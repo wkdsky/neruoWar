@@ -32,11 +32,12 @@ router.post('/register', async (req, res) => {
 
     // 加密密码
     const hashedPassword = await bcrypt.hash(password, 10);
-    
+
     // 创建用户
     const user = new User({ 
       username, 
-      password: hashedPassword 
+      password: hashedPassword,
+      role: 'common'
     });
     await user.save();
 
@@ -46,7 +47,8 @@ router.post('/register', async (req, res) => {
     res.status(201).json({ 
       token, 
       userId: user._id, 
-      username: user.username 
+      username: user.username,
+      role: user.role
     });
   } catch (error) {
     console.error('注册错误:', error);
@@ -82,7 +84,8 @@ router.post('/login', async (req, res) => {
     res.json({ 
       token, 
       userId: user._id, 
-      username: user.username 
+      username: user.username,
+      role: user.role
     });
   } catch (error) {
     console.error('登录错误:', error);

@@ -1,10 +1,5 @@
 const User = require('../models/User');
 
-// 管理员用户名列表（可以改为从环境变量读取）
-const ADMIN_USERNAMES = process.env.ADMIN_USERNAMES 
-  ? process.env.ADMIN_USERNAMES.split(',') 
-  : ['admin'];
-
 async function isAdmin(req, res, next) {
   try {
     const user = await User.findById(req.user.userId);
@@ -13,7 +8,7 @@ async function isAdmin(req, res, next) {
       return res.status(404).json({ error: '用户不存在' });
     }
 
-    if (!ADMIN_USERNAMES.includes(user.username)) {
+    if (user.role !== 'admin') {
       return res.status(403).json({ error: '需要管理员权限' });
     }
 

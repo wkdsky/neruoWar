@@ -12,6 +12,7 @@ const Army = require('./models/Army');
 const Technology = require('./models/Technology');
 const GameService = require('./services/GameService');
 const adminRoutes = require('./routes/admin');
+const nodeRoutes = require('./routes/nodes');
 // 初始化Express
 const app = express();
 const server = http.createServer(app);
@@ -37,7 +38,8 @@ app.use(cors({
 app.use(express.json());
 
 app.use('/api', authRoutes);
-app.use('/api/admin', adminRoutes); // 添加这行
+app.use('/api/admin', adminRoutes);
+app.use('/api/nodes', nodeRoutes);
 // 连接数据库
 connectDB();
 

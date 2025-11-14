@@ -14,6 +14,11 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: ''  // 设置默认值，不是必填
   },
+  role: {
+    type: String,
+    enum: ['admin', 'common'],
+    default: 'common'
+  },
   level: {
     type: Number,
     default: 1

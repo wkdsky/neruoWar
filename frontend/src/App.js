@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Plus, Zap, Sword, FlaskConical, Link, Users, Home } from 'lucide-react';
+import { Play, Plus, Zap, Sword, FlaskConical, Link, Users, Home, Search, X, Check, Bell } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
 
@@ -25,6 +25,23 @@ const App = () => {
       level: 0,
       experience: 0
     });
+
+    // 新节点创建状态
+    const [showCreateNodeModal, setShowCreateNodeModal] = useState(false);
+    const [newNodeData, setNewNodeData] = useState({
+      title: '',
+      description: ''
+    });
+    const [searchKeyword, setSearchKeyword] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+    const [searchLoading, setSearchLoading] = useState(false);
+    const [selectedNodes, setSelectedNodes] = useState([]);
+    const [currentAssociation, setCurrentAssociation] = useState({
+      relationType: ''
+    });
+    const [associations, setAssociations] = useState([]);
+    const [showNotifications, setShowNotifications] = useState(false);
+    const [pendingNodes, setPendingNodes] = useState([]);
     useEffect(() => {
         if (socketRef.current) {
             return;
@@ -189,15 +206,15 @@ const App = () => {
                 socket.emit('authenticate', data.token);
                 await checkAdminStatus();
             } else {
-                alert(data.error);
+                window.alert(data.error);
             }
         } catch (error) {
-            alert('连接失败: ' + error.message);
+            window.alert('连接失败: ' + error.message);
         }
     };
 
     const handleCreateNode = () => {
-        const name = prompt('输入节点名称:');
+        const name = window.prompt('输入节点名称:');
         if (!name) return;
 
         const x = Math.random() * 700 + 50;
@@ -211,11 +228,11 @@ const App = () => {
 
     const handleProduceArmy = (type) => {
         if (!selectedNode) {
-            alert('请先选择一个节点');
+            window.alert('请先选择一个节点');
             return;
         }
 
-        const count = parseInt(prompt(`生产${type}数量:`));
+        const count = parseInt(window.prompt(`生产${type}数量:`));
         if (!count || count <= 0) return;
 
         socket.emit('produceArmy', {
@@ -230,15 +247,27 @@ const App = () => {
     };
 
     const handleCanvasClick = (e) => {
-        const rect = canvasRef.current.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        
+        // 计算Canvas坐标系统的缩放比例
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        
+        // 将点击坐标转换为Canvas内部坐标
+        const x = (e.clientX - rect.left) * scaleX;
+        const y = (e.clientY - rect.top) * scaleY;
 
         const clickedNode = nodes.find(node => {
+            const prosperity = node.prosperity || 100;
+            const radius = 15 + (prosperity / 50);
+            
             const dx = node.position.x - x;
             const dy = node.position.y - y;
             const distance = Math.sqrt(dx * dx + dy * dy);
-            return distance < 20;
+            
+            // 使用节点的实际绘制半径作为点击检测范围
+            return distance < (radius * 1.5); // 包括光晕区域
         });
 
         setSelectedNode(clickedNode || null);
@@ -319,7 +348,7 @@ const App = () => {
     };
 
     const deleteUser = async (userId, username) => {
-        if (!confirm(`确定要删除用户 ${username} 吗？`)) return;
+        if (!window.confirm(`确定要删除用户 ${username} 吗？`)) return;
         
         const token = localStorage.getItem('token');
         try {
@@ -340,6 +369,204 @@ const App = () => {
         } catch (error) {
             console.error('删除用户失败:', error);
             alert('删除失败');
+        }
+    };
+
+    // 新节点创建相关函数
+    const openCreateNodeModal = () => {
+        setShowCreateNodeModal(true);
+        setNewNodeData({ title: '', description: '' });
+        setAssociations([]);
+        setSelectedNodes([]);
+        setSearchResults([]);
+        setSearchKeyword('');
+    };
+
+    const searchNodes = async () => {
+        if (!searchKeyword.trim()) {
+            setSearchResults([]);
+            return;
+        }
+
+        setSearchLoading(true);
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/search?keyword=${encodeURIComponent(searchKeyword)}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                setSearchResults(data);
+            } else {
+                setSearchResults([]);
+            }
+        } catch (error) {
+            console.error('搜索节点失败:', error);
+            setSearchResults([]);
+        } finally {
+            setSearchLoading(false);
+        }
+    };
+
+    const toggleNodeSelection = (node) => {
+        setSelectedNodes(prev => {
+            const isSelected = prev.some(n => n._id === node._id);
+            if (isSelected) {
+                return prev.filter(n => n._id !== node._id);
+            } else {
+                return [...prev, node];
+            }
+        });
+    };
+
+    const addAssociation = () => {
+        if (selectedNodes.length === 0 || !currentAssociation.relationType) {
+            alert('请选择至少一个节点并选择关联关系类型');
+            return;
+        }
+
+        const newAssociations = selectedNodes.map(node => ({
+            targetNode: node._id,
+            relationType: currentAssociation.relationType,
+            nodeName: node.name
+        }));
+
+        setAssociations(prev => [...prev, ...newAssociations]);
+        setSelectedNodes([]);
+        setCurrentAssociation({ relationType: '' });
+        setSearchResults([]);
+        setSearchKeyword('');
+    };
+
+    const removeAssociation = (index) => {
+        setAssociations(prev => prev.filter((_, i) => i !== index));
+    };
+
+    const canSubmitNode = () => {
+        const hasTitle = newNodeData.title.trim() !== '';
+        const hasDescription = newNodeData.description.trim() !== '';
+        const hasAssociations = associations.length > 0 || isAdmin;
+        
+        // 检查标题唯一性（在前端进行基本检查，后端会再次验证）
+        const isTitleUnique = !nodes.some(node => node.name === newNodeData.title);
+        
+        return hasTitle && hasDescription && hasAssociations && isTitleUnique;
+    };
+
+    const submitNodeCreation = async () => {
+        if (!canSubmitNode()) {
+            alert('请填写所有必填字段并确保标题唯一');
+            return;
+        }
+
+        const token = localStorage.getItem('token');
+        try {
+            const x = Math.random() * 700 + 50;
+            const y = Math.random() * 400 + 50;
+
+            const response = await fetch('http://192.168.1.96:5000/api/nodes/create', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    name: newNodeData.title,
+                    description: newNodeData.description,
+                    position: { x, y },
+                    associations: associations
+                })
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                if (isAdmin) {
+                    alert('节点创建成功！');
+                    setNodes(prev => [...prev, data]);
+                } else {
+                    alert('节点创建申请已提交，等待管理员审批');
+                }
+                setShowCreateNodeModal(false);
+            } else {
+                alert(data.error || '创建失败');
+            }
+        } catch (error) {
+            console.error('创建节点失败:', error);
+            alert('创建失败');
+        }
+    };
+
+    const fetchPendingNodes = async () => {
+        if (!isAdmin) return;
+        
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/nodes/pending', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                setPendingNodes(data);
+            }
+        } catch (error) {
+            console.error('获取待审批节点失败:', error);
+        }
+    };
+
+    const approveNode = async (nodeId) => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/nodes/approve', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ nodeId })
+            });
+
+            if (response.ok) {
+                alert('节点审批通过');
+                setPendingNodes(prev => prev.filter(node => node._id !== nodeId));
+                fetchPendingNodes();
+            } else {
+                const data = await response.json();
+                alert(data.error || '审批失败');
+            }
+        } catch (error) {
+            console.error('审批节点失败:', error);
+            alert('审批失败');
+        }
+    };
+
+    const rejectNode = async (nodeId) => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/nodes/reject', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ nodeId })
+            });
+
+            if (response.ok) {
+                alert('节点已拒绝');
+                setPendingNodes(prev => prev.filter(node => node._id !== nodeId));
+            } else {
+                const data = await response.json();
+                alert(data.error || '拒绝失败');
+            }
+        } catch (error) {
+            console.error('拒绝节点失败:', error);
+            alert('拒绝失败');
         }
     };
 
@@ -431,13 +658,30 @@ const App = () => {
                         <div className="map-section">
                             <div className="section-header">
                                 <h2 className="section-title">节点网络图</h2>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                 <button
-                                    onClick={handleCreateNode}
+                                    onClick={openCreateNodeModal}
                                     className="btn btn-success"
                                 >
                                     <Plus className="icon-small" />
                                     创建节点
                                 </button>
+                                {!isAdmin && (
+                                    <button
+                                        onClick={() => {
+                                            setShowNotifications(!showNotifications);
+                                            fetchPendingNodes();
+                                        }}
+                                        className="btn btn-info"
+                                    >
+                                        <Bell className="icon-small" />
+                                        通知
+                                        {pendingNodes.length > 0 && (
+                                            <span className="notification-badge">{pendingNodes.length}</span>
+                                        )}
+                                    </button>
+                                )}
+                            </div>
                             </div>
                             <canvas
                                 ref={canvasRef}
@@ -554,6 +798,258 @@ const App = () => {
                                 )}
                             </div>
                         </div>
+
+                        {/* 节点创建模态框 */}
+                        {showCreateNodeModal && (
+                            <div className="modal-overlay">
+                                <div className="modal-content">
+                                    <div className="modal-header">
+                                        <h3>创建新节点</h3>
+                                        <button 
+                                            onClick={() => setShowCreateNodeModal(false)}
+                                            className="btn-close"
+                                        >
+                                            <X className="icon-small" />
+                                        </button>
+                                    </div>
+                                    
+                                    <div className="modal-body">
+                                        {/* 基本信息 */}
+                                        <div className="form-group">
+                                            <label>节点标题 *</label>
+                                            <input
+                                                type="text"
+                                                value={newNodeData.title}
+                                                onChange={(e) => setNewNodeData({
+                                                    ...newNodeData,
+                                                    title: e.target.value
+                                                })}
+                                                placeholder="输入节点标题"
+                                                className="form-input"
+                                            />
+                                            {newNodeData.title.trim() === '' && (
+                                                <span className="error-text">标题不能为空</span>
+                                            )}
+                                            {newNodeData.title.trim() !== '' && nodes.some(node => node.name === newNodeData.title) && (
+                                                <span className="error-text">标题必须唯一</span>
+                                            )}
+                                        </div>
+
+                                        <div className="form-group">
+                                            <label>节点简介 *</label>
+                                            <textarea
+                                                value={newNodeData.description}
+                                                onChange={(e) => setNewNodeData({
+                                                    ...newNodeData,
+                                                    description: e.target.value
+                                                })}
+                                                placeholder="输入节点简介"
+                                                rows="3"
+                                                className="form-textarea"
+                                            />
+                                            {newNodeData.description.trim() === '' && (
+                                                <span className="error-text">简介不能为空</span>
+                                            )}
+                                        </div>
+
+                                        {/* 关联关系创建 */}
+                                        <div className="associations-section">
+                                            <h4>关联关系 {!isAdmin && <span className="required-star">*</span>}</h4>
+                                            
+                                            {/* 搜索和选择节点 */}
+                                            <div className="search-section">
+                                                <div className="search-input-group">
+                                                    <input
+                                                        type="text"
+                                                        value={searchKeyword}
+                                                        onChange={(e) => setSearchKeyword(e.target.value)}
+                                                        placeholder="搜索节点标题或简介..."
+                                                        className="form-input"
+                                                    />
+                                                    <button
+                                                        onClick={searchNodes}
+                                                        disabled={searchLoading}
+                                                        className="btn btn-primary"
+                                                    >
+                                                        <Search className="icon-small" />
+                                                        {searchLoading ? '搜索中...' : '搜索'}
+                                                    </button>
+                                                </div>
+
+                                                {/* 搜索结果 */}
+                                                {searchResults.length > 0 && (
+                                                    <div className="search-results">
+                                                        <h5>搜索结果</h5>
+                                                        {searchResults.map(node => (
+                                                            <div 
+                                                                key={node._id}
+                                                                className={`search-result-item ${selectedNodes.some(n => n._id === node._id) ? 'selected' : ''}`}
+                                                                onClick={() => toggleNodeSelection(node)}
+                                                            >
+                                                                <div className="node-info">
+                                                                    <strong>{node.name}</strong>
+                                                                    <span className="node-description">{node.description}</span>
+                                                                </div>
+                                                                <div className="selection-indicator">
+                                                                    {selectedNodes.some(n => n._id === node._id) ? '✓' : '+'}
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+
+                                                {/* 搜索状态提示 */}
+                                                {searchLoading && (
+                                                    <div className="search-status">
+                                                        <p>正在搜索...</p>
+                                                    </div>
+                                                )}
+                                                {!searchLoading && searchKeyword.trim() !== '' && searchResults.length === 0 && (
+                                                    <div className="search-status">
+                                                        <p>未找到匹配的节点</p>
+                                                    </div>
+                                                )}
+
+                                                {/* 关联类型选择 */}
+                                                {selectedNodes.length > 0 && (
+                                                    <div className="relation-type-section">
+                                                        <label>关联类型:</label>
+                                                        <div className="relation-options">
+                                                            <label className="radio-label">
+                                                                <input
+                                                                    type="radio"
+                                                                    name="relationType"
+                                                                    value="contains"
+                                                                    checked={currentAssociation.relationType === 'contains'}
+                                                                    onChange={(e) => setCurrentAssociation({
+                                                                        ...currentAssociation,
+                                                                        relationType: e.target.value
+                                                                    })}
+                                                                />
+                                                                <span>包含</span>
+                                                            </label>
+                                                            <label className="radio-label">
+                                                                <input
+                                                                    type="radio"
+                                                                    name="relationType"
+                                                                    value="extends"
+                                                                    checked={currentAssociation.relationType === 'extends'}
+                                                                    onChange={(e) => setCurrentAssociation({
+                                                                        ...currentAssociation,
+                                                                        relationType: e.target.value
+                                                                    })}
+                                                                />
+                                                                <span>拓展</span>
+                                                            </label>
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* 添加关联关系按钮 */}
+                                                {selectedNodes.length > 0 && currentAssociation.relationType && (
+                                                    <button
+                                                        onClick={addAssociation}
+                                                        className="btn btn-success"
+                                                    >
+                                                        <Check className="icon-small" />
+                                                        添加关联关系
+                                                    </button>
+                                                )}
+                                            </div>
+
+                                            {/* 已添加的关联关系列表 */}
+                                            {associations.length > 0 && (
+                                                <div className="associations-list">
+                                                    <h5>已添加的关联关系</h5>
+                                                    {associations.map((association, index) => (
+                                                        <div key={index} className="association-item">
+                                                            <div className="association-info">
+                                                                <span className="node-name">{association.nodeName}</span>
+                                                                <span className="relation-type">
+                                                                    {association.relationType === 'contains' ? '包含' : '拓展'}
+                                                                </span>
+                                                            </div>
+                                                            <button
+                                                                onClick={() => removeAssociation(index)}
+                                                                className="btn btn-danger btn-small"
+                                                            >
+                                                                <X className="icon-small" />
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {!isAdmin && associations.length === 0 && (
+                                                <span className="error-text">至少需要一个关联关系</span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="modal-footer">
+                                        <button
+                                            onClick={() => setShowCreateNodeModal(false)}
+                                            className="btn btn-secondary"
+                                        >
+                                            取消
+                                        </button>
+                                        <button
+                                            onClick={submitNodeCreation}
+                                            disabled={!canSubmitNode()}
+                                            className={`btn ${canSubmitNode() ? 'btn-success' : 'btn-disabled'}`}
+                                        >
+                                            {isAdmin ? '创建节点' : '申请创建'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 通知面板 */}
+                        {showNotifications && !isAdmin && (
+                            <div className="notifications-panel">
+                                <div className="notifications-header">
+                                    <h3>节点创建申请</h3>
+                                    <button 
+                                        onClick={() => setShowNotifications(false)}
+                                        className="btn-close"
+                                    >
+                                        <X className="icon-small" />
+                                    </button>
+                                </div>
+                                
+                                <div className="notifications-body">
+                                    {pendingNodes.length === 0 ? (
+                                        <div className="no-notifications">
+                                            <p>暂无待处理申请</p>
+                                        </div>
+                                    ) : (
+                                        <div className="pending-nodes-list">
+                                            {pendingNodes.map(node => (
+                                                <div key={node._id} className="pending-node-item">
+                                                    <div className="node-details">
+                                                        <h4>{node.name}</h4>
+                                                        <p className="node-description">{node.description}</p>
+                                                        <div className="associations-summary">
+                                                            关联关系: {node.associations?.length || 0} 个
+                                                        </div>
+                                                    </div>
+                                                    <div className="node-status">
+                                                        <span className={`status-badge status-${node.status}`}>
+                                                            {node.status === 'pending' ? '待审批' : 
+                                                             node.status === 'approved' ? '已通过' : '已拒绝'}
+                                                        </span>
+                                                        <div className="submission-time">
+                                                            提交时间: {new Date(node.createdAt).toLocaleString('zh-CN')}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 

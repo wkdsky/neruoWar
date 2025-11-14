@@ -1,5 +1,22 @@
 const mongoose = require('mongoose');
 
+const AssociationSchema = new mongoose.Schema({
+  targetNode: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Node',
+    required: true
+  },
+  relationType: {
+    type: String,
+    enum: ['contains', 'extends'],
+    required: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
 const NodeSchema = new mongoose.Schema({
   nodeId: { 
     type: String, 
@@ -13,6 +30,12 @@ const NodeSchema = new mongoose.Schema({
   },
   name: { 
     type: String, 
+    required: true,
+    trim: true,
+    unique: true
+  },
+  description: {
+    type: String,
     required: true,
     trim: true
   },
@@ -70,10 +93,7 @@ const NodeSchema = new mongoose.Schema({
       min: 0
     }
   },
-  connectedNodes: [{ 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Node' 
-  }],
+  associations: [AssociationSchema],
   level: { 
     type: Number, 
     default: 1,
@@ -85,6 +105,11 @@ const NodeSchema = new mongoose.Schema({
     default: 0,
     min: 0,
     max: 100
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'approved'
   },
   lastUpdate: { 
     type: Date, 
