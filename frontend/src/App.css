@@ -1275,6 +1275,158 @@ body {
     transform: none !important;
 }
 
+/* 管理员选项卡样式 */
+.admin-tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 2rem;
+    border-bottom: 2px solid #475569;
+    padding-bottom: 0.5rem;
+}
+
+.admin-tab {
+    padding: 0.75rem 1.5rem;
+    background: rgba(51, 65, 85, 0.6);
+    border: 1px solid #475569;
+    border-radius: 8px 8px 0 0;
+    color: #d1d5db;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.admin-tab:hover {
+    background: rgba(59, 130, 246, 0.2);
+    color: white;
+    border-color: #3b82f6;
+}
+
+.admin-tab.active {
+    background: #3b82f6;
+    color: white;
+    border-color: #3b82f6;
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
+}
+
+/* 节点管理表格样式 */
+.nodes-table-container {
+    margin-top: 1rem;
+}
+
+.nodes-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: rgba(51, 65, 85, 0.8);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.nodes-table thead {
+    background: rgba(30, 41, 59, 0.9);
+}
+
+.nodes-table th {
+    padding: 1rem;
+    text-align: left;
+    color: #3b82f6;
+    font-weight: 600;
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    border-bottom: 2px solid #3b82f6;
+}
+
+.nodes-table tbody tr {
+    border-bottom: 1px solid #475569;
+    transition: background 0.2s ease;
+}
+
+.nodes-table tbody tr:hover {
+    background: rgba(59, 130, 246, 0.1);
+}
+
+.nodes-table td {
+    padding: 1rem;
+    color: #d1d5db;
+    font-size: 0.875rem;
+    vertical-align: middle;
+}
+
+.node-name-cell {
+    color: white;
+    font-weight: 600;
+}
+
+.node-description-cell {
+    color: #9ca3af;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+}
+
+/* 资源显示样式 */
+.resource-display {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+}
+
+.resource-display span {
+    color: #d1d5db;
+}
+
+.production-display {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+}
+
+.production-display span {
+    color: #d1d5db;
+}
+
+/* 编辑输入框样式 */
+.edit-textarea {
+    width: 100%;
+    padding: 0.5rem;
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid #6366f1;
+    border-radius: 4px;
+    color: white;
+    font-size: 0.875rem;
+    resize: vertical;
+    min-height: 60px;
+    font-family: inherit;
+}
+
+.edit-input-tiny {
+    width: 70px;
+    padding: 0.5rem;
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid #6366f1;
+    border-radius: 4px;
+    color: white;
+    font-size: 0.75rem;
+    margin-right: 0.25rem;
+}
+
+.resource-inputs, .production-inputs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.resource-inputs .edit-input-tiny, .production-inputs .edit-input-tiny {
+    width: 100%;
+    margin-bottom: 0.25rem;
+}
+
 /* 响应式 */
 @media (max-width: 640px) {
     .login-box {

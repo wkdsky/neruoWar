@@ -197,4 +197,102 @@ router.post('/reject-association', authenticateToken, async (req, res) => {
   }
 });
 
+// 获取所有节点（管理员专用）
+router.get('/', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const nodes = await Node.find()
+      .populate('owner', 'username')
+      .populate('associations.targetNode', 'name description')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      count: nodes.length,
+      nodes: nodes
+    });
+  } catch (error) {
+    console.error('获取节点列表错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 更新节点信息（管理员专用）
+router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const { name, description, prosperity, resources, productionRates } = req.body;
+
+    const node = await Node.findById(nodeId);
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+
+    // 更新字段
+    if (name !== undefined) {
+      // 检查名称唯一性（排除当前节点）
+      const existingNode = await Node.findOne({ 
+        name, 
+        _id: { $ne: nodeId } 
+      });
+      if (existingNode) {
+        return res.status(400).json({ error: '节点名称必须唯一' });
+      }
+      node.name = name;
+    }
+
+    if (description !== undefined) {
+      node.description = description;
+    }
+
+    if (prosperity !== undefined) {
+      node.prosperity = prosperity;
+    }
+
+    if (resources !== undefined) {
+      node.resources = resources;
+    }
+
+    if (productionRates !== undefined) {
+      node.productionRates = productionRates;
+    }
+
+    await node.save();
+
+    res.json({
+      success: true,
+      message: '节点信息已更新',
+      node: node
+    });
+  } catch (error) {
+    console.error('更新节点信息错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 删除节点（管理员专用）
+router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    
+    const node = await Node.findByIdAndDelete(nodeId);
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+
+    // 从用户拥有的节点列表中移除
+    await User.findByIdAndUpdate(node.owner, {
+      $pull: { ownedNodes: nodeId }
+    });
+
+    res.json({
+      success: true,
+      message: '节点已删除',
+      deletedNode: node.name
+    });
+  } catch (error) {
+    console.error('删除节点错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 module.exports = router;

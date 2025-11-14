@@ -26,6 +26,26 @@ const App = () => {
       experience: 0
     });
 
+    // 检查本地存储的登录状态
+    useEffect(() => {
+        const token = localStorage.getItem('token');
+        const storedUsername = localStorage.getItem('username');
+        
+        if (token && storedUsername) {
+            setAuthenticated(true);
+            setUsername(storedUsername);
+            setView('game');
+            
+            // 如果socket已连接，重新认证
+            if (socket) {
+                socket.emit('authenticate', token);
+            }
+            
+            // 检查管理员状态
+            checkAdminStatus();
+        }
+    }, [socket]);
+
     // 新节点创建状态
     const [showCreateNodeModal, setShowCreateNodeModal] = useState(false);
     const [newNodeData, setNewNodeData] = useState({
@@ -42,6 +62,16 @@ const App = () => {
     const [associations, setAssociations] = useState([]);
     const [showNotifications, setShowNotifications] = useState(false);
     const [pendingNodes, setPendingNodes] = useState([]);
+    const [adminTab, setAdminTab] = useState('users'); // 管理员面板选项卡状态
+    const [allNodes, setAllNodes] = useState([]); // 所有节点数据
+    const [editingNode, setEditingNode] = useState(null); // 正在编辑的节点
+    const [editNodeForm, setEditNodeForm] = useState({
+      name: '',
+      description: '',
+      prosperity: 0,
+      resources: { food: 0, metal: 0, energy: 0 },
+      productionRates: { food: 0, metal: 0, energy: 0 }
+    });
     useEffect(() => {
         if (socketRef.current) {
             return;
@@ -76,12 +106,17 @@ const App = () => {
         });
 
         newSocket.on('gameState', (data) => {
-            setNodes(data.nodes || []);
+            // 只显示已批准的节点
+            const approvedNodes = (data.nodes || []).filter(node => node.status === 'approved');
+            setNodes(approvedNodes);
             setArmies(data.armies || []);
         });
 
         newSocket.on('nodeCreated', (node) => {
-            setNodes(prev => [...prev, node]);
+            // 只添加已批准的节点到地图
+            if (node.status === 'approved') {
+                setNodes(prev => [...prev, node]);
+            }
         });
 
         newSocket.on('armyProduced', (data) => {
@@ -203,13 +238,35 @@ const App = () => {
             const data = await response.json();
             if (response.ok) {
                 localStorage.setItem('token', data.token);
-                socket.emit('authenticate', data.token);
+                localStorage.setItem('username', data.username);
+                setAuthenticated(true);
+                setView('game');
+                setUsername(data.username);
+                
+                if (socket) {
+                    socket.emit('authenticate', data.token);
+                }
+                
                 await checkAdminStatus();
             } else {
                 window.alert(data.error);
             }
         } catch (error) {
             window.alert('连接失败: ' + error.message);
+        }
+    };
+
+    const handleLogout = () => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        setAuthenticated(false);
+        setUsername('');
+        setPassword('');
+        setView('login');
+        setIsAdmin(false);
+        
+        if (socket) {
+            socket.disconnect();
         }
     };
 
@@ -570,6 +627,95 @@ const App = () => {
         }
     };
 
+    // 获取所有节点信息（管理员专用）
+    const fetchAllNodes = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/nodes', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+    
+            if (response.ok) {
+                const data = await response.json();
+                setAllNodes(data.nodes);
+            }
+        } catch (error) {
+            console.error('获取节点列表失败:', error);
+        }
+    };
+
+    const startEditNode = (node) => {
+        setEditingNode(node._id);
+        setEditNodeForm({
+            name: node.name,
+            description: node.description,
+            prosperity: node.prosperity || 100,
+            resources: {
+                food: node.resources?.food || 0,
+                metal: node.resources?.metal || 0,
+                energy: node.resources?.energy || 0
+            },
+            productionRates: {
+                food: node.productionRates?.food || 0,
+                metal: node.productionRates?.metal || 0,
+                energy: node.productionRates?.energy || 0
+            }
+        });
+    };
+
+    const saveNodeEdit = async (nodeId) => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(editNodeForm)
+            });
+    
+            if (response.ok) {
+                alert('节点信息已更新');
+                setEditingNode(null);
+                fetchAllNodes();
+            } else {
+                const data = await response.json();
+                alert(data.error || '更新失败');
+            }
+        } catch (error) {
+            console.error('更新节点失败:', error);
+            alert('更新失败');
+        }
+    };
+
+    const deleteNode = async (nodeId, nodeName) => {
+        if (!window.confirm(`确定要删除节点 "${nodeName}" 吗？此操作不可撤销！`)) return;
+        
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+    
+            if (response.ok) {
+                alert('节点已删除');
+                fetchAllNodes();
+            } else {
+                const data = await response.json();
+                alert(data.error || '删除失败');
+            }
+        } catch (error) {
+            console.error('删除节点失败:', error);
+            alert('删除失败');
+        }
+    };
+
     if (view === 'login') {
         return (
             <div className="login-container">
@@ -624,30 +770,41 @@ const App = () => {
                             <Home className="icon" />
                             多节点策略系统
                         </h1>
-                        <div className="header-buttons">
-                            <button
-                                onClick={() => setView('game')}
-                                className="btn btn-primary"
-                            >
-                                地图
-                            </button>
-                            <button
-                                onClick={() => setView('tech')}
-                                className="btn btn-secondary"
-                            >
-                                科技
-                            </button>
-                            {isAdmin && (
+                        <div className="header-right">
+                            <div className="user-info">
+                                <span className="user-name">当前用户: {username}</span>
                                 <button
-                                    onClick={() => {
-                                        setView('admin');
-                                        fetchAllUsers();
-                                    }}
-                                    className="btn btn-warning"
+                                    onClick={handleLogout}
+                                    className="btn btn-logout"
                                 >
-                                    管理员面板
+                                    退出登录
                                 </button>
-                            )}
+                            </div>
+                            <div className="header-buttons">
+                                <button
+                                    onClick={() => setView('game')}
+                                    className="btn btn-primary"
+                                >
+                                    地图
+                                </button>
+                                <button
+                                    onClick={() => setView('tech')}
+                                    className="btn btn-secondary"
+                                >
+                                    科技
+                                </button>
+                                {isAdmin && (
+                                    <button
+                                        onClick={() => {
+                                            setView('admin');
+                                            fetchAllUsers();
+                                        }}
+                                        className="btn btn-warning"
+                                    >
+                                        管理员面板
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1106,142 +1263,399 @@ const App = () => {
                     <div className="admin-section">
                         <h2 className="section-title-large">
                             <Users className="icon" />
-                            管理员面板 - 用户数据库
+                            管理员面板
                         </h2>
 
-                        <div className="users-table-container">
-                            <div className="table-info">
-                                <p>总用户数: <strong>{allUsers.length}</strong></p>
-                                <button 
-                                    onClick={fetchAllUsers}
-                                    className="btn btn-primary"
-                                    style={{ marginLeft: '1rem' }}
-                                >
-                                    刷新数据
-                                </button>
-                            </div>
-                            
-                            <div className="table-responsive">
-                                <table className="users-table">
-                                    <thead>
-                                        <tr>
-                                            <th>数据库ID</th>
-                                            <th>用户名</th>
-                                            <th>密码（明文）</th>
-                                            <th>等级</th>
-                                            <th>经验值</th>
-                                            <th>拥有节点</th>
-                                            <th>创建时间</th>
-                                            <th>更新时间</th>
-                                            <th>操作</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {allUsers.map((user) => (
-                                            <tr key={user._id}>
-                                                <td className="id-cell">{user._id}</td>
-                                                <td>
-                                                    {editingUser === user._id ? (
-                                                        <input
-                                                            type="text"
-                                                            value={editForm.username}
-                                                            onChange={(e) => setEditForm({
-                                                                ...editForm,
-                                                                username: e.target.value
-                                                            })}
-                                                            className="edit-input"
-                                                        />
-                                                    ) : (
-                                                        <span className="username-cell">{user.username}</span>
-                                                    )}
-                                                </td>
-                                                <td>
-                                                    {editingUser === user._id ? (
-                                                        <input
-                                                            type="text"
-                                                            value={editForm.password}
-                                                            onChange={(e) => setEditForm({
-                                                                ...editForm,
-                                                                password: e.target.value
-                                                            })}
-                                                            className="edit-input"
-                                                        />
-                                                    ) : (
-                                                        <span className="password-cell">{user.password}</span>
-                                                    )}
-                                                </td>
-                                                <td>
-                                                    {editingUser === user._id ? (
-                                                        <input
-                                                            type="number"
-                                                            value={editForm.level}
-                                                            onChange={(e) => setEditForm({
-                                                                ...editForm,
-                                                                level: parseInt(e.target.value)
-                                                            })}
-                                                            className="edit-input-small"
-                                                        />
-                                                    ) : (
-                                                        user.level
-                                                    )}
-                                                </td>
-                                                <td>
-                                                    {editingUser === user._id ? (
-                                                        <input
-                                                            type="number"
-                                                            value={editForm.experience}
-                                                            onChange={(e) => setEditForm({
-                                                                ...editForm,
-                                                                experience: parseInt(e.target.value)
-                                                            })}
-                                                            className="edit-input-small"
-                                                        />
-                                                    ) : (
-                                                        user.experience
-                                                    )}
-                                                </td>
-                                                <td>{user.ownedNodes?.length || 0}</td>
-                                                <td>{new Date(user.createdAt).toLocaleString('zh-CN')}</td>
-                                                <td>{new Date(user.updatedAt).toLocaleString('zh-CN')}</td>
-                                                <td className="action-cell">
-                                                    {editingUser === user._id ? (
-                                                        <>
-                                                            <button
-                                                                onClick={() => saveUserEdit(user._id)}
-                                                                className="btn-action btn-save"
-                                                            >
-                                                                保存
-                                                            </button>
-                                                            <button
-                                                                onClick={() => setEditingUser(null)}
-                                                                className="btn-action btn-cancel"
-                                                            >
-                                                                取消
-                                                            </button>
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <button
-                                                                onClick={() => startEditUser(user)}
-                                                                className="btn-action btn-edit"
-                                                            >
-                                                                编辑
-                                                            </button>
-                                                            <button
-                                                                onClick={() => deleteUser(user._id, user.username)}
-                                                                className="btn-action btn-delete"
-                                                            >
-                                                                删除
-                                                            </button>
-                                                        </>
-                                                    )}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
+                        {/* 选项卡导航 */}
+                        <div className="admin-tabs">
+                            <button
+                                onClick={() => {
+                                    setAdminTab('users');
+                                    fetchAllUsers();
+                                }}
+                                className={`admin-tab ${adminTab === 'users' ? 'active' : ''}`}
+                            >
+                                <Users className="icon-small" />
+                                用户管理
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setAdminTab('nodes');
+                                    fetchAllNodes();
+                                }}
+                                className={`admin-tab ${adminTab === 'nodes' ? 'active' : ''}`}
+                            >
+                                <Zap className="icon-small" />
+                                节点管理
+                            </button>
                         </div>
+
+                        {/* 用户管理选项卡 */}
+                        {adminTab === 'users' && (
+                            <div className="users-table-container">
+                                <div className="table-info">
+                                    <p>总用户数: <strong>{allUsers.length}</strong></p>
+                                    <button 
+                                        onClick={fetchAllUsers}
+                                        className="btn btn-primary"
+                                        style={{ marginLeft: '1rem' }}
+                                    >
+                                        刷新数据
+                                    </button>
+                                </div>
+                                
+                                <div className="table-responsive">
+                                    <table className="users-table">
+                                        <thead>
+                                            <tr>
+                                                <th>数据库ID</th>
+                                                <th>用户名</th>
+                                                <th>密码（明文）</th>
+                                                <th>等级</th>
+                                                <th>经验值</th>
+                                                <th>拥有节点</th>
+                                                <th>创建时间</th>
+                                                <th>更新时间</th>
+                                                <th>操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {allUsers.map((user) => (
+                                                <tr key={user._id}>
+                                                    <td className="id-cell">{user._id}</td>
+                                                    <td>
+                                                        {editingUser === user._id ? (
+                                                            <input
+                                                                type="text"
+                                                                value={editForm.username}
+                                                                onChange={(e) => setEditForm({
+                                                                    ...editForm,
+                                                                    username: e.target.value
+                                                                })}
+                                                                className="edit-input"
+                                                            />
+                                                        ) : (
+                                                            <span className="username-cell">{user.username}</span>
+                                                        )}
+                                                    </td>
+                                                    <td>
+                                                        {editingUser === user._id ? (
+                                                            <input
+                                                                type="text"
+                                                                value={editForm.password}
+                                                                onChange={(e) => setEditForm({
+                                                                    ...editForm,
+                                                                    password: e.target.value
+                                                                })}
+                                                                className="edit-input"
+                                                            />
+                                                        ) : (
+                                                            <span className="password-cell">{user.password}</span>
+                                                        )}
+                                                    </td>
+                                                    <td>
+                                                        {editingUser === user._id ? (
+                                                            <input
+                                                                type="number"
+                                                                value={editForm.level}
+                                                                onChange={(e) => setEditForm({
+                                                                    ...editForm,
+                                                                    level: parseInt(e.target.value)
+                                                                })}
+                                                                className="edit-input-small"
+                                                            />
+                                                        ) : (
+                                                            user.level
+                                                        )}
+                                                    </td>
+                                                    <td>
+                                                        {editingUser === user._id ? (
+                                                            <input
+                                                                type="number"
+                                                                value={editForm.experience}
+                                                                onChange={(e) => setEditForm({
+                                                                    ...editForm,
+                                                                    experience: parseInt(e.target.value)
+                                                                })}
+                                                                className="edit-input-small"
+                                                            />
+                                                        ) : (
+                                                            user.experience
+                                                        )}
+                                                    </td>
+                                                    <td>{user.ownedNodes?.length || 0}</td>
+                                                    <td>{new Date(user.createdAt).toLocaleString('zh-CN')}</td>
+                                                    <td>{new Date(user.updatedAt).toLocaleString('zh-CN')}</td>
+                                                    <td className="action-cell">
+                                                        {editingUser === user._id ? (
+                                                            <>
+                                                                <button
+                                                                    onClick={() => saveUserEdit(user._id)}
+                                                                    className="btn-action btn-save"
+                                                                >
+                                                                    保存
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => setEditingUser(null)}
+                                                                    className="btn-action btn-cancel"
+                                                                >
+                                                                    取消
+                                                                </button>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <button
+                                                                    onClick={() => startEditUser(user)}
+                                                                    className="btn-action btn-edit"
+                                                                >
+                                                                    编辑
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => deleteUser(user._id, user.username)}
+                                                                    className="btn-action btn-delete"
+                                                                >
+                                                                    删除
+                                                                </button>
+                                                            </>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 节点管理选项卡 */}
+                        {adminTab === 'nodes' && (
+                            <div className="nodes-table-container">
+                                <div className="table-info">
+                                    <p>总节点数: <strong>{allNodes.length}</strong></p>
+                                    <button 
+                                        onClick={fetchAllNodes}
+                                        className="btn btn-primary"
+                                        style={{ marginLeft: '1rem' }}
+                                    >
+                                        刷新数据
+                                    </button>
+                                </div>
+                                
+                                <div className="table-responsive">
+                                    <table className="nodes-table">
+                                        <thead>
+                                            <tr>
+                                                <th>数据库ID</th>
+                                                <th>节点名称</th>
+                                                <th>描述</th>
+                                                <th>繁荣度</th>
+                                                <th>资源</th>
+                                                <th>生产率</th>
+                                                <th>状态</th>
+                                                <th>创建者</th>
+                                                <th>创建时间</th>
+                                                <th>操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {allNodes.map((node) => (
+                                                <tr key={node._id}>
+                                                    <td className="id-cell">{node._id}</td>
+                                                    <td>
+                                                        {editingNode === node._id ? (
+                                                            <input
+                                                                type="text"
+                                                                value={editNodeForm.name}
+                                                                onChange={(e) => setEditNodeForm({
+                                                                    ...editNodeForm,
+                                                                    name: e.target.value
+                                                                })}
+                                                                className="edit-input"
+                                                            />
+                                                        ) : (
+                                                            <span className="node-name-cell">{node.name}</span>
+                                                        )}
+                                                    </td>
+                                                    <td>
+                                                        {editingNode === node._id ? (
+                                                            <textarea
+                                                                value={editNodeForm.description}
+                                                                onChange={(e) => setEditNodeForm({
+                                                                    ...editNodeForm,
+                                                                    description: e.target.value
+                                                                })}
+                                                                className="edit-textarea"
+                                                                rows="2"
+                                                            />
+                                                        ) : (
+                                                            <span className="node-description-cell">{node.description}</span>
+                                                        )}
+                                                    </td>
+                                                    <td>
+                                                        {editingNode === node._id ? (
+                                                            <input
+                                                                type="number"
+                                                                value={editNodeForm.prosperity}
+                                                                onChange={(e) => setEditNodeForm({
+                                                                    ...editNodeForm,
+                                                                    prosperity: parseInt(e.target.value)
+                                                                })}
+                                                                className="edit-input-small"
+                                                            />
+                                                        ) : (
+                                                            Math.round(node.prosperity || 0)
+                                                        )}
+                                                    </td>
+                                                    <td>
+                                                        {editingNode === node._id ? (
+                                                            <div className="resource-inputs">
+                                                                <input
+                                                                    type="number"
+                                                                    value={editNodeForm.resources.food}
+                                                                    onChange={(e) => setEditNodeForm({
+                                                                        ...editNodeForm,
+                                                                        resources: {
+                                                                            ...editNodeForm.resources,
+                                                                            food: parseInt(e.target.value)
+                                                                        }
+                                                                    })}
+                                                                    className="edit-input-tiny"
+                                                                    placeholder="食物"
+                                                                />
+                                                                <input
+                                                                    type="number"
+                                                                    value={editNodeForm.resources.metal}
+                                                                    onChange={(e) => setEditNodeForm({
+                                                                        ...editNodeForm,
+                                                                        resources: {
+                                                                            ...editNodeForm.resources,
+                                                                            metal: parseInt(e.target.value)
+                                                                        }
+                                                                    })}
+                                                                    className="edit-input-tiny"
+                                                                    placeholder="金属"
+                                                                />
+                                                                <input
+                                                                    type="number"
+                                                                    value={editNodeForm.resources.energy}
+                                                                    onChange={(e) => setEditNodeForm({
+                                                                        ...editNodeForm,
+                                                                        resources: {
+                                                                            ...editNodeForm.resources,
+                                                                            energy: parseInt(e.target.value)
+                                                                        }
+                                                                    })}
+                                                                    className="edit-input-tiny"
+                                                                    placeholder="能量"
+                                                                />
+                                                            </div>
+                                                        ) : (
+                                                            <div className="resource-display">
+                                                                <span>食: {Math.round(node.resources?.food || 0)}</span>
+                                                                <span>金: {Math.round(node.resources?.metal || 0)}</span>
+                                                                <span>能: {Math.round(node.resources?.energy || 0)}</span>
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td>
+                                                        {editingNode === node._id ? (
+                                                            <div className="production-inputs">
+                                                                <input
+                                                                    type="number"
+                                                                    value={editNodeForm.productionRates.food}
+                                                                    onChange={(e) => setEditNodeForm({
+                                                                        ...editNodeForm,
+                                                                        productionRates: {
+                                                                            ...editNodeForm.productionRates,
+                                                                            food: parseInt(e.target.value)
+                                                                        }
+                                                                    })}
+                                                                    className="edit-input-tiny"
+                                                                    placeholder="食物/分"
+                                                                />
+                                                                <input
+                                                                    type="number"
+                                                                    value={editNodeForm.productionRates.metal}
+                                                                    onChange={(e) => setEditNodeForm({
+                                                                        ...editNodeForm,
+                                                                        productionRates: {
+                                                                            ...editNodeForm.productionRates,
+                                                                            metal: parseInt(e.target.value)
+                                                                        }
+                                                                    })}
+                                                                    className="edit-input-tiny"
+                                                                    placeholder="金属/分"
+                                                                />
+                                                                <input
+                                                                    type="number"
+                                                                    value={editNodeForm.productionRates.energy}
+                                                                    onChange={(e) => setEditNodeForm({
+                                                                        ...editNodeForm,
+                                                                        productionRates: {
+                                                                            ...editNodeForm.productionRates,
+                                                                            energy: parseInt(e.target.value)
+                                                                        }
+                                                                    })}
+                                                                    className="edit-input-tiny"
+                                                                    placeholder="能量/分"
+                                                                />
+                                                            </div>
+                                                        ) : (
+                                                            <div className="production-display">
+                                                                <span>食: {node.productionRates?.food || 0}/分</span>
+                                                                <span>金: {node.productionRates?.metal || 0}/分</span>
+                                                                <span>能: {node.productionRates?.energy || 0}/分</span>
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                    <td>
+                                                        <span className={`status-badge status-${node.status}`}>
+                                                            {node.status === 'pending' ? '待审批' : 
+                                                             node.status === 'approved' ? '已通过' : '已拒绝'}
+                                                        </span>
+                                                    </td>
+                                                    <td>{node.owner?.username || '系统'}</td>
+                                                    <td>{new Date(node.createdAt).toLocaleString('zh-CN')}</td>
+                                                    <td className="action-cell">
+                                                        {editingNode === node._id ? (
+                                                            <>
+                                                                <button
+                                                                    onClick={() => saveNodeEdit(node._id)}
+                                                                    className="btn-action btn-save"
+                                                                >
+                                                                    保存
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => setEditingNode(null)}
+                                                                    className="btn-action btn-cancel"
+                                                                >
+                                                                    取消
+                                                                </button>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <button
+                                                                    onClick={() => startEditNode(node)}
+                                                                    className="btn-action btn-edit"
+                                                                >
+                                                                    编辑
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => deleteNode(node._id, node.name)}
+                                                                    className="btn-action btn-delete"
+                                                                >
+                                                                    删除
+                                                                </button>
+                                                            </>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
