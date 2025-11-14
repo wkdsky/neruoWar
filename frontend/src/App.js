@@ -26,7 +26,7 @@ const App = () => {
       experience: 0
     });
 
-    // 检查本地存储的登录状态
+    // 修改检查登录状态的useEffect
     useEffect(() => {
         const token = localStorage.getItem('token');
         const storedUsername = localStorage.getItem('username');
@@ -35,16 +35,21 @@ const App = () => {
             setAuthenticated(true);
             setUsername(storedUsername);
             setView('game');
+            checkAdminStatus();
             
             // 如果socket已连接，重新认证
-            if (socket) {
+            if (socket && socket.connected) {
                 socket.emit('authenticate', token);
+                setTimeout(() => {
+                    socket.emit('getGameState');
+                }, 200);
             }
-            
+
             // 检查管理员状态
             checkAdminStatus();
         }
-    }, [socket]);
+    }, []); // 只在组件挂载时执行一次
+
 
     // 新节点创建状态
     const [showCreateNodeModal, setShowCreateNodeModal] = useState(false);
@@ -73,8 +78,9 @@ const App = () => {
       productionRates: { food: 0, metal: 0, energy: 0 }
     });
     useEffect(() => {
-        if (socketRef.current) {
-            return;
+        // 只在没有socket时初始化
+        if (!socketRef.current) {
+            initializeSocket();
         }
 
         const newSocket = io('http://192.168.1.96:5000', {
@@ -89,6 +95,11 @@ const App = () => {
         
         newSocket.on('connect', () => {
             console.log('WebSocket 连接成功:', newSocket.id);
+            // 如果用户已经登录，自动认证
+            const token = localStorage.getItem('token');
+            if (token) {
+                newSocket.emit('authenticate', token);
+            }
         });
 
         newSocket.on('connect_error', (error) => {
@@ -159,73 +170,213 @@ const App = () => {
         };
     }, []);
 
+    // 动画帧引用
+    const animationRef = useRef(null);
+    const [animationTime, setAnimationTime] = useState(0);
+
+    // 启动持续动画
     useEffect(() => {
-        if (canvasRef.current && nodes.length > 0) {
-            drawNetwork();
-        }
-    }, [nodes, selectedNode]);
+        const startAnimation = () => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
 
-    const drawNetwork = () => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
 
-        const ctx = canvas.getContext('2d');
-        const width = canvas.width;
-        const height = canvas.height;
+            ctx.clearRect(0, 0, width, height);
 
-        ctx.clearRect(0, 0, width, height);
-
-        // 绘制连接线
-        ctx.strokeStyle = '#4b5563';
-        ctx.lineWidth = 2;
-        nodes.forEach(node => {
-            node.connectedNodes?.forEach(connectedId => {
-                const connectedNode = nodes.find(n => n._id === connectedId);
-                if (connectedNode) {
-                    ctx.beginPath();
-                    ctx.moveTo(node.position.x, node.position.y);
-                    ctx.lineTo(connectedNode.position.x, connectedNode.position.y);
-                    ctx.stroke();
+            // 绘制关联连线
+            nodes.forEach(node => {
+                if (node.associations && node.associations.length > 0) {
+                    node.associations.forEach(association => {
+                        const targetNode = nodes.find(n => n._id === association.targetNode);
+                        if (targetNode) {
+                            drawAssociationLine(ctx, node, targetNode, association.relationType);
+                        }
+                    });
                 }
             });
-        });
 
-        // 绘制节点
-        nodes.forEach(node => {
-            const prosperity = node.prosperity || 100;
-            const radius = 15 + (prosperity / 50);
-            
-            // 节点光晕
-            const gradient = ctx.createRadialGradient(
-                node.position.x, node.position.y, 0,
-                node.position.x, node.position.y, radius
-            );
-            gradient.addColorStop(0, `rgba(59, 130, 246, ${prosperity / 200})`);
-            gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
-            
-            ctx.fillStyle = gradient;
-            ctx.beginPath();
-            ctx.arc(node.position.x, node.position.y, radius * 1.5, 0, Math.PI * 2);
-            ctx.fill();
+            // 绘制节点
+            nodes.forEach(node => {
+                const prosperity = node.prosperity || 100;
+                const radius = 15 + (prosperity / 50);
+                
+                // 节点光晕
+                const gradient = ctx.createRadialGradient(
+                    node.position.x, node.position.y, 0,
+                    node.position.x, node.position.y, radius
+                );
+                gradient.addColorStop(0, `rgba(59, 130, 246, ${prosperity / 200})`);
+                gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
+                
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(node.position.x, node.position.y, radius * 1.5, 0, Math.PI * 2);
+                ctx.fill();
 
-            // 节点主体
-            ctx.fillStyle = selectedNode?._id === node._id ? '#3b82f6' : '#6366f1';
-            ctx.beginPath();
-            ctx.arc(node.position.x, node.position.y, radius, 0, Math.PI * 2);
-            ctx.fill();
+                // 节点主体
+                ctx.fillStyle = selectedNode?._id === node._id ? '#3b82f6' : '#6366f1';
+                ctx.beginPath();
+                ctx.arc(node.position.x, node.position.y, radius, 0, Math.PI * 2);
+                ctx.fill();
 
-            // 节点边框
-            ctx.strokeStyle = '#1e40af';
-            ctx.lineWidth = 2;
-            ctx.stroke();
+                // 节点边框
+                ctx.strokeStyle = '#1e40af';
+                ctx.lineWidth = 2;
+                ctx.stroke();
 
-            // 节点名称
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '12px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(node.name, node.position.x, node.position.y - radius - 5);
-        });
+                // 节点名称
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '12px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(node.name, node.position.x, node.position.y - radius - 5);
+            });
+
+            // 持续请求下一帧动画
+            animationRef.current = requestAnimationFrame(() => {
+                setAnimationTime(prev => prev + 0.02);
+                startAnimation();
+            });
+        };
+
+        // 启动动画循环
+        startAnimation();
+
+        // 清理函数
+        return () => {
+            if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+            }
+        };
+    }, [nodes, selectedNode, associations, animationTime]);
+
+    const drawNetwork = () => {
+        // 这个函数现在被整合到动画循环中
     };
+
+    const drawAssociationLine = (ctx, sourceNode, targetNode, relationType) => {
+        const startX = sourceNode.position.x;
+        const startY = sourceNode.position.y;
+        const endX = targetNode.position.x;
+        const endY = targetNode.position.y;
+        
+        // 计算连线的角度和距离
+        const dx = endX - startX;
+        const dy = endY - startY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const angle = Math.atan2(dy, dx);
+        
+        // 根据关系类型设置不同的样式
+        let lineColor, lineWidth, dashPattern;
+        
+        if (relationType === 'contains') {
+            // 包含关系：母节点包含子节点，使用金色渐变
+            lineColor = '#fbbf24';
+            lineWidth = 3;
+            dashPattern = [10, 5];
+        } else {
+            // 扩展关系：子节点被包含到母节点，使用绿色渐变
+            lineColor = '#10b981';
+            lineWidth = 2;
+            dashPattern = [5, 5];
+        }
+        
+        // 设置连线样式
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = lineWidth;
+        ctx.setLineDash(dashPattern);
+        
+        // 绘制连线
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+        
+        // 重置虚线模式
+        ctx.setLineDash([]);
+        
+        // 绘制动态流动效果
+        drawFlowEffect(ctx, startX, startY, endX, endY, angle, distance, relationType);
+        
+        // 绘制箭头
+        drawArrow(ctx, endX, endY, angle, relationType);
+    };
+
+    const drawFlowEffect = (ctx, startX, startY, endX, endY, angle, distance, relationType) => {
+        const flowSpeed = 0.5;
+        const flowOffset = (animationTime * flowSpeed) % 1;
+        
+        // 计算流动点的位置
+        const flowX = startX + (endX - startX) * flowOffset;
+        const flowY = startY + (endY - startY) * flowOffset;
+        
+        // 设置流动点样式
+        let flowColor, flowRadius;
+        if (relationType === 'contains') {
+            flowColor = '#fef3c7';
+            flowRadius = 4;
+        } else {
+            flowColor = '#d1fae5';
+            flowRadius = 3;
+        }
+        
+        // 绘制流动点
+        ctx.fillStyle = flowColor;
+        ctx.beginPath();
+        ctx.arc(flowX, flowY, flowRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // 添加光晕效果
+        const glowGradient = ctx.createRadialGradient(
+            flowX, flowY, 0,
+            flowX, flowY, flowRadius * 2
+        );
+        glowGradient.addColorStop(0, `${flowColor}80`);
+        glowGradient.addColorStop(1, `${flowColor}00`);
+        
+        ctx.fillStyle = glowGradient;
+        ctx.beginPath();
+        ctx.arc(flowX, flowY, flowRadius * 2, 0, Math.PI * 2);
+        ctx.fill();
+    };
+
+    const drawArrow = (ctx, x, y, angle, relationType) => {
+        const arrowLength = 12;
+        const arrowWidth = 8;
+        
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        
+        // 设置箭头样式
+        let arrowColor;
+        if (relationType === 'contains') {
+            arrowColor = '#f59e0b';
+        } else {
+            arrowColor = '#059669';
+        }
+        
+        ctx.fillStyle = arrowColor;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-arrowLength, -arrowWidth / 2);
+        ctx.lineTo(-arrowLength, arrowWidth / 2);
+        ctx.closePath();
+        ctx.fill();
+        
+        ctx.restore();
+    };
+
+    // 清理动画帧
+    useEffect(() => {
+        return () => {
+            if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+            }
+        };
+    }, []);
 
     const handleLogin = async (isRegister = false) => {
         try {
@@ -234,7 +385,7 @@ const App = () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password })
             });
-
+    
             const data = await response.json();
             if (response.ok) {
                 localStorage.setItem('token', data.token);
@@ -243,8 +394,15 @@ const App = () => {
                 setView('game');
                 setUsername(data.username);
                 
-                if (socket) {
+                // 确保socket已连接并重新设置监听器
+                if (socket && socket.connected) {
                     socket.emit('authenticate', data.token);
+                    setTimeout(() => {
+                        socket.emit('getGameState');
+                    }, 100);
+                } else {
+                    // 重新初始化socket连接
+                    initializeSocket(data.token);
                 }
                 
                 await checkAdminStatus();
@@ -265,9 +423,114 @@ const App = () => {
         setView('login');
         setIsAdmin(false);
         
+        // 清理socket连接和引用
         if (socket) {
             socket.disconnect();
         }
+        if (socketRef.current) {
+            socketRef.current.removeAllListeners();
+            socketRef.current.close();
+            socketRef.current = null; // 关键：清空引用
+        }
+        setSocket(null); // 清空state
+        
+        // 清理节点数据
+        setNodes([]);
+        setArmies([]);
+        setSelectedNode(null);
+    };
+
+    // 将socket初始化逻辑提取为独立函数
+    const initializeSocket = (token = null) => {
+        // 如果已存在socket，先清理
+        if (socketRef.current) {
+            socketRef.current.removeAllListeners();
+            socketRef.current.close();
+            socketRef.current = null;
+        }
+
+        const newSocket = io('http://192.168.1.96:5000', {
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            reconnectionAttempts: 5,
+            timeout: 20000,
+            autoConnect: true
+        });
+        
+        newSocket.on('connect', () => {
+            console.log('WebSocket 连接成功:', newSocket.id);
+            const authToken = token || localStorage.getItem('token');
+            if (authToken) {
+                newSocket.emit('authenticate', authToken);
+                // 认证后立即请求游戏状态
+                setTimeout(() => {
+                    newSocket.emit('getGameState');
+                }, 200);
+            }
+        });
+
+        newSocket.on('connect_error', (error) => {
+            console.error('WebSocket 连接错误:', error);
+        });
+
+        newSocket.on('disconnect', (reason) => {
+            console.log('WebSocket 断开连接:', reason);
+        });
+
+        newSocket.on('authenticated', (data) => {
+            console.log('认证成功');
+            setAuthenticated(true);
+            setView('game');
+            newSocket.emit('getGameState');
+        });
+
+        newSocket.on('gameState', (data) => {
+            console.log('收到游戏状态:', data);
+            const approvedNodes = (data.nodes || []).filter(node => node.status === 'approved');
+            setNodes(approvedNodes);
+            setArmies(data.armies || []);
+        });
+
+        newSocket.on('nodeCreated', (node) => {
+            if (node.status === 'approved') {
+                setNodes(prev => [...prev, node]);
+            }
+        });
+
+        newSocket.on('armyProduced', (data) => {
+            setArmies(prev => {
+                const existing = prev.find(a => a.nodeId === data.nodeId && a.type === data.type);
+                if (existing) {
+                    return prev.map(a => 
+                        a.nodeId === data.nodeId && a.type === data.type 
+                            ? { ...a, count: a.count + data.count }
+                            : a
+                    );
+                }
+                return [...prev, data.army];
+            });
+        });
+
+        newSocket.on('techUpgraded', (tech) => {
+            setTechnologies(prev => {
+                const existing = prev.find(t => t.techId === tech.techId);
+                if (existing) {
+                    return prev.map(t => t.techId === tech.techId ? tech : t);
+                }
+                return [...prev, tech];
+            });
+        });
+
+        newSocket.on('resourcesUpdated', () => {
+            newSocket.emit('getGameState');
+        });
+
+        socketRef.current = newSocket;
+        setSocket(newSocket);
+        
+        return newSocket;
     };
 
     const handleCreateNode = () => {
@@ -782,7 +1045,12 @@ const App = () => {
                             </div>
                             <div className="header-buttons">
                                 <button
-                                    onClick={() => setView('game')}
+                                    onClick={() => {
+                                        setView('game');
+                                        if (socket) {
+                                            socket.emit('getGameState');
+                                        }
+                                    }}
                                     className="btn btn-primary"
                                 >
                                     地图
@@ -810,11 +1078,9 @@ const App = () => {
                 </div>
 
                 {view === 'game' && (
-                    <div className="game-layout">
-                        {/* 主地图区域 */}
-                        <div className="map-section">
-                            <div className="section-header">
-                                <h2 className="section-title">节点网络图</h2>
+                    <div className="game-layout-fullscreen">
+                        {/* 地图控制栏 */}
+                        <div className="map-controls">
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                 <button
                                     onClick={openCreateNodeModal}
@@ -839,122 +1105,128 @@ const App = () => {
                                     </button>
                                 )}
                             </div>
-                            </div>
+                        </div>
+
+                        {/* 主地图区域 - 占满剩余空间 */}
+                        <div className="map-section-fullscreen">
                             <canvas
                                 ref={canvasRef}
-                                width={800}
-                                height={500}
+                                width={window.innerWidth}
+                                height={window.innerHeight - 100} // 减去头部和控制栏高度
                                 onClick={handleCanvasClick}
-                                className="game-canvas"
+                                className="game-canvas-fullscreen"
                             />
                         </div>
 
-                        {/* 侧边栏 */}
-                        <div className="sidebar">
-                            {/* 节点信息 */}
-                            <div className="card">
-                                <h3 className="card-title">
-                                    <Zap className="icon-small icon-yellow" />
-                                    {selectedNode ? selectedNode.name : '未选择节点'}
-                                </h3>
-                                
-                                {selectedNode && (
-                                    <div className="card-content">
-                                        <div className="info-box">
-                                            <p className="info-label">繁荣度</p>
-                                            <div className="progress-container">
-                                                <div className="progress-bar">
-                                                    <div
-                                                        className="progress-fill"
-                                                        style={{ width: `${Math.min(selectedNode.prosperity || 0, 100)}%` }}
-                                                    />
-                                                </div>
-                                                <span className="progress-value">{Math.round(selectedNode.prosperity || 0)}</span>
-                                            </div>
-                                        </div>
-
-                                        <div className="info-box">
-                                            <p className="info-label">资源</p>
-                                            <div className="resource-list">
-                                                <div className="resource-item">
-                                                    <span>食物:</span>
-                                                    <span className="resource-value">{Math.round(selectedNode.resources?.food || 0)}</span>
-                                                </div>
-                                                <div className="resource-item">
-                                                    <span>金属:</span>
-                                                    <span className="resource-value">{Math.round(selectedNode.resources?.metal || 0)}</span>
-                                                </div>
-                                                <div className="resource-item">
-                                                    <span>能量:</span>
-                                                    <span className="resource-value">{Math.round(selectedNode.resources?.energy || 0)}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="info-box">
-                                            <p className="info-label">生产率</p>
-                                            <div className="resource-list">
-                                                <div className="resource-item">
-                                                    <span>食物/分:</span>
-                                                    <span className="resource-value">{selectedNode.productionRates?.food || 0}</span>
-                                                </div>
-                                                <div className="resource-item">
-                                                    <span>金属/分:</span>
-                                                    <span className="resource-value">{selectedNode.productionRates?.metal || 0}</span>
-                                                </div>
-                                                <div className="resource-item">
-                                                    <span>能量/分:</span>
-                                                    <span className="resource-value">{selectedNode.productionRates?.energy || 0}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* 军队生产 */}
-                            <div className="card">
-                                <h3 className="card-title">
-                                    <Sword className="icon-small icon-red" />
-                                    军队生产
-                                </h3>
-                                
-                                <div className="army-grid">
-                                    {[
-                                        { type: 'infantry', label: '步兵' },
-                                        { type: 'cavalry', label: '骑兵' },
-                                        { type: 'archer', label: '弓箭手' },
-                                        { type: 'siege', label: '攻城器' }
-                                    ].map(army => (
-                                        <button
-                                            key={army.type}
-                                            onClick={() => handleProduceArmy(army.type)}
-                                            disabled={!selectedNode}
-                                            className="btn btn-danger"
-                                        >
-                                            {army.label}
-                                        </button>
-                                    ))}
+                        {/* 节点信息浮框 */}
+                        {selectedNode && (
+                            <div className="node-popup">
+                                <div className="popup-header">
+                                    <h3 className="popup-title">
+                                        <Zap className="icon-small icon-yellow" />
+                                        {selectedNode.name}
+                                    </h3>
+                                    <button
+                                        onClick={() => setSelectedNode(null)}
+                                        className="btn-close"
+                                    >
+                                        <X className="icon-small" />
+                                    </button>
                                 </div>
-
-                                {selectedNode && (
-                                    <div className="army-list">
-                                        {armies
-                                            .filter(a => a.nodeId === selectedNode._id)
-                                            .map((army, idx) => (
-                                                <div key={idx} className="army-item">
-                                                    <span className="army-name">
-                                                        {army.type === 'infantry' ? '步兵' :
-                                                         army.type === 'cavalry' ? '骑兵' :
-                                                         army.type === 'archer' ? '弓箭手' : '攻城器'}
-                                                    </span>
-                                                    <span className="army-count">×{army.count}</span>
-                                                </div>
-                                            ))}
+                                
+                                <div className="popup-content">
+                                    <div className="info-box">
+                                        <p className="info-label">繁荣度</p>
+                                        <div className="progress-container">
+                                            <div className="progress-bar">
+                                                <div
+                                                    className="progress-fill"
+                                                    style={{ width: `${Math.min(selectedNode.prosperity || 0, 100)}%` }}
+                                                />
+                                            </div>
+                                            <span className="progress-value">{Math.round(selectedNode.prosperity || 0)}</span>
+                                        </div>
                                     </div>
-                                )}
+
+                                    <div className="info-box">
+                                        <p className="info-label">资源</p>
+                                        <div className="resource-list">
+                                            <div className="resource-item">
+                                                <span>食物:</span>
+                                                <span className="resource-value">{Math.round(selectedNode.resources?.food || 0)}</span>
+                                            </div>
+                                            <div className="resource-item">
+                                                <span>金属:</span>
+                                                <span className="resource-value">{Math.round(selectedNode.resources?.metal || 0)}</span>
+                                            </div>
+                                            <div className="resource-item">
+                                                <span>能量:</span>
+                                                <span className="resource-value">{Math.round(selectedNode.resources?.energy || 0)}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="info-box">
+                                        <p className="info-label">生产率</p>
+                                        <div className="resource-list">
+                                            <div className="resource-item">
+                                                <span>食物/分:</span>
+                                                <span className="resource-value">{selectedNode.productionRates?.food || 0}</span>
+                                            </div>
+                                            <div className="resource-item">
+                                                <span>金属/分:</span>
+                                                <span className="resource-value">{selectedNode.productionRates?.metal || 0}</span>
+                                            </div>
+                                            <div className="resource-item">
+                                                <span>能量/分:</span>
+                                                <span className="resource-value">{selectedNode.productionRates?.energy || 0}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* 军队生产 */}
+                                    <div className="info-box">
+                                        <p className="info-label">军队生产</p>
+                                        <div className="army-grid-popup">
+                                            {[
+                                                { type: 'infantry', label: '步兵' },
+                                                { type: 'cavalry', label: '骑兵' },
+                                                { type: 'archer', label: '弓箭手' },
+                                                { type: 'siege', label: '攻城器' }
+                                            ].map(army => (
+                                                <button
+                                                    key={army.type}
+                                                    onClick={() => handleProduceArmy(army.type)}
+                                                    className="btn btn-danger btn-small"
+                                                >
+                                                    {army.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {armies.filter(a => a.nodeId === selectedNode._id).length > 0 && (
+                                        <div className="info-box">
+                                            <p className="info-label">当前军队</p>
+                                            <div className="army-list">
+                                                {armies
+                                                    .filter(a => a.nodeId === selectedNode._id)
+                                                    .map((army, idx) => (
+                                                        <div key={idx} className="army-item">
+                                                            <span className="army-name">
+                                                                {army.type === 'infantry' ? '步兵' :
+                                                                 army.type === 'cavalry' ? '骑兵' :
+                                                                 army.type === 'archer' ? '弓箭手' : '攻城器'}
+                                                            </span>
+                                                            <span className="army-count">×{army.count}</span>
+                                                        </div>
+                                                    ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        </div>
+                        )}
 
                         {/* 节点创建模态框 */}
                         {showCreateNodeModal && (
@@ -1288,6 +1560,19 @@ const App = () => {
                                 <Zap className="icon-small" />
                                 节点管理
                             </button>
+                            <button
+                                onClick={() => {
+                                    setAdminTab('pending');
+                                    fetchPendingNodes();
+                                }}
+                                className={`admin-tab ${adminTab === 'pending' ? 'active' : ''}`}
+                            >
+                                <Bell className="icon-small" />
+                                待审批节点
+                                {pendingNodes.length > 0 && (
+                                    <span className="notification-badge">{pendingNodes.length}</span>
+                                )}
+                            </button>
                         </div>
 
                         {/* 用户管理选项卡 */}
@@ -1424,6 +1709,93 @@ const App = () => {
                                         </tbody>
                                     </table>
                                 </div>
+                            </div>
+                        )}
+
+                        {/* 待审批节点选项卡 */}
+                        {adminTab === 'pending' && (
+                            <div className="pending-nodes-container">
+                                <div className="table-info">
+                                    <p>待审批节点数: <strong>{pendingNodes.length}</strong></p>
+                                    <button 
+                                        onClick={fetchPendingNodes}
+                                        className="btn btn-primary"
+                                        style={{ marginLeft: '1rem' }}
+                                    >
+                                        刷新数据
+                                    </button>
+                                </div>
+                                
+                                {pendingNodes.length === 0 ? (
+                                    <div className="no-pending-nodes">
+                                        <p>暂无待审批节点</p>
+                                    </div>
+                                ) : (
+                                    <div className="pending-nodes-list admin">
+                                        {pendingNodes.map(node => (
+                                            <div key={node._id} className="pending-node-card">
+                                                <div className="node-header">
+                                                    <h3 className="node-title">{node.name}</h3>
+                                                    <span className={`status-badge status-${node.status}`}>
+                                                        {node.status === 'pending' ? '待审批' : 
+                                                         node.status === 'approved' ? '已通过' : '已拒绝'}
+                                                    </span>
+                                                </div>
+                                                
+                                                <div className="node-details">
+                                                    <p className="node-description">{node.description}</p>
+                                                    
+                                                    <div className="node-meta">
+                                                        <div className="meta-item">
+                                                            <strong>创建者:</strong> {node.owner?.username || '未知用户'}
+                                                        </div>
+                                                        <div className="meta-item">
+                                                            <strong>提交时间:</strong> {new Date(node.createdAt).toLocaleString('zh-CN')}
+                                                        </div>
+                                                        <div className="meta-item">
+                                                            <strong>位置:</strong> ({Math.round(node.position?.x || 0)}, {Math.round(node.position?.y || 0)})
+                                                        </div>
+                                                    </div>
+
+                                                    {node.associations && node.associations.length > 0 && (
+                                                        <div className="associations-section">
+                                                            <h4>关联关系 ({node.associations.length} 个)</h4>
+                                                            <div className="associations-list">
+                                                                {node.associations.map((association, index) => (
+                                                                    <div key={index} className="association-item">
+                                                                        <span className="node-name">
+                                                                            {association.targetNode?.name || '未知节点'}
+                                                                        </span>
+                                                                        <span className="relation-type">
+                                                                            {association.relationType === 'contains' ? '包含' : '拓展'}
+                                                                        </span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                <div className="node-actions">
+                                                    <button
+                                                        onClick={() => approveNode(node._id)}
+                                                        className="btn btn-success"
+                                                    >
+                                                        <Check className="icon-small" />
+                                                        通过
+                                                    </button>
+                                                    <button
+                                                        onClick={() => rejectNode(node._id)}
+                                                        className="btn btn-danger"
+                                                    >
+                                                        <X className="icon-small" />
+                                                        拒绝
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         )}
 

@@ -118,20 +118,26 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
-// 拒绝节点
+// 拒绝节点（直接删除）
 router.post('/reject', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { nodeId } = req.body;
-    const node = await Node.findById(nodeId);
     
+    const node = await Node.findByIdAndDelete(nodeId);
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
 
-    node.status = 'rejected';
-    await node.save();
+    // 从用户拥有的节点列表中移除（如果已添加）
+    await User.findByIdAndUpdate(node.owner, {
+      $pull: { ownedNodes: nodeId }
+    });
 
-    res.json(node);
+    res.json({
+      success: true,
+      message: '节点申请已被拒绝并删除',
+      deletedNode: node.name
+    });
   } catch (error) {
     console.error('拒绝节点错误:', error);
     res.status(500).json({ error: '服务器错误' });
