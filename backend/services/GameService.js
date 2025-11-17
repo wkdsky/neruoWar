@@ -35,6 +35,51 @@ class GameService {
     return node;
   }
 
+  // 每秒更新所有节点知识点
+  static async updateAllNodesPerSecond() {
+    try {
+      const now = new Date();
+      const nodes = await Node.find({});
+      const updatedNodes = [];
+      
+      for (const node of nodes) {
+        // 使用UTC时间避免时区问题
+        const lastUpdated = new Date(node.knowledgePoint.lastUpdated).getTime();
+        const currentTime = now.getTime();
+        const secondsElapsed = (currentTime - lastUpdated) / 1000;
+        
+        if (secondsElapsed > 0) {
+          // 计算每秒实际增量
+          const increment = secondsElapsed * (node.contentScore / 60);
+          node.knowledgePoint.value = parseFloat((node.knowledgePoint.value + increment).toFixed(2));
+          node.knowledgePoint.lastUpdated = now;
+          
+          // 使用批量更新提高性能
+          await Node.updateOne(
+            { _id: node._id },
+            { 
+              $set: { 
+                "knowledgePoint.value": node.knowledgePoint.value,
+                "knowledgePoint.lastUpdated": now
+              }
+            }
+          );
+          
+          updatedNodes.push({
+            _id: node._id,
+            knowledgePoint: node.knowledgePoint
+          });
+        }
+      }
+      
+      console.log(`[${now.toISOString()}] 知识点每秒更新完成，共更新 ${updatedNodes.length} 个节点`);
+      return updatedNodes; // 返回更新后的节点数组，用于广播
+    } catch (error) {
+      console.error('知识点每秒更新失败:', error);
+      return [];
+    }
+  }
+
   // 获取军队基础属性
   static getArmyStats(type, level) {
     const baseStats = {
@@ -130,6 +175,19 @@ class GameService {
     node.resources.energy -= cost.energy;
     await node.save();
     return node;
+  }
+
+  // 更新所有节点的知识点值
+  static async updateKnowledgePoints() {
+    try {
+      const nodes = await Node.find({});
+      for (const node of nodes) {
+        await Node.updateKnowledgePoint(node._id);
+      }
+      console.log(`[${new Date().toISOString()}] 知识点更新完成，共更新 ${nodes.length} 个节点`);
+    } catch (error) {
+      console.error('知识点更新失败:', error);
+    }
   }
 }
 

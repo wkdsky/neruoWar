@@ -59,38 +59,20 @@ const NodeSchema = new mongoose.Schema({
       max: 500
     }
   },
-  resources: {
-    food: { 
-      type: Number, 
-      default: 1000,
-      min: 0
-    },
-    metal: { 
-      type: Number, 
-      default: 500,
-      min: 0
-    },
-    energy: { 
-      type: Number, 
-      default: 300,
-      min: 0
-    }
+  contentScore: { 
+    type: Number, 
+    default: 1,
+    min: 1 
   },
-  productionRates: {
-    food: { 
+  knowledgePoint: {
+    value: { 
       type: Number, 
-      default: 10,
-      min: 0
+      default: 0,
+      set: v => parseFloat(v.toFixed(2)) // 保留两位小数
     },
-    metal: { 
-      type: Number, 
-      default: 5,
-      min: 0
-    },
-    energy: { 
-      type: Number, 
-      default: 3,
-      min: 0
+    lastUpdated: { 
+      type: Date, 
+      default: Date.now 
     }
   },
   associations: [AssociationSchema],
@@ -124,5 +106,20 @@ const NodeSchema = new mongoose.Schema({
 // 索引优化
 NodeSchema.index({ owner: 1 });
 NodeSchema.index({ nodeId: 1 });
+
+// 更新知识点的静态方法
+NodeSchema.statics.updateKnowledgePoint = async function(nodeId) {
+  const node = await this.findById(nodeId);
+  if (!node) return null;
+  
+  const now = new Date();
+  const minutesElapsed = Math.max(0, (now - node.knowledgePoint.lastUpdated) / (1000 * 60));
+  const increment = minutesElapsed * node.contentScore;
+  
+  node.knowledgePoint.value = parseFloat((node.knowledgePoint.value + increment).toFixed(2));
+  node.knowledgePoint.lastUpdated = now;
+  
+  return node.save();
+};
 
 module.exports = mongoose.model('Node', NodeSchema);

@@ -256,6 +256,27 @@ setInterval(async () => {
   }
 }, 60000); // 每分钟执行一次
 
+// 定时任务：知识点更新
+setInterval(async () => {
+  try {
+    await GameService.updateKnowledgePoints();
+  } catch (error) {
+    console.error('知识点更新错误:', error);
+  }
+}, 60000); // 每分钟执行一次
+
+// 定时任务：每秒更新节点知识点并广播
+setInterval(async () => {
+  try {
+    const updatedNodes = await GameService.updateAllNodesPerSecond();
+    if (updatedNodes) {
+      io.emit('knowledgePointUpdated', updatedNodes);
+    }
+  } catch (error) {
+    console.error('每秒更新知识点错误:', error);
+  }
+}, 1000);
+
 // 启动服务��
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {

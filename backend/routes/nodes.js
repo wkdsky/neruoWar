@@ -61,7 +61,8 @@ router.post('/create', authenticateToken, async (req, res) => {
       description,
       position,
       associations: associations || [],
-      status: isUserAdmin ? 'approved' : 'pending'
+      status: isUserAdmin ? 'approved' : 'pending',
+      contentScore: 1 // 新建节点默认内容分数为1
     });
 
     await node.save();
@@ -104,6 +105,8 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     }
 
     node.status = 'approved';
+    // 设置默认内容分数为1
+    node.contentScore = 1;
     await node.save();
 
     // 更新用户拥有的节点列表
@@ -156,6 +159,8 @@ router.post('/associate', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '不能关联自己创建的节点' });
     }
     node.status = 'pending';
+    // 重置内容分数为1（关联节点视为新节点）
+    node.contentScore = 1;
     await node.save();
     res.status(200).json(node);
   } catch (error) {
@@ -226,7 +231,7 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
 router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { nodeId } = req.params;
-    const { name, description, prosperity, resources, productionRates } = req.body;
+    const { name, description, prosperity, contentScore } = req.body;
 
     const node = await Node.findById(nodeId);
     if (!node) {
@@ -254,12 +259,12 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
       node.prosperity = prosperity;
     }
 
-    if (resources !== undefined) {
-      node.resources = resources;
-    }
-
-    if (productionRates !== undefined) {
-      node.productionRates = productionRates;
+    if (contentScore !== undefined) {
+      // 验证内容分数至少为1
+      if (contentScore < 1) {
+        return res.status(400).json({ error: '内容分数至少为1' });
+      }
+      node.contentScore = contentScore;
     }
 
     await node.save();
@@ -298,6 +303,31 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
   } catch (error) {
     console.error('删除节点错误:', error);
     res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取单个节点（需要身份验证）
+router.get('/:id', authenticateToken, async (req, res) => {
+  try {
+    const node = await Node.updateKnowledgePoint(req.params.id);
+    if (!node) {
+      return res.status(404).json({ message: '节点不存在' });
+    }
+    
+    // 检查用户是否有权访问此节点
+    const user = await User.findById(req.user.userId);
+    const isOwner = node.owner.toString() === req.user.userId;
+    const isAdmin = user.role === 'admin';
+    
+    // 只有节点所有者或管理员可以查看未审批节点
+    if (node.status !== 'approved' && !isOwner && !isAdmin) {
+      return res.status(403).json({ message: '无权访问此节点' });
+    }
+    
+    res.json(node);
+  } catch (err) {
+    console.error('获取节点错误:', err);
+    res.status(500).json({ message: '服务器错误' });
   }
 });
 

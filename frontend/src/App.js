@@ -15,7 +15,6 @@ const App = () => {
     const [view, setView] = useState('login');
     const canvasRef = useRef(null);
     const socketRef = useRef(null);
-    const [systemStats, setSystemStats] = useState(null);
     const [isAdmin, setIsAdmin] = useState(false);
     const [allUsers, setAllUsers] = useState([]);
     const [editingUser, setEditingUser] = useState(null);
@@ -35,7 +34,6 @@ const App = () => {
             setAuthenticated(true);
             setUsername(storedUsername);
             setView('game');
-            checkAdminStatus();
             
             // 如果socket已连接，重新认证
             if (socket && socket.connected) {
@@ -82,7 +80,7 @@ const App = () => {
         if (!socketRef.current) {
             initializeSocket();
         }
-
+    
         const newSocket = io('http://192.168.1.96:5000', {
             transports: ['websocket', 'polling'],
             reconnection: true,
@@ -101,63 +99,15 @@ const App = () => {
                 newSocket.emit('authenticate', token);
             }
         });
-
+    
         newSocket.on('connect_error', (error) => {
             console.error('WebSocket 连接错误:', error);
         });
-
+    
         newSocket.on('disconnect', (reason) => {
             console.log('WebSocket 断开连接:', reason);
         });
-
-        newSocket.on('authenticated', (data) => {
-            setAuthenticated(true);
-            setView('game');
-            newSocket.emit('getGameState');
-        });
-
-        newSocket.on('gameState', (data) => {
-            // 只显示已批准的节点
-            const approvedNodes = (data.nodes || []).filter(node => node.status === 'approved');
-            setNodes(approvedNodes);
-            setArmies(data.armies || []);
-        });
-
-        newSocket.on('nodeCreated', (node) => {
-            // 只添加已批准的节点到地图
-            if (node.status === 'approved') {
-                setNodes(prev => [...prev, node]);
-            }
-        });
-
-        newSocket.on('armyProduced', (data) => {
-            setArmies(prev => {
-                const existing = prev.find(a => a.nodeId === data.nodeId && a.type === data.type);
-                if (existing) {
-                    return prev.map(a => 
-                        a.nodeId === data.nodeId && a.type === data.type 
-                            ? { ...a, count: a.count + data.count }
-                            : a
-                    );
-                }
-                return [...prev, data.army];
-            });
-        });
-
-        newSocket.on('techUpgraded', (tech) => {
-            setTechnologies(prev => {
-                const existing = prev.find(t => t.techId === tech.techId);
-                if (existing) {
-                    return prev.map(t => t.techId === tech.techId ? tech : t);
-                }
-                return [...prev, tech];
-            });
-        });
-
-        newSocket.on('resourcesUpdated', () => {
-            newSocket.emit('getGameState');
-        });
-
+    
         socketRef.current = newSocket;
         setSocket(newSocket);
 
@@ -251,10 +201,6 @@ const App = () => {
             }
         };
     }, [nodes, selectedNode, associations, animationTime]);
-
-    const drawNetwork = () => {
-        // 这个函数现在被整合到动画循环中
-    };
 
     const drawAssociationLine = (ctx, sourceNode, targetNode, relationType) => {
         const startX = sourceNode.position.x;
@@ -378,41 +324,40 @@ const App = () => {
         };
     }, []);
 
-    const handleLogin = async (isRegister = false) => {
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/${isRegister ? 'register' : 'login'}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
-            });
-    
-            const data = await response.json();
-            if (response.ok) {
-                localStorage.setItem('token', data.token);
-                localStorage.setItem('username', data.username);
-                setAuthenticated(true);
-                setView('game');
-                setUsername(data.username);
-                
-                // 确保socket已连接并重新设置监听器
-                if (socket && socket.connected) {
-                    socket.emit('authenticate', data.token);
-                    setTimeout(() => {
-                        socket.emit('getGameState');
-                    }, 100);
-                } else {
-                    // 重新初始化socket连接
-                    initializeSocket(data.token);
-                }
-                
-                await checkAdminStatus();
-            } else {
-                window.alert(data.error);
-            }
-        } catch (error) {
-            window.alert('连接失败: ' + error.message);
+    useEffect(() => {
+        // ... 其他代码
+        if (isAdmin) {
+            fetchPendingNodes();
         }
-    };
+    }, [isAdmin]);
+    
+  const handleLogin = async (isRegister = false) => {
+    try {
+      const response = await fetch(`http://192.168.1.96:5000/api/${isRegister ? 'register' : 'login'}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('username', data.username);
+        setAuthenticated(true);
+        setView('game');
+        setUsername(data.username);
+        
+        // 重新初始化socket连接（连接事件中会处理认证）
+        initializeSocket(data.token);
+        
+        await checkAdminStatus();
+      } else {
+        window.alert(data.error);
+      }
+    } catch (error) {
+      window.alert('连接失败: ' + error.message);
+    }
+  };
 
     const handleLogout = () => {
         localStorage.removeItem('token');
@@ -448,7 +393,7 @@ const App = () => {
             socketRef.current.close();
             socketRef.current = null;
         }
-
+    
         const newSocket = io('http://192.168.1.96:5000', {
             transports: ['websocket', 'polling'],
             reconnection: true,
@@ -469,36 +414,43 @@ const App = () => {
                     newSocket.emit('getGameState');
                 }, 200);
             }
+            
+            // 如果是登录操作，立即获取游戏状态
+            if (token) {
+                setTimeout(() => {
+                    newSocket.emit('getGameState');
+                }, 300);
+            }
         });
-
+    
         newSocket.on('connect_error', (error) => {
             console.error('WebSocket 连接错误:', error);
         });
-
+    
         newSocket.on('disconnect', (reason) => {
             console.log('WebSocket 断开连接:', reason);
         });
-
+    
         newSocket.on('authenticated', (data) => {
             console.log('认证成功');
             setAuthenticated(true);
             setView('game');
             newSocket.emit('getGameState');
         });
-
+    
         newSocket.on('gameState', (data) => {
             console.log('收到游戏状态:', data);
             const approvedNodes = (data.nodes || []).filter(node => node.status === 'approved');
             setNodes(approvedNodes);
             setArmies(data.armies || []);
         });
-
-        newSocket.on('nodeCreated', (node) => {
+    
+    newSocket.on('nodeCreated', (node) => {
             if (node.status === 'approved') {
                 setNodes(prev => [...prev, node]);
             }
         });
-
+    
         newSocket.on('armyProduced', (data) => {
             setArmies(prev => {
                 const existing = prev.find(a => a.nodeId === data.nodeId && a.type === data.type);
@@ -512,7 +464,7 @@ const App = () => {
                 return [...prev, data.army];
             });
         });
-
+    
         newSocket.on('techUpgraded', (tech) => {
             setTechnologies(prev => {
                 const existing = prev.find(t => t.techId === tech.techId);
@@ -522,28 +474,54 @@ const App = () => {
                 return [...prev, tech];
             });
         });
-
+    
         newSocket.on('resourcesUpdated', () => {
             newSocket.emit('getGameState');
         });
-
+    
+        // 【关键修改】添加知识点更新监听器
+        newSocket.on('knowledgePointUpdated', (updatedNodes) => {
+            console.log('收到知识点更新:', updatedNodes);
+            setNodes(prevNodes => {
+                const updatedNodeMap = new Map();
+                updatedNodes.forEach(node => updatedNodeMap.set(node._id, node));
+                
+                // 更新现有节点状态 - 创建全新节点对象
+                const newNodes = prevNodes.map(node => {
+                    const updatedNode = updatedNodeMap.get(node._id);
+                    if (updatedNode) {
+                        // 创建全新的节点对象
+                        return {
+                            ...node,
+                            knowledgePoint: updatedNode.knowledgePoint
+                        };
+                    }
+                    return node;
+                });
+                
+                return newNodes;
+            });
+            
+            // 自动更新当前选中的节点（如果存在）
+            setSelectedNode(currentSelected => {
+                if (currentSelected) {
+                    const updatedNode = updatedNodes.find(n => n._id === currentSelected._id);
+                    if (updatedNode) {
+                        // 创建全新的选中节点对象
+                        return {
+                            ...currentSelected,
+                            knowledgePoint: updatedNode.knowledgePoint
+                        };
+                    }
+                }
+                return currentSelected;
+            });
+        });
+    
         socketRef.current = newSocket;
         setSocket(newSocket);
         
         return newSocket;
-    };
-
-    const handleCreateNode = () => {
-        const name = window.prompt('输入节点名称:');
-        if (!name) return;
-
-        const x = Math.random() * 700 + 50;
-        const y = Math.random() * 400 + 50;
-
-        socket.emit('createNode', {
-            name,
-            position: { x, y }
-        });
     };
 
     const handleProduceArmy = (type) => {
@@ -820,16 +798,14 @@ const App = () => {
     };
 
     const fetchPendingNodes = async () => {
-        if (!isAdmin) return;
-        
-        const token = localStorage.getItem('token');
         try {
+            const token = localStorage.getItem('token');
             const response = await fetch('http://192.168.1.96:5000/api/nodes/pending', {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
             });
-
+    
             if (response.ok) {
                 const data = await response.json();
                 setPendingNodes(data);
@@ -1061,17 +1037,20 @@ const App = () => {
                                 >
                                     科技
                                 </button>
-                                {isAdmin && (
-                                    <button
-                                        onClick={() => {
-                                            setView('admin');
-                                            fetchAllUsers();
-                                        }}
-                                        className="btn btn-warning"
-                                    >
-                                        管理员面板
-                                    </button>
-                                )}
+            {isAdmin && (
+                <button
+                    onClick={() => {
+                        setView('admin');
+                        fetchPendingNodes();
+                    }}
+                    className="btn btn-warning"
+                >
+                    管理员面板
+                    {pendingNodes.length > 0 && (
+                        <span className="notification-badge">!</span>
+                    )}
+                </button>
+            )}
                             </div>
                         </div>
                     </div>
@@ -1149,19 +1128,11 @@ const App = () => {
                                     </div>
 
                                     <div className="info-box">
-                                        <p className="info-label">资源</p>
+                                        <p className="info-label">知识点</p>
                                         <div className="resource-list">
                                             <div className="resource-item">
-                                                <span>食物:</span>
-                                                <span className="resource-value">{Math.round(selectedNode.resources?.food || 0)}</span>
-                                            </div>
-                                            <div className="resource-item">
-                                                <span>金属:</span>
-                                                <span className="resource-value">{Math.round(selectedNode.resources?.metal || 0)}</span>
-                                            </div>
-                                            <div className="resource-item">
-                                                <span>能量:</span>
-                                                <span className="resource-value">{Math.round(selectedNode.resources?.energy || 0)}</span>
+                                                <span>当前值:</span>
+                                                <span className="resource-value">{(selectedNode.knowledgePoint?.value || 0).toFixed(2)}</span>
                                             </div>
                                         </div>
                                     </div>
@@ -1170,16 +1141,8 @@ const App = () => {
                                         <p className="info-label">生产率</p>
                                         <div className="resource-list">
                                             <div className="resource-item">
-                                                <span>食物/分:</span>
-                                                <span className="resource-value">{selectedNode.productionRates?.food || 0}</span>
-                                            </div>
-                                            <div className="resource-item">
-                                                <span>金属/分:</span>
-                                                <span className="resource-value">{selectedNode.productionRates?.metal || 0}</span>
-                                            </div>
-                                            <div className="resource-item">
-                                                <span>能量/分:</span>
-                                                <span className="resource-value">{selectedNode.productionRates?.energy || 0}</span>
+                                                <span>知识点/分:</span>
+                                                <span className="resource-value">{selectedNode.contentScore || 1}</span>
                                             </div>
                                         </div>
                                     </div>
@@ -1821,8 +1784,8 @@ const App = () => {
                                                 <th>节点名称</th>
                                                 <th>描述</th>
                                                 <th>繁荣度</th>
-                                                <th>资源</th>
-                                                <th>生产率</th>
+                                        <th>知识点</th>
+                                        <th>内容分数</th>
                                                 <th>状态</th>
                                                 <th>创建者</th>
                                                 <th>创建时间</th>
@@ -1882,51 +1845,17 @@ const App = () => {
                                                         {editingNode === node._id ? (
                                                             <div className="resource-inputs">
                                                                 <input
-                                                                    type="number"
-                                                                    value={editNodeForm.resources.food}
-                                                                    onChange={(e) => setEditNodeForm({
-                                                                        ...editNodeForm,
-                                                                        resources: {
-                                                                            ...editNodeForm.resources,
-                                                                            food: parseInt(e.target.value)
-                                                                        }
-                                                                    })}
+                                                                    type="text"
+                                                                    value={(node.knowledgePoint?.value || 0).toFixed(2)}
+                                                                    readOnly
                                                                     className="edit-input-tiny"
-                                                                    placeholder="食物"
-                                                                />
-                                                                <input
-                                                                    type="number"
-                                                                    value={editNodeForm.resources.metal}
-                                                                    onChange={(e) => setEditNodeForm({
-                                                                        ...editNodeForm,
-                                                                        resources: {
-                                                                            ...editNodeForm.resources,
-                                                                            metal: parseInt(e.target.value)
-                                                                        }
-                                                                    })}
-                                                                    className="edit-input-tiny"
-                                                                    placeholder="金属"
-                                                                />
-                                                                <input
-                                                                    type="number"
-                                                                    value={editNodeForm.resources.energy}
-                                                                    onChange={(e) => setEditNodeForm({
-                                                                        ...editNodeForm,
-                                                                        resources: {
-                                                                            ...editNodeForm.resources,
-                                                                            energy: parseInt(e.target.value)
-                                                                        }
-                                                                    })}
-                                                                    className="edit-input-tiny"
-                                                                    placeholder="能量"
+                                                                    placeholder="知识点"
                                                                 />
                                                             </div>
                                                         ) : (
-                                                            <div className="resource-display">
-                                                                <span>食: {Math.round(node.resources?.food || 0)}</span>
-                                                                <span>金: {Math.round(node.resources?.metal || 0)}</span>
-                                                                <span>能: {Math.round(node.resources?.energy || 0)}</span>
-                                                            </div>
+                                                    <div className="resource-display">
+                                                        <span>{(node.knowledgePoint?.value || 0).toFixed(2)}</span>
+                                                    </div>
                                                         )}
                                                     </td>
                                                     <td>
@@ -1934,50 +1863,19 @@ const App = () => {
                                                             <div className="production-inputs">
                                                                 <input
                                                                     type="number"
-                                                                    value={editNodeForm.productionRates.food}
+                                                                    value={editNodeForm.contentScore}
                                                                     onChange={(e) => setEditNodeForm({
                                                                         ...editNodeForm,
-                                                                        productionRates: {
-                                                                            ...editNodeForm.productionRates,
-                                                                            food: parseInt(e.target.value)
-                                                                        }
+                                                                        contentScore: parseInt(e.target.value)
                                                                     })}
                                                                     className="edit-input-tiny"
-                                                                    placeholder="食物/分"
-                                                                />
-                                                                <input
-                                                                    type="number"
-                                                                    value={editNodeForm.productionRates.metal}
-                                                                    onChange={(e) => setEditNodeForm({
-                                                                        ...editNodeForm,
-                                                                        productionRates: {
-                                                                            ...editNodeForm.productionRates,
-                                                                            metal: parseInt(e.target.value)
-                                                                        }
-                                                                    })}
-                                                                    className="edit-input-tiny"
-                                                                    placeholder="金属/分"
-                                                                />
-                                                                <input
-                                                                    type="number"
-                                                                    value={editNodeForm.productionRates.energy}
-                                                                    onChange={(e) => setEditNodeForm({
-                                                                        ...editNodeForm,
-                                                                        productionRates: {
-                                                                            ...editNodeForm.productionRates,
-                                                                            energy: parseInt(e.target.value)
-                                                                        }
-                                                                    })}
-                                                                    className="edit-input-tiny"
-                                                                    placeholder="能量/分"
+                                                                    placeholder="内容分数"
                                                                 />
                                                             </div>
                                                         ) : (
-                                                            <div className="production-display">
-                                                                <span>食: {node.productionRates?.food || 0}/分</span>
-                                                                <span>金: {node.productionRates?.metal || 0}/分</span>
-                                                                <span>能: {node.productionRates?.energy || 0}/分</span>
-                                                            </div>
+                                                    <div className="production-display">
+                                                        <span>{node.contentScore || 1}</span>
+                                                    </div>
                                                         )}
                                                     </td>
                                                     <td>
