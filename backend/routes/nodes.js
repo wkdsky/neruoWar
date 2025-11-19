@@ -53,6 +53,34 @@ router.post('/create', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '普通用户创建节点必须至少有一个关联关系' });
     }
 
+    // 填充关联母域和关联子域
+    let relatedParentDomains = [];
+    let relatedChildDomains = [];
+
+    if (associations && associations.length > 0) {
+      // 获取所有关联节点的详细信息
+      const targetNodeIds = associations.map(a => a.targetNode);
+      const targetNodes = await Node.find({ _id: { $in: targetNodeIds } });
+
+      // 创建节点ID到节点名称的映射
+      const nodeMap = {};
+      targetNodes.forEach(node => {
+        nodeMap[node._id.toString()] = node.name;
+      });
+
+      // 根据关联类型分类
+      associations.forEach(association => {
+        const targetNodeName = nodeMap[association.targetNode.toString()];
+        if (targetNodeName) {
+          if (association.relationType === 'extends') {
+            relatedParentDomains.push(targetNodeName);
+          } else if (association.relationType === 'contains') {
+            relatedChildDomains.push(targetNodeName);
+          }
+        }
+      });
+    }
+
     const nodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const node = new Node({
       nodeId,
@@ -61,6 +89,8 @@ router.post('/create', authenticateToken, async (req, res) => {
       description,
       position,
       associations: associations || [],
+      relatedParentDomains,
+      relatedChildDomains,
       status: isUserAdmin ? 'approved' : 'pending',
       contentScore: 1 // 新建节点默认内容分数为1
     });
@@ -98,13 +128,31 @@ router.get('/pending', authenticateToken, isAdmin, async (req, res) => {
 router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { nodeId } = req.body;
-    const node = await Node.findById(nodeId);
-    
+    const node = await Node.findById(nodeId).populate('associations.targetNode', 'name');
+
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
 
+    // 填充关联母域和关联子域
+    let relatedParentDomains = [];
+    let relatedChildDomains = [];
+
+    if (node.associations && node.associations.length > 0) {
+      node.associations.forEach(association => {
+        if (association.targetNode && association.targetNode.name) {
+          if (association.relationType === 'extends') {
+            relatedParentDomains.push(association.targetNode.name);
+          } else if (association.relationType === 'contains') {
+            relatedChildDomains.push(association.targetNode.name);
+          }
+        }
+      });
+    }
+
     node.status = 'approved';
+    node.relatedParentDomains = relatedParentDomains;
+    node.relatedChildDomains = relatedChildDomains;
     // 设置默认内容分数为1
     node.contentScore = 1;
     await node.save();

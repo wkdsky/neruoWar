@@ -75,6 +75,8 @@ const App = () => {
       resources: { food: 0, metal: 0, energy: 0 },
       productionRates: { food: 0, metal: 0, energy: 0 }
     });
+    const [showAssociationModal, setShowAssociationModal] = useState(false);
+    const [viewingAssociationNode, setViewingAssociationNode] = useState(null);
     useEffect(() => {
         // 只在没有socket时初始化
         if (!socketRef.current) {
@@ -1789,6 +1791,7 @@ const App = () => {
                                                 <th>状态</th>
                                                 <th>创建者</th>
                                                 <th>创建时间</th>
+                                                <th>查看关联</th>
                                                 <th>操作</th>
                                             </tr>
                                         </thead>
@@ -1886,6 +1889,17 @@ const App = () => {
                                                     </td>
                                                     <td>{node.owner?.username || '系统'}</td>
                                                     <td>{new Date(node.createdAt).toLocaleString('zh-CN')}</td>
+                                                    <td>
+                                                        <button
+                                                            onClick={() => {
+                                                                setViewingAssociationNode(node);
+                                                                setShowAssociationModal(true);
+                                                            }}
+                                                            className="btn-action btn-view"
+                                                        >
+                                                            查看
+                                                        </button>
+                                                    </td>
                                                     <td className="action-cell">
                                                         {editingNode === node._id ? (
                                                             <>
@@ -1926,6 +1940,81 @@ const App = () => {
                                 </div>
                             </div>
                         )}
+                    </div>
+                )}
+
+                {/* 查看关联浮窗 */}
+                {showAssociationModal && viewingAssociationNode && (
+                    <div className="modal-backdrop" onClick={() => setShowAssociationModal(false)}>
+                        <div className="modal-content association-modal" onClick={(e) => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h2>节点关联详情</h2>
+                                <button
+                                    className="modal-close"
+                                    onClick={() => setShowAssociationModal(false)}
+                                >
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            <div className="modal-body">
+                                <div className="association-info">
+                                    <h3 className="node-title">{viewingAssociationNode.name}</h3>
+                                    <p className="node-desc">{viewingAssociationNode.description}</p>
+                                </div>
+
+                                <div className="association-section">
+                                    <h4 className="section-title">
+                                        关联母域（拓展的节点）
+                                    </h4>
+                                    <div className="association-list">
+                                        {viewingAssociationNode.relatedParentDomains &&
+                                         viewingAssociationNode.relatedParentDomains.length > 0 ? (
+                                            <ul>
+                                                {viewingAssociationNode.relatedParentDomains.map((domain, index) => (
+                                                    <li key={index} className="domain-item parent-domain">
+                                                        <span className="domain-badge extends">拓展</span>
+                                                        {domain}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        ) : (
+                                            <p className="empty-message">暂无关联母域</p>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="association-section">
+                                    <h4 className="section-title">
+                                        关联子域（包含的节点）
+                                    </h4>
+                                    <div className="association-list">
+                                        {viewingAssociationNode.relatedChildDomains &&
+                                         viewingAssociationNode.relatedChildDomains.length > 0 ? (
+                                            <ul>
+                                                {viewingAssociationNode.relatedChildDomains.map((domain, index) => (
+                                                    <li key={index} className="domain-item child-domain">
+                                                        <span className="domain-badge contains">包含</span>
+                                                        {domain}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        ) : (
+                                            <p className="empty-message">暂无关联子域</p>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="modal-footer">
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => setShowAssociationModal(false)}
+                                >
+                                    关闭
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>
