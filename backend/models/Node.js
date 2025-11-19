@@ -101,9 +101,17 @@ const NodeSchema = new mongoose.Schema({
     enum: ['pending', 'approved', 'rejected'],
     default: 'approved'
   },
-  lastUpdate: { 
-    type: Date, 
-    default: Date.now 
+  isFeatured: {
+    type: Boolean,
+    default: false
+  },
+  featuredOrder: {
+    type: Number,
+    default: 0
+  },
+  lastUpdate: {
+    type: Date,
+    default: Date.now
   },
   createdAt: {
     type: Date,
@@ -114,6 +122,9 @@ const NodeSchema = new mongoose.Schema({
 // 索引优化
 NodeSchema.index({ owner: 1 });
 NodeSchema.index({ nodeId: 1 });
+NodeSchema.index({ isFeatured: 1, featuredOrder: 1 });
+NodeSchema.index({ status: 1 });
+NodeSchema.index({ name: 'text', description: 'text' });
 
 // 更新知识点的静态方法
 NodeSchema.statics.updateKnowledgePoint = async function(nodeId) {

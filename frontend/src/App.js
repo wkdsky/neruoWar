@@ -33,8 +33,8 @@ const App = () => {
         if (token && storedUsername) {
             setAuthenticated(true);
             setUsername(storedUsername);
-            setView('game');
-            
+            setView('home');
+
             // 如果socket已连接，重新认证
             if (socket && socket.connected) {
                 socket.emit('authenticate', token);
@@ -77,6 +77,22 @@ const App = () => {
     });
     const [showAssociationModal, setShowAssociationModal] = useState(false);
     const [viewingAssociationNode, setViewingAssociationNode] = useState(null);
+
+    // 编辑关联相关状态
+    const [showEditAssociationModal, setShowEditAssociationModal] = useState(false);
+    const [editingAssociationNode, setEditingAssociationNode] = useState(null);
+    const [editAssociations, setEditAssociations] = useState([]);
+    const [assocSearchKeyword, setAssocSearchKeyword] = useState('');
+    const [assocSearchResults, setAssocSearchResults] = useState([]);
+    const [newAssocType, setNewAssocType] = useState('contains');
+
+    // 首页相关状态
+    const [rootNodes, setRootNodes] = useState([]);
+    const [featuredNodes, setFeaturedNodes] = useState([]);
+    const [homeSearchQuery, setHomeSearchQuery] = useState('');
+    const [homeSearchResults, setHomeSearchResults] = useState([]);
+    const [isSearching, setIsSearching] = useState(false);
+
     useEffect(() => {
         // 只在没有socket时初始化
         if (!socketRef.current) {
@@ -346,9 +362,9 @@ const App = () => {
         localStorage.setItem('token', data.token);
         localStorage.setItem('username', data.username);
         setAuthenticated(true);
-        setView('game');
+        setView('home');
         setUsername(data.username);
-        
+
         // 重新初始化socket连接（连接事件中会处理认证）
         initializeSocket(data.token);
         
@@ -610,6 +626,73 @@ const App = () => {
             console.error('获取用户列表失败:', error);
         }
     };
+
+    // 获取根节点
+    const fetchRootNodes = async () => {
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/nodes/public/root-nodes');
+            if (response.ok) {
+                const data = await response.json();
+                setRootNodes(data.nodes);
+            }
+        } catch (error) {
+            console.error('获取根节点失败:', error);
+        }
+    };
+
+    // 获取热门节点
+    const fetchFeaturedNodes = async () => {
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/nodes/public/featured-nodes');
+            if (response.ok) {
+                const data = await response.json();
+                setFeaturedNodes(data.nodes);
+            }
+        } catch (error) {
+            console.error('获取热门节点失败:', error);
+        }
+    };
+
+    // 实时搜索
+    const performHomeSearch = async (query) => {
+        if (!query || query.trim() === '') {
+            setHomeSearchResults([]);
+            setIsSearching(false);
+            return;
+        }
+
+        setIsSearching(true);
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/public/search?query=${encodeURIComponent(query)}`);
+            if (response.ok) {
+                const data = await response.json();
+                setHomeSearchResults(data.results);
+            }
+        } catch (error) {
+            console.error('搜索失败:', error);
+        } finally {
+            setIsSearching(false);
+        }
+    };
+
+    // 监听搜索输入变化
+    useEffect(() => {
+        const timeoutId = setTimeout(() => {
+            if (view === 'home') {
+                performHomeSearch(homeSearchQuery);
+            }
+        }, 300); // 防抖：300ms后执行搜索
+
+        return () => clearTimeout(timeoutId);
+    }, [homeSearchQuery, view]);
+
+    // 初始化首页数据
+    useEffect(() => {
+        if (authenticated && view === 'home') {
+            fetchRootNodes();
+            fetchFeaturedNodes();
+        }
+    }, [authenticated, view]);
 
     const startEditUser = (user) => {
         setEditingUser(user._id);
@@ -957,6 +1040,230 @@ const App = () => {
         }
     };
 
+    // 设置/取消热门节点
+    const toggleFeaturedNode = async (nodeId, currentFeatured) => {
+        const token = localStorage.getItem('token');
+        const action = currentFeatured ? '取消热门' : '设置为热门';
+
+        if (!window.confirm(`确定要${action}吗？`)) return;
+
+        let featuredOrder = 0;
+        if (!currentFeatured) {
+            // 如果是设置为热门，让用户输入排序
+            const orderInput = window.prompt('请输入热门节点的排序（数字越小越靠前）：', '0');
+            if (orderInput === null) return; // 用户取消
+            featuredOrder = parseInt(orderInput) || 0;
+        }
+
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}/featured`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    isFeatured: !currentFeatured,
+                    featuredOrder: featuredOrder
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                alert(data.message);
+                fetchAllNodes();
+                fetchFeaturedNodes(); // 更新首页的热门节点
+            } else {
+                const data = await response.json();
+                alert(data.error || '操作失败');
+            }
+        } catch (error) {
+            console.error('设置热门节点失败:', error);
+            alert('操作失败');
+        }
+    };
+
+    // 打开编辑关联模态框
+    const openEditAssociationModal = async (node) => {
+        setEditingAssociationNode(node);
+        setAssocSearchKeyword('');
+        setAssocSearchResults([]);
+        setNewAssocType('contains');
+        setShowEditAssociationModal(true);
+
+        // 根据关联母域和关联子域重建关联关系
+        const token = localStorage.getItem('token');
+        const allRelatedNames = [
+            ...(node.relatedParentDomains || []),
+            ...(node.relatedChildDomains || [])
+        ];
+
+        if (allRelatedNames.length === 0) {
+            setEditAssociations([]);
+            return;
+        }
+
+        try {
+            // 获取所有节点以便根据名称查找ID
+            const response = await fetch('http://192.168.1.96:5000/api/nodes', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                const allNodes = data.nodes || [];
+
+                // 创建名称到节点的映射
+                const nodeMap = {};
+                allNodes.forEach(n => {
+                    nodeMap[n.name] = n;
+                });
+
+                // 根据关联母域和关联子域构建关联关系
+                const rebuiltAssociations = [];
+
+                // 关联母域中的节点 → 当前节点拓展(extends)它们
+                (node.relatedParentDomains || []).forEach(nodeName => {
+                    const targetNode = nodeMap[nodeName];
+                    if (targetNode) {
+                        rebuiltAssociations.push({
+                            targetNode: targetNode._id,
+                            targetNodeName: targetNode.name,
+                            relationType: 'extends'
+                        });
+                    }
+                });
+
+                // 关联子域中的节点 → 当前节点包含(contains)它们
+                (node.relatedChildDomains || []).forEach(nodeName => {
+                    const targetNode = nodeMap[nodeName];
+                    if (targetNode) {
+                        rebuiltAssociations.push({
+                            targetNode: targetNode._id,
+                            targetNodeName: targetNode.name,
+                            relationType: 'contains'
+                        });
+                    }
+                });
+
+                setEditAssociations(rebuiltAssociations);
+            }
+        } catch (error) {
+            console.error('获取节点列表失败:', error);
+            // 如果获取失败，尝试使用原有的associations
+            const normalizedAssociations = (node.associations || []).map(assoc => {
+                if (typeof assoc.targetNode === 'object' && assoc.targetNode !== null) {
+                    return {
+                        targetNode: assoc.targetNode._id,
+                        targetNodeName: assoc.targetNode.name,
+                        relationType: assoc.relationType
+                    };
+                }
+                return {
+                    targetNode: assoc.targetNode,
+                    targetNodeName: assoc.targetNodeName || assoc.targetNode,
+                    relationType: assoc.relationType
+                };
+            });
+            setEditAssociations(normalizedAssociations);
+        }
+    };
+
+    // 搜索关联节点（用于编辑关联）
+    const searchAssociationNodes = async (keyword) => {
+        if (!keyword || keyword.trim() === '') {
+            setAssocSearchResults([]);
+            return;
+        }
+
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/search?keyword=${encodeURIComponent(keyword)}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                // 过滤掉当前节点自己
+                const filtered = data.filter(n => n._id !== editingAssociationNode._id);
+                setAssocSearchResults(filtered);
+            }
+        } catch (error) {
+            console.error('搜索节点失败:', error);
+        }
+    };
+
+    // 添加编辑关联
+    const addEditAssociation = (targetNode) => {
+        // 检查是否已存在
+        const exists = editAssociations.some(a => a.targetNode === targetNode._id);
+        if (exists) {
+            alert('该节点已在关联列表中');
+            return;
+        }
+
+        setEditAssociations([
+            ...editAssociations,
+            {
+                targetNode: targetNode._id,
+                targetNodeName: targetNode.name,
+                relationType: newAssocType
+            }
+        ]);
+        setAssocSearchKeyword('');
+        setAssocSearchResults([]);
+    };
+
+    // 移除编辑关联
+    const removeEditAssociation = (index) => {
+        setEditAssociations(editAssociations.filter((_, i) => i !== index));
+    };
+
+    // 修改关联类型
+    const changeAssociationType = (index, newType) => {
+        const updated = [...editAssociations];
+        updated[index].relationType = newType;
+        setEditAssociations(updated);
+    };
+
+    // 保存关联编辑
+    const saveAssociationEdit = async () => {
+        const token = localStorage.getItem('token');
+
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${editingAssociationNode._id}/associations`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    associations: editAssociations.map(a => ({
+                        targetNode: a.targetNode,
+                        relationType: a.relationType
+                    }))
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                alert(data.message);
+                setShowEditAssociationModal(false);
+                fetchAllNodes();
+            } else {
+                const data = await response.json();
+                alert(data.error || '保存失败');
+            }
+        } catch (error) {
+            console.error('保存关联失败:', error);
+            alert('保存失败');
+        }
+    };
+
     if (view === 'login') {
         return (
             <div className="login-container">
@@ -1023,13 +1330,20 @@ const App = () => {
                             </div>
                             <div className="header-buttons">
                                 <button
+                                    onClick={() => setView('home')}
+                                    className="btn btn-primary"
+                                >
+                                    <Home size={18} />
+                                    首页
+                                </button>
+                                <button
                                     onClick={() => {
                                         setView('game');
                                         if (socket) {
                                             socket.emit('getGameState');
                                         }
                                     }}
-                                    className="btn btn-primary"
+                                    className="btn btn-secondary"
                                 >
                                     地图
                                 </button>
@@ -1044,6 +1358,8 @@ const App = () => {
                     onClick={() => {
                         setView('admin');
                         fetchPendingNodes();
+                        fetchAllUsers();
+                        fetchAllNodes();
                     }}
                     className="btn btn-warning"
                 >
@@ -1057,6 +1373,123 @@ const App = () => {
                         </div>
                     </div>
                 </div>
+
+                {/* 首页视图 */}
+                {view === 'home' && (
+                    <div className="home-container">
+                        {/* 搜索栏 */}
+                        <div className="home-search-section">
+                            <div className="search-bar-home">
+                                <Search className="search-icon" size={24} />
+                                <input
+                                    type="text"
+                                    placeholder="搜索节点...（支持多关键词，用空格分隔）"
+                                    value={homeSearchQuery}
+                                    onChange={(e) => setHomeSearchQuery(e.target.value)}
+                                    className="search-input-home"
+                                />
+                                {homeSearchQuery && (
+                                    <button
+                                        onClick={() => {
+                                            setHomeSearchQuery('');
+                                            setHomeSearchResults([]);
+                                        }}
+                                        className="search-clear-btn"
+                                    >
+                                        <X size={18} />
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* 搜索结果 */}
+                            {homeSearchQuery && (
+                                <div className="search-results-home">
+                                    {isSearching ? (
+                                        <div className="search-loading">搜索中...</div>
+                                    ) : homeSearchResults.length > 0 ? (
+                                        <div className="results-list">
+                                            {homeSearchResults.map((node) => (
+                                                <div key={node._id} className="result-item">
+                                                    <div className="result-header">
+                                                        <h4>{node.name}</h4>
+                                                        <span className="result-knowledge">
+                                                            {(node.knowledgePoint?.value || 0).toFixed(2)} 知识点
+                                                        </span>
+                                                    </div>
+                                                    <p className="result-desc">{node.description}</p>
+                                                    <div className="result-meta">
+                                                        <span>创建者: {node.owner?.username || '系统'}</span>
+                                                        <span>内容分数: {node.contentScore || 1}</span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="search-empty">未找到匹配的节点</div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 根节点展示区 */}
+                        <div className="root-nodes-section">
+                            <h2 className="section-title">根节点</h2>
+                            <div className="root-nodes-grid">
+                                {rootNodes.length > 0 ? (
+                                    rootNodes.map((node) => (
+                                        <div key={node._id} className="node-card root-node-card">
+                                            <div className="node-card-header">
+                                                <h3>{node.name}</h3>
+                                                <div className="node-badge root-badge">根节点</div>
+                                            </div>
+                                            <p className="node-card-desc">{node.description}</p>
+                                            <div className="node-card-footer">
+                                                <div className="node-stat">
+                                                    <Zap size={16} />
+                                                    <span>{(node.knowledgePoint?.value || 0).toFixed(2)}</span>
+                                                </div>
+                                                <div className="node-stat">
+                                                    <span>内容分数: {node.contentScore || 1}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="empty-message">暂无根节点</div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* 热门节点横向滚动区 */}
+                        <div className="featured-nodes-section">
+                            <h2 className="section-title">热门节点</h2>
+                            <div className="featured-nodes-scroll">
+                                {featuredNodes.length > 0 ? (
+                                    featuredNodes.map((node) => (
+                                        <div key={node._id} className="node-card featured-node-card">
+                                            <div className="node-card-header">
+                                                <h3>{node.name}</h3>
+                                                <div className="node-badge featured-badge">热门</div>
+                                            </div>
+                                            <p className="node-card-desc">{node.description}</p>
+                                            <div className="node-card-footer">
+                                                <div className="node-stat">
+                                                    <Zap size={16} />
+                                                    <span>{(node.knowledgePoint?.value || 0).toFixed(2)}</span>
+                                                </div>
+                                                <div className="node-stat">
+                                                    <span>内容分数: {node.contentScore || 1}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="empty-message">管理员暂未设置热门节点</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {view === 'game' && (
                     <div className="game-layout-fullscreen">
@@ -1791,6 +2224,7 @@ const App = () => {
                                                 <th>状态</th>
                                                 <th>创建者</th>
                                                 <th>创建时间</th>
+                                                <th>热门</th>
                                                 <th>查看关联</th>
                                                 <th>操作</th>
                                             </tr>
@@ -1890,15 +2324,38 @@ const App = () => {
                                                     <td>{node.owner?.username || '系统'}</td>
                                                     <td>{new Date(node.createdAt).toLocaleString('zh-CN')}</td>
                                                     <td>
-                                                        <button
-                                                            onClick={() => {
-                                                                setViewingAssociationNode(node);
-                                                                setShowAssociationModal(true);
-                                                            }}
-                                                            className="btn-action btn-view"
-                                                        >
-                                                            查看
-                                                        </button>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                            {node.isFeatured && (
+                                                                <span className="featured-badge-small">
+                                                                    热门 (排序: {node.featuredOrder || 0})
+                                                                </span>
+                                                            )}
+                                                            <button
+                                                                onClick={() => toggleFeaturedNode(node._id, node.isFeatured)}
+                                                                className={`btn-action ${node.isFeatured ? 'btn-featured-active' : 'btn-featured'}`}
+                                                            >
+                                                                {node.isFeatured ? '取消热门' : '设为热门'}
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                            <button
+                                                                onClick={() => {
+                                                                    setViewingAssociationNode(node);
+                                                                    setShowAssociationModal(true);
+                                                                }}
+                                                                className="btn-action btn-view"
+                                                            >
+                                                                查看
+                                                            </button>
+                                                            <button
+                                                                onClick={() => openEditAssociationModal(node)}
+                                                                className="btn-action btn-edit"
+                                                            >
+                                                                编辑
+                                                            </button>
+                                                        </div>
                                                     </td>
                                                     <td className="action-cell">
                                                         {editingNode === node._id ? (
@@ -2012,6 +2469,129 @@ const App = () => {
                                     onClick={() => setShowAssociationModal(false)}
                                 >
                                     关闭
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 编辑关联浮窗 */}
+                {showEditAssociationModal && editingAssociationNode && (
+                    <div className="modal-backdrop" onClick={() => setShowEditAssociationModal(false)}>
+                        <div className="modal-content edit-association-modal" onClick={(e) => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h2>编辑节点关联 - {editingAssociationNode.name}</h2>
+                                <button
+                                    className="modal-close"
+                                    onClick={() => setShowEditAssociationModal(false)}
+                                >
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            <div className="modal-body">
+                                {/* 搜索添加新关联 */}
+                                <div className="add-association-section">
+                                    <h4>添加新关联</h4>
+                                    <div className="search-add-container">
+                                        <div className="search-input-group">
+                                            <input
+                                                type="text"
+                                                placeholder="搜索节点..."
+                                                value={assocSearchKeyword}
+                                                onChange={(e) => {
+                                                    setAssocSearchKeyword(e.target.value);
+                                                    searchAssociationNodes(e.target.value);
+                                                }}
+                                                className="search-input"
+                                            />
+                                        </div>
+                                        <div className="relation-type-selector">
+                                            <label>
+                                                <input
+                                                    type="radio"
+                                                    value="contains"
+                                                    checked={newAssocType === 'contains'}
+                                                    onChange={(e) => setNewAssocType(e.target.value)}
+                                                />
+                                                包含
+                                            </label>
+                                            <label>
+                                                <input
+                                                    type="radio"
+                                                    value="extends"
+                                                    checked={newAssocType === 'extends'}
+                                                    onChange={(e) => setNewAssocType(e.target.value)}
+                                                />
+                                                拓展
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    {assocSearchResults.length > 0 && (
+                                        <div className="search-results-box">
+                                            {assocSearchResults.map((node) => (
+                                                <div key={node._id} className="search-result-item">
+                                                    <span>{node.name}</span>
+                                                    <button
+                                                        onClick={() => addEditAssociation(node)}
+                                                        className="btn-action btn-add-small"
+                                                    >
+                                                        添加
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* 当前关联列表 */}
+                                <div className="current-associations-section">
+                                    <h4>当前关联（{editAssociations.length}个）</h4>
+                                    {editAssociations.length > 0 ? (
+                                        <div className="associations-list">
+                                            {editAssociations.map((assoc, index) => (
+                                                <div key={index} className="association-item-edit">
+                                                    <div className="assoc-info">
+                                                        <span className="assoc-name">
+                                                            {assoc.targetNodeName || assoc.targetNode}
+                                                        </span>
+                                                        <select
+                                                            value={assoc.relationType}
+                                                            onChange={(e) => changeAssociationType(index, e.target.value)}
+                                                            className="assoc-type-select"
+                                                        >
+                                                            <option value="contains">包含</option>
+                                                            <option value="extends">拓展</option>
+                                                        </select>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => removeEditAssociation(index)}
+                                                        className="btn-action btn-delete-small"
+                                                    >
+                                                        删除
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p className="empty-message">暂无关联</p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="modal-footer">
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => setShowEditAssociationModal(false)}
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={saveAssociationEdit}
+                                >
+                                    保存
                                 </button>
                             </div>
                         </div>
