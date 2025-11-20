@@ -2185,10 +2185,10 @@ body {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 2rem;
-    background: rgba(30, 41, 59, 0.8);
+    background: transparent;
     padding: 1.5rem;
     border-radius: 12px;
-    border: 1px solid rgba(168, 85, 247, 0.3);
+    border: none;
 }
 
 .detail-title {
@@ -2199,11 +2199,9 @@ body {
 }
 
 .node-detail-canvas {
-    background: rgba(15, 23, 42, 0.5);
-    border-radius: 12px;
-    border: 2px solid rgba(168, 85, 247, 0.3);
+    background: transparent;
+    border: none;
     cursor: pointer;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
 }
 
 /* 节点详细信息模态框样式 */
@@ -2522,4 +2520,58 @@ body {
 
 .navigation-tree-canvas-container::-webkit-scrollbar-thumb:hover {
     background: rgba(168, 85, 247, 0.7);
+}
+
+/* ===== 真实的页面转场动画 ===== */
+.page-transition-wrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9999;
+    pointer-events: none;
+}
+
+/* 共享节点元素 - 在转场时显示 */
+.shared-node-element {
+    position: fixed;
+    z-index: 10000;
+    pointer-events: none;
+    transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 旧页面淡出 */
+.page-transitioning-out {
+    animation: fadeOutPage 0.8s ease-out forwards;
+}
+
+@keyframes fadeOutPage {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
+}
+
+/* 新页面淡入 */
+.page-transitioning-in {
+    animation: fadeInPage 0.8s ease-out forwards;
+    animation-delay: 0.4s;
+    opacity: 0;
+}
+
+@keyframes fadeInPage {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+/* 节点卡片在转场时隐藏 */
+.node-transitioning {
+    opacity: 0 !important;
 }
