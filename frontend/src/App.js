@@ -9,11 +9,8 @@ const App = () => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [nodes, setNodes] = useState([]);
-    const [selectedNode, setSelectedNode] = useState(null);
-    const [armies, setArmies] = useState([]);
     const [technologies, setTechnologies] = useState([]);
     const [view, setView] = useState('login');
-    const canvasRef = useRef(null);
     const socketRef = useRef(null);
     const [isAdmin, setIsAdmin] = useState(false);
     const [allUsers, setAllUsers] = useState([]);
@@ -93,6 +90,11 @@ const App = () => {
     const [homeSearchResults, setHomeSearchResults] = useState([]);
     const [isSearching, setIsSearching] = useState(false);
 
+    // 节点详情页面相关状态
+    const [currentNodeDetail, setCurrentNodeDetail] = useState(null);
+    const [showNodeInfoModal, setShowNodeInfoModal] = useState(false);
+    const detailCanvasRef = useRef(null);
+
     useEffect(() => {
         // 只在没有socket时初始化
         if (!socketRef.current) {
@@ -134,210 +136,6 @@ const App = () => {
                 socketRef.current.removeAllListeners();
                 socketRef.current.close();
                 socketRef.current = null;
-            }
-        };
-    }, []);
-
-    // 动画帧引用
-    const animationRef = useRef(null);
-    const [animationTime, setAnimationTime] = useState(0);
-
-    // 启动持续动画
-    useEffect(() => {
-        const startAnimation = () => {
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-
-            const ctx = canvas.getContext('2d');
-            const width = canvas.width;
-            const height = canvas.height;
-
-            ctx.clearRect(0, 0, width, height);
-
-            // 绘制关联连线
-            nodes.forEach(node => {
-                if (node.associations && node.associations.length > 0) {
-                    node.associations.forEach(association => {
-                        const targetNode = nodes.find(n => n._id === association.targetNode);
-                        if (targetNode) {
-                            drawAssociationLine(ctx, node, targetNode, association.relationType);
-                        }
-                    });
-                }
-            });
-
-            // 绘制节点
-            nodes.forEach(node => {
-                const prosperity = node.prosperity || 100;
-                const radius = 15 + (prosperity / 50);
-                
-                // 节点光晕
-                const gradient = ctx.createRadialGradient(
-                    node.position.x, node.position.y, 0,
-                    node.position.x, node.position.y, radius
-                );
-                gradient.addColorStop(0, `rgba(59, 130, 246, ${prosperity / 200})`);
-                gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
-                
-                ctx.fillStyle = gradient;
-                ctx.beginPath();
-                ctx.arc(node.position.x, node.position.y, radius * 1.5, 0, Math.PI * 2);
-                ctx.fill();
-
-                // 节点主体
-                ctx.fillStyle = selectedNode?._id === node._id ? '#3b82f6' : '#6366f1';
-                ctx.beginPath();
-                ctx.arc(node.position.x, node.position.y, radius, 0, Math.PI * 2);
-                ctx.fill();
-
-                // 节点边框
-                ctx.strokeStyle = '#1e40af';
-                ctx.lineWidth = 2;
-                ctx.stroke();
-
-                // 节点名称
-                ctx.fillStyle = '#ffffff';
-                ctx.font = '12px sans-serif';
-                ctx.textAlign = 'center';
-                ctx.fillText(node.name, node.position.x, node.position.y - radius - 5);
-            });
-
-            // 持续请求下一帧动画
-            animationRef.current = requestAnimationFrame(() => {
-                setAnimationTime(prev => prev + 0.02);
-                startAnimation();
-            });
-        };
-
-        // 启动动画循环
-        startAnimation();
-
-        // 清理函数
-        return () => {
-            if (animationRef.current) {
-                cancelAnimationFrame(animationRef.current);
-            }
-        };
-    }, [nodes, selectedNode, associations, animationTime]);
-
-    const drawAssociationLine = (ctx, sourceNode, targetNode, relationType) => {
-        const startX = sourceNode.position.x;
-        const startY = sourceNode.position.y;
-        const endX = targetNode.position.x;
-        const endY = targetNode.position.y;
-        
-        // 计算连线的角度和距离
-        const dx = endX - startX;
-        const dy = endY - startY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const angle = Math.atan2(dy, dx);
-        
-        // 根据关系类型设置不同的样式
-        let lineColor, lineWidth, dashPattern;
-        
-        if (relationType === 'contains') {
-            // 包含关系：母节点包含子节点，使用金色渐变
-            lineColor = '#fbbf24';
-            lineWidth = 3;
-            dashPattern = [10, 5];
-        } else {
-            // 扩展关系：子节点被包含到母节点，使用绿色渐变
-            lineColor = '#10b981';
-            lineWidth = 2;
-            dashPattern = [5, 5];
-        }
-        
-        // 设置连线样式
-        ctx.strokeStyle = lineColor;
-        ctx.lineWidth = lineWidth;
-        ctx.setLineDash(dashPattern);
-        
-        // 绘制连线
-        ctx.beginPath();
-        ctx.moveTo(startX, startY);
-        ctx.lineTo(endX, endY);
-        ctx.stroke();
-        
-        // 重置虚线模式
-        ctx.setLineDash([]);
-        
-        // 绘制动态流动效果
-        drawFlowEffect(ctx, startX, startY, endX, endY, angle, distance, relationType);
-        
-        // 绘制箭头
-        drawArrow(ctx, endX, endY, angle, relationType);
-    };
-
-    const drawFlowEffect = (ctx, startX, startY, endX, endY, angle, distance, relationType) => {
-        const flowSpeed = 0.5;
-        const flowOffset = (animationTime * flowSpeed) % 1;
-        
-        // 计算流动点的位置
-        const flowX = startX + (endX - startX) * flowOffset;
-        const flowY = startY + (endY - startY) * flowOffset;
-        
-        // 设置流动点样式
-        let flowColor, flowRadius;
-        if (relationType === 'contains') {
-            flowColor = '#fef3c7';
-            flowRadius = 4;
-        } else {
-            flowColor = '#d1fae5';
-            flowRadius = 3;
-        }
-        
-        // 绘制流动点
-        ctx.fillStyle = flowColor;
-        ctx.beginPath();
-        ctx.arc(flowX, flowY, flowRadius, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // 添加光晕效果
-        const glowGradient = ctx.createRadialGradient(
-            flowX, flowY, 0,
-            flowX, flowY, flowRadius * 2
-        );
-        glowGradient.addColorStop(0, `${flowColor}80`);
-        glowGradient.addColorStop(1, `${flowColor}00`);
-        
-        ctx.fillStyle = glowGradient;
-        ctx.beginPath();
-        ctx.arc(flowX, flowY, flowRadius * 2, 0, Math.PI * 2);
-        ctx.fill();
-    };
-
-    const drawArrow = (ctx, x, y, angle, relationType) => {
-        const arrowLength = 12;
-        const arrowWidth = 8;
-        
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(angle);
-        
-        // 设置箭头样式
-        let arrowColor;
-        if (relationType === 'contains') {
-            arrowColor = '#f59e0b';
-        } else {
-            arrowColor = '#059669';
-        }
-        
-        ctx.fillStyle = arrowColor;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(-arrowLength, -arrowWidth / 2);
-        ctx.lineTo(-arrowLength, arrowWidth / 2);
-        ctx.closePath();
-        ctx.fill();
-        
-        ctx.restore();
-    };
-
-    // 清理动画帧
-    useEffect(() => {
-        return () => {
-            if (animationRef.current) {
-                cancelAnimationFrame(animationRef.current);
             }
         };
     }, []);
@@ -399,8 +197,6 @@ const App = () => {
         
         // 清理节点数据
         setNodes([]);
-        setArmies([]);
-        setSelectedNode(null);
     };
 
     // 将socket初始化逻辑提取为独立函数
@@ -460,29 +256,14 @@ const App = () => {
             console.log('收到游戏状态:', data);
             const approvedNodes = (data.nodes || []).filter(node => node.status === 'approved');
             setNodes(approvedNodes);
-            setArmies(data.armies || []);
         });
-    
+
     newSocket.on('nodeCreated', (node) => {
             if (node.status === 'approved') {
                 setNodes(prev => [...prev, node]);
             }
         });
-    
-        newSocket.on('armyProduced', (data) => {
-            setArmies(prev => {
-                const existing = prev.find(a => a.nodeId === data.nodeId && a.type === data.type);
-                if (existing) {
-                    return prev.map(a => 
-                        a.nodeId === data.nodeId && a.type === data.type 
-                            ? { ...a, count: a.count + data.count }
-                            : a
-                    );
-                }
-                return [...prev, data.army];
-            });
-        });
-    
+
         newSocket.on('techUpgraded', (tech) => {
             setTechnologies(prev => {
                 const existing = prev.find(t => t.techId === tech.techId);
@@ -519,74 +300,16 @@ const App = () => {
                 
                 return newNodes;
             });
-            
-            // 自动更新当前选中的节点（如果存在）
-            setSelectedNode(currentSelected => {
-                if (currentSelected) {
-                    const updatedNode = updatedNodes.find(n => n._id === currentSelected._id);
-                    if (updatedNode) {
-                        // 创建全新的选中节点对象
-                        return {
-                            ...currentSelected,
-                            knowledgePoint: updatedNode.knowledgePoint
-                        };
-                    }
-                }
-                return currentSelected;
-            });
         });
-    
+
         socketRef.current = newSocket;
         setSocket(newSocket);
         
         return newSocket;
     };
 
-    const handleProduceArmy = (type) => {
-        if (!selectedNode) {
-            window.alert('请先选择一个节点');
-            return;
-        }
-
-        const count = parseInt(window.prompt(`生产${type}数量:`));
-        if (!count || count <= 0) return;
-
-        socket.emit('produceArmy', {
-            nodeId: selectedNode._id,
-            type,
-            count
-        });
-    };
-
     const handleUpgradeTech = (techId) => {
         socket.emit('upgradeTech', { techId });
-    };
-
-    const handleCanvasClick = (e) => {
-        const canvas = canvasRef.current;
-        const rect = canvas.getBoundingClientRect();
-        
-        // 计算Canvas坐标系统的缩放比例
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        
-        // 将点击坐标转换为Canvas内部坐标
-        const x = (e.clientX - rect.left) * scaleX;
-        const y = (e.clientY - rect.top) * scaleY;
-
-        const clickedNode = nodes.find(node => {
-            const prosperity = node.prosperity || 100;
-            const radius = 15 + (prosperity / 50);
-            
-            const dx = node.position.x - x;
-            const dy = node.position.y - y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            // 使用节点的实际绘制半径作为点击检测范围
-            return distance < (radius * 1.5); // 包括光晕区域
-        });
-
-        setSelectedNode(clickedNode || null);
     };
 
     const checkAdminStatus = async () => {
@@ -653,6 +376,23 @@ const App = () => {
         }
     };
 
+    // 获取节点详情
+    const fetchNodeDetail = async (nodeId) => {
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/public/node-detail/${nodeId}`);
+            if (response.ok) {
+                const data = await response.json();
+                setCurrentNodeDetail(data.node);
+                setView('nodeDetail');
+            } else {
+                alert('获取节点详情失败');
+            }
+        } catch (error) {
+            console.error('获取节点详情失败:', error);
+            alert('获取节点详情失败');
+        }
+    };
+
     // 实时搜索
     const performHomeSearch = async (query) => {
         if (!query || query.trim() === '') {
@@ -693,6 +433,229 @@ const App = () => {
             fetchFeaturedNodes();
         }
     }, [authenticated, view]);
+
+    // 绘制节点详情页面的canvas
+    useEffect(() => {
+        if (view !== 'nodeDetail' || !currentNodeDetail || !detailCanvasRef.current) return;
+
+        const canvas = detailCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+
+        // 清空画布
+        ctx.clearRect(0, 0, width, height);
+
+        // 中央节点位置和大小
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const centerRadius = 80;
+
+        // 母域节点（上方半圆）
+        const parentNodes = currentNodeDetail.parentNodesInfo || [];
+        const parentRadius = 50;
+        const parentDistance = 200;
+
+        // 子域节点（下方半圆）
+        const childNodes = currentNodeDetail.childNodesInfo || [];
+        const childRadius = 40;
+        const childDistance = 180;
+
+        // 绘制连线 - 母域
+        parentNodes.forEach((node, index) => {
+            const angle = Math.PI + (Math.PI / (parentNodes.length + 1)) * (index + 1);
+            const x = centerX + Math.cos(angle) * parentDistance;
+            const y = centerY + Math.sin(angle) * parentDistance;
+
+            ctx.strokeStyle = '#10b981';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY - centerRadius);
+            ctx.lineTo(x, y + parentRadius);
+            ctx.stroke();
+        });
+
+        // 绘制连线 - 子域
+        childNodes.forEach((node, index) => {
+            const angle = (Math.PI / (childNodes.length + 1)) * (index + 1);
+            const x = centerX + Math.cos(angle) * childDistance;
+            const y = centerY + Math.sin(angle) * childDistance;
+
+            ctx.strokeStyle = '#fbbf24';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY + centerRadius);
+            ctx.lineTo(x, y - childRadius);
+            ctx.stroke();
+        });
+
+        // 绘制母域节点
+        parentNodes.forEach((node, index) => {
+            const angle = Math.PI + (Math.PI / (parentNodes.length + 1)) * (index + 1);
+            const x = centerX + Math.cos(angle) * parentDistance;
+            const y = centerY + Math.sin(angle) * parentDistance;
+
+            // 光晕
+            const gradient = ctx.createRadialGradient(x, y, 0, x, y, parentRadius);
+            gradient.addColorStop(0, 'rgba(16, 185, 129, 0.3)');
+            gradient.addColorStop(1, 'rgba(16, 185, 129, 0)');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(x, y, parentRadius * 1.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 节点主体
+            ctx.fillStyle = '#10b981';
+            ctx.beginPath();
+            ctx.arc(x, y, parentRadius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 边框
+            ctx.strokeStyle = '#059669';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            // 名称
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 14px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(node.name, x, y - parentRadius - 10);
+
+            // 知识点
+            ctx.font = '12px sans-serif';
+            ctx.fillStyle = '#d1fae5';
+            ctx.fillText(`${(node.knowledgePoint?.value || 0).toFixed(1)}`, x, y + 5);
+        });
+
+        // 绘制子域节点
+        childNodes.forEach((node, index) => {
+            const angle = (Math.PI / (childNodes.length + 1)) * (index + 1);
+            const x = centerX + Math.cos(angle) * childDistance;
+            const y = centerY + Math.sin(angle) * childDistance;
+
+            // 光晕
+            const gradient = ctx.createRadialGradient(x, y, 0, x, y, childRadius);
+            gradient.addColorStop(0, 'rgba(251, 191, 36, 0.3)');
+            gradient.addColorStop(1, 'rgba(251, 191, 36, 0)');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(x, y, childRadius * 1.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 节点主体
+            ctx.fillStyle = '#fbbf24';
+            ctx.beginPath();
+            ctx.arc(x, y, childRadius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 边框
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            // 名称
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(node.name, x, y + childRadius + 20);
+
+            // 知识点
+            ctx.font = '11px sans-serif';
+            ctx.fillStyle = '#fef3c7';
+            ctx.fillText(`${(node.knowledgePoint?.value || 0).toFixed(1)}`, x, y + 4);
+        });
+
+        // 绘制中央节点（最后绘制，确保在最上层）
+        // 光晕
+        const centerGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, centerRadius);
+        centerGradient.addColorStop(0, 'rgba(168, 85, 247, 0.4)');
+        centerGradient.addColorStop(1, 'rgba(168, 85, 247, 0)');
+        ctx.fillStyle = centerGradient;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, centerRadius * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 节点主体
+        ctx.fillStyle = '#a855f7';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, centerRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 边框
+        ctx.strokeStyle = '#7c3aed';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+
+        // 节点名称
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 18px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(currentNodeDetail.name, centerX, centerY - 10);
+
+        // 知识点
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillStyle = '#e9d5ff';
+        ctx.fillText(`${(currentNodeDetail.knowledgePoint?.value || 0).toFixed(2)}`, centerX, centerY + 10);
+
+        // 内容分数
+        ctx.font = '12px sans-serif';
+        ctx.fillStyle = '#c4b5fd';
+        ctx.fillText(`分数: ${currentNodeDetail.contentScore || 1}/分钟`, centerX, centerY + 28);
+
+    }, [view, currentNodeDetail]);
+
+    // 处理节点详情canvas点击
+    const handleDetailCanvasClick = (e) => {
+        if (!detailCanvasRef.current || !currentNodeDetail) return;
+
+        const canvas = detailCanvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        const width = canvas.width;
+        const height = canvas.height;
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const centerRadius = 80;
+
+        // 检查是否点击中央节点
+        const distanceToCenter = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+        if (distanceToCenter <= centerRadius) {
+            setShowNodeInfoModal(true);
+            return;
+        }
+
+        // 检查是否点击母域节点
+        const parentNodes = currentNodeDetail.parentNodesInfo || [];
+        const parentRadius = 50;
+        const parentDistance = 200;
+        for (let i = 0; i < parentNodes.length; i++) {
+            const angle = Math.PI + (Math.PI / (parentNodes.length + 1)) * (i + 1);
+            const nodeX = centerX + Math.cos(angle) * parentDistance;
+            const nodeY = centerY + Math.sin(angle) * parentDistance;
+            const distance = Math.sqrt((x - nodeX) ** 2 + (y - nodeY) ** 2);
+            if (distance <= parentRadius) {
+                fetchNodeDetail(parentNodes[i]._id);
+                return;
+            }
+        }
+
+        // 检查是否点击子域节点
+        const childNodes = currentNodeDetail.childNodesInfo || [];
+        const childRadius = 40;
+        const childDistance = 180;
+        for (let i = 0; i < childNodes.length; i++) {
+            const angle = (Math.PI / (childNodes.length + 1)) * (i + 1);
+            const nodeX = centerX + Math.cos(angle) * childDistance;
+            const nodeY = centerY + Math.sin(angle) * childDistance;
+            const distance = Math.sqrt((x - nodeX) ** 2 + (y - nodeY) ** 2);
+            if (distance <= childRadius) {
+                fetchNodeDetail(childNodes[i]._id);
+                return;
+            }
+        }
+    };
 
     const startEditUser = (user) => {
         setEditingUser(user._id);
@@ -808,6 +771,16 @@ const App = () => {
     const addAssociation = () => {
         if (selectedNodes.length === 0 || !currentAssociation.relationType) {
             alert('请选择至少一个节点并选择关联关系类型');
+            return;
+        }
+
+        // 检查是否有节点已经在关联列表中（防止重复）
+        const duplicateNodes = selectedNodes.filter(node =>
+            associations.some(assoc => assoc.targetNode === node._id)
+        );
+
+        if (duplicateNodes.length > 0) {
+            alert(`以下节点已在关联列表中，一个节点只能有一种关联关系：\n${duplicateNodes.map(n => n.name).join(', ')}`);
             return;
         }
 
@@ -1172,7 +1145,7 @@ const App = () => {
     };
 
     // 搜索关联节点（用于编辑关联）
-    const searchAssociationNodes = async (keyword) => {
+    const searchAssociationNodes = async (keyword, currentAssociations = null) => {
         if (!keyword || keyword.trim() === '') {
             setAssocSearchResults([]);
             return;
@@ -1188,8 +1161,13 @@ const App = () => {
 
             if (response.ok) {
                 const data = await response.json();
-                // 过滤掉当前节点自己
-                const filtered = data.filter(n => n._id !== editingAssociationNode._id);
+                // 使用传入的 currentAssociations 或默认使用 editAssociations
+                const associations = currentAssociations !== null ? currentAssociations : editAssociations;
+                // 过滤掉当前节点自己，以及已经在关联列表中的节点
+                const filtered = data.filter(n => {
+                    if (n._id === editingAssociationNode._id) return false;
+                    return !associations.some(assoc => assoc.targetNode === n._id);
+                });
                 setAssocSearchResults(filtered);
             }
         } catch (error) {
@@ -1199,10 +1177,10 @@ const App = () => {
 
     // 添加编辑关联
     const addEditAssociation = (targetNode) => {
-        // 检查是否已存在
+        // 检查是否已存在（无论什么类型）
         const exists = editAssociations.some(a => a.targetNode === targetNode._id);
         if (exists) {
-            alert('该节点已在关联列表中');
+            alert('该节点已在关联列表中。一个节点只能有一种关联关系（拓展或包含），不能同时存在两种关系。');
             return;
         }
 
@@ -1214,13 +1192,21 @@ const App = () => {
                 relationType: newAssocType
             }
         ]);
-        setAssocSearchKeyword('');
-        setAssocSearchResults([]);
+
+        // 从搜索结果中移除已添加的节点，但保留其他搜索结果和搜索关键词
+        setAssocSearchResults(prev => prev.filter(node => node._id !== targetNode._id));
     };
 
     // 移除编辑关联
-    const removeEditAssociation = (index) => {
-        setEditAssociations(editAssociations.filter((_, i) => i !== index));
+    const removeEditAssociation = async (index) => {
+        // 先计算删除后的新关联列表
+        const newAssociations = editAssociations.filter((_, i) => i !== index);
+        setEditAssociations(newAssociations);
+
+        // 如果当前有搜索关键词，使用新的关联列表重新搜索
+        if (assocSearchKeyword && assocSearchKeyword.trim() !== '') {
+            await searchAssociationNodes(assocSearchKeyword, newAssociations);
+        }
     };
 
     // 修改关联类型
@@ -1337,15 +1323,11 @@ const App = () => {
                                     首页
                                 </button>
                                 <button
-                                    onClick={() => {
-                                        setView('game');
-                                        if (socket) {
-                                            socket.emit('getGameState');
-                                        }
-                                    }}
-                                    className="btn btn-secondary"
+                                    onClick={openCreateNodeModal}
+                                    className="btn btn-success"
                                 >
-                                    地图
+                                    <Plus size={18} />
+                                    创建节点
                                 </button>
                                 <button
                                     onClick={() => setView('tech')}
@@ -1409,7 +1391,12 @@ const App = () => {
                                     ) : homeSearchResults.length > 0 ? (
                                         <div className="results-list">
                                             {homeSearchResults.map((node) => (
-                                                <div key={node._id} className="result-item">
+                                                <div
+                                                    key={node._id}
+                                                    className="result-item"
+                                                    onClick={() => fetchNodeDetail(node._id)}
+                                                    style={{ cursor: 'pointer' }}
+                                                >
                                                     <div className="result-header">
                                                         <h4>{node.name}</h4>
                                                         <span className="result-knowledge">
@@ -1437,7 +1424,12 @@ const App = () => {
                             <div className="root-nodes-grid">
                                 {rootNodes.length > 0 ? (
                                     rootNodes.map((node) => (
-                                        <div key={node._id} className="node-card root-node-card">
+                                        <div
+                                            key={node._id}
+                                            className="node-card root-node-card"
+                                            onClick={() => fetchNodeDetail(node._id)}
+                                            style={{ cursor: 'pointer' }}
+                                        >
                                             <div className="node-card-header">
                                                 <h3>{node.name}</h3>
                                                 <div className="node-badge root-badge">根节点</div>
@@ -1466,7 +1458,12 @@ const App = () => {
                             <div className="featured-nodes-scroll">
                                 {featuredNodes.length > 0 ? (
                                     featuredNodes.map((node) => (
-                                        <div key={node._id} className="node-card featured-node-card">
+                                        <div
+                                            key={node._id}
+                                            className="node-card featured-node-card"
+                                            onClick={() => fetchNodeDetail(node._id)}
+                                            style={{ cursor: 'pointer' }}
+                                        >
                                             <div className="node-card-header">
                                                 <h3>{node.name}</h3>
                                                 <div className="node-badge featured-badge">热门</div>
@@ -1491,392 +1488,26 @@ const App = () => {
                     </div>
                 )}
 
-                {view === 'game' && (
-                    <div className="game-layout-fullscreen">
-                        {/* 地图控制栏 */}
-                        <div className="map-controls">
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                                <button
-                                    onClick={openCreateNodeModal}
-                                    className="btn btn-success"
-                                >
-                                    <Plus className="icon-small" />
-                                    创建节点
-                                </button>
-                                {!isAdmin && (
-                                    <button
-                                        onClick={() => {
-                                            setShowNotifications(!showNotifications);
-                                            fetchPendingNodes();
-                                        }}
-                                        className="btn btn-info"
-                                    >
-                                        <Bell className="icon-small" />
-                                        通知
-                                        {pendingNodes.length > 0 && (
-                                            <span className="notification-badge">{pendingNodes.length}</span>
-                                        )}
-                                    </button>
-                                )}
-                            </div>
+                {/* 节点详情视图 */}
+                {view === 'nodeDetail' && currentNodeDetail && (
+                    <div className="node-detail-container">
+                        <div className="node-detail-header">
+                            <h2 className="detail-title">{currentNodeDetail.name}</h2>
+                            <button
+                                onClick={() => setView('home')}
+                                className="btn btn-secondary"
+                            >
+                                <Home size={18} />
+                                返回首页
+                            </button>
                         </div>
-
-                        {/* 主地图区域 - 占满剩余空间 */}
-                        <div className="map-section-fullscreen">
-                            <canvas
-                                ref={canvasRef}
-                                width={window.innerWidth}
-                                height={window.innerHeight - 100} // 减去头部和控制栏高度
-                                onClick={handleCanvasClick}
-                                className="game-canvas-fullscreen"
-                            />
-                        </div>
-
-                        {/* 节点信息浮框 */}
-                        {selectedNode && (
-                            <div className="node-popup">
-                                <div className="popup-header">
-                                    <h3 className="popup-title">
-                                        <Zap className="icon-small icon-yellow" />
-                                        {selectedNode.name}
-                                    </h3>
-                                    <button
-                                        onClick={() => setSelectedNode(null)}
-                                        className="btn-close"
-                                    >
-                                        <X className="icon-small" />
-                                    </button>
-                                </div>
-                                
-                                <div className="popup-content">
-                                    <div className="info-box">
-                                        <p className="info-label">繁荣度</p>
-                                        <div className="progress-container">
-                                            <div className="progress-bar">
-                                                <div
-                                                    className="progress-fill"
-                                                    style={{ width: `${Math.min(selectedNode.prosperity || 0, 100)}%` }}
-                                                />
-                                            </div>
-                                            <span className="progress-value">{Math.round(selectedNode.prosperity || 0)}</span>
-                                        </div>
-                                    </div>
-
-                                    <div className="info-box">
-                                        <p className="info-label">知识点</p>
-                                        <div className="resource-list">
-                                            <div className="resource-item">
-                                                <span>当前值:</span>
-                                                <span className="resource-value">{(selectedNode.knowledgePoint?.value || 0).toFixed(2)}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="info-box">
-                                        <p className="info-label">生产率</p>
-                                        <div className="resource-list">
-                                            <div className="resource-item">
-                                                <span>知识点/分:</span>
-                                                <span className="resource-value">{selectedNode.contentScore || 1}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* 军队生产 */}
-                                    <div className="info-box">
-                                        <p className="info-label">军队生产</p>
-                                        <div className="army-grid-popup">
-                                            {[
-                                                { type: 'infantry', label: '步兵' },
-                                                { type: 'cavalry', label: '骑兵' },
-                                                { type: 'archer', label: '弓箭手' },
-                                                { type: 'siege', label: '攻城器' }
-                                            ].map(army => (
-                                                <button
-                                                    key={army.type}
-                                                    onClick={() => handleProduceArmy(army.type)}
-                                                    className="btn btn-danger btn-small"
-                                                >
-                                                    {army.label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    {armies.filter(a => a.nodeId === selectedNode._id).length > 0 && (
-                                        <div className="info-box">
-                                            <p className="info-label">当前军队</p>
-                                            <div className="army-list">
-                                                {armies
-                                                    .filter(a => a.nodeId === selectedNode._id)
-                                                    .map((army, idx) => (
-                                                        <div key={idx} className="army-item">
-                                                            <span className="army-name">
-                                                                {army.type === 'infantry' ? '步兵' :
-                                                                 army.type === 'cavalry' ? '骑兵' :
-                                                                 army.type === 'archer' ? '弓箭手' : '攻城器'}
-                                                            </span>
-                                                            <span className="army-count">×{army.count}</span>
-                                                        </div>
-                                                    ))}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* 节点创建模态框 */}
-                        {showCreateNodeModal && (
-                            <div className="modal-overlay">
-                                <div className="modal-content">
-                                    <div className="modal-header">
-                                        <h3>创建新节点</h3>
-                                        <button 
-                                            onClick={() => setShowCreateNodeModal(false)}
-                                            className="btn-close"
-                                        >
-                                            <X className="icon-small" />
-                                        </button>
-                                    </div>
-                                    
-                                    <div className="modal-body">
-                                        {/* 基本信息 */}
-                                        <div className="form-group">
-                                            <label>节点标题 *</label>
-                                            <input
-                                                type="text"
-                                                value={newNodeData.title}
-                                                onChange={(e) => setNewNodeData({
-                                                    ...newNodeData,
-                                                    title: e.target.value
-                                                })}
-                                                placeholder="输入节点标题"
-                                                className="form-input"
-                                            />
-                                            {newNodeData.title.trim() === '' && (
-                                                <span className="error-text">标题不能为空</span>
-                                            )}
-                                            {newNodeData.title.trim() !== '' && nodes.some(node => node.name === newNodeData.title) && (
-                                                <span className="error-text">标题必须唯一</span>
-                                            )}
-                                        </div>
-
-                                        <div className="form-group">
-                                            <label>节点简介 *</label>
-                                            <textarea
-                                                value={newNodeData.description}
-                                                onChange={(e) => setNewNodeData({
-                                                    ...newNodeData,
-                                                    description: e.target.value
-                                                })}
-                                                placeholder="输入节点简介"
-                                                rows="3"
-                                                className="form-textarea"
-                                            />
-                                            {newNodeData.description.trim() === '' && (
-                                                <span className="error-text">简介不能为空</span>
-                                            )}
-                                        </div>
-
-                                        {/* 关联关系创建 */}
-                                        <div className="associations-section">
-                                            <h4>关联关系 {!isAdmin && <span className="required-star">*</span>}</h4>
-                                            
-                                            {/* 搜索和选择节点 */}
-                                            <div className="search-section">
-                                                <div className="search-input-group">
-                                                    <input
-                                                        type="text"
-                                                        value={searchKeyword}
-                                                        onChange={(e) => setSearchKeyword(e.target.value)}
-                                                        placeholder="搜索节点标题或简介..."
-                                                        className="form-input"
-                                                    />
-                                                    <button
-                                                        onClick={searchNodes}
-                                                        disabled={searchLoading}
-                                                        className="btn btn-primary"
-                                                    >
-                                                        <Search className="icon-small" />
-                                                        {searchLoading ? '搜索中...' : '搜索'}
-                                                    </button>
-                                                </div>
-
-                                                {/* 搜索结果 */}
-                                                {searchResults.length > 0 && (
-                                                    <div className="search-results">
-                                                        <h5>搜索结果</h5>
-                                                        {searchResults.map(node => (
-                                                            <div 
-                                                                key={node._id}
-                                                                className={`search-result-item ${selectedNodes.some(n => n._id === node._id) ? 'selected' : ''}`}
-                                                                onClick={() => toggleNodeSelection(node)}
-                                                            >
-                                                                <div className="node-info">
-                                                                    <strong>{node.name}</strong>
-                                                                    <span className="node-description">{node.description}</span>
-                                                                </div>
-                                                                <div className="selection-indicator">
-                                                                    {selectedNodes.some(n => n._id === node._id) ? '✓' : '+'}
-                                                                </div>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                )}
-
-                                                {/* 搜索状态提示 */}
-                                                {searchLoading && (
-                                                    <div className="search-status">
-                                                        <p>正在搜索...</p>
-                                                    </div>
-                                                )}
-                                                {!searchLoading && searchKeyword.trim() !== '' && searchResults.length === 0 && (
-                                                    <div className="search-status">
-                                                        <p>未找到匹配的节点</p>
-                                                    </div>
-                                                )}
-
-                                                {/* 关联类型选择 */}
-                                                {selectedNodes.length > 0 && (
-                                                    <div className="relation-type-section">
-                                                        <label>关联类型:</label>
-                                                        <div className="relation-options">
-                                                            <label className="radio-label">
-                                                                <input
-                                                                    type="radio"
-                                                                    name="relationType"
-                                                                    value="contains"
-                                                                    checked={currentAssociation.relationType === 'contains'}
-                                                                    onChange={(e) => setCurrentAssociation({
-                                                                        ...currentAssociation,
-                                                                        relationType: e.target.value
-                                                                    })}
-                                                                />
-                                                                <span>包含</span>
-                                                            </label>
-                                                            <label className="radio-label">
-                                                                <input
-                                                                    type="radio"
-                                                                    name="relationType"
-                                                                    value="extends"
-                                                                    checked={currentAssociation.relationType === 'extends'}
-                                                                    onChange={(e) => setCurrentAssociation({
-                                                                        ...currentAssociation,
-                                                                        relationType: e.target.value
-                                                                    })}
-                                                                />
-                                                                <span>拓展</span>
-                                                            </label>
-                                                        </div>
-                                                    </div>
-                                                )}
-
-                                                {/* 添加关联关系按钮 */}
-                                                {selectedNodes.length > 0 && currentAssociation.relationType && (
-                                                    <button
-                                                        onClick={addAssociation}
-                                                        className="btn btn-success"
-                                                    >
-                                                        <Check className="icon-small" />
-                                                        添加关联关系
-                                                    </button>
-                                                )}
-                                            </div>
-
-                                            {/* 已添加的关联关系列表 */}
-                                            {associations.length > 0 && (
-                                                <div className="associations-list">
-                                                    <h5>已添加的关联关系</h5>
-                                                    {associations.map((association, index) => (
-                                                        <div key={index} className="association-item">
-                                                            <div className="association-info">
-                                                                <span className="node-name">{association.nodeName}</span>
-                                                                <span className="relation-type">
-                                                                    {association.relationType === 'contains' ? '包含' : '拓展'}
-                                                                </span>
-                                                            </div>
-                                                            <button
-                                                                onClick={() => removeAssociation(index)}
-                                                                className="btn btn-danger btn-small"
-                                                            >
-                                                                <X className="icon-small" />
-                                                            </button>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-
-                                            {!isAdmin && associations.length === 0 && (
-                                                <span className="error-text">至少需要一个关联关系</span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    <div className="modal-footer">
-                                        <button
-                                            onClick={() => setShowCreateNodeModal(false)}
-                                            className="btn btn-secondary"
-                                        >
-                                            取消
-                                        </button>
-                                        <button
-                                            onClick={submitNodeCreation}
-                                            disabled={!canSubmitNode()}
-                                            className={`btn ${canSubmitNode() ? 'btn-success' : 'btn-disabled'}`}
-                                        >
-                                            {isAdmin ? '创建节点' : '申请创建'}
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* 通知面板 */}
-                        {showNotifications && !isAdmin && (
-                            <div className="notifications-panel">
-                                <div className="notifications-header">
-                                    <h3>节点创建申请</h3>
-                                    <button 
-                                        onClick={() => setShowNotifications(false)}
-                                        className="btn-close"
-                                    >
-                                        <X className="icon-small" />
-                                    </button>
-                                </div>
-                                
-                                <div className="notifications-body">
-                                    {pendingNodes.length === 0 ? (
-                                        <div className="no-notifications">
-                                            <p>暂无待处理申请</p>
-                                        </div>
-                                    ) : (
-                                        <div className="pending-nodes-list">
-                                            {pendingNodes.map(node => (
-                                                <div key={node._id} className="pending-node-item">
-                                                    <div className="node-details">
-                                                        <h4>{node.name}</h4>
-                                                        <p className="node-description">{node.description}</p>
-                                                        <div className="associations-summary">
-                                                            关联关系: {node.associations?.length || 0} 个
-                                                        </div>
-                                                    </div>
-                                                    <div className="node-status">
-                                                        <span className={`status-badge status-${node.status}`}>
-                                                            {node.status === 'pending' ? '待审批' : 
-                                                             node.status === 'approved' ? '已通过' : '已拒绝'}
-                                                        </span>
-                                                        <div className="submission-time">
-                                                            提交时间: {new Date(node.createdAt).toLocaleString('zh-CN')}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
+                        <canvas
+                            ref={detailCanvasRef}
+                            width={window.innerWidth - 40}
+                            height={window.innerHeight - 200}
+                            onClick={handleDetailCanvasClick}
+                            className="node-detail-canvas"
+                        />
                     </div>
                 )}
 
@@ -2422,42 +2053,44 @@ const App = () => {
 
                                 <div className="association-section">
                                     <h4 className="section-title">
-                                        关联母域（拓展的节点）
+                                        母域节点
                                     </h4>
+                                    <p className="association-hint">当前节点拓展了以下节点（或者说，以下节点包含当前节点）</p>
                                     <div className="association-list">
                                         {viewingAssociationNode.relatedParentDomains &&
                                          viewingAssociationNode.relatedParentDomains.length > 0 ? (
                                             <ul>
                                                 {viewingAssociationNode.relatedParentDomains.map((domain, index) => (
                                                     <li key={index} className="domain-item parent-domain">
-                                                        <span className="domain-badge extends">拓展</span>
+                                                        <span className="domain-badge parent">⬆ 母域</span>
                                                         {domain}
                                                     </li>
                                                 ))}
                                             </ul>
                                         ) : (
-                                            <p className="empty-message">暂无关联母域</p>
+                                            <p className="empty-message">暂无母域节点</p>
                                         )}
                                     </div>
                                 </div>
 
                                 <div className="association-section">
                                     <h4 className="section-title">
-                                        关联子域（包含的节点）
+                                        子域节点
                                     </h4>
+                                    <p className="association-hint">以下节点拓展了当前节点（或者说，当前节点包含以下节点）</p>
                                     <div className="association-list">
                                         {viewingAssociationNode.relatedChildDomains &&
                                          viewingAssociationNode.relatedChildDomains.length > 0 ? (
                                             <ul>
                                                 {viewingAssociationNode.relatedChildDomains.map((domain, index) => (
                                                     <li key={index} className="domain-item child-domain">
-                                                        <span className="domain-badge contains">包含</span>
+                                                        <span className="domain-badge child">⬇ 子域</span>
                                                         {domain}
                                                     </li>
                                                 ))}
                                             </ul>
                                         ) : (
-                                            <p className="empty-message">暂无关联子域</p>
+                                            <p className="empty-message">暂无子域节点</p>
                                         )}
                                     </div>
                                 </div>
@@ -2592,6 +2225,298 @@ const App = () => {
                                     onClick={saveAssociationEdit}
                                 >
                                     保存
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 节点详细信息模态框 */}
+                {showNodeInfoModal && currentNodeDetail && (
+                    <div className="modal-backdrop" onClick={() => setShowNodeInfoModal(false)}>
+                        <div className="modal-content node-info-modal" onClick={(e) => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h2>节点详细信息</h2>
+                                <button
+                                    className="btn-close"
+                                    onClick={() => setShowNodeInfoModal(false)}
+                                >
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            <div className="modal-body">
+                                <div className="node-info-section">
+                                    <h3 className="info-section-title">{currentNodeDetail.name}</h3>
+                                    <p className="info-section-desc">{currentNodeDetail.description}</p>
+                                </div>
+
+                                <div className="node-info-grid">
+                                    <div className="info-item">
+                                        <span className="info-label">创建者</span>
+                                        <span className="info-value">{currentNodeDetail.owner?.username || '系统'}</span>
+                                    </div>
+                                    <div className="info-item">
+                                        <span className="info-label">创建时间</span>
+                                        <span className="info-value">
+                                            {new Date(currentNodeDetail.createdAt).toLocaleString('zh-CN')}
+                                        </span>
+                                    </div>
+                                    <div className="info-item">
+                                        <span className="info-label">内容分数</span>
+                                        <span className="info-value highlight">{currentNodeDetail.contentScore || 1} 点/分钟</span>
+                                    </div>
+                                    <div className="info-item">
+                                        <span className="info-label">知识点存量</span>
+                                        <span className="info-value highlight">
+                                            {(currentNodeDetail.knowledgePoint?.value || 0).toFixed(2)} 点
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="node-info-section">
+                                    <h4 className="info-section-subtitle">关联域</h4>
+                                    <div className="domain-summary">
+                                        <div className="domain-summary-item">
+                                            <span className="domain-summary-label">母域节点：</span>
+                                            <span className="domain-summary-value">
+                                                {currentNodeDetail.relatedParentDomains?.length || 0} 个
+                                            </span>
+                                        </div>
+                                        <div className="domain-summary-item">
+                                            <span className="domain-summary-label">子域节点：</span>
+                                            <span className="domain-summary-value">
+                                                {currentNodeDetail.relatedChildDomains?.length || 0} 个
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="modal-footer">
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => setShowNodeInfoModal(false)}
+                                >
+                                    关闭
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 节点创建模态框 - 全局访问 */}
+                {showCreateNodeModal && (
+                    <div className="modal-overlay">
+                        <div className="modal-content">
+                            <div className="modal-header">
+                                <h3>创建新节点</h3>
+                                <button
+                                    onClick={() => setShowCreateNodeModal(false)}
+                                    className="btn-close"
+                                >
+                                    <X className="icon-small" />
+                                </button>
+                            </div>
+
+                            <div className="modal-body">
+                                {/* 节点信息 */}
+                                <div className="node-creation-info">
+                                    <div className="info-row">
+                                        <span className="info-label-display">创建者:</span>
+                                        <span className="info-value-display">{username}</span>
+                                    </div>
+                                    <div className="info-row">
+                                        <span className="info-label-display">当前域主:</span>
+                                        <span className="info-value-display">{username}</span>
+                                    </div>
+                                </div>
+
+                                {/* 基本信息 */}
+                                <div className="form-group">
+                                    <label>节点标题 *</label>
+                                    <input
+                                        type="text"
+                                        value={newNodeData.title}
+                                        onChange={(e) => setNewNodeData({
+                                            ...newNodeData,
+                                            title: e.target.value
+                                        })}
+                                        placeholder="输入节点标题"
+                                        className="form-input"
+                                    />
+                                    {newNodeData.title.trim() === '' && (
+                                        <span className="error-text">标题不能为空</span>
+                                    )}
+                                    {newNodeData.title.trim() !== '' && nodes.some(node => node.name === newNodeData.title) && (
+                                        <span className="error-text">标题必须唯一</span>
+                                    )}
+                                </div>
+
+                                <div className="form-group">
+                                    <label>节点简介 *</label>
+                                    <textarea
+                                        value={newNodeData.description}
+                                        onChange={(e) => setNewNodeData({
+                                            ...newNodeData,
+                                            description: e.target.value
+                                        })}
+                                        placeholder="输入节点简介"
+                                        rows="3"
+                                        className="form-textarea"
+                                    />
+                                    {newNodeData.description.trim() === '' && (
+                                        <span className="error-text">简介不能为空</span>
+                                    )}
+                                </div>
+
+                                {/* 关联关系创建 */}
+                                <div className="associations-section">
+                                    <h4>关联关系 {!isAdmin && <span className="required-star">*</span>}</h4>
+
+                                    {/* 搜索和选择节点 */}
+                                    <div className="search-section">
+                                        <div className="search-input-group">
+                                            <input
+                                                type="text"
+                                                value={searchKeyword}
+                                                onChange={(e) => setSearchKeyword(e.target.value)}
+                                                placeholder="搜索节点标题或简介..."
+                                                className="form-input"
+                                            />
+                                            <button
+                                                onClick={searchNodes}
+                                                disabled={searchLoading}
+                                                className="btn btn-primary"
+                                            >
+                                                <Search className="icon-small" />
+                                                {searchLoading ? '搜索中...' : '搜索'}
+                                            </button>
+                                        </div>
+
+                                        {/* 搜索结果 */}
+                                        {searchResults.length > 0 && (
+                                            <div className="search-results">
+                                                <h5>搜索结果</h5>
+                                                {searchResults.map(node => (
+                                                    <div
+                                                        key={node._id}
+                                                        className={`search-result-item ${selectedNodes.some(n => n._id === node._id) ? 'selected' : ''}`}
+                                                        onClick={() => toggleNodeSelection(node)}
+                                                    >
+                                                        <div className="node-info">
+                                                            <strong>{node.name}</strong>
+                                                            <span className="node-description">{node.description}</span>
+                                                        </div>
+                                                        <div className="selection-indicator">
+                                                            {selectedNodes.some(n => n._id === node._id) ? '✓' : '+'}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {/* 搜索状态提示 */}
+                                        {searchLoading && (
+                                            <div className="search-status">
+                                                <p>正在搜索...</p>
+                                            </div>
+                                        )}
+                                        {!searchLoading && searchKeyword.trim() !== '' && searchResults.length === 0 && (
+                                            <div className="search-status">
+                                                <p>未找到匹配的节点</p>
+                                            </div>
+                                        )}
+
+                                        {/* 关联类型选择 */}
+                                        {selectedNodes.length > 0 && (
+                                            <div className="relation-type-section">
+                                                <label>关联类型:</label>
+                                                <div className="relation-options">
+                                                    <label className="radio-label">
+                                                        <input
+                                                            type="radio"
+                                                            name="relationType"
+                                                            value="contains"
+                                                            checked={currentAssociation.relationType === 'contains'}
+                                                            onChange={(e) => setCurrentAssociation({
+                                                                ...currentAssociation,
+                                                                relationType: e.target.value
+                                                            })}
+                                                        />
+                                                        <span>包含</span>
+                                                    </label>
+                                                    <label className="radio-label">
+                                                        <input
+                                                            type="radio"
+                                                            name="relationType"
+                                                            value="extends"
+                                                            checked={currentAssociation.relationType === 'extends'}
+                                                            onChange={(e) => setCurrentAssociation({
+                                                                ...currentAssociation,
+                                                                relationType: e.target.value
+                                                            })}
+                                                        />
+                                                        <span>拓展</span>
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* 添加关联关系按钮 */}
+                                        {selectedNodes.length > 0 && currentAssociation.relationType && (
+                                            <button
+                                                onClick={addAssociation}
+                                                className="btn btn-success"
+                                            >
+                                                <Check className="icon-small" />
+                                                添加关联关系
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    {/* 已添加的关联关系列表 */}
+                                    {associations.length > 0 && (
+                                        <div className="associations-list">
+                                            <h5>已添加的关联关系</h5>
+                                            {associations.map((association, index) => (
+                                                <div key={index} className="association-item">
+                                                    <div className="association-info">
+                                                        <span className="node-name">{association.nodeName}</span>
+                                                        <span className="relation-type">
+                                                            {association.relationType === 'contains' ? '包含' : '拓展'}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => removeAssociation(index)}
+                                                        className="btn btn-danger btn-small"
+                                                    >
+                                                        <X className="icon-small" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {!isAdmin && associations.length === 0 && (
+                                        <span className="error-text">至少需要一个关联关系</span>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="modal-footer">
+                                <button
+                                    onClick={() => setShowCreateNodeModal(false)}
+                                    className="btn btn-secondary"
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    onClick={submitNodeCreation}
+                                    disabled={!canSubmitNode()}
+                                    className={`btn ${canSubmitNode() ? 'btn-success' : 'btn-disabled'}`}
+                                >
+                                    {isAdmin ? '创建节点' : '申请创建'}
                                 </button>
                             </div>
                         </div>

@@ -520,177 +520,14 @@ body {
     background: #2563eb;
 }
 
-/* 游戏布局 */
-.game-layout {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 1rem;
-}
-
-@media (min-width: 1024px) {
-    .game-layout {
-        grid-template-columns: 2fr 1fr;
-    }
-}
-
-/* 全屏游戏布局 */
-.game-layout-fullscreen {
-    display: flex;
-    flex-direction: column;
-    height: calc(100vh - 120px); /* 减去头部高度 */
-    margin-top: 1rem;
-}
-
-/* 地图控制栏 */
-.map-controls {
-    background: rgba(30, 41, 59, 0.9);
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    margin-bottom: 0.5rem;
-    border: 1px solid rgba(168, 85, 247, 0.3);
-    display: flex;
-    justify-content: flex-end;
-}
-
-/* 全屏地图区域 */
-.map-section-fullscreen {
-    flex: 1;
+/* 科技区域 */
+.tech-section {
     background: rgba(30, 41, 59, 0.9);
     border-radius: 12px;
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(168, 85, 247, 0.3);
-    overflow: hidden;
-    position: relative;
-}
-
-/* 全屏Canvas */
-.game-canvas-fullscreen {
-    width: 100%;
-    height: 100%;
-    background: #0f172a;
-    cursor: pointer;
-    display: block;
-}
-
-/* 节点信息浮框 */
-.node-popup {
-    position: absolute;
-    top: 20px;
-    right: 20px;
-    width: 320px;
-    background: rgba(30, 41, 59, 0.95);
-    border-radius: 12px;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    border: 2px solid rgba(168, 85, 247, 0.5);
-    z-index: 100;
-    animation: slideInRight 0.3s ease-out;
-    max-height: calc(100vh - 160px);
-    overflow-y: auto;
-}
-
-.popup-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid #475569;
-    background: rgba(30, 41, 59, 0.9);
-    border-radius: 12px 12px 0 0;
-}
-
-.popup-title {
-    color: white;
-    font-size: 1.125rem;
-    font-weight: 600;
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.popup-content {
     padding: 1.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
-.popup-content .info-box {
-    background: rgba(51, 65, 85, 0.6);
-    border-radius: 8px;
-    padding: 1rem;
-    margin: 0;
-}
-
-.popup-content .info-label {
-    font-size: 0.875rem;
-    color: #9ca3af;
-    margin-bottom: 0.75rem;
-    font-weight: 600;
-}
-
-/* 浮框中的军队网格 */
-.army-grid-popup {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.5rem;
-}
-
-.army-grid-popup .btn-small {
-    padding: 0.5rem 0.75rem;
-    font-size: 0.8rem;
-    width: 100%;
-    justify-content: center;
-}
-
-/* 移除边框和调整游戏容器 */
-.game-container {
-    min-height: 100vh;
-    background: linear-gradient(135deg, #0f172a 0%, #581c87 50%, #0f172a 100%);
-    padding: 1rem;
-    background-size: 200% 200%;
-    animation: gradientShift 10s ease infinite;
-}
-
-.game-content {
-    max-width: none;
-    margin: 0;
-}
-
-/* 地图区域 */
-.map-section {
-    background: rgba(30, 41, 59, 0.9);
-    border-radius: 12px;
-    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-    padding: 1rem;
     border: 1px solid rgba(168, 85, 247, 0.3);
-    animation: fadeInLeft 0.5s ease-out;
-}
-
-@keyframes fadeInLeft {
-    from {
-        opacity: 0;
-        transform: translateX(-20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
-}
-
-.section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-}
-
-.section-title {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: white;
+    animation: fadeIn 0.5s ease-out;
 }
 
 .section-title-large {
@@ -701,172 +538,6 @@ body {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-}
-
-.game-canvas {
-    width: 100%;
-    background: #0f172a;
-    border-radius: 8px;
-    border: 1px solid #334155;
-    cursor: pointer;
-    transition: box-shadow 0.3s ease;
-}
-
-.game-canvas:hover {
-    box-shadow: 0 0 30px rgba(168, 85, 247, 0.3);
-}
-
-/* 侧边栏 */
-.sidebar {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    animation: fadeInRight 0.5s ease-out;
-}
-
-@keyframes fadeInRight {
-    from {
-        opacity: 0;
-        transform: translateX(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
-}
-
-/* 卡片 */
-.card {
-    background: rgba(30, 41, 59, 0.9);
-    border-radius: 12px;
-    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-    padding: 1rem;
-    border: 1px solid rgba(168, 85, 247, 0.3);
-}
-
-.card-title {
-    font-size: 1.125rem;
-    font-weight: 700;
-    color: white;
-    margin-bottom: 0.75rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.card-content {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-/* 信息框 */
-.info-box {
-    background: rgba(51, 65, 85, 0.6);
-    border-radius: 8px;
-    padding: 0.75rem;
-}
-
-.info-label {
-    font-size: 0.875rem;
-    color: #9ca3af;
-    margin-bottom: 0.5rem;
-}
-
-/* 进度条 */
-.progress-container {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.progress-bar {
-    flex: 1;
-    background: #475569;
-    border-radius: 9999px;
-    height: 0.5rem;
-    overflow: hidden;
-}
-
-.progress-fill {
-    background: linear-gradient(90deg, #10b981, #34d399);
-    height: 100%;
-    border-radius: 9999px;
-    transition: width 0.5s ease;
-    animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.8; }
-}
-
-.progress-value {
-    color: white;
-    font-weight: 600;
-    min-width: 3rem;
-    text-align: right;
-}
-
-/* 资源列表 */
-.resource-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.875rem;
-}
-
-.resource-item {
-    display: flex;
-    justify-content: space-between;
-    color: white;
-}
-
-.resource-value {
-    font-weight: 600;
-}
-
-/* 军队网格 */
-.army-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.5rem;
-}
-
-.army-list {
-    margin-top: 0.75rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-}
-
-.army-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: rgba(51, 65, 85, 0.6);
-    border-radius: 6px;
-    padding: 0.5rem;
-    font-size: 0.875rem;
-}
-
-.army-name {
-    color: #d1d5db;
-}
-
-.army-count {
-    color: white;
-    font-weight: 600;
-}
-
-/* 科技区域 */
-.tech-section {
-    background: rgba(30, 41, 59, 0.9);
-    border-radius: 12px;
-    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-    padding: 1.5rem;
-    border: 1px solid rgba(168, 85, 247, 0.3);
-    animation: fadeIn 0.5s ease-out;
 }
 
 .tech-grid {
@@ -1976,6 +1647,13 @@ body {
     border-left-color: #fbbf24;
 }
 
+.association-hint {
+    color: #94a3b8;
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
+    line-height: 1.5;
+}
+
 .domain-badge {
     padding: 0.25rem 0.75rem;
     border-radius: 12px;
@@ -1985,13 +1663,13 @@ body {
     letter-spacing: 0.5px;
 }
 
-.domain-badge.extends {
+.domain-badge.parent {
     background: rgba(16, 185, 129, 0.2);
     color: #10b981;
     border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
-.domain-badge.contains {
+.domain-badge.child {
     background: rgba(251, 191, 36, 0.2);
     color: #fbbf24;
     border: 1px solid rgba(251, 191, 36, 0.3);
@@ -2352,6 +2030,144 @@ body {
     transform: translateY(-2px);
 }
 
+/* ===== 节点详情页面样式 ===== */
+.node-detail-container {
+    min-height: calc(100vh - 120px);
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+}
+
+.node-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    background: rgba(30, 41, 59, 0.8);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.detail-title {
+    color: #e9d5ff;
+    font-size: 2rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.node-detail-canvas {
+    background: rgba(15, 23, 42, 0.5);
+    border-radius: 12px;
+    border: 2px solid rgba(168, 85, 247, 0.3);
+    cursor: pointer;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* 节点详细信息模态框样式 */
+.node-info-modal {
+    max-width: 700px;
+    max-height: 85vh;
+    overflow-y: auto;
+}
+
+.node-info-section {
+    margin-bottom: 2rem;
+}
+
+.info-section-title {
+    color: #e9d5ff;
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    text-align: center;
+    background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.info-section-desc {
+    color: #c4b5fd;
+    font-size: 1.05rem;
+    line-height: 1.7;
+    text-align: center;
+    padding: 0 1rem;
+}
+
+.info-section-subtitle {
+    color: #e9d5ff;
+    font-size: 1.2rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid rgba(168, 85, 247, 0.3);
+}
+
+.node-info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.info-item {
+    background: rgba(168, 85, 247, 0.05);
+    padding: 1rem;
+    border-radius: 8px;
+    border-left: 3px solid #a855f7;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.info-label {
+    color: #94a3b8;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.info-value {
+    color: #e9d5ff;
+    font-size: 1.05rem;
+    font-weight: 500;
+}
+
+.info-value.highlight {
+    color: #fbbf24;
+    font-weight: 700;
+    font-size: 1.2rem;
+}
+
+.domain-summary {
+    display: flex;
+    gap: 2rem;
+    background: rgba(30, 41, 59, 0.5);
+    padding: 1rem;
+    border-radius: 8px;
+}
+
+.domain-summary-item {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.domain-summary-label {
+    color: #94a3b8;
+    font-size: 0.95rem;
+}
+
+.domain-summary-value {
+    color: #e9d5ff;
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
 /* ===== 编辑关联浮窗样式 ===== */
 .edit-association-modal {
     max-width: 700px;
@@ -2492,4 +2308,36 @@ body {
 .assoc-type-select:focus {
     outline: none;
     border-color: rgba(168, 85, 247, 0.6);
+}
+
+/* ===== 节点创建信息显示样式 ===== */
+.node-creation-info {
+    background: rgba(168, 85, 247, 0.1);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.info-row {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem 0;
+}
+
+.info-row:not(:last-child) {
+    border-bottom: 1px solid rgba(168, 85, 247, 0.15);
+}
+
+.info-label-display {
+    color: #9ca3af;
+    font-size: 0.875rem;
+    font-weight: 600;
+    min-width: 80px;
+}
+
+.info-value-display {
+    color: #e9d5ff;
+    font-size: 0.95rem;
+    font-weight: 500;
 }

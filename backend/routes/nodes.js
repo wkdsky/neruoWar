@@ -53,6 +53,17 @@ router.post('/create', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '普通用户创建节点必须至少有一个关联关系' });
     }
 
+    // 验证：检查是否有重复的目标节点（一个节点不能既被包含又被拓展）
+    if (associations && associations.length > 0) {
+      const targetNodeIds = associations.map(a => a.targetNode.toString());
+      const uniqueTargetNodes = new Set(targetNodeIds);
+      if (targetNodeIds.length !== uniqueTargetNodes.size) {
+        return res.status(400).json({
+          error: '关联关系错误：同一个节点只能有一种关联关系（拓展或包含），不能同时存在两种关系。'
+        });
+      }
+    }
+
     // 填充关联母域和关联子域
     let relatedParentDomains = [];
     let relatedChildDomains = [];
@@ -81,7 +92,7 @@ router.post('/create', authenticateToken, async (req, res) => {
       });
     }
 
-    const nodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const nodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
     const node = new Node({
       nodeId,
       owner: req.user.userId,
@@ -462,6 +473,17 @@ router.put('/:nodeId/associations', authenticateToken, isAdmin, async (req, res)
       return res.status(404).json({ error: '节点不存在' });
     }
 
+    // 验证：检查是否有重复的目标节点（一个节点不能既被包含又被拓展）
+    if (associations && associations.length > 0) {
+      const targetNodeIds = associations.map(a => a.targetNode.toString());
+      const uniqueTargetNodes = new Set(targetNodeIds);
+      if (targetNodeIds.length !== uniqueTargetNodes.size) {
+        return res.status(400).json({
+          error: '关联关系错误：同一个节点只能有一种关联关系（拓展或包含），不能同时存在两种关系。'
+        });
+      }
+    }
+
     const nodeName = node.name;
     const oldAssociations = node.associations || [];
 
@@ -670,6 +692,49 @@ router.get('/public/search', async (req, res) => {
     });
   } catch (error) {
     console.error('搜索节点错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取节点详细信息（所有用户可访问）
+router.get('/public/node-detail/:nodeId', async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+
+    const node = await Node.findById(nodeId)
+      .populate('owner', 'username')
+      .select('name description owner relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
+
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+
+    if (node.status !== 'approved') {
+      return res.status(403).json({ error: '该节点未审批' });
+    }
+
+    // 获取关联的母域节点信息（ID和名称）
+    const parentNodes = await Node.find({
+      name: { $in: node.relatedParentDomains },
+      status: 'approved'
+    }).select('_id name description knowledgePoint contentScore');
+
+    // 获取关联的子域节点信息（ID和名称）
+    const childNodes = await Node.find({
+      name: { $in: node.relatedChildDomains },
+      status: 'approved'
+    }).select('_id name description knowledgePoint contentScore');
+
+    res.json({
+      success: true,
+      node: {
+        ...node.toObject(),
+        parentNodesInfo: parentNodes,
+        childNodesInfo: childNodes
+      }
+    });
+  } catch (error) {
+    console.error('获取节点详情错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });
