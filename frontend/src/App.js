@@ -95,6 +95,12 @@ const App = () => {
     const [showNodeInfoModal, setShowNodeInfoModal] = useState(false);
     const detailCanvasRef = useRef(null);
 
+    // 导航路径相关状态
+    const [navigationPath, setNavigationPath] = useState([{ type: 'home', label: '首页' }]);
+    const [showNavigationTree, setShowNavigationTree] = useState(false);
+    const [fullNavigationPaths, setFullNavigationPaths] = useState([]);
+    const treeCanvasRef = useRef(null);
+
     useEffect(() => {
         // 只在没有socket时初始化
         if (!socketRef.current) {
@@ -248,7 +254,7 @@ const App = () => {
         newSocket.on('authenticated', (data) => {
             console.log('认证成功');
             setAuthenticated(true);
-            setView('game');
+            setView('home');
             newSocket.emit('getGameState');
         });
     
@@ -376,6 +382,188 @@ const App = () => {
         }
     };
 
+    // 构建从当前节点到根节点的所有路径
+    const buildPathsToRoot = async (nodeId) => {
+        try {
+            const token = localStorage.getItem('token');
+            const response = await fetch('http://192.168.1.96:5000/api/nodes', {
+                headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+            });
+
+            if (!response.ok) return [];
+
+            const data = await response.json();
+            const allNodes = data.nodes || [];
+
+            // 创建节点映射
+            const nodeMap = new Map();
+            allNodes.forEach(node => {
+                nodeMap.set(node._id, node);
+            });
+
+            // 递归查找所有到根节点的路径
+            const findPaths = (currentNodeId, visited = new Set()) => {
+                if (visited.has(currentNodeId)) return []; // 避免循环
+
+                const currentNode = nodeMap.get(currentNodeId);
+                if (!currentNode) return [];
+
+                visited.add(currentNodeId);
+
+                // 获取关联母域（被谁包含）
+                const parentDomains = currentNode.relatedParentDomains || [];
+
+                // 如果没有关联母域，说明是根节点
+                if (parentDomains.length === 0) {
+                    return [[currentNode]];
+                }
+
+                // 查找所有父节点的路径
+                const allPaths = [];
+                for (const parentName of parentDomains) {
+                    const parentNode = Array.from(nodeMap.values()).find(n => n.name === parentName);
+                    if (parentNode) {
+                        const parentPaths = findPaths(parentNode._id, new Set(visited));
+                        parentPaths.forEach(path => {
+                            allPaths.push([...path, currentNode]);
+                        });
+                    }
+                }
+
+                return allPaths;
+            };
+
+            return findPaths(nodeId);
+        } catch (error) {
+            console.error('构建路径失败:', error);
+            return [];
+        }
+    };
+
+    // 应用省略规则并生成导航路径
+    const generateNavigationPath = (paths) => {
+        if (paths.length === 0) return [{ type: 'home', label: '首页' }];
+
+        const nav = [{ type: 'home', label: '首页' }];
+
+        // 如果只有一条路径，直接显示
+        if (paths.length === 1) {
+            paths[0].forEach(node => {
+                nav.push({
+                    type: 'node',
+                    label: node.name,
+                    nodeId: node._id,
+                    node: node
+                });
+            });
+            return nav;
+        }
+
+        // 两条路径：按二叉树结构显示
+        if (paths.length === 2) {
+            const maxDepth = Math.max(...paths.map(p => p.length));
+
+            for (let depth = 0; depth < maxDepth; depth++) {
+                const nodesAtDepth = paths
+                    .filter(p => p.length > depth)
+                    .map(p => p[depth]);
+
+                const uniqueNodes = Array.from(new Map(nodesAtDepth.map(n => [n._id, n])).values());
+
+                if (uniqueNodes.length === 1) {
+                    // 只有一个节点，正常显示
+                    nav.push({
+                        type: 'node',
+                        label: uniqueNodes[0].name,
+                        nodeId: uniqueNodes[0]._id,
+                        node: uniqueNodes[0]
+                    });
+                } else if (uniqueNodes.length === 2) {
+                    // 两个节点，并列显示（二叉树分叉）
+                    nav.push({
+                        type: 'branch',
+                        nodes: uniqueNodes.map(node => ({
+                            label: node.name,
+                            nodeId: node._id,
+                            node: node
+                        }))
+                    });
+                }
+            }
+
+            return nav;
+        }
+
+        // 三条及以上路径：从根节点层开始检查，找到第一个有>=3个节点的层就省略
+        const maxDepth = Math.max(...paths.map(p => p.length));
+        let omitStartDepth = -1;
+
+        // 从第0层开始检查
+        for (let depth = 0; depth < maxDepth; depth++) {
+            const nodesAtDepth = paths
+                .filter(p => p.length > depth)
+                .map(p => p[depth]);
+
+            const uniqueNodes = Array.from(new Map(nodesAtDepth.map(n => [n._id, n])).values());
+
+            if (uniqueNodes.length >= 3) {
+                omitStartDepth = depth;
+                break;
+            }
+        }
+
+        if (omitStartDepth === -1) {
+            // 没有找到需要省略的层，全部显示（理论上不会到这里，因为>=3条路径）
+            omitStartDepth = maxDepth - 1;
+        }
+
+        // 显示省略之前的层
+        for (let depth = 0; depth < omitStartDepth; depth++) {
+            const nodesAtDepth = paths
+                .filter(p => p.length > depth)
+                .map(p => p[depth]);
+
+            const uniqueNodes = Array.from(new Map(nodesAtDepth.map(n => [n._id, n])).values());
+
+            if (uniqueNodes.length === 1) {
+                nav.push({
+                    type: 'node',
+                    label: uniqueNodes[0].name,
+                    nodeId: uniqueNodes[0]._id,
+                    node: uniqueNodes[0]
+                });
+            } else if (uniqueNodes.length === 2) {
+                nav.push({
+                    type: 'branch',
+                    nodes: uniqueNodes.map(node => ({
+                        label: node.name,
+                        nodeId: node._id,
+                        node: node
+                    }))
+                });
+            }
+        }
+
+        // 添加省略项
+        nav.push({
+            type: 'omit-paths',
+            label: `省略路径:${paths.length}`,
+            count: paths.length,
+            paths: paths
+        });
+
+        // 添加目标节点
+        const targetNode = paths[0][paths[0].length - 1];
+        nav.push({
+            type: 'node',
+            label: targetNode.name,
+            nodeId: targetNode._id,
+            node: targetNode
+        });
+
+        return nav;
+    };
+
     // 获取节点详情
     const fetchNodeDetail = async (nodeId) => {
         try {
@@ -384,6 +572,12 @@ const App = () => {
                 const data = await response.json();
                 setCurrentNodeDetail(data.node);
                 setView('nodeDetail');
+
+                // 构建导航路径
+                const paths = await buildPathsToRoot(nodeId);
+                setFullNavigationPaths(paths); // 保存完整路径用于浮窗显示
+                const navPath = generateNavigationPath(paths);
+                setNavigationPath(navPath);
             } else {
                 alert('获取节点详情失败');
             }
@@ -431,8 +625,184 @@ const App = () => {
         if (authenticated && view === 'home') {
             fetchRootNodes();
             fetchFeaturedNodes();
+            setNavigationPath([{ type: 'home', label: '首页' }]);
         }
     }, [authenticated, view]);
+
+    // 绘制导航树Canvas
+    useEffect(() => {
+        if (!showNavigationTree || !treeCanvasRef.current || fullNavigationPaths.length === 0) return;
+
+        const canvas = treeCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+
+        // 构建树结构
+        const buildTree = () => {
+            const tree = { id: 'home', name: '首页', children: [], parentIds: [] };
+            const nodeMap = new Map([['home', tree]]);
+
+            fullNavigationPaths.forEach(path => {
+                let parentId = 'home';
+
+                path.forEach(node => {
+                    if (!nodeMap.has(node._id)) {
+                        const treeNode = {
+                            id: node._id,
+                            name: node.name,
+                            children: [],
+                            parentIds: [parentId]
+                        };
+                        nodeMap.set(node._id, treeNode);
+                        nodeMap.get(parentId).children.push(treeNode);
+                    } else {
+                        // 节点已存在，添加额外的父节点引用
+                        const existingNode = nodeMap.get(node._id);
+                        if (!existingNode.parentIds.includes(parentId)) {
+                            existingNode.parentIds.push(parentId);
+                        }
+                    }
+                    parentId = node._id;
+                });
+            });
+
+            return { tree, nodeMap };
+        };
+
+        const { tree } = buildTree();
+
+        // 按层级收集节点
+        const levels = [];
+        const visited = new Set();
+        let currentLevel = [tree];
+
+        while (currentLevel.length > 0) {
+            levels.push(currentLevel);
+            currentLevel.forEach(n => visited.add(n.id));
+
+            const nextLevel = [];
+            currentLevel.forEach(node => {
+                node.children.forEach(child => {
+                    if (!visited.has(child.id)) {
+                        nextLevel.push(child);
+                    }
+                });
+            });
+            currentLevel = nextLevel;
+        }
+
+        // 计算Canvas尺寸
+        const nodeWidth = 100;
+        const nodeHeight = 36;
+        const horizontalGap = 20;
+        const verticalGap = 60;
+
+        const maxNodesInLevel = Math.max(...levels.map(l => l.length));
+        const canvasWidth = Math.max(600, maxNodesInLevel * (nodeWidth + horizontalGap) + 40);
+        const canvasHeight = levels.length * (nodeHeight + verticalGap) + 40;
+
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+
+        // 计算节点位置
+        const nodePositions = [];
+
+        levels.forEach((level, levelIndex) => {
+            const levelWidth = level.length * (nodeWidth + horizontalGap) - horizontalGap;
+            const startX = (canvasWidth - levelWidth) / 2;
+            const y = 20 + levelIndex * (nodeHeight + verticalGap) + nodeHeight / 2;
+
+            level.forEach((node, nodeIndex) => {
+                const x = startX + nodeIndex * (nodeWidth + horizontalGap) + nodeWidth / 2;
+                nodePositions.push({
+                    id: node.id,
+                    name: node.name,
+                    x,
+                    y,
+                    width: nodeWidth,
+                    height: nodeHeight,
+                    parentIds: node.parentIds
+                });
+            });
+        });
+
+        // 存储节点位置用于点击检测
+        canvas._nodePositions = nodePositions;
+
+        // 清空画布
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        // 画连线
+        ctx.strokeStyle = '#a855f7';
+        ctx.lineWidth = 2;
+
+        nodePositions.forEach(nodePos => {
+            nodePos.parentIds.forEach(parentId => {
+                const parentPos = nodePositions.find(p => p.id === parentId);
+                if (parentPos) {
+                    ctx.beginPath();
+                    ctx.moveTo(parentPos.x, parentPos.y + nodeHeight / 2);
+                    ctx.lineTo(nodePos.x, nodePos.y - nodeHeight / 2);
+                    ctx.stroke();
+                }
+            });
+        });
+
+        // 画节点
+        nodePositions.forEach(nodePos => {
+            const isActive = nodePos.id === currentNodeDetail?._id;
+            const isHome = nodePos.id === 'home';
+
+            // 节点背景
+            if (isHome) {
+                const gradient = ctx.createLinearGradient(
+                    nodePos.x - nodeWidth / 2, nodePos.y,
+                    nodePos.x + nodeWidth / 2, nodePos.y
+                );
+                gradient.addColorStop(0, '#7c3aed');
+                gradient.addColorStop(1, '#a855f7');
+                ctx.fillStyle = gradient;
+            } else if (isActive) {
+                ctx.fillStyle = 'rgba(168, 85, 247, 0.6)';
+            } else {
+                ctx.fillStyle = 'rgba(51, 65, 85, 0.9)';
+            }
+
+            // 圆角矩形
+            const radius = 8;
+            ctx.beginPath();
+            ctx.roundRect(
+                nodePos.x - nodeWidth / 2,
+                nodePos.y - nodeHeight / 2,
+                nodeWidth,
+                nodeHeight,
+                radius
+            );
+            ctx.fill();
+
+            // 边框
+            ctx.strokeStyle = isActive ? '#a855f7' : 'rgba(168, 85, 247, 0.5)';
+            ctx.lineWidth = isActive ? 3 : 2;
+            ctx.stroke();
+
+            // 文字
+            ctx.fillStyle = '#e9d5ff';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            // 截断长文本
+            let text = nodePos.name;
+            if (ctx.measureText(text).width > nodeWidth - 16) {
+                while (ctx.measureText(text + '...').width > nodeWidth - 16 && text.length > 0) {
+                    text = text.slice(0, -1);
+                }
+                text += '...';
+            }
+            ctx.fillText(text, nodePos.x, nodePos.y);
+        });
+
+    }, [showNavigationTree, fullNavigationPaths, currentNodeDetail]);
 
     // 绘制节点详情页面的canvas
     useEffect(() => {
@@ -462,7 +832,7 @@ const App = () => {
         const childDistance = 180;
 
         // 绘制连线 - 母域
-        parentNodes.forEach((node, index) => {
+        parentNodes.forEach((_, index) => {
             const angle = Math.PI + (Math.PI / (parentNodes.length + 1)) * (index + 1);
             const x = centerX + Math.cos(angle) * parentDistance;
             const y = centerY + Math.sin(angle) * parentDistance;
@@ -476,7 +846,7 @@ const App = () => {
         });
 
         // 绘制连线 - 子域
-        childNodes.forEach((node, index) => {
+        childNodes.forEach((_, index) => {
             const angle = (Math.PI / (childNodes.length + 1)) * (index + 1);
             const x = centerX + Math.cos(angle) * childDistance;
             const y = centerY + Math.sin(angle) * childDistance;
@@ -610,8 +980,14 @@ const App = () => {
 
         const canvas = detailCanvasRef.current;
         const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+
+        // 计算canvas逻辑尺寸和显示尺寸的缩放比例
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+
+        // 将点击坐标从显示坐标系转换到canvas逻辑坐标系
+        const x = (e.clientX - rect.left) * scaleX;
+        const y = (e.clientY - rect.top) * scaleY;
 
         const width = canvas.width;
         const height = canvas.height;
@@ -1316,7 +1692,10 @@ const App = () => {
                             </div>
                             <div className="header-buttons">
                                 <button
-                                    onClick={() => setView('home')}
+                                    onClick={() => {
+                                        setView('home');
+                                        setNavigationPath([{ type: 'home', label: '首页' }]);
+                                    }}
                                     className="btn btn-primary"
                                 >
                                     <Home size={18} />
@@ -1358,7 +1737,15 @@ const App = () => {
 
                 {/* 首页视图 */}
                 {view === 'home' && (
-                    <div className="home-container">
+                    <>
+                        {/* 左侧导航栏 */}
+                        <div className="navigation-sidebar">
+                            <div className="nav-item active">
+                                <span className="nav-label">首页</span>
+                            </div>
+                        </div>
+
+                        <div className="home-container">
                         {/* 搜索栏 */}
                         <div className="home-search-section">
                             <div className="search-bar-home">
@@ -1485,16 +1872,63 @@ const App = () => {
                                 )}
                             </div>
                         </div>
-                    </div>
+                        </div>
+                    </>
                 )}
 
                 {/* 节点详情视图 */}
                 {view === 'nodeDetail' && currentNodeDetail && (
-                    <div className="node-detail-container">
+                    <>
+                        {/* 左侧导航栏 */}
+                        <div className="navigation-sidebar">
+                            {navigationPath.map((item, index) => (
+                                <div key={index}>
+                                    {item.type === 'branch' ? (
+                                        // 二叉树分叉，两个节点并列显示
+                                        <div className="nav-branch">
+                                            {item.nodes.map((branchNode, branchIndex) => (
+                                                <div
+                                                    key={branchIndex}
+                                                    className={`nav-item branch-item clickable ${branchNode.nodeId === currentNodeDetail._id ? 'active' : ''}`}
+                                                    onClick={() => fetchNodeDetail(branchNode.nodeId)}
+                                                >
+                                                    <span className="nav-label">{branchNode.label}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div
+                                            className={`nav-item ${item.type === 'node' && item.nodeId === currentNodeDetail._id ? 'active' : ''} ${item.type === 'omit-paths' ? 'clickable omit-item' : item.type !== 'home' ? 'clickable' : ''}`}
+                                            onClick={() => {
+                                                if (item.type === 'home') {
+                                                    setView('home');
+                                                    setNavigationPath([{ type: 'home', label: '首页' }]);
+                                                } else if (item.type === 'node') {
+                                                    fetchNodeDetail(item.nodeId);
+                                                } else if (item.type === 'omit-paths') {
+                                                    // 点击省略项，显示完整导航树
+                                                    setShowNavigationTree(true);
+                                                }
+                                            }}
+                                        >
+                                            <span className="nav-label">{item.label}</span>
+                                        </div>
+                                    )}
+                                    {index < navigationPath.length - 1 && (
+                                        <div className="nav-arrow">↓</div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="node-detail-container">
                         <div className="node-detail-header">
                             <h2 className="detail-title">{currentNodeDetail.name}</h2>
                             <button
-                                onClick={() => setView('home')}
+                                onClick={() => {
+                                    setView('home');
+                                    setNavigationPath([{ type: 'home', label: '首页' }]);
+                                }}
                                 className="btn btn-secondary"
                             >
                                 <Home size={18} />
@@ -1508,7 +1942,8 @@ const App = () => {
                             onClick={handleDetailCanvasClick}
                             className="node-detail-canvas"
                         />
-                    </div>
+                        </div>
+                    </>
                 )}
 
                 {view === 'tech' && (
@@ -2497,7 +2932,6 @@ const App = () => {
                                             ))}
                                         </div>
                                     )}
-
                                     {!isAdmin && associations.length === 0 && (
                                         <span className="error-text">至少需要一个关联关系</span>
                                     )}
@@ -2517,6 +2951,69 @@ const App = () => {
                                     className={`btn ${canSubmitNode() ? 'btn-success' : 'btn-disabled'}`}
                                 >
                                     {isAdmin ? '创建节点' : '申请创建'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 完整导航树浮窗 */}
+                {showNavigationTree && fullNavigationPaths.length > 0 && (
+                    <div className="modal-backdrop" onClick={() => setShowNavigationTree(false)}>
+                        <div className="modal-content navigation-tree-modal" onClick={(e) => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h2>完整导航路径</h2>
+                                <button
+                                    className="btn-close"
+                                    onClick={() => setShowNavigationTree(false)}
+                                >
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            <div className="modal-body">
+                                <div className="navigation-tree-canvas-container">
+                                    <canvas
+                                        ref={treeCanvasRef}
+                                        className="navigation-tree-canvas"
+                                        onClick={(e) => {
+                                            // 处理Canvas点击
+                                            const canvas = treeCanvasRef.current;
+                                            if (!canvas) return;
+
+                                            const rect = canvas.getBoundingClientRect();
+                                            const scaleX = canvas.width / rect.width;
+                                            const scaleY = canvas.height / rect.height;
+                                            const x = (e.clientX - rect.left) * scaleX;
+                                            const y = (e.clientY - rect.top) * scaleY;
+
+                                            // 检查点击了哪个节点
+                                            const nodePositions = canvas._nodePositions || [];
+                                            for (const nodePos of nodePositions) {
+                                                const dx = x - nodePos.x;
+                                                const dy = y - nodePos.y;
+                                                if (Math.abs(dx) <= nodePos.width / 2 && Math.abs(dy) <= nodePos.height / 2) {
+                                                    if (nodePos.id === 'home') {
+                                                        setView('home');
+                                                        setNavigationPath([{ type: 'home', label: '首页' }]);
+                                                    } else {
+                                                        fetchNodeDetail(nodePos.id);
+                                                    }
+                                                    setShowNavigationTree(false);
+                                                    break;
+                                                }
+                                            }
+                                        }}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="modal-footer">
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => setShowNavigationTree(false)}
+                                >
+                                    关闭
                                 </button>
                             </div>
                         </div>
