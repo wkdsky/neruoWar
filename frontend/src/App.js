@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Play, Plus, Zap, Sword, FlaskConical, Link, Users, Home, Search, X, Check, Bell } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
+import SceneManager from './SceneManager';
 
 const App = () => {
     const [socket, setSocket] = useState(null);
@@ -100,6 +101,74 @@ const App = () => {
     const [showNavigationTree, setShowNavigationTree] = useState(false);
     const [fullNavigationPaths, setFullNavigationPaths] = useState([]);
     const treeCanvasRef = useRef(null);
+
+    // WebGL场景管理
+    const webglCanvasRef = useRef(null);
+    const sceneManagerRef = useRef(null);
+    const [isWebGLReady, setIsWebGLReady] = useState(false);
+
+    // 初始化WebGL场景
+    useEffect(() => {
+        const canvas = webglCanvasRef.current;
+        if (!canvas) {
+            // canvas不存在时，清理旧的场景管理器
+            if (sceneManagerRef.current) {
+                sceneManagerRef.current.destroy();
+                sceneManagerRef.current = null;
+                setIsWebGLReady(false);
+            }
+            return;
+        }
+
+        // 每次view变化时，清理并重新创建场景管理器
+        if (sceneManagerRef.current) {
+            sceneManagerRef.current.destroy();
+            sceneManagerRef.current = null;
+        }
+
+        try {
+            const parent = canvas.parentElement;
+            if (!parent) return;
+
+            // 设置canvas大小
+            const rect = parent.getBoundingClientRect();
+            canvas.width = rect.width || 800;
+            canvas.height = rect.height || 600;
+
+            // 创建场景管理器
+            const sceneManager = new SceneManager(canvas);
+
+            // 设置点击回调
+            sceneManager.onNodeClick = (node) => {
+                if (node.data && node.data._id) {
+                    fetchNodeDetail(node.data._id, node);
+                }
+            };
+
+            sceneManagerRef.current = sceneManager;
+            setIsWebGLReady(true);
+
+            // 监听窗口大小变化
+            const handleResize = () => {
+                const newRect = parent.getBoundingClientRect();
+                if (newRect.width > 0 && newRect.height > 0) {
+                    canvas.width = newRect.width;
+                    canvas.height = newRect.height;
+                    if (sceneManagerRef.current) {
+                        sceneManagerRef.current.resize(newRect.width, newRect.height);
+                    }
+                }
+            };
+
+            window.addEventListener('resize', handleResize);
+
+            return () => {
+                window.removeEventListener('resize', handleResize);
+            };
+        } catch (error) {
+            console.error('WebGL初始化失败:', error);
+        }
+    }, [view]); // 视图变化时重新初始化
 
     useEffect(() => {
         // 只在没有socket时初始化
@@ -565,7 +634,7 @@ const App = () => {
     };
 
     // 获取节点详情
-    const fetchNodeDetail = async (nodeId) => {
+    const fetchNodeDetail = async (nodeId, clickedNode = null) => {
         try {
             const response = await fetch(`http://192.168.1.96:5000/api/nodes/public/node-detail/${nodeId}`);
             if (response.ok) {
@@ -578,6 +647,7 @@ const App = () => {
                 setFullNavigationPaths(paths); // 保存完整路径用于浮窗显示
                 const navPath = generateNavigationPath(paths);
                 setNavigationPath(navPath);
+                // WebGL场景更新由useEffect自动处理
             } else {
                 alert('获取节点详情失败');
             }
@@ -628,6 +698,28 @@ const App = () => {
             setNavigationPath([{ type: 'home', label: '首页' }]);
         }
     }, [authenticated, view]);
+
+    // 更新WebGL首页场景
+    useEffect(() => {
+        if (!sceneManagerRef.current || !isWebGLReady) return;
+        if (view !== 'home') return;
+
+        // 确保有数据才渲染
+        if (rootNodes.length > 0 || featuredNodes.length > 0) {
+            sceneManagerRef.current.showHome(rootNodes, featuredNodes, []);
+        }
+    }, [isWebGLReady, view, rootNodes, featuredNodes]);
+
+    // 更新WebGL节点详情场景
+    useEffect(() => {
+        if (!sceneManagerRef.current || !isWebGLReady) return;
+        if (view !== 'nodeDetail' || !currentNodeDetail) return;
+
+        const parentNodes = currentNodeDetail.parentNodesInfo || [];
+        const childNodes = currentNodeDetail.childNodesInfo || [];
+
+        sceneManagerRef.current.showNodeDetail(currentNodeDetail, parentNodes, childNodes, null);
+    }, [isWebGLReady, view, currentNodeDetail]);
 
     // 绘制导航树Canvas
     useEffect(() => {
@@ -1745,17 +1837,22 @@ const App = () => {
                             </div>
                         </div>
 
-                        <div className="home-container">
-                        {/* 搜索栏 */}
-                        <div className="home-search-section">
-                            <div className="search-bar-home">
+                        <div className="webgl-scene-container">
+                            {/* WebGL Canvas */}
+                            <canvas
+                                ref={webglCanvasRef}
+                                className="webgl-canvas"
+                            />
+
+                            {/* 悬浮搜索栏 */}
+                            <div className="floating-search-bar">
                                 <Search className="search-icon" size={24} />
                                 <input
                                     type="text"
                                     placeholder="搜索节点...（支持多关键词，用空格分隔）"
                                     value={homeSearchQuery}
                                     onChange={(e) => setHomeSearchQuery(e.target.value)}
-                                    className="search-input-home"
+                                    className="search-input-floating"
                                 />
                                 {homeSearchQuery && (
                                     <button
@@ -1770,108 +1867,44 @@ const App = () => {
                                 )}
                             </div>
 
-                            {/* 搜索结果 */}
-                            {homeSearchQuery && (
-                                <div className="search-results-home">
-                                    {isSearching ? (
-                                        <div className="search-loading">搜索中...</div>
-                                    ) : homeSearchResults.length > 0 ? (
-                                        <div className="results-list">
-                                            {homeSearchResults.map((node) => (
-                                                <div
-                                                    key={node._id}
-                                                    className="result-item"
-                                                    onClick={() => fetchNodeDetail(node._id)}
-                                                    style={{ cursor: 'pointer' }}
-                                                >
-                                                    <div className="result-header">
-                                                        <h4>{node.name}</h4>
-                                                        <span className="result-knowledge">
-                                                            {(node.knowledgePoint?.value || 0).toFixed(2)} 知识点
-                                                        </span>
-                                                    </div>
-                                                    <p className="result-desc">{node.description}</p>
-                                                    <div className="result-meta">
-                                                        <span>创建者: {node.owner?.username || '系统'}</span>
-                                                        <span>内容分数: {node.contentScore || 1}</span>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <div className="search-empty">未找到匹配的节点</div>
-                                    )}
+                            {/* 搜索结果列表（长方体条目） */}
+                            {homeSearchQuery && homeSearchResults.length > 0 && (
+                                <div className="search-results-panel">
+                                    <div className="search-results-scroll">
+                                        {homeSearchResults.map((node) => (
+                                            <div
+                                                key={node._id}
+                                                className="search-result-card"
+                                                onClick={() => {
+                                                    // 点击搜索结果，跳转到节点详情
+                                                    fetchNodeDetail(node._id, {
+                                                        id: `search-${node._id}`,
+                                                        data: node,
+                                                        type: 'search'
+                                                    });
+                                                }}
+                                            >
+                                                <div className="search-card-title">{node.name}</div>
+                                                <div className="search-card-desc">{node.description}</div>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             )}
-                        </div>
 
-                        {/* 根节点展示区 */}
-                        <div className="root-nodes-section">
-                            <h2 className="section-title">根节点</h2>
-                            <div className="root-nodes-grid">
-                                {rootNodes.length > 0 ? (
-                                    rootNodes.map((node) => (
-                                        <div
-                                            key={node._id}
-                                            className="node-card root-node-card"
-                                            onClick={() => fetchNodeDetail(node._id)}
-                                            style={{ cursor: 'pointer' }}
-                                        >
-                                            <div className="node-card-header">
-                                                <h3>{node.name}</h3>
-                                                <div className="node-badge root-badge">根节点</div>
-                                            </div>
-                                            <p className="node-card-desc">{node.description}</p>
-                                            <div className="node-card-footer">
-                                                <div className="node-stat">
-                                                    <Zap size={16} />
-                                                    <span>{(node.knowledgePoint?.value || 0).toFixed(2)}</span>
-                                                </div>
-                                                <div className="node-stat">
-                                                    <span>内容分数: {node.contentScore || 1}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <div className="empty-message">暂无根节点</div>
-                                )}
-                            </div>
-                        </div>
+                            {/* 搜索无结果 */}
+                            {homeSearchQuery && !isSearching && homeSearchResults.length === 0 && (
+                                <div className="search-no-results">
+                                    未找到匹配的节点
+                                </div>
+                            )}
 
-                        {/* 热门节点横向滚动区 */}
-                        <div className="featured-nodes-section">
-                            <h2 className="section-title">热门节点</h2>
-                            <div className="featured-nodes-scroll">
-                                {featuredNodes.length > 0 ? (
-                                    featuredNodes.map((node) => (
-                                        <div
-                                            key={node._id}
-                                            className="node-card featured-node-card"
-                                            onClick={() => fetchNodeDetail(node._id)}
-                                            style={{ cursor: 'pointer' }}
-                                        >
-                                            <div className="node-card-header">
-                                                <h3>{node.name}</h3>
-                                                <div className="node-badge featured-badge">热门</div>
-                                            </div>
-                                            <p className="node-card-desc">{node.description}</p>
-                                            <div className="node-card-footer">
-                                                <div className="node-stat">
-                                                    <Zap size={16} />
-                                                    <span>{(node.knowledgePoint?.value || 0).toFixed(2)}</span>
-                                                </div>
-                                                <div className="node-stat">
-                                                    <span>内容分数: {node.contentScore || 1}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <div className="empty-message">管理员暂未设置热门节点</div>
-                                )}
-                            </div>
-                        </div>
+                            {/* 搜索中 */}
+                            {isSearching && (
+                                <div className="search-loading-indicator">
+                                    搜索中...
+                                </div>
+                            )}
                         </div>
                     </>
                 )}
@@ -1921,27 +1954,26 @@ const App = () => {
                             ))}
                         </div>
 
-                        <div className="node-detail-container">
-                        <div className="node-detail-header">
-                            <h2 className="detail-title">{currentNodeDetail.name}</h2>
-                            <button
-                                onClick={() => {
-                                    setView('home');
-                                    setNavigationPath([{ type: 'home', label: '首页' }]);
-                                }}
-                                className="btn btn-secondary"
-                            >
-                                <Home size={18} />
-                                返回首页
-                            </button>
-                        </div>
-                        <canvas
-                            ref={detailCanvasRef}
-                            width={window.innerWidth - 40}
-                            height={window.innerHeight - 200}
-                            onClick={handleDetailCanvasClick}
-                            className="node-detail-canvas"
-                        />
+                        <div className="webgl-scene-container">
+                            {/* WebGL Canvas */}
+                            <canvas
+                                ref={webglCanvasRef}
+                                className="webgl-canvas"
+                            />
+
+                            {/* 返回按钮 */}
+                            <div className="floating-back-btn">
+                                <button
+                                    onClick={() => {
+                                        setView('home');
+                                        setNavigationPath([{ type: 'home', label: '首页' }]);
+                                    }}
+                                    className="btn btn-secondary"
+                                >
+                                    <Home size={18} />
+                                    返回首页
+                                </button>
+                            </div>
                         </div>
                     </>
                 )}
