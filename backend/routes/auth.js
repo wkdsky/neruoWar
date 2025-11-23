@@ -44,11 +44,12 @@ router.post('/register', async (req, res) => {
     // 生成token
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
     
-    res.status(201).json({ 
-      token, 
-      userId: user._id, 
+    res.status(201).json({
+      token,
+      userId: user._id,
       username: user.username,
-      role: user.role
+      role: user.role,
+      location: user.location
     });
   } catch (error) {
     console.error('注册错误:', error);
@@ -80,15 +81,51 @@ router.post('/login', async (req, res) => {
 
     // 生成token
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
-    
-    res.json({ 
-      token, 
-      userId: user._id, 
+
+    res.json({
+      token,
+      userId: user._id,
       username: user.username,
-      role: user.role
+      role: user.role,
+      location: user.location
     });
   } catch (error) {
     console.error('登录错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 更新用户location
+router.put('/location', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { location } = req.body;
+
+    if (!location || location.trim() === '') {
+      return res.status(400).json({ error: 'location不能为空' });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      decoded.userId,
+      { location: location },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    res.json({
+      success: true,
+      location: user.location
+    });
+  } catch (error) {
+    console.error('更新location错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });

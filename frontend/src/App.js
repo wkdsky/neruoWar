@@ -3,6 +3,7 @@ import { Play, Plus, Zap, Sword, FlaskConical, Link, Users, Home, Search, X, Che
 import io from 'socket.io-client';
 import './App.css';
 import SceneManager from './SceneManager';
+import LocationSelectionModal from './LocationSelectionModal';
 
 const App = () => {
     const [socket, setSocket] = useState(null);
@@ -27,11 +28,21 @@ const App = () => {
     useEffect(() => {
         const token = localStorage.getItem('token');
         const storedUsername = localStorage.getItem('username');
-        
+        const storedLocation = localStorage.getItem('userLocation');
+
         if (token && storedUsername) {
             setAuthenticated(true);
             setUsername(storedUsername);
-            setView('home');
+            setUserLocation(storedLocation || '');
+
+            // 如果location为空，需要显示位置选择弹窗
+            if (!storedLocation || storedLocation === '') {
+                // 先获取热门节点，然后显示弹窗
+                fetchFeaturedNodes();
+                setShowLocationModal(true);
+            } else {
+                setView('home');
+            }
 
             // 如果socket已连接，重新认证
             if (socket && socket.connected) {
@@ -84,6 +95,12 @@ const App = () => {
     const [assocSearchResults, setAssocSearchResults] = useState([]);
     const [newAssocType, setNewAssocType] = useState('contains');
 
+    // 用户位置相关状态
+    const [userLocation, setUserLocation] = useState('');
+    const [showLocationModal, setShowLocationModal] = useState(false);
+    const [selectedLocationNode, setSelectedLocationNode] = useState(null);
+    const [currentLocationNodeDetail, setCurrentLocationNodeDetail] = useState(null);
+
     // 首页相关状态
     const [rootNodes, setRootNodes] = useState([]);
     const [featuredNodes, setFeaturedNodes] = useState([]);
@@ -106,6 +123,8 @@ const App = () => {
     const webglCanvasRef = useRef(null);
     const sceneManagerRef = useRef(null);
     const [isWebGLReady, setIsWebGLReady] = useState(false);
+    const [clickedNodeForTransition, setClickedNodeForTransition] = useState(null);
+    const [canvasKey, setCanvasKey] = useState(0); // 用于强制重新渲染canvas
 
     // 初始化WebGL场景
     useEffect(() => {
@@ -140,7 +159,13 @@ const App = () => {
 
             // 设置点击回调
             sceneManager.onNodeClick = (node) => {
-                if (node.data && node.data._id) {
+                if (!node.data || !node.data._id) return;
+
+                // 如果在节点详情页，且点击的是中央节点，显示详情弹窗
+                if (view === 'nodeDetail' && node.type === 'center') {
+                    setShowNodeInfoModal(true);
+                } else {
+                    // 其他情况：导航到节点详情页
                     fetchNodeDetail(node.data._id, node);
                 }
             };
@@ -168,7 +193,7 @@ const App = () => {
         } catch (error) {
             console.error('WebGL初始化失败:', error);
         }
-    }, [view]); // 视图变化时重新初始化
+    }, [view, canvasKey]); // 添加canvasKey作为依赖，用于强制重新初始化
 
     useEffect(() => {
         // 只在没有socket时初始化
@@ -234,14 +259,32 @@ const App = () => {
       if (response.ok) {
         localStorage.setItem('token', data.token);
         localStorage.setItem('username', data.username);
+        localStorage.setItem('userLocation', data.location || '');
         setAuthenticated(true);
-        setView('home');
         setUsername(data.username);
+        setUserLocation(data.location || '');
 
         // 重新初始化socket连接（连接事件中会处理认证）
         initializeSocket(data.token);
-        
+
         await checkAdminStatus();
+
+        // 检查location字段，如果为空且不是管理员，显示位置选择弹窗
+        if (!data.location || data.location === '') {
+          if (data.role === 'admin') {
+            // 管理员自动设置location为"任意"
+            await updateUserLocation('任意');
+            setUserLocation('任意');
+            localStorage.setItem('userLocation', '任意');
+            setView('home');
+          } else {
+            // 普通用户显示位置选择弹窗
+            setShowLocationModal(true);
+            // 不设置view，保持在登录状态但显示弹窗
+          }
+        } else {
+          setView('home');
+        }
       } else {
         window.alert(data.error);
       }
@@ -250,14 +293,115 @@ const App = () => {
     }
   };
 
+  // 更新用户location
+  const updateUserLocation = async (location) => {
+    const token = localStorage.getItem('token');
+    try {
+      console.log('正在更新location:', location);
+      const response = await fetch('http://192.168.1.96:5000/api/location', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ location })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        console.log('location更新成功:', data.location);
+        return data.location;
+      } else {
+        console.error('location更新失败:', data);
+        window.alert(`设置降临位置失败: ${data.error || '未知错误'}`);
+        return null;
+      }
+    } catch (error) {
+      console.error('更新location失败:', error);
+      window.alert(`网络错误: ${error.message}`);
+      return null;
+    }
+  };
+
+  // 处理位置选择确认
+  const handleLocationConfirm = async (selectedNode) => {
+    console.log('用户选择的节点:', selectedNode);
+
+    if (!selectedNode || !selectedNode.name) {
+      window.alert('选择的节点无效，请重新选择');
+      return;
+    }
+
+    const locationName = selectedNode.name;
+    const updatedLocation = await updateUserLocation(locationName);
+
+    if (updatedLocation) {
+      setUserLocation(updatedLocation);
+      setSelectedLocationNode(selectedNode);
+      setCurrentLocationNodeDetail(selectedNode);
+      localStorage.setItem('userLocation', updatedLocation);
+
+      // 关闭modal并切换到home视图
+      setShowLocationModal(false);
+      setView('home');
+
+      // 强制重新初始化WebGL（确保canvas渲染后再初始化）
+      setTimeout(() => {
+        setCanvasKey(prev => prev + 1);
+      }, 50);
+    }
+    // 如果失败，updateUserLocation已经显示了错误消息，保持弹窗打开
+  };
+
+  // 根据location名称获取节点详细信息
+  const fetchLocationNodeDetail = async (locationName) => {
+    if (!locationName || locationName === '' || locationName === '任意') {
+      setCurrentLocationNodeDetail(null);
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://192.168.1.96:5000/api/nodes/public/search?query=${encodeURIComponent(locationName)}`);
+      if (response.ok) {
+        const data = await response.json();
+        // 精确匹配节点名称
+        const exactMatch = data.results.find(node => node.name === locationName);
+        if (exactMatch) {
+          // 获取完整的节点详情
+          const detailResponse = await fetch(`http://192.168.1.96:5000/api/nodes/public/node-detail/${exactMatch._id}`);
+          if (detailResponse.ok) {
+            const detailData = await detailResponse.json();
+            setCurrentLocationNodeDetail(detailData.node);
+          } else {
+            setCurrentLocationNodeDetail(exactMatch);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('获取位置节点详情失败:', error);
+    }
+  };
+
+  // 当userLocation变化时，获取节点详情
+  useEffect(() => {
+    if (authenticated && userLocation) {
+      fetchLocationNodeDetail(userLocation);
+    }
+  }, [userLocation, authenticated]);
+
     const handleLogout = () => {
         localStorage.removeItem('token');
         localStorage.removeItem('username');
+        localStorage.removeItem('userLocation');
         setAuthenticated(false);
         setUsername('');
         setPassword('');
         setView('login');
         setIsAdmin(false);
+        setUserLocation('');
+        setSelectedLocationNode(null);
+        setShowLocationModal(false);
         
         // 清理socket连接和引用
         if (socket) {
@@ -454,10 +598,8 @@ const App = () => {
     // 构建从当前节点到根节点的所有路径
     const buildPathsToRoot = async (nodeId) => {
         try {
-            const token = localStorage.getItem('token');
-            const response = await fetch('http://192.168.1.96:5000/api/nodes', {
-                headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-            });
+            // 使用公开API端点，所有用户都可以访问
+            const response = await fetch('http://192.168.1.96:5000/api/nodes/public/all-nodes');
 
             if (!response.ok) return [];
 
@@ -642,6 +784,13 @@ const App = () => {
                 setCurrentNodeDetail(data.node);
                 setView('nodeDetail');
 
+                // 保存被点击的节点，用于WebGL过渡动画
+                if (clickedNode) {
+                    setClickedNodeForTransition(clickedNode);
+                } else {
+                    setClickedNodeForTransition(null);
+                }
+
                 // 构建导航路径
                 const paths = await buildPathsToRoot(nodeId);
                 setFullNavigationPaths(paths); // 保存完整路径用于浮窗显示
@@ -718,7 +867,11 @@ const App = () => {
         const parentNodes = currentNodeDetail.parentNodesInfo || [];
         const childNodes = currentNodeDetail.childNodesInfo || [];
 
-        sceneManagerRef.current.showNodeDetail(currentNodeDetail, parentNodes, childNodes, null);
+        // 将被点击的节点传递给SceneManager，用于正确的过渡动画
+        sceneManagerRef.current.showNodeDetail(currentNodeDetail, parentNodes, childNodes, clickedNodeForTransition);
+
+        // 动画完成后清除clickedNode状态
+        setClickedNodeForTransition(null);
     }, [isWebGLReady, view, currentNodeDetail]);
 
     // 绘制导航树Canvas
@@ -1726,7 +1879,7 @@ const App = () => {
                         <h1 className="login-title">策略经营游戏</h1>
                         <p className="login-subtitle">多节点网络战略系统</p>
                     </div>
-                    
+
                     <div className="login-form">
                         <input
                             type="text"
@@ -1759,6 +1912,18 @@ const App = () => {
                     </div>
                 </div>
             </div>
+        );
+    }
+
+    // 如果需要显示位置选择弹窗，只显示弹窗，不显示其他内容
+    if (showLocationModal) {
+        return (
+            <LocationSelectionModal
+                onConfirm={handleLocationConfirm}
+                featuredNodes={featuredNodes}
+                username={username}
+                onLogout={handleLogout}
+            />
         );
     }
 
@@ -1906,6 +2071,72 @@ const App = () => {
                                 </div>
                             )}
                         </div>
+
+                        {/* 右侧知识域驻留栏 */}
+                        {!isAdmin ? (
+                            <div className="location-resident-sidebar">
+                                <div className="location-sidebar-header">
+                                    <h3>当前所在的知识域</h3>
+                                </div>
+
+                                {currentLocationNodeDetail ? (
+                                    <div className="location-sidebar-content">
+                                        <div className="location-node-title">{currentLocationNodeDetail.name}</div>
+
+                                        {currentLocationNodeDetail.description && (
+                                            <div className="location-node-section">
+                                                <div className="section-label">描述</div>
+                                                <div className="section-content">{currentLocationNodeDetail.description}</div>
+                                            </div>
+                                        )}
+
+                                        {currentLocationNodeDetail.relatedParentDomains && currentLocationNodeDetail.relatedParentDomains.length > 0 && (
+                                            <div className="location-node-section">
+                                                <div className="section-label">父域</div>
+                                                <div className="section-tags">
+                                                    {currentLocationNodeDetail.relatedParentDomains.map((parent, idx) => (
+                                                        <span key={idx} className="node-tag parent-tag">{parent}</span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {currentLocationNodeDetail.relatedChildDomains && currentLocationNodeDetail.relatedChildDomains.length > 0 && (
+                                            <div className="location-node-section">
+                                                <div className="section-label">子域</div>
+                                                <div className="section-tags">
+                                                    {currentLocationNodeDetail.relatedChildDomains.map((child, idx) => (
+                                                        <span key={idx} className="node-tag child-tag">{child}</span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {currentLocationNodeDetail.knowledge && (
+                                            <div className="location-node-section">
+                                                <div className="section-label">知识内容</div>
+                                                <div className="section-content knowledge-content">
+                                                    {currentLocationNodeDetail.knowledge}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="location-sidebar-empty">
+                                        <p>暂未降临到任何知识域</p>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="location-resident-sidebar admin-sidebar">
+                                <div className="location-sidebar-header">
+                                    <h3>管理员视图</h3>
+                                </div>
+                                <div className="location-sidebar-empty">
+                                    <p>管理员可查看所有知识域</p>
+                                </div>
+                            </div>
+                        )}
                     </>
                 )}
 
@@ -1914,6 +2145,12 @@ const App = () => {
                     <>
                         {/* 左侧导航栏 */}
                         <div className="navigation-sidebar">
+                            {/* 添加标题说明 */}
+                            <div className="navigation-header">
+                                <h3 className="navigation-title">当前查看的节点</h3>
+                                <div className="navigation-divider"></div>
+                            </div>
+
                             {navigationPath.map((item, index) => (
                                 <div key={index}>
                                     {item.type === 'branch' ? (

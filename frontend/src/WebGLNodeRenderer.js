@@ -158,6 +158,7 @@ class WebGLNodeRenderer {
     this.animations = [];
     this.currentLayout = 'home'; // 'home' | 'nodeDetail'
     this.animating = false;
+    this.renderingLoop = false; // 标记是否已经在持续渲染循环中
     this.lastTime = 0;
 
     // 交互状态
@@ -316,6 +317,11 @@ class WebGLNodeRenderer {
       subLabel: config.subLabel ?? existing?.subLabel ?? '',
       data: config.data ?? existing?.data ?? null,
       glowIntensity: config.glowIntensity ?? existing?.glowIntensity ?? 0.5,
+      // 知识点动态增长相关
+      knowledgePointValue: config.data?.knowledgePoint?.value ?? existing?.knowledgePointValue ?? 0,
+      contentScore: config.data?.contentScore ?? existing?.contentScore ?? 1,
+      lastUpdateTime: existing?.lastUpdateTime ?? Date.now(),
+      isAnimating: existing?.isAnimating ?? false, // 保持原有的动画状态
       // 目标值 (用于动画)
       targetX: config.x ?? existing?.x ?? 0,
       targetY: config.y ?? existing?.y ?? 0,
@@ -346,6 +352,16 @@ class WebGLNodeRenderer {
     const node = this.nodes.get(id);
     if (!node) return Promise.resolve();
 
+    // 标记节点正在动画
+    node.isAnimating = true;
+
+    // 停止持续渲染循环（动画期间不需要）
+    if (this.renderLoopId) {
+      cancelAnimationFrame(this.renderLoopId);
+      this.renderLoopId = null;
+      this.renderingLoop = false;
+    }
+
     return new Promise(resolve => {
       const animation = {
         nodeId: id,
@@ -366,7 +382,14 @@ class WebGLNodeRenderer {
           opacity: target.opacity ?? node.opacity,
           rotation: target.rotation ?? node.rotation
         },
-        onComplete: resolve
+        onComplete: () => {
+          // 动画完成时取消标记
+          const animNode = this.nodes.get(id);
+          if (animNode) {
+            animNode.isAnimating = false;
+          }
+          resolve();
+        }
       };
 
       this.animations.push(animation);
@@ -390,6 +413,8 @@ class WebGLNodeRenderer {
   animate(currentTime = performance.now()) {
     if (this.animations.length === 0) {
       this.animating = false;
+      // 动画结束后，确保重启知识点更新循环
+      this.renderingLoop = false;
       this.render();
       return;
     }
@@ -430,6 +455,8 @@ class WebGLNodeRenderer {
       requestAnimationFrame((t) => this.animate(t));
     } else {
       this.animating = false;
+      // 动画完全结束后，确保重启知识点更新循环
+      this.renderingLoop = false;
     }
   }
 
@@ -450,8 +477,55 @@ class WebGLNodeRenderer {
     // 再渲染节点
     this.renderNodes();
 
-    // 最后渲染文字 (使用2D Canvas叠加)
+    // 更新并渲染文字标签
+    this.updateKnowledgePoints();
     this.renderLabels();
+
+    // 启动持续渲染循环（如果还没有在运行）
+    if (!this.animating && !this.renderingLoop && this.nodes.size > 0) {
+      this.renderingLoop = true;
+      this.startRenderLoop();
+    }
+  }
+
+  // 持续渲染循环
+  startRenderLoop() {
+    if (!this.renderingLoop) return;
+
+    // 如果没有节点或者在动画中，停止循环
+    if (this.nodes.size === 0 || this.animating) {
+      this.renderingLoop = false;
+      return;
+    }
+
+    // 更新知识点
+    this.updateKnowledgePoints();
+
+    // 只重新渲染文字（性能优化）
+    this.renderLabels();
+
+    // 继续下一帧
+    this.renderLoopId = requestAnimationFrame(() => this.startRenderLoop());
+  }
+
+  // 更新知识点值
+  updateKnowledgePoints() {
+    const now = Date.now();
+
+    for (const [, node] of this.nodes) {
+      // 只更新不在动画中的节点
+      if (node.isAnimating || !node.visible) continue;
+
+      const deltaTime = (now - node.lastUpdateTime) / 1000; // 转换为秒
+      node.lastUpdateTime = now;
+
+      // 根据contentScore增长知识点
+      // contentScore范围通常是0-10，我们让每个contentScore点相当于每秒增长0.1知识点
+      // 这样contentScore为5时，每秒增长0.5，每分钟增长30知识点
+      const growthRate = (node.contentScore || 1) * 0.1;
+      const increment = growthRate * deltaTime;
+      node.knowledgePointValue += increment;
+    }
   }
 
   renderLines() {
@@ -574,8 +648,15 @@ class WebGLNodeRenderer {
 
       ctx.fillText(label, node.x, node.y - fontSize * 0.3);
 
-      // 副标签 (知识点等)
-      if (node.subLabel) {
+      // 副标签 (动态知识点)
+      if (node.knowledgePointValue > 0) {
+        ctx.font = `${fontSize * 0.7}px sans-serif`;
+        ctx.fillStyle = '#e9d5ff';
+        // 显示动态更新的知识点值
+        const dynamicSubLabel = `${node.knowledgePointValue.toFixed(2)} 知识点`;
+        ctx.fillText(dynamicSubLabel, node.x, node.y + fontSize * 0.6);
+      } else if (node.subLabel) {
+        // 回退到静态subLabel（如果没有知识点值）
         ctx.font = `${fontSize * 0.7}px sans-serif`;
         ctx.fillStyle = '#e9d5ff';
         ctx.fillText(node.subLabel, node.x, node.y + fontSize * 0.6);
@@ -594,6 +675,13 @@ class WebGLNodeRenderer {
 
   // 销毁
   destroy() {
+    // 停止所有渲染循环
+    this.renderingLoop = false;
+    if (this.renderLoopId) {
+      cancelAnimationFrame(this.renderLoopId);
+      this.renderLoopId = null;
+    }
+
     if (this.labelCanvas) {
       this.labelCanvas.remove();
     }

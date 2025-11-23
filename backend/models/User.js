@@ -30,7 +30,11 @@ const userSchema = new mongoose.Schema({
   ownedNodes: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Node'
-  }]
+  }],
+  location: {
+    type: String,
+    default: ''  // 普通用户注册时为空，管理员为"任意"
+  }
 }, {
   timestamps: true
 });

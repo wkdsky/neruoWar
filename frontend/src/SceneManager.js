@@ -175,6 +175,10 @@ class SceneManager {
     await Promise.all(animations);
 
     this.currentLayout = newLayout;
+
+    // 所有动画完成后，强制重启渲染循环
+    this.renderer.renderingLoop = false;
+    this.renderer.render();
   }
 
   /**
@@ -208,6 +212,10 @@ class SceneManager {
     });
 
     await Promise.all(fadeInPromises);
+
+    // 所有动画完成后，强制重启渲染循环
+    this.renderer.renderingLoop = false;
+    this.renderer.render();
   }
 
   /**
@@ -268,6 +276,10 @@ class SceneManager {
     await Promise.all(enterAnimations);
 
     this.currentLayout = newLayout;
+
+    // 所有动画完成后，强制重启渲染循环
+    this.renderer.renderingLoop = false;
+    this.renderer.render();
   }
 
   /**
@@ -382,6 +394,10 @@ class SceneManager {
     await Promise.all(enterAnimations);
 
     this.currentLayout = newLayout;
+
+    // 所有动画完成后，强制重启渲染循环
+    this.renderer.renderingLoop = false;
+    this.renderer.render();
   }
 
   /**

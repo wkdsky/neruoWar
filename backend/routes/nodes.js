@@ -739,4 +739,21 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
   }
 });
 
+// 公开接口：获取所有已批准的节点（用于构建导航路径）
+router.get('/public/all-nodes', async (req, res) => {
+  try {
+    const nodes = await Node.find({ status: 'approved' })
+      .select('_id name description relatedParentDomains relatedChildDomains')
+      .lean();
+
+    res.json({
+      success: true,
+      nodes: nodes
+    });
+  } catch (error) {
+    console.error('获取所有节点错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 module.exports = router;
