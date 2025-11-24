@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Plus, Zap, Sword, FlaskConical, Link, Users, Home, Search, X, Check, Bell } from 'lucide-react';
+import { Play, Plus, Zap, Sword, FlaskConical, Link, Users, Home, Search, X, Check, Bell, Shield } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
 import SceneManager from './SceneManager';
@@ -84,6 +84,23 @@ const App = () => {
       resources: { food: 0, metal: 0, energy: 0 },
       productionRates: { food: 0, metal: 0, energy: 0 }
     });
+
+    // 更换域主相关状态
+    const [showChangeMasterModal, setShowChangeMasterModal] = useState(false);
+    const [changingMasterNode, setChangingMasterNode] = useState(null);
+    const [masterSearchKeyword, setMasterSearchKeyword] = useState('');
+    const [masterSearchResults, setMasterSearchResults] = useState([]);
+    const [selectedNewMaster, setSelectedNewMaster] = useState(null);
+
+    // 熵盟管理相关状态
+    const [adminAlliances, setAdminAlliances] = useState([]);
+    const [editingAlliance, setEditingAlliance] = useState(null);
+    const [editAllianceForm, setEditAllianceForm] = useState({
+      name: '',
+      flag: '',
+      declaration: ''
+    });
+
     const [showAssociationModal, setShowAssociationModal] = useState(false);
     const [viewingAssociationNode, setViewingAssociationNode] = useState(null);
 
@@ -125,6 +142,18 @@ const App = () => {
     const [isWebGLReady, setIsWebGLReady] = useState(false);
     const [clickedNodeForTransition, setClickedNodeForTransition] = useState(null);
     const [canvasKey, setCanvasKey] = useState(0); // 用于强制重新渲染canvas
+
+    // 熵盟相关状态
+    const [alliances, setAlliances] = useState([]);
+    const [selectedAlliance, setSelectedAlliance] = useState(null);
+    const [showAllianceDetailModal, setShowAllianceDetailModal] = useState(false);
+    const [showCreateAllianceModal, setShowCreateAllianceModal] = useState(false);
+    const [newAllianceData, setNewAllianceData] = useState({
+        name: '',
+        flag: '#7c3aed',
+        declaration: ''
+    });
+    const [userAlliance, setUserAlliance] = useState(null);
 
     // 初始化WebGL场景
     useEffect(() => {
@@ -1611,7 +1640,7 @@ const App = () => {
 
     const deleteNode = async (nodeId, nodeName) => {
         if (!window.confirm(`确定要删除节点 "${nodeName}" 吗？此操作不可撤销！`)) return;
-        
+
         const token = localStorage.getItem('token');
         try {
             const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}`, {
@@ -1620,7 +1649,7 @@ const App = () => {
                     'Authorization': `Bearer ${token}`
                 }
             });
-    
+
             if (response.ok) {
                 alert('节点已删除');
                 fetchAllNodes();
@@ -1630,6 +1659,296 @@ const App = () => {
             }
         } catch (error) {
             console.error('删除节点失败:', error);
+            alert('删除失败');
+        }
+    };
+
+    // ===== 熵盟相关函数 =====
+
+    // 获取所有熵盟列表
+    const fetchAlliances = async () => {
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/alliances/list');
+            if (response.ok) {
+                const data = await response.json();
+                setAlliances(data.alliances);
+            }
+        } catch (error) {
+            console.error('获取熵盟列表失败:', error);
+        }
+    };
+
+    // 获取用户的熵盟信息
+    const fetchUserAlliance = async () => {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/alliances/my/info', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setUserAlliance(data.alliance);
+            }
+        } catch (error) {
+            console.error('获取用户熵盟信息失败:', error);
+        }
+    };
+
+    // 获取单个熵盟详情
+    const fetchAllianceDetail = async (allianceId) => {
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/alliances/${allianceId}`);
+            if (response.ok) {
+                const data = await response.json();
+                setSelectedAlliance(data);
+                setShowAllianceDetailModal(true);
+            }
+        } catch (error) {
+            console.error('获取熵盟详情失败:', error);
+        }
+    };
+
+    // 创建新熵盟
+    const createAlliance = async () => {
+        const token = localStorage.getItem('token');
+        const { name, flag, declaration } = newAllianceData;
+
+        if (!name.trim() || !declaration.trim()) {
+            alert('请填写所有必填字段');
+            return;
+        }
+
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/alliances/create', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ name, flag, declaration })
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                alert('熵盟创建成功！');
+                setShowCreateAllianceModal(false);
+                setNewAllianceData({ name: '', flag: '#7c3aed', declaration: '' });
+                fetchAlliances();
+                fetchUserAlliance();
+            } else {
+                alert(data.error || '创建失败');
+            }
+        } catch (error) {
+            console.error('创建熵盟失败:', error);
+            alert('创建失败');
+        }
+    };
+
+    // 加入熵盟
+    const joinAlliance = async (allianceId) => {
+        const token = localStorage.getItem('token');
+
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/alliances/join/${allianceId}`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                alert('成功加入熵盟！');
+                setShowAllianceDetailModal(false);
+                fetchAlliances();
+                fetchUserAlliance();
+            } else {
+                alert(data.error || '加入失败');
+            }
+        } catch (error) {
+            console.error('加入熵盟失败:', error);
+            alert('加入失败');
+        }
+    };
+
+    // 退出熵盟
+    const leaveAlliance = async () => {
+        if (!window.confirm('确定要退出当前熵盟吗？')) return;
+
+        const token = localStorage.getItem('token');
+
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/alliances/leave', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                alert(data.message);
+                setShowAllianceDetailModal(false);
+                fetchAlliances();
+                fetchUserAlliance();
+            } else {
+                alert(data.error || '退出失败');
+            }
+        } catch (error) {
+            console.error('退出熵盟失败:', error);
+            alert('退出失败');
+        }
+    };
+
+    // ===== 管理员：更换域主相关函数 =====
+
+    // 搜索用户（用于选择域主）
+    const searchUsersForMaster = async (keyword) => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/admin/search-users?keyword=${keyword}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setMasterSearchResults(data.users);
+            }
+        } catch (error) {
+            console.error('搜索用户失败:', error);
+        }
+    };
+
+    // 打开更换域主弹窗
+    const openChangeMasterModal = (node) => {
+        setChangingMasterNode(node);
+        setSelectedNewMaster(node.domainMaster || null);
+        setMasterSearchKeyword('');
+        setMasterSearchResults([]);
+        setShowChangeMasterModal(true);
+        // 自动搜索所有用户
+        searchUsersForMaster('');
+    };
+
+    // 确认更换域主
+    const confirmChangeMaster = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/nodes/admin/domain-master/${changingMasterNode._id}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    domainMasterId: selectedNewMaster?._id || null
+                })
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                alert(data.message);
+                setShowChangeMasterModal(false);
+                fetchAllNodes(); // 刷新节点列表
+            } else {
+                alert(data.error || '更换失败');
+            }
+        } catch (error) {
+            console.error('更换域主失败:', error);
+            alert('更换失败');
+        }
+    };
+
+    // ===== 管理员：熵盟管理相关函数 =====
+
+    // 获取所有熵盟
+    const fetchAdminAlliances = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch('http://192.168.1.96:5000/api/alliances/admin/all', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                setAdminAlliances(data.alliances);
+            }
+        } catch (error) {
+            console.error('获取熵盟列表失败:', error);
+        }
+    };
+
+    // 开始编辑熵盟
+    const startEditAlliance = (alliance) => {
+        setEditingAlliance(alliance);
+        setEditAllianceForm({
+            name: alliance.name,
+            flag: alliance.flag,
+            declaration: alliance.declaration
+        });
+    };
+
+    // 取消编辑熵盟
+    const cancelEditAlliance = () => {
+        setEditingAlliance(null);
+        setEditAllianceForm({ name: '', flag: '', declaration: '' });
+    };
+
+    // 保存熵盟修改
+    const saveAllianceEdit = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/alliances/admin/${editingAlliance._id}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(editAllianceForm)
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                alert(data.message);
+                cancelEditAlliance();
+                fetchAdminAlliances();
+            } else {
+                alert(data.error || '保存失败');
+            }
+        } catch (error) {
+            console.error('保存熵盟失败:', error);
+            alert('保存失败');
+        }
+    };
+
+    // 删除熵盟
+    const deleteAlliance = async (allianceId, allianceName) => {
+        if (!window.confirm(`确定要删除熵盟 "${allianceName}" 吗？此操作将清除所有成员的熵盟关联！`)) return;
+
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://192.168.1.96:5000/api/alliances/admin/${allianceId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                alert(data.message);
+                fetchAdminAlliances();
+            } else {
+                alert(data.error || '删除失败');
+            }
+        } catch (error) {
+            console.error('删除熵盟失败:', error);
             alert('删除失败');
         }
     };
@@ -1966,10 +2285,15 @@ const App = () => {
                                     创建节点
                                 </button>
                                 <button
-                                    onClick={() => setView('tech')}
+                                    onClick={() => {
+                                        setView('alliance');
+                                        fetchAlliances();
+                                        fetchUserAlliance();
+                                    }}
                                     className="btn btn-secondary"
                                 >
-                                    科技
+                                    <Shield size={18} />
+                                    熵盟
                                 </button>
             {isAdmin && (
                 <button
@@ -2201,52 +2525,78 @@ const App = () => {
                     </>
                 )}
 
-                {view === 'tech' && (
-                    <div className="tech-section">
+                {view === 'alliance' && (
+                    <div className="alliance-section">
                         <h2 className="section-title-large">
-                            <FlaskConical className="icon" />
-                            科技树
+                            <Shield className="icon" />
+                            熵盟系统
                         </h2>
-                        
-                        <div className="tech-grid">
-                            {[
-                                { id: 'agriculture', name: '农业科技', icon: '🌾', color: 'green' },
-                                { id: 'metallurgy', name: '冶金学', icon: '⚒️', color: 'orange' },
-                                { id: 'warfare', name: '军事学', icon: '⚔️', color: 'red' },
-                                { id: 'engineering', name: '工程学', icon: '🏗️', color: 'blue' }
-                            ].map(tech => {
-                                const userTech = technologies.find(t => t.techId === tech.id);
-                                const level = userTech?.level || 0;
 
-                                return (
-                                    <div key={tech.id} className="tech-card">
-                                        <div className="tech-header">
-                                            <div className="tech-info">
-                                                <span className="tech-icon">{tech.icon}</span>
-                                                <div>
-                                                    <h3 className="tech-name">{tech.name}</h3>
-                                                    <p className="tech-level">等级 {level}</p>
+                        {/* 用户当前熵盟状态 */}
+                        {!isAdmin && (
+                            <div className="user-alliance-status">
+                                {userAlliance ? (
+                                    <div className="current-alliance-card">
+                                        <div className="alliance-flag" style={{ backgroundColor: userAlliance.flag }}></div>
+                                        <div className="alliance-info-compact">
+                                            <h3>{userAlliance.name}</h3>
+                                            <p>成员: {userAlliance.memberCount} | 管辖域: {userAlliance.domainCount}</p>
+                                        </div>
+                                        <button
+                                            onClick={leaveAlliance}
+                                            className="btn btn-danger btn-small"
+                                        >
+                                            退出熵盟
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="no-alliance-prompt">
+                                        <p>您还未加入任何熵盟</p>
+                                        <button
+                                            onClick={() => setShowCreateAllianceModal(true)}
+                                            className="btn btn-primary"
+                                        >
+                                            创立新熵盟
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* 熵盟列表 */}
+                        <div className="alliances-grid">
+                            {alliances.length === 0 ? (
+                                <div className="empty-alliances">
+                                    <p>暂无熵盟，快来创建第一个熵盟吧！</p>
+                                </div>
+                            ) : (
+                                alliances.map((alliance) => (
+                                    <div
+                                        key={alliance._id}
+                                        className="alliance-card"
+                                        onClick={() => fetchAllianceDetail(alliance._id)}
+                                    >
+                                        <div className="alliance-flag-large" style={{ backgroundColor: alliance.flag }}></div>
+                                        <div className="alliance-card-content">
+                                            <h3 className="alliance-name">{alliance.name}</h3>
+                                            <p className="alliance-declaration">{alliance.declaration}</p>
+                                            <div className="alliance-stats">
+                                                <div className="stat-item">
+                                                    <Users className="icon-tiny" />
+                                                    <span>成员: {alliance.memberCount}</span>
+                                                </div>
+                                                <div className="stat-item">
+                                                    <Zap className="icon-tiny" />
+                                                    <span>管辖域: {alliance.domainCount}</span>
                                                 </div>
                                             </div>
-                                        </div>
-
-                                        <button
-                                            onClick={() => handleUpgradeTech(tech.id)}
-                                            className={`btn btn-${tech.color}`}
-                                        >
-                                            升级到 {level + 1} 级
-                                        </button>
-
-                                        {userTech && (
-                                            <div className="tech-effects">
-                                                <p>繁荣度加成: +{(userTech.effects.prosperityBonus * 100).toFixed(0)}%</p>
-                                                <p>生产加成: +{(userTech.effects.productionBonus * 100).toFixed(0)}%</p>
-                                                <p>军事加成: +{(userTech.effects.militaryBonus * 100).toFixed(0)}%</p>
+                                            <div className="alliance-founder">
+                                                创始人: {alliance.founder?.username || '未知'}
                                             </div>
-                                        )}
+                                        </div>
                                     </div>
-                                );
-                            })}
+                                ))
+                            )}
                         </div>
                     </div>
                 )}
@@ -2291,6 +2641,16 @@ const App = () => {
                                 {pendingNodes.length > 0 && (
                                     <span className="notification-badge">{pendingNodes.length}</span>
                                 )}
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setAdminTab('alliances');
+                                    fetchAdminAlliances();
+                                }}
+                                className={`admin-tab ${adminTab === 'alliances' ? 'active' : ''}`}
+                            >
+                                <Shield className="icon-small" />
+                                熵盟管理
                             </button>
                         </div>
 
@@ -2544,6 +2904,7 @@ const App = () => {
                                         <th>内容分数</th>
                                                 <th>状态</th>
                                                 <th>创建者</th>
+                                                <th>域主</th>
                                                 <th>创建时间</th>
                                                 <th>热门</th>
                                                 <th>查看关联</th>
@@ -2643,6 +3004,18 @@ const App = () => {
                                                         </span>
                                                     </td>
                                                     <td>{node.owner?.username || '系统'}</td>
+                                                    <td>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                            <span>{node.domainMaster?.username || '(未设置)'}</span>
+                                                            <button
+                                                                onClick={() => openChangeMasterModal(node)}
+                                                                className="btn-action btn-primary-small"
+                                                                title="更换域主"
+                                                            >
+                                                                更换
+                                                            </button>
+                                                        </div>
+                                                    </td>
                                                     <td>{new Date(node.createdAt).toLocaleString('zh-CN')}</td>
                                                     <td>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -2715,6 +3088,139 @@ const App = () => {
                                             ))}
                                         </tbody>
                                     </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 熵盟管理选项卡 */}
+                        {adminTab === 'alliances' && (
+                            <div className="alliances-admin-container">
+                                <div className="table-info">
+                                    <p>总熵盟数: <strong>{adminAlliances.length}</strong></p>
+                                    <button
+                                        onClick={fetchAdminAlliances}
+                                        className="btn btn-primary"
+                                        style={{ marginLeft: '1rem' }}
+                                    >
+                                        刷新数据
+                                    </button>
+                                </div>
+
+                                <div className="alliances-admin-grid">
+                                    {adminAlliances.map((alliance) => (
+                                        <div key={alliance._id} className="alliance-admin-card">
+                                            {editingAlliance && editingAlliance._id === alliance._id ? (
+                                                /* 编辑模式 */
+                                                <div className="alliance-edit-form">
+                                                    <div className="form-group">
+                                                        <label>熵盟名称</label>
+                                                        <input
+                                                            type="text"
+                                                            value={editAllianceForm.name}
+                                                            onChange={(e) => setEditAllianceForm({
+                                                                ...editAllianceForm,
+                                                                name: e.target.value
+                                                            })}
+                                                            className="form-input"
+                                                        />
+                                                    </div>
+
+                                                    <div className="form-group">
+                                                        <label>旗帜颜色</label>
+                                                        <div className="color-picker-group">
+                                                            <input
+                                                                type="color"
+                                                                value={editAllianceForm.flag}
+                                                                onChange={(e) => setEditAllianceForm({
+                                                                    ...editAllianceForm,
+                                                                    flag: e.target.value
+                                                                })}
+                                                                className="color-picker"
+                                                            />
+                                                            <div className="flag-preview-small" style={{ backgroundColor: editAllianceForm.flag }}></div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="form-group">
+                                                        <label>熵盟号召</label>
+                                                        <textarea
+                                                            value={editAllianceForm.declaration}
+                                                            onChange={(e) => setEditAllianceForm({
+                                                                ...editAllianceForm,
+                                                                declaration: e.target.value
+                                                            })}
+                                                            className="form-textarea"
+                                                            rows="3"
+                                                        />
+                                                    </div>
+
+                                                    <div className="alliance-edit-actions">
+                                                        <button onClick={saveAllianceEdit} className="btn btn-success">
+                                                            保存
+                                                        </button>
+                                                        <button onClick={cancelEditAlliance} className="btn btn-secondary">
+                                                            取消
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                /* 查看模式 */
+                                                <>
+                                                    <div className="alliance-admin-header">
+                                                        <div className="alliance-flag-medium" style={{ backgroundColor: alliance.flag }}></div>
+                                                        <div className="alliance-admin-info">
+                                                            <h3>{alliance.name}</h3>
+                                                            <p className="alliance-id">ID: {alliance._id}</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="alliance-admin-details">
+                                                        <div className="detail-row">
+                                                            <span className="detail-label">号召:</span>
+                                                            <span className="detail-value">{alliance.declaration}</span>
+                                                        </div>
+                                                        <div className="detail-row">
+                                                            <span className="detail-label">创始人:</span>
+                                                            <span className="detail-value">{alliance.founder?.username || '未知'}</span>
+                                                        </div>
+                                                        <div className="detail-row">
+                                                            <span className="detail-label">成员数:</span>
+                                                            <span className="detail-value">{alliance.memberCount}</span>
+                                                        </div>
+                                                        <div className="detail-row">
+                                                            <span className="detail-label">管辖域:</span>
+                                                            <span className="detail-value">{alliance.domainCount}</span>
+                                                        </div>
+                                                        <div className="detail-row">
+                                                            <span className="detail-label">创建时间:</span>
+                                                            <span className="detail-value">{new Date(alliance.createdAt).toLocaleString('zh-CN')}</span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="alliance-admin-actions">
+                                                        <button
+                                                            onClick={() => startEditAlliance(alliance)}
+                                                            className="btn btn-primary"
+                                                        >
+                                                            编辑
+                                                        </button>
+                                                        <button
+                                                            onClick={() => deleteAlliance(alliance._id, alliance.name)}
+                                                            className="btn btn-danger"
+                                                        >
+                                                            删除
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    ))}
+
+                                    {adminAlliances.length === 0 && (
+                                        <div className="empty-alliances-admin">
+                                            <p>暂无熵盟</p>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -3269,6 +3775,306 @@ const App = () => {
                                     onClick={() => setShowNavigationTree(false)}
                                 >
                                     关闭
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 熵盟详情弹窗 */}
+                {showAllianceDetailModal && selectedAlliance && (
+                    <div className="modal-backdrop" onClick={() => setShowAllianceDetailModal(false)}>
+                        <div className="modal-content alliance-detail-modal" onClick={(e) => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h2>熵盟详情</h2>
+                                <button
+                                    className="modal-close"
+                                    onClick={() => setShowAllianceDetailModal(false)}
+                                >
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            <div className="modal-body">
+                                {/* 熵盟基本信息 */}
+                                <div className="alliance-detail-header">
+                                    <div className="alliance-flag-huge" style={{ backgroundColor: selectedAlliance.alliance.flag }}></div>
+                                    <div className="alliance-main-info">
+                                        <h2>{selectedAlliance.alliance.name}</h2>
+                                        <p className="declaration-text">{selectedAlliance.alliance.declaration}</p>
+                                        <div className="alliance-meta">
+                                            <span>创始人: {selectedAlliance.alliance.founder?.username || '未知'}</span>
+                                            <span>成立时间: {new Date(selectedAlliance.alliance.createdAt).toLocaleDateString('zh-CN')}</span>
+                                        </div>
+                                        <div className="alliance-stats-large">
+                                            <div className="stat-box">
+                                                <Users className="icon" />
+                                                <div>
+                                                    <span className="stat-number">{selectedAlliance.alliance.memberCount}</span>
+                                                    <span className="stat-label">成员</span>
+                                                </div>
+                                            </div>
+                                            <div className="stat-box">
+                                                <Zap className="icon" />
+                                                <div>
+                                                    <span className="stat-number">{selectedAlliance.alliance.domainCount}</span>
+                                                    <span className="stat-label">管辖域</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* 成员列表 */}
+                                <div className="alliance-section-detail">
+                                    <h3>成员列表 ({selectedAlliance.members.length}人)</h3>
+                                    <div className="members-list">
+                                        {selectedAlliance.members.map((member) => (
+                                            <div key={member._id} className="member-item">
+                                                <Users className="icon-small" />
+                                                <span className="member-name">{member.username}</span>
+                                                <span className="member-level">Lv.{member.level}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* 管辖知识域列表 */}
+                                <div className="alliance-section-detail">
+                                    <h3>管辖知识域 ({selectedAlliance.domains.length}个)</h3>
+                                    <div className="domains-list">
+                                        {selectedAlliance.domains.length > 0 ? (
+                                            selectedAlliance.domains.map((domain) => (
+                                                <div key={domain._id} className="domain-item">
+                                                    <Zap className="icon-small" />
+                                                    <div className="domain-info">
+                                                        <span className="domain-name">{domain.name}</span>
+                                                        <span className="domain-master">域主: {domain.domainMaster?.username || '暂无'}</span>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <p className="empty-message">该熵盟暂无管辖知识域</p>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="modal-footer">
+                                {!isAdmin && (
+                                    <>
+                                        {userAlliance && userAlliance._id === selectedAlliance.alliance._id ? (
+                                            <button
+                                                className="btn btn-danger"
+                                                onClick={leaveAlliance}
+                                            >
+                                                退出熵盟
+                                            </button>
+                                        ) : !userAlliance ? (
+                                            <button
+                                                className="btn btn-primary"
+                                                onClick={() => joinAlliance(selectedAlliance.alliance._id)}
+                                            >
+                                                加入熵盟
+                                            </button>
+                                        ) : null}
+                                    </>
+                                )}
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => setShowAllianceDetailModal(false)}
+                                >
+                                    关闭
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 创建熵盟弹窗 */}
+                {showCreateAllianceModal && (
+                    <div className="modal-backdrop" onClick={() => setShowCreateAllianceModal(false)}>
+                        <div className="modal-content create-alliance-modal" onClick={(e) => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h2>创立新熵盟</h2>
+                                <button
+                                    className="modal-close"
+                                    onClick={() => setShowCreateAllianceModal(false)}
+                                >
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            <div className="modal-body">
+                                <div className="form-group">
+                                    <label>熵盟名称 *</label>
+                                    <input
+                                        type="text"
+                                        value={newAllianceData.name}
+                                        onChange={(e) => setNewAllianceData({
+                                            ...newAllianceData,
+                                            name: e.target.value
+                                        })}
+                                        placeholder="输入熵盟名称"
+                                        className="form-input"
+                                    />
+                                </div>
+
+                                <div className="form-group">
+                                    <label>熵盟旗帜（颜色） *</label>
+                                    <div className="color-picker-group">
+                                        <input
+                                            type="color"
+                                            value={newAllianceData.flag}
+                                            onChange={(e) => setNewAllianceData({
+                                                ...newAllianceData,
+                                                flag: e.target.value
+                                            })}
+                                            className="color-picker"
+                                        />
+                                        <div className="flag-preview" style={{ backgroundColor: newAllianceData.flag }}>
+                                            <span>预览</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="form-group">
+                                    <label>熵盟号召（势力宣言） *</label>
+                                    <textarea
+                                        value={newAllianceData.declaration}
+                                        onChange={(e) => setNewAllianceData({
+                                            ...newAllianceData,
+                                            declaration: e.target.value
+                                        })}
+                                        placeholder="输入熵盟的号召或宣言..."
+                                        rows="4"
+                                        className="form-textarea"
+                                    />
+                                </div>
+
+                                <div className="create-alliance-info">
+                                    <p><strong>注意：</strong></p>
+                                    <ul>
+                                        <li>创建熵盟需要至少是一个知识域的域主</li>
+                                        <li>创建成功后，您将自动成为该熵盟的成员</li>
+                                        <li>每个用户只能属于一个熵盟</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div className="modal-footer">
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => setShowCreateAllianceModal(false)}
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={createAlliance}
+                                    disabled={!newAllianceData.name.trim() || !newAllianceData.declaration.trim()}
+                                >
+                                    创立熵盟
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 更换域主弹窗 */}
+                {showChangeMasterModal && changingMasterNode && (
+                    <div className="modal-backdrop" onClick={() => setShowChangeMasterModal(false)}>
+                        <div className="modal-content change-master-modal" onClick={(e) => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h2>更换域主</h2>
+                                <button
+                                    className="modal-close"
+                                    onClick={() => setShowChangeMasterModal(false)}
+                                >
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            <div className="modal-body">
+                                <div className="change-master-info">
+                                    <p><strong>节点:</strong> {changingMasterNode.name}</p>
+                                    <p><strong>当前域主:</strong> {changingMasterNode.domainMaster?.username || '(未设置)'}</p>
+                                </div>
+
+                                {/* 搜索用户 */}
+                                <div className="form-group">
+                                    <label>搜索用户</label>
+                                    <input
+                                        type="text"
+                                        value={masterSearchKeyword}
+                                        onChange={(e) => {
+                                            setMasterSearchKeyword(e.target.value);
+                                            searchUsersForMaster(e.target.value);
+                                        }}
+                                        placeholder="输入用户名搜索..."
+                                        className="form-input"
+                                    />
+                                </div>
+
+                                {/* 搜索结果列表 */}
+                                <div className="user-search-results">
+                                    <h4>选择新域主:</h4>
+                                    <div className="user-list">
+                                        {masterSearchResults.length > 0 ? (
+                                            masterSearchResults.map((user) => (
+                                                <div
+                                                    key={user._id}
+                                                    className={`user-item ${selectedNewMaster?._id === user._id ? 'selected' : ''}`}
+                                                    onClick={() => setSelectedNewMaster(user)}
+                                                >
+                                                    <div className="user-info">
+                                                        <span className="user-name">{user.username}</span>
+                                                        <span className="user-meta">Lv.{user.level} | {user.role === 'admin' ? '管理员' : '普通用户'}</span>
+                                                    </div>
+                                                    {selectedNewMaster?._id === user._id && (
+                                                        <Check className="check-icon" size={20} />
+                                                    )}
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <p className="no-results">没有找到用户</p>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* 显示选中的新域主 */}
+                                <div className="selected-master-display">
+                                    <h4>新域主:</h4>
+                                    {selectedNewMaster ? (
+                                        <div className="selected-master-card">
+                                            <span className="master-name">{selectedNewMaster.username}</span>
+                                            <span className="master-level">Lv.{selectedNewMaster.level}</span>
+                                            <button
+                                                onClick={() => setSelectedNewMaster(null)}
+                                                className="btn-remove-selection"
+                                                title="清除选择"
+                                            >
+                                                <X size={16} />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <p className="no-selection">(未选择，将清除域主)</p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="modal-footer">
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => setShowChangeMasterModal(false)}
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={confirmChangeMaster}
+                                >
+                                    确定
                                 </button>
                             </div>
                         </div>

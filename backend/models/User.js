@@ -34,6 +34,11 @@ const userSchema = new mongoose.Schema({
   location: {
     type: String,
     default: ''  // 普通用户注册时为空，管理员为"任意"
+  },
+  allianceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'EntropyAlliance',
+    default: null  // 默认不属于任何熵盟
   }
 }, {
   timestamps: true

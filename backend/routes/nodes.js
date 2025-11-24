@@ -96,6 +96,7 @@ router.post('/create', authenticateToken, async (req, res) => {
     const node = new Node({
       nodeId,
       owner: req.user.userId,
+      domainMaster: req.user.userId, // 创建者自动成为域主
       name,
       description,
       position,
@@ -319,6 +320,7 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
   try {
     const nodes = await Node.find()
       .populate('owner', 'username')
+      .populate('domainMaster', 'username')
       .populate('associations.targetNode', 'name description')
       .sort({ createdAt: -1 });
     
@@ -752,6 +754,92 @@ router.get('/public/all-nodes', async (req, res) => {
     });
   } catch (error) {
     console.error('获取所有节点错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 管理员：更换节点域主
+router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) => {
+  try {
+    // 检查是否是管理员
+    const adminUser = await User.findById(req.user.userId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: '无权限执行此操作' });
+    }
+
+    const { nodeId } = req.params;
+    const { domainMasterId } = req.body;
+
+    // 查找节点
+    const node = await Node.findById(nodeId);
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+
+    // 如果domainMasterId为空或null，清除域主
+    if (!domainMasterId) {
+      node.domainMaster = null;
+      await node.save();
+      return res.json({
+        success: true,
+        message: '域主已清除',
+        node: await Node.findById(nodeId).populate('domainMaster', 'username')
+      });
+    }
+
+    // 查找新域主用户
+    const newMaster = await User.findById(domainMasterId);
+    if (!newMaster) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    // 更新域主
+    node.domainMaster = domainMasterId;
+    await node.save();
+
+    const updatedNode = await Node.findById(nodeId)
+      .populate('domainMaster', 'username');
+
+    res.json({
+      success: true,
+      message: '域主更换成功',
+      node: updatedNode
+    });
+  } catch (error) {
+    console.error('更换域主错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 管理员：搜索用户（用于选择域主）
+router.get('/admin/search-users', authenticateToken, async (req, res) => {
+  try {
+    // 检查是否是管理员
+    const adminUser = await User.findById(req.user.userId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: '无权限执行此操作' });
+    }
+
+    const { keyword } = req.query;
+
+    let query = {};
+    if (keyword && keyword.trim()) {
+      query = {
+        username: { $regex: keyword, $options: 'i' }
+      };
+    }
+
+    const users = await User.find(query)
+      .select('_id username level role')
+      .limit(20)
+      .sort({ username: 1 });
+
+    res.json({
+      success: true,
+      users
+    });
+  } catch (error) {
+    console.error('搜索用户错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });

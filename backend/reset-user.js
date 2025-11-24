@@ -32,7 +32,10 @@ const USER_CONFIG = {
   experience: 0,
 
   // 位置/降临的知识域（可选，管理员建议设为'任意'，普通用户可设为具体节点名或留空''）
-  location: ''
+  location: '',
+
+  // 所属熵盟ID（可选，留空表示不属于任何熵盟，填写ObjectId字符串）
+  allianceId: null
 };
 // ========================================
 // 配置区域结束
@@ -75,6 +78,7 @@ async function listAllUsers() {
       console.log(`   等级: ${user.level}`);
       console.log(`   经验: ${user.experience}`);
       console.log(`   位置: ${user.location || colors.yellow + '(未设置)' + colors.reset}`);
+      console.log(`   熵盟ID: ${user.allianceId || colors.yellow + '(未加入)' + colors.reset}`);
       console.log(`   明文密码: ${user.plainPassword || colors.yellow + '(不可用)' + colors.reset}`);
       console.log(`   创建时间: ${user.createdAt?.toLocaleString('zh-CN') || '未知'}`);
       console.log(`   更新时间: ${user.updatedAt?.toLocaleString('zh-CN') || '未知'}`);
@@ -95,7 +99,9 @@ async function viewUser(username) {
       return;
     }
 
-    const user = await User.findOne({ username }).populate('ownedNodes');
+    const user = await User.findOne({ username })
+      .populate('ownedNodes')
+      .populate('allianceId');
 
     if (!user) {
       colorLog(colors.red, `\n用户 "${username}" 不存在！`);
@@ -126,6 +132,14 @@ async function viewUser(username) {
       });
     } else {
       console.log(`  ${colors.yellow}(无)${colors.reset}`);
+    }
+
+    console.log(`\n${colors.bright}熵盟信息:${colors.reset}`);
+    if (user.allianceId) {
+      console.log(`  熵盟名称: ${user.allianceId.name || '未知'}`);
+      console.log(`  熵盟ID: ${user.allianceId._id}`);
+    } else {
+      console.log(`  ${colors.yellow}(未加入任何熵盟)${colors.reset}`);
     }
 
     console.log(`\n${colors.bright}时间信息:${colors.reset}`);
@@ -223,6 +237,12 @@ async function updateUser(config) {
       user.location = '';
     }
 
+    if (config.allianceId !== undefined) {
+      user.allianceId = config.allianceId;
+    } else if (isNewUser) {
+      user.allianceId = null;
+    }
+
     // 保存用户
     await user.save();
 
@@ -239,6 +259,7 @@ async function updateUser(config) {
     console.log(`等级: ${user.level}`);
     console.log(`经验: ${user.experience}`);
     console.log(`位置: ${user.location || colors.yellow + '(未设置)' + colors.reset}`);
+    console.log(`熵盟ID: ${user.allianceId || colors.yellow + '(未加入)' + colors.reset}`);
 
     colorLog(colors.cyan, '\n========================================');
 

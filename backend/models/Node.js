@@ -23,10 +23,15 @@ const NodeSchema = new mongoose.Schema({
     required: true, 
     unique: true 
   },
-  owner: { 
-    type: mongoose.Schema.Types.ObjectId, 
+  owner: {
+    type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  domainMaster: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null  // 默认为null，节点的域主
   },
   name: { 
     type: String, 

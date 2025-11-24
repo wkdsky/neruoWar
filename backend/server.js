@@ -13,6 +13,7 @@ const Technology = require('./models/Technology');
 const GameService = require('./services/GameService');
 const adminRoutes = require('./routes/admin');
 const nodeRoutes = require('./routes/nodes');
+const allianceRoutes = require('./routes/alliance');
 // 初始化Express
 const app = express();
 const server = http.createServer(app);
@@ -40,6 +41,7 @@ app.use(express.json());
 app.use('/api', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/nodes', nodeRoutes);
+app.use('/api/alliances', allianceRoutes);
 // 连接数据库
 connectDB();
 
