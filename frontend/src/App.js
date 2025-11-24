@@ -124,6 +124,7 @@ const App = () => {
     const [homeSearchQuery, setHomeSearchQuery] = useState('');
     const [homeSearchResults, setHomeSearchResults] = useState([]);
     const [isSearching, setIsSearching] = useState(false);
+    const [showSearchResults, setShowSearchResults] = useState(false); // 控制搜索结果的显示/隐藏，默认隐藏
 
     // 节点详情页面相关状态
     const [currentNodeDetail, setCurrentNodeDetail] = useState(null);
@@ -142,6 +143,9 @@ const App = () => {
     const [isWebGLReady, setIsWebGLReady] = useState(false);
     const [clickedNodeForTransition, setClickedNodeForTransition] = useState(null);
     const [canvasKey, setCanvasKey] = useState(0); // 用于强制重新渲染canvas
+
+    // 搜索栏相关引用
+    const searchBarRef = useRef(null);
 
     // 熵盟相关状态
     const [alliances, setAlliances] = useState([]);
@@ -860,13 +864,39 @@ const App = () => {
     // 监听搜索输入变化
     useEffect(() => {
         const timeoutId = setTimeout(() => {
-            if (view === 'home') {
+            if (view === 'home' || view === 'nodeDetail') {
                 performHomeSearch(homeSearchQuery);
+                // 只有在用户主动输入时才显示搜索结果，而不是在view变化时
+                if (homeSearchQuery.trim() !== '') {
+                    setShowSearchResults(true);
+                }
             }
         }, 300); // 防抖：300ms后执行搜索
 
         return () => clearTimeout(timeoutId);
-    }, [homeSearchQuery, view]);
+    }, [homeSearchQuery]); // 移除view依赖，只在搜索词变化时触发
+
+    // 全局点击事件监听器 - 用于控制搜索结果显示/隐藏
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            // 只在首页和节点详情页监听点击事件
+            if (view !== 'home' && view !== 'nodeDetail') return;
+
+            // 检查点击是否在搜索栏区域内
+            if (searchBarRef.current && !searchBarRef.current.contains(event.target)) {
+                // 点击在搜索栏外部，隐藏搜索结果
+                setShowSearchResults(false);
+            }
+        };
+
+        // 添加全局点击事件监听器
+        document.addEventListener('mousedown', handleClickOutside);
+
+        // 清理函数：移除事件监听器
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [view]); // 依赖view状态，当view变化时重新绑定事件
 
     // 初始化首页数据
     useEffect(() => {
@@ -2278,13 +2308,6 @@ const App = () => {
                                     首页
                                 </button>
                                 <button
-                                    onClick={openCreateNodeModal}
-                                    className="btn btn-success"
-                                >
-                                    <Plus size={18} />
-                                    创建节点
-                                </button>
-                                <button
                                     onClick={() => {
                                         setView('alliance');
                                         fetchAlliances();
@@ -2333,67 +2356,85 @@ const App = () => {
                                 className="webgl-canvas"
                             />
 
-                            {/* 悬浮搜索栏 */}
-                            <div className="floating-search-bar">
-                                <Search className="search-icon" size={24} />
-                                <input
-                                    type="text"
-                                    placeholder="搜索节点...（支持多关键词，用空格分隔）"
-                                    value={homeSearchQuery}
-                                    onChange={(e) => setHomeSearchQuery(e.target.value)}
-                                    className="search-input-floating"
-                                />
-                                {homeSearchQuery && (
-                                    <button
-                                        onClick={() => {
-                                            setHomeSearchQuery('');
-                                            setHomeSearchResults([]);
-                                        }}
-                                        className="search-clear-btn"
-                                    >
-                                        <X size={18} />
-                                    </button>
-                                )}
-                            </div>
-
-                            {/* 搜索结果列表（长方体条目） */}
-                            {homeSearchQuery && homeSearchResults.length > 0 && (
-                                <div className="search-results-panel">
-                                    <div className="search-results-scroll">
-                                        {homeSearchResults.map((node) => (
-                                            <div
-                                                key={node._id}
-                                                className="search-result-card"
-                                                onClick={() => {
-                                                    // 点击搜索结果，跳转到节点详情
-                                                    fetchNodeDetail(node._id, {
-                                                        id: `search-${node._id}`,
-                                                        data: node,
-                                                        type: 'search'
-                                                    });
-                                                }}
-                                            >
-                                                <div className="search-card-title">{node.name}</div>
-                                                <div className="search-card-desc">{node.description}</div>
-                                            </div>
-                                        ))}
+                            {/* 搜索栏容器（包含搜索栏和搜索结果） */}
+                            <div className="search-container" ref={searchBarRef}>
+                                {/* 悬浮搜索栏和创建节点按钮 */}
+                                <div className="floating-search-bar">
+                                    <div className="search-and-create-container">
+                                       <div className="search-input-wrapper" onClick={() => setShowSearchResults(true)}>
+                                            <Search className="search-icon" size={24} />
+                                            <input
+                                                type="text"
+                                                placeholder="搜索节点...（支持多关键词，用空格分隔）"
+                                                value={homeSearchQuery}
+                                                onChange={(e) => setHomeSearchQuery(e.target.value)}
+                                                className="search-input-floating"
+                                                onFocus={() => setShowSearchResults(true)} // 获得焦点时也显示搜索结果
+                                            />
+                                            {homeSearchQuery && (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation(); // 防止触发外层的点击事件
+                                                        setHomeSearchQuery('');
+                                                        setHomeSearchResults([]);
+                                                        setShowSearchResults(true);
+                                                    }}
+                                                    className="search-clear-btn"
+                                                >
+                                                    <X size={18} />
+                                                </button>
+                                            )}
+                                        </div>
+                                        <button
+                                            onClick={openCreateNodeModal}
+                                            className="btn btn-success create-node-btn"
+                                        >
+                                            <Plus size={18} />
+                                            创建节点
+                                        </button>
                                     </div>
                                 </div>
-                            )}
 
-                            {/* 搜索无结果 */}
-                            {homeSearchQuery && !isSearching && homeSearchResults.length === 0 && (
-                                <div className="search-no-results">
-                                    未找到匹配的节点
-                                </div>
-                            )}
+                                {/* 搜索结果列表（长方体条目） */}
+                                {homeSearchQuery && homeSearchResults.length > 0 && showSearchResults && (
+                                    <div className="search-results-panel">
+                                        <div className="search-results-scroll">
+                                            {homeSearchResults.map((node) => (
+                                                <div
+                                                    key={node._id}
+                                                    className="search-result-card"
+                                                    onClick={() => {
+                                                        // 点击搜索结果，跳转到节点详情并隐藏搜索结果
+                                                        fetchNodeDetail(node._id, {
+                                                            id: `search-${node._id}`,
+                                                            data: node,
+                                                            type: 'search'
+                                                        });
+                                                        setShowSearchResults(false); // 隐藏搜索结果
+                                                    }}
+                                                >
+                                                    <div className="search-card-title">{node.name}</div>
+                                                    <div className="search-card-desc">{node.description}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
 
-                            {/* 搜索中 */}
-                            {isSearching && (
-                                <div className="search-loading-indicator">
-                                    搜索中...
-                                </div>
-                            )}
+                                {/* 搜索无结果 */}
+                                {homeSearchQuery && !isSearching && homeSearchResults.length === 0 && showSearchResults && (
+                                    <div className="search-no-results">
+                                        未找到匹配的节点
+                                    </div>
+                                )}
+
+                                {/* 搜索中 */}
+                                {isSearching && showSearchResults && (
+                                    <div className="search-loading-indicator">
+                                        搜索中...
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         {/* 右侧知识域驻留栏 */}
@@ -2521,6 +2562,86 @@ const App = () => {
                                 ref={webglCanvasRef}
                                 className="webgl-canvas"
                             />
+
+                            {/* 搜索栏容器（包含搜索栏和搜索结果） */}
+                            <div className="search-container" ref={searchBarRef}>
+                                {/* 悬浮搜索栏和创建节点按钮 */}
+                                <div className="floating-search-bar">
+                                    <div className="search-and-create-container">
+                                       <div className="search-input-wrapper" onClick={() => setShowSearchResults(true)}>
+                                            <Search className="search-icon" size={24} />
+                                            <input
+                                                type="text"
+                                                placeholder="搜索节点...（支持多关键词，用空格分隔）"
+                                                value={homeSearchQuery}
+                                                onChange={(e) => setHomeSearchQuery(e.target.value)}
+                                                className="search-input-floating"
+                                                onFocus={() => setShowSearchResults(true)} // 获得焦点时也显示搜索结果
+                                            />
+                                            {homeSearchQuery && (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation(); // 防止触发外层的点击事件
+                                                        setHomeSearchQuery('');
+                                                        setHomeSearchResults([]);
+                                                        setShowSearchResults(true);
+                                                    }}
+                                                    className="search-clear-btn"
+                                                >
+                                                    <X size={18} />
+                                                </button>
+                                            )}
+                                        </div>
+                                        <button
+                                            onClick={openCreateNodeModal}
+                                            className="btn btn-success create-node-btn"
+                                        >
+                                            <Plus size={18} />
+                                            创建节点
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* 搜索结果列表（长方体条目） */}
+                                {homeSearchQuery && homeSearchResults.length > 0 && showSearchResults && (
+                                    <div className="search-results-panel">
+                                        <div className="search-results-scroll">
+                                            {homeSearchResults.map((node) => (
+                                                <div
+                                                    key={node._id}
+                                                    className="search-result-card"
+                                                    onClick={() => {
+                                                        // 点击搜索结果，跳转到节点详情并隐藏搜索结果
+                                                        fetchNodeDetail(node._id, {
+                                                            id: `search-${node._id}`,
+                                                            data: node,
+                                                            type: 'search'
+                                                        });
+                                                        setShowSearchResults(false); // 隐藏搜索结果
+                                                    }}
+                                                >
+                                                    <div className="search-card-title">{node.name}</div>
+                                                    <div className="search-card-desc">{node.description}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* 搜索无结果 */}
+                                {homeSearchQuery && !isSearching && homeSearchResults.length === 0 && showSearchResults && (
+                                    <div className="search-no-results">
+                                        未找到匹配的节点
+                                    </div>
+                                )}
+
+                                {/* 搜索中 */}
+                                {isSearching && showSearchResults && (
+                                    <div className="search-loading-indicator">
+                                        搜索中...
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </>
                 )}
