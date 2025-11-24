@@ -2693,27 +2693,6 @@ body {
     transform: scale(1.1);
 }
 
-/* 悬浮返回按钮 */
-.floating-back-btn {
-    position: absolute;
-    top: 2rem;
-    right: 2rem;
-    z-index: 10;
-}
-
-.floating-back-btn .btn {
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5),
-                0 0 30px rgba(59, 130, 246, 0.3);
-    backdrop-filter: blur(10px);
-    border: 2px solid rgba(59, 130, 246, 0.5);
-}
-
-.floating-back-btn .btn:hover {
-    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6),
-                0 0 40px rgba(59, 130, 246, 0.4);
-    border-color: rgba(59, 130, 246, 0.7);
-    transform: translateY(-2px);
-}
 
 /* 移动端适配 */
 @media (max-width: 768px) {
@@ -2722,16 +2701,6 @@ body {
         width: calc(100% - 2rem);
         padding: 0.5rem 1rem;
         top: 1rem;
-    }
-
-    .floating-back-btn {
-        top: 1rem;
-        right: 1rem;
-    }
-
-    .floating-back-btn .btn {
-        padding: 0.5rem 1rem;
-        font-size: 0.875rem;
     }
 }
 

@@ -2197,20 +2197,6 @@ const App = () => {
                                 ref={webglCanvasRef}
                                 className="webgl-canvas"
                             />
-
-                            {/* 返回按钮 */}
-                            <div className="floating-back-btn">
-                                <button
-                                    onClick={() => {
-                                        setView('home');
-                                        setNavigationPath([{ type: 'home', label: '首页' }]);
-                                    }}
-                                    className="btn btn-secondary"
-                                >
-                                    <Home size={18} />
-                                    返回首页
-                                </button>
-                            </div>
                         </div>
                     </>
                 )}
