@@ -2,6 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Play, Plus, Zap, Sword, FlaskConical, Link, Users, Home, Search, X, Check, Bell, Shield } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
+import Login from './components/auth/Login';
+import AdminPanel from './components/admin/AdminPanel';
+import AlliancePanel from './components/game/AlliancePanel';
+import NodeDetail from './components/game/NodeDetail';
+import HomeView from './components/game/Home';
 import SceneManager from './SceneManager';
 import LocationSelectionModal from './LocationSelectionModal';
 
@@ -9,20 +14,12 @@ const App = () => {
     const [socket, setSocket] = useState(null);
     const [authenticated, setAuthenticated] = useState(false);
     const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
     const [nodes, setNodes] = useState([]);
     const [technologies, setTechnologies] = useState([]);
     const [view, setView] = useState('login');
     const socketRef = useRef(null);
     const [isAdmin, setIsAdmin] = useState(false);
-    const [allUsers, setAllUsers] = useState([]);
-    const [editingUser, setEditingUser] = useState(null);
-    const [editForm, setEditForm] = useState({
-      username: '',
-      password: '',
-      level: 0,
-      experience: 0
-    });
+
 
     // 修改检查登录状态的useEffect
     useEffect(() => {
@@ -73,33 +70,7 @@ const App = () => {
     });
     const [associations, setAssociations] = useState([]);
     const [showNotifications, setShowNotifications] = useState(false);
-    const [pendingNodes, setPendingNodes] = useState([]);
-    const [adminTab, setAdminTab] = useState('users'); // 管理员面板选项卡状态
-    const [allNodes, setAllNodes] = useState([]); // 所有节点数据
-    const [editingNode, setEditingNode] = useState(null); // 正在编辑的节点
-    const [editNodeForm, setEditNodeForm] = useState({
-      name: '',
-      description: '',
-      prosperity: 0,
-      resources: { food: 0, metal: 0, energy: 0 },
-      productionRates: { food: 0, metal: 0, energy: 0 }
-    });
 
-    // 更换域主相关状态
-    const [showChangeMasterModal, setShowChangeMasterModal] = useState(false);
-    const [changingMasterNode, setChangingMasterNode] = useState(null);
-    const [masterSearchKeyword, setMasterSearchKeyword] = useState('');
-    const [masterSearchResults, setMasterSearchResults] = useState([]);
-    const [selectedNewMaster, setSelectedNewMaster] = useState(null);
-
-    // 熵盟管理相关状态
-    const [adminAlliances, setAdminAlliances] = useState([]);
-    const [editingAlliance, setEditingAlliance] = useState(null);
-    const [editAllianceForm, setEditAllianceForm] = useState({
-      name: '',
-      flag: '',
-      declaration: ''
-    });
 
     const [showAssociationModal, setShowAssociationModal] = useState(false);
     const [viewingAssociationNode, setViewingAssociationNode] = useState(null);
@@ -273,56 +244,36 @@ const App = () => {
         };
     }, []);
 
-    useEffect(() => {
-        // ... 其他代码
-        if (isAdmin) {
-            fetchPendingNodes();
-        }
-    }, [isAdmin]);
+
     
-  const handleLogin = async (isRegister = false) => {
-    try {
-      const response = await fetch(`http://192.168.1.96:5000/api/${isRegister ? 'register' : 'login'}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
+  const handleLoginSuccess = async (data) => {
+    localStorage.setItem('token', data.token);
+    localStorage.setItem('username', data.username);
+    localStorage.setItem('userLocation', data.location || '');
+    setAuthenticated(true);
+    setUsername(data.username);
+    setUserLocation(data.location || '');
 
-      const data = await response.json();
-      if (response.ok) {
-        localStorage.setItem('token', data.token);
-        localStorage.setItem('username', data.username);
-        localStorage.setItem('userLocation', data.location || '');
-        setAuthenticated(true);
-        setUsername(data.username);
-        setUserLocation(data.location || '');
+    // 重新初始化socket连接（连接事件中会处理认证）
+    initializeSocket(data.token);
 
-        // 重新初始化socket连接（连接事件中会处理认证）
-        initializeSocket(data.token);
+    await checkAdminStatus();
 
-        await checkAdminStatus();
-
-        // 检查location字段，如果为空且不是管理员，显示位置选择弹窗
-        if (!data.location || data.location === '') {
-          if (data.role === 'admin') {
-            // 管理员自动设置location为"任意"
-            await updateUserLocation('任意');
-            setUserLocation('任意');
-            localStorage.setItem('userLocation', '任意');
-            setView('home');
-          } else {
-            // 普通用户显示位置选择弹窗
-            setShowLocationModal(true);
-            // 不设置view，保持在登录状态但显示弹窗
-          }
-        } else {
-          setView('home');
-        }
+    // 检查location字段，如果为空且不是管理员，显示位置选择弹窗
+    if (!data.location || data.location === '') {
+      if (data.role === 'admin') {
+        // 管理员自动设置location为"任意"
+        await updateUserLocation('任意');
+        setUserLocation('任意');
+        localStorage.setItem('userLocation', '任意');
+        setView('home');
       } else {
-        window.alert(data.error);
+        // 普通用户显示位置选择弹窗
+        setShowLocationModal(true);
+        // 不设置view，保持在登录状态但显示弹窗
       }
-    } catch (error) {
-      window.alert('连接失败: ' + error.message);
+    } else {
+      setView('home');
     }
   };
 
@@ -429,7 +380,6 @@ const App = () => {
         localStorage.removeItem('userLocation');
         setAuthenticated(false);
         setUsername('');
-        setPassword('');
         setView('login');
         setIsAdmin(false);
         setUserLocation('');
@@ -583,24 +533,7 @@ const App = () => {
         }
     };    
 
-    // 获取所有用户信息
-    const fetchAllUsers = async () => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch('http://192.168.1.96:5000/api/admin/users', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-    
-            if (response.ok) {
-                const data = await response.json();
-                setAllUsers(data.users);
-            }
-        } catch (error) {
-            console.error('获取用户列表失败:', error);
-        }
-    };
+
 
     // 获取根节点
     const fetchRootNodes = async () => {
@@ -1337,66 +1270,7 @@ const App = () => {
         }
     };
 
-    const startEditUser = (user) => {
-        setEditingUser(user._id);
-        setEditForm({
-            username: user.username,
-            password: user.password,
-            level: user.level,
-            experience: user.experience
-        });
-    };
 
-    const saveUserEdit = async (userId) => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/admin/users/${userId}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify(editForm)
-            });
-    
-            if (response.ok) {
-                alert('用户信息已更新');
-                setEditingUser(null);
-                fetchAllUsers();
-            } else {
-                const data = await response.json();
-                alert(data.error || '更新失败');
-            }
-        } catch (error) {
-            console.error('更新用户失败:', error);
-            alert('更新失败');
-        }
-    };
-
-    const deleteUser = async (userId, username) => {
-        if (!window.confirm(`确定要删除用户 ${username} 吗？`)) return;
-        
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/admin/users/${userId}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-    
-            if (response.ok) {
-                alert('用户已删除');
-                fetchAllUsers();
-            } else {
-                const data = await response.json();
-                alert(data.error || '删除失败');
-            }
-        } catch (error) {
-            console.error('删除用户失败:', error);
-            alert('删除失败');
-        }
-    };
 
     // 新节点创建相关函数
     const openCreateNodeModal = () => {
@@ -1535,163 +1409,9 @@ const App = () => {
         }
     };
 
-    const fetchPendingNodes = async () => {
-        try {
-            const token = localStorage.getItem('token');
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/pending', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-    
-            if (response.ok) {
-                const data = await response.json();
-                setPendingNodes(data);
-            }
-        } catch (error) {
-            console.error('获取待审批节点失败:', error);
-        }
-    };
 
-    const approveNode = async (nodeId) => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/approve', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ nodeId })
-            });
 
-            if (response.ok) {
-                alert('节点审批通过');
-                setPendingNodes(prev => prev.filter(node => node._id !== nodeId));
-                fetchPendingNodes();
-            } else {
-                const data = await response.json();
-                alert(data.error || '审批失败');
-            }
-        } catch (error) {
-            console.error('审批节点失败:', error);
-            alert('审批失败');
-        }
-    };
 
-    const rejectNode = async (nodeId) => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/reject', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ nodeId })
-            });
-
-            if (response.ok) {
-                alert('节点已拒绝');
-                setPendingNodes(prev => prev.filter(node => node._id !== nodeId));
-            } else {
-                const data = await response.json();
-                alert(data.error || '拒绝失败');
-            }
-        } catch (error) {
-            console.error('拒绝节点失败:', error);
-            alert('拒绝失败');
-        }
-    };
-
-    // 获取所有节点信息（管理员专用）
-    const fetchAllNodes = async () => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch('http://192.168.1.96:5000/api/nodes', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-    
-            if (response.ok) {
-                const data = await response.json();
-                setAllNodes(data.nodes);
-            }
-        } catch (error) {
-            console.error('获取节点列表失败:', error);
-        }
-    };
-
-    const startEditNode = (node) => {
-        setEditingNode(node._id);
-        setEditNodeForm({
-            name: node.name,
-            description: node.description,
-            prosperity: node.prosperity || 100,
-            resources: {
-                food: node.resources?.food || 0,
-                metal: node.resources?.metal || 0,
-                energy: node.resources?.energy || 0
-            },
-            productionRates: {
-                food: node.productionRates?.food || 0,
-                metal: node.productionRates?.metal || 0,
-                energy: node.productionRates?.energy || 0
-            }
-        });
-    };
-
-    const saveNodeEdit = async (nodeId) => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify(editNodeForm)
-            });
-    
-            if (response.ok) {
-                alert('节点信息已更新');
-                setEditingNode(null);
-                fetchAllNodes();
-            } else {
-                const data = await response.json();
-                alert(data.error || '更新失败');
-            }
-        } catch (error) {
-            console.error('更新节点失败:', error);
-            alert('更新失败');
-        }
-    };
-
-    const deleteNode = async (nodeId, nodeName) => {
-        if (!window.confirm(`确定要删除节点 "${nodeName}" 吗？此操作不可撤销！`)) return;
-
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-
-            if (response.ok) {
-                alert('节点已删除');
-                fetchAllNodes();
-            } else {
-                const data = await response.json();
-                alert(data.error || '删除失败');
-            }
-        } catch (error) {
-            console.error('删除节点失败:', error);
-            alert('删除失败');
-        }
-    };
 
     // ===== 熵盟相关函数 =====
 
@@ -1834,197 +1554,11 @@ const App = () => {
         }
     };
 
-    // ===== 管理员：更换域主相关函数 =====
 
-    // 搜索用户（用于选择域主）
-    const searchUsersForMaster = async (keyword) => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/admin/search-users?keyword=${keyword}`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-            if (response.ok) {
-                const data = await response.json();
-                setMasterSearchResults(data.users);
-            }
-        } catch (error) {
-            console.error('搜索用户失败:', error);
-        }
-    };
 
-    // 打开更换域主弹窗
-    const openChangeMasterModal = (node) => {
-        setChangingMasterNode(node);
-        setSelectedNewMaster(node.domainMaster || null);
-        setMasterSearchKeyword('');
-        setMasterSearchResults([]);
-        setShowChangeMasterModal(true);
-        // 自动搜索所有用户
-        searchUsersForMaster('');
-    };
 
-    // 确认更换域主
-    const confirmChangeMaster = async () => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/admin/domain-master/${changingMasterNode._id}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    domainMasterId: selectedNewMaster?._id || null
-                })
-            });
 
-            const data = await response.json();
-            if (response.ok) {
-                alert(data.message);
-                setShowChangeMasterModal(false);
-                fetchAllNodes(); // 刷新节点列表
-            } else {
-                alert(data.error || '更换失败');
-            }
-        } catch (error) {
-            console.error('更换域主失败:', error);
-            alert('更换失败');
-        }
-    };
 
-    // ===== 管理员：熵盟管理相关函数 =====
-
-    // 获取所有熵盟
-    const fetchAdminAlliances = async () => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/admin/all', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-            if (response.ok) {
-                const data = await response.json();
-                setAdminAlliances(data.alliances);
-            }
-        } catch (error) {
-            console.error('获取熵盟列表失败:', error);
-        }
-    };
-
-    // 开始编辑熵盟
-    const startEditAlliance = (alliance) => {
-        setEditingAlliance(alliance);
-        setEditAllianceForm({
-            name: alliance.name,
-            flag: alliance.flag,
-            declaration: alliance.declaration
-        });
-    };
-
-    // 取消编辑熵盟
-    const cancelEditAlliance = () => {
-        setEditingAlliance(null);
-        setEditAllianceForm({ name: '', flag: '', declaration: '' });
-    };
-
-    // 保存熵盟修改
-    const saveAllianceEdit = async () => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/alliances/admin/${editingAlliance._id}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify(editAllianceForm)
-            });
-
-            const data = await response.json();
-            if (response.ok) {
-                alert(data.message);
-                cancelEditAlliance();
-                fetchAdminAlliances();
-            } else {
-                alert(data.error || '保存失败');
-            }
-        } catch (error) {
-            console.error('保存熵盟失败:', error);
-            alert('保存失败');
-        }
-    };
-
-    // 删除熵盟
-    const deleteAlliance = async (allianceId, allianceName) => {
-        if (!window.confirm(`确定要删除熵盟 "${allianceName}" 吗？此操作将清除所有成员的熵盟关联！`)) return;
-
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/alliances/admin/${allianceId}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-
-            const data = await response.json();
-            if (response.ok) {
-                alert(data.message);
-                fetchAdminAlliances();
-            } else {
-                alert(data.error || '删除失败');
-            }
-        } catch (error) {
-            console.error('删除熵盟失败:', error);
-            alert('删除失败');
-        }
-    };
-
-    // 设置/取消热门节点
-    const toggleFeaturedNode = async (nodeId, currentFeatured) => {
-        const token = localStorage.getItem('token');
-        const action = currentFeatured ? '取消热门' : '设置为热门';
-
-        if (!window.confirm(`确定要${action}吗？`)) return;
-
-        let featuredOrder = 0;
-        if (!currentFeatured) {
-            // 如果是设置为热门，让用户输入排序
-            const orderInput = window.prompt('请输入热门节点的排序（数字越小越靠前）：', '0');
-            if (orderInput === null) return; // 用户取消
-            featuredOrder = parseInt(orderInput) || 0;
-        }
-
-        try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}/featured`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    isFeatured: !currentFeatured,
-                    featuredOrder: featuredOrder
-                })
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                alert(data.message);
-                fetchAllNodes();
-                fetchFeaturedNodes(); // 更新首页的热门节点
-            } else {
-                const data = await response.json();
-                alert(data.error || '操作失败');
-            }
-        } catch (error) {
-            console.error('设置热门节点失败:', error);
-            alert('操作失败');
-        }
-    };
 
     // 打开编辑关联模态框
     const openEditAssociationModal = async (node) => {
@@ -2221,47 +1755,7 @@ const App = () => {
     };
 
     if (view === 'login') {
-        return (
-            <div className="login-container">
-                <div className="login-box">
-                    <div className="login-header">
-                        <h1 className="login-title">策略经营游戏</h1>
-                        <p className="login-subtitle">多节点网络战略系统</p>
-                    </div>
-
-                    <div className="login-form">
-                        <input
-                            type="text"
-                            placeholder="用户名"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            className="login-input"
-                        />
-                        <input
-                            type="password"
-                            placeholder="密码"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="login-input"
-                        />
-                        <div className="login-buttons">
-                            <button
-                                onClick={() => handleLogin(false)}
-                                className="btn btn-primary"
-                            >
-                                登录
-                            </button>
-                            <button
-                                onClick={() => handleLogin(true)}
-                                className="btn btn-secondary"
-                            >
-                                注册
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
+        return <Login onLogin={handleLoginSuccess} />;
     }
 
     // 如果需要显示位置选择弹窗，只显示弹窗，不显示其他内容
@@ -2322,16 +1816,10 @@ const App = () => {
                 <button
                     onClick={() => {
                         setView('admin');
-                        fetchPendingNodes();
-                        fetchAllUsers();
-                        fetchAllNodes();
                     }}
                     className="btn btn-warning"
                 >
                     管理员面板
-                    {pendingNodes.length > 0 && (
-                        <span className="notification-badge">!</span>
-                    )}
                 </button>
             )}
                             </div>
@@ -2340,1014 +1828,79 @@ const App = () => {
                 </div>
 
                 {/* 首页视图 */}
-                {view === 'home' && (
-                    <>
-                        {/* 左侧导航栏 */}
-                        <div className="navigation-sidebar">
-                            <div className="nav-item active">
-                                <span className="nav-label">首页</span>
-                            </div>
-                        </div>
-
-                        <div className="webgl-scene-container">
-                            {/* WebGL Canvas */}
-                            <canvas
-                                ref={webglCanvasRef}
-                                className="webgl-canvas"
-                            />
-
-                            {/* 搜索栏容器（包含搜索栏和搜索结果） */}
-                            <div className="search-container" ref={searchBarRef}>
-                                {/* 悬浮搜索栏和创建节点按钮 */}
-                                <div className="floating-search-bar">
-                                    <div className="search-and-create-container">
-                                       <div className="search-input-wrapper" onClick={() => setShowSearchResults(true)}>
-                                            <Search className="search-icon" size={24} />
-                                            <input
-                                                type="text"
-                                                placeholder="搜索节点...（支持多关键词，用空格分隔）"
-                                                value={homeSearchQuery}
-                                                onChange={(e) => setHomeSearchQuery(e.target.value)}
-                                                className="search-input-floating"
-                                                onFocus={() => setShowSearchResults(true)} // 获得焦点时也显示搜索结果
-                                            />
-                                            {homeSearchQuery && (
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation(); // 防止触发外层的点击事件
-                                                        setHomeSearchQuery('');
-                                                        setHomeSearchResults([]);
-                                                        setShowSearchResults(true);
-                                                    }}
-                                                    className="search-clear-btn"
-                                                >
-                                                    <X size={18} />
-                                                </button>
-                                            )}
-                                        </div>
-                                        <button
-                                            onClick={openCreateNodeModal}
-                                            className="btn btn-success create-node-btn"
-                                        >
-                                            <Plus size={18} />
-                                            创建节点
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {/* 搜索结果列表（长方体条目） */}
-                                {homeSearchQuery && homeSearchResults.length > 0 && showSearchResults && (
-                                    <div className="search-results-panel">
-                                        <div className="search-results-scroll">
-                                            {homeSearchResults.map((node) => (
-                                                <div
-                                                    key={node._id}
-                                                    className="search-result-card"
-                                                    onClick={() => {
-                                                        // 点击搜索结果，跳转到节点详情并隐藏搜索结果
-                                                        fetchNodeDetail(node._id, {
-                                                            id: `search-${node._id}`,
-                                                            data: node,
-                                                            type: 'search'
-                                                        });
-                                                        setShowSearchResults(false); // 隐藏搜索结果
-                                                    }}
-                                                >
-                                                    <div className="search-card-title">{node.name}</div>
-                                                    <div className="search-card-desc">{node.description}</div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* 搜索无结果 */}
-                                {homeSearchQuery && !isSearching && homeSearchResults.length === 0 && showSearchResults && (
-                                    <div className="search-no-results">
-                                        未找到匹配的节点
-                                    </div>
-                                )}
-
-                                {/* 搜索中 */}
-                                {isSearching && showSearchResults && (
-                                    <div className="search-loading-indicator">
-                                        搜索中...
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* 右侧知识域驻留栏 */}
-                        {!isAdmin ? (
-                            <div className="location-resident-sidebar">
-                                <div className="location-sidebar-header">
-                                    <h3>当前所在的知识域</h3>
-                                </div>
-
-                                {currentLocationNodeDetail ? (
-                                    <div className="location-sidebar-content">
-                                        <div className="location-node-title">{currentLocationNodeDetail.name}</div>
-
-                                        {currentLocationNodeDetail.description && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">描述</div>
-                                                <div className="section-content">{currentLocationNodeDetail.description}</div>
-                                            </div>
-                                        )}
-
-                                        {currentLocationNodeDetail.relatedParentDomains && currentLocationNodeDetail.relatedParentDomains.length > 0 && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">父域</div>
-                                                <div className="section-tags">
-                                                    {currentLocationNodeDetail.relatedParentDomains.map((parent, idx) => (
-                                                        <span key={idx} className="node-tag parent-tag">{parent}</span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {currentLocationNodeDetail.relatedChildDomains && currentLocationNodeDetail.relatedChildDomains.length > 0 && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">子域</div>
-                                                <div className="section-tags">
-                                                    {currentLocationNodeDetail.relatedChildDomains.map((child, idx) => (
-                                                        <span key={idx} className="node-tag child-tag">{child}</span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {currentLocationNodeDetail.knowledge && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">知识内容</div>
-                                                <div className="section-content knowledge-content">
-                                                    {currentLocationNodeDetail.knowledge}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                ) : (
-                                    <div className="location-sidebar-empty">
-                                        <p>暂未降临到任何知识域</p>
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            <div className="location-resident-sidebar admin-sidebar">
-                                <div className="location-sidebar-header">
-                                    <h3>管理员视图</h3>
-                                </div>
-                                <div className="location-sidebar-empty">
-                                    <p>管理员可查看所有知识域</p>
-                                </div>
-                            </div>
-                        )}
-                    </>
+                {/* 首页视图 */}
+                {view === "home" && (
+                    <HomeView
+                        webglCanvasRef={webglCanvasRef}
+                        searchQuery={homeSearchQuery}
+                        onSearchChange={(e) => setHomeSearchQuery(e.target.value)}
+                        onSearchFocus={() => setShowSearchResults(true)}
+                        onSearchClear={() => {
+                            setHomeSearchQuery("");
+                            setHomeSearchResults([]);
+                            setShowSearchResults(true);
+                        }}
+                        searchResults={homeSearchResults}
+                        showSearchResults={showSearchResults}
+                        isSearching={isSearching}
+                        onSearchResultClick={(node) => {
+                            fetchNodeDetail(node._id, {
+                                id: `search-${node._id}`,
+                                data: node,
+                                type: "search"
+                            });
+                            setShowSearchResults(false);
+                        }}
+                        onCreateNode={openCreateNodeModal}
+                        isAdmin={isAdmin}
+                        currentLocationNodeDetail={currentLocationNodeDetail}
+                    />
                 )}
-
                 {/* 节点详情视图 */}
-                {view === 'nodeDetail' && currentNodeDetail && (
-                    <>
-                        {/* 左侧导航栏 */}
-                        <div className="navigation-sidebar">
-                            {/* 添加标题说明 */}
-                            <div className="navigation-header">
-                                <h3 className="navigation-title">当前查看的节点</h3>
-                                <div className="navigation-divider"></div>
-                            </div>
-
-                            {navigationPath.map((item, index) => (
-                                <div key={index}>
-                                    {item.type === 'branch' ? (
-                                        // 二叉树分叉，两个节点并列显示
-                                        <div className="nav-branch">
-                                            {item.nodes.map((branchNode, branchIndex) => (
-                                                <div
-                                                    key={branchIndex}
-                                                    className={`nav-item branch-item clickable ${branchNode.nodeId === currentNodeDetail._id ? 'active' : ''}`}
-                                                    onClick={() => fetchNodeDetail(branchNode.nodeId)}
-                                                >
-                                                    <span className="nav-label">{branchNode.label}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <div
-                                            className={`nav-item ${item.type === 'node' && item.nodeId === currentNodeDetail._id ? 'active' : ''} ${item.type === 'omit-paths' ? 'clickable omit-item' : item.type !== 'home' ? 'clickable' : ''}`}
-                                            onClick={() => {
-                                                if (item.type === 'home') {
-                                                    setView('home');
-                                                    setNavigationPath([{ type: 'home', label: '首页' }]);
-                                                } else if (item.type === 'node') {
-                                                    fetchNodeDetail(item.nodeId);
-                                                } else if (item.type === 'omit-paths') {
-                                                    // 点击省略项，显示完整导航树
-                                                    setShowNavigationTree(true);
-                                                }
-                                            }}
-                                        >
-                                            <span className="nav-label">{item.label}</span>
-                                        </div>
-                                    )}
-                                    {index < navigationPath.length - 1 && (
-                                        <div className="nav-arrow">↓</div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-
-                        <div className="webgl-scene-container">
-                            {/* WebGL Canvas */}
-                            <canvas
-                                ref={webglCanvasRef}
-                                className="webgl-canvas"
-                            />
-
-                            {/* 搜索栏容器（包含搜索栏和搜索结果） */}
-                            <div className="search-container" ref={searchBarRef}>
-                                {/* 悬浮搜索栏和创建节点按钮 */}
-                                <div className="floating-search-bar">
-                                    <div className="search-and-create-container">
-                                       <div className="search-input-wrapper" onClick={() => setShowSearchResults(true)}>
-                                            <Search className="search-icon" size={24} />
-                                            <input
-                                                type="text"
-                                                placeholder="搜索节点...（支持多关键词，用空格分隔）"
-                                                value={homeSearchQuery}
-                                                onChange={(e) => setHomeSearchQuery(e.target.value)}
-                                                className="search-input-floating"
-                                                onFocus={() => setShowSearchResults(true)} // 获得焦点时也显示搜索结果
-                                            />
-                                            {homeSearchQuery && (
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation(); // 防止触发外层的点击事件
-                                                        setHomeSearchQuery('');
-                                                        setHomeSearchResults([]);
-                                                        setShowSearchResults(true);
-                                                    }}
-                                                    className="search-clear-btn"
-                                                >
-                                                    <X size={18} />
-                                                </button>
-                                            )}
-                                        </div>
-                                        <button
-                                            onClick={openCreateNodeModal}
-                                            className="btn btn-success create-node-btn"
-                                        >
-                                            <Plus size={18} />
-                                            创建节点
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {/* 搜索结果列表（长方体条目） */}
-                                {homeSearchQuery && homeSearchResults.length > 0 && showSearchResults && (
-                                    <div className="search-results-panel">
-                                        <div className="search-results-scroll">
-                                            {homeSearchResults.map((node) => (
-                                                <div
-                                                    key={node._id}
-                                                    className="search-result-card"
-                                                    onClick={() => {
-                                                        // 点击搜索结果，跳转到节点详情并隐藏搜索结果
-                                                        fetchNodeDetail(node._id, {
-                                                            id: `search-${node._id}`,
-                                                            data: node,
-                                                            type: 'search'
-                                                        });
-                                                        setShowSearchResults(false); // 隐藏搜索结果
-                                                    }}
-                                                >
-                                                    <div className="search-card-title">{node.name}</div>
-                                                    <div className="search-card-desc">{node.description}</div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* 搜索无结果 */}
-                                {homeSearchQuery && !isSearching && homeSearchResults.length === 0 && showSearchResults && (
-                                    <div className="search-no-results">
-                                        未找到匹配的节点
-                                    </div>
-                                )}
-
-                                {/* 搜索中 */}
-                                {isSearching && showSearchResults && (
-                                    <div className="search-loading-indicator">
-                                        搜索中...
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </>
+                {view === "nodeDetail" && currentNodeDetail && (
+                    <NodeDetail
+                        node={currentNodeDetail}
+                        navigationPath={navigationPath}
+                        onNavigate={(nodeId) => fetchNodeDetail(nodeId)}
+                        onHome={() => {
+                            setView("home");
+                            setNavigationPath([{ type: "home", label: "首页" }]);
+                        }}
+                        onShowNavigationTree={() => setShowNavigationTree(true)}
+                        searchQuery={homeSearchQuery}
+                        onSearchChange={(e) => setHomeSearchQuery(e.target.value)}
+                        onSearchFocus={() => setShowSearchResults(true)}
+                        onSearchClear={() => {
+                            setHomeSearchQuery("");
+                            setHomeSearchResults([]);
+                            setShowSearchResults(true);
+                        }}
+                        searchResults={homeSearchResults}
+                        showSearchResults={showSearchResults}
+                        isSearching={isSearching}
+                        onSearchResultClick={(node) => {
+                            fetchNodeDetail(node._id, {
+                                id: `search-${node._id}`,
+                                data: node,
+                                type: "search"
+                            });
+                            setShowSearchResults(false);
+                        }}
+                        onCreateNode={openCreateNodeModal}
+                        onNodeInfoClick={() => setShowNodeInfoModal(true)}
+                        webglCanvasRef={webglCanvasRef}
+                    />
                 )}
-
-                {view === 'alliance' && (
-                    <div className="alliance-section">
-                        <h2 className="section-title-large">
-                            <Shield className="icon" />
-                            熵盟系统
-                        </h2>
-
-                        {/* 用户当前熵盟状态 */}
-                        {!isAdmin && (
-                            <div className="user-alliance-status">
-                                {userAlliance ? (
-                                    <div className="current-alliance-card">
-                                        <div className="alliance-flag" style={{ backgroundColor: userAlliance.flag }}></div>
-                                        <div className="alliance-info-compact">
-                                            <h3>{userAlliance.name}</h3>
-                                            <p>成员: {userAlliance.memberCount} | 管辖域: {userAlliance.domainCount}</p>
-                                        </div>
-                                        <button
-                                            onClick={leaveAlliance}
-                                            className="btn btn-danger btn-small"
-                                        >
-                                            退出熵盟
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <div className="no-alliance-prompt">
-                                        <p>您还未加入任何熵盟</p>
-                                        <button
-                                            onClick={() => setShowCreateAllianceModal(true)}
-                                            className="btn btn-primary"
-                                        >
-                                            创立新熵盟
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {/* 熵盟列表 */}
-                        <div className="alliances-grid">
-                            {alliances.length === 0 ? (
-                                <div className="empty-alliances">
-                                    <p>暂无熵盟，快来创建第一个熵盟吧！</p>
-                                </div>
-                            ) : (
-                                alliances.map((alliance) => (
-                                    <div
-                                        key={alliance._id}
-                                        className="alliance-card"
-                                        onClick={() => fetchAllianceDetail(alliance._id)}
-                                    >
-                                        <div className="alliance-flag-large" style={{ backgroundColor: alliance.flag }}></div>
-                                        <div className="alliance-card-content">
-                                            <h3 className="alliance-name">{alliance.name}</h3>
-                                            <p className="alliance-declaration">{alliance.declaration}</p>
-                                            <div className="alliance-stats">
-                                                <div className="stat-item">
-                                                    <Users className="icon-tiny" />
-                                                    <span>成员: {alliance.memberCount}</span>
-                                                </div>
-                                                <div className="stat-item">
-                                                    <Zap className="icon-tiny" />
-                                                    <span>管辖域: {alliance.domainCount}</span>
-                                                </div>
-                                            </div>
-                                            <div className="alliance-founder">
-                                                创始人: {alliance.founder?.username || '未知'}
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
+                {view === "alliance" && (
+                    <AlliancePanel 
+                        username={username} 
+                        token={localStorage.getItem("token")} 
+                        isAdmin={isAdmin} 
+                    />
                 )}
-                {view === 'admin' && isAdmin && (
-                    <div className="admin-section">
-                        <h2 className="section-title-large">
-                            <Users className="icon" />
-                            管理员面板
-                        </h2>
-
-                        {/* 选项卡导航 */}
-                        <div className="admin-tabs">
-                            <button
-                                onClick={() => {
-                                    setAdminTab('users');
-                                    fetchAllUsers();
-                                }}
-                                className={`admin-tab ${adminTab === 'users' ? 'active' : ''}`}
-                            >
-                                <Users className="icon-small" />
-                                用户管理
-                            </button>
-                            <button
-                                onClick={() => {
-                                    setAdminTab('nodes');
-                                    fetchAllNodes();
-                                }}
-                                className={`admin-tab ${adminTab === 'nodes' ? 'active' : ''}`}
-                            >
-                                <Zap className="icon-small" />
-                                节点管理
-                            </button>
-                            <button
-                                onClick={() => {
-                                    setAdminTab('pending');
-                                    fetchPendingNodes();
-                                }}
-                                className={`admin-tab ${adminTab === 'pending' ? 'active' : ''}`}
-                            >
-                                <Bell className="icon-small" />
-                                待审批节点
-                                {pendingNodes.length > 0 && (
-                                    <span className="notification-badge">{pendingNodes.length}</span>
-                                )}
-                            </button>
-                            <button
-                                onClick={() => {
-                                    setAdminTab('alliances');
-                                    fetchAdminAlliances();
-                                }}
-                                className={`admin-tab ${adminTab === 'alliances' ? 'active' : ''}`}
-                            >
-                                <Shield className="icon-small" />
-                                熵盟管理
-                            </button>
-                        </div>
-
-                        {/* 用户管理选项卡 */}
-                        {adminTab === 'users' && (
-                            <div className="users-table-container">
-                                <div className="table-info">
-                                    <p>总用户数: <strong>{allUsers.length}</strong></p>
-                                    <button 
-                                        onClick={fetchAllUsers}
-                                        className="btn btn-primary"
-                                        style={{ marginLeft: '1rem' }}
-                                    >
-                                        刷新数据
-                                    </button>
-                                </div>
-                                
-                                <div className="table-responsive">
-                                    <table className="users-table">
-                                        <thead>
-                                            <tr>
-                                                <th>数据库ID</th>
-                                                <th>用户名</th>
-                                                <th>密码（明文）</th>
-                                                <th>等级</th>
-                                                <th>经验值</th>
-                                                <th>拥有节点</th>
-                                                <th>创建时间</th>
-                                                <th>更新时间</th>
-                                                <th>操作</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {allUsers.map((user) => (
-                                                <tr key={user._id}>
-                                                    <td className="id-cell">{user._id}</td>
-                                                    <td>
-                                                        {editingUser === user._id ? (
-                                                            <input
-                                                                type="text"
-                                                                value={editForm.username}
-                                                                onChange={(e) => setEditForm({
-                                                                    ...editForm,
-                                                                    username: e.target.value
-                                                                })}
-                                                                className="edit-input"
-                                                            />
-                                                        ) : (
-                                                            <span className="username-cell">{user.username}</span>
-                                                        )}
-                                                    </td>
-                                                    <td>
-                                                        {editingUser === user._id ? (
-                                                            <input
-                                                                type="text"
-                                                                value={editForm.password}
-                                                                onChange={(e) => setEditForm({
-                                                                    ...editForm,
-                                                                    password: e.target.value
-                                                                })}
-                                                                className="edit-input"
-                                                            />
-                                                        ) : (
-                                                            <span className="password-cell">{user.password}</span>
-                                                        )}
-                                                    </td>
-                                                    <td>
-                                                        {editingUser === user._id ? (
-                                                            <input
-                                                                type="number"
-                                                                value={editForm.level}
-                                                                onChange={(e) => setEditForm({
-                                                                    ...editForm,
-                                                                    level: parseInt(e.target.value)
-                                                                })}
-                                                                className="edit-input-small"
-                                                            />
-                                                        ) : (
-                                                            user.level
-                                                        )}
-                                                    </td>
-                                                    <td>
-                                                        {editingUser === user._id ? (
-                                                            <input
-                                                                type="number"
-                                                                value={editForm.experience}
-                                                                onChange={(e) => setEditForm({
-                                                                    ...editForm,
-                                                                    experience: parseInt(e.target.value)
-                                                                })}
-                                                                className="edit-input-small"
-                                                            />
-                                                        ) : (
-                                                            user.experience
-                                                        )}
-                                                    </td>
-                                                    <td>{user.ownedNodes?.length || 0}</td>
-                                                    <td>{new Date(user.createdAt).toLocaleString('zh-CN')}</td>
-                                                    <td>{new Date(user.updatedAt).toLocaleString('zh-CN')}</td>
-                                                    <td className="action-cell">
-                                                        {editingUser === user._id ? (
-                                                            <>
-                                                                <button
-                                                                    onClick={() => saveUserEdit(user._id)}
-                                                                    className="btn-action btn-save"
-                                                                >
-                                                                    保存
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => setEditingUser(null)}
-                                                                    className="btn-action btn-cancel"
-                                                                >
-                                                                    取消
-                                                                </button>
-                                                            </>
-                                                        ) : (
-                                                            <>
-                                                                <button
-                                                                    onClick={() => startEditUser(user)}
-                                                                    className="btn-action btn-edit"
-                                                                >
-                                                                    编辑
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => deleteUser(user._id, user.username)}
-                                                                    className="btn-action btn-delete"
-                                                                >
-                                                                    删除
-                                                                </button>
-                                                            </>
-                                                        )}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* 待审批节点选项卡 */}
-                        {adminTab === 'pending' && (
-                            <div className="pending-nodes-container">
-                                <div className="table-info">
-                                    <p>待审批节点数: <strong>{pendingNodes.length}</strong></p>
-                                    <button 
-                                        onClick={fetchPendingNodes}
-                                        className="btn btn-primary"
-                                        style={{ marginLeft: '1rem' }}
-                                    >
-                                        刷新数据
-                                    </button>
-                                </div>
-                                
-                                {pendingNodes.length === 0 ? (
-                                    <div className="no-pending-nodes">
-                                        <p>暂无待审批节点</p>
-                                    </div>
-                                ) : (
-                                    <div className="pending-nodes-list admin">
-                                        {pendingNodes.map(node => (
-                                            <div key={node._id} className="pending-node-card">
-                                                <div className="node-header">
-                                                    <h3 className="node-title">{node.name}</h3>
-                                                    <span className={`status-badge status-${node.status}`}>
-                                                        {node.status === 'pending' ? '待审批' : 
-                                                         node.status === 'approved' ? '已通过' : '已拒绝'}
-                                                    </span>
-                                                </div>
-                                                
-                                                <div className="node-details">
-                                                    <p className="node-description">{node.description}</p>
-                                                    
-                                                    <div className="node-meta">
-                                                        <div className="meta-item">
-                                                            <strong>创建者:</strong> {node.owner?.username || '未知用户'}
-                                                        </div>
-                                                        <div className="meta-item">
-                                                            <strong>提交时间:</strong> {new Date(node.createdAt).toLocaleString('zh-CN')}
-                                                        </div>
-                                                        <div className="meta-item">
-                                                            <strong>位置:</strong> ({Math.round(node.position?.x || 0)}, {Math.round(node.position?.y || 0)})
-                                                        </div>
-                                                    </div>
-
-                                                    {node.associations && node.associations.length > 0 && (
-                                                        <div className="associations-section">
-                                                            <h4>关联关系 ({node.associations.length} 个)</h4>
-                                                            <div className="associations-list">
-                                                                {node.associations.map((association, index) => (
-                                                                    <div key={index} className="association-item">
-                                                                        <span className="node-name">
-                                                                            {association.targetNode?.name || '未知节点'}
-                                                                        </span>
-                                                                        <span className="relation-type">
-                                                                            {association.relationType === 'contains' ? '包含' : '拓展'}
-                                                                        </span>
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
-
-                                                <div className="node-actions">
-                                                    <button
-                                                        onClick={() => approveNode(node._id)}
-                                                        className="btn btn-success"
-                                                    >
-                                                        <Check className="icon-small" />
-                                                        通过
-                                                    </button>
-                                                    <button
-                                                        onClick={() => rejectNode(node._id)}
-                                                        className="btn btn-danger"
-                                                    >
-                                                        <X className="icon-small" />
-                                                        拒绝
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {/* 节点管理选项卡 */}
-                        {adminTab === 'nodes' && (
-                            <div className="nodes-table-container">
-                                <div className="table-info">
-                                    <p>总节点数: <strong>{allNodes.length}</strong></p>
-                                    <button 
-                                        onClick={fetchAllNodes}
-                                        className="btn btn-primary"
-                                        style={{ marginLeft: '1rem' }}
-                                    >
-                                        刷新数据
-                                    </button>
-                                </div>
-                                
-                                <div className="table-responsive">
-                                    <table className="nodes-table">
-                                        <thead>
-                                            <tr>
-                                                <th>数据库ID</th>
-                                                <th>节点名称</th>
-                                                <th>描述</th>
-                                                <th>繁荣度</th>
-                                        <th>知识点</th>
-                                        <th>内容分数</th>
-                                                <th>状态</th>
-                                                <th>创建者</th>
-                                                <th>域主</th>
-                                                <th>创建时间</th>
-                                                <th>热门</th>
-                                                <th>查看关联</th>
-                                                <th>操作</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {allNodes.map((node) => (
-                                                <tr key={node._id}>
-                                                    <td className="id-cell">{node._id}</td>
-                                                    <td>
-                                                        {editingNode === node._id ? (
-                                                            <input
-                                                                type="text"
-                                                                value={editNodeForm.name}
-                                                                onChange={(e) => setEditNodeForm({
-                                                                    ...editNodeForm,
-                                                                    name: e.target.value
-                                                                })}
-                                                                className="edit-input"
-                                                            />
-                                                        ) : (
-                                                            <span className="node-name-cell">{node.name}</span>
-                                                        )}
-                                                    </td>
-                                                    <td>
-                                                        {editingNode === node._id ? (
-                                                            <textarea
-                                                                value={editNodeForm.description}
-                                                                onChange={(e) => setEditNodeForm({
-                                                                    ...editNodeForm,
-                                                                    description: e.target.value
-                                                                })}
-                                                                className="edit-textarea"
-                                                                rows="2"
-                                                            />
-                                                        ) : (
-                                                            <span className="node-description-cell">{node.description}</span>
-                                                        )}
-                                                    </td>
-                                                    <td>
-                                                        {editingNode === node._id ? (
-                                                            <input
-                                                                type="number"
-                                                                value={editNodeForm.prosperity}
-                                                                onChange={(e) => setEditNodeForm({
-                                                                    ...editNodeForm,
-                                                                    prosperity: parseInt(e.target.value)
-                                                                })}
-                                                                className="edit-input-small"
-                                                            />
-                                                        ) : (
-                                                            Math.round(node.prosperity || 0)
-                                                        )}
-                                                    </td>
-                                                    <td>
-                                                        {editingNode === node._id ? (
-                                                            <div className="resource-inputs">
-                                                                <input
-                                                                    type="text"
-                                                                    value={(node.knowledgePoint?.value || 0).toFixed(2)}
-                                                                    readOnly
-                                                                    className="edit-input-tiny"
-                                                                    placeholder="知识点"
-                                                                />
-                                                            </div>
-                                                        ) : (
-                                                    <div className="resource-display">
-                                                        <span>{(node.knowledgePoint?.value || 0).toFixed(2)}</span>
-                                                    </div>
-                                                        )}
-                                                    </td>
-                                                    <td>
-                                                        {editingNode === node._id ? (
-                                                            <div className="production-inputs">
-                                                                <input
-                                                                    type="number"
-                                                                    value={editNodeForm.contentScore}
-                                                                    onChange={(e) => setEditNodeForm({
-                                                                        ...editNodeForm,
-                                                                        contentScore: parseInt(e.target.value)
-                                                                    })}
-                                                                    className="edit-input-tiny"
-                                                                    placeholder="内容分数"
-                                                                />
-                                                            </div>
-                                                        ) : (
-                                                    <div className="production-display">
-                                                        <span>{node.contentScore || 1}</span>
-                                                    </div>
-                                                        )}
-                                                    </td>
-                                                    <td>
-                                                        <span className={`status-badge status-${node.status}`}>
-                                                            {node.status === 'pending' ? '待审批' : 
-                                                             node.status === 'approved' ? '已通过' : '已拒绝'}
-                                                        </span>
-                                                    </td>
-                                                    <td>{node.owner?.username || '系统'}</td>
-                                                    <td>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                            <span>{node.domainMaster?.username || '(未设置)'}</span>
-                                                            <button
-                                                                onClick={() => openChangeMasterModal(node)}
-                                                                className="btn-action btn-primary-small"
-                                                                title="更换域主"
-                                                            >
-                                                                更换
-                                                            </button>
-                                                        </div>
-                                                    </td>
-                                                    <td>{new Date(node.createdAt).toLocaleString('zh-CN')}</td>
-                                                    <td>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                            {node.isFeatured && (
-                                                                <span className="featured-badge-small">
-                                                                    热门 (排序: {node.featuredOrder || 0})
-                                                                </span>
-                                                            )}
-                                                            <button
-                                                                onClick={() => toggleFeaturedNode(node._id, node.isFeatured)}
-                                                                className={`btn-action ${node.isFeatured ? 'btn-featured-active' : 'btn-featured'}`}
-                                                            >
-                                                                {node.isFeatured ? '取消热门' : '设为热门'}
-                                                            </button>
-                                                        </div>
-                                                    </td>
-                                                    <td>
-                                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                                            <button
-                                                                onClick={() => {
-                                                                    setViewingAssociationNode(node);
-                                                                    setShowAssociationModal(true);
-                                                                }}
-                                                                className="btn-action btn-view"
-                                                            >
-                                                                查看
-                                                            </button>
-                                                            <button
-                                                                onClick={() => openEditAssociationModal(node)}
-                                                                className="btn-action btn-edit"
-                                                            >
-                                                                编辑
-                                                            </button>
-                                                        </div>
-                                                    </td>
-                                                    <td className="action-cell">
-                                                        {editingNode === node._id ? (
-                                                            <>
-                                                                <button
-                                                                    onClick={() => saveNodeEdit(node._id)}
-                                                                    className="btn-action btn-save"
-                                                                >
-                                                                    保存
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => setEditingNode(null)}
-                                                                    className="btn-action btn-cancel"
-                                                                >
-                                                                    取消
-                                                                </button>
-                                                            </>
-                                                        ) : (
-                                                            <>
-                                                                <button
-                                                                    onClick={() => startEditNode(node)}
-                                                                    className="btn-action btn-edit"
-                                                                >
-                                                                    编辑
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => deleteNode(node._id, node.name)}
-                                                                    className="btn-action btn-delete"
-                                                                >
-                                                                    删除
-                                                                </button>
-                                                            </>
-                                                        )}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* 熵盟管理选项卡 */}
-                        {adminTab === 'alliances' && (
-                            <div className="alliances-admin-container">
-                                <div className="table-info">
-                                    <p>总熵盟数: <strong>{adminAlliances.length}</strong></p>
-                                    <button
-                                        onClick={fetchAdminAlliances}
-                                        className="btn btn-primary"
-                                        style={{ marginLeft: '1rem' }}
-                                    >
-                                        刷新数据
-                                    </button>
-                                </div>
-
-                                <div className="alliances-admin-grid">
-                                    {adminAlliances.map((alliance) => (
-                                        <div key={alliance._id} className="alliance-admin-card">
-                                            {editingAlliance && editingAlliance._id === alliance._id ? (
-                                                /* 编辑模式 */
-                                                <div className="alliance-edit-form">
-                                                    <div className="form-group">
-                                                        <label>熵盟名称</label>
-                                                        <input
-                                                            type="text"
-                                                            value={editAllianceForm.name}
-                                                            onChange={(e) => setEditAllianceForm({
-                                                                ...editAllianceForm,
-                                                                name: e.target.value
-                                                            })}
-                                                            className="form-input"
-                                                        />
-                                                    </div>
-
-                                                    <div className="form-group">
-                                                        <label>旗帜颜色</label>
-                                                        <div className="color-picker-group">
-                                                            <input
-                                                                type="color"
-                                                                value={editAllianceForm.flag}
-                                                                onChange={(e) => setEditAllianceForm({
-                                                                    ...editAllianceForm,
-                                                                    flag: e.target.value
-                                                                })}
-                                                                className="color-picker"
-                                                            />
-                                                            <div className="flag-preview-small" style={{ backgroundColor: editAllianceForm.flag }}></div>
-                                                        </div>
-                                                    </div>
-
-                                                    <div className="form-group">
-                                                        <label>熵盟号召</label>
-                                                        <textarea
-                                                            value={editAllianceForm.declaration}
-                                                            onChange={(e) => setEditAllianceForm({
-                                                                ...editAllianceForm,
-                                                                declaration: e.target.value
-                                                            })}
-                                                            className="form-textarea"
-                                                            rows="3"
-                                                        />
-                                                    </div>
-
-                                                    <div className="alliance-edit-actions">
-                                                        <button onClick={saveAllianceEdit} className="btn btn-success">
-                                                            保存
-                                                        </button>
-                                                        <button onClick={cancelEditAlliance} className="btn btn-secondary">
-                                                            取消
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                /* 查看模式 */
-                                                <>
-                                                    <div className="alliance-admin-header">
-                                                        <div className="alliance-flag-medium" style={{ backgroundColor: alliance.flag }}></div>
-                                                        <div className="alliance-admin-info">
-                                                            <h3>{alliance.name}</h3>
-                                                            <p className="alliance-id">ID: {alliance._id}</p>
-                                                        </div>
-                                                    </div>
-
-                                                    <div className="alliance-admin-details">
-                                                        <div className="detail-row">
-                                                            <span className="detail-label">号召:</span>
-                                                            <span className="detail-value">{alliance.declaration}</span>
-                                                        </div>
-                                                        <div className="detail-row">
-                                                            <span className="detail-label">创始人:</span>
-                                                            <span className="detail-value">{alliance.founder?.username || '未知'}</span>
-                                                        </div>
-                                                        <div className="detail-row">
-                                                            <span className="detail-label">成员数:</span>
-                                                            <span className="detail-value">{alliance.memberCount}</span>
-                                                        </div>
-                                                        <div className="detail-row">
-                                                            <span className="detail-label">管辖域:</span>
-                                                            <span className="detail-value">{alliance.domainCount}</span>
-                                                        </div>
-                                                        <div className="detail-row">
-                                                            <span className="detail-label">创建时间:</span>
-                                                            <span className="detail-value">{new Date(alliance.createdAt).toLocaleString('zh-CN')}</span>
-                                                        </div>
-                                                    </div>
-
-                                                    <div className="alliance-admin-actions">
-                                                        <button
-                                                            onClick={() => startEditAlliance(alliance)}
-                                                            className="btn btn-primary"
-                                                        >
-                                                            编辑
-                                                        </button>
-                                                        <button
-                                                            onClick={() => deleteAlliance(alliance._id, alliance.name)}
-                                                            className="btn btn-danger"
-                                                        >
-                                                            删除
-                                                        </button>
-                                                    </div>
-                                                </>
-                                            )}
-                                        </div>
-                                    ))}
-
-                                    {adminAlliances.length === 0 && (
-                                        <div className="empty-alliances-admin">
-                                            <p>暂无熵盟</p>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-                    </div>
+                {view === "admin" && isAdmin && (
+                    <AdminPanel />
                 )}
-
                 {/* 查看关联浮窗 */}
                 {showAssociationModal && viewingAssociationNode && (
                     <div className="modal-backdrop" onClick={() => setShowAssociationModal(false)}>
@@ -3425,128 +1978,7 @@ const App = () => {
                     </div>
                 )}
 
-                {/* 编辑关联浮窗 */}
-                {showEditAssociationModal && editingAssociationNode && (
-                    <div className="modal-backdrop" onClick={() => setShowEditAssociationModal(false)}>
-                        <div className="modal-content edit-association-modal" onClick={(e) => e.stopPropagation()}>
-                            <div className="modal-header">
-                                <h2>编辑节点关联 - {editingAssociationNode.name}</h2>
-                                <button
-                                    className="modal-close"
-                                    onClick={() => setShowEditAssociationModal(false)}
-                                >
-                                    <X size={24} />
-                                </button>
-                            </div>
 
-                            <div className="modal-body">
-                                {/* 搜索添加新关联 */}
-                                <div className="add-association-section">
-                                    <h4>添加新关联</h4>
-                                    <div className="search-add-container">
-                                        <div className="search-input-group">
-                                            <input
-                                                type="text"
-                                                placeholder="搜索节点..."
-                                                value={assocSearchKeyword}
-                                                onChange={(e) => {
-                                                    setAssocSearchKeyword(e.target.value);
-                                                    searchAssociationNodes(e.target.value);
-                                                }}
-                                                className="search-input"
-                                            />
-                                        </div>
-                                        <div className="relation-type-selector">
-                                            <label>
-                                                <input
-                                                    type="radio"
-                                                    value="contains"
-                                                    checked={newAssocType === 'contains'}
-                                                    onChange={(e) => setNewAssocType(e.target.value)}
-                                                />
-                                                包含
-                                            </label>
-                                            <label>
-                                                <input
-                                                    type="radio"
-                                                    value="extends"
-                                                    checked={newAssocType === 'extends'}
-                                                    onChange={(e) => setNewAssocType(e.target.value)}
-                                                />
-                                                拓展
-                                            </label>
-                                        </div>
-                                    </div>
-
-                                    {assocSearchResults.length > 0 && (
-                                        <div className="search-results-box">
-                                            {assocSearchResults.map((node) => (
-                                                <div key={node._id} className="search-result-item">
-                                                    <span>{node.name}</span>
-                                                    <button
-                                                        onClick={() => addEditAssociation(node)}
-                                                        className="btn-action btn-add-small"
-                                                    >
-                                                        添加
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* 当前关联列表 */}
-                                <div className="current-associations-section">
-                                    <h4>当前关联（{editAssociations.length}个）</h4>
-                                    {editAssociations.length > 0 ? (
-                                        <div className="associations-list">
-                                            {editAssociations.map((assoc, index) => (
-                                                <div key={index} className="association-item-edit">
-                                                    <div className="assoc-info">
-                                                        <span className="assoc-name">
-                                                            {assoc.targetNodeName || assoc.targetNode}
-                                                        </span>
-                                                        <select
-                                                            value={assoc.relationType}
-                                                            onChange={(e) => changeAssociationType(index, e.target.value)}
-                                                            className="assoc-type-select"
-                                                        >
-                                                            <option value="contains">包含</option>
-                                                            <option value="extends">拓展</option>
-                                                        </select>
-                                                    </div>
-                                                    <button
-                                                        onClick={() => removeEditAssociation(index)}
-                                                        className="btn-action btn-delete-small"
-                                                    >
-                                                        删除
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <p className="empty-message">暂无关联</p>
-                                    )}
-                                </div>
-                            </div>
-
-                            <div className="modal-footer">
-                                <button
-                                    className="btn btn-secondary"
-                                    onClick={() => setShowEditAssociationModal(false)}
-                                >
-                                    取消
-                                </button>
-                                <button
-                                    className="btn btn-primary"
-                                    onClick={saveAssociationEdit}
-                                >
-                                    保存
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
 
                 {/* 节点详细信息模态框 */}
                 {showNodeInfoModal && currentNodeDetail && (
@@ -4102,105 +2534,7 @@ const App = () => {
                     </div>
                 )}
 
-                {/* 更换域主弹窗 */}
-                {showChangeMasterModal && changingMasterNode && (
-                    <div className="modal-backdrop" onClick={() => setShowChangeMasterModal(false)}>
-                        <div className="modal-content change-master-modal" onClick={(e) => e.stopPropagation()}>
-                            <div className="modal-header">
-                                <h2>更换域主</h2>
-                                <button
-                                    className="modal-close"
-                                    onClick={() => setShowChangeMasterModal(false)}
-                                >
-                                    <X size={24} />
-                                </button>
-                            </div>
 
-                            <div className="modal-body">
-                                <div className="change-master-info">
-                                    <p><strong>节点:</strong> {changingMasterNode.name}</p>
-                                    <p><strong>当前域主:</strong> {changingMasterNode.domainMaster?.username || '(未设置)'}</p>
-                                </div>
-
-                                {/* 搜索用户 */}
-                                <div className="form-group">
-                                    <label>搜索用户</label>
-                                    <input
-                                        type="text"
-                                        value={masterSearchKeyword}
-                                        onChange={(e) => {
-                                            setMasterSearchKeyword(e.target.value);
-                                            searchUsersForMaster(e.target.value);
-                                        }}
-                                        placeholder="输入用户名搜索..."
-                                        className="form-input"
-                                    />
-                                </div>
-
-                                {/* 搜索结果列表 */}
-                                <div className="user-search-results">
-                                    <h4>选择新域主:</h4>
-                                    <div className="user-list">
-                                        {masterSearchResults.length > 0 ? (
-                                            masterSearchResults.map((user) => (
-                                                <div
-                                                    key={user._id}
-                                                    className={`user-item ${selectedNewMaster?._id === user._id ? 'selected' : ''}`}
-                                                    onClick={() => setSelectedNewMaster(user)}
-                                                >
-                                                    <div className="user-info">
-                                                        <span className="user-name">{user.username}</span>
-                                                        <span className="user-meta">Lv.{user.level} | {user.role === 'admin' ? '管理员' : '普通用户'}</span>
-                                                    </div>
-                                                    {selectedNewMaster?._id === user._id && (
-                                                        <Check className="check-icon" size={20} />
-                                                    )}
-                                                </div>
-                                            ))
-                                        ) : (
-                                            <p className="no-results">没有找到用户</p>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* 显示选中的新域主 */}
-                                <div className="selected-master-display">
-                                    <h4>新域主:</h4>
-                                    {selectedNewMaster ? (
-                                        <div className="selected-master-card">
-                                            <span className="master-name">{selectedNewMaster.username}</span>
-                                            <span className="master-level">Lv.{selectedNewMaster.level}</span>
-                                            <button
-                                                onClick={() => setSelectedNewMaster(null)}
-                                                className="btn-remove-selection"
-                                                title="清除选择"
-                                            >
-                                                <X size={16} />
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <p className="no-selection">(未选择，将清除域主)</p>
-                                    )}
-                                </div>
-                            </div>
-
-                            <div className="modal-footer">
-                                <button
-                                    className="btn btn-secondary"
-                                    onClick={() => setShowChangeMasterModal(false)}
-                                >
-                                    取消
-                                </button>
-                                <button
-                                    className="btn btn-primary"
-                                    onClick={confirmChangeMaster}
-                                >
-                                    确定
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                )}
             </div>
         </div>
     );

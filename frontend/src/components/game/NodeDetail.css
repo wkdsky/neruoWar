@@ -1,0 +1,141 @@
+/* ===== 节点详情页面样式 ===== */
+.node-detail-container {
+    min-height: calc(100vh - 120px);
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    margin-left: 200px;
+}
+
+/* ===== 悬浮导航栏样式 ===== */
+.navigation-sidebar {
+    position: fixed;
+    left: 1rem;
+    top: 160px;
+    width: 180px;
+    background: rgba(30, 41, 59, 0.95);
+    border-radius: 12px;
+    border: 2px solid rgba(168, 85, 247, 0.5);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    padding: 1rem;
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+    z-index: 100;
+    animation: slideInLeft 0.3s ease-out;
+}
+
+/* 导航栏标题 */
+.navigation-header {
+    margin-bottom: 1rem;
+}
+
+.navigation-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #a855f7;
+    margin: 0 0 0.5rem 0;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.navigation-divider {
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(168, 85, 247, 0.5), transparent);
+    margin-bottom: 0.75rem;
+}
+
+.nav-item {
+    background: rgba(51, 65, 85, 0.6);
+    border-radius: 8px;
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    transition: all 0.3s ease;
+    border: 2px solid transparent;
+}
+
+.nav-item.clickable {
+    cursor: pointer;
+}
+
+.nav-item.clickable:hover {
+    background: rgba(168, 85, 247, 0.2);
+    border-color: rgba(168, 85, 247, 0.5);
+    transform: translateX(4px);
+}
+
+/* 省略项特殊样式 */
+.nav-item.omit-item {
+    background: linear-gradient(135deg, rgba(251, 191, 36, 0.2) 0%, rgba(245, 158, 11, 0.2) 100%);
+    border-color: rgba(251, 191, 36, 0.5);
+}
+
+.nav-item.omit-item:hover {
+    background: linear-gradient(135deg, rgba(251, 191, 36, 0.3) 0%, rgba(245, 158, 11, 0.3) 100%);
+    border-color: rgba(251, 191, 36, 0.7);
+    transform: translateX(4px);
+}
+
+.nav-item.omit-item .nav-label {
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.nav-item.active {
+    background: rgba(168, 85, 247, 0.3);
+    border-color: #a855f7;
+    box-shadow: 0 0 15px rgba(168, 85, 247, 0.4);
+}
+
+.nav-label {
+    color: #e9d5ff;
+    font-size: 0.9rem;
+    font-weight: 500;
+    display: block;
+    word-break: break-word;
+    line-height: 1.4;
+}
+
+.nav-arrow {
+    text-align: center;
+    color: #a855f7;
+    font-size: 1.2rem;
+    margin: 0.25rem 0;
+    font-weight: bold;
+}
+
+/* 二叉树分支样式 */
+.nav-branch {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.nav-item.branch-item {
+    flex: 1;
+    padding: 0.5rem;
+    font-size: 0.85rem;
+    margin-bottom: 0;
+}
+
+.nav-item.branch-item .nav-label {
+    font-size: 0.8rem;
+}
+
+.navigation-sidebar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.navigation-sidebar::-webkit-scrollbar-track {
+    background: rgba(30, 41, 59, 0.5);
+    border-radius: 3px;
+}
+
+.navigation-sidebar::-webkit-scrollbar-thumb {
+    background: rgba(168, 85, 247, 0.5);
+    border-radius: 3px;
+}
+
+.navigation-sidebar::-webkit-scrollbar-thumb:hover {
+    background: rgba(168, 85, 247, 0.7);
+}
