@@ -205,7 +205,7 @@ const App = () => {
             initializeSocket();
         }
     
-        const newSocket = io('http://192.168.1.96:5000', {
+        const newSocket = io('http://localhost:5000', {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
@@ -282,7 +282,7 @@ const App = () => {
     const token = localStorage.getItem('token');
     try {
       console.log('正在更新location:', location);
-      const response = await fetch('http://192.168.1.96:5000/api/location', {
+      const response = await fetch('http://localhost:5000/api/location', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -346,14 +346,14 @@ const App = () => {
     }
 
     try {
-      const response = await fetch(`http://192.168.1.96:5000/api/nodes/public/search?query=${encodeURIComponent(locationName)}`);
+      const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(locationName)}`);
       if (response.ok) {
         const data = await response.json();
         // 精确匹配节点名称
         const exactMatch = data.results.find(node => node.name === locationName);
         if (exactMatch) {
           // 获取完整的节点详情
-          const detailResponse = await fetch(`http://192.168.1.96:5000/api/nodes/public/node-detail/${exactMatch._id}`);
+          const detailResponse = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${exactMatch._id}`);
           if (detailResponse.ok) {
             const detailData = await detailResponse.json();
             setCurrentLocationNodeDetail(detailData.node);
@@ -410,7 +410,7 @@ const App = () => {
             socketRef.current = null;
         }
     
-        const newSocket = io('http://192.168.1.96:5000', {
+        const newSocket = io('http://localhost:5000', {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
@@ -519,7 +519,7 @@ const App = () => {
         if (!token) return;
     
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/admin/users', {
+            const response = await fetch('http://localhost:5000/api/admin/users', {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -538,7 +538,7 @@ const App = () => {
     // 获取根节点
     const fetchRootNodes = async () => {
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/public/root-nodes');
+            const response = await fetch('http://localhost:5000/api/nodes/public/root-nodes');
             if (response.ok) {
                 const data = await response.json();
                 setRootNodes(data.nodes);
@@ -551,7 +551,7 @@ const App = () => {
     // 获取热门节点
     const fetchFeaturedNodes = async () => {
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/public/featured-nodes');
+            const response = await fetch('http://localhost:5000/api/nodes/public/featured-nodes');
             if (response.ok) {
                 const data = await response.json();
                 setFeaturedNodes(data.nodes);
@@ -565,7 +565,7 @@ const App = () => {
     const buildPathsToRoot = async (nodeId) => {
         try {
             // 使用公开API端点，所有用户都可以访问
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/public/all-nodes');
+            const response = await fetch('http://localhost:5000/api/nodes/public/all-nodes');
 
             if (!response.ok) return [];
 
@@ -744,7 +744,7 @@ const App = () => {
     // 获取节点详情
     const fetchNodeDetail = async (nodeId, clickedNode = null) => {
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/public/node-detail/${nodeId}`);
+            const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}`);
             if (response.ok) {
                 const data = await response.json();
                 setCurrentNodeDetail(data.node);
@@ -782,7 +782,7 @@ const App = () => {
 
         setIsSearching(true);
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/public/search?query=${encodeURIComponent(query)}`);
+            const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(query)}`);
             if (response.ok) {
                 const data = await response.json();
                 setHomeSearchResults(data.results);
@@ -1291,7 +1291,7 @@ const App = () => {
         setSearchLoading(true);
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/search?keyword=${encodeURIComponent(searchKeyword)}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(searchKeyword)}`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -1377,7 +1377,7 @@ const App = () => {
             const x = Math.random() * 700 + 50;
             const y = Math.random() * 400 + 50;
 
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/create', {
+            const response = await fetch('http://localhost:5000/api/nodes/create', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1418,7 +1418,7 @@ const App = () => {
     // 获取所有熵盟列表
     const fetchAlliances = async () => {
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/list');
+            const response = await fetch('http://localhost:5000/api/alliances/list');
             if (response.ok) {
                 const data = await response.json();
                 setAlliances(data.alliances);
@@ -1434,7 +1434,7 @@ const App = () => {
         if (!token) return;
 
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/my/info', {
+            const response = await fetch('http://localhost:5000/api/alliances/my/info', {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -1451,7 +1451,7 @@ const App = () => {
     // 获取单个熵盟详情
     const fetchAllianceDetail = async (allianceId) => {
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/alliances/${allianceId}`);
+            const response = await fetch(`http://localhost:5000/api/alliances/${allianceId}`);
             if (response.ok) {
                 const data = await response.json();
                 setSelectedAlliance(data);
@@ -1473,7 +1473,7 @@ const App = () => {
         }
 
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/create', {
+            const response = await fetch('http://localhost:5000/api/alliances/create', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1503,7 +1503,7 @@ const App = () => {
         const token = localStorage.getItem('token');
 
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/alliances/join/${allianceId}`, {
+            const response = await fetch(`http://localhost:5000/api/alliances/join/${allianceId}`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`
@@ -1532,7 +1532,7 @@ const App = () => {
         const token = localStorage.getItem('token');
 
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/leave', {
+            const response = await fetch('http://localhost:5000/api/alliances/leave', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`
@@ -1582,7 +1582,7 @@ const App = () => {
 
         try {
             // 获取所有节点以便根据名称查找ID
-            const response = await fetch('http://192.168.1.96:5000/api/nodes', {
+            const response = await fetch('http://localhost:5000/api/nodes', {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -1657,7 +1657,7 @@ const App = () => {
 
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/search?keyword=${encodeURIComponent(keyword)}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(keyword)}`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -1725,7 +1725,7 @@ const App = () => {
         const token = localStorage.getItem('token');
 
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${editingAssociationNode._id}/associations`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/${editingAssociationNode._id}/associations`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',

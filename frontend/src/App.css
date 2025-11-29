@@ -84,7 +84,7 @@ body {
 /* 头部 */
 .header {
     position: relative;
-    z-index: 50;
+    z-index: 1;
     background: rgba(30, 41, 59, 0.9);
     border-radius: 12px;
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
@@ -2884,6 +2884,7 @@ body {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
+    z-index: 100;
 }
 
 /* 位置选择搜索栏 */

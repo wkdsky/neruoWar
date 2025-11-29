@@ -21,7 +21,7 @@ const server = http.createServer(app);
 // 初始化Socket.IO
 const io = socketIo(server, {
   cors: {
-    origin: ["http://localhost:3000", "http://192.168.1.96:3000"],
+    origin: ["http://localhost:3000"],
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -33,7 +33,7 @@ const io = socketIo(server, {
 
 // 中间件
 app.use(cors({
-  origin: ["http://localhost:3000", "http://192.168.1.96:3000"],
+  origin: ["http://localhost:3000"],
   credentials: true
 }));
 app.use(express.json());

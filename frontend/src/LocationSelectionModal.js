@@ -20,7 +20,7 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
 
         setIsSearching(true);
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/public/search?query=${encodeURIComponent(query)}`);
+            const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(query)}`);
             if (response.ok) {
                 const data = await response.json();
                 setSearchResults(data.results);
@@ -51,7 +51,7 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
     const fetchLocationTree = async (nodeId) => {
         try {
             // 使用公开API端点，所有用户都可以访问
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/public/all-nodes');
+            const response = await fetch('http://localhost:5000/api/nodes/public/all-nodes');
 
             if (!response.ok) return null;
 
@@ -355,7 +355,7 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
                 if (nodePos.id !== 'home') {
                     // 点击了一个节点，获取其完整信息并选中
                     try {
-                        const response = await fetch(`http://192.168.1.96:5000/api/nodes/public/node-detail/${nodePos.id}`);
+                        const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodePos.id}`);
                         if (response.ok) {
                             const data = await response.json();
                             setSelectedNode(data.node);

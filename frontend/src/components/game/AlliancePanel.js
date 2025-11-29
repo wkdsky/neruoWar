@@ -21,7 +21,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
 
     const fetchAlliances = async () => {
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/list');
+            const response = await fetch('http://localhost:5000/api/alliances/list');
             if (response.ok) {
                 const data = await response.json();
                 setAlliances(data.alliances);
@@ -34,7 +34,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
     const fetchUserAlliance = async () => {
         if (!token) return;
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/my/info', {
+            const response = await fetch('http://localhost:5000/api/alliances/my/info', {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -50,7 +50,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
 
     const fetchAllianceDetail = async (allianceId) => {
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/alliances/${allianceId}`);
+            const response = await fetch(`http://localhost:5000/api/alliances/${allianceId}`);
             if (response.ok) {
                 const data = await response.json();
                 setSelectedAlliance(data);
@@ -68,7 +68,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
             return;
         }
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/create', {
+            const response = await fetch('http://localhost:5000/api/alliances/create', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -94,7 +94,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
 
     const joinAlliance = async (allianceId) => {
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/alliances/join/${allianceId}`, {
+            const response = await fetch(`http://localhost:5000/api/alliances/join/${allianceId}`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`
@@ -118,7 +118,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
     const leaveAlliance = async () => {
         if (!window.confirm('确定要退出当前熵盟吗？')) return;
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/leave', {
+            const response = await fetch('http://localhost:5000/api/alliances/leave', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`

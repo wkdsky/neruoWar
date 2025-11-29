@@ -66,7 +66,7 @@ const AdminPanel = () => {
     const fetchAllUsers = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/admin/users', {
+            const response = await fetch('http://localhost:5000/api/admin/users', {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -91,7 +91,7 @@ const AdminPanel = () => {
     const saveUserEdit = async (userId) => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/admin/users/${userId}`, {
+            const response = await fetch(`http://localhost:5000/api/admin/users/${userId}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -117,7 +117,7 @@ const AdminPanel = () => {
         if (!window.confirm(`确定要删除用户 ${username} 吗？`)) return;
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/admin/users/${userId}`, {
+            const response = await fetch(`http://localhost:5000/api/admin/users/${userId}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -138,7 +138,7 @@ const AdminPanel = () => {
     const fetchPendingNodes = async () => {
         try {
             const token = localStorage.getItem('token');
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/pending', {
+            const response = await fetch('http://localhost:5000/api/nodes/pending', {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -153,7 +153,7 @@ const AdminPanel = () => {
     const approveNode = async (nodeId) => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/approve', {
+            const response = await fetch('http://localhost:5000/api/nodes/approve', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -178,7 +178,7 @@ const AdminPanel = () => {
     const rejectNode = async (nodeId) => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/nodes/reject', {
+            const response = await fetch('http://localhost:5000/api/nodes/reject', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -202,7 +202,7 @@ const AdminPanel = () => {
     const fetchAllNodes = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/nodes', {
+            const response = await fetch('http://localhost:5000/api/nodes', {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -237,7 +237,7 @@ const AdminPanel = () => {
     const saveNodeEdit = async (nodeId) => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -263,7 +263,7 @@ const AdminPanel = () => {
         if (!window.confirm(`确定要删除节点 "${nodeName}" 吗？此操作不可撤销！`)) return;
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -293,7 +293,7 @@ const AdminPanel = () => {
         }
 
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${nodeId}/featured`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/featured`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -344,7 +344,7 @@ const AdminPanel = () => {
         }
 
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/nodes', {
+            const response = await fetch('http://localhost:5000/api/nodes', {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
 
@@ -390,7 +390,7 @@ const AdminPanel = () => {
         }
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/search?keyword=${encodeURIComponent(keyword)}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(keyword)}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -430,7 +430,7 @@ const AdminPanel = () => {
     const saveAssociationEdit = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/${editingAssociationNode._id}/associations`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/${editingAssociationNode._id}/associations`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -462,7 +462,7 @@ const AdminPanel = () => {
     const fetchAdminAlliances = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://192.168.1.96:5000/api/alliances/admin/all', {
+            const response = await fetch('http://localhost:5000/api/alliances/admin/all', {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -491,7 +491,7 @@ const AdminPanel = () => {
     const saveAllianceEdit = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/alliances/admin/${editingAlliance._id}`, {
+            const response = await fetch(`http://localhost:5000/api/alliances/admin/${editingAlliance._id}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -518,7 +518,7 @@ const AdminPanel = () => {
         if (!window.confirm(`确定要删除熵盟 "${allianceName}" 吗？此操作将清除所有成员的熵盟关联！`)) return;
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/alliances/admin/${allianceId}`, {
+            const response = await fetch(`http://localhost:5000/api/alliances/admin/${allianceId}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -540,7 +540,7 @@ const AdminPanel = () => {
     const searchUsersForMaster = async (keyword) => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/admin/search-users?keyword=${keyword}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/admin/search-users?keyword=${keyword}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -564,7 +564,7 @@ const AdminPanel = () => {
     const confirmChangeMaster = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://192.168.1.96:5000/api/nodes/admin/domain-master/${changingMasterNode._id}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/admin/domain-master/${changingMasterNode._id}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
