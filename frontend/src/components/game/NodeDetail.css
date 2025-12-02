@@ -139,3 +139,110 @@
 .navigation-sidebar::-webkit-scrollbar-thumb:hover {
     background: rgba(168, 85, 247, 0.7);
 }
+
+.node-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    background: transparent;
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: none;
+}
+
+.detail-title {
+    color: #e9d5ff;
+    font-size: 2rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.node-detail-canvas {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+}
+
+/* 科技区域 */
+.tech-section {
+    background: rgba(30, 41, 59, 0.9);
+    border-radius: 12px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+    padding: 1.5rem;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+    animation: fadeIn 0.5s ease-out;
+}
+
+.section-title-large {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: white;
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.tech-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+}
+
+@media (min-width: 768px) {
+    .tech-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+.tech-card {
+    background: rgba(51, 65, 85, 0.6);
+    border-radius: 8px;
+    padding: 1rem;
+    border: 1px solid #475569;
+    transition: all 0.3s ease;
+}
+
+.tech-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(168, 85, 247, 0.3);
+    border-color: #a855f7;
+}
+
+.tech-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.tech-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.tech-icon {
+    font-size: 2rem;
+}
+
+.tech-name {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: white;
+}
+
+.tech-level {
+    font-size: 0.875rem;
+    color: #9ca3af;
+}
+
+.tech-effects {
+    margin-top: 0.75rem;
+    font-size: 0.875rem;
+    color: #d1d5db;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}

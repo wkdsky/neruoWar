@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Zap, Shield, X } from 'lucide-react';
+import { Shield, Users, Zap } from 'lucide-react';
 import '../../App.css'; 
+import AllianceDetailModal from '../modals/AllianceDetailModal';
+import CreateAllianceModal from '../modals/CreateAllianceModal';
 
 const AlliancePanel = ({ username, token, isAdmin }) => {
     const [alliances, setAlliances] = useState([]);
@@ -8,11 +10,6 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
     const [selectedAlliance, setSelectedAlliance] = useState(null);
     const [showAllianceDetailModal, setShowAllianceDetailModal] = useState(false);
     const [showCreateAllianceModal, setShowCreateAllianceModal] = useState(false);
-    const [newAllianceData, setNewAllianceData] = useState({
-        name: '',
-        flag: '#7c3aed',
-        declaration: ''
-    });
 
     useEffect(() => {
         fetchAlliances();
@@ -61,12 +58,8 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
         }
     };
 
-    const createAlliance = async () => {
-        const { name, flag, declaration } = newAllianceData;
-        if (!name.trim() || !declaration.trim()) {
-            alert('请填写所有必填字段');
-            return;
-        }
+    const createAlliance = async (allianceData) => {
+        const { name, flag, declaration } = allianceData;
         try {
             const response = await fetch('http://localhost:5000/api/alliances/create', {
                 method: 'POST',
@@ -80,7 +73,6 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
             if (response.ok) {
                 alert('熵盟创建成功！');
                 setShowCreateAllianceModal(false);
-                setNewAllianceData({ name: '', flag: '#7c3aed', declaration: '' });
                 fetchAlliances();
                 fetchUserAlliance();
             } else {
@@ -211,157 +203,22 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
             </div>
 
             {/* 熵盟详情弹窗 */}
-            {showAllianceDetailModal && selectedAlliance && (
-                <div className="modal-backdrop" onClick={() => setShowAllianceDetailModal(false)}>
-                    <div className="modal-content alliance-detail-modal" onClick={(e) => e.stopPropagation()}>
-                        <div className="modal-header">
-                            <h2>熵盟详情</h2>
-                            <button className="modal-close" onClick={() => setShowAllianceDetailModal(false)}>
-                                <X size={24} />
-                            </button>
-                        </div>
-                        <div className="modal-body">
-                            <div className="alliance-detail-header">
-                                <div className="alliance-flag-huge" style={{ backgroundColor: selectedAlliance.alliance.flag }}></div>
-                                <div className="alliance-main-info">
-                                    <h2>{selectedAlliance.alliance.name}</h2>
-                                    <p className="declaration-text">{selectedAlliance.alliance.declaration}</p>
-                                    <div className="alliance-meta">
-                                        <span>创始人: {selectedAlliance.alliance.founder?.username || '未知'}</span>
-                                        <span>成立时间: {new Date(selectedAlliance.alliance.createdAt).toLocaleDateString('zh-CN')}</span>
-                                    </div>
-                                    <div className="alliance-stats-large">
-                                        <div className="stat-box">
-                                            <Users className="icon" />
-                                            <div>
-                                                <span className="stat-number">{selectedAlliance.alliance.memberCount}</span>
-                                                <span className="stat-label">成员</span>
-                                            </div>
-                                        </div>
-                                        <div className="stat-box">
-                                            <Zap className="icon" />
-                                            <div>
-                                                <span className="stat-number">{selectedAlliance.alliance.domainCount}</span>
-                                                <span className="stat-label">管辖域</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="alliance-section-detail">
-                                <h3>成员列表 ({selectedAlliance.members.length}人)</h3>
-                                <div className="members-list">
-                                    {selectedAlliance.members.map((member) => (
-                                        <div key={member._id} className="member-item">
-                                            <Users className="icon-small" />
-                                            <span className="member-name">{member.username}</span>
-                                            <span className="member-level">Lv.{member.level}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="alliance-section-detail">
-                                <h3>管辖知识域 ({selectedAlliance.domains.length}个)</h3>
-                                <div className="domains-list">
-                                    {selectedAlliance.domains.length > 0 ? (
-                                        selectedAlliance.domains.map((domain) => (
-                                            <div key={domain._id} className="domain-item">
-                                                <Zap className="icon-small" />
-                                                <div className="domain-info">
-                                                    <span className="domain-name">{domain.name}</span>
-                                                    <span className="domain-master">域主: {domain.domainMaster?.username || '暂无'}</span>
-                                                </div>
-                                            </div>
-                                        ))
-                                    ) : (
-                                        <p className="empty-message">该熵盟暂无管辖知识域</p>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                        <div className="modal-footer">
-                            {!isAdmin && (
-                                <>
-                                    {userAlliance && userAlliance._id === selectedAlliance.alliance._id ? (
-                                        <button className="btn btn-danger" onClick={leaveAlliance}>退出熵盟</button>
-                                    ) : !userAlliance ? (
-                                        <button className="btn btn-primary" onClick={() => joinAlliance(selectedAlliance.alliance._id)}>加入熵盟</button>
-                                    ) : null}
-                                </>
-                            )}
-                            <button className="btn btn-secondary" onClick={() => setShowAllianceDetailModal(false)}>关闭</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <AllianceDetailModal
+                isOpen={showAllianceDetailModal}
+                onClose={() => setShowAllianceDetailModal(false)}
+                selectedAlliance={selectedAlliance}
+                userAlliance={userAlliance}
+                onJoin={joinAlliance}
+                onLeave={leaveAlliance}
+                isAdmin={isAdmin}
+            />
 
             {/* 创建熵盟弹窗 */}
-            {showCreateAllianceModal && (
-                <div className="modal-backdrop" onClick={() => setShowCreateAllianceModal(false)}>
-                    <div className="modal-content create-alliance-modal" onClick={(e) => e.stopPropagation()}>
-                        <div className="modal-header">
-                            <h2>创立新熵盟</h2>
-                            <button className="modal-close" onClick={() => setShowCreateAllianceModal(false)}>
-                                <X size={24} />
-                            </button>
-                        </div>
-                        <div className="modal-body">
-                            <div className="form-group">
-                                <label>熵盟名称 *</label>
-                                <input
-                                    type="text"
-                                    value={newAllianceData.name}
-                                    onChange={(e) => setNewAllianceData({ ...newAllianceData, name: e.target.value })}
-                                    placeholder="输入熵盟名称"
-                                    className="form-input"
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label>熵盟旗帜（颜色） *</label>
-                                <div className="color-picker-group">
-                                    <input
-                                        type="color"
-                                        value={newAllianceData.flag}
-                                        onChange={(e) => setNewAllianceData({ ...newAllianceData, flag: e.target.value })}
-                                        className="color-picker"
-                                    />
-                                    <div className="flag-preview" style={{ backgroundColor: newAllianceData.flag }}>
-                                        <span>预览</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="form-group">
-                                <label>熵盟号召（势力宣言） *</label>
-                                <textarea
-                                    value={newAllianceData.declaration}
-                                    onChange={(e) => setNewAllianceData({ ...newAllianceData, declaration: e.target.value })}
-                                    placeholder="输入熵盟的号召或宣言..."
-                                    rows="4"
-                                    className="form-textarea"
-                                />
-                            </div>
-                            <div className="create-alliance-info">
-                                <p><strong>注意：</strong></p>
-                                <ul>
-                                    <li>创建熵盟需要至少是一个知识域的域主</li>
-                                    <li>创建成功后，您将自动成为该熵盟的成员</li>
-                                    <li>每个用户只能属于一个熵盟</li>
-                                </ul>
-                            </div>
-                        </div>
-                        <div className="modal-footer">
-                            <button className="btn btn-secondary" onClick={() => setShowCreateAllianceModal(false)}>取消</button>
-                            <button
-                                className="btn btn-primary"
-                                onClick={createAlliance}
-                                disabled={!newAllianceData.name.trim() || !newAllianceData.declaration.trim()}
-                            >
-                                创立熵盟
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <CreateAllianceModal
+                isOpen={showCreateAllianceModal}
+                onClose={() => setShowCreateAllianceModal(false)}
+                onCreate={createAlliance}
+            />
         </div>
     );
 };

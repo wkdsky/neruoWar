@@ -1,0 +1,58 @@
+
+/* Create Alliance Modal Specific Styles */
+
+.create-alliance-modal {
+    max-width: 600px;
+}
+
+.color-picker-group {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.color-picker {
+    width: 80px;
+    height: 50px;
+    border: 2px solid rgba(168, 85, 247, 0.3);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.flag-preview {
+    flex: 1;
+    height: 80px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
+    font-size: 1.2rem;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.create-alliance-info {
+    background: rgba(251, 191, 36, 0.1);
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 1rem;
+}
+
+.create-alliance-info p {
+    margin: 0 0 0.5rem 0;
+    color: #fbbf24;
+    font-weight: bold;
+}
+
+.create-alliance-info ul {
+    margin: 0;
+    padding-left: 1.5rem;
+    color: #cbd5e1;
+}
+
+.create-alliance-info li {
+    margin-bottom: 0.25rem;
+}

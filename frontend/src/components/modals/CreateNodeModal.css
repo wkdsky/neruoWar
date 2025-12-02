@@ -1,0 +1,168 @@
+.create-node-modal {
+    max-width: 600px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+/* 节点创建信息显示样式 */
+.node-creation-info {
+    background: rgba(168, 85, 247, 0.1);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.info-row {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem 0;
+}
+
+.info-row:not(:last-child) {
+    border-bottom: 1px solid rgba(168, 85, 247, 0.15);
+}
+
+.info-label-display {
+    color: #9ca3af;
+    font-size: 0.875rem;
+    font-weight: 600;
+    min-width: 80px;
+}
+
+.info-value-display {
+    color: #e9d5ff;
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+/* 关联关系部分 */
+.associations-section {
+    border-top: 1px solid #475569;
+    padding-top: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.associations-section h4 {
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+}
+
+.search-section {
+    margin-bottom: 1.5rem;
+}
+
+.search-input-group {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.search-results {
+    background: rgba(51, 65, 85, 0.6);
+    border-radius: 8px;
+    padding: 0.75rem;
+    margin-bottom: 1rem;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.search-results h5 {
+    color: #9ca3af;
+    font-size: 0.875rem;
+    margin-bottom: 0.5rem;
+}
+
+.search-result-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    background: rgba(30, 41, 59, 0.8);
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    border: 1px solid transparent;
+}
+
+.search-result-item:hover {
+    background: rgba(30, 41, 59, 0.9);
+    border-color: #6366f1;
+}
+
+.search-result-item.selected {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: #3b82f6;
+}
+
+.selection-indicator {
+    color: #10b981;
+    font-weight: bold;
+    font-size: 1rem;
+}
+
+/* 关联类型选择 */
+.relation-type-section {
+    margin-bottom: 1rem;
+    padding: 1rem;
+    background: rgba(51, 65, 85, 0.6);
+    border-radius: 8px;
+}
+
+.relation-options {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: white;
+    font-size: 0.875rem;
+    cursor: pointer;
+}
+
+/* 关联关系列表 */
+.associations-list {
+    background: rgba(51, 65, 85, 0.6);
+    border-radius: 8px;
+    padding: 0.75rem;
+    margin-top: 1rem;
+}
+
+.association-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    background: rgba(30, 41, 59, 0.8);
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    border: 1px solid #475569;
+}
+
+.association-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.relation-type {
+    color: #10b981;
+    font-size: 0.75rem;
+    background: rgba(16, 185, 129, 0.2);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+}
+
+.search-status {
+    color: #9ca3af;
+    text-align: center;
+    padding: 1rem;
+    font-style: italic;
+}

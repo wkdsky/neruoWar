@@ -1,0 +1,78 @@
+/* ===== 完整导航树浮窗样式 ===== */
+.navigation-tree-modal {
+    max-width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+    background: rgba(30, 41, 59, 0.95);
+    border-radius: 12px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    border: 2px solid rgba(168, 85, 247, 0.5);
+}
+
+.navigation-tree-modal .modal-header {
+    border-bottom: 2px solid rgba(168, 85, 247, 0.3);
+    padding: 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.navigation-tree-modal .modal-header h2 {
+    color: #a855f7;
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0;
+}
+
+.btn-close {
+    background: none;
+    border: none;
+    color: #9ca3af;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+    transition: all 0.3s ease;
+}
+
+.btn-close:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+
+.navigation-tree-canvas-container {
+    padding: 1rem;
+    background: rgba(15, 23, 42, 0.5);
+    border-radius: 8px;
+    overflow: auto;
+    max-height: 70vh;
+}
+
+.navigation-tree-canvas {
+    display: block;
+    cursor: pointer;
+    margin: 0 auto;
+}
+
+/* 导航树滚动条 */
+.navigation-tree-canvas-container::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.navigation-tree-canvas-container::-webkit-scrollbar-track {
+    background: rgba(30, 41, 59, 0.5);
+    border-radius: 4px;
+}
+
+.navigation-tree-canvas-container::-webkit-scrollbar-thumb {
+    background: rgba(168, 85, 247, 0.5);
+    border-radius: 4px;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding: 1.5rem;
+    border-top: 1px solid #475569;
+}

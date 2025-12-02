@@ -702,7 +702,7 @@
 /* Search Container in Home */
 .search-container {
     position: absolute;
-    top: 80px;
+    top: 140px;
     left: 50%;
     transform: translateX(-50%);
     width: 600px;

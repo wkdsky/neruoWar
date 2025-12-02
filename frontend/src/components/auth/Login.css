@@ -86,3 +86,10 @@
     display: flex;
     gap: 0.75rem;
 }
+
+/* 响应式 */
+@media (max-width: 640px) {
+    .login-box {
+        padding: 1.5rem;
+    }
+}

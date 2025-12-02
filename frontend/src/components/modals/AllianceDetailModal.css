@@ -1,0 +1,182 @@
+
+/* Alliance Detail Modal Specific Styles */
+
+.alliance-detail-modal {
+    max-width: 800px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.alliance-detail-header {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 2rem;
+    padding-bottom: 2rem;
+    border-bottom: 2px solid rgba(168, 85, 247, 0.2);
+}
+
+@media (max-width: 768px) {
+    .alliance-detail-header {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        gap: 1rem;
+    }
+}
+
+.alliance-flag-huge {
+    width: 150px;
+    height: 150px;
+    border-radius: 12px;
+    flex-shrink: 0;
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+}
+
+.alliance-main-info {
+    flex: 1;
+}
+
+.alliance-main-info h2 {
+    margin: 0 0 1rem 0;
+    font-size: 2rem;
+    color: #e9d5ff;
+}
+
+.declaration-text {
+    color: #cbd5e1;
+    font-size: 1.05rem;
+    line-height: 1.6;
+    margin-bottom: 1rem;
+}
+
+.alliance-meta {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 1.5rem;
+    color: #9ca3af;
+    font-size: 0.9rem;
+}
+
+.alliance-stats-large {
+    display: flex;
+    gap: 2rem;
+}
+
+@media (max-width: 768px) {
+    .alliance-stats-large {
+        justify-content: center;
+    }
+    .alliance-meta {
+        justify-content: center;
+    }
+}
+
+.stat-box {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: rgba(168, 85, 247, 0.15);
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.stat-box .icon {
+    color: #a855f7;
+}
+
+.stat-number {
+    display: block;
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: #e9d5ff;
+}
+
+.stat-label {
+    display: block;
+    font-size: 0.85rem;
+    color: #c4b5fd;
+}
+
+.alliance-section-detail {
+    margin-bottom: 2rem;
+}
+
+.alliance-section-detail h3 {
+    margin: 0 0 1rem 0;
+    color: #e9d5ff;
+    font-size: 1.3rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(168, 85, 247, 0.2);
+}
+
+.members-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.75rem;
+}
+
+.member-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: rgba(51, 65, 85, 0.5);
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    border: 1px solid rgba(168, 85, 247, 0.2);
+}
+
+.member-name {
+    flex: 1;
+    color: #cbd5e1;
+    font-weight: 500;
+}
+
+.member-level {
+    color: #a5b4fc;
+    font-size: 0.85rem;
+    background: rgba(168, 85, 247, 0.2);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+}
+
+.domains-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.domain-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: rgba(51, 65, 85, 0.5);
+    padding: 1rem;
+    border-radius: 6px;
+    border: 1px solid rgba(168, 85, 247, 0.2);
+}
+
+.domain-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.domain-name {
+    color: #e9d5ff;
+    font-weight: 500;
+    font-size: 1.05rem;
+}
+
+.domain-master {
+    color: #a5b4fc;
+    font-size: 0.9rem;
+}
+
+.empty-message {
+    text-align: center;
+    color: #9ca3af;
+    font-style: italic;
+    padding: 2rem;
+}
