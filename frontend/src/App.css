@@ -223,6 +223,26 @@ body {
     background: #2563eb;
 }
 
+.btn-logout {
+    background: #ef4444;
+    color: white;
+}
+
+.btn-logout:hover {
+    background: #dc2626;
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.5);
+}
+
+.btn-warning {
+    background: #f59e0b;
+    color: white;
+}
+
+.btn-warning:hover {
+    background: #d97706;
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.5);
+}
+
 
 
 /* 图标 */

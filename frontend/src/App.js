@@ -868,16 +868,16 @@ const App = () => {
                             多节点策略系统
                         </h1>
                         <div className="header-right">
-                            <div className="user-info">
-                                <span className="user-name">当前用户: {username}</span>
+                            <div className="header-buttons">
+                                <span className="user-name" style={{marginRight: '1rem', display: 'flex', alignItems: 'center'}}>
+                                    当前用户: {username}
+                                </span>
                                 <button
                                     onClick={handleLogout}
                                     className="btn btn-logout"
                                 >
                                     退出登录
                                 </button>
-                            </div>
-                            <div className="header-buttons">
                                 <button
                                     onClick={() => {
                                         setView('home');

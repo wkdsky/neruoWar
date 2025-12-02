@@ -342,14 +342,14 @@
 .navigation-sidebar {
     position: fixed;
     left: 1rem;
-    top: 160px;
+    top: 140px;
     width: 180px;
     background: rgba(30, 41, 59, 0.95);
     border-radius: 12px;
     border: 2px solid rgba(168, 85, 247, 0.5);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     padding: 1rem;
-    max-height: calc(100vh - 140px);
+    max-height: calc(100vh - 160px);
     overflow-y: auto;
     z-index: 100;
     animation: slideInLeft 0.3s ease-out;
@@ -564,14 +564,14 @@
 .location-resident-sidebar {
     position: fixed;
     right: 1rem;
-    top: 160px;
+    top: 180px;
     width: 250px;
     background: rgba(30, 41, 59, 0.95);
     border-radius: 12px;
     border: 2px solid rgba(168, 85, 247, 0.5);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     padding: 1rem;
-    max-height: calc(100vh - 140px);
+    max-height: calc(100vh - 160px);
     overflow-y: auto;
     z-index: 100;
     animation: slideInRight 0.3s ease-out;
@@ -702,7 +702,7 @@
 /* Search Container in Home */
 .search-container {
     position: absolute;
-    top: 140px;
+    top: 120px;
     left: 50%;
     transform: translateX(-50%);
     width: 600px;

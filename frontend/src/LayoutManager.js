@@ -39,8 +39,11 @@ class LayoutManager {
 
     // 正常首页布局
 
+    // 整体下移偏移量
+    const yOffset = 70;
+
     // 根节点：网格布局
-    const rootStartY = this.height * 0.35;
+    const rootStartY = this.height * 0.35 + yOffset;
     const rootCols = Math.min(3, rootNodes.length);
     const rootSpacingX = Math.min(250, this.width * 0.25);
     const rootSpacingY = 180;
@@ -67,7 +70,7 @@ class LayoutManager {
     });
 
     // 热门节点：横向排列
-    const featuredY = this.height * 0.75;
+    const featuredY = this.height * 0.70 + yOffset;
     const featuredSpacing = 150;
     const featuredStartX = this.centerX - (featuredNodes.length - 1) * featuredSpacing / 2;
 
@@ -100,11 +103,14 @@ class LayoutManager {
       lines: []
     };
 
+    // 整体下移偏移量
+    const yOffset = 60;
+
     // 中心节点
     layout.nodes.push({
       id: `center-${centerNode._id}`,
       x: this.centerX,
-      y: this.centerY,
+      y: this.centerY + yOffset,
       radius: 80,
       scale: 1,
       opacity: 1,
@@ -122,7 +128,7 @@ class LayoutManager {
     parentNodes.forEach((node, index) => {
       const angle = Math.PI + (Math.PI / (parentNodes.length + 1)) * (index + 1);
       const x = this.centerX + Math.cos(angle) * parentDistance;
-      const y = this.centerY + Math.sin(angle) * parentDistance;
+      const y = this.centerY + yOffset + Math.sin(angle) * parentDistance;
 
       const nodeId = `parent-${node._id}`;
 
@@ -155,7 +161,7 @@ class LayoutManager {
     childNodes.forEach((node, index) => {
       const angle = (Math.PI / (childNodes.length + 1)) * (index + 1);
       const x = this.centerX + Math.cos(angle) * childDistance;
-      const y = this.centerY + Math.sin(angle) * childDistance;
+      const y = this.centerY + yOffset + Math.sin(angle) * childDistance;
 
       const nodeId = `child-${node._id}`;
 
