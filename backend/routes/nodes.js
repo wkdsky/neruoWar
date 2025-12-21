@@ -31,22 +31,38 @@ router.get('/search', authenticateToken, async (req, res) => {
 // 创建节点（普通用户需要申请，管理员直接创建）
 router.post('/create', authenticateToken, async (req, res) => {
   try {
-    const { name, description, position, associations } = req.body;
-    
+    const { name, description, position, associations, forceCreate } = req.body;
+
     // 验证必填字段
     if (!name || !description) {
       return res.status(400).json({ error: '标题和简介不能为空' });
     }
 
-    // 检查标题唯一性
-    const existingNode = await Node.findOne({ name });
-    if (existingNode) {
-      return res.status(400).json({ error: '节点标题必须唯一' });
+    // 检查标题唯一性（只检查已审核通过的节点）
+    const existingApprovedNode = await Node.findOne({ name, status: 'approved' });
+    if (existingApprovedNode) {
+      return res.status(400).json({ error: '该节点标题已被使用（已有同名的审核通过节点）' });
     }
 
     // 检查用户是否为管理员
     const user = await User.findById(req.user.userId);
     const isUserAdmin = user.role === 'admin';
+
+    // 如果是管理员，检查是否有同名的待审核节点
+    if (isUserAdmin && !forceCreate) {
+      const pendingNodesWithSameName = await Node.find({ name, status: 'pending' })
+        .populate('owner', 'username profession')
+        .populate('associations.targetNode', 'name');
+
+      if (pendingNodesWithSameName.length > 0) {
+        // 返回待审核节点信息，让管理员选择
+        return res.status(409).json({
+          error: 'PENDING_NODES_EXIST',
+          message: '已有用户提交了同名节点的申请，请先处理这些申请',
+          pendingNodes: pendingNodesWithSameName
+        });
+      }
+    }
 
     // 验证关联关系（普通用户必须至少有一个关联关系）
     if (!isUserAdmin && (!associations || associations.length === 0)) {
@@ -152,7 +168,7 @@ router.post('/create', authenticateToken, async (req, res) => {
 router.get('/pending', authenticateToken, isAdmin, async (req, res) => {
   try {
     const nodes = await Node.find({ status: 'pending' })
-      .populate('owner', 'username')
+      .populate('owner', 'username profession')
       .populate('associations.targetNode', 'name description');
     res.json(nodes);
   } catch (error) {
@@ -169,6 +185,12 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
 
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
+    }
+
+    // 检查是否已有同名的已审核节点
+    const existingApproved = await Node.findOne({ name: node.name, status: 'approved' });
+    if (existingApproved) {
+      return res.status(400).json({ error: '已存在同名的审核通过节点，无法批准此申请' });
     }
 
     // 填充关联母域和关联子域
@@ -193,6 +215,23 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     // 设置默认内容分数为1
     node.contentScore = 1;
     await node.save();
+
+    // 自动拒绝其他同名的待审核节点
+    const rejectedNodes = await Node.find({
+      name: node.name,
+      status: 'pending',
+      _id: { $ne: node._id }
+    }).populate('owner', 'username');
+
+    const rejectedInfo = [];
+    for (const rejectedNode of rejectedNodes) {
+      rejectedInfo.push({
+        id: rejectedNode._id,
+        owner: rejectedNode.owner?.username || '未知用户'
+      });
+      // 删除被拒绝的节点
+      await Node.findByIdAndDelete(rejectedNode._id);
+    }
 
     // 双向同步：更新被关联节点的relatedParentDomains和relatedChildDomains
     if (node.associations && node.associations.length > 0) {
@@ -221,7 +260,11 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
       $push: { ownedNodes: node._id }
     });
 
-    res.json(node);
+    res.json({
+      ...node.toObject(),
+      autoRejectedCount: rejectedInfo.length,
+      autoRejectedNodes: rejectedInfo
+    });
   } catch (error) {
     console.error('审批节点错误:', error);
     res.status(500).json({ error: '服务器错误' });
@@ -319,8 +362,8 @@ router.post('/reject-association', authenticateToken, async (req, res) => {
 router.get('/', authenticateToken, isAdmin, async (req, res) => {
   try {
     const nodes = await Node.find()
-      .populate('owner', 'username')
-      .populate('domainMaster', 'username')
+      .populate('owner', 'username profession')
+      .populate('domainMaster', 'username profession')
       .populate('associations.targetNode', 'name description')
       .sort({ createdAt: -1 });
     
@@ -348,13 +391,14 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
 
     // 更新字段
     if (name !== undefined) {
-      // 检查名称唯一性（排除当前节点）
-      const existingNode = await Node.findOne({ 
-        name, 
-        _id: { $ne: nodeId } 
+      // 检查名称唯一性（只检查已审核通过的节点，排除当前节点）
+      const existingNode = await Node.findOne({
+        name,
+        status: 'approved',
+        _id: { $ne: nodeId }
       });
       if (existingNode) {
-        return res.status(400).json({ error: '节点名称必须唯一' });
+        return res.status(400).json({ error: '该名称已被其他审核通过的节点使用' });
       }
       node.name = name;
     }
@@ -606,7 +650,7 @@ router.get('/public/root-nodes', async (req, res) => {
   try {
     // 查找所有已批准的节点
     const nodes = await Node.find({ status: 'approved' })
-      .populate('owner', 'username')
+      .populate('owner', 'username profession')
       .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore');
 
     // 过滤出根节点（没有母节点的节点）
@@ -632,7 +676,7 @@ router.get('/public/featured-nodes', async (req, res) => {
       status: 'approved',
       isFeatured: true
     })
-      .populate('owner', 'username')
+      .populate('owner', 'username profession')
       .sort({ featuredOrder: 1, createdAt: -1 })
       .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder');
 
@@ -664,7 +708,7 @@ router.get('/public/search', async (req, res) => {
 
     // 查找所有已批准的节点
     const allNodes = await Node.find({ status: 'approved' })
-      .populate('owner', 'username')
+      .populate('owner', 'username profession')
       .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore');
 
     // 计算匹配度
@@ -704,7 +748,7 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     const { nodeId } = req.params;
 
     const node = await Node.findById(nodeId)
-      .populate('owner', 'username')
+      .populate('owner', 'username profession')
       .select('name description owner relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
 
     if (!node) {
@@ -783,7 +827,7 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
       return res.json({
         success: true,
         message: '域主已清除',
-        node: await Node.findById(nodeId).populate('domainMaster', 'username')
+        node: await Node.findById(nodeId).populate('domainMaster', 'username profession')
       });
     }
 
@@ -798,7 +842,7 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
     await node.save();
 
     const updatedNode = await Node.findById(nodeId)
-      .populate('domainMaster', 'username');
+      .populate('domainMaster', 'username profession');
 
     res.json({
       success: true,

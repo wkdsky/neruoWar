@@ -37,7 +37,9 @@ const AllianceDetailModal = ({
                             <h2>{alliance.name}</h2>
                             <p className="declaration-text">{alliance.declaration}</p>
                             <div className="alliance-meta">
-                                <span>创始人: {alliance.founder?.username || '未知'}</span>
+                                <span>创始人: {alliance.founder?.username || '未知'}
+                                    {alliance.founder?.profession && ` 【${alliance.founder.profession}】`}
+                                </span>
                                 <span>成立时间: {new Date(alliance.createdAt).toLocaleDateString('zh-CN')}</span>
                             </div>
                             <div className="alliance-stats-large">
@@ -66,7 +68,10 @@ const AllianceDetailModal = ({
                             {members.map((member) => (
                                 <div key={member._id} className="member-item">
                                     <Users className="icon-small" />
-                                    <span className="member-name">{member.username}</span>
+                                    <span className="member-name">
+                                        {member.username}
+                                        {member.profession && ` 【${member.profession}】`}
+                                    </span>
                                     <span className="member-level">Lv.{member.level}</span>
                                 </div>
                             ))}
@@ -83,7 +88,10 @@ const AllianceDetailModal = ({
                                         <Zap className="icon-small" />
                                         <div className="domain-info">
                                             <span className="domain-name">{domain.name}</span>
-                                            <span className="domain-master">域主: {domain.domainMaster?.username || '暂无'}</span>
+                                            <span className="domain-master">
+                                                域主: {domain.domainMaster?.username || '暂无'}
+                                                {domain.domainMaster?.profession && ` 【${domain.domainMaster.profession}】`}
+                                            </span>
                                         </div>
                                     </div>
                                 ))

@@ -21,6 +21,7 @@ router.get('/users', authenticateToken, isAdmin, async (req, res) => {
       hashedPassword: user.password,  // 哈希密码（如果你想看）
       level: user.level,
       experience: user.experience,
+      profession: user.profession,
       ownedNodes: user.ownedNodes,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,

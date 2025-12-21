@@ -27,7 +27,10 @@ const NodeInfoModal = ({ isOpen, onClose, nodeDetail }) => {
                     <div className="node-info-grid">
                         <div className="info-item">
                             <span className="info-label">创建者</span>
-                            <span className="info-value">{nodeDetail.owner?.username || '系统'}</span>
+                            <span className="info-value">
+                                {nodeDetail.owner?.username || '系统'}
+                                {nodeDetail.owner?.profession && ` 【${nodeDetail.owner.profession}】`}
+                            </span>
                         </div>
                         <div className="info-item">
                             <span className="info-label">创建时间</span>

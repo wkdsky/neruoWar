@@ -18,6 +18,7 @@ const App = () => {
     const [socket, setSocket] = useState(null);
     const [authenticated, setAuthenticated] = useState(false);
     const [username, setUsername] = useState('');
+    const [profession, setProfession] = useState('');
     const [nodes, setNodes] = useState([]);
     const [technologies, setTechnologies] = useState([]);
     const [view, setView] = useState('login');
@@ -30,10 +31,12 @@ const App = () => {
         const token = localStorage.getItem('token');
         const storedUsername = localStorage.getItem('username');
         const storedLocation = localStorage.getItem('userLocation');
+        const storedProfession = localStorage.getItem('profession');
 
         if (token && storedUsername) {
             setAuthenticated(true);
             setUsername(storedUsername);
+            setProfession(storedProfession || '');
             setUserLocation(storedLocation || '');
 
             // 如果location为空，需要显示位置选择弹窗
@@ -221,8 +224,10 @@ const App = () => {
     localStorage.setItem('token', data.token);
     localStorage.setItem('username', data.username);
     localStorage.setItem('userLocation', data.location || '');
+    localStorage.setItem('profession', data.profession || '求知');
     setAuthenticated(true);
     setUsername(data.username);
+    setProfession(data.profession || '求知');
     setUserLocation(data.location || '');
 
     // 重新初始化socket连接（连接事件中会处理认证）
@@ -349,8 +354,10 @@ const App = () => {
         localStorage.removeItem('token');
         localStorage.removeItem('username');
         localStorage.removeItem('userLocation');
+        localStorage.removeItem('profession');
         setAuthenticated(false);
         setUsername('');
+        setProfession('');
         setView('login');
         setIsAdmin(false);
         setUserLocation('');
@@ -870,7 +877,7 @@ const App = () => {
                         <div className="header-right">
                             <div className="header-buttons">
                                 <span className="user-name" style={{marginRight: '1rem', display: 'flex', alignItems: 'center'}}>
-                                    当前用户: {username}
+                                    当前用户: {username} {profession && `【${profession}】`}
                                 </span>
                                 <button
                                     onClick={handleLogout}
@@ -999,12 +1006,13 @@ const App = () => {
                 />
 
                 {showCreateNodeModal && (
-                    <CreateNodeModal 
+                    <CreateNodeModal
                         isOpen={showCreateNodeModal}
                         onClose={() => setShowCreateNodeModal(false)}
                         username={username}
                         isAdmin={isAdmin}
                         existingNodes={nodes}
+                        sceneManager={sceneManagerRef.current}
                         onSuccess={(newNode) => {
                             if (newNode) {
                                 setNodes(prev => [...prev, newNode]);

@@ -310,6 +310,301 @@ class LayoutManager {
 
     return transitions;
   }
+
+  // ==================== 关联关系预览布局计算 ====================
+
+  /**
+   * 计算关联关系预览布局
+   * @param {Object} newNodeData - 新节点数据 {name, description}
+   * @param {Object} nodeA - 第一个关联节点（包含 parentNodesInfo, childNodesInfo）
+   * @param {string} relationType - 'extends' | 'contains' | 'insert'
+   * @param {Object} nodeB - 第二个关联节点（仅 insert 模式，包含 node 和 direction）
+   * @param {Object} currentLayout - 当前布局
+   * @returns {Object} 预览布局配置
+   */
+  calculateAssociationPreviewLayout(newNodeData, nodeA, relationType, nodeB, currentLayout) {
+    // 整体下移偏移量
+    const yOffset = 60;
+
+    // 找到 nodeA 在当前布局中的位置
+    const nodeAInLayout = currentLayout.nodes.find(
+      n => n.data && n.data._id === nodeA._id
+    );
+
+    // 如果找不到 nodeA，使用中心位置
+    const nodeAPosition = nodeAInLayout
+      ? { x: nodeAInLayout.x, y: nodeAInLayout.y }
+      : { x: this.centerX, y: this.centerY + yOffset };
+
+    // 根据关系类型计算预览布局
+    if (relationType === 'insert' && nodeB) {
+      return this.calculateInsertPreviewLayout(newNodeData, nodeA, nodeB, currentLayout, nodeAPosition);
+    } else {
+      return this.calculateSimplePreviewLayout(newNodeData, nodeA, relationType, currentLayout, nodeAPosition);
+    }
+  }
+
+  /**
+   * 计算简单关联预览布局（新节点直接作为 nodeA 的母域或子域）
+   */
+  calculateSimplePreviewLayout(newNodeData, nodeA, relationType, currentLayout, nodeAPosition) {
+    const result = {
+      movements: [],
+      previewNode: null,
+      previewLines: []
+    };
+
+    const distance = 150;
+    const previewRadius = 45;
+
+    // 确定新节点位置
+    let previewX, previewY;
+    let lineColor;
+
+    if (relationType === 'extends') {
+      // 新节点作为 nodeA 的母域（上方）
+      // 需要检查 nodeA 已有的母域节点数量来确定位置
+      const existingParentCount = nodeA.parentNodesInfo?.length || 0;
+      const angle = Math.PI + (Math.PI / (existingParentCount + 2)) * (existingParentCount + 1);
+
+      previewX = nodeAPosition.x + Math.cos(angle) * distance;
+      previewY = nodeAPosition.y + Math.sin(angle) * distance;
+      lineColor = [0.06, 0.73, 0.51, 0.8]; // 绿色（母域连线）
+
+      // 如果有现有母域节点，需要移动它们以腾出空间
+      if (existingParentCount > 0 && currentLayout.nodes) {
+        const parentNodes = currentLayout.nodes.filter(n => n.type === 'parent');
+        const totalParents = existingParentCount + 1;
+
+        parentNodes.forEach((node, index) => {
+          const newAngle = Math.PI + (Math.PI / (totalParents + 1)) * (index + 1);
+          const newX = nodeAPosition.x + Math.cos(newAngle) * distance;
+          const newY = nodeAPosition.y + Math.sin(newAngle) * distance;
+
+          if (Math.abs(node.x - newX) > 5 || Math.abs(node.y - newY) > 5) {
+            result.movements.push({
+              id: node.id,
+              x: newX,
+              y: newY
+            });
+          }
+        });
+      }
+    } else {
+      // 新节点作为 nodeA 的子域（下方）
+      const existingChildCount = nodeA.childNodesInfo?.length || 0;
+      const angle = (Math.PI / (existingChildCount + 2)) * (existingChildCount + 1);
+
+      previewX = nodeAPosition.x + Math.cos(angle) * distance;
+      previewY = nodeAPosition.y + Math.sin(angle) * distance;
+      lineColor = [0.98, 0.75, 0.14, 0.8]; // 黄色（子域连线）
+
+      // 如果有现有子域节点，需要移动它们以腾出空间
+      if (existingChildCount > 0 && currentLayout.nodes) {
+        const childNodes = currentLayout.nodes.filter(n => n.type === 'child');
+        const totalChildren = existingChildCount + 1;
+
+        childNodes.forEach((node, index) => {
+          const newAngle = (Math.PI / (totalChildren + 1)) * (index + 1);
+          const newX = nodeAPosition.x + Math.cos(newAngle) * distance;
+          const newY = nodeAPosition.y + Math.sin(newAngle) * distance;
+
+          if (Math.abs(node.x - newX) > 5 || Math.abs(node.y - newY) > 5) {
+            result.movements.push({
+              id: node.id,
+              x: newX,
+              y: newY
+            });
+          }
+        });
+      }
+    }
+
+    // 设置预览节点
+    result.previewNode = {
+      x: previewX,
+      y: previewY,
+      radius: previewRadius,
+      scale: 1,
+      opacity: 0.75,
+      label: newNodeData.name || '新节点',
+      subLabel: '',
+      visible: true
+    };
+
+    // 设置预览连线（从 nodeA 到新节点）
+    const nodeAId = currentLayout.nodes.find(n => n.data && n.data._id === nodeA._id)?.id;
+    if (nodeAId) {
+      result.previewLines.push({
+        from: nodeAId,
+        to: 'preview-new-node',
+        color: lineColor,
+        isDashed: true,
+        isNew: true
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * 计算插入预览布局（新节点插入到 A 和 B 之间）
+   */
+  calculateInsertPreviewLayout(newNodeData, nodeA, nodeBConfig, currentLayout, nodeAPosition) {
+    const nodeB = nodeBConfig.node;
+    const direction = nodeBConfig.direction; // 'aToB' 或 'bToA'
+
+    const result = {
+      movements: [],
+      previewNode: null,
+      previewLines: []
+    };
+
+    // 找到 nodeB 在当前布局中的位置
+    const nodeBInLayout = currentLayout.nodes.find(
+      n => n.data && n.data._id === nodeB._id
+    );
+
+    if (!nodeBInLayout) {
+      // 如果找不到 nodeB，回退到简单布局
+      return this.calculateSimplePreviewLayout(
+        newNodeData,
+        nodeA,
+        direction === 'aToB' ? 'contains' : 'extends',
+        currentLayout,
+        nodeAPosition
+      );
+    }
+
+    const nodeBPosition = { x: nodeBInLayout.x, y: nodeBInLayout.y };
+
+    // 计算新节点位置（在 A 和 B 中间）
+    const midX = (nodeAPosition.x + nodeBPosition.x) / 2;
+    const midY = (nodeAPosition.y + nodeBPosition.y) / 2;
+
+    // 稍微偏移以避免完全重叠
+    const dx = nodeBPosition.x - nodeAPosition.x;
+    const dy = nodeBPosition.y - nodeAPosition.y;
+    const perpX = -dy * 0.15; // 垂直偏移
+    const perpY = dx * 0.15;
+
+    const previewX = midX + perpX;
+    const previewY = midY + perpY;
+
+    // 设置预览节点
+    result.previewNode = {
+      x: previewX,
+      y: previewY,
+      radius: 45,
+      scale: 1,
+      opacity: 0.75,
+      label: newNodeData.name || '新节点',
+      subLabel: '',
+      visible: true
+    };
+
+    // 获取节点 ID
+    const nodeALayoutNode = currentLayout.nodes.find(n => n.data && n.data._id === nodeA._id);
+    const nodeAId = nodeALayoutNode?.id;
+    const nodeBId = nodeBInLayout.id;
+
+    if (!nodeAId || !nodeBId) {
+      return result;
+    }
+
+    // 确定连线方向和颜色
+    // aToB: 新节点是 A 的子域，B 的母域
+    // bToA: 新节点是 B 的子域，A 的母域
+    const parentLineColor = [0.06, 0.73, 0.51, 0.8]; // 绿色
+    const childLineColor = [0.98, 0.75, 0.14, 0.8];  // 黄色
+
+    if (direction === 'aToB') {
+      // 新节点是 A 的子域 -> A 到新节点用黄线
+      // 新节点是 B 的母域 -> 新节点到 B 用绿线
+      result.previewLines.push({
+        from: nodeAId,
+        to: 'preview-new-node',
+        color: childLineColor,
+        isDashed: true,
+        isNew: true
+      });
+      result.previewLines.push({
+        from: 'preview-new-node',
+        to: nodeBId,
+        color: parentLineColor,
+        isDashed: true,
+        isNew: true
+      });
+    } else {
+      // 新节点是 B 的子域 -> B 到新节点用黄线
+      // 新节点是 A 的母域 -> 新节点到 A 用绿线
+      result.previewLines.push({
+        from: nodeBId,
+        to: 'preview-new-node',
+        color: childLineColor,
+        isDashed: true,
+        isNew: true
+      });
+      result.previewLines.push({
+        from: 'preview-new-node',
+        to: nodeAId,
+        color: parentLineColor,
+        isDashed: true,
+        isNew: true
+      });
+    }
+
+    // 标记原有的 A-B 连线为移除状态
+    const existingLine = currentLayout.lines.find(
+      l => (l.from === nodeAId && l.to === nodeBId) || (l.from === nodeBId && l.to === nodeAId)
+    );
+
+    if (existingLine) {
+      result.previewLines.push({
+        from: existingLine.from,
+        to: existingLine.to,
+        color: existingLine.color,
+        isRemoved: true
+      });
+    }
+
+    // 计算需要移动的节点（为新节点腾出空间）
+    // 将中间区域的节点稍微外移
+    const pushDistance = 30;
+    for (const node of currentLayout.nodes) {
+      if (node.id === nodeAId || node.id === nodeBId) continue;
+      if (!node.visible) continue;
+
+      const distToPreview = Math.sqrt(
+        Math.pow(node.x - previewX, 2) + Math.pow(node.y - previewY, 2)
+      );
+
+      // 如果节点太靠近预览位置，将其推开
+      if (distToPreview < 100) {
+        const angle = Math.atan2(node.y - previewY, node.x - previewX);
+        result.movements.push({
+          id: node.id,
+          x: node.x + Math.cos(angle) * pushDistance,
+          y: node.y + Math.sin(angle) * pushDistance
+        });
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * 获取节点的候选关联节点（用于插入选择）
+   * @param {Object} nodeA - 选中的节点A
+   * @returns {Object} { parents: [], children: [] }
+   */
+  getCandidateNodesForInsertion(nodeA) {
+    // 返回 nodeA 的母域和子域节点
+    return {
+      parents: nodeA.parentNodesInfo || [],
+      children: nodeA.childNodesInfo || []
+    };
+  }
 }
 
 export default LayoutManager;

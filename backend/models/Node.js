@@ -33,11 +33,12 @@ const NodeSchema = new mongoose.Schema({
     ref: 'User',
     default: null  // 默认为null，节点的域主
   },
-  name: { 
-    type: String, 
+  name: {
+    type: String,
     required: true,
-    trim: true,
-    unique: true
+    trim: true
+    // 注意：不再使用 unique 约束，改为在应用层检查
+    // 只有 approved 状态的节点名称需要唯一
   },
   description: {
     type: String,

@@ -137,7 +137,10 @@ const NodeColors = {
   child: { base: [0.98, 0.75, 0.14, 1], glow: [0.96, 0.62, 0.04, 1] },     // 黄色
   root: { base: [0.49, 0.23, 0.93, 1], glow: [0.66, 0.33, 0.97, 1] },      // 深紫
   featured: { base: [0.98, 0.55, 0.23, 1], glow: [0.96, 0.42, 0.13, 1] },  // 橙色
-  search: { base: [0.23, 0.51, 0.96, 1], glow: [0.15, 0.40, 0.85, 1] }     // 蓝色
+  search: { base: [0.23, 0.51, 0.96, 1], glow: [0.15, 0.40, 0.85, 1] },    // 蓝色
+  // 预览模式专用颜色
+  preview: { base: [0.56, 0.78, 0.95, 1], glow: [0.40, 0.65, 0.90, 1] },   // 浅蓝色（待插入节点）
+  previewAffected: { base: [0.70, 0.70, 0.70, 1], glow: [0.50, 0.50, 0.50, 1] } // 灰色（受影响节点）
 };
 
 class WebGLNodeRenderer {
@@ -165,6 +168,13 @@ class WebGLNodeRenderer {
     this.hoveredNode = null;
     this.selectedNode = null;
     this.onClick = null;
+
+    // 预览模式状态
+    this.previewMode = false;
+    this.previewNodes = new Map();   // 预览用的临时节点
+    this.previewLines = [];          // 预览用的临时连线
+    this.previewPulseTime = 0;       // 脉冲动画时间
+    this.savedState = null;          // 保存的原始状态（用于回滚）
 
     this.init();
   }
@@ -673,6 +683,490 @@ class WebGLNodeRenderer {
     this.render();
   }
 
+  // ==================== 预览模式方法 ====================
+
+  /**
+   * 进入预览模式 - 保存当前状态
+   */
+  enterPreviewMode() {
+    if (this.previewMode) return;
+
+    // 保存当前状态（深拷贝）
+    this.savedState = {
+      nodes: new Map(),
+      lines: [...this.lines]
+    };
+
+    for (const [id, node] of this.nodes) {
+      this.savedState.nodes.set(id, { ...node });
+    }
+
+    this.previewMode = true;
+    this.previewNodes.clear();
+    this.previewLines = [];
+    this.previewPulseTime = 0;
+
+    // 启动预览渲染循环
+    this.startPreviewRenderLoop();
+  }
+
+  /**
+   * 退出预览模式 - 恢复原始状态
+   */
+  exitPreviewMode() {
+    if (!this.previewMode) return;
+
+    // 停止预览渲染循环
+    if (this.previewRenderLoopId) {
+      cancelAnimationFrame(this.previewRenderLoopId);
+      this.previewRenderLoopId = null;
+    }
+
+    // 恢复保存的状态
+    if (this.savedState) {
+      this.nodes.clear();
+      for (const [id, node] of this.savedState.nodes) {
+        this.nodes.set(id, { ...node });
+      }
+      this.lines = [...this.savedState.lines];
+    }
+
+    this.previewMode = false;
+    this.previewNodes.clear();
+    this.previewLines = [];
+    this.savedState = null;
+
+    // 重新渲染
+    this.render();
+  }
+
+  /**
+   * 设置预览节点（新节点的临时表示）
+   */
+  setPreviewNode(id, config) {
+    const node = {
+      id,
+      x: config.x ?? 0,
+      y: config.y ?? 0,
+      radius: config.radius ?? 45,
+      scale: config.scale ?? 1,
+      rotation: config.rotation ?? 0,
+      opacity: config.opacity ?? 0.7,
+      visible: config.visible ?? true,
+      type: 'preview',
+      label: config.label ?? '新节点',
+      subLabel: config.subLabel ?? '',
+      data: config.data ?? null,
+      glowIntensity: config.glowIntensity ?? 0.8,
+      isPreview: true,           // 标记为预览节点
+      pulsePhase: 0,             // 脉冲相位
+      dashOffset: 0              // 虚线偏移
+    };
+
+    this.previewNodes.set(id, node);
+    return node;
+  }
+
+  /**
+   * 设置预览连线
+   */
+  setPreviewLines(lines) {
+    // lines格式: [{from: nodeId, to: nodeId, color: [r,g,b,a], isDashed: bool, isNew: bool, isRemoved: bool}]
+    this.previewLines = lines.map(line => ({
+      ...line,
+      dashOffset: 0,
+      animProgress: 0
+    }));
+  }
+
+  /**
+   * 修改现有节点位置（用于预览布局调整）
+   */
+  moveNodeForPreview(id, newX, newY, duration = 400) {
+    const node = this.nodes.get(id);
+    if (!node) return Promise.resolve();
+
+    return this.animateNode(id, { x: newX, y: newY }, duration, 'easeOutCubic');
+  }
+
+  /**
+   * 批量移动节点（预览布局）
+   */
+  async animatePreviewLayout(movements, duration = 500) {
+    const promises = movements.map(({ id, x, y }) =>
+      this.moveNodeForPreview(id, x, y, duration)
+    );
+    await Promise.all(promises);
+  }
+
+  /**
+   * 预览渲染循环（带脉冲动画）
+   */
+  startPreviewRenderLoop() {
+    if (!this.previewMode) return;
+
+    const animate = (timestamp) => {
+      if (!this.previewMode) return;
+
+      // 更新脉冲时间
+      this.previewPulseTime = timestamp * 0.001; // 转换为秒
+
+      // 更新预览节点的脉冲效果
+      for (const [, node] of this.previewNodes) {
+        // 脉冲缩放效果 (0.95 - 1.05)
+        node.pulsePhase = Math.sin(this.previewPulseTime * 3) * 0.05;
+        // 虚线动画
+        node.dashOffset = (this.previewPulseTime * 20) % 20;
+      }
+
+      // 更新预览连线的虚线动画
+      for (const line of this.previewLines) {
+        if (line.isDashed || line.isNew) {
+          line.dashOffset = (this.previewPulseTime * 30) % 30;
+          line.animProgress = Math.min(1, (line.animProgress || 0) + 0.02);
+        }
+        if (line.isRemoved) {
+          line.animProgress = Math.max(0, (line.animProgress ?? 1) - 0.02);
+        }
+      }
+
+      this.renderPreview();
+
+      this.previewRenderLoopId = requestAnimationFrame(animate);
+    };
+
+    this.previewRenderLoopId = requestAnimationFrame(animate);
+  }
+
+  /**
+   * 预览模式渲染
+   */
+  renderPreview() {
+    const gl = this.gl;
+    const canvas = this.canvas;
+
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0.07, 0.09, 0.15, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // 渲染原有连线（可能变暗/虚化）
+    this.renderLinesWithPreview();
+
+    // 渲染预览连线（新连线/移除的连线）
+    this.renderPreviewLines();
+
+    // 渲染原有节点
+    this.renderNodesWithPreview();
+
+    // 渲染预览节点
+    this.renderPreviewNodes();
+
+    // 渲染标签
+    this.renderLabelsWithPreview();
+  }
+
+  /**
+   * 渲染带预览效果的连线
+   */
+  renderLinesWithPreview() {
+    const gl = this.gl;
+    if (this.lines.length === 0) return;
+
+    gl.useProgram(this.lineProgram);
+    gl.uniform2f(this.lineLocations.resolution, this.canvas.width, this.canvas.height);
+
+    for (const line of this.lines) {
+      const fromNode = this.nodes.get(line.from);
+      const toNode = this.nodes.get(line.to);
+
+      if (!fromNode || !toNode || !fromNode.visible || !toNode.visible) continue;
+
+      // 检查这条连线是否在预览中被标记为移除
+      const isBeingRemoved = this.previewLines.some(
+        pl => pl.isRemoved && pl.from === line.from && pl.to === line.to
+      );
+
+      const vertices = new Float32Array([
+        fromNode.x, fromNode.y,
+        toNode.x, toNode.y
+      ]);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
+
+      gl.enableVertexAttribArray(this.lineLocations.position);
+      gl.vertexAttribPointer(this.lineLocations.position, 2, gl.FLOAT, false, 0, 0);
+
+      let color = line.color || [0.66, 0.33, 0.97, 0.6];
+      let opacity = Math.min(fromNode.opacity, toNode.opacity);
+
+      // 被移除的连线变暗并逐渐消失
+      if (isBeingRemoved) {
+        color = [color[0] * 0.5, color[1] * 0.5, color[2] * 0.5, color[3] * 0.3];
+        opacity *= 0.4;
+      }
+
+      gl.uniform4fv(this.lineLocations.color, color);
+      gl.uniform1f(this.lineLocations.opacity, opacity);
+
+      gl.lineWidth(2);
+      gl.drawArrays(gl.LINES, 0, 2);
+    }
+  }
+
+  /**
+   * 渲染预览连线（新增的/虚线）
+   */
+  renderPreviewLines() {
+    const gl = this.gl;
+    if (this.previewLines.length === 0) return;
+
+    gl.useProgram(this.lineProgram);
+    gl.uniform2f(this.lineLocations.resolution, this.canvas.width, this.canvas.height);
+
+    for (const line of this.previewLines) {
+      if (line.isRemoved) continue; // 移除的连线已在上面处理
+
+      // 获取起止节点
+      let fromNode = this.nodes.get(line.from) || this.previewNodes.get(line.from);
+      let toNode = this.nodes.get(line.to) || this.previewNodes.get(line.to);
+
+      if (!fromNode || !toNode) continue;
+
+      // 新连线使用虚线效果（通过分段绘制模拟）
+      if (line.isDashed || line.isNew) {
+        this.renderDashedLine(fromNode, toNode, line);
+      } else {
+        const vertices = new Float32Array([
+          fromNode.x, fromNode.y,
+          toNode.x, toNode.y
+        ]);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
+
+        gl.enableVertexAttribArray(this.lineLocations.position);
+        gl.vertexAttribPointer(this.lineLocations.position, 2, gl.FLOAT, false, 0, 0);
+
+        const color = line.color || [0.56, 0.78, 0.95, 0.8];
+        gl.uniform4fv(this.lineLocations.color, color);
+        gl.uniform1f(this.lineLocations.opacity, line.animProgress || 1);
+
+        gl.lineWidth(2);
+        gl.drawArrays(gl.LINES, 0, 2);
+      }
+    }
+  }
+
+  /**
+   * 渲染虚线
+   */
+  renderDashedLine(fromNode, toNode, line) {
+    const gl = this.gl;
+    const dashLength = 10;
+    const gapLength = 8;
+    const totalLength = dashLength + gapLength;
+
+    const dx = toNode.x - fromNode.x;
+    const dy = toNode.y - fromNode.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+    const segments = Math.ceil(length / totalLength);
+
+    const dirX = dx / length;
+    const dirY = dy / length;
+
+    const offset = (line.dashOffset || 0) % totalLength;
+
+    const color = line.color || [0.56, 0.78, 0.95, 0.9];
+    gl.uniform4fv(this.lineLocations.color, color);
+    gl.uniform1f(this.lineLocations.opacity, (line.animProgress || 1) * 0.9);
+
+    for (let i = 0; i < segments + 1; i++) {
+      const startDist = i * totalLength - offset;
+      const endDist = startDist + dashLength;
+
+      const clampedStart = Math.max(0, startDist);
+      const clampedEnd = Math.min(length, endDist);
+
+      if (clampedStart >= clampedEnd || clampedStart >= length) continue;
+
+      const startX = fromNode.x + dirX * clampedStart;
+      const startY = fromNode.y + dirY * clampedStart;
+      const endX = fromNode.x + dirX * clampedEnd;
+      const endY = fromNode.y + dirY * clampedEnd;
+
+      const vertices = new Float32Array([startX, startY, endX, endY]);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(this.lineLocations.position);
+      gl.vertexAttribPointer(this.lineLocations.position, 2, gl.FLOAT, false, 0, 0);
+
+      gl.lineWidth(2);
+      gl.drawArrays(gl.LINES, 0, 2);
+    }
+  }
+
+  /**
+   * 渲染带预览效果的节点
+   */
+  renderNodesWithPreview() {
+    const gl = this.gl;
+
+    gl.useProgram(this.nodeProgram);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.nodeBuffer);
+
+    gl.enableVertexAttribArray(this.nodeLocations.position);
+    gl.vertexAttribPointer(this.nodeLocations.position, 2, gl.FLOAT, false, 16, 0);
+
+    gl.enableVertexAttribArray(this.nodeLocations.texCoord);
+    gl.vertexAttribPointer(this.nodeLocations.texCoord, 2, gl.FLOAT, false, 16, 8);
+
+    gl.uniform2f(this.nodeLocations.resolution, this.canvas.width, this.canvas.height);
+
+    const sortedNodes = Array.from(this.nodes.values())
+      .filter(n => n.visible && n.opacity > 0)
+      .sort((a, b) => a.opacity - b.opacity);
+
+    for (const node of sortedNodes) {
+      const colors = NodeColors[node.type] || NodeColors.center;
+      const size = node.radius * 2;
+
+      gl.uniform2f(this.nodeLocations.translation, node.x, node.y);
+      gl.uniform2f(this.nodeLocations.scale, size * node.scale, size * node.scale);
+      gl.uniform1f(this.nodeLocations.rotation, node.rotation);
+      gl.uniform4fv(this.nodeLocations.color, colors.base);
+      gl.uniform4fv(this.nodeLocations.glowColor, colors.glow);
+      gl.uniform1f(this.nodeLocations.glowIntensity,
+        this.hoveredNode === node ? 0.8 : node.glowIntensity);
+      gl.uniform1f(this.nodeLocations.opacity, node.opacity);
+      gl.uniform1i(this.nodeLocations.shapeType, 0);
+      gl.uniform2f(this.nodeLocations.size, size, size);
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+  }
+
+  /**
+   * 渲染预览节点（带脉冲动画）
+   */
+  renderPreviewNodes() {
+    const gl = this.gl;
+
+    if (this.previewNodes.size === 0) return;
+
+    gl.useProgram(this.nodeProgram);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.nodeBuffer);
+
+    gl.enableVertexAttribArray(this.nodeLocations.position);
+    gl.vertexAttribPointer(this.nodeLocations.position, 2, gl.FLOAT, false, 16, 0);
+
+    gl.enableVertexAttribArray(this.nodeLocations.texCoord);
+    gl.vertexAttribPointer(this.nodeLocations.texCoord, 2, gl.FLOAT, false, 16, 8);
+
+    gl.uniform2f(this.nodeLocations.resolution, this.canvas.width, this.canvas.height);
+
+    for (const [, node] of this.previewNodes) {
+      if (!node.visible) continue;
+
+      const colors = NodeColors.preview;
+      const size = node.radius * 2;
+      const pulseScale = 1 + (node.pulsePhase || 0); // 脉冲缩放
+
+      gl.uniform2f(this.nodeLocations.translation, node.x, node.y);
+      gl.uniform2f(this.nodeLocations.scale, size * node.scale * pulseScale, size * node.scale * pulseScale);
+      gl.uniform1f(this.nodeLocations.rotation, node.rotation);
+      gl.uniform4fv(this.nodeLocations.color, colors.base);
+      gl.uniform4fv(this.nodeLocations.glowColor, colors.glow);
+      gl.uniform1f(this.nodeLocations.glowIntensity, 0.6 + Math.abs(node.pulsePhase || 0) * 4);
+      gl.uniform1f(this.nodeLocations.opacity, node.opacity * (0.7 + Math.abs(node.pulsePhase || 0) * 2));
+      gl.uniform1i(this.nodeLocations.shapeType, 0);
+      gl.uniform2f(this.nodeLocations.size, size, size);
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+  }
+
+  /**
+   * 渲染带预览效果的标签
+   */
+  renderLabelsWithPreview() {
+    let labelCanvas = this.labelCanvas;
+    if (!labelCanvas) {
+      labelCanvas = document.createElement('canvas');
+      labelCanvas.style.position = 'absolute';
+      labelCanvas.style.top = '0';
+      labelCanvas.style.left = '0';
+      labelCanvas.style.pointerEvents = 'none';
+      labelCanvas.style.zIndex = '1';
+      if (this.canvas.parentElement) {
+        this.canvas.parentElement.appendChild(labelCanvas);
+      }
+      this.labelCanvas = labelCanvas;
+    }
+
+    labelCanvas.width = this.canvas.width;
+    labelCanvas.height = this.canvas.height;
+    labelCanvas.style.width = this.canvas.offsetWidth + 'px';
+    labelCanvas.style.height = this.canvas.offsetHeight + 'px';
+
+    const ctx = labelCanvas.getContext('2d');
+    ctx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+
+    // 渲染原有节点标签
+    for (const [, node] of this.nodes) {
+      if (!node.visible || node.opacity < 0.3 || !node.label) continue;
+      this.renderNodeLabel(ctx, node);
+    }
+
+    // 渲染预览节点标签
+    for (const [, node] of this.previewNodes) {
+      if (!node.visible || !node.label) continue;
+      this.renderNodeLabel(ctx, node, true);
+    }
+
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * 渲染单个节点的标签
+   */
+  renderNodeLabel(ctx, node, isPreview = false) {
+    ctx.globalAlpha = node.opacity * (isPreview ? 0.9 : 1);
+    ctx.fillStyle = isPreview ? '#a5d8ff' : '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const fontSize = Math.max(12, node.radius * node.scale * 0.35);
+    ctx.font = `bold ${fontSize}px sans-serif`;
+
+    let label = node.label;
+    const maxWidth = node.radius * node.scale * 1.8;
+    while (ctx.measureText(label).width > maxWidth && label.length > 3) {
+      label = label.slice(0, -1);
+    }
+    if (label !== node.label) label += '...';
+
+    ctx.fillText(label, node.x, node.y - fontSize * 0.3);
+
+    // 副标签
+    if (node.subLabel || node.knowledgePointValue > 0) {
+      ctx.font = `${fontSize * 0.7}px sans-serif`;
+      ctx.fillStyle = isPreview ? '#74c0fc' : '#e9d5ff';
+      const subLabel = node.knowledgePointValue > 0
+        ? `${node.knowledgePointValue.toFixed(2)} 知识点`
+        : node.subLabel;
+      ctx.fillText(subLabel, node.x, node.y + fontSize * 0.6);
+    }
+
+    // 预览节点添加"待审核"标识
+    if (isPreview) {
+      ctx.font = `${fontSize * 0.6}px sans-serif`;
+      ctx.fillStyle = '#ffd43b';
+      ctx.fillText('(待审核)', node.x, node.y + fontSize * 1.3);
+    }
+  }
+
   // 销毁
   destroy() {
     // 停止所有渲染循环
@@ -682,11 +1176,20 @@ class WebGLNodeRenderer {
       this.renderLoopId = null;
     }
 
+    // 停止预览渲染循环
+    if (this.previewRenderLoopId) {
+      cancelAnimationFrame(this.previewRenderLoopId);
+      this.previewRenderLoopId = null;
+    }
+
     if (this.labelCanvas) {
       this.labelCanvas.remove();
     }
     this.animations = [];
     this.nodes.clear();
+    this.previewNodes.clear();
+    this.previewLines = [];
+    this.savedState = null;
   }
 }
 

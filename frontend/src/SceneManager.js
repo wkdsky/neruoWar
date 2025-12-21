@@ -19,6 +19,10 @@ class SceneManager {
     this.onNodeClick = null;
     this.onSceneChange = null;
 
+    // 预览模式状态
+    this.isInPreviewMode = false;
+    this.previewConfig = null;
+
     // 绑定点击事件
     this.renderer.onClick = (node) => {
       if (this.onNodeClick) {
@@ -467,10 +471,175 @@ class SceneManager {
     }
   }
 
+  // ==================== 关联关系预览方法 ====================
+
+  /**
+   * 进入关联关系预览模式
+   * @param {Object} newNodeData - 新节点数据 {name, description}
+   * @param {Object} nodeA - 第一个关联节点
+   * @param {string} relationType - 关系类型 'extends' | 'contains' | 'insert'
+   * @param {Object} nodeB - 第二个关联节点（仅插入模式需要）
+   */
+  async enterAssociationPreview(newNodeData, nodeA, relationType, nodeB = null) {
+    if (this.isInPreviewMode) {
+      this.exitAssociationPreview();
+    }
+
+    this.isInPreviewMode = true;
+    this.previewConfig = {
+      newNodeData,
+      nodeA,
+      relationType,
+      nodeB
+    };
+
+    // 进入渲染器预览模式
+    this.renderer.enterPreviewMode();
+
+    // 计算预览布局
+    const previewLayout = this.layout.calculateAssociationPreviewLayout(
+      newNodeData,
+      nodeA,
+      relationType,
+      nodeB,
+      this.currentLayout
+    );
+
+    // 如果需要移动现有节点，执行动画
+    if (previewLayout.movements && previewLayout.movements.length > 0) {
+      await this.renderer.animatePreviewLayout(previewLayout.movements, 500);
+    }
+
+    // 设置预览节点
+    if (previewLayout.previewNode) {
+      this.renderer.setPreviewNode('preview-new-node', previewLayout.previewNode);
+    }
+
+    // 设置预览连线
+    if (previewLayout.previewLines) {
+      this.renderer.setPreviewLines(previewLayout.previewLines);
+    }
+
+    return previewLayout;
+  }
+
+  /**
+   * 退出关联关系预览模式（回滚所有变更）
+   */
+  exitAssociationPreview() {
+    if (!this.isInPreviewMode) return;
+
+    this.renderer.exitPreviewMode();
+    this.isInPreviewMode = false;
+    this.previewConfig = null;
+  }
+
+  /**
+   * 重新播放预览动画
+   */
+  async replayPreview() {
+    if (!this.isInPreviewMode || !this.previewConfig) return;
+
+    const { newNodeData, nodeA, relationType, nodeB } = this.previewConfig;
+
+    // 先退出再重新进入
+    this.renderer.exitPreviewMode();
+
+    // 短暂延迟后重新进入
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    await this.enterAssociationPreview(newNodeData, nodeA, relationType, nodeB);
+  }
+
+  /**
+   * 获取当前预览配置
+   */
+  getPreviewConfig() {
+    return this.previewConfig;
+  }
+
+  /**
+   * 检查是否在预览模式
+   */
+  isPreviewMode() {
+    return this.isInPreviewMode;
+  }
+
+  /**
+   * 显示简单关联预览（新节点直接作为 nodeA 的母域或子域）
+   * @param {Object} newNodeData - 新节点数据
+   * @param {Object} nodeA - 关联节点A的完整数据（包括 parentNodesInfo, childNodesInfo）
+   * @param {string} relationType - 'extends' 或 'contains'
+   */
+  async showSimpleAssociationPreview(newNodeData, nodeA, relationType) {
+    return this.enterAssociationPreview(newNodeData, nodeA, relationType, null);
+  }
+
+  /**
+   * 显示插入预览（新节点插入到 nodeA 和 nodeB 之间）
+   * @param {Object} newNodeData - 新节点数据
+   * @param {Object} nodeA - 关联节点A
+   * @param {Object} nodeB - 关联节点B
+   * @param {string} insertDirection - 插入方向 'aToB' (新节点在A-B之间，新作为A的子、B的父) 或 'bToA'
+   */
+  async showInsertAssociationPreview(newNodeData, nodeA, nodeB, insertDirection) {
+    return this.enterAssociationPreview(newNodeData, nodeA, 'insert', {
+      node: nodeB,
+      direction: insertDirection
+    });
+  }
+
+  /**
+   * 为单个节点生成预览场景（用于在创建节点模态框中显示）
+   * 这个方法会在指定的 canvas 上创建一个小型预览场景
+   */
+  createMiniPreviewScene(nodeA, relationType, newNodeName) {
+    // 计算一个简化的预览布局
+    const centerX = this.layout.centerX;
+    const centerY = this.layout.centerY;
+    const distance = 150;
+
+    let previewNodePosition;
+    let lineColor;
+
+    if (relationType === 'extends') {
+      // 新节点作为 nodeA 的母域 -> 新节点在上方
+      previewNodePosition = {
+        x: centerX,
+        y: centerY - distance
+      };
+      lineColor = [0.06, 0.73, 0.51, 0.8]; // 绿色
+    } else {
+      // 新节点作为 nodeA 的子域 -> 新节点在下方
+      previewNodePosition = {
+        x: centerX,
+        y: centerY + distance
+      };
+      lineColor = [0.98, 0.75, 0.14, 0.8]; // 黄色
+    }
+
+    return {
+      centerNode: {
+        x: centerX,
+        y: centerY,
+        label: nodeA.name || 'Node A'
+      },
+      previewNode: {
+        ...previewNodePosition,
+        label: newNodeName || '新节点'
+      },
+      lineColor
+    };
+  }
+
   /**
    * 销毁
    */
   destroy() {
+    // 确保退出预览模式
+    if (this.isInPreviewMode) {
+      this.exitAssociationPreview();
+    }
     this.renderer.destroy();
   }
 }

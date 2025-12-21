@@ -49,7 +49,8 @@ router.post('/register', async (req, res) => {
       userId: user._id,
       username: user.username,
       role: user.role,
-      location: user.location
+      location: user.location,
+      profession: user.profession
     });
   } catch (error) {
     console.error('注册错误:', error);
@@ -87,7 +88,8 @@ router.post('/login', async (req, res) => {
       userId: user._id,
       username: user.username,
       role: user.role,
-      location: user.location
+      location: user.location,
+      profession: user.profession
     });
   } catch (error) {
     console.error('登录错误:', error);

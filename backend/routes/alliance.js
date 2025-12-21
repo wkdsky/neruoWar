@@ -9,7 +9,7 @@ const { authenticateToken } = require('../middleware/auth');
 router.get('/list', async (req, res) => {
   try {
     const alliances = await EntropyAlliance.find()
-      .populate('founder', 'username')
+      .populate('founder', 'username profession')
       .sort({ createdAt: -1 });
 
     // 为每个熵盟计算成员数量和管辖知识域数量
@@ -51,7 +51,7 @@ router.get('/list', async (req, res) => {
 router.get('/:allianceId', async (req, res) => {
   try {
     const alliance = await EntropyAlliance.findById(req.params.allianceId)
-      .populate('founder', 'username');
+      .populate('founder', 'username profession');
 
     if (!alliance) {
       return res.status(404).json({ error: '熵盟不存在' });
@@ -59,7 +59,7 @@ router.get('/:allianceId', async (req, res) => {
 
     // 获取成员列表
     const members = await User.find({ allianceId: alliance._id })
-      .select('username level createdAt');
+      .select('username level profession createdAt');
 
     // 获取管辖域列表
     const memberIds = members.map(m => m._id);
@@ -67,7 +67,7 @@ router.get('/:allianceId', async (req, res) => {
       domainMaster: { $in: memberIds },
       status: 'approved'
     })
-      .populate('domainMaster', 'username')
+      .populate('domainMaster', 'username profession')
       .select('name description domainMaster');
 
     res.json({
@@ -142,7 +142,7 @@ router.post('/create', authenticateToken, async (req, res) => {
     await user.save();
 
     const populatedAlliance = await EntropyAlliance.findById(alliance._id)
-      .populate('founder', 'username');
+      .populate('founder', 'username profession');
 
     res.json({
       message: '熵盟创建成功',
@@ -280,7 +280,7 @@ router.get('/admin/all', authenticateToken, async (req, res) => {
     }
 
     const alliances = await EntropyAlliance.find()
-      .populate('founder', 'username')
+      .populate('founder', 'username profession')
       .sort({ createdAt: -1 });
 
     // 为每个熵盟计算成员数量和管辖知识域数量
@@ -345,7 +345,7 @@ router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
     await alliance.save();
 
     const updatedAlliance = await EntropyAlliance.findById(allianceId)
-      .populate('founder', 'username');
+      .populate('founder', 'username profession');
 
     res.json({
       success: true,

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Users, Zap, Bell, Shield, Check, X, Search, Plus, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Users, Zap, Bell, Shield, Check, X, Search, Plus, Trash2, AlertTriangle } from 'lucide-react';
 import './Admin.css';
 
 const AdminPanel = () => {
@@ -27,6 +27,28 @@ const AdminPanel = () => {
         contentScore: 1
     });
     const [pendingNodes, setPendingNodes] = useState([]);
+
+    // 将待审核节点按名称分组
+    const groupedPendingNodes = useMemo(() => {
+        const groups = {};
+        pendingNodes.forEach(node => {
+            const name = node.name;
+            if (!groups[name]) {
+                groups[name] = [];
+            }
+            groups[name].push(node);
+        });
+        // 转换为数组，同名的排在前面（优先显示有竞争的）
+        return Object.entries(groups)
+            .map(([name, nodes]) => ({ name, nodes, hasConflict: nodes.length > 1 }))
+            .sort((a, b) => {
+                // 有冲突的优先显示
+                if (a.hasConflict && !b.hasConflict) return -1;
+                if (!a.hasConflict && b.hasConflict) return 1;
+                // 同样冲突状态的按提交时间排序
+                return new Date(b.nodes[0].createdAt) - new Date(a.nodes[0].createdAt);
+            });
+    }, [pendingNodes]);
 
     // Master Change State
     const [showChangeMasterModal, setShowChangeMasterModal] = useState(false);
@@ -150,7 +172,7 @@ const AdminPanel = () => {
         }
     };
 
-    const approveNode = async (nodeId) => {
+    const approveNode = async (nodeId, nodeName) => {
         const token = localStorage.getItem('token');
         try {
             const response = await fetch('http://localhost:5000/api/nodes/approve', {
@@ -162,8 +184,12 @@ const AdminPanel = () => {
                 body: JSON.stringify({ nodeId })
             });
             if (response.ok) {
-                alert('节点审批通过');
-                setPendingNodes(prev => prev.filter(node => node._id !== nodeId));
+                const data = await response.json();
+                let message = '节点审批通过';
+                if (data.autoRejectedCount > 0) {
+                    message += `，已自动拒绝 ${data.autoRejectedCount} 个同名申请`;
+                }
+                alert(message);
                 fetchPendingNodes();
             } else {
                 const data = await response.json();
@@ -687,7 +713,10 @@ const AdminPanel = () => {
                                                     className="edit-input"
                                                 />
                                             ) : (
-                                                <span className="username-cell">{user.username}</span>
+                                                <span className="username-cell">
+                                                    {user.username}
+                                                    {user.profession && <span className="user-profession">【{user.profession}】</span>}
+                                                </span>
                                             )}
                                         </td>
                                         <td>
@@ -784,7 +813,13 @@ const AdminPanel = () => {
                 <div className="pending-nodes-container">
                     <div className="table-info">
                         <p>待审批节点数: <strong>{pendingNodes.length}</strong></p>
-                        <button 
+                        {groupedPendingNodes.some(g => g.hasConflict) && (
+                            <span className="conflict-warning">
+                                <AlertTriangle className="icon-small" />
+                                存在同名申请竞争
+                            </span>
+                        )}
+                        <button
                             onClick={fetchPendingNodes}
                             className="btn btn-primary"
                             style={{ marginLeft: '1rem' }}
@@ -792,72 +827,93 @@ const AdminPanel = () => {
                             刷新数据
                         </button>
                     </div>
-                    
+
                     {pendingNodes.length === 0 ? (
                         <div className="no-pending-nodes">
                             <p>暂无待审批节点</p>
                         </div>
                     ) : (
                         <div className="pending-nodes-list admin">
-                            {pendingNodes.map(node => (
-                                <div key={node._id} className="pending-node-card">
-                                    <div className="node-header">
-                                        <h3 className="node-title">{node.name}</h3>
-                                        <span className={`status-badge status-${node.status}`}>
-                                            {node.status === 'pending' ? '待审批' : 
-                                             node.status === 'approved' ? '已通过' : '已拒绝'}
-                                        </span>
-                                    </div>
-                                    
-                                    <div className="node-details">
-                                        <p className="node-description">{node.description}</p>
-                                        
-                                        <div className="node-meta">
-                                            <div className="meta-item">
-                                                <strong>创建者:</strong> {node.owner?.username || '未知用户'}
-                                            </div>
-                                            <div className="meta-item">
-                                                <strong>提交时间:</strong> {new Date(node.createdAt).toLocaleString('zh-CN')}
-                                            </div>
-                                            <div className="meta-item">
-                                                <strong>位置:</strong> ({Math.round(node.position?.x || 0)}, {Math.round(node.position?.y || 0)})
-                                            </div>
+                            {groupedPendingNodes.map(group => (
+                                <div key={group.name} className={`pending-group ${group.hasConflict ? 'has-conflict' : ''}`}>
+                                    {/* 同名节点组标题 */}
+                                    {group.hasConflict && (
+                                        <div className="conflict-group-header">
+                                            <AlertTriangle className="icon-small" />
+                                            <span>同名申请竞争: "{group.name}" ({group.nodes.length} 个申请)</span>
+                                            <span className="conflict-hint">请对比后选择一个通过，其他将自动拒绝</span>
                                         </div>
+                                    )}
 
-                                        {node.associations && node.associations.length > 0 && (
-                                            <div className="associations-section">
-                                                <h4>关联关系 ({node.associations.length} 个)</h4>
-                                                <div className="associations-list">
-                                                    {node.associations.map((association, index) => (
-                                                        <div key={index} className="association-item">
-                                                            <span className="node-name">
-                                                                {association.targetNode?.name || '未知节点'}
-                                                            </span>
-                                                            <span className="relation-type">
-                                                                {association.relationType === 'contains' ? '包含' : '拓展'}
-                                                            </span>
+                                    <div className={`pending-nodes-grid ${group.hasConflict ? 'conflict-grid' : ''}`}>
+                                        {group.nodes.map((node, index) => (
+                                            <div key={node._id} className={`pending-node-card ${group.hasConflict ? 'conflict-card' : ''}`}>
+                                                {group.hasConflict && (
+                                                    <div className="conflict-badge">申请 #{index + 1}</div>
+                                                )}
+                                                <div className="node-header">
+                                                    <h3 className="node-title">{node.name}</h3>
+                                                    <span className={`status-badge status-${node.status}`}>
+                                                        {node.status === 'pending' ? '待审批' :
+                                                         node.status === 'approved' ? '已通过' : '已拒绝'}
+                                                    </span>
+                                                </div>
+
+                                                <div className="node-details">
+                                                    <p className="node-description">{node.description}</p>
+
+                                                    <div className="node-meta">
+                                                        <div className="meta-item">
+                                                            <strong>创建者:</strong> {node.owner?.username || '未知用户'}
+                                                            {node.owner?.profession && (
+                                                                <span className="user-profession">【{node.owner.profession}】</span>
+                                                            )}
                                                         </div>
-                                                    ))}
+                                                        <div className="meta-item">
+                                                            <strong>提交时间:</strong> {new Date(node.createdAt).toLocaleString('zh-CN')}
+                                                        </div>
+                                                        <div className="meta-item">
+                                                            <strong>位置:</strong> ({Math.round(node.position?.x || 0)}, {Math.round(node.position?.y || 0)})
+                                                        </div>
+                                                    </div>
+
+                                                    {node.associations && node.associations.length > 0 && (
+                                                        <div className="associations-section">
+                                                            <h4>关联关系 ({node.associations.length} 个)</h4>
+                                                            <div className="associations-list">
+                                                                {node.associations.map((association, idx) => (
+                                                                    <div key={idx} className="association-item">
+                                                                        <span className="node-name">
+                                                                            {association.targetNode?.name || '未知节点'}
+                                                                        </span>
+                                                                        <span className={`relation-type ${association.relationType}`}>
+                                                                            {association.relationType === 'contains' ? '子域' : '母域'}
+                                                                        </span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                <div className="node-actions">
+                                                    <button
+                                                        onClick={() => approveNode(node._id, node.name)}
+                                                        className="btn btn-success"
+                                                    >
+                                                        <Check className="icon-small" />
+                                                        {group.hasConflict ? '选择此申请' : '通过'}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => rejectNode(node._id)}
+                                                        className="btn btn-danger"
+                                                    >
+                                                        <X className="icon-small" />
+                                                        拒绝
+                                                    </button>
                                                 </div>
                                             </div>
-                                        )}
-                                    </div>
-
-                                    <div className="node-actions">
-                                        <button
-                                            onClick={() => approveNode(node._id)}
-                                            className="btn btn-success"
-                                        >
-                                            <Check className="icon-small" />
-                                            通过
-                                        </button>
-                                        <button
-                                            onClick={() => rejectNode(node._id)}
-                                            className="btn btn-danger"
-                                        >
-                                            <X className="icon-small" />
-                                            拒绝
-                                        </button>
+                                        ))}
                                     </div>
                                 </div>
                             ))}
