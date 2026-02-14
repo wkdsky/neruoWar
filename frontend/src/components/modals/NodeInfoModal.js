@@ -1,8 +1,8 @@
 import React from 'react';
-import { X } from 'lucide-react';
+import { X, Compass } from 'lucide-react';
 import './NodeInfoModal.css';
 
-const NodeInfoModal = ({ isOpen, onClose, nodeDetail }) => {
+const NodeInfoModal = ({ isOpen, onClose, nodeDetail, onEnterKnowledgeDomain }) => {
     if (!isOpen || !nodeDetail) return null;
 
     return (
@@ -70,6 +70,13 @@ const NodeInfoModal = ({ isOpen, onClose, nodeDetail }) => {
                 </div>
 
                 <div className="modal-footer">
+                    <button
+                        className="btn btn-primary enter-domain-btn"
+                        onClick={() => onEnterKnowledgeDomain && onEnterKnowledgeDomain(nodeDetail)}
+                    >
+                        <Compass size={18} />
+                        进入知识域
+                    </button>
                     <button
                         className="btn btn-secondary"
                         onClick={onClose}

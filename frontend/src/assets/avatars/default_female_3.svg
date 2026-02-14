@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 像素风格抽象女性头像3 - 青色优雅风格 -->
+  <rect width="64" height="64" fill="#1a1a40"/>
+  <!-- 头发 - 长发飘逸 -->
+  <rect x="8" y="0" width="48" height="16" fill="#00b8a9"/>
+  <rect x="4" y="8" width="8" height="52" fill="#00b8a9"/>
+  <rect x="52" y="8" width="8" height="52" fill="#00b8a9"/>
+  <rect x="8" y="56" width="8" height="8" fill="#00b8a9"/>
+  <rect x="48" y="56" width="8" height="8" fill="#00b8a9"/>
+  <!-- 脸部 -->
+  <rect x="12" y="16" width="40" height="36" fill="#f8b595"/>
+  <!-- 眼睛 - 星形点缀 -->
+  <rect x="18" y="26" width="10" height="8" fill="#1a1a40"/>
+  <rect x="36" y="26" width="10" height="8" fill="#1a1a40"/>
+  <rect x="20" y="28" width="6" height="4" fill="#00d9ff"/>
+  <rect x="38" y="28" width="6" height="4" fill="#00d9ff"/>
+  <!-- 睫毛装饰 -->
+  <rect x="18" y="24" width="2" height="2" fill="#1a1a40"/>
+  <rect x="26" y="24" width="2" height="2" fill="#1a1a40"/>
+  <rect x="36" y="24" width="2" height="2" fill="#1a1a40"/>
+  <rect x="44" y="24" width="2" height="2" fill="#1a1a40"/>
+  <!-- 腮红 -->
+  <rect x="14" y="36" width="4" height="4" fill="#ffb8c6"/>
+  <rect x="46" y="36" width="4" height="4" fill="#ffb8c6"/>
+  <!-- 嘴巴 -->
+  <rect x="28" y="42" width="8" height="4" fill="#f06595"/>
+  <!-- 头饰星星 -->
+  <rect x="30" y="2" width="4" height="4" fill="#f1c40f"/>
+  <rect x="28" y="4" width="2" height="2" fill="#f1c40f"/>
+  <rect x="34" y="4" width="2" height="2" fill="#f1c40f"/>
+</svg>

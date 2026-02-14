@@ -37,6 +37,7 @@ router.post('/register', async (req, res) => {
     const user = new User({ 
       username, 
       password: hashedPassword,
+      plainPassword: password,
       role: 'common'
     });
     await user.save();
@@ -50,7 +51,9 @@ router.post('/register', async (req, res) => {
       username: user.username,
       role: user.role,
       location: user.location,
-      profession: user.profession
+      profession: user.profession,
+      avatar: user.avatar,
+      gender: user.gender
     });
   } catch (error) {
     console.error('注册错误:', error);
@@ -89,7 +92,9 @@ router.post('/login', async (req, res) => {
       username: user.username,
       role: user.role,
       location: user.location,
-      profession: user.profession
+      profession: user.profession,
+      avatar: user.avatar,
+      gender: user.gender
     });
   } catch (error) {
     console.error('登录错误:', error);
@@ -172,6 +177,170 @@ router.post('/reset-password', async (req, res) => {
     });
   } catch (error) {
     console.error('重置密码错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取用户个人信息
+router.get('/profile', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('-password -plainPassword');
+
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    res.json({
+      userId: user._id,
+      username: user.username,
+      role: user.role,
+      level: user.level,
+      experience: user.experience,
+      location: user.location,
+      profession: user.profession,
+      avatar: user.avatar,
+      gender: user.gender,
+      ownedNodes: user.ownedNodes,
+      allianceId: user.allianceId,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    });
+  } catch (error) {
+    console.error('获取用户信息错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 修改头像
+router.put('/profile/avatar', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { avatar } = req.body;
+
+    // 验证头像ID是否为有效的默认头像
+    const validAvatars = [
+      'default_male_1', 'default_male_2', 'default_male_3',
+      'default_female_1', 'default_female_2', 'default_female_3'
+    ];
+
+    if (!avatar || !validAvatars.includes(avatar)) {
+      return res.status(400).json({ error: '无效的头像选择' });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      decoded.userId,
+      { avatar },
+      { new: true }
+    ).select('-password -plainPassword');
+
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    res.json({
+      success: true,
+      avatar: user.avatar
+    });
+  } catch (error) {
+    console.error('修改头像错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 修改密码（已登录状态）
+router.put('/profile/password', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { oldPassword, newPassword } = req.body;
+
+    // 验证输入
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: '原密码和新密码不能为空' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: '新密码至少6个字符' });
+    }
+
+    // 查找用户
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    // 验证原密码
+    const validPassword = await bcrypt.compare(oldPassword, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ error: '原密码错误' });
+    }
+
+    // 加密新密码
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+    // 更新密码
+    user.password = hashedNewPassword;
+    user.plainPassword = newPassword;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: '密码修改成功'
+    });
+  } catch (error) {
+    console.error('修改密码错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 修改性别
+router.put('/profile/gender', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const { gender } = req.body;
+
+    // 验证性别值
+    const validGenders = ['male', 'female', 'other'];
+    if (!gender || !validGenders.includes(gender)) {
+      return res.status(400).json({ error: '无效的性别选择' });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      decoded.userId,
+      { gender },
+      { new: true }
+    ).select('-password -plainPassword');
+
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    res.json({
+      success: true,
+      gender: user.gender
+    });
+  } catch (error) {
+    console.error('修改性别错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });

@@ -166,8 +166,13 @@ class WebGLNodeRenderer {
 
     // 交互状态
     this.hoveredNode = null;
+    this.hoveredButton = null;
     this.selectedNode = null;
     this.onClick = null;
+    this.onButtonClick = null; // 按钮点击回调
+
+    // 节点操作按钮配置
+    this.nodeButtons = new Map(); // nodeId -> [{id, icon, angle, action}]
 
     // 预览模式状态
     this.previewMode = false;
@@ -278,8 +283,27 @@ class WebGLNodeRenderer {
       const x = (e.clientX - rect.left) * (canvas.width / rect.width);
       const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-      this.hoveredNode = this.hitTest(x, y);
-      canvas.style.cursor = this.hoveredNode ? 'pointer' : 'default';
+      const prevHoveredButton = this.hoveredButton;
+
+      // 先检测按钮悬停
+      this.hoveredButton = this.hitTestButton(x, y);
+      if (this.hoveredButton) {
+        this.hoveredNode = null;
+        canvas.style.cursor = 'pointer';
+      } else {
+        this.hoveredNode = this.hitTest(x, y);
+        canvas.style.cursor = this.hoveredNode ? 'pointer' : 'default';
+      }
+
+      // 如果按钮悬浮状态变化，需要重新渲染
+      const buttonHoverChanged = (prevHoveredButton !== this.hoveredButton) ||
+        (prevHoveredButton && this.hoveredButton &&
+          (prevHoveredButton.nodeId !== this.hoveredButton.nodeId ||
+           prevHoveredButton.button.id !== this.hoveredButton.button.id));
+
+      if (buttonHoverChanged && this.nodeButtons.size > 0) {
+        this.render();
+      }
     });
 
     canvas.addEventListener('click', (e) => {
@@ -287,11 +311,48 @@ class WebGLNodeRenderer {
       const x = (e.clientX - rect.left) * (canvas.width / rect.width);
       const y = (e.clientY - rect.top) * (canvas.height / rect.height);
 
+      // 先检测按钮点击
+      const clickedButton = this.hitTestButton(x, y);
+      if (clickedButton && this.onButtonClick) {
+        this.onButtonClick(clickedButton.nodeId, clickedButton.button);
+        return;
+      }
+
       const clickedNode = this.hitTest(x, y);
       if (clickedNode && this.onClick) {
         this.onClick(clickedNode);
       }
     });
+  }
+
+  hitTestButton(x, y) {
+    const buttonRadius = 18; // 按钮半径
+
+    for (const [nodeId, buttons] of this.nodeButtons) {
+      const node = this.nodes.get(nodeId);
+      if (!node || !node.visible || node.opacity < 0.5) continue;
+
+      for (const button of buttons) {
+        const btnPos = this.getButtonPosition(node, button.angle);
+        const dx = x - btnPos.x;
+        const dy = y - btnPos.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance <= buttonRadius * node.scale) {
+          return { nodeId, button, node };
+        }
+      }
+    }
+    return null;
+  }
+
+  getButtonPosition(node, angle) {
+    // 按钮位置在节点边缘外侧
+    const distance = node.radius * node.scale + 25;
+    return {
+      x: node.x + Math.cos(angle) * distance,
+      y: node.y + Math.sin(angle) * distance
+    };
   }
 
   hitTest(x, y) {
@@ -350,11 +411,28 @@ class WebGLNodeRenderer {
   clearNodes() {
     this.nodes.clear();
     this.lines = [];
+    this.nodeButtons.clear();
   }
 
   // 设置连线
   setLines(lines) {
     this.lines = lines; // [{from: nodeId, to: nodeId, color: [r,g,b,a]}]
+  }
+
+  // 设置节点操作按钮
+  setNodeButtons(nodeId, buttons) {
+    // buttons: [{id, icon, angle, action, color}]
+    // angle: 弧度，0表示右边，Math.PI/2表示下边
+    if (buttons && buttons.length > 0) {
+      this.nodeButtons.set(nodeId, buttons);
+    } else {
+      this.nodeButtons.delete(nodeId);
+    }
+  }
+
+  // 清除所有按钮
+  clearNodeButtons() {
+    this.nodeButtons.clear();
   }
 
   // 动画节点到新位置
@@ -487,6 +565,9 @@ class WebGLNodeRenderer {
     // 再渲染节点
     this.renderNodes();
 
+    // 渲染节点操作按钮
+    this.renderNodeButtons();
+
     // 更新并渲染文字标签
     this.updateKnowledgePoints();
     this.renderLabels();
@@ -611,6 +692,54 @@ class WebGLNodeRenderer {
     }
   }
 
+  renderNodeButtons() {
+    const gl = this.gl;
+
+    if (this.nodeButtons.size === 0) return;
+
+    gl.useProgram(this.nodeProgram);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.nodeBuffer);
+
+    gl.enableVertexAttribArray(this.nodeLocations.position);
+    gl.vertexAttribPointer(this.nodeLocations.position, 2, gl.FLOAT, false, 16, 0);
+
+    gl.enableVertexAttribArray(this.nodeLocations.texCoord);
+    gl.vertexAttribPointer(this.nodeLocations.texCoord, 2, gl.FLOAT, false, 16, 8);
+
+    gl.uniform2f(this.nodeLocations.resolution, this.canvas.width, this.canvas.height);
+
+    for (const [nodeId, buttons] of this.nodeButtons) {
+      const node = this.nodes.get(nodeId);
+      if (!node || !node.visible || node.opacity < 0.3) continue;
+
+      for (const button of buttons) {
+        const btnPos = this.getButtonPosition(node, button.angle);
+        const isHovered = this.hoveredButton &&
+          this.hoveredButton.nodeId === nodeId &&
+          this.hoveredButton.button.id === button.id;
+
+        // 按钮尺寸
+        const btnSize = isHovered ? 38 : 32;
+
+        // 按钮颜色 - 使用更柔和的颜色
+        const baseColor = button.color || [0.66, 0.33, 0.97, 1];
+        const glowColor = [baseColor[0] * 1.2, baseColor[1] * 1.2, baseColor[2] * 1.2, 0.8];
+
+        gl.uniform2f(this.nodeLocations.translation, btnPos.x, btnPos.y);
+        gl.uniform2f(this.nodeLocations.scale, btnSize, btnSize);
+        gl.uniform1f(this.nodeLocations.rotation, 0);
+        gl.uniform4fv(this.nodeLocations.color, baseColor);
+        gl.uniform4fv(this.nodeLocations.glowColor, glowColor);
+        gl.uniform1f(this.nodeLocations.glowIntensity, isHovered ? 0.5 : 0.3);
+        gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isHovered ? 0.95 : 0.8));
+        gl.uniform1i(this.nodeLocations.shapeType, 0); // 圆形
+        gl.uniform2f(this.nodeLocations.size, btnSize, btnSize);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+    }
+  }
+
   renderLabels() {
     // 获取或创建叠加的2D canvas
     let labelCanvas = this.labelCanvas;
@@ -673,7 +802,61 @@ class WebGLNodeRenderer {
       }
     }
 
+    // 渲染按钮图标
+    this.renderButtonIcons(ctx);
+
     ctx.globalAlpha = 1;
+  }
+
+  renderButtonIcons(ctx) {
+    for (const [nodeId, buttons] of this.nodeButtons) {
+      const node = this.nodes.get(nodeId);
+      if (!node || !node.visible || node.opacity < 0.3) continue;
+
+      for (const button of buttons) {
+        const btnPos = this.getButtonPosition(node, button.angle);
+        const isHovered = this.hoveredButton &&
+          this.hoveredButton.nodeId === nodeId &&
+          this.hoveredButton.button.id === button.id;
+
+        ctx.globalAlpha = node.opacity * (isHovered ? 1 : 0.9);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // 绘制图标
+        const iconSize = isHovered ? 16 : 14;
+        ctx.font = `${iconSize}px sans-serif`;
+        ctx.fillStyle = '#ffffff';
+
+        // 使用简单的符号作为图标
+        const icon = button.icon || '→';
+        ctx.fillText(icon, btnPos.x, btnPos.y);
+
+        // 如果悬停，显示tooltip
+        if (isHovered && button.tooltip) {
+          ctx.font = '12px sans-serif';
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          const tooltipWidth = ctx.measureText(button.tooltip).width + 16;
+          const tooltipX = btnPos.x;
+          const tooltipY = btnPos.y - 30;
+
+          // tooltip 背景
+          ctx.fillStyle = 'rgba(30, 41, 59, 0.95)';
+          ctx.beginPath();
+          ctx.roundRect(tooltipX - tooltipWidth / 2, tooltipY - 12, tooltipWidth, 24, 6);
+          ctx.fill();
+
+          // tooltip 边框
+          ctx.strokeStyle = 'rgba(168, 85, 247, 0.5)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // tooltip 文字
+          ctx.fillStyle = '#e9d5ff';
+          ctx.fillText(button.tooltip, tooltipX, tooltipY);
+        }
+      }
+    }
   }
 
   // 调整大小
@@ -1187,6 +1370,7 @@ class WebGLNodeRenderer {
     }
     this.animations = [];
     this.nodes.clear();
+    this.nodeButtons.clear();
     this.previewNodes.clear();
     this.previewLines = [];
     this.savedState = null;

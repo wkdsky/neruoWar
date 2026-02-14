@@ -43,6 +43,15 @@ const userSchema = new mongoose.Schema({
   profession: {
     type: String,
     default: '求知'  // 默认职业为"求知"
+  },
+  avatar: {
+    type: String,
+    default: 'default_male_1'  // 默认头像
+  },
+  gender: {
+    type: String,
+    enum: ['male', 'female', 'other'],
+    default: 'male'
   }
 }, {
   timestamps: true

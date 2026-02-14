@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 像素风格抽象男性头像1 - 蓝色方块风格 -->
+  <rect width="64" height="64" fill="#1a1a2e"/>
+  <!-- 脸部轮廓 -->
+  <rect x="16" y="12" width="32" height="40" fill="#4a69bd"/>
+  <rect x="12" y="16" width="4" height="32" fill="#4a69bd"/>
+  <rect x="48" y="16" width="4" height="32" fill="#4a69bd"/>
+  <!-- 眼睛区域 -->
+  <rect x="20" y="24" width="8" height="8" fill="#1a1a2e"/>
+  <rect x="36" y="24" width="8" height="8" fill="#1a1a2e"/>
+  <rect x="22" y="26" width="4" height="4" fill="#00d2d3"/>
+  <rect x="38" y="26" width="4" height="4" fill="#00d2d3"/>
+  <!-- 嘴巴 -->
+  <rect x="24" y="40" width="16" height="4" fill="#1a1a2e"/>
+  <!-- 头发 -->
+  <rect x="16" y="8" width="32" height="8" fill="#222f3e"/>
+  <rect x="12" y="12" width="8" height="8" fill="#222f3e"/>
+  <rect x="44" y="12" width="8" height="8" fill="#222f3e"/>
+</svg>

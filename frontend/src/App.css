@@ -93,6 +93,39 @@ body {
 .header-buttons {
     display: flex;
     gap: 0.5rem;
+    align-items: center;
+}
+
+/* 用户头像容器 */
+.user-avatar-container {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.8rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 25px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-right: 0.5rem;
+}
+
+.user-avatar-container:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-2px);
+}
+
+.user-avatar-small {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 2px solid rgba(168, 85, 247, 0.5);
+    background: #0a0a15;
+}
+
+.user-name {
+    color: #e0e0e0;
+    font-size: 0.9rem;
+    font-weight: 500;
 }
 
 /* 按钮样式 */

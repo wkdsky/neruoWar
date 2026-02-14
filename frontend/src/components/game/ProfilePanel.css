@@ -1,0 +1,403 @@
+.profile-panel {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2rem;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    color: #e0e0e0;
+}
+
+.profile-loading {
+    text-align: center;
+    padding: 4rem;
+    font-size: 1.2rem;
+    color: #888;
+}
+
+/* 头部区域 */
+.profile-header {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    margin-bottom: 1.5rem;
+}
+
+.profile-avatar-display {
+    flex-shrink: 0;
+}
+
+.profile-avatar-large {
+    width: 100px;
+    height: 100px;
+    border-radius: 16px;
+    border: 3px solid #4a69bd;
+    box-shadow: 0 4px 20px rgba(74, 105, 189, 0.3);
+    background: #0a0a15;
+}
+
+.profile-header-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.profile-username {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #fff;
+    margin: 0;
+}
+
+.profile-role {
+    font-size: 0.9rem;
+    padding: 4px 12px;
+    background: rgba(74, 105, 189, 0.3);
+    border-radius: 20px;
+    display: inline-block;
+    width: fit-content;
+    color: #8ca0d4;
+}
+
+.profile-profession {
+    font-size: 1rem;
+    color: #f1c40f;
+    font-weight: 500;
+}
+
+/* 标签页 */
+.profile-tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 0.5rem;
+}
+
+.profile-tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    background: transparent;
+    border: none;
+    color: #888;
+    font-size: 1rem;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+}
+
+.profile-tab:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #ccc;
+}
+
+.profile-tab.active {
+    background: rgba(74, 105, 189, 0.2);
+    color: #4a69bd;
+}
+
+/* 内容区域 */
+.profile-content {
+    min-height: 400px;
+}
+
+/* 个人信息 */
+.profile-info-section {
+    padding: 1rem 0;
+}
+
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1.5rem;
+}
+
+.info-item {
+    background: rgba(255, 255, 255, 0.03);
+    padding: 1rem;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.info-label {
+    display: block;
+    font-size: 0.85rem;
+    color: #888;
+    margin-bottom: 0.5rem;
+}
+
+.info-value {
+    display: block;
+    font-size: 1.1rem;
+    color: #fff;
+    font-weight: 500;
+}
+
+/* 修改头像 */
+.profile-avatar-section {
+    padding: 1rem 0;
+}
+
+.avatar-preview {
+    text-align: center;
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 16px;
+}
+
+.avatar-preview-img {
+    width: 120px;
+    height: 120px;
+    border-radius: 16px;
+    border: 3px solid #4a69bd;
+    background: #0a0a15;
+    margin-bottom: 0.5rem;
+}
+
+.avatar-preview-label {
+    display: block;
+    color: #888;
+    font-size: 0.9rem;
+}
+
+.avatar-category {
+    margin-bottom: 2rem;
+}
+
+.avatar-category-title {
+    font-size: 1rem;
+    color: #aaa;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.avatar-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+}
+
+.avatar-option {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 2px solid transparent;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.avatar-option:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(74, 105, 189, 0.5);
+}
+
+.avatar-option.selected {
+    background: rgba(74, 105, 189, 0.15);
+    border-color: #4a69bd;
+}
+
+.avatar-option img {
+    width: 80px;
+    height: 80px;
+    border-radius: 12px;
+    background: #0a0a15;
+    margin-bottom: 0.5rem;
+}
+
+.avatar-label {
+    font-size: 0.85rem;
+    color: #aaa;
+}
+
+.avatar-option.selected .avatar-label {
+    color: #4a69bd;
+}
+
+.avatar-check {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    background: #4a69bd;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+}
+
+.save-avatar-btn {
+    width: 100%;
+    padding: 14px;
+    font-size: 1rem;
+    margin-top: 1rem;
+}
+
+.save-avatar-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* 修改密码 */
+.profile-password-section {
+    padding: 1rem 0;
+    max-width: 400px;
+}
+
+.password-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.form-group label {
+    font-size: 0.95rem;
+    color: #aaa;
+}
+
+.form-input {
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 1rem;
+    transition: all 0.3s ease;
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: #4a69bd;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.form-input::placeholder {
+    color: #666;
+}
+
+.password-error {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    background: rgba(231, 76, 60, 0.15);
+    border: 1px solid rgba(231, 76, 60, 0.3);
+    border-radius: 8px;
+    color: #e74c3c;
+    font-size: 0.9rem;
+}
+
+.password-success {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    background: rgba(39, 174, 96, 0.15);
+    border: 1px solid rgba(39, 174, 96, 0.3);
+    border-radius: 8px;
+    color: #27ae60;
+    font-size: 0.9rem;
+}
+
+.change-password-btn {
+    padding: 14px;
+    font-size: 1rem;
+}
+
+.change-password-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* 按钮样式 */
+.btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #4a69bd 0%, #3c5aa6 100%);
+    color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #5a79cd 0%, #4c6ab6 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(74, 105, 189, 0.4);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+    .profile-panel {
+        padding: 1rem;
+        margin: 0.5rem;
+    }
+
+    .profile-header {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .profile-avatar-large {
+        width: 80px;
+        height: 80px;
+    }
+
+    .profile-tabs {
+        flex-wrap: wrap;
+    }
+
+    .profile-tab {
+        flex: 1;
+        min-width: 100px;
+        justify-content: center;
+        padding: 10px 12px;
+        font-size: 0.9rem;
+    }
+
+    .avatar-grid {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.5rem;
+    }
+
+    .avatar-option {
+        padding: 0.5rem;
+    }
+
+    .avatar-option img {
+        width: 60px;
+        height: 60px;
+    }
+
+    .avatar-label {
+        font-size: 0.75rem;
+    }
+
+    .info-grid {
+        grid-template-columns: 1fr;
+    }
+}

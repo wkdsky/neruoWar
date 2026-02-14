@@ -18,6 +18,7 @@ class SceneManager {
     // 回调函数
     this.onNodeClick = null;
     this.onSceneChange = null;
+    this.onButtonClick = null; // 按钮点击回调
 
     // 预览模式状态
     this.isInPreviewMode = false;
@@ -27,6 +28,13 @@ class SceneManager {
     this.renderer.onClick = (node) => {
       if (this.onNodeClick) {
         this.onNodeClick(node);
+      }
+    };
+
+    // 绑定按钮点击事件
+    this.renderer.onButtonClick = (nodeId, button) => {
+      if (this.onButtonClick) {
+        this.onButtonClick(nodeId, button);
       }
     };
   }
@@ -40,6 +48,9 @@ class SceneManager {
       featuredCount: featuredNodes?.length,
       searchCount: searchResults?.length
     });
+
+    // 清除节点按钮（首页不需要）
+    this.renderer.clearNodeButtons();
 
     const newLayout = this.layout.calculateHomeLayout(rootNodes, featuredNodes, searchResults);
 
@@ -77,6 +88,9 @@ class SceneManager {
       hasClickedNode: !!clickedNode
     });
 
+    // 清除之前的按钮
+    this.renderer.clearNodeButtons();
+
     const newLayout = this.layout.calculateNodeDetailLayout(centerNode, parentNodes, childNodes);
 
     console.log('New layout:', {
@@ -89,6 +103,7 @@ class SceneManager {
     if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
       console.log('First load, setting layout directly');
       this.setLayout(newLayout);
+      this.setupCenterNodeButtons(centerNode);
       this.currentScene = 'nodeDetail';
       if (this.onSceneChange) {
         this.onSceneChange('nodeDetail', centerNode);
@@ -110,11 +125,35 @@ class SceneManager {
       this.setLayout(newLayout);
     }
 
+    // 设置中心节点的操作按钮
+    this.setupCenterNodeButtons(centerNode);
+
     this.currentScene = 'nodeDetail';
 
     if (this.onSceneChange) {
       this.onSceneChange('nodeDetail', centerNode);
     }
+  }
+
+  /**
+   * 设置中心节点的操作按钮
+   */
+  setupCenterNodeButtons(centerNode) {
+    if (!centerNode) return;
+
+    const centerNodeId = `center-${centerNode._id}`;
+
+    // 设置按钮 - 右边是进入知识域
+    this.renderer.setNodeButtons(centerNodeId, [
+      {
+        id: 'enter-domain',
+        icon: '◎',  // 使用圆圈符号表示进入
+        angle: 0,   // 0 = 右边
+        action: 'enterKnowledgeDomain',
+        tooltip: '进入知识域',
+        color: [0.3, 0.7, 0.9, 0.9]  // 柔和的青蓝色
+      }
+    ]);
   }
 
   /**
@@ -563,6 +602,197 @@ class SceneManager {
    */
   isPreviewMode() {
     return this.isInPreviewMode;
+  }
+
+  /**
+   * 进入知识域动画 - 中心节点扩大并淡出，配合知识域淡入
+   * @param {Function} onTransitionComplete - 过渡动画完成后的回调
+   * @param {Function} onProgress - 动画进度回调 (0-1)
+   */
+  async enterKnowledgeDomain(onTransitionComplete, onProgress) {
+    // 清除按钮（进入知识域时不需要显示）
+    this.renderer.clearNodeButtons();
+
+    const centerNode = this.currentLayout.nodes.find(n => n.type === 'center');
+    if (!centerNode) {
+      if (onTransitionComplete) onTransitionComplete();
+      return;
+    }
+
+    const duration = 1000; // 动画时长
+    const startTime = performance.now();
+
+    // 保存初始状态
+    const initialScale = centerNode.scale;
+    const initialX = centerNode.x;
+    const initialY = centerNode.y;
+    const initialOpacity = 1;
+
+    // 计算目标状态 - 节点需要扩大到覆盖整个画布
+    const canvasWidth = this.canvas.width;
+    const canvasHeight = this.canvas.height;
+    const maxDimension = Math.max(canvasWidth, canvasHeight);
+    const targetScale = (maxDimension / (centerNode.radius * 2)) * 1.5;
+    const targetX = canvasWidth / 2;
+    const targetY = canvasHeight / 2;
+
+    // 其他节点淡出
+    const otherNodes = this.currentLayout.nodes.filter(n => n.type !== 'center');
+    otherNodes.forEach(n => {
+      this.renderer.animateNode(n.id, { opacity: 0, scale: n.scale * 0.5 }, duration * 0.3, 'easeInCubic');
+    });
+
+    // 中心节点扩大并淡出动画
+    const animate = () => {
+      const elapsed = performance.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+
+      // 使用easeInOutCubic缓动
+      const easedProgress = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+      // 更新中心节点
+      const node = this.renderer.nodes.get(centerNode.id);
+      if (node) {
+        node.scale = initialScale + (targetScale - initialScale) * easedProgress;
+        node.x = initialX + (targetX - initialX) * easedProgress;
+        node.y = initialY + (targetY - initialY) * easedProgress;
+        // 后半段开始淡出
+        const fadeProgress = Math.max(0, (progress - 0.4) / 0.6);
+        node.opacity = initialOpacity * (1 - fadeProgress);
+        node.glowIntensity = 0.5 + easedProgress * 0.3 - fadeProgress * 0.5;
+      }
+
+      // 通知进度
+      if (onProgress) {
+        onProgress(progress);
+      }
+
+      this.renderer.render();
+
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        // 动画完成，清理节点
+        otherNodes.forEach(n => this.renderer.removeNode(n.id));
+        if (onTransitionComplete) {
+          onTransitionComplete();
+        }
+      }
+    };
+
+    animate();
+  }
+
+  /**
+   * 从知识域返回 - 反向动画：知识域淡出，节点从大到小淡入
+   * @param {Function} onTransitionStart - 开始恢复场景的回调
+   * @param {Function} onProgress - 动画进度回调 (0-1)
+   * @param {Function} onTransitionComplete - 过渡动画完成后的回调
+   */
+  async exitKnowledgeDomain(onTransitionStart, onProgress, onTransitionComplete) {
+    // 首先通知开始恢复，让知识域开始淡出
+    if (onTransitionStart) {
+      onTransitionStart();
+    }
+
+    const duration = 1000;
+    const startTime = performance.now();
+
+    // 计算初始状态（从放大状态开始）
+    const canvasWidth = this.canvas.width;
+    const canvasHeight = this.canvas.height;
+    const maxDimension = Math.max(canvasWidth, canvasHeight);
+
+    // 获取当前节点详情的中心节点配置
+    const centerNodeConfig = this.currentLayout.nodes.find(n => n.type === 'center');
+    if (!centerNodeConfig) {
+      if (onTransitionComplete) onTransitionComplete();
+      return;
+    }
+
+    const targetScale = centerNodeConfig.scale;
+    const targetX = centerNodeConfig.x;
+    const targetY = centerNodeConfig.y;
+    const initialScale = (maxDimension / (centerNodeConfig.radius * 2)) * 1.5;
+    const initialX = canvasWidth / 2;
+    const initialY = canvasHeight / 2;
+
+    // 先设置中心节点为放大状态
+    this.renderer.setNode(centerNodeConfig.id, {
+      ...centerNodeConfig,
+      x: initialX,
+      y: initialY,
+      scale: initialScale,
+      opacity: 0
+    });
+
+    // 反向动画：节点从大到小，从透明到可见
+    const animate = () => {
+      const elapsed = performance.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+
+      // 使用easeInOutCubic缓动
+      const easedProgress = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+      // 更新中心节点
+      const node = this.renderer.nodes.get(centerNodeConfig.id);
+      if (node) {
+        node.scale = initialScale + (targetScale - initialScale) * easedProgress;
+        node.x = initialX + (targetX - initialX) * easedProgress;
+        node.y = initialY + (targetY - initialY) * easedProgress;
+        // 前半段淡入
+        const fadeProgress = Math.min(1, progress / 0.6);
+        node.opacity = fadeProgress;
+        node.glowIntensity = 0.3 + fadeProgress * 0.2;
+      }
+
+      // 通知进度（反向，1到0）
+      if (onProgress) {
+        onProgress(1 - progress);
+      }
+
+      this.renderer.render();
+
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        // 动画完成，恢复其他节点
+        const otherNodes = this.currentLayout.nodes.filter(n => n.type !== 'center');
+        otherNodes.forEach((nodeConfig, index) => {
+          this.renderer.setNode(nodeConfig.id, {
+            ...nodeConfig,
+            opacity: 0,
+            scale: 0
+          });
+          // 延迟进入动画
+          setTimeout(() => {
+            this.renderer.animateNode(nodeConfig.id, nodeConfig, 400, 'easeOutBack');
+          }, index * 50);
+        });
+
+        // 更新连线
+        this.renderer.setLines(this.currentLayout.lines);
+
+        // 重新设置中心节点的按钮
+        if (centerNodeConfig.data) {
+          this.setupCenterNodeButtons(centerNodeConfig.data);
+        }
+
+        // 确保渲染循环正常运行
+        this.renderer.renderingLoop = false;
+        this.renderer.render();
+
+        if (onTransitionComplete) {
+          setTimeout(onTransitionComplete, 400 + otherNodes.length * 50);
+        }
+      }
+    };
+
+    animate();
   }
 
   /**

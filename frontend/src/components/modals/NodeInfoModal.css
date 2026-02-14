@@ -139,3 +139,28 @@
     padding: 1.5rem;
     border-top: 1px solid #475569;
 }
+
+.enter-domain-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(168, 85, 247, 0.3);
+}
+
+.enter-domain-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(168, 85, 247, 0.4);
+    background: linear-gradient(135deg, #b86cf7 0%, #7c7fff 100%);
+}
+
+.enter-domain-btn:active {
+    transform: translateY(0);
+}

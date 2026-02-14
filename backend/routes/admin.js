@@ -14,19 +14,23 @@ router.get('/users', authenticateToken, isAdmin, async (req, res) => {
       .lean();  // 转换为普通对象
 
     // 返回所有字段
-    const usersData = users.map(user => ({
-      _id: user._id,
-      username: user.username,
-      password: user.plainPassword || '未保存',  // 明文密码
-      hashedPassword: user.password,  // 哈希密码（如果你想看）
-      level: user.level,
-      experience: user.experience,
-      profession: user.profession,
-      ownedNodes: user.ownedNodes,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
-      __v: user.__v
-    }));
+    const usersData = users.map(user => {
+      const plainPassword = typeof user.plainPassword === 'string' ? user.plainPassword : '';
+      return {
+        _id: user._id,
+        username: user.username,
+        password: plainPassword,  // 明文密码（可能为空）
+        passwordSaved: plainPassword.length > 0,
+        hashedPassword: user.password,  // 哈希密码（如果你想看）
+        level: user.level,
+        experience: user.experience,
+        profession: user.profession,
+        ownedNodes: user.ownedNodes,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+        __v: user.__v
+      };
+    });
 
     res.json({
       success: true,
@@ -63,10 +67,26 @@ router.put('/users/:userId', authenticateToken, isAdmin, async (req, res) => {
       user.username = username;
     }
 
-    if (password !== undefined) {
-      // 保存明文密码和哈希密码
-      user.plainPassword = password;
-      user.password = await bcrypt.hash(password, 10);
+    if (password !== undefined && password !== null) {
+      const nextPassword = typeof password === 'string' ? password : String(password);
+      const trimmedPassword = nextPassword.trim();
+
+      // 兼容旧前端：当明文密码本来为空时，忽略占位文案“未保存”
+      const isLegacyUnsavedPlaceholder = (
+        nextPassword === '未保存' &&
+        (!user.plainPassword || user.plainPassword === '')
+      );
+
+      // 留空表示不修改密码
+      if (trimmedPassword !== '' && !isLegacyUnsavedPlaceholder) {
+        if (nextPassword.length < 6) {
+          return res.status(400).json({ error: '密码至少6个字符' });
+        }
+
+        // 保存明文密码和哈希密码
+        user.plainPassword = nextPassword;
+        user.password = await bcrypt.hash(nextPassword, 10);
+      }
     }
 
     if (level !== undefined) {

@@ -252,6 +252,14 @@ const CreateNodeModal = ({
                 displayText: `插入到 ${selectedNodeA.name} 和 ${selectedNodeB.name} 之间`
             };
         } else {
+            // UI 中的“作为母域/子域”是从新节点相对目标节点的角色描述，
+            // 后端 relationType 则是“当前节点相对目标节点”的关系：
+            // 作为目标母域 => 当前节点包含目标 => contains
+            // 作为目标子域 => 当前节点拓展目标 => extends
+            const backendRelationType = selectedRelationType === RELATION_TYPES.EXTENDS
+                ? RELATION_TYPES.CONTAINS
+                : RELATION_TYPES.EXTENDS;
+
             associationData = {
                 type: selectedRelationType,
                 nodeA: selectedNodeA,
@@ -259,7 +267,7 @@ const CreateNodeModal = ({
                 direction: null,
                 actualAssociations: [{
                     targetNode: selectedNodeA._id,
-                    relationType: selectedRelationType,
+                    relationType: backendRelationType,
                     nodeName: selectedNodeA.name
                 }],
                 displayText: selectedRelationType === 'extends'

@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Home, Shield } from 'lucide-react';
+import { Home, Shield, User } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
 import Login from './components/auth/Login';
 import AdminPanel from './components/admin/AdminPanel';
 import AlliancePanel from './components/game/AlliancePanel';
+import ProfilePanel from './components/game/ProfilePanel';
 import NodeDetail from './components/game/NodeDetail';
 import HomeView from './components/game/Home';
+import KnowledgeDomainScene from './components/game/KnowledgeDomainScene';
 import SceneManager from './SceneManager';
 import LocationSelectionModal from './LocationSelectionModal';
 import AssociationModal from './components/modals/AssociationModal';
@@ -14,11 +16,30 @@ import NodeInfoModal from './components/modals/NodeInfoModal';
 import NavigationTreeModal from './components/modals/NavigationTreeModal';
 import CreateNodeModal from './components/modals/CreateNodeModal';
 
+// 导入头像
+import defaultMale1 from './assets/avatars/default_male_1.svg';
+import defaultMale2 from './assets/avatars/default_male_2.svg';
+import defaultMale3 from './assets/avatars/default_male_3.svg';
+import defaultFemale1 from './assets/avatars/default_female_1.svg';
+import defaultFemale2 from './assets/avatars/default_female_2.svg';
+import defaultFemale3 from './assets/avatars/default_female_3.svg';
+
+// 头像映射
+const avatarMap = {
+    default_male_1: defaultMale1,
+    default_male_2: defaultMale2,
+    default_male_3: defaultMale3,
+    default_female_1: defaultFemale1,
+    default_female_2: defaultFemale2,
+    default_female_3: defaultFemale3
+};
+
 const App = () => {
     const [socket, setSocket] = useState(null);
     const [authenticated, setAuthenticated] = useState(false);
     const [username, setUsername] = useState('');
     const [profession, setProfession] = useState('');
+    const [userAvatar, setUserAvatar] = useState('default_male_1');
     const [nodes, setNodes] = useState([]);
     const [technologies, setTechnologies] = useState([]);
     const [view, setView] = useState('login');
@@ -32,12 +53,14 @@ const App = () => {
         const storedUsername = localStorage.getItem('username');
         const storedLocation = localStorage.getItem('userLocation');
         const storedProfession = localStorage.getItem('profession');
+        const storedAvatar = localStorage.getItem('userAvatar');
 
         if (token && storedUsername) {
             setAuthenticated(true);
             setUsername(storedUsername);
             setProfession(storedProfession || '');
             setUserLocation(storedLocation || '');
+            setUserAvatar(storedAvatar || 'default_male_1');
 
             // 如果location为空，需要显示位置选择弹窗
             if (!storedLocation || storedLocation === '') {
@@ -95,6 +118,12 @@ const App = () => {
     const [showNavigationTree, setShowNavigationTree] = useState(false);
     const [fullNavigationPaths, setFullNavigationPaths] = useState([]);
 
+    // 知识域场景相关状态
+    const [showKnowledgeDomain, setShowKnowledgeDomain] = useState(false);
+    const [knowledgeDomainNode, setKnowledgeDomainNode] = useState(null);
+    const [domainTransitionProgress, setDomainTransitionProgress] = useState(0);
+    const [isTransitioningToDomain, setIsTransitioningToDomain] = useState(false);
+
     // WebGL场景管理
     const webglCanvasRef = useRef(null);
     const sceneManagerRef = useRef(null);
@@ -149,6 +178,16 @@ const App = () => {
                 }
             };
 
+            // 设置按钮点击回调
+            sceneManager.onButtonClick = (nodeId, button) => {
+                if (button.action === 'enterKnowledgeDomain') {
+                    // 获取当前节点详情并进入知识域
+                    if (currentNodeDetail) {
+                        handleEnterKnowledgeDomain(currentNodeDetail);
+                    }
+                }
+            };
+
             sceneManagerRef.current = sceneManager;
             setIsWebGLReady(true);
 
@@ -173,6 +212,17 @@ const App = () => {
             console.error('WebGL初始化失败:', error);
         }
     }, [view, canvasKey]); // 添加canvasKey作为依赖，用于强制重新初始化
+
+    // 更新按钮点击回调（确保获取最新的 currentNodeDetail）
+    useEffect(() => {
+        if (sceneManagerRef.current) {
+            sceneManagerRef.current.onButtonClick = (nodeId, button) => {
+                if (button.action === 'enterKnowledgeDomain' && currentNodeDetail) {
+                    handleEnterKnowledgeDomain(currentNodeDetail);
+                }
+            };
+        }
+    }, [currentNodeDetail]);
 
     useEffect(() => {
         // 只在没有socket时初始化
@@ -225,10 +275,12 @@ const App = () => {
     localStorage.setItem('username', data.username);
     localStorage.setItem('userLocation', data.location || '');
     localStorage.setItem('profession', data.profession || '求知');
+    localStorage.setItem('userAvatar', data.avatar || 'default_male_1');
     setAuthenticated(true);
     setUsername(data.username);
     setProfession(data.profession || '求知');
     setUserLocation(data.location || '');
+    setUserAvatar(data.avatar || 'default_male_1');
 
     // 重新初始化socket连接（连接事件中会处理认证）
     initializeSocket(data.token);
@@ -355,12 +407,14 @@ const App = () => {
         localStorage.removeItem('username');
         localStorage.removeItem('userLocation');
         localStorage.removeItem('profession');
+        localStorage.removeItem('userAvatar');
         setAuthenticated(false);
         setUsername('');
         setProfession('');
         setView('login');
         setIsAdmin(false);
         setUserLocation('');
+        setUserAvatar('default_male_1');
         setSelectedLocationNode(null);
         setShowLocationModal(false);
         
@@ -848,6 +902,59 @@ const App = () => {
         setShowCreateNodeModal(true);
     };
 
+    // 进入知识域
+    const handleEnterKnowledgeDomain = (node) => {
+        if (!sceneManagerRef.current || !node) return;
+
+        setKnowledgeDomainNode(node);
+        setIsTransitioningToDomain(true);
+        setShowNodeInfoModal(false); // 关闭节点信息弹窗
+
+        // 开始过渡动画
+        sceneManagerRef.current.enterKnowledgeDomain(
+            () => {
+                // 动画完成，显示知识域场景
+                setShowKnowledgeDomain(true);
+                setIsTransitioningToDomain(false);
+                setDomainTransitionProgress(1);
+            },
+            (progress) => {
+                // 更新过渡进度
+                setDomainTransitionProgress(progress);
+            }
+        );
+    };
+
+    // 退出知识域
+    const handleExitKnowledgeDomain = () => {
+        if (!sceneManagerRef.current) {
+            setShowKnowledgeDomain(false);
+            setDomainTransitionProgress(0);
+            setKnowledgeDomainNode(null);
+            return;
+        }
+
+        setIsTransitioningToDomain(true);
+
+        // 开始反向过渡动画
+        sceneManagerRef.current.exitKnowledgeDomain(
+            () => {
+                // 开始恢复场景，知识域开始淡出
+                setShowKnowledgeDomain(false);
+            },
+            (progress) => {
+                // 更新过渡进度（从1到0）
+                setDomainTransitionProgress(progress);
+            },
+            () => {
+                // 动画完成
+                setIsTransitioningToDomain(false);
+                setDomainTransitionProgress(0);
+                setKnowledgeDomainNode(null);
+            }
+        );
+    };
+
     if (view === 'login') {
         return <Login onLogin={handleLoginSuccess} />;
     }
@@ -876,9 +983,20 @@ const App = () => {
                         </h1>
                         <div className="header-right">
                             <div className="header-buttons">
-                                <span className="user-name" style={{marginRight: '1rem', display: 'flex', alignItems: 'center'}}>
-                                    当前用户: {username} {profession && `【${profession}】`}
-                                </span>
+                                <div
+                                    className="user-avatar-container"
+                                    onClick={() => setView('profile')}
+                                    title="点击进入个人中心"
+                                >
+                                    <img
+                                        src={avatarMap[userAvatar] || avatarMap['default_male_1']}
+                                        alt="头像"
+                                        className="user-avatar-small"
+                                    />
+                                    <span className="user-name">
+                                        {username} {profession && `【${profession}】`}
+                                    </span>
+                                </div>
                                 <button
                                     onClick={handleLogout}
                                     className="btn btn-logout"
@@ -992,6 +1110,15 @@ const App = () => {
                 {view === "admin" && isAdmin && (
                     <AdminPanel />
                 )}
+                {view === "profile" && (
+                    <ProfilePanel
+                        username={username}
+                        onAvatarChange={(newAvatar) => {
+                            setUserAvatar(newAvatar);
+                            localStorage.setItem('userAvatar', newAvatar);
+                        }}
+                    />
+                )}
                 
                 <AssociationModal 
                     isOpen={showAssociationModal}
@@ -999,10 +1126,11 @@ const App = () => {
                     viewingAssociationNode={viewingAssociationNode}
                 />
 
-                <NodeInfoModal 
+                <NodeInfoModal
                     isOpen={showNodeInfoModal}
                     onClose={() => setShowNodeInfoModal(false)}
                     nodeDetail={currentNodeDetail}
+                    onEnterKnowledgeDomain={handleEnterKnowledgeDomain}
                 />
 
                 {showCreateNodeModal && (
@@ -1021,7 +1149,7 @@ const App = () => {
                     />
                 )}
 
-                <NavigationTreeModal 
+                <NavigationTreeModal
                     isOpen={showNavigationTree}
                     onClose={() => setShowNavigationTree(false)}
                     navigationPaths={fullNavigationPaths}
@@ -1031,6 +1159,14 @@ const App = () => {
                         setView('home');
                         setNavigationPath([{ type: 'home', label: '首页' }]);
                     }}
+                />
+
+                {/* 知识域场景 */}
+                <KnowledgeDomainScene
+                    node={knowledgeDomainNode}
+                    isVisible={showKnowledgeDomain || isTransitioningToDomain}
+                    onExit={handleExitKnowledgeDomain}
+                    transitionProgress={domainTransitionProgress}
                 />
             </div>
         </div>

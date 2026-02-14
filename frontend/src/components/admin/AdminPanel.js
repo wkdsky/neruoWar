@@ -104,7 +104,8 @@ const AdminPanel = () => {
         setEditingUser(user._id);
         setEditForm({
             username: user.username,
-            password: user.password,
+            // 编辑时默认留空，避免把展示值误当作新密码提交
+            password: '',
             level: user.level,
             experience: user.experience
         });
@@ -112,6 +113,16 @@ const AdminPanel = () => {
 
     const saveUserEdit = async (userId) => {
         const token = localStorage.getItem('token');
+        const payload = {
+            username: editForm.username,
+            level: editForm.level,
+            experience: editForm.experience
+        };
+
+        if (editForm.password.trim() !== '') {
+            payload.password = editForm.password;
+        }
+
         try {
             const response = await fetch(`http://localhost:5000/api/admin/users/${userId}`, {
                 method: 'PUT',
@@ -119,7 +130,7 @@ const AdminPanel = () => {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify(editForm)
+                body: JSON.stringify(payload)
             });
             if (response.ok) {
                 alert('用户信息已更新');
@@ -728,10 +739,11 @@ const AdminPanel = () => {
                                                         ...editForm,
                                                         password: e.target.value
                                                     })}
+                                                    placeholder="留空表示不修改密码"
                                                     className="edit-input"
                                                 />
                                             ) : (
-                                                <span className="password-cell">{user.password}</span>
+                                                <span className="password-cell">{user.password || '未保存'}</span>
                                             )}
                                         </td>
                                         <td>
