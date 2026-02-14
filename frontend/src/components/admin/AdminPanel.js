@@ -1,6 +1,20 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Users, Zap, Bell, Shield, Check, X, Search, Plus, Trash2, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Users, Zap, Bell, Shield, Check, X, Search, Plus, AlertTriangle, ArrowLeft, ArrowRight, RotateCcw, ChevronDown, ChevronUp, Settings } from 'lucide-react';
+import MiniPreviewRenderer from '../modals/MiniPreviewRenderer';
 import './Admin.css';
+
+const ASSOC_STEPS = {
+    SELECT_NODE_A: 'select_node_a',
+    SELECT_RELATION: 'select_relation',
+    SELECT_NODE_B: 'select_node_b',
+    PREVIEW: 'preview'
+};
+
+const ASSOC_RELATION_TYPES = {
+    EXTENDS: 'extends',
+    CONTAINS: 'contains',
+    INSERT: 'insert'
+};
 
 const AdminPanel = () => {
     const [adminTab, setAdminTab] = useState('users');
@@ -14,6 +28,8 @@ const AdminPanel = () => {
         level: 0,
         experience: 0
     });
+    const [travelUnitSeconds, setTravelUnitSeconds] = useState(60);
+    const [travelUnitInput, setTravelUnitInput] = useState('60');
 
     // Node Management State
     const [allNodes, setAllNodes] = useState([]);
@@ -75,13 +91,27 @@ const AdminPanel = () => {
     const [editAssociations, setEditAssociations] = useState([]);
     const [assocSearchKeyword, setAssocSearchKeyword] = useState('');
     const [assocSearchResults, setAssocSearchResults] = useState([]);
-    const [newAssocType, setNewAssocType] = useState('contains');
+    const [assocSearchLoading, setAssocSearchLoading] = useState(false);
+    const [isEditAssociationListExpanded, setIsEditAssociationListExpanded] = useState(true);
+
+    const [assocCurrentStep, setAssocCurrentStep] = useState(null);
+    const [assocSelectedNodeA, setAssocSelectedNodeA] = useState(null);
+    const [assocSelectedRelationType, setAssocSelectedRelationType] = useState(null);
+    const [assocSelectedNodeB, setAssocSelectedNodeB] = useState(null);
+    const [assocInsertDirection, setAssocInsertDirection] = useState(null);
+    const [assocNodeBCandidates, setAssocNodeBCandidates] = useState({ parents: [], children: [] });
+    const [assocNodeBSearchKeyword, setAssocNodeBSearchKeyword] = useState('');
+    const [assocEditingIndex, setAssocEditingIndex] = useState(null);
+
+    const assocPreviewCanvasRef = useRef(null);
+    const assocPreviewRendererRef = useRef(null);
 
     // Initial Fetch
     useEffect(() => {
         fetchPendingNodes();
         fetchAllUsers();
         fetchAllNodes();
+        fetchAdminSettings();
     }, []);
 
     // --- User Management Functions ---
@@ -164,6 +194,57 @@ const AdminPanel = () => {
         } catch (error) {
             console.error('删除用户失败:', error);
             alert('删除失败');
+        }
+    };
+
+    const fetchAdminSettings = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch('http://localhost:5000/api/admin/settings', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                const seconds = String(data?.settings?.travelUnitSeconds ?? 60);
+                setTravelUnitSeconds(parseInt(seconds, 10));
+                setTravelUnitInput(seconds);
+            }
+        } catch (error) {
+            console.error('获取系统设置失败:', error);
+        }
+    };
+
+    const saveAdminSettings = async () => {
+        const token = localStorage.getItem('token');
+        const parsed = parseInt(travelUnitInput, 10);
+
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 86400) {
+            alert('每单位移动耗时必须是 1-86400 的整数秒');
+            return;
+        }
+
+        try {
+            const response = await fetch('http://localhost:5000/api/admin/settings', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ travelUnitSeconds: parsed })
+            });
+            if (response.ok) {
+                const data = await response.json();
+                const seconds = parseInt(String(data?.settings?.travelUnitSeconds ?? parsed), 10);
+                setTravelUnitSeconds(seconds);
+                setTravelUnitInput(String(seconds));
+                alert('系统设置已保存');
+            } else {
+                const data = await response.json();
+                alert(data.error || '保存失败');
+            }
+        } catch (error) {
+            console.error('保存系统设置失败:', error);
+            alert('保存失败');
         }
     };
 
@@ -361,111 +442,428 @@ const AdminPanel = () => {
         setShowAssociationModal(true);
     };
 
-    const openEditAssociationModal = async (node) => {
-        setEditingAssociationNode(node);
-        setAssocSearchKeyword('');
-        setAssocSearchResults([]);
-        setNewAssocType('contains');
-        setShowEditAssociationModal(true);
-
-        // Rebuild associations for editing
-        const token = localStorage.getItem('token');
-        const allRelatedNames = [
-            ...(node.relatedParentDomains || []),
-            ...(node.relatedChildDomains || [])
-        ];
-
-        if (allRelatedNames.length === 0) {
-            setEditAssociations([]);
-            return;
-        }
-
-        try {
-            const response = await fetch('http://localhost:5000/api/nodes', {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                const allNodesList = data.nodes || [];
-                const nodeMap = {};
-                allNodesList.forEach(n => { nodeMap[n.name] = n; });
-
-                const rebuiltAssociations = [];
-                (node.relatedParentDomains || []).forEach(nodeName => {
-                    const targetNode = nodeMap[nodeName];
-                    if (targetNode) {
-                        rebuiltAssociations.push({
-                            targetNode: targetNode._id,
-                            targetNodeName: targetNode.name,
-                            relationType: 'extends'
-                        });
-                    }
-                });
-                (node.relatedChildDomains || []).forEach(nodeName => {
-                    const targetNode = nodeMap[nodeName];
-                    if (targetNode) {
-                        rebuiltAssociations.push({
-                            targetNode: targetNode._id,
-                            targetNodeName: targetNode.name,
-                            relationType: 'contains'
-                        });
-                    }
-                });
-                setEditAssociations(rebuiltAssociations);
-            }
-        } catch (error) {
-            console.error('获取节点列表失败:', error);
-            setEditAssociations([]);
-        }
+    const getRelationMeta = (uiRelationType) => {
+        const isParent = uiRelationType === ASSOC_RELATION_TYPES.EXTENDS;
+        return {
+            roleText: isParent ? '母域' : '子域',
+            badgeClass: uiRelationType,
+            displayText: (targetNodeName) => `作为 ${targetNodeName} 的${isParent ? '母域' : '子域'}`
+        };
     };
 
-    const searchAssociationNodes = async (keyword) => {
-        if (!keyword || keyword.trim() === '') {
+    const toBackendRelationType = (uiRelationType) => (
+        uiRelationType === ASSOC_RELATION_TYPES.EXTENDS
+            ? ASSOC_RELATION_TYPES.CONTAINS
+            : ASSOC_RELATION_TYPES.EXTENDS
+    );
+
+    const resetAssociationEditor = useCallback(() => {
+        setAssocCurrentStep(null);
+        setAssocSelectedNodeA(null);
+        setAssocSelectedRelationType(null);
+        setAssocSelectedNodeB(null);
+        setAssocInsertDirection(null);
+        setAssocNodeBCandidates({ parents: [], children: [] });
+        setAssocNodeBSearchKeyword('');
+        setAssocEditingIndex(null);
+        setAssocSearchKeyword('');
+        setAssocSearchResults([]);
+        setAssocSearchLoading(false);
+
+        if (assocPreviewRendererRef.current) {
+            assocPreviewRendererRef.current.destroy();
+            assocPreviewRendererRef.current = null;
+        }
+    }, []);
+
+    const closeEditAssociationModal = useCallback(() => {
+        setShowEditAssociationModal(false);
+        setEditingAssociationNode(null);
+        setEditAssociations([]);
+        resetAssociationEditor();
+    }, [resetAssociationEditor]);
+
+    useEffect(() => {
+        if (assocCurrentStep === ASSOC_STEPS.PREVIEW && assocPreviewCanvasRef.current) {
+            if (!assocPreviewRendererRef.current) {
+                assocPreviewRendererRef.current = new MiniPreviewRenderer(assocPreviewCanvasRef.current);
+            }
+
+            assocPreviewRendererRef.current.setPreviewScene({
+                nodeA: assocSelectedNodeA,
+                nodeB: assocSelectedNodeB,
+                relationType: assocSelectedRelationType,
+                newNodeName: editingAssociationNode?.name || '当前节点',
+                insertDirection: assocInsertDirection
+            });
+        }
+
+        return () => {
+            if (assocCurrentStep !== ASSOC_STEPS.PREVIEW && assocPreviewRendererRef.current) {
+                assocPreviewRendererRef.current.stopAnimation();
+            }
+        };
+    }, [
+        assocCurrentStep,
+        assocSelectedNodeA,
+        assocSelectedNodeB,
+        assocSelectedRelationType,
+        assocInsertDirection,
+        editingAssociationNode
+    ]);
+
+    useEffect(() => () => {
+        if (assocPreviewRendererRef.current) {
+            assocPreviewRendererRef.current.destroy();
+            assocPreviewRendererRef.current = null;
+        }
+    }, []);
+
+    const fetchNodeDetailForAssociation = async (nodeId) => {
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}`);
+            if (response.ok) {
+                const data = await response.json();
+                return data.node;
+            }
+        } catch (error) {
+            console.error('获取节点详情失败:', error);
+        }
+        return null;
+    };
+
+    const buildSimpleAssociation = ({ targetNodeId, targetNodeName, backendRelationType }) => {
+        const uiRelationType = backendRelationType === ASSOC_RELATION_TYPES.CONTAINS
+            ? ASSOC_RELATION_TYPES.EXTENDS
+            : ASSOC_RELATION_TYPES.CONTAINS;
+        const relationMeta = getRelationMeta(uiRelationType);
+        return {
+            type: uiRelationType,
+            nodeA: { _id: targetNodeId, name: targetNodeName },
+            nodeB: null,
+            direction: null,
+            actualAssociations: [{
+                targetNode: targetNodeId,
+                relationType: backendRelationType,
+                nodeName: targetNodeName
+            }],
+            displayText: relationMeta.displayText(targetNodeName)
+        };
+    };
+
+    const openEditAssociationModal = (node) => {
+        setEditingAssociationNode(node);
+        setShowEditAssociationModal(true);
+        setIsEditAssociationListExpanded(true);
+        resetAssociationEditor();
+
+        const rebuiltAssociations = [];
+
+        if (Array.isArray(node.associations) && node.associations.length > 0) {
+            node.associations.forEach((assoc) => {
+                const targetNodeId = assoc?.targetNode?._id || assoc?.targetNode;
+                const targetNodeName = assoc?.targetNode?.name;
+                if (targetNodeId && targetNodeName && assoc.relationType) {
+                    rebuiltAssociations.push(buildSimpleAssociation({
+                        targetNodeId,
+                        targetNodeName,
+                        backendRelationType: assoc.relationType
+                    }));
+                }
+            });
+        }
+
+        if (rebuiltAssociations.length === 0) {
+            const nodeMap = {};
+            allNodes.forEach(n => {
+                nodeMap[n.name] = n;
+            });
+
+            (node.relatedParentDomains || []).forEach((nodeName) => {
+                const targetNode = nodeMap[nodeName];
+                if (targetNode) {
+                    rebuiltAssociations.push(buildSimpleAssociation({
+                        targetNodeId: targetNode._id,
+                        targetNodeName: targetNode.name,
+                        backendRelationType: ASSOC_RELATION_TYPES.EXTENDS
+                    }));
+                }
+            });
+
+            (node.relatedChildDomains || []).forEach((nodeName) => {
+                const targetNode = nodeMap[nodeName];
+                if (targetNode) {
+                    rebuiltAssociations.push(buildSimpleAssociation({
+                        targetNodeId: targetNode._id,
+                        targetNodeName: targetNode.name,
+                        backendRelationType: ASSOC_RELATION_TYPES.CONTAINS
+                    }));
+                }
+            });
+        }
+
+        setEditAssociations(rebuiltAssociations);
+    };
+
+    const searchAssociationNodes = useCallback(async (keyword) => {
+        const normalizedKeyword = (keyword || '').trim();
+        if (!normalizedKeyword) {
             setAssocSearchResults([]);
             return;
         }
+
+        setAssocSearchLoading(true);
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(keyword)}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(normalizedKeyword)}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
                 const data = await response.json();
-                const filtered = data.filter(n => {
-                    if (n._id === editingAssociationNode._id) return false;
-                    return !editAssociations.some(assoc => assoc.targetNode === n._id);
-                });
+                const filtered = data.filter(n => n._id !== editingAssociationNode?._id);
                 setAssocSearchResults(filtered);
+            } else {
+                setAssocSearchResults([]);
             }
         } catch (error) {
             console.error('搜索节点失败:', error);
+            setAssocSearchResults([]);
+        } finally {
+            setAssocSearchLoading(false);
+        }
+    }, [editingAssociationNode]);
+
+    // 选择节点步骤中，输入时自动搜索
+    useEffect(() => {
+        if (assocCurrentStep !== ASSOC_STEPS.SELECT_NODE_A) {
+            return;
+        }
+
+        if (!assocSearchKeyword.trim()) {
+            setAssocSearchResults([]);
+            setAssocSearchLoading(false);
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            searchAssociationNodes(assocSearchKeyword);
+        }, 220);
+
+        return () => clearTimeout(timer);
+    }, [assocSearchKeyword, assocCurrentStep, searchAssociationNodes]);
+
+    const startAddEditAssociation = () => {
+        resetAssociationEditor();
+        setAssocCurrentStep(ASSOC_STEPS.SELECT_NODE_A);
+    };
+
+    const selectAssocNodeA = async (node) => {
+        const nodeDetail = await fetchNodeDetailForAssociation(node._id);
+        if (nodeDetail) {
+            setAssocSelectedNodeA(nodeDetail);
+            setAssocCurrentStep(ASSOC_STEPS.SELECT_RELATION);
+            setAssocSearchResults([]);
+            setAssocSearchKeyword('');
+        } else {
+            alert('获取节点详情失败');
         }
     };
 
-    const addEditAssociation = (targetNode) => {
-        const exists = editAssociations.some(a => a.targetNode === targetNode._id);
-        if (exists) {
-            alert('该节点已在关联列表中。');
+    const selectAssocRelationType = (type) => {
+        setAssocSelectedRelationType(type);
+
+        if (type === ASSOC_RELATION_TYPES.INSERT) {
+            const candidates = {
+                parents: assocSelectedNodeA?.parentNodesInfo || [],
+                children: assocSelectedNodeA?.childNodesInfo || []
+            };
+            setAssocNodeBCandidates(candidates);
+
+            if (candidates.parents.length === 0 && candidates.children.length === 0) {
+                alert('该节点没有母域或子域节点，无法使用插入模式。');
+                return;
+            }
+            setAssocCurrentStep(ASSOC_STEPS.SELECT_NODE_B);
+        } else {
+            setAssocCurrentStep(ASSOC_STEPS.PREVIEW);
+        }
+    };
+
+    const selectAssocNodeB = (node, fromParents) => {
+        setAssocSelectedNodeB(node);
+        setAssocInsertDirection(fromParents ? 'bToA' : 'aToB');
+        setAssocCurrentStep(ASSOC_STEPS.PREVIEW);
+    };
+
+    const replayAssocPreview = () => {
+        if (assocPreviewRendererRef.current) {
+            assocPreviewRendererRef.current.setPreviewScene({
+                nodeA: assocSelectedNodeA,
+                nodeB: assocSelectedNodeB,
+                relationType: assocSelectedRelationType,
+                newNodeName: editingAssociationNode?.name || '当前节点',
+                insertDirection: assocInsertDirection
+            });
+        }
+    };
+
+    const confirmEditAssociation = () => {
+        let associationData;
+
+        if (assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT) {
+            associationData = {
+                type: ASSOC_RELATION_TYPES.INSERT,
+                nodeA: assocSelectedNodeA,
+                nodeB: assocSelectedNodeB,
+                direction: assocInsertDirection,
+                actualAssociations: assocInsertDirection === 'aToB'
+                    ? [
+                        { targetNode: assocSelectedNodeA._id, relationType: ASSOC_RELATION_TYPES.EXTENDS, nodeName: assocSelectedNodeA.name },
+                        { targetNode: assocSelectedNodeB._id, relationType: ASSOC_RELATION_TYPES.CONTAINS, nodeName: assocSelectedNodeB.name }
+                    ]
+                    : [
+                        { targetNode: assocSelectedNodeB._id, relationType: ASSOC_RELATION_TYPES.EXTENDS, nodeName: assocSelectedNodeB.name },
+                        { targetNode: assocSelectedNodeA._id, relationType: ASSOC_RELATION_TYPES.CONTAINS, nodeName: assocSelectedNodeA.name }
+                    ],
+                displayText: `插入到 ${assocSelectedNodeA.name} 和 ${assocSelectedNodeB.name} 之间`
+            };
+        } else {
+            const backendRelationType = toBackendRelationType(assocSelectedRelationType);
+            const relationMeta = getRelationMeta(assocSelectedRelationType);
+            associationData = {
+                type: assocSelectedRelationType,
+                nodeA: assocSelectedNodeA,
+                nodeB: null,
+                direction: null,
+                actualAssociations: [{
+                    targetNode: assocSelectedNodeA._id,
+                    relationType: backendRelationType,
+                    nodeName: assocSelectedNodeA.name
+                }],
+                displayText: relationMeta.displayText(assocSelectedNodeA.name)
+            };
+        }
+
+        let duplicateReason = null;
+        const isDuplicate = editAssociations.some((assoc, index) => {
+            if (assocEditingIndex !== null && index === assocEditingIndex) {
+                return false;
+            }
+
+            if (assoc.type === ASSOC_RELATION_TYPES.INSERT && associationData.type === ASSOC_RELATION_TYPES.INSERT) {
+                const existingPair = [assoc.nodeA._id, assoc.nodeB._id].sort();
+                const newPair = [associationData.nodeA._id, associationData.nodeB._id].sort();
+                if (existingPair[0] === newPair[0] && existingPair[1] === newPair[1]) {
+                    duplicateReason = `已经存在插入到 ${assoc.nodeA.name} 和 ${assoc.nodeB.name} 之间的关联`;
+                    return true;
+                }
+                return false;
+            }
+
+            if (assoc.type !== ASSOC_RELATION_TYPES.INSERT && associationData.type !== ASSOC_RELATION_TYPES.INSERT) {
+                const found = assoc.actualAssociations.some(aa =>
+                    associationData.actualAssociations.some(ba =>
+                        aa.targetNode.toString() === ba.targetNode.toString() && aa.relationType === ba.relationType
+                    )
+                );
+                if (found) {
+                    duplicateReason = `已经存在与 ${assoc.nodeA.name} 的${assoc.type === ASSOC_RELATION_TYPES.EXTENDS ? '母域' : '子域'}关系`;
+                    return true;
+                }
+                return false;
+            }
+
+            const insertAssoc = assoc.type === ASSOC_RELATION_TYPES.INSERT ? assoc : associationData;
+            const simpleAssoc = assoc.type === ASSOC_RELATION_TYPES.INSERT ? associationData : assoc;
+            const conflict = insertAssoc.actualAssociations.find(ia =>
+                simpleAssoc.actualAssociations.some(sa =>
+                    ia.targetNode.toString() === sa.targetNode.toString() && ia.relationType === sa.relationType
+                )
+            );
+            if (conflict) {
+                duplicateReason = `与现有关联冲突：当前节点对 ${conflict.nodeName} 已经有${conflict.relationType === ASSOC_RELATION_TYPES.EXTENDS ? '子域' : '母域'}关系`;
+                return true;
+            }
+            return false;
+        });
+
+        if (isDuplicate) {
+            alert(duplicateReason || '该关联关系已存在');
             return;
         }
-        setEditAssociations([
-            ...editAssociations,
-            {
-                targetNode: targetNode._id,
-                targetNodeName: targetNode.name,
-                relationType: newAssocType
-            }
-        ]);
-        setAssocSearchResults(prev => prev.filter(node => node._id !== targetNode._id));
+
+        if (assocEditingIndex !== null) {
+            setEditAssociations(prev => {
+                const next = [...prev];
+                next[assocEditingIndex] = associationData;
+                return next;
+            });
+        } else {
+            setEditAssociations(prev => [...prev, associationData]);
+        }
+
+        resetAssociationEditor();
     };
 
     const removeEditAssociation = (index) => {
         setEditAssociations(prev => prev.filter((_, i) => i !== index));
     };
 
+    const editExistingAssociation = async (index) => {
+        const assoc = editAssociations[index];
+        let nextNodeA = assoc.nodeA;
+
+        if (nextNodeA?._id && (!nextNodeA.parentNodesInfo || !nextNodeA.childNodesInfo)) {
+            const nodeDetail = await fetchNodeDetailForAssociation(nextNodeA._id);
+            if (nodeDetail) {
+                nextNodeA = nodeDetail;
+            }
+        }
+
+        setAssocEditingIndex(index);
+        setAssocSelectedNodeA(nextNodeA);
+        setAssocSelectedRelationType(assoc.type);
+        setAssocSelectedNodeB(assoc.nodeB);
+        setAssocInsertDirection(assoc.direction);
+        setAssocCurrentStep(ASSOC_STEPS.PREVIEW);
+    };
+
+    const goBackAssocStep = () => {
+        if (assocPreviewRendererRef.current) {
+            assocPreviewRendererRef.current.stopAnimation();
+        }
+
+        switch (assocCurrentStep) {
+            case ASSOC_STEPS.SELECT_RELATION:
+                setAssocSelectedRelationType(null);
+                setAssocCurrentStep(ASSOC_STEPS.SELECT_NODE_A);
+                break;
+            case ASSOC_STEPS.SELECT_NODE_B:
+                setAssocSelectedNodeB(null);
+                setAssocInsertDirection(null);
+                setAssocCurrentStep(ASSOC_STEPS.SELECT_RELATION);
+                break;
+            case ASSOC_STEPS.PREVIEW:
+                if (assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT) {
+                    setAssocCurrentStep(ASSOC_STEPS.SELECT_NODE_B);
+                } else {
+                    setAssocCurrentStep(ASSOC_STEPS.SELECT_RELATION);
+                }
+                break;
+            default:
+                resetAssociationEditor();
+        }
+    };
+
     const saveAssociationEdit = async () => {
         const token = localStorage.getItem('token');
+        const associationsPayload = editAssociations.flatMap((assoc) =>
+            assoc.actualAssociations.map((actual) => ({
+                targetNode: actual.targetNode,
+                relationType: actual.relationType
+            }))
+        );
+
         try {
             const response = await fetch(`http://localhost:5000/api/nodes/${editingAssociationNode._id}/associations`, {
                 method: 'PUT',
@@ -474,16 +872,13 @@ const AdminPanel = () => {
                     'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({
-                    associations: editAssociations.map(a => ({
-                        targetNode: a.targetNode,
-                        relationType: a.relationType
-                    }))
+                    associations: associationsPayload
                 })
             });
             if (response.ok) {
                 const data = await response.json();
                 alert(data.message);
-                setShowEditAssociationModal(false);
+                closeEditAssociationModal();
                 fetchAllNodes();
             } else {
                 const data = await response.json();
@@ -492,6 +887,234 @@ const AdminPanel = () => {
         } catch (error) {
             console.error('保存关联失败:', error);
             alert('保存失败');
+        }
+    };
+
+    const renderAssocStepIndicator = () => {
+        if (!assocCurrentStep) return null;
+
+        const steps = [
+            { key: ASSOC_STEPS.SELECT_NODE_A, label: '选择节点' },
+            { key: ASSOC_STEPS.SELECT_RELATION, label: '选择关系' },
+            ...(assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT ? [{ key: ASSOC_STEPS.SELECT_NODE_B, label: '第二节点' }] : []),
+            { key: ASSOC_STEPS.PREVIEW, label: '预览确认' }
+        ];
+        const currentIndex = steps.findIndex(s => s.key === assocCurrentStep);
+
+        return (
+            <div className="admin-assoc-step-indicator">
+                {steps.map((step, index) => (
+                    <React.Fragment key={step.key}>
+                        <div className={`admin-assoc-step-dot ${index <= currentIndex ? 'active' : ''} ${step.key === assocCurrentStep ? 'current' : ''}`}>
+                            {index + 1}
+                        </div>
+                        {index < steps.length - 1 && (
+                            <div className={`admin-assoc-step-line ${index < currentIndex ? 'active' : ''}`} />
+                        )}
+                    </React.Fragment>
+                ))}
+                <div className="admin-assoc-step-labels">
+                    {steps.map((step) => (
+                        <span key={step.key} className={`admin-assoc-step-label ${step.key === assocCurrentStep ? 'current' : ''}`}>
+                            {step.label}
+                        </span>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    const renderAssocSelectNodeA = () => (
+        <div className="admin-assoc-step">
+            <h5>步骤 1：选择关联节点</h5>
+            <p className="admin-assoc-step-description">搜索并选择一个现有节点作为关联目标</p>
+
+            <div className="search-input-group">
+                <input
+                    type="text"
+                    value={assocSearchKeyword}
+                    onChange={(e) => setAssocSearchKeyword(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && searchAssociationNodes(assocSearchKeyword)}
+                    placeholder="搜索节点标题或简介..."
+                    className="form-input"
+                />
+                <button onClick={() => searchAssociationNodes(assocSearchKeyword)} disabled={assocSearchLoading} className="btn btn-primary">
+                    <Search className="icon-small" />
+                    {assocSearchLoading ? '...' : '搜索'}
+                </button>
+            </div>
+
+            {assocSearchResults.length > 0 && (
+                <div className="search-results">
+                    {assocSearchResults.map(node => (
+                        <div key={node._id} className="search-result-item clickable" onClick={() => selectAssocNodeA(node)}>
+                            <div className="node-info">
+                                <strong>{node.name}</strong>
+                                <span className="node-description">{node.description}</span>
+                            </div>
+                            <ArrowRight className="icon-small" />
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+
+    const renderAssocSelectRelation = () => (
+        <div className="admin-assoc-step">
+            <h5>步骤 2：选择关系类型</h5>
+            <p className="admin-assoc-step-description">
+                选择当前节点与 <strong>{assocSelectedNodeA?.name}</strong> 的关系
+            </p>
+
+            <div className="admin-assoc-relation-cards">
+                <div className="admin-assoc-relation-card" onClick={() => selectAssocRelationType(ASSOC_RELATION_TYPES.EXTENDS)}>
+                    <div className="admin-assoc-relation-icon extends">↑</div>
+                    <div className="admin-assoc-relation-content">
+                        <h6>作为母域节点</h6>
+                        <p>当前节点将成为 {assocSelectedNodeA?.name} 的母域（上级概念）</p>
+                    </div>
+                </div>
+
+                <div className="admin-assoc-relation-card" onClick={() => selectAssocRelationType(ASSOC_RELATION_TYPES.CONTAINS)}>
+                    <div className="admin-assoc-relation-icon contains">↓</div>
+                    <div className="admin-assoc-relation-content">
+                        <h6>作为子域节点</h6>
+                        <p>当前节点将成为 {assocSelectedNodeA?.name} 的子域（下级概念）</p>
+                    </div>
+                </div>
+
+                <div
+                    className={`admin-assoc-relation-card ${(!assocSelectedNodeA?.parentNodesInfo?.length && !assocSelectedNodeA?.childNodesInfo?.length) ? 'disabled' : ''}`}
+                    onClick={() => {
+                        if (assocSelectedNodeA?.parentNodesInfo?.length || assocSelectedNodeA?.childNodesInfo?.length) {
+                            selectAssocRelationType(ASSOC_RELATION_TYPES.INSERT);
+                        }
+                    }}
+                >
+                    <div className="admin-assoc-relation-icon insert">⇄</div>
+                    <div className="admin-assoc-relation-content">
+                        <h6>插入到两节点之间</h6>
+                        <p>将当前节点插入到 {assocSelectedNodeA?.name} 与另一个节点之间</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+
+    const renderAssocSelectNodeB = () => {
+        const filteredNodeBCandidates = {
+            parents: assocNodeBCandidates.parents.filter(n =>
+                assocNodeBSearchKeyword.trim() === '' ||
+                n.name.toLowerCase().includes(assocNodeBSearchKeyword.toLowerCase())
+            ),
+            children: assocNodeBCandidates.children.filter(n =>
+                assocNodeBSearchKeyword.trim() === '' ||
+                n.name.toLowerCase().includes(assocNodeBSearchKeyword.toLowerCase())
+            )
+        };
+
+        return (
+            <div className="admin-assoc-step">
+                <h5>步骤 3：选择第二个节点</h5>
+                <p className="admin-assoc-step-description">
+                    选择要与 <strong>{assocSelectedNodeA?.name}</strong> 之间插入当前节点的目标节点
+                </p>
+
+                <div className="admin-assoc-node-b-search">
+                    <input
+                        type="text"
+                        value={assocNodeBSearchKeyword}
+                        onChange={(e) => setAssocNodeBSearchKeyword(e.target.value)}
+                        placeholder="搜索候选节点..."
+                        className="form-input"
+                    />
+                </div>
+
+                {filteredNodeBCandidates.parents.length > 0 && (
+                    <div className="admin-assoc-candidate-section">
+                        <h6 className="admin-assoc-candidate-header parent">
+                            <span className="admin-assoc-candidate-icon">↑</span> 母域节点（上级）
+                        </h6>
+                        <div className="admin-assoc-candidate-list">
+                            {filteredNodeBCandidates.parents.map(node => (
+                                <div key={node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, true)}>
+                                    <span className="admin-assoc-candidate-name">{node.name}</span>
+                                    <span className="admin-assoc-candidate-hint">插入到 {node.name} 和 {assocSelectedNodeA?.name} 之间</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {filteredNodeBCandidates.children.length > 0 && (
+                    <div className="admin-assoc-candidate-section">
+                        <h6 className="admin-assoc-candidate-header child">
+                            <span className="admin-assoc-candidate-icon">↓</span> 子域节点（下级）
+                        </h6>
+                        <div className="admin-assoc-candidate-list">
+                            {filteredNodeBCandidates.children.map(node => (
+                                <div key={node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, false)}>
+                                    <span className="admin-assoc-candidate-name">{node.name}</span>
+                                    <span className="admin-assoc-candidate-hint">插入到 {assocSelectedNodeA?.name} 和 {node.name} 之间</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const renderAssocPreview = () => (
+        <div className="admin-assoc-step admin-assoc-preview-step">
+            <h5>步骤 {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT ? '4' : '3'}：预览确认</h5>
+            <p className="admin-assoc-step-description">查看关联关系生效后的结构变化</p>
+
+            <div className="admin-assoc-preview-canvas-container">
+                <canvas
+                    ref={assocPreviewCanvasRef}
+                    width={320}
+                    height={200}
+                    className="admin-assoc-preview-canvas"
+                />
+            </div>
+
+            <div className="admin-assoc-preview-info">
+                {assocSelectedRelationType === ASSOC_RELATION_TYPES.EXTENDS && (
+                    <span><strong>{editingAssociationNode?.name}</strong> 将成为 <strong>{assocSelectedNodeA?.name}</strong> 的母域</span>
+                )}
+                {assocSelectedRelationType === ASSOC_RELATION_TYPES.CONTAINS && (
+                    <span><strong>{editingAssociationNode?.name}</strong> 将成为 <strong>{assocSelectedNodeA?.name}</strong> 的子域</span>
+                )}
+                {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT && (
+                    <span><strong>{editingAssociationNode?.name}</strong> 将插入到 <strong>{assocSelectedNodeA?.name}</strong> 和 <strong>{assocSelectedNodeB?.name}</strong> 之间</span>
+                )}
+            </div>
+
+            <div className="admin-assoc-preview-actions">
+                <button onClick={replayAssocPreview} className="btn btn-secondary">
+                    <RotateCcw className="icon-small" /> 重播
+                </button>
+                <button onClick={confirmEditAssociation} className="btn btn-success">
+                    <Check className="icon-small" /> 确认关联
+                </button>
+            </div>
+        </div>
+    );
+
+    const renderAssocCurrentStep = () => {
+        switch (assocCurrentStep) {
+            case ASSOC_STEPS.SELECT_NODE_A:
+                return renderAssocSelectNodeA();
+            case ASSOC_STEPS.SELECT_RELATION:
+                return renderAssocSelectRelation();
+            case ASSOC_STEPS.SELECT_NODE_B:
+                return renderAssocSelectNodeB();
+            case ASSOC_STEPS.PREVIEW:
+                return renderAssocPreview();
+            default:
+                return null;
         }
     };
 
@@ -677,6 +1300,16 @@ const AdminPanel = () => {
                     <Shield className="icon-small" />
                     熵盟管理
                 </button>
+                <button
+                    onClick={() => {
+                        setAdminTab('settings');
+                        fetchAdminSettings();
+                    }}
+                    className={`admin-tab ${adminTab === 'settings' ? 'active' : ''}`}
+                >
+                    <Settings className="icon-small" />
+                    系统设置
+                </button>
             </div>
 
             {/* 用户管理选项卡 */}
@@ -820,6 +1453,36 @@ const AdminPanel = () => {
                 </div>
             )}
 
+            {adminTab === 'settings' && (
+                <div className="admin-settings-container">
+                    <div className="admin-settings-card">
+                        <h3>移动参数设置</h3>
+                        <p className="admin-settings-desc">
+                            设置普通用户在节点图上移动时，每经过 1 个相邻节点边所需的时间。
+                        </p>
+                        <div className="admin-settings-row">
+                            <label htmlFor="travelUnitSeconds">每单位移动耗时（秒）</label>
+                            <input
+                                id="travelUnitSeconds"
+                                type="number"
+                                min="1"
+                                max="86400"
+                                value={travelUnitInput}
+                                onChange={(e) => setTravelUnitInput(e.target.value)}
+                                className="edit-input-small"
+                            />
+                        </div>
+                        <div className="admin-settings-current">
+                            当前生效值: <strong>{travelUnitSeconds}</strong> 秒 / 单位
+                        </div>
+                        <div className="admin-settings-actions">
+                            <button onClick={saveAdminSettings} className="btn btn-primary">保存设置</button>
+                            <button onClick={fetchAdminSettings} className="btn btn-secondary">重新读取</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* 待审批节点选项卡 */}
             {adminTab === 'pending' && (
                 <div className="pending-nodes-container">
@@ -898,8 +1561,8 @@ const AdminPanel = () => {
                                                                         <span className="node-name">
                                                                             {association.targetNode?.name || '未知节点'}
                                                                         </span>
-                                                                        <span className={`relation-type ${association.relationType}`}>
-                                                                            {association.relationType === 'contains' ? '子域' : '母域'}
+                                                                        <span className={`admin-relation-badge ${association.relationType === 'contains' ? 'parent' : 'child'}`}>
+                                                                            {association.relationType === 'contains' ? '母域' : '子域'}
                                                                         </span>
                                                                     </div>
                                                                 ))}
@@ -1345,7 +2008,8 @@ const AdminPanel = () => {
                         </div>
                         <div className="modal-body">
                             <div className="association-section">
-                                <h4 className="section-title">母域节点 (Extends)</h4>
+                                <h4 className="section-title">母域节点</h4>
+                                <p className="association-hint">当前节点拓展了以下节点（或者说，以下节点包含当前节点）</p>
                                 <div className="association-list">
                                     {viewingAssociationNode.relatedParentDomains?.length > 0 ? (
                                         <ul>
@@ -1360,7 +2024,8 @@ const AdminPanel = () => {
                                 </div>
                             </div>
                             <div className="association-section">
-                                <h4 className="section-title">子域节点 (Contains)</h4>
+                                <h4 className="section-title">子域节点</h4>
+                                <p className="association-hint">以下节点拓展了当前节点（或者说，当前节点包含以下节点）</p>
                                 <div className="association-list">
                                     {viewingAssociationNode.relatedChildDomains?.length > 0 ? (
                                         <ul>
@@ -1384,91 +2049,89 @@ const AdminPanel = () => {
 
             {/* Edit Association Modal */}
             {showEditAssociationModal && editingAssociationNode && (
-                <div className="modal-backdrop" onClick={() => setShowEditAssociationModal(false)}>
-                    <div className="modal-content" onClick={e => e.stopPropagation()}>
+                <div className="modal-backdrop" onClick={closeEditAssociationModal}>
+                    <div className="modal-content admin-edit-association-modal" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
                             <h3>编辑关联: {editingAssociationNode.name}</h3>
-                            <button className="btn-close" onClick={() => setShowEditAssociationModal(false)}><X size={20} /></button>
+                            <button className="btn-close" onClick={closeEditAssociationModal}><X size={20} /></button>
                         </div>
                         <div className="modal-body">
-                            <div className="form-group">
-                                <label>现有关联:</label>
-                                <div className="associations-list">
-                                    {editAssociations.length === 0 ? <p className="text-gray-400">暂无关联</p> : (
-                                        editAssociations.map((assoc, index) => (
-                                            <div key={index} className="association-item">
-                                                <div className="association-info">
-                                                    <span className="relation-type">
-                                                        {assoc.relationType === 'contains' ? '包含 (Contains)' : '拓展 (Extends)'}
-                                                    </span>
-                                                    <span className="node-name">{assoc.targetNodeName}</span>
-                                                </div>
-                                                <button onClick={() => removeEditAssociation(index)} className="btn-danger btn-small">
-                                                    <Trash2 size={14} />
-                                                </button>
-                                            </div>
-                                        ))
-                                    )}
+                            <div className="admin-edit-associations-section">
+                                <div
+                                    className="admin-edit-associations-header"
+                                    onClick={() => setIsEditAssociationListExpanded(!isEditAssociationListExpanded)}
+                                >
+                                    <h4>
+                                        关联关系
+                                        <span className="association-count">({editAssociations.length})</span>
+                                    </h4>
+                                    {isEditAssociationListExpanded ? <ChevronUp className="icon-small" /> : <ChevronDown className="icon-small" />}
                                 </div>
-                            </div>
 
-                            <div className="form-group">
-                                <label>添加新关联:</label>
-                                <div className="relation-type-section">
-                                    <div className="relation-options">
-                                        <label className="radio-label">
-                                            <input
-                                                type="radio"
-                                                name="assocType"
-                                                checked={newAssocType === 'contains'}
-                                                onChange={() => setNewAssocType('contains')}
-                                            />
-                                            包含 (Contains)
-                                        </label>
-                                        <label className="radio-label">
-                                            <input
-                                                type="radio"
-                                                name="assocType"
-                                                checked={newAssocType === 'extends'}
-                                                onChange={() => setNewAssocType('extends')}
-                                            />
-                                            拓展 (Extends)
-                                        </label>
-                                    </div>
-                                </div>
-                                <div className="search-input-group">
-                                    <input
-                                        type="text"
-                                        className="form-input"
-                                        placeholder="搜索节点..."
-                                        value={assocSearchKeyword}
-                                        onChange={(e) => {
-                                            setAssocSearchKeyword(e.target.value);
-                                            searchAssociationNodes(e.target.value);
-                                        }}
-                                    />
-                                    <button className="btn btn-primary" onClick={() => searchAssociationNodes(assocSearchKeyword)}>
-                                        <Search size={16} />
-                                    </button>
-                                </div>
-                                {assocSearchResults.length > 0 && (
-                                    <div className="search-results">
-                                        {assocSearchResults.map(node => (
+                                {isEditAssociationListExpanded && editAssociations.length > 0 && (
+                                    <div className="admin-edit-associations-list">
+                                        {editAssociations.map((association, index) => (
                                             <div
-                                                key={node._id}
-                                                className="search-result-item"
-                                                onClick={() => addEditAssociation(node)}
+                                                key={index}
+                                                className={`admin-edit-association-item ${assocCurrentStep === null ? 'clickable' : ''}`}
+                                                onClick={() => {
+                                                    if (assocCurrentStep === null) {
+                                                        editExistingAssociation(index);
+                                                    }
+                                                }}
                                             >
-                                                <span>{node.name}</span>
-                                                <Plus size={16} className="text-green-500" />
+                                                <div className="admin-edit-association-info">
+                                                    <span className="admin-edit-association-display">{association.displayText}</span>
+                                                    <span className={`admin-edit-relation-badge ${association.type}`}>
+                                                        {association.type === ASSOC_RELATION_TYPES.EXTENDS && '母域'}
+                                                        {association.type === ASSOC_RELATION_TYPES.CONTAINS && '子域'}
+                                                        {association.type === ASSOC_RELATION_TYPES.INSERT && '插入'}
+                                                    </span>
+                                                </div>
+                                                <div className="admin-edit-association-actions">
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            removeEditAssociation(index);
+                                                        }}
+                                                        className="btn btn-danger btn-small"
+                                                        disabled={assocCurrentStep !== null}
+                                                    >
+                                                        <X className="icon-small" />
+                                                    </button>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
                                 )}
+
+                                {editAssociations.length === 0 && !assocCurrentStep && (
+                                    <p className="text-gray-400">暂无关联</p>
+                                )}
+
+                                {assocCurrentStep ? (
+                                    <div className="admin-assoc-editor">
+                                        {renderAssocStepIndicator()}
+                                        {renderAssocCurrentStep()}
+
+                                        <div className="admin-assoc-editor-navigation">
+                                            <button onClick={goBackAssocStep} className="btn btn-secondary">
+                                                <ArrowLeft className="icon-small" /> 返回
+                                            </button>
+                                            <button onClick={resetAssociationEditor} className="btn btn-danger">
+                                                取消
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <button onClick={startAddEditAssociation} className="btn btn-primary admin-add-association-btn">
+                                        <Plus className="icon-small" /> 添加关联
+                                    </button>
+                                )}
                             </div>
                         </div>
                         <div className="modal-footer">
-                            <button className="btn btn-secondary" onClick={() => setShowEditAssociationModal(false)}>取消</button>
+                            <button className="btn btn-secondary" onClick={closeEditAssociationModal}>取消</button>
                             <button className="btn btn-primary" onClick={saveAssociationEdit}>保存更改</button>
                         </div>
                     </div>

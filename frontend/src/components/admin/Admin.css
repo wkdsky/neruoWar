@@ -561,6 +561,18 @@
     gap: 1rem;
 }
 
+.admin-association-info {
+    flex: 1;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.admin-association-display-text {
+    color: #e2e8f0;
+    font-size: 0.875rem;
+}
+
 .association-name {
     color: white;
     font-weight: 600;
@@ -574,6 +586,449 @@
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
     font-weight: 600;
+}
+
+.admin-relation-badge {
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.admin-relation-badge.parent {
+    background: rgba(34, 197, 94, 0.2);
+    color: #4ade80;
+}
+
+.admin-relation-badge.child {
+    background: rgba(250, 204, 21, 0.2);
+    color: #fcd34d;
+}
+
+.admin-relation-option-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.admin-relation-option-card {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    background: rgba(15, 23, 42, 0.55);
+    color: #e2e8f0;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.admin-relation-option-card:hover {
+    border-color: rgba(129, 140, 248, 0.65);
+    background: rgba(30, 41, 59, 0.75);
+}
+
+.admin-relation-option-card.selected {
+    border-color: rgba(96, 165, 250, 0.85);
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35) inset;
+}
+
+.admin-relation-option-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+}
+
+.admin-relation-option-icon.parent {
+    background: rgba(34, 197, 94, 0.2);
+    color: #4ade80;
+}
+
+.admin-relation-option-icon.child {
+    background: rgba(250, 204, 21, 0.2);
+    color: #fcd34d;
+}
+
+.admin-relation-option-content h6 {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #f8fafc;
+}
+
+.admin-relation-option-content p {
+    margin: 0.25rem 0 0 0;
+    font-size: 0.78rem;
+    color: #94a3b8;
+}
+
+.admin-assoc-search-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.admin-assoc-search-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.admin-assoc-search-hint {
+    color: #94a3b8;
+    font-size: 0.75rem;
+}
+
+.association-hint {
+    margin: 0.15rem 0 0.6rem 0;
+    color: #94a3b8;
+    font-size: 0.8rem;
+}
+
+.admin-edit-association-modal {
+    width: min(860px, 95vw);
+}
+
+.admin-edit-associations-section {
+    margin-top: 0.25rem;
+}
+
+.admin-edit-associations-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    padding: 0.5rem 0.25rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+    margin-bottom: 0.75rem;
+}
+
+.admin-edit-associations-header h4 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #f8fafc;
+}
+
+.admin-edit-associations-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.admin-edit-association-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 8px;
+}
+
+.admin-edit-association-item.clickable {
+    cursor: pointer;
+}
+
+.admin-edit-association-item.clickable:hover {
+    border-color: rgba(96, 165, 250, 0.65);
+}
+
+.admin-edit-association-info {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.admin-edit-association-display {
+    color: #e2e8f0;
+    font-size: 0.875rem;
+}
+
+.admin-edit-relation-badge {
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.admin-edit-relation-badge.extends {
+    background: rgba(34, 197, 94, 0.2);
+    color: #4ade80;
+}
+
+.admin-edit-relation-badge.contains {
+    background: rgba(250, 204, 21, 0.2);
+    color: #fcd34d;
+}
+
+.admin-edit-relation-badge.insert {
+    background: rgba(99, 102, 241, 0.2);
+    color: #a5b4fc;
+}
+
+.admin-edit-association-actions {
+    display: flex;
+    gap: 0.45rem;
+}
+
+.admin-add-association-btn {
+    width: 100%;
+    justify-content: center;
+    margin-top: 0.6rem;
+}
+
+.admin-assoc-editor {
+    margin-top: 0.75rem;
+    padding: 1rem;
+    border-radius: 10px;
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    background: rgba(2, 6, 23, 0.45);
+}
+
+.admin-assoc-step-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    padding-bottom: 1.25rem;
+    margin-bottom: 1rem;
+}
+
+.admin-assoc-step-dot {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    border: 2px solid rgba(99, 102, 241, 0.35);
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 700;
+    z-index: 1;
+}
+
+.admin-assoc-step-dot.active {
+    border-color: rgba(96, 165, 250, 0.75);
+    color: #bfdbfe;
+}
+
+.admin-assoc-step-dot.current {
+    background: rgba(59, 130, 246, 0.25);
+}
+
+.admin-assoc-step-line {
+    width: 38px;
+    height: 2px;
+    background: rgba(148, 163, 184, 0.35);
+}
+
+.admin-assoc-step-line.active {
+    background: rgba(96, 165, 250, 0.75);
+}
+
+.admin-assoc-step-labels {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 1.1rem;
+}
+
+.admin-assoc-step-label {
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+.admin-assoc-step-label.current {
+    color: #e2e8f0;
+}
+
+.admin-assoc-step h5 {
+    margin: 0 0 0.4rem 0;
+    color: #f8fafc;
+}
+
+.admin-assoc-step-description {
+    margin: 0 0 0.85rem 0;
+    color: #94a3b8;
+    font-size: 0.84rem;
+}
+
+.admin-assoc-relation-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.admin-assoc-relation-card {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.85rem 0.95rem;
+    border-radius: 8px;
+    border: 1px solid rgba(99, 102, 241, 0.28);
+    background: rgba(15, 23, 42, 0.5);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.admin-assoc-relation-card:hover:not(.disabled) {
+    border-color: rgba(96, 165, 250, 0.65);
+    background: rgba(30, 41, 59, 0.75);
+}
+
+.admin-assoc-relation-card.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.admin-assoc-relation-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+}
+
+.admin-assoc-relation-icon.extends {
+    background: rgba(34, 197, 94, 0.2);
+    color: #4ade80;
+}
+
+.admin-assoc-relation-icon.contains {
+    background: rgba(250, 204, 21, 0.2);
+    color: #fcd34d;
+}
+
+.admin-assoc-relation-icon.insert {
+    background: rgba(99, 102, 241, 0.2);
+    color: #a5b4fc;
+}
+
+.admin-assoc-relation-content h6 {
+    margin: 0;
+    color: #e2e8f0;
+}
+
+.admin-assoc-relation-content p {
+    margin: 0.2rem 0 0 0;
+    font-size: 0.78rem;
+    color: #94a3b8;
+}
+
+.admin-assoc-node-b-search {
+    margin-bottom: 0.8rem;
+}
+
+.admin-assoc-candidate-section {
+    margin-bottom: 0.8rem;
+}
+
+.admin-assoc-candidate-header {
+    margin: 0 0 0.5rem 0;
+    padding: 0.45rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.admin-assoc-candidate-header.parent {
+    color: #4ade80;
+    background: rgba(34, 197, 94, 0.12);
+}
+
+.admin-assoc-candidate-header.child {
+    color: #fcd34d;
+    background: rgba(250, 204, 21, 0.12);
+}
+
+.admin-assoc-candidate-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+.admin-assoc-candidate-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.65rem 0.75rem;
+    border-radius: 7px;
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    background: rgba(15, 23, 42, 0.45);
+    cursor: pointer;
+}
+
+.admin-assoc-candidate-item:hover {
+    border-color: rgba(96, 165, 250, 0.65);
+}
+
+.admin-assoc-candidate-name {
+    color: #f8fafc;
+    font-size: 0.85rem;
+}
+
+.admin-assoc-candidate-hint {
+    color: #94a3b8;
+    font-size: 0.75rem;
+}
+
+.admin-assoc-preview-canvas-container {
+    display: flex;
+    justify-content: center;
+    margin: 0.3rem 0 0.75rem 0;
+}
+
+.admin-assoc-preview-canvas {
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 8px;
+    background: radial-gradient(circle at top, rgba(30, 41, 59, 0.65), rgba(2, 6, 23, 0.8));
+}
+
+.admin-assoc-preview-info {
+    padding: 0.7rem 0.8rem;
+    border-radius: 8px;
+    font-size: 0.84rem;
+    color: #e2e8f0;
+    background: rgba(30, 41, 59, 0.55);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    margin-bottom: 0.75rem;
+}
+
+.admin-assoc-preview-actions {
+    display: flex;
+    justify-content: center;
+    gap: 0.65rem;
+}
+
+.admin-assoc-editor-navigation {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 0.9rem;
 }
 
 .node-actions {
@@ -852,4 +1307,57 @@
     margin-left: 0.5rem;
     color: #a5b4fc;
     font-size: 0.85rem;
+}
+
+.admin-settings-container {
+    margin-top: 1.5rem;
+    display: flex;
+    justify-content: center;
+}
+
+.admin-settings-card {
+    width: 100%;
+    max-width: 560px;
+    padding: 1.5rem;
+    border-radius: 12px;
+    background: rgba(51, 65, 85, 0.8);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+}
+
+.admin-settings-card h3 {
+    color: #e2e8f0;
+    margin: 0 0 0.5rem;
+}
+
+.admin-settings-desc {
+    margin: 0 0 1.25rem;
+    color: #94a3b8;
+    line-height: 1.5;
+}
+
+.admin-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.admin-settings-row label {
+    color: #cbd5e1;
+    min-width: 180px;
+}
+
+.admin-settings-current {
+    margin-top: 0.85rem;
+    color: #cbd5e1;
+}
+
+.admin-settings-current strong {
+    color: #60a5fa;
+}
+
+.admin-settings-actions {
+    margin-top: 1.2rem;
+    display: flex;
+    gap: 0.75rem;
 }

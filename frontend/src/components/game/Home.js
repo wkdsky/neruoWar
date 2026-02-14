@@ -14,9 +14,22 @@ const Home = ({
     onSearchResultClick,
     onCreateNode,
     isAdmin,
-    currentLocationNodeDetail
+    currentLocationNodeDetail,
+    travelStatus,
+    onStopTravel,
+    isStoppingTravel,
+    canJumpToLocationView,
+    onJumpToLocationView
 }) => {
     const searchBarRef = useRef(null);
+    const formatSeconds = (seconds) => {
+        if (!Number.isFinite(seconds) || seconds <= 0) return '0 秒';
+        const rounded = Math.round(seconds);
+        const mins = Math.floor(rounded / 60);
+        const remain = rounded % 60;
+        if (mins <= 0) return `${remain} 秒`;
+        return `${mins} 分 ${remain} 秒`;
+    };
 
     return (
         <>
@@ -106,15 +119,65 @@ const Home = ({
                 </div>
             </div>
 
-            {/* Right Sidebar - Location Resident */}
-            {!isAdmin ? (
+            {/* Right Sidebar - Normal User Only */}
+            {!isAdmin && (
                 <div className="location-resident-sidebar">
                     <div className="location-sidebar-header">
-                        <h3>当前所在的知识域</h3>
+                        <h3>{travelStatus?.isTraveling ? '移动状态' : '当前所在的知识域'}</h3>
                     </div>
 
-                    {currentLocationNodeDetail ? (
-                        <div className="location-sidebar-content">
+                    {travelStatus?.isTraveling ? (
+                        <div className="travel-sidebar-content">
+                            <div className="travel-main-info">
+                                <div className="travel-destination">
+                                    {travelStatus?.isStopping ? '停止目标' : '目标节点'}: <strong>{travelStatus?.targetNode?.nodeName}</strong>
+                                </div>
+                                <div className="travel-metrics">
+                                    <span>剩余距离: {travelStatus?.remainingDistanceUnits?.toFixed?.(2) ?? travelStatus?.remainingDistanceUnits} 单位</span>
+                                    <span>剩余时间: {formatSeconds(travelStatus?.remainingSeconds)}</span>
+                                    {travelStatus?.queuedTargetNode?.nodeName && (
+                                        <span>已排队目标: {travelStatus.queuedTargetNode.nodeName}</span>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="travel-anim-layout">
+                                <div className="travel-node-card next">
+                                    <div className="travel-node-label">下一目的地</div>
+                                    <div className="travel-node-name">{travelStatus?.nextNode?.nodeName || '-'}</div>
+                                </div>
+                                <div className="travel-track-wrap">
+                                    <div className="travel-track">
+                                        <div
+                                            className="travel-progress-dot"
+                                            style={{ left: `${(1 - (travelStatus?.progressInCurrentSegment || 0)) * 100}%` }}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="travel-node-card reached">
+                                    <div className="travel-node-label">最近到达</div>
+                                    <div className="travel-node-name">{travelStatus?.lastReachedNode?.nodeName || '-'}</div>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                className="btn btn-danger travel-stop-btn"
+                                onClick={onStopTravel}
+                                disabled={isStoppingTravel || travelStatus?.isStopping}
+                            >
+                                {(isStoppingTravel || travelStatus?.isStopping) ? '停止进行中...' : '停止移动'}
+                            </button>
+                        </div>
+                    ) : currentLocationNodeDetail ? (
+                        <div
+                            className={`location-sidebar-content ${canJumpToLocationView ? 'location-sidebar-jumpable' : ''}`}
+                            onClick={() => {
+                                if (canJumpToLocationView && onJumpToLocationView) {
+                                    onJumpToLocationView();
+                                }
+                            }}
+                        >
                             <div className="location-node-title">{currentLocationNodeDetail.name}</div>
 
                             {currentLocationNodeDetail.description && (
@@ -160,15 +223,6 @@ const Home = ({
                             <p>暂未降临到任何知识域</p>
                         </div>
                     )}
-                </div>
-            ) : (
-                <div className="location-resident-sidebar admin-sidebar">
-                    <div className="location-sidebar-header">
-                        <h3>管理员视图</h3>
-                    </div>
-                    <div className="location-sidebar-empty">
-                        <p>管理员可查看所有知识域</p>
-                    </div>
                 </div>
             )}
         </>

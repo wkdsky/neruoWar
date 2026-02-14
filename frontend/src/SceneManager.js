@@ -23,6 +23,7 @@ class SceneManager {
     // 预览模式状态
     this.isInPreviewMode = false;
     this.previewConfig = null;
+    this.centerNodeButtonContext = {};
 
     // 绑定点击事件
     this.renderer.onClick = (node) => {
@@ -80,13 +81,15 @@ class SceneManager {
   /**
    * 显示节点详情场景
    */
-  async showNodeDetail(centerNode, parentNodes, childNodes, clickedNode = null) {
+  async showNodeDetail(centerNode, parentNodes, childNodes, clickedNode = null, buttonContext = {}) {
     console.log('showNodeDetail called:', {
       centerNode: centerNode?.name,
       parentCount: parentNodes?.length,
       childCount: childNodes?.length,
       hasClickedNode: !!clickedNode
     });
+
+    this.centerNodeButtonContext = buttonContext || {};
 
     // 清除之前的按钮
     this.renderer.clearNodeButtons();
@@ -103,7 +106,7 @@ class SceneManager {
     if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
       console.log('First load, setting layout directly');
       this.setLayout(newLayout);
-      this.setupCenterNodeButtons(centerNode);
+      this.setupCenterNodeButtons(centerNode, buttonContext);
       this.currentScene = 'nodeDetail';
       if (this.onSceneChange) {
         this.onSceneChange('nodeDetail', centerNode);
@@ -126,7 +129,7 @@ class SceneManager {
     }
 
     // 设置中心节点的操作按钮
-    this.setupCenterNodeButtons(centerNode);
+    this.setupCenterNodeButtons(centerNode, buttonContext);
 
     this.currentScene = 'nodeDetail';
 
@@ -138,13 +141,12 @@ class SceneManager {
   /**
    * 设置中心节点的操作按钮
    */
-  setupCenterNodeButtons(centerNode) {
+  setupCenterNodeButtons(centerNode, buttonContext = this.centerNodeButtonContext || {}) {
     if (!centerNode) return;
 
     const centerNodeId = `center-${centerNode._id}`;
 
-    // 设置按钮 - 右边是进入知识域
-    this.renderer.setNodeButtons(centerNodeId, [
+    const buttons = [
       {
         id: 'enter-domain',
         icon: '◎',  // 使用圆圈符号表示进入
@@ -153,7 +155,25 @@ class SceneManager {
         tooltip: '进入知识域',
         color: [0.3, 0.7, 0.9, 0.9]  // 柔和的青蓝色
       }
-    ]);
+    ];
+
+    if (buttonContext.showMoveButton) {
+      buttons.push({
+        id: 'move-to-node',
+        icon: '⇦',
+        angle: Math.PI, // 左边
+        action: 'moveToNode',
+        tooltip: buttonContext.moveDisabled
+          ? (buttonContext.moveDisabledReason || '当前不可移动')
+          : '移动到该节点',
+        color: buttonContext.moveDisabled
+          ? [0.47, 0.55, 0.67, 0.85]
+          : [0.20, 0.75, 0.40, 0.92],
+        disabled: !!buttonContext.moveDisabled
+      });
+    }
+
+    this.renderer.setNodeButtons(centerNodeId, buttons);
   }
 
   /**

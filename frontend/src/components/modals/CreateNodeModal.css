@@ -204,6 +204,14 @@
     border-radius: 8px;
 }
 
+.association-item.clickable {
+    cursor: pointer;
+}
+
+.association-item.clickable:hover {
+    border-color: rgba(138, 43, 226, 0.45);
+}
+
 .association-info {
     display: flex;
     align-items: center;

@@ -2,8 +2,15 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const GameSetting = require('../models/GameSetting');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
+
+const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
+  { key: 'global' },
+  { $setOnInsert: { travelUnitSeconds: 60 } },
+  { new: true, upsert: true, setDefaultsOnInsert: true }
+);
 
 // 获取所有用户的完整信息（包括明文密码）
 router.get('/users', authenticateToken, isAdmin, async (req, res) => {
@@ -135,6 +142,51 @@ router.delete('/users/:userId', authenticateToken, isAdmin, async (req, res) => 
     });
   } catch (error) {
     console.error('删除用户错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取系统设置
+router.get('/settings', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const settings = await getOrCreateSettings();
+    res.json({
+      success: true,
+      settings: {
+        travelUnitSeconds: settings.travelUnitSeconds
+      }
+    });
+  } catch (error) {
+    console.error('获取系统设置错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 更新系统设置
+router.put('/settings', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { travelUnitSeconds } = req.body;
+    const parsed = parseInt(travelUnitSeconds, 10);
+
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 86400) {
+      return res.status(400).json({ error: '每单位移动耗时必须是 1-86400 的整数秒' });
+    }
+
+    const settings = await GameSetting.findOneAndUpdate(
+      { key: 'global' },
+      { $set: { travelUnitSeconds: parsed } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({
+      success: true,
+      message: '系统设置已更新',
+      settings: {
+        travelUnitSeconds: settings.travelUnitSeconds
+      }
+    });
+  } catch (error) {
+    console.error('更新系统设置错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });

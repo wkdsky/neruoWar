@@ -99,6 +99,8 @@ const App = () => {
     const [showLocationModal, setShowLocationModal] = useState(false);
     const [selectedLocationNode, setSelectedLocationNode] = useState(null);
     const [currentLocationNodeDetail, setCurrentLocationNodeDetail] = useState(null);
+    const [travelStatus, setTravelStatus] = useState({ isTraveling: false });
+    const [isStoppingTravel, setIsStoppingTravel] = useState(false);
 
     // 首页相关状态
     const [rootNodes, setRootNodes] = useState([]);
@@ -185,6 +187,8 @@ const App = () => {
                     if (currentNodeDetail) {
                         handleEnterKnowledgeDomain(currentNodeDetail);
                     }
+                } else if (button.action === 'moveToNode' && currentNodeDetail) {
+                    handleMoveToNode(currentNodeDetail);
                 }
             };
 
@@ -219,10 +223,12 @@ const App = () => {
             sceneManagerRef.current.onButtonClick = (nodeId, button) => {
                 if (button.action === 'enterKnowledgeDomain' && currentNodeDetail) {
                     handleEnterKnowledgeDomain(currentNodeDetail);
+                } else if (button.action === 'moveToNode' && currentNodeDetail) {
+                    handleMoveToNode(currentNodeDetail);
                 }
             };
         }
-    }, [currentNodeDetail]);
+    }, [currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling]);
 
     useEffect(() => {
         // 只在没有socket时初始化
@@ -286,6 +292,11 @@ const App = () => {
     initializeSocket(data.token);
 
     await checkAdminStatus();
+    if (data.role !== 'admin') {
+      fetchTravelStatus(true);
+    } else {
+      setTravelStatus({ isTraveling: false });
+    }
 
     // 检查location字段，如果为空且不是管理员，显示位置选择弹窗
     if (!data.location || data.location === '') {
@@ -395,12 +406,230 @@ const App = () => {
     }
   };
 
+  const syncUserLocation = (location) => {
+    if (!location || location === '任意') {
+      setUserLocation(location || '');
+      localStorage.setItem('userLocation', location || '');
+      return;
+    }
+    setUserLocation(location);
+    localStorage.setItem('userLocation', location);
+  };
+
+  const parseApiResponse = async (response) => {
+    const rawText = await response.text();
+    let data = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch (e) {
+      data = null;
+    }
+    return { response, data, rawText };
+  };
+
+  const getApiErrorMessage = ({ response, data, rawText }, fallbackText) => {
+    if (data?.error) return data.error;
+    if (data?.message) return data.message;
+    if (typeof rawText === 'string' && rawText.includes('Cannot POST /api/travel/start')) {
+      return '移动接口不存在（后端可能未重启，请重启后端服务）';
+    }
+    if (typeof rawText === 'string' && rawText.includes('Cannot GET /api/travel/status')) {
+      return '移动状态接口不存在（后端可能未重启，请重启后端服务）';
+    }
+    if (typeof rawText === 'string' && rawText.includes('Cannot POST /api/travel/stop')) {
+      return '停止移动接口不存在（后端可能未重启，请重启后端服务）';
+    }
+    return `${fallbackText}（HTTP ${response.status}）`;
+  };
+
+  const fetchTravelStatus = async (silent = true) => {
+    const token = localStorage.getItem('token');
+    if (!token) return null;
+
+    try {
+      const response = await fetch('http://localhost:5000/api/travel/status', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok) {
+        if (!silent) {
+          window.alert(getApiErrorMessage(parsed, '获取移动状态失败'));
+        }
+        return null;
+      }
+
+      if (!data) {
+        if (!silent) {
+          window.alert('获取移动状态失败：返回数据不是 JSON');
+        }
+        return null;
+      }
+
+      const currentStoredLocation = localStorage.getItem('userLocation') || '';
+      if (typeof data.location === 'string' && data.location !== currentStoredLocation) {
+        syncUserLocation(data.location);
+      }
+
+      setTravelStatus(data.travel || { isTraveling: false });
+      return data;
+    } catch (error) {
+      if (!silent) {
+        window.alert(`获取移动状态失败: ${error.message}`);
+      }
+      return null;
+    }
+  };
+
+  const startTravelToNode = async (targetNodeId) => {
+    const token = localStorage.getItem('token');
+    if (!token) return 'failed';
+
+    try {
+      const response = await fetch('http://localhost:5000/api/travel/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ targetNodeId })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok) {
+        window.alert(getApiErrorMessage(parsed, '开始移动失败'));
+        return 'failed';
+      }
+
+      if (!data) {
+        window.alert('开始移动失败：返回数据不是 JSON');
+        return 'failed';
+      }
+
+      setTravelStatus(data.travel || { isTraveling: false });
+      const currentStoredLocation = localStorage.getItem('userLocation') || '';
+      if (typeof data.location === 'string' && data.location !== currentStoredLocation) {
+        syncUserLocation(data.location);
+      }
+
+      if (data.travel?.isStopping) {
+        if (data.message) {
+          window.alert(data.message);
+        }
+        return 'queued';
+      }
+
+      return 'started';
+    } catch (error) {
+      window.alert(`开始移动失败: ${error.message}`);
+      return 'failed';
+    }
+  };
+
+  const stopTravel = async () => {
+    if (isStoppingTravel) return;
+    setIsStoppingTravel(true);
+    const token = localStorage.getItem('token');
+
+    try {
+      const response = await fetch('http://localhost:5000/api/travel/stop', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok) {
+        window.alert(getApiErrorMessage(parsed, '停止移动失败'));
+        return;
+      }
+
+      if (!data) {
+        window.alert('停止移动失败：返回数据不是 JSON');
+        return;
+      }
+
+      setTravelStatus(data.travel || { isTraveling: false });
+      if (typeof data.location === 'string') {
+        syncUserLocation(data.location);
+      }
+    } catch (error) {
+      window.alert(`停止移动失败: ${error.message}`);
+    } finally {
+      setIsStoppingTravel(false);
+    }
+  };
+
+  const handleMoveToNode = async (targetNode) => {
+    if (!targetNode || !targetNode._id) return;
+
+    if (isAdmin) {
+      window.alert('管理员不可执行移动操作');
+      return;
+    }
+
+    const isHardMoving = travelStatus.isTraveling && !travelStatus.isStopping;
+    const isStopping = !!travelStatus.isStopping;
+
+    if (isHardMoving) {
+      window.alert('你正在移动中，不能更换目的地。请先停止移动。');
+      return;
+    }
+
+    if (!userLocation || userLocation.trim() === '') {
+      window.alert('尚未设置当前位置，暂时无法移动');
+      return;
+    }
+
+    if (!isStopping && targetNode.name === userLocation) {
+      window.alert('你已经在该节点，无需移动');
+      return;
+    }
+
+    if (isStopping && targetNode.name === travelStatus?.stoppingNearestNode?.nodeName) {
+      window.alert('停止移动期间不能把最近节点设为新的目标');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      isStopping
+        ? `是否将「${targetNode.name}」设为新的目标？将在停止移动完成后自动出发。`
+        : `是否移动到「${targetNode.name}」？将按最短路径计算距离。`
+    );
+    if (!confirmed) return;
+
+    const startResult = await startTravelToNode(targetNode._id);
+    if (startResult === 'started') {
+      setView('home');
+      setNavigationPath([{ type: 'home', label: '首页' }]);
+    }
+  };
+
   // 当userLocation变化时，获取节点详情
   useEffect(() => {
     if (authenticated && userLocation) {
       fetchLocationNodeDetail(userLocation);
     }
   }, [userLocation, authenticated]);
+
+  useEffect(() => {
+    if (!authenticated || isAdmin) {
+      setTravelStatus({ isTraveling: false });
+      return;
+    }
+
+    fetchTravelStatus(true);
+    const timer = setInterval(() => {
+      fetchTravelStatus(true);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [authenticated, isAdmin]);
 
     const handleLogout = () => {
         localStorage.removeItem('token');
@@ -414,6 +643,9 @@ const App = () => {
         setView('login');
         setIsAdmin(false);
         setUserLocation('');
+        setTravelStatus({ isTraveling: false });
+        setIsStoppingTravel(false);
+        setCurrentLocationNodeDetail(null);
         setUserAvatar('default_male_1');
         setSelectedLocationNode(null);
         setShowLocationModal(false);
@@ -559,9 +791,12 @@ const App = () => {
     
             if (response.ok) {
                 setIsAdmin(true);
+            } else {
+                setIsAdmin(false);
             }
         } catch (error) {
             console.log('非管理员用户');
+            setIsAdmin(false);
         }
     };
 
@@ -802,6 +1037,65 @@ const App = () => {
         }
     };
 
+    const buildClickedNodeFromScene = (targetNodeId) => {
+        const sceneNodes = sceneManagerRef.current?.currentLayout?.nodes || [];
+        const matched = sceneNodes.find((n) => n?.data?._id === targetNodeId);
+        if (!matched) return null;
+        return {
+            id: matched.id,
+            data: matched.data,
+            type: matched.type
+        };
+    };
+
+    const handleJumpToCurrentLocationView = async () => {
+        if (!currentLocationNodeDetail?._id) {
+            return;
+        }
+
+        if (view === 'nodeDetail' && currentNodeDetail?.name === userLocation) {
+            return;
+        }
+
+        const clickedNode = buildClickedNodeFromScene(currentLocationNodeDetail._id);
+        await fetchNodeDetail(currentLocationNodeDetail._id, clickedNode);
+    };
+
+    const getNodeDetailButtonContext = (nodeDetail) => {
+        const isAtCurrentNode = nodeDetail?.name === userLocation;
+        const isHardMoving = travelStatus.isTraveling && !travelStatus.isStopping;
+        const isNearestInStopping = travelStatus.isStopping && nodeDetail?.name === travelStatus?.stoppingNearestNode?.nodeName;
+        const moveDisabled = isAtCurrentNode || isHardMoving || !userLocation || isNearestInStopping;
+        const moveDisabledReason = isAtCurrentNode
+            ? '已位于该节点'
+            : (isHardMoving
+                ? '移动中不可切换目的地'
+                : (!userLocation
+                    ? '未设置当前位置'
+                    : (isNearestInStopping ? '停止移动期间不能选择最近节点' : '当前不可移动')));
+
+        return {
+            showMoveButton: !isAdmin,
+            moveDisabled,
+            moveDisabledReason
+        };
+    };
+
+    useEffect(() => {
+        if (!sceneManagerRef.current) return;
+
+        sceneManagerRef.current.onNodeClick = (node) => {
+            if (!node?.data?._id) return;
+
+            if (view === 'nodeDetail' && node.type === 'center') {
+                setShowNodeInfoModal(true);
+                return;
+            }
+
+            fetchNodeDetail(node.data._id, node);
+        };
+    }, [view]);
+
     // 实时搜索
     const performHomeSearch = async (query) => {
         if (!query || query.trim() === '') {
@@ -890,11 +1184,27 @@ const App = () => {
         const childNodes = currentNodeDetail.childNodesInfo || [];
 
         // 将被点击的节点传递给SceneManager，用于正确的过渡动画
-        sceneManagerRef.current.showNodeDetail(currentNodeDetail, parentNodes, childNodes, clickedNodeForTransition);
+        sceneManagerRef.current.showNodeDetail(
+            currentNodeDetail,
+            parentNodes,
+            childNodes,
+            clickedNodeForTransition,
+            getNodeDetailButtonContext(currentNodeDetail)
+        );
 
         // 动画完成后清除clickedNode状态
         setClickedNodeForTransition(null);
     }, [isWebGLReady, view, currentNodeDetail]);
+
+    useEffect(() => {
+        if (!sceneManagerRef.current) return;
+        if (view !== 'nodeDetail' || !currentNodeDetail) return;
+
+        sceneManagerRef.current.setupCenterNodeButtons(
+            currentNodeDetail,
+            getNodeDetailButtonContext(currentNodeDetail)
+        );
+    }, [view, currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling]);
 
 
     // 新节点创建相关函数
@@ -952,6 +1262,114 @@ const App = () => {
                 setDomainTransitionProgress(0);
                 setKnowledgeDomainNode(null);
             }
+        );
+    };
+
+    const renderNodeDetailLocationSidebar = () => {
+        if (isAdmin || view !== 'nodeDetail') return null;
+
+        const canJumpToLocationView = Boolean(
+            !travelStatus.isTraveling &&
+            currentLocationNodeDetail &&
+            userLocation &&
+            currentNodeDetail?.name !== userLocation
+        );
+
+        return (
+            <div className="location-resident-sidebar">
+                <div className="location-sidebar-header">
+                    <h3>{travelStatus?.isTraveling ? '移动状态' : '当前所在的知识域'}</h3>
+                </div>
+
+                {travelStatus?.isTraveling ? (
+                    <div className="travel-sidebar-content">
+                        <div className="travel-main-info">
+                                <div className="travel-destination">
+                                {travelStatus?.isStopping ? '停止目标' : '目标节点'}: <strong>{travelStatus?.targetNode?.nodeName}</strong>
+                                </div>
+                                <div className="travel-metrics">
+                                    <span>剩余距离: {travelStatus?.remainingDistanceUnits?.toFixed?.(2) ?? travelStatus?.remainingDistanceUnits} 单位</span>
+                                    <span>剩余时间: {Math.max(0, Math.round(travelStatus?.remainingSeconds || 0))} 秒</span>
+                                    {travelStatus?.queuedTargetNode?.nodeName && (
+                                        <span>已排队目标: {travelStatus.queuedTargetNode.nodeName}</span>
+                                    )}
+                                </div>
+                            </div>
+
+                        <div className="travel-anim-layout">
+                            <div className="travel-node-card next">
+                                <div className="travel-node-label">下一目的地</div>
+                                <div className="travel-node-name">{travelStatus?.nextNode?.nodeName || '-'}</div>
+                            </div>
+                            <div className="travel-track-wrap">
+                                <div className="travel-track">
+                                    <div
+                                        className="travel-progress-dot"
+                                        style={{ left: `${(1 - (travelStatus?.progressInCurrentSegment || 0)) * 100}%` }}
+                                    />
+                                </div>
+                            </div>
+                            <div className="travel-node-card reached">
+                                <div className="travel-node-label">最近到达</div>
+                                <div className="travel-node-name">{travelStatus?.lastReachedNode?.nodeName || '-'}</div>
+                            </div>
+                        </div>
+
+                        <button
+                            type="button"
+                            className="btn btn-danger travel-stop-btn"
+                            onClick={stopTravel}
+                            disabled={isStoppingTravel || travelStatus?.isStopping}
+                        >
+                            {(isStoppingTravel || travelStatus?.isStopping) ? '停止进行中...' : '停止移动'}
+                        </button>
+                    </div>
+                ) : currentLocationNodeDetail ? (
+                    <div
+                        className={`location-sidebar-content ${canJumpToLocationView ? 'location-sidebar-jumpable' : ''}`}
+                        onClick={() => {
+                            if (canJumpToLocationView) {
+                                handleJumpToCurrentLocationView();
+                            }
+                        }}
+                    >
+                        <div className="location-node-title">{currentLocationNodeDetail.name}</div>
+
+                        {currentLocationNodeDetail.description && (
+                            <div className="location-node-section">
+                                <div className="section-label">描述</div>
+                                <div className="section-content">{currentLocationNodeDetail.description}</div>
+                            </div>
+                        )}
+
+                        {currentLocationNodeDetail.relatedParentDomains && currentLocationNodeDetail.relatedParentDomains.length > 0 && (
+                            <div className="location-node-section">
+                                <div className="section-label">父域</div>
+                                <div className="section-tags">
+                                    {currentLocationNodeDetail.relatedParentDomains.map((parent, idx) => (
+                                        <span key={idx} className="node-tag parent-tag">{parent}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {currentLocationNodeDetail.relatedChildDomains && currentLocationNodeDetail.relatedChildDomains.length > 0 && (
+                            <div className="location-node-section">
+                                <div className="section-label">子域</div>
+                                <div className="section-tags">
+                                    {currentLocationNodeDetail.relatedChildDomains.map((child, idx) => (
+                                        <span key={idx} className="node-tag child-tag">{child}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="location-sidebar-empty">
+                        <p>暂未降临到任何知识域</p>
+                    </div>
+                )}
+            </div>
         );
     };
 
@@ -1063,42 +1481,54 @@ const App = () => {
                         onCreateNode={openCreateNodeModal}
                         isAdmin={isAdmin}
                         currentLocationNodeDetail={currentLocationNodeDetail}
+                        travelStatus={travelStatus}
+                        onStopTravel={stopTravel}
+                        isStoppingTravel={isStoppingTravel}
+                        canJumpToLocationView={Boolean(
+                            !travelStatus.isTraveling &&
+                            currentLocationNodeDetail &&
+                            userLocation
+                        )}
+                        onJumpToLocationView={handleJumpToCurrentLocationView}
                     />
                 )}
                 {/* 节点详情视图 */}
                 {view === "nodeDetail" && currentNodeDetail && (
-                    <NodeDetail
-                        node={currentNodeDetail}
-                        navigationPath={navigationPath}
-                        onNavigate={(nodeId) => fetchNodeDetail(nodeId)}
-                        onHome={() => {
-                            setView("home");
-                            setNavigationPath([{ type: "home", label: "首页" }]);
-                        }}
-                        onShowNavigationTree={() => setShowNavigationTree(true)}
-                        searchQuery={homeSearchQuery}
-                        onSearchChange={(e) => setHomeSearchQuery(e.target.value)}
-                        onSearchFocus={() => setShowSearchResults(true)}
-                        onSearchClear={() => {
-                            setHomeSearchQuery("");
-                            setHomeSearchResults([]);
-                            setShowSearchResults(true);
-                        }}
-                        searchResults={homeSearchResults}
-                        showSearchResults={showSearchResults}
-                        isSearching={isSearching}
-                        onSearchResultClick={(node) => {
-                            fetchNodeDetail(node._id, {
-                                id: `search-${node._id}`,
-                                data: node,
-                                type: "search"
-                            });
-                            setShowSearchResults(false);
-                        }}
-                        onCreateNode={openCreateNodeModal}
-                        onNodeInfoClick={() => setShowNodeInfoModal(true)}
-                        webglCanvasRef={webglCanvasRef}
-                    />
+                    <>
+                        <NodeDetail
+                            node={currentNodeDetail}
+                            navigationPath={navigationPath}
+                            onNavigate={(nodeId) => fetchNodeDetail(nodeId)}
+                            onHome={() => {
+                                setView("home");
+                                setNavigationPath([{ type: "home", label: "首页" }]);
+                            }}
+                            onShowNavigationTree={() => setShowNavigationTree(true)}
+                            searchQuery={homeSearchQuery}
+                            onSearchChange={(e) => setHomeSearchQuery(e.target.value)}
+                            onSearchFocus={() => setShowSearchResults(true)}
+                            onSearchClear={() => {
+                                setHomeSearchQuery("");
+                                setHomeSearchResults([]);
+                                setShowSearchResults(true);
+                            }}
+                            searchResults={homeSearchResults}
+                            showSearchResults={showSearchResults}
+                            isSearching={isSearching}
+                            onSearchResultClick={(node) => {
+                                fetchNodeDetail(node._id, {
+                                    id: `search-${node._id}`,
+                                    data: node,
+                                    type: "search"
+                                });
+                                setShowSearchResults(false);
+                            }}
+                            onCreateNode={openCreateNodeModal}
+                            onNodeInfoClick={() => setShowNodeInfoModal(true)}
+                            webglCanvasRef={webglCanvasRef}
+                        />
+                        {renderNodeDetailLocationSidebar()}
+                    </>
                 )}
                 {view === "alliance" && (
                     <AlliancePanel 

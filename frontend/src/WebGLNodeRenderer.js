@@ -333,6 +333,7 @@ class WebGLNodeRenderer {
       if (!node || !node.visible || node.opacity < 0.5) continue;
 
       for (const button of buttons) {
+        if (button.disabled) continue;
         const btnPos = this.getButtonPosition(node, button.angle);
         const dx = x - btnPos.x;
         const dy = y - btnPos.y;
@@ -717,21 +718,24 @@ class WebGLNodeRenderer {
         const isHovered = this.hoveredButton &&
           this.hoveredButton.nodeId === nodeId &&
           this.hoveredButton.button.id === button.id;
+        const isDisabled = !!button.disabled;
 
         // 按钮尺寸
-        const btnSize = isHovered ? 38 : 32;
+        const btnSize = isHovered && !isDisabled ? 38 : 32;
 
         // 按钮颜色 - 使用更柔和的颜色
         const baseColor = button.color || [0.66, 0.33, 0.97, 1];
-        const glowColor = [baseColor[0] * 1.2, baseColor[1] * 1.2, baseColor[2] * 1.2, 0.8];
+        const glowColor = isDisabled
+          ? [baseColor[0], baseColor[1], baseColor[2], 0.35]
+          : [baseColor[0] * 1.2, baseColor[1] * 1.2, baseColor[2] * 1.2, 0.8];
 
         gl.uniform2f(this.nodeLocations.translation, btnPos.x, btnPos.y);
         gl.uniform2f(this.nodeLocations.scale, btnSize, btnSize);
         gl.uniform1f(this.nodeLocations.rotation, 0);
         gl.uniform4fv(this.nodeLocations.color, baseColor);
         gl.uniform4fv(this.nodeLocations.glowColor, glowColor);
-        gl.uniform1f(this.nodeLocations.glowIntensity, isHovered ? 0.5 : 0.3);
-        gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isHovered ? 0.95 : 0.8));
+        gl.uniform1f(this.nodeLocations.glowIntensity, isDisabled ? 0.05 : (isHovered ? 0.5 : 0.3));
+        gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isDisabled ? 0.45 : (isHovered ? 0.95 : 0.8)));
         gl.uniform1i(this.nodeLocations.shapeType, 0); // 圆形
         gl.uniform2f(this.nodeLocations.size, btnSize, btnSize);
 
@@ -818,21 +822,22 @@ class WebGLNodeRenderer {
         const isHovered = this.hoveredButton &&
           this.hoveredButton.nodeId === nodeId &&
           this.hoveredButton.button.id === button.id;
+        const isDisabled = !!button.disabled;
 
-        ctx.globalAlpha = node.opacity * (isHovered ? 1 : 0.9);
+        ctx.globalAlpha = node.opacity * (isDisabled ? 0.55 : (isHovered ? 1 : 0.9));
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
         // 绘制图标
-        const iconSize = isHovered ? 16 : 14;
+        const iconSize = isHovered && !isDisabled ? 16 : 14;
         ctx.font = `${iconSize}px sans-serif`;
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = isDisabled ? '#cbd5e1' : '#ffffff';
 
         // 使用简单的符号作为图标
         const icon = button.icon || '→';
         ctx.fillText(icon, btnPos.x, btnPos.y);
 
-        // 如果悬停，显示tooltip
+        // 如果悬停，显示tooltip（禁用按钮同样提示）
         if (isHovered && button.tooltip) {
           ctx.font = '12px sans-serif';
           ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';

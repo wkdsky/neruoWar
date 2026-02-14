@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Search, Check, ArrowRight, ArrowLeft, RotateCcw, Plus, ChevronDown, ChevronUp, Eye, AlertTriangle } from 'lucide-react';
+import { X, Search, Check, ArrowRight, ArrowLeft, RotateCcw, Plus, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import MiniPreviewRenderer from './MiniPreviewRenderer';
 import './CreateNodeModal.css';
 
@@ -125,11 +125,10 @@ const CreateNodeModal = ({
         };
     }, [currentStep, selectedNodeA, selectedNodeB, selectedRelationType, newNodeData.title, insertDirection]);
 
-    if (!isOpen) return null;
-
     // 搜索节点
-    const searchNodes = async () => {
-        if (!searchKeyword.trim()) {
+    const searchNodes = useCallback(async (keyword) => {
+        const normalizedKeyword = (keyword || '').trim();
+        if (!normalizedKeyword) {
             setSearchResults([]);
             return;
         }
@@ -137,7 +136,7 @@ const CreateNodeModal = ({
         setSearchLoading(true);
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(searchKeyword)}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(normalizedKeyword)}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
 
@@ -153,7 +152,26 @@ const CreateNodeModal = ({
         } finally {
             setSearchLoading(false);
         }
-    };
+    }, []);
+
+    // 选择节点步骤中，输入时自动搜索
+    useEffect(() => {
+        if (currentStep !== STEPS.SELECT_NODE_A) {
+            return;
+        }
+
+        if (!searchKeyword.trim()) {
+            setSearchResults([]);
+            setSearchLoading(false);
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            searchNodes(searchKeyword);
+        }, 220);
+
+        return () => clearTimeout(timer);
+    }, [searchKeyword, currentStep, searchNodes]);
 
     // 获取节点详情
     const fetchNodeDetail = async (nodeId) => {
@@ -584,11 +602,11 @@ const CreateNodeModal = ({
                     type="text"
                     value={searchKeyword}
                     onChange={(e) => setSearchKeyword(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && searchNodes()}
+                    onKeyPress={(e) => e.key === 'Enter' && searchNodes(searchKeyword)}
                     placeholder="搜索节点标题或简介..."
                     className="form-input"
                 />
-                <button onClick={searchNodes} disabled={searchLoading} className="btn btn-primary">
+                <button onClick={() => searchNodes(searchKeyword)} disabled={searchLoading} className="btn btn-primary">
                     <Search className="icon-small" />
                     {searchLoading ? '...' : '搜索'}
                 </button>
@@ -787,6 +805,8 @@ const CreateNodeModal = ({
         }
     };
 
+    if (!isOpen) return null;
+
     return (
         <div className="modal-overlay">
             <div className="modal-content create-node-modal" onClick={(e) => e.stopPropagation()}>
@@ -937,7 +957,15 @@ const CreateNodeModal = ({
                                 {isAssociationListExpanded && associations.length > 0 && (
                                     <div className="associations-list">
                                         {associations.map((association, index) => (
-                                            <div key={index} className="association-item">
+                                            <div
+                                                key={index}
+                                                className={`association-item ${currentStep === null ? 'clickable' : ''}`}
+                                                onClick={() => {
+                                                    if (currentStep === null) {
+                                                        editAssociation(index);
+                                                    }
+                                                }}
+                                            >
                                                 <div className="association-info">
                                                     <span className="association-display-text">{association.displayText}</span>
                                                     <span className={`relation-type-badge ${association.type}`}>
@@ -947,10 +975,14 @@ const CreateNodeModal = ({
                                                     </span>
                                                 </div>
                                                 <div className="association-actions">
-                                                    <button onClick={() => editAssociation(index)} className="btn btn-secondary btn-small" disabled={currentStep !== null}>
-                                                        <Eye className="icon-small" />
-                                                    </button>
-                                                    <button onClick={() => removeAssociation(index)} className="btn btn-danger btn-small" disabled={currentStep !== null}>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            removeAssociation(index);
+                                                        }}
+                                                        className="btn btn-danger btn-small"
+                                                        disabled={currentStep !== null}
+                                                    >
                                                         <X className="icon-small" />
                                                     </button>
                                                 </div>

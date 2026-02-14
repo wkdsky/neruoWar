@@ -1,5 +1,17 @@
 const mongoose = require('mongoose');
 
+const TravelPathNodeSchema = new mongoose.Schema({
+  nodeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Node',
+    required: true
+  },
+  nodeName: {
+    type: String,
+    required: true
+  }
+}, { _id: false });
+
 const userSchema = new mongoose.Schema({
   username: {
     type: String,
@@ -52,6 +64,66 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ['male', 'female', 'other'],
     default: 'male'
+  },
+  travelState: {
+    status: {
+      type: String,
+      enum: ['idle', 'moving', 'stopping'],
+      default: 'idle'
+    },
+    isTraveling: {
+      type: Boolean,
+      default: false
+    },
+    path: {
+      type: [TravelPathNodeSchema],
+      default: []
+    },
+    startedAt: {
+      type: Date,
+      default: null
+    },
+    unitDurationSeconds: {
+      type: Number,
+      default: 60,
+      min: 1
+    },
+    targetNodeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Node',
+      default: null
+    },
+    stoppingNearestNodeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Node',
+      default: null
+    },
+    stoppingNearestNodeName: {
+      type: String,
+      default: ''
+    },
+    stopStartedAt: {
+      type: Date,
+      default: null
+    },
+    stopDurationSeconds: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    stopFromNode: {
+      type: TravelPathNodeSchema,
+      default: null
+    },
+    queuedTargetNodeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Node',
+      default: null
+    },
+    queuedTargetNodeName: {
+      type: String,
+      default: ''
+    }
   }
 }, {
   timestamps: true
