@@ -19,6 +19,121 @@ const TRAVEL_STATUS = {
   MOVING: 'moving',
   STOPPING: 'stopping'
 };
+const RESIGN_REQUEST_EXPIRE_MS = 3 * 24 * 60 * 60 * 1000;
+
+const getIdString = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && value._id && value._id !== value) return getIdString(value._id);
+  if (value && typeof value === 'object' && typeof value.id === 'string' && value.id) return value.id;
+  if (typeof value.toString === 'function') {
+    const text = value.toString();
+    return text === '[object Object]' ? '' : text;
+  }
+  return '';
+};
+
+const isResignRequestExpired = (notification, now = Date.now()) => {
+  const createdAtMs = new Date(notification?.createdAt || 0).getTime();
+  if (!createdAtMs) return false;
+  return (now - createdAtMs) >= RESIGN_REQUEST_EXPIRE_MS;
+};
+
+const handleResignRequestDecision = async ({
+  domainMasterUser,
+  notification,
+  action = 'accept',
+  isAuto = false
+}) => {
+  const nowDate = new Date();
+  const domainMasterId = getIdString(domainMasterUser?._id);
+  const nodeId = getIdString(notification?.nodeId);
+  const requesterId = getIdString(notification?.inviteeId);
+
+  if (!domainMasterId || !nodeId || !requesterId) {
+    notification.status = 'accepted';
+    notification.read = true;
+    notification.respondedAt = nowDate;
+    return {
+      decision: 'accepted',
+      message: isAuto ? '申请超时，已自动同意卸任' : '已同意卸任'
+    };
+  }
+
+  const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
+  const requester = await User.findById(requesterId);
+
+  const shouldAccept = isAuto ? true : action === 'accept';
+  let decision = shouldAccept ? 'accepted' : 'rejected';
+  let decisionMessage = shouldAccept ? '已同意该管理员卸任申请' : '已拒绝该管理员卸任申请';
+
+  if (shouldAccept && node && node.status === 'approved' && getIdString(node.domainMaster) === domainMasterId) {
+    const beforeCount = (node.domainAdmins || []).length;
+    node.domainAdmins = (node.domainAdmins || []).filter((adminId) => getIdString(adminId) !== requesterId);
+    if (node.domainAdmins.length !== beforeCount) {
+      await node.save();
+      decisionMessage = isAuto ? '申请超时，已自动同意并完成卸任' : '已同意并完成卸任';
+    } else {
+      decisionMessage = isAuto ? '申请超时自动同意（该用户已非管理员）' : '已同意（该用户已非管理员）';
+    }
+  }
+
+  notification.status = decision;
+  notification.read = true;
+  notification.respondedAt = nowDate;
+
+  if (requester) {
+    requester.notifications.unshift({
+      type: 'domain_admin_resign_result',
+      title: `卸任申请结果：${notification.nodeName || node?.name || '知识域'}`,
+      message: decision === 'accepted'
+        ? (isAuto ? '你的卸任申请已超时自动同意' : `${domainMasterUser.username} 已同意你的卸任申请`)
+        : `${domainMasterUser.username} 已拒绝你的卸任申请`,
+      read: false,
+      status: decision,
+      nodeId: node?._id || notification.nodeId || null,
+      nodeName: node?.name || notification.nodeName || '',
+      inviterId: domainMasterUser._id,
+      inviterUsername: domainMasterUser.username,
+      inviteeId: requester._id,
+      inviteeUsername: requester.username,
+      respondedAt: nowDate
+    });
+    await requester.save();
+  }
+
+  return {
+    decision,
+    message: decisionMessage
+  };
+};
+
+const settleExpiredResignRequestsForUser = async (user) => {
+  if (!user || !Array.isArray(user.notifications) || user.notifications.length === 0) return false;
+
+  let changed = false;
+  const now = Date.now();
+  for (const notification of user.notifications) {
+    if (
+      notification.type === 'domain_admin_resign_request' &&
+      notification.status === 'pending' &&
+      isResignRequestExpired(notification, now)
+    ) {
+      await handleResignRequestDecision({
+        domainMasterUser: user,
+        notification,
+        action: 'accept',
+        isAuto: true
+      });
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await user.save();
+  }
+  return changed;
+};
 
 const getTravelStatus = (travelState) => {
   if (!travelState) return TRAVEL_STATUS.IDLE;
@@ -737,6 +852,199 @@ router.put('/profile/gender', async (req, res) => {
     });
   } catch (error) {
     console.error('修改性别错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取通知列表
+router.get('/notifications', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('notifications');
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    await settleExpiredResignRequestsForUser(user);
+
+    const notifications = [...(user.notifications || [])]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map((notification) => ({
+        _id: notification._id,
+        type: notification.type,
+        title: notification.title,
+        message: notification.message,
+        read: notification.read,
+        status: notification.status,
+        nodeId: notification.nodeId,
+        nodeName: notification.nodeName,
+        inviterId: notification.inviterId,
+        inviterUsername: notification.inviterUsername,
+        inviteeId: notification.inviteeId,
+        inviteeUsername: notification.inviteeUsername,
+        createdAt: notification.createdAt,
+        respondedAt: notification.respondedAt
+      }));
+
+    const unreadCount = notifications.filter((notification) => !notification.read).length;
+
+    res.json({
+      success: true,
+      unreadCount,
+      notifications
+    });
+  } catch (error) {
+    console.error('获取通知列表错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 标记通知已读
+router.post('/notifications/:notificationId/read', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const notification = user.notifications.id(req.params.notificationId);
+    if (!notification) {
+      return res.status(404).json({ error: '通知不存在' });
+    }
+
+    notification.read = true;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: '通知已标记为已读'
+    });
+  } catch (error) {
+    console.error('标记通知已读错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 响应通知动作（管理员邀请/管理员卸任申请）
+router.post('/notifications/:notificationId/respond', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const { action } = req.body;
+    if (!['accept', 'reject'].includes(action)) {
+      return res.status(400).json({ error: '无效的操作类型' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const notification = user.notifications.id(req.params.notificationId);
+    if (!notification) {
+      return res.status(404).json({ error: '通知不存在' });
+    }
+
+    if (notification.status !== 'pending') {
+      return res.status(400).json({ error: '该通知不可响应' });
+    }
+
+    let decision = 'rejected';
+    let decisionMessage = '处理完成';
+
+    if (notification.type === 'domain_admin_invite') {
+      if (!notification.nodeId) {
+        return res.status(400).json({ error: '邀请信息异常：缺少节点信息' });
+      }
+
+      const node = await Node.findById(notification.nodeId).select('name status domainMaster domainAdmins');
+      if (!node || node.status !== 'approved') {
+        return res.status(400).json({ error: '该知识域不存在或不可加入管理员' });
+      }
+
+      if (!node.domainMaster || !notification.inviterId || getIdString(node.domainMaster) !== getIdString(notification.inviterId)) {
+        return res.status(400).json({ error: '邀请已失效（域主已变化）' });
+      }
+
+      if (user.role !== 'common') {
+        return res.status(400).json({ error: '只有普通用户可以接受该邀请' });
+      }
+
+      if (action === 'accept') {
+        const alreadyAdmin = (node.domainAdmins || []).some((id) => getIdString(id) === getIdString(user._id));
+        if (!alreadyAdmin) {
+          node.domainAdmins.push(user._id);
+          await node.save();
+        }
+        decision = 'accepted';
+        decisionMessage = alreadyAdmin ? '你已是该知识域管理员' : '已接受邀请，成为知识域管理员';
+      } else {
+        decision = 'rejected';
+        decisionMessage = '已拒绝邀请';
+      }
+
+      notification.status = decision;
+      notification.read = true;
+      notification.respondedAt = new Date();
+      await user.save();
+
+      if (notification.inviterId) {
+        const inviter = await User.findById(notification.inviterId);
+        if (inviter) {
+          inviter.notifications.unshift({
+            type: 'domain_admin_invite_result',
+            title: `邀请结果：${notification.nodeName || '知识域'}`,
+            message: `${user.username} ${decision === 'accepted' ? '已接受' : '已拒绝'}你的管理员邀请`,
+            read: false,
+            status: decision,
+            nodeId: notification.nodeId || null,
+            nodeName: notification.nodeName || '',
+            inviterId: inviter._id,
+            inviterUsername: inviter.username,
+            inviteeId: user._id,
+            inviteeUsername: user.username,
+            respondedAt: notification.respondedAt
+          });
+          await inviter.save();
+        }
+      }
+    } else if (notification.type === 'domain_admin_resign_request') {
+      const expired = isResignRequestExpired(notification);
+      const result = await handleResignRequestDecision({
+        domainMasterUser: user,
+        notification,
+        action: expired ? 'accept' : action,
+        isAuto: expired
+      });
+      decision = result.decision;
+      decisionMessage = result.message;
+      await user.save();
+    } else {
+      return res.status(400).json({ error: '该通知类型不支持响应操作' });
+    }
+
+    res.json({
+      success: true,
+      decision,
+      message: decisionMessage
+    });
+  } catch (error) {
+    console.error('响应邀请通知错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });

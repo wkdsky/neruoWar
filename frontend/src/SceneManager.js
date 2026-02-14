@@ -145,15 +145,24 @@ class SceneManager {
     if (!centerNode) return;
 
     const centerNodeId = `center-${centerNode._id}`;
+    const isFavorite = !!buttonContext.isFavorite;
 
     const buttons = [
       {
         id: 'enter-domain',
         icon: '◎',  // 使用圆圈符号表示进入
-        angle: 0,   // 0 = 右边
+        angle: -Math.PI / 7, // 右上偏侧，避开顶部连线区域
         action: 'enterKnowledgeDomain',
         tooltip: '进入知识域',
         color: [0.3, 0.7, 0.9, 0.9]  // 柔和的青蓝色
+      },
+      {
+        id: 'toggle-favorite',
+        icon: isFavorite ? '★' : '☆',
+        angle: Math.PI / 7, // 右下偏侧，避开底部连线区域
+        action: 'toggleFavoriteNode',
+        tooltip: isFavorite ? '取消收藏' : '收藏该知识域',
+        color: [0.98, 0.80, 0.20, 0.95]
       }
     ];
 
@@ -161,7 +170,7 @@ class SceneManager {
       buttons.push({
         id: 'move-to-node',
         icon: '⇦',
-        angle: Math.PI, // 左边
+        angle: Math.PI, // 左侧
         action: 'moveToNode',
         tooltip: buttonContext.moveDisabled
           ? (buttonContext.moveDisabledReason || '当前不可移动')

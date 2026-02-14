@@ -1,9 +1,39 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Node = require('../models/Node');
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
+
+const getIdString = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (value instanceof mongoose.Types.ObjectId) return value.toString();
+  if (typeof value === 'object' && value._id && value._id !== value) return getIdString(value._id);
+  if (typeof value === 'object' && typeof value.id === 'string' && value.id) return value.id;
+  if (typeof value.toString === 'function') {
+    const text = value.toString();
+    return text === '[object Object]' ? '' : text;
+  }
+  return '';
+};
+
+const isDomainMaster = (node, userId) => {
+  const masterId = getIdString(node?.domainMaster);
+  const currentUserId = getIdString(userId);
+  return !!masterId && !!currentUserId && masterId === currentUserId;
+};
+
+const isDomainAdmin = (node, userId) => {
+  const currentUserId = getIdString(userId);
+  if (!currentUserId || !Array.isArray(node?.domainAdmins)) return false;
+  return node.domainAdmins.some((adminId) => getIdString(adminId) === currentUserId);
+};
+
+const DOMAIN_CARD_SELECT = '_id name description knowledgePoint contentScore';
+
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // 搜索节点
 router.get('/search', authenticateToken, async (req, res) => {
@@ -884,6 +914,496 @@ router.get('/admin/search-users', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('搜索用户错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取与当前用户相关的知识域（域主/普通管理员/收藏/最近访问）
+router.get('/me/related-domains', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId).select('favoriteDomains recentVisitedDomains');
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const userId = user._id;
+    const [domainMasterDomains, domainAdminDomains] = await Promise.all([
+      Node.find({ status: 'approved', domainMaster: userId })
+        .select(DOMAIN_CARD_SELECT)
+        .sort({ name: 1 })
+        .lean(),
+      Node.find({ status: 'approved', domainAdmins: userId, domainMaster: { $ne: userId } })
+        .select(DOMAIN_CARD_SELECT)
+        .sort({ name: 1 })
+        .lean()
+    ]);
+
+    const favoriteDomainIds = (user.favoriteDomains || [])
+      .map((id) => getIdString(id))
+      .filter((id) => isValidObjectId(id));
+    const favoriteNodes = favoriteDomainIds.length > 0
+      ? await Node.find({ _id: { $in: favoriteDomainIds }, status: 'approved' })
+          .select(DOMAIN_CARD_SELECT)
+          .lean()
+      : [];
+    const favoriteNodeMap = new Map(favoriteNodes.map((node) => [getIdString(node._id), node]));
+    const favoriteDomains = favoriteDomainIds
+      .map((id) => favoriteNodeMap.get(id))
+      .filter(Boolean);
+
+    const recentEntries = (user.recentVisitedDomains || [])
+      .filter((item) => item && item.nodeId)
+      .sort((a, b) => new Date(b.visitedAt).getTime() - new Date(a.visitedAt).getTime());
+    const recentDomainIds = recentEntries
+      .map((item) => getIdString(item.nodeId))
+      .filter((id) => isValidObjectId(id));
+    const recentNodes = recentDomainIds.length > 0
+      ? await Node.find({ _id: { $in: recentDomainIds }, status: 'approved' })
+          .select(DOMAIN_CARD_SELECT)
+          .lean()
+      : [];
+    const recentNodeMap = new Map(recentNodes.map((node) => [getIdString(node._id), node]));
+    const recentDomains = recentEntries
+      .map((item) => {
+        const nodeId = getIdString(item.nodeId);
+        const node = recentNodeMap.get(nodeId);
+        if (!node) return null;
+        return {
+          ...node,
+          visitedAt: item.visitedAt
+        };
+      })
+      .filter(Boolean);
+
+    res.json({
+      success: true,
+      domainMasterDomains,
+      domainAdminDomains,
+      favoriteDomains,
+      recentDomains
+    });
+  } catch (error) {
+    console.error('获取相关知识域错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 收藏/取消收藏知识域（当前用户）
+router.post('/:nodeId/favorite', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('_id status');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可收藏' });
+    }
+
+    const user = await User.findById(req.user.userId).select('favoriteDomains');
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const targetId = getIdString(node._id);
+    const exists = (user.favoriteDomains || []).some((id) => getIdString(id) === targetId);
+
+    if (exists) {
+      user.favoriteDomains = (user.favoriteDomains || []).filter((id) => getIdString(id) !== targetId);
+    } else {
+      user.favoriteDomains = [node._id, ...(user.favoriteDomains || []).filter((id) => getIdString(id) !== targetId)];
+      if (user.favoriteDomains.length > 100) {
+        user.favoriteDomains = user.favoriteDomains.slice(0, 100);
+      }
+    }
+
+    await user.save();
+
+    res.json({
+      success: true,
+      isFavorite: !exists,
+      message: exists ? '已取消收藏' : '已加入收藏'
+    });
+  } catch (error) {
+    console.error('收藏知识域错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 记录最近访问知识域（当前用户）
+router.post('/:nodeId/recent-visit', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('_id status');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可访问' });
+    }
+
+    const user = await User.findById(req.user.userId).select('recentVisitedDomains');
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const targetId = getIdString(node._id);
+    const filtered = (user.recentVisitedDomains || []).filter((item) => getIdString(item?.nodeId) !== targetId);
+    user.recentVisitedDomains = [
+      { nodeId: node._id, visitedAt: new Date() },
+      ...filtered
+    ].slice(0, 50);
+
+    await user.save();
+
+    res.json({
+      success: true
+    });
+  } catch (error) {
+    console.error('记录最近访问知识域错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 普通管理员申请卸任（提交给域主审批，3天超时自动同意）
+router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+
+    if (isDomainMaster(node, requestUserId)) {
+      return res.status(400).json({ error: '域主无需申请卸任管理员' });
+    }
+
+    if (!isDomainAdmin(node, requestUserId)) {
+      return res.status(403).json({ error: '你不是该知识域管理员' });
+    }
+
+    const requester = await User.findById(requestUserId).select('username role');
+    if (!requester) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (requester.role !== 'common') {
+      return res.status(403).json({ error: '仅普通用户可申请卸任管理员' });
+    }
+
+    const domainMasterId = getIdString(node.domainMaster);
+    if (!isValidObjectId(domainMasterId)) {
+      node.domainAdmins = (node.domainAdmins || []).filter((adminId) => getIdString(adminId) !== requestUserId);
+      await node.save();
+      return res.json({
+        success: true,
+        message: '该知识域当前无域主，已自动卸任管理员'
+      });
+    }
+
+    const domainMaster = await User.findById(domainMasterId).select('username notifications');
+    if (!domainMaster) {
+      node.domainAdmins = (node.domainAdmins || []).filter((adminId) => getIdString(adminId) !== requestUserId);
+      await node.save();
+      return res.json({
+        success: true,
+        message: '域主信息缺失，已自动卸任管理员'
+      });
+    }
+
+    const hasPendingRequest = (domainMaster.notifications || []).some((notification) => (
+      notification.type === 'domain_admin_resign_request' &&
+      notification.status === 'pending' &&
+      getIdString(notification.nodeId) === nodeId &&
+      getIdString(notification.inviteeId) === requestUserId
+    ));
+
+    if (hasPendingRequest) {
+      return res.status(409).json({ error: '你已提交过卸任申请，请等待域主处理' });
+    }
+
+    domainMaster.notifications.unshift({
+      type: 'domain_admin_resign_request',
+      title: `管理员卸任申请：${node.name}`,
+      message: `${requester.username} 申请卸任知识域「${node.name}」管理员`,
+      read: false,
+      status: 'pending',
+      nodeId: node._id,
+      nodeName: node.name,
+      inviteeId: requester._id,
+      inviteeUsername: requester.username,
+      createdAt: new Date()
+    });
+    await domainMaster.save();
+
+    res.json({
+      success: true,
+      message: '卸任申请已提交给域主，3天内未处理将自动同意'
+    });
+  } catch (error) {
+    console.error('申请卸任管理员错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取知识域管理员列表（域主可编辑，其他域管理员只读）
+router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name domainMaster domainAdmins');
+
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+
+    const currentUser = await User.findById(requestUserId).select('role');
+    if (!currentUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const canEdit = isDomainMaster(node, requestUserId);
+    const canView = canEdit || isDomainAdmin(node, requestUserId) || currentUser.role === 'admin';
+
+    if (!canView) {
+      return res.status(403).json({ error: '无权限查看该知识域管理员' });
+    }
+
+    const domainMasterId = getIdString(node.domainMaster);
+    const domainAdminIds = (node.domainAdmins || [])
+      .map((adminId) => getIdString(adminId))
+      .filter((adminId) => isValidObjectId(adminId));
+
+    const relatedUserIds = Array.from(new Set([domainMasterId, ...domainAdminIds].filter((id) => isValidObjectId(id))));
+    const relatedUsers = relatedUserIds.length > 0
+      ? await User.find({ _id: { $in: relatedUserIds } }).select('_id username profession role').lean()
+      : [];
+    const relatedUserMap = new Map(relatedUsers.map((userItem) => [getIdString(userItem._id), userItem]));
+
+    const domainMasterUser = relatedUserMap.get(domainMasterId) || null;
+    const admins = domainAdminIds
+      .filter((adminId, index, arr) => adminId !== domainMasterId && arr.indexOf(adminId) === index)
+      .map((adminId) => {
+        const adminUser = relatedUserMap.get(adminId);
+        if (!adminUser) return null;
+        return {
+          _id: getIdString(adminUser._id),
+          username: adminUser.username,
+          profession: adminUser.profession,
+          role: adminUser.role
+        };
+      })
+      .filter(Boolean);
+
+    const canResign = !canEdit && isDomainAdmin(node, requestUserId);
+    let resignPending = false;
+    if (canResign && isValidObjectId(domainMasterId)) {
+      const domainMaster = await User.findById(domainMasterId).select('notifications');
+      resignPending = !!(domainMaster?.notifications || []).some((notification) => (
+        notification.type === 'domain_admin_resign_request' &&
+        notification.status === 'pending' &&
+        getIdString(notification.nodeId) === nodeId &&
+        getIdString(notification.inviteeId) === requestUserId
+      ));
+    }
+
+    res.json({
+      success: true,
+      canView,
+      canEdit,
+      canResign,
+      resignPending,
+      nodeId: node._id,
+      nodeName: node.name,
+      domainMaster: domainMasterUser
+        ? {
+            _id: getIdString(domainMasterUser._id),
+            username: domainMasterUser.username,
+            profession: domainMasterUser.profession
+          }
+        : null,
+      domainAdmins: admins
+    });
+  } catch (error) {
+    console.error('获取知识域管理员错误:', error);
+    if (error?.name === 'CastError') {
+      return res.status(400).json({ error: '数据格式错误，请检查用户或知识域数据' });
+    }
+    res.status(500).json({ error: `服务器错误: ${error?.name || 'Error'} ${error?.message || ''}`.trim() });
+  }
+});
+
+// 域主搜索普通用户（用于邀请管理员）
+router.get('/:nodeId/domain-admins/search-users', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const { keyword = '' } = req.query;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('domainMaster domainAdmins');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+
+    if (!isDomainMaster(node, req.user.userId)) {
+      return res.status(403).json({ error: '只有域主可以邀请管理员' });
+    }
+
+    const excludedIds = [getIdString(node.domainMaster), ...(node.domainAdmins || []).map((id) => getIdString(id))]
+      .filter((id) => isValidObjectId(id));
+
+    const query = {
+      role: 'common',
+      _id: { $nin: excludedIds }
+    };
+
+    if (keyword.trim()) {
+      query.username = { $regex: keyword.trim(), $options: 'i' };
+    }
+
+    const users = await User.find(query)
+      .select('_id username profession role')
+      .sort({ username: 1 })
+      .limit(20);
+
+    res.json({
+      success: true,
+      users
+    });
+  } catch (error) {
+    console.error('搜索知识域管理员候选用户错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 域主邀请普通用户成为知识域管理员
+router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const { username } = req.body;
+    const normalizedUsername = typeof username === 'string' ? username.trim() : '';
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    if (!normalizedUsername) {
+      return res.status(400).json({ error: '用户名不能为空' });
+    }
+
+    const node = await Node.findById(nodeId).select('name domainMaster domainAdmins');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+
+    if (!isDomainMaster(node, req.user.userId)) {
+      return res.status(403).json({ error: '只有域主可以邀请管理员' });
+    }
+
+    const inviter = await User.findById(req.user.userId).select('username');
+    if (!inviter) {
+      return res.status(404).json({ error: '邀请人不存在' });
+    }
+
+    const invitee = await User.findOne({ username: normalizedUsername, role: 'common' });
+    if (!invitee) {
+      return res.status(404).json({ error: '未找到可邀请的普通用户' });
+    }
+
+    if (invitee._id.toString() === req.user.userId) {
+      return res.status(400).json({ error: '不能邀请自己' });
+    }
+
+    if (isDomainAdmin(node, invitee._id.toString())) {
+      return res.status(400).json({ error: '该用户已经是此知识域管理员' });
+    }
+
+    const hasPendingInvite = (invitee.notifications || []).some((notification) => (
+      notification.type === 'domain_admin_invite' &&
+      notification.status === 'pending' &&
+      notification.nodeId &&
+      notification.nodeId.toString() === node._id.toString()
+    ));
+
+    if (hasPendingInvite) {
+      return res.status(409).json({ error: '该用户已有待处理邀请' });
+    }
+
+    invitee.notifications.unshift({
+      type: 'domain_admin_invite',
+      title: `管理员邀请：${node.name}`,
+      message: `${inviter.username} 邀请你成为知识域「${node.name}」的管理员`,
+      read: false,
+      status: 'pending',
+      nodeId: node._id,
+      nodeName: node.name,
+      inviterId: inviter._id,
+      inviterUsername: inviter.username
+    });
+    await invitee.save();
+
+    res.json({
+      success: true,
+      message: `已向 ${invitee.username} 发出邀请`
+    });
+  } catch (error) {
+    console.error('邀请知识域管理员错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 域主移除知识域管理员
+router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId, adminUserId } = req.params;
+    if (!isValidObjectId(nodeId) || !isValidObjectId(adminUserId)) {
+      return res.status(400).json({ error: '无效的用户或知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name domainMaster domainAdmins');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+
+    if (!isDomainMaster(node, req.user.userId)) {
+      return res.status(403).json({ error: '只有域主可以编辑管理员' });
+    }
+
+    if (node.domainMaster && node.domainMaster.toString() === adminUserId) {
+      return res.status(400).json({ error: '不能移除域主' });
+    }
+
+    if (!isDomainAdmin(node, adminUserId)) {
+      return res.status(404).json({ error: '该用户不是此知识域管理员' });
+    }
+
+    node.domainAdmins = (node.domainAdmins || []).filter((id) => id.toString() !== adminUserId);
+    await node.save();
+
+    res.json({
+      success: true,
+      message: '已移除知识域管理员'
+    });
+  } catch (error) {
+    console.error('移除知识域管理员错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });

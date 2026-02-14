@@ -3,6 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 
 const connectDB = require('./config/database');
 const authRoutes = require('./routes/auth');
@@ -46,6 +47,95 @@ app.use('/api/alliances', allianceRoutes);
 connectDB();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const RESIGN_REQUEST_EXPIRE_MS = 3 * 24 * 60 * 60 * 1000;
+
+const getIdString = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (value instanceof mongoose.Types.ObjectId) return value.toString();
+  if (typeof value === 'object' && value._id && value._id !== value) return getIdString(value._id);
+  if (typeof value === 'object' && typeof value.id === 'string' && value.id) return value.id;
+  if (typeof value.toString === 'function') {
+    const text = value.toString();
+    return text === '[object Object]' ? '' : text;
+  }
+  return '';
+};
+
+const processExpiredDomainAdminResignRequests = async () => {
+  const deadline = new Date(Date.now() - RESIGN_REQUEST_EXPIRE_MS);
+  const candidates = await User.find({
+    notifications: {
+      $elemMatch: {
+        type: 'domain_admin_resign_request',
+        status: 'pending',
+        createdAt: { $lte: deadline }
+      }
+    }
+  });
+
+  for (const domainMaster of candidates) {
+    let changed = false;
+
+    for (const notification of domainMaster.notifications || []) {
+      if (
+        notification.type !== 'domain_admin_resign_request' ||
+        notification.status !== 'pending' ||
+        new Date(notification.createdAt || 0).getTime() > deadline.getTime()
+      ) {
+        continue;
+      }
+
+      const nodeId = getIdString(notification.nodeId);
+      const requesterId = getIdString(notification.inviteeId);
+      const nowDate = new Date();
+      let node = null;
+      let requester = null;
+
+      if (nodeId) {
+        node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
+      }
+      if (requesterId) {
+        requester = await User.findById(requesterId);
+      }
+
+      if (node && node.status === 'approved' && getIdString(node.domainMaster) === getIdString(domainMaster._id)) {
+        const before = (node.domainAdmins || []).length;
+        node.domainAdmins = (node.domainAdmins || []).filter((adminId) => getIdString(adminId) !== requesterId);
+        if (node.domainAdmins.length !== before) {
+          await node.save();
+        }
+      }
+
+      notification.status = 'accepted';
+      notification.read = true;
+      notification.respondedAt = nowDate;
+      changed = true;
+
+      if (requester) {
+        requester.notifications.unshift({
+          type: 'domain_admin_resign_result',
+          title: `卸任申请结果：${notification.nodeName || node?.name || '知识域'}`,
+          message: '你的卸任申请已超时自动同意',
+          read: false,
+          status: 'accepted',
+          nodeId: node?._id || notification.nodeId || null,
+          nodeName: node?.name || notification.nodeName || '',
+          inviterId: domainMaster._id,
+          inviterUsername: domainMaster.username,
+          inviteeId: requester._id,
+          inviteeUsername: requester.username,
+          respondedAt: nowDate
+        });
+        await requester.save();
+      }
+    }
+
+    if (changed) {
+      await domainMaster.save();
+    }
+  }
+};
 
 // API路由
 app.use('/api', authRoutes);
@@ -278,6 +368,15 @@ setInterval(async () => {
     console.error('每秒更新知识点错误:', error);
   }
 }, 1000);
+
+// 定时任务：自动处理超时的管理员卸任申请（3天）
+setInterval(async () => {
+  try {
+    await processExpiredDomainAdminResignRequests();
+  } catch (error) {
+    console.error('自动处理卸任申请错误:', error);
+  }
+}, 60 * 1000);
 
 // 启动服务��
 const PORT = process.env.PORT || 5000;

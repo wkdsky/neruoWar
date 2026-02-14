@@ -734,8 +734,8 @@ class WebGLNodeRenderer {
         gl.uniform1f(this.nodeLocations.rotation, 0);
         gl.uniform4fv(this.nodeLocations.color, baseColor);
         gl.uniform4fv(this.nodeLocations.glowColor, glowColor);
-        gl.uniform1f(this.nodeLocations.glowIntensity, isDisabled ? 0.05 : (isHovered ? 0.5 : 0.3));
-        gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isDisabled ? 0.45 : (isHovered ? 0.95 : 0.8)));
+        gl.uniform1f(this.nodeLocations.glowIntensity, isDisabled ? 0.05 : 0.3);
+        gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isDisabled ? 0.45 : 0.8));
         gl.uniform1i(this.nodeLocations.shapeType, 0); // 圆形
         gl.uniform2f(this.nodeLocations.size, btnSize, btnSize);
 
@@ -824,7 +824,7 @@ class WebGLNodeRenderer {
           this.hoveredButton.button.id === button.id;
         const isDisabled = !!button.disabled;
 
-        ctx.globalAlpha = node.opacity * (isDisabled ? 0.55 : (isHovered ? 1 : 0.9));
+        ctx.globalAlpha = node.opacity * (isDisabled ? 0.55 : 0.9);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 

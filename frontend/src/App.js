@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Home, Shield, User } from 'lucide-react';
+import { Home, Shield, Bell, Layers, Star } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
 import Login from './components/auth/Login';
@@ -32,6 +32,14 @@ const avatarMap = {
     default_female_1: defaultFemale1,
     default_female_2: defaultFemale2,
     default_female_3: defaultFemale3
+};
+
+const normalizeObjectId = (value) => {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object' && value._id) return normalizeObjectId(value._id);
+    if (typeof value.toString === 'function') return value.toString();
+    return '';
 };
 
 const App = () => {
@@ -101,6 +109,21 @@ const App = () => {
     const [currentLocationNodeDetail, setCurrentLocationNodeDetail] = useState(null);
     const [travelStatus, setTravelStatus] = useState({ isTraveling: false });
     const [isStoppingTravel, setIsStoppingTravel] = useState(false);
+    const [notifications, setNotifications] = useState([]);
+    const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+    const [showNotificationsPanel, setShowNotificationsPanel] = useState(false);
+    const [isNotificationsLoading, setIsNotificationsLoading] = useState(false);
+    const [notificationActionId, setNotificationActionId] = useState('');
+    const [showRelatedDomainsPanel, setShowRelatedDomainsPanel] = useState(false);
+    const [relatedDomainsData, setRelatedDomainsData] = useState({
+        loading: false,
+        error: '',
+        domainMasterDomains: [],
+        domainAdminDomains: [],
+        favoriteDomains: [],
+        recentDomains: []
+    });
+    const [favoriteActionDomainId, setFavoriteActionDomainId] = useState('');
 
     // 首页相关状态
     const [rootNodes, setRootNodes] = useState([]);
@@ -135,6 +158,8 @@ const App = () => {
 
     // 搜索栏相关引用
     const searchBarRef = useRef(null);
+    const notificationsWrapperRef = useRef(null);
+    const relatedDomainsWrapperRef = useRef(null);
 
     // 初始化WebGL场景
     useEffect(() => {
@@ -189,6 +214,8 @@ const App = () => {
                     }
                 } else if (button.action === 'moveToNode' && currentNodeDetail) {
                     handleMoveToNode(currentNodeDetail);
+                } else if (button.action === 'toggleFavoriteNode' && currentNodeDetail?._id) {
+                    toggleFavoriteDomain(currentNodeDetail._id);
                 }
             };
 
@@ -225,6 +252,8 @@ const App = () => {
                     handleEnterKnowledgeDomain(currentNodeDetail);
                 } else if (button.action === 'moveToNode' && currentNodeDetail) {
                     handleMoveToNode(currentNodeDetail);
+                } else if (button.action === 'toggleFavoriteNode' && currentNodeDetail?._id) {
+                    toggleFavoriteDomain(currentNodeDetail._id);
                 }
             };
         }
@@ -442,6 +471,199 @@ const App = () => {
     return `${fallbackText}（HTTP ${response.status}）`;
   };
 
+  const fetchRelatedDomains = async (silent = true) => {
+    const token = localStorage.getItem('token');
+    if (!token) return null;
+
+    if (!silent) {
+      setRelatedDomainsData((prev) => ({ ...prev, loading: true, error: '' }));
+    }
+
+    try {
+      const response = await fetch('http://localhost:5000/api/nodes/me/related-domains', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        const errorText = getApiErrorMessage(parsed, '获取相关知识域失败');
+        setRelatedDomainsData((prev) => ({
+          ...prev,
+          loading: false,
+          error: errorText
+        }));
+        return null;
+      }
+
+      const nextData = {
+        loading: false,
+        error: '',
+        domainMasterDomains: data.domainMasterDomains || [],
+        domainAdminDomains: data.domainAdminDomains || [],
+        favoriteDomains: data.favoriteDomains || [],
+        recentDomains: data.recentDomains || []
+      };
+      setRelatedDomainsData(nextData);
+      return nextData;
+    } catch (error) {
+      setRelatedDomainsData((prev) => ({
+        ...prev,
+        loading: false,
+        error: `获取相关知识域失败: ${error.message}`
+      }));
+      return null;
+    }
+  };
+
+  const toggleFavoriteDomain = async (domainId) => {
+    const token = localStorage.getItem('token');
+    const normalizedId = normalizeObjectId(domainId);
+    if (!token || !normalizedId) return;
+
+    setFavoriteActionDomainId(normalizedId);
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${normalizedId}/favorite`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok) {
+        window.alert(getApiErrorMessage(parsed, '更新收藏失败'));
+        return;
+      }
+      await fetchRelatedDomains(true);
+    } catch (error) {
+      window.alert(`更新收藏失败: ${error.message}`);
+    } finally {
+      setFavoriteActionDomainId('');
+    }
+  };
+
+  const trackRecentDomain = async (nodeOrId) => {
+    const token = localStorage.getItem('token');
+    const domainId = normalizeObjectId(nodeOrId?._id || nodeOrId);
+    if (!token || !domainId) return;
+
+    try {
+      await fetch(`http://localhost:5000/api/nodes/${domainId}/recent-visit`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+    } catch (error) {
+      // 最近访问记录失败不影响主流程
+    }
+  };
+
+  const formatDomainKnowledgePoint = (node) => {
+    const value = Number(node?.knowledgePoint?.value);
+    if (!Number.isFinite(value)) return '知识点: --';
+    return `知识点: ${value.toFixed(2)}`;
+  };
+
+  const fetchNotifications = async (silent = true) => {
+    const token = localStorage.getItem('token');
+    if (!token) return null;
+
+    if (!silent) {
+      setIsNotificationsLoading(true);
+    }
+
+    try {
+      const response = await fetch('http://localhost:5000/api/notifications', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        if (!silent) {
+          window.alert(getApiErrorMessage(parsed, '获取通知失败'));
+        }
+        return null;
+      }
+
+      setNotifications(data.notifications || []);
+      setNotificationUnreadCount(data.unreadCount || 0);
+      return data;
+    } catch (error) {
+      if (!silent) {
+        window.alert(`获取通知失败: ${error.message}`);
+      }
+      return null;
+    } finally {
+      if (!silent) {
+        setIsNotificationsLoading(false);
+      }
+    }
+  };
+
+  const markNotificationRead = async (notificationId) => {
+    const token = localStorage.getItem('token');
+    if (!token || !notificationId) return;
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/read`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok) {
+        window.alert(getApiErrorMessage(parsed, '标记已读失败'));
+        return;
+      }
+
+      setNotifications((prev) => prev.map((item) => (
+        item._id === notificationId ? { ...item, read: true } : item
+      )));
+      setNotificationUnreadCount((prev) => Math.max(0, prev - 1));
+    } catch (error) {
+      window.alert(`标记已读失败: ${error.message}`);
+    }
+  };
+
+  const respondDomainAdminInvite = async (notificationId, action) => {
+    const token = localStorage.getItem('token');
+    if (!token || !notificationId) return;
+
+    const actionKey = `${notificationId}:${action}`;
+    setNotificationActionId(actionKey);
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/respond`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ action })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        window.alert(getApiErrorMessage(parsed, '处理邀请失败'));
+        return;
+      }
+
+      window.alert(data.message || '邀请处理完成');
+      await fetchNotifications(true);
+    } catch (error) {
+      window.alert(`处理邀请失败: ${error.message}`);
+    } finally {
+      setNotificationActionId('');
+    }
+  };
+
+  const formatNotificationTime = (time) => {
+    if (!time) return '';
+    const date = new Date(time);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('zh-CN', { hour12: false });
+  };
+
   const fetchTravelStatus = async (silent = true) => {
     const token = localStorage.getItem('token');
     if (!token) return null;
@@ -631,6 +853,69 @@ const App = () => {
     return () => clearInterval(timer);
   }, [authenticated, isAdmin]);
 
+  useEffect(() => {
+    if (!authenticated || isAdmin) {
+      setNotifications([]);
+      setNotificationUnreadCount(0);
+      setShowNotificationsPanel(false);
+      return;
+    }
+
+    fetchNotifications(true);
+    const timer = setInterval(() => {
+      fetchNotifications(true);
+    }, 8000);
+
+    return () => clearInterval(timer);
+  }, [authenticated, isAdmin]);
+
+  useEffect(() => {
+    if (!authenticated || isAdmin) {
+      setRelatedDomainsData({
+        loading: false,
+        error: '',
+        domainMasterDomains: [],
+        domainAdminDomains: [],
+        favoriteDomains: [],
+        recentDomains: []
+      });
+      setShowRelatedDomainsPanel(false);
+      return;
+    }
+
+    fetchRelatedDomains(true);
+  }, [authenticated, isAdmin]);
+
+  useEffect(() => {
+    if (!showNotificationsPanel) return undefined;
+
+    const handleClickOutside = (event) => {
+      if (notificationsWrapperRef.current && !notificationsWrapperRef.current.contains(event.target)) {
+        setShowNotificationsPanel(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showNotificationsPanel]);
+
+  useEffect(() => {
+    if (!showRelatedDomainsPanel) return undefined;
+
+    const handleClickOutside = (event) => {
+      if (relatedDomainsWrapperRef.current && !relatedDomainsWrapperRef.current.contains(event.target)) {
+        setShowRelatedDomainsPanel(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showRelatedDomainsPanel]);
+
     const handleLogout = () => {
         localStorage.removeItem('token');
         localStorage.removeItem('username');
@@ -645,6 +930,21 @@ const App = () => {
         setUserLocation('');
         setTravelStatus({ isTraveling: false });
         setIsStoppingTravel(false);
+        setNotifications([]);
+        setNotificationUnreadCount(0);
+        setShowNotificationsPanel(false);
+        setIsNotificationsLoading(false);
+        setNotificationActionId('');
+        setShowRelatedDomainsPanel(false);
+        setRelatedDomainsData({
+            loading: false,
+            error: '',
+            domainMasterDomains: [],
+            domainAdminDomains: [],
+            favoriteDomains: [],
+            recentDomains: []
+        });
+        setFavoriteActionDomainId('');
         setCurrentLocationNodeDetail(null);
         setUserAvatar('default_male_1');
         setSelectedLocationNode(null);
@@ -1012,6 +1312,7 @@ const App = () => {
             const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}`);
             if (response.ok) {
                 const data = await response.json();
+                trackRecentDomain(data.node);
                 setCurrentNodeDetail(data.node);
                 setView('nodeDetail');
 
@@ -1061,6 +1362,90 @@ const App = () => {
         await fetchNodeDetail(currentLocationNodeDetail._id, clickedNode);
     };
 
+    const domainMasterDomains = relatedDomainsData.domainMasterDomains || [];
+    const domainAdminDomains = relatedDomainsData.domainAdminDomains || [];
+    const favoriteDomains = relatedDomainsData.favoriteDomains || [];
+    const recentDomains = relatedDomainsData.recentDomains || [];
+
+    const favoriteDomainSet = new Set(favoriteDomains.map((node) => normalizeObjectId(node?._id)));
+    const relatedDomainCount = new Set([
+        ...domainMasterDomains.map((node) => normalizeObjectId(node?._id)),
+        ...domainAdminDomains.map((node) => normalizeObjectId(node?._id)),
+        ...favoriteDomains.map((node) => normalizeObjectId(node?._id)),
+        ...recentDomains.map((node) => normalizeObjectId(node?._id))
+    ].filter(Boolean)).size;
+
+    const handleOpenRelatedDomain = async (node) => {
+        const nodeId = normalizeObjectId(node?._id);
+        if (!nodeId) return;
+        setShowRelatedDomainsPanel(false);
+        const clickedNode = buildClickedNodeFromScene(nodeId);
+        await fetchNodeDetail(nodeId, clickedNode);
+    };
+
+    const renderRelatedDomainSection = (title, domainList, emptyText) => (
+        <div className="related-domain-section">
+            <div className="related-domain-section-title">
+                <span>{title}</span>
+                <span className="related-domain-count">{domainList.length}</span>
+            </div>
+            {domainList.length === 0 ? (
+                <div className="related-domain-empty">{emptyText}</div>
+            ) : (
+                <div className="related-domain-list">
+                    {domainList.map((domain) => {
+                        const domainId = normalizeObjectId(domain?._id);
+                        const isFavorite = favoriteDomainSet.has(domainId);
+                        const isUpdatingFavorite = favoriteActionDomainId === domainId;
+                        return (
+                            <div key={`${title}-${domainId}`} className="related-domain-item">
+                                <button
+                                    type="button"
+                                    className="related-domain-link"
+                                    onClick={() => handleOpenRelatedDomain(domain)}
+                                >
+                                    <span className="related-domain-name">{domain.name}</span>
+                                    <span className="related-domain-meta">{formatDomainKnowledgePoint(domain)}</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`related-domain-fav-btn ${isFavorite ? 'active' : ''}`}
+                                    onClick={() => toggleFavoriteDomain(domainId)}
+                                    disabled={isUpdatingFavorite}
+                                    title={isFavorite ? '取消收藏' : '加入收藏'}
+                                >
+                                    <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
+                                </button>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+
+    const renderRelatedDomainsPanel = () => {
+        if (!showRelatedDomainsPanel) return null;
+
+        return (
+            <div className="related-domains-panel">
+                <div className="related-domains-header">
+                    <h3>与我相关的知识域</h3>
+                </div>
+                <div className="related-domains-body">
+                    {relatedDomainsData.loading && <div className="related-domain-empty">加载中...</div>}
+                    {!relatedDomainsData.loading && relatedDomainsData.error && (
+                        <div className="related-domains-error">{relatedDomainsData.error}</div>
+                    )}
+                    {renderRelatedDomainSection('作为域主', domainMasterDomains, '当前没有作为域主的知识域')}
+                    {renderRelatedDomainSection('作为普通管理者', domainAdminDomains, '当前没有管理者身份的知识域')}
+                    {renderRelatedDomainSection('收藏的知识域', favoriteDomains, '暂无收藏，点击右侧星标可收藏')}
+                    {renderRelatedDomainSection('最近访问的知识域', recentDomains, '暂无访问记录')}
+                </div>
+            </div>
+        );
+    };
+
     const getNodeDetailButtonContext = (nodeDetail) => {
         const isAtCurrentNode = nodeDetail?.name === userLocation;
         const isHardMoving = travelStatus.isTraveling && !travelStatus.isStopping;
@@ -1076,6 +1461,7 @@ const App = () => {
 
         return {
             showMoveButton: !isAdmin,
+            isFavorite: favoriteDomainSet.has(normalizeObjectId(nodeDetail?._id)),
             moveDisabled,
             moveDisabledReason
         };
@@ -1204,7 +1590,7 @@ const App = () => {
             currentNodeDetail,
             getNodeDetailButtonContext(currentNodeDetail)
         );
-    }, [view, currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling]);
+    }, [view, currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, relatedDomainsData.favoriteDomains]);
 
 
     // 新节点创建相关函数
@@ -1216,6 +1602,7 @@ const App = () => {
     const handleEnterKnowledgeDomain = (node) => {
         if (!sceneManagerRef.current || !node) return;
 
+        trackRecentDomain(node);
         setKnowledgeDomainNode(node);
         setIsTransitioningToDomain(true);
         setShowNodeInfoModal(false); // 关闭节点信息弹窗
@@ -1373,6 +1760,117 @@ const App = () => {
         );
     };
 
+    const renderNotificationsPanel = () => {
+        if (isAdmin || !showNotificationsPanel) return null;
+
+        return (
+            <div className="notifications-panel">
+                <div className="notifications-header">
+                    <h3>通知中心</h3>
+                    <button
+                        type="button"
+                        className="btn btn-small btn-secondary"
+                        onClick={() => fetchNotifications(false)}
+                        disabled={isNotificationsLoading}
+                    >
+                        {isNotificationsLoading ? '刷新中...' : '刷新'}
+                    </button>
+                </div>
+                <div className="notifications-body">
+                    {notifications.length === 0 ? (
+                        <div className="no-notifications">暂无通知</div>
+                    ) : (
+                        <div className="notifications-list">
+                            {notifications.map((notification) => {
+                                const isInvitePending =
+                                    notification.type === 'domain_admin_invite' &&
+                                    notification.status === 'pending';
+                                const isResignRequestPending =
+                                    notification.type === 'domain_admin_resign_request' &&
+                                    notification.status === 'pending';
+                                const currentActionKey = notificationActionId.split(':')[0];
+                                const isActing = currentActionKey === notification._id;
+
+                                return (
+                                    <div
+                                        key={notification._id}
+                                        className={`notification-item ${notification.read ? '' : 'unread'}`}
+                                    >
+                                        <div className="notification-item-title-row">
+                                            <h4>{notification.title || '系统通知'}</h4>
+                                            {!notification.read && <span className="notification-dot" />}
+                                        </div>
+                                        <div className="notification-item-message">{notification.message || ''}</div>
+                                        <div className="notification-item-meta">
+                                            {formatNotificationTime(notification.createdAt)}
+                                        </div>
+                                        {(notification.type === 'domain_admin_invite_result' || notification.type === 'domain_admin_resign_result') && (
+                                            <div className={`notification-result-tag ${notification.status === 'accepted' ? 'accepted' : 'rejected'}`}>
+                                                {notification.status === 'accepted'
+                                                    ? (notification.type === 'domain_admin_resign_result' ? '域主已同意卸任' : '对方已接受')
+                                                    : (notification.type === 'domain_admin_resign_result' ? '域主已拒绝卸任' : '对方已拒绝')}
+                                            </div>
+                                        )}
+
+                                        {isInvitePending ? (
+                                            <div className="notification-actions">
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-small btn-success"
+                                                    onClick={() => respondDomainAdminInvite(notification._id, 'accept')}
+                                                    disabled={isActing}
+                                                >
+                                                    接受
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-small btn-danger"
+                                                    onClick={() => respondDomainAdminInvite(notification._id, 'reject')}
+                                                    disabled={isActing}
+                                                >
+                                                    拒绝
+                                                </button>
+                                            </div>
+                                        ) : isResignRequestPending ? (
+                                            <div className="notification-actions">
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-small btn-success"
+                                                    onClick={() => respondDomainAdminInvite(notification._id, 'accept')}
+                                                    disabled={isActing}
+                                                >
+                                                    同意卸任
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-small btn-danger"
+                                                    onClick={() => respondDomainAdminInvite(notification._id, 'reject')}
+                                                    disabled={isActing}
+                                                >
+                                                    拒绝
+                                                </button>
+                                            </div>
+                                        ) : !notification.read ? (
+                                            <div className="notification-actions">
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-small btn-blue"
+                                                    onClick={() => markNotificationRead(notification._id)}
+                                                >
+                                                    标记已读
+                                                </button>
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     if (view === 'login') {
         return <Login onLogin={handleLoginSuccess} />;
     }
@@ -1414,6 +1912,54 @@ const App = () => {
                                     <span className="user-name">
                                         {username} {profession && `【${profession}】`}
                                     </span>
+                                </div>
+                                {!isAdmin && (
+                                    <div className="notifications-wrapper" ref={notificationsWrapperRef}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary notification-trigger-btn"
+                                            onClick={async () => {
+                                                const nextVisible = !showNotificationsPanel;
+                                                setShowNotificationsPanel(nextVisible);
+                                                setShowRelatedDomainsPanel(false);
+                                                if (nextVisible) {
+                                                    await fetchNotifications(false);
+                                                }
+                                            }}
+                                        >
+                                            <Bell size={18} />
+                                            通知
+                                            {notificationUnreadCount > 0 && (
+                                                <span className="notification-badge">
+                                                    {notificationUnreadCount > 99 ? '99+' : notificationUnreadCount}
+                                                </span>
+                                            )}
+                                        </button>
+                                        {renderNotificationsPanel()}
+                                    </div>
+                                )}
+                                <div className="related-domains-wrapper" ref={relatedDomainsWrapperRef}>
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary related-domains-trigger-btn"
+                                        onClick={async () => {
+                                            const nextVisible = !showRelatedDomainsPanel;
+                                            setShowNotificationsPanel(false);
+                                            setShowRelatedDomainsPanel(nextVisible);
+                                            if (nextVisible) {
+                                                await fetchRelatedDomains(false);
+                                            }
+                                        }}
+                                    >
+                                        <Layers size={18} />
+                                        我的知识域
+                                        {relatedDomainCount > 0 && (
+                                            <span className="notification-badge">
+                                                {relatedDomainCount > 99 ? '99+' : relatedDomainCount}
+                                            </span>
+                                        )}
+                                    </button>
+                                    {renderRelatedDomainsPanel()}
                                 </div>
                                 <button
                                     onClick={handleLogout}

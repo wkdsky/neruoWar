@@ -12,6 +12,84 @@ const TravelPathNodeSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const NotificationSchema = new mongoose.Schema({
+  type: {
+    type: String,
+    enum: [
+      'domain_admin_invite',
+      'domain_admin_invite_result',
+      'domain_admin_resign_request',
+      'domain_admin_resign_result',
+      'info'
+    ],
+    default: 'info'
+  },
+  title: {
+    type: String,
+    default: ''
+  },
+  message: {
+    type: String,
+    default: ''
+  },
+  read: {
+    type: Boolean,
+    default: false
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'accepted', 'rejected', 'info'],
+    default: 'info'
+  },
+  nodeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Node',
+    default: null
+  },
+  nodeName: {
+    type: String,
+    default: ''
+  },
+  inviterId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  inviterUsername: {
+    type: String,
+    default: ''
+  },
+  inviteeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  inviteeUsername: {
+    type: String,
+    default: ''
+  },
+  respondedAt: {
+    type: Date,
+    default: null
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const RecentVisitedDomainSchema = new mongoose.Schema({
+  nodeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Node',
+    required: true
+  },
+  visitedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
 const userSchema = new mongoose.Schema({
   username: {
     type: String,
@@ -124,6 +202,21 @@ const userSchema = new mongoose.Schema({
       type: String,
       default: ''
     }
+  },
+  notifications: {
+    type: [NotificationSchema],
+    default: []
+  },
+  favoriteDomains: {
+    type: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Node'
+    }],
+    default: []
+  },
+  recentVisitedDomains: {
+    type: [RecentVisitedDomainSchema],
+    default: []
   }
 }, {
   timestamps: true

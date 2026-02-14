@@ -301,6 +301,189 @@ const KnowledgeDomainScene = ({
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
   const containerRef = useRef(null);
+  const [activeTab, setActiveTab] = useState('info');
+  const [domainAdminState, setDomainAdminState] = useState({
+    loading: false,
+    error: '',
+    canView: false,
+    canEdit: false,
+    canResign: false,
+    resignPending: false,
+    domainMaster: null,
+    domainAdmins: []
+  });
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
+  const [invitingUsername, setInvitingUsername] = useState('');
+  const [removingAdminId, setRemovingAdminId] = useState('');
+  const [isSubmittingResign, setIsSubmittingResign] = useState(false);
+  const [manageFeedback, setManageFeedback] = useState('');
+
+  const parseApiResponse = async (response) => {
+    const rawText = await response.text();
+    let data = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch (e) {
+      data = null;
+    }
+    return { response, data, rawText };
+  };
+
+  const getApiError = (parsed, fallback) => (
+    parsed?.data?.error ||
+    parsed?.data?.message ||
+    fallback
+  );
+
+  const fetchDomainAdmins = async (silent = true) => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id) return;
+
+    if (!silent) {
+      setDomainAdminState((prev) => ({ ...prev, loading: true, error: '' }));
+    }
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        setDomainAdminState((prev) => ({
+          ...prev,
+          loading: false,
+          canView: false,
+          canEdit: false,
+          canResign: false,
+          resignPending: false,
+          error: getApiError(parsed, '获取管理员列表失败')
+        }));
+        return;
+      }
+
+      setDomainAdminState({
+        loading: false,
+        error: '',
+        canView: !!data.canView,
+        canEdit: !!data.canEdit,
+        canResign: !!data.canResign,
+        resignPending: !!data.resignPending,
+        domainMaster: data.domainMaster || null,
+        domainAdmins: data.domainAdmins || []
+      });
+    } catch (error) {
+      setDomainAdminState((prev) => ({
+        ...prev,
+        loading: false,
+        canResign: false,
+        resignPending: false,
+        error: `获取管理员列表失败: ${error.message}`
+      }));
+    }
+  };
+
+  const applyResignDomainAdmin = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id) return;
+
+    const confirmed = window.confirm('确认提交卸任申请？域主3天内未处理将自动同意。');
+    if (!confirmed) return;
+
+    setIsSubmittingResign(true);
+    setManageFeedback('');
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/resign`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        setManageFeedback(getApiError(parsed, '提交卸任申请失败'));
+        return;
+      }
+
+      setManageFeedback(data.message || '卸任申请已提交');
+      await fetchDomainAdmins(true);
+    } catch (error) {
+      setManageFeedback(`提交卸任申请失败: ${error.message}`);
+    } finally {
+      setIsSubmittingResign(false);
+    }
+  };
+
+  const inviteDomainAdmin = async (username) => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id || !username) return;
+
+    setInvitingUsername(username);
+    setManageFeedback('');
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ username })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        setManageFeedback(getApiError(parsed, '发送邀请失败'));
+        return;
+      }
+
+      setManageFeedback(data.message || '邀请已发送');
+      setSearchKeyword('');
+      setSearchResults([]);
+      await fetchDomainAdmins(true);
+    } catch (error) {
+      setManageFeedback(`发送邀请失败: ${error.message}`);
+    } finally {
+      setInvitingUsername('');
+    }
+  };
+
+  const removeDomainAdmin = async (adminUserId) => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id || !adminUserId) return;
+
+    const confirmed = window.confirm('确认移除该管理员吗？');
+    if (!confirmed) return;
+
+    setRemovingAdminId(adminUserId);
+    setManageFeedback('');
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/${adminUserId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        setManageFeedback(getApiError(parsed, '移除管理员失败'));
+        return;
+      }
+
+      setManageFeedback(data.message || '管理员已移除');
+      await fetchDomainAdmins(true);
+    } catch (error) {
+      setManageFeedback(`移除管理员失败: ${error.message}`);
+    } finally {
+      setRemovingAdminId('');
+    }
+  };
 
   // 计算实际的显示透明度（在进度40%后开始淡入，或退出时在60%前淡出完成）
   const displayOpacity = transitionProgress < 0.4
@@ -340,6 +523,61 @@ const KnowledgeDomainScene = ({
     };
   }, [isVisible]);
 
+  useEffect(() => {
+    if (!isVisible || !node?._id) return;
+
+    setActiveTab('info');
+    setSearchKeyword('');
+    setSearchResults([]);
+    setManageFeedback('');
+    fetchDomainAdmins(true);
+  }, [isVisible, node?._id]);
+
+  useEffect(() => {
+    if (!isVisible || activeTab !== 'manage' || !node?._id || !domainAdminState.canEdit) {
+      setSearchResults([]);
+      return undefined;
+    }
+
+    const keyword = searchKeyword.trim();
+    if (!keyword) {
+      setSearchResults([]);
+      return undefined;
+    }
+
+    const timerId = setTimeout(async () => {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      setIsSearchingUsers(true);
+      try {
+        const response = await fetch(
+          `http://localhost:5000/api/nodes/${node._id}/domain-admins/search-users?keyword=${encodeURIComponent(keyword)}`,
+          {
+            headers: { Authorization: `Bearer ${token}` }
+          }
+        );
+        const parsed = await parseApiResponse(response);
+        const data = parsed.data;
+        if (!response.ok || !data) {
+          setSearchResults([]);
+          setManageFeedback(getApiError(parsed, '搜索用户失败'));
+          return;
+        }
+        setSearchResults(data.users || []);
+      } catch (error) {
+        setSearchResults([]);
+        setManageFeedback(`搜索用户失败: ${error.message}`);
+      } finally {
+        setIsSearchingUsers(false);
+      }
+    }, 300);
+
+    return () => {
+      clearTimeout(timerId);
+    };
+  }, [activeTab, isVisible, node?._id, searchKeyword, domainAdminState.canEdit]);
+
   if (!isVisible && transitionProgress <= 0) return null;
 
   return (
@@ -353,7 +591,6 @@ const KnowledgeDomainScene = ({
     >
       <canvas ref={canvasRef} className="knowledge-domain-canvas" />
 
-      {/* 节点信息浮窗 */}
       <div
         className="domain-info-panel"
         style={{
@@ -361,18 +598,154 @@ const KnowledgeDomainScene = ({
           transform: `translateY(${(1 - displayOpacity) * -20}px)`
         }}
       >
-        <h2 className="domain-title">{node?.name || '知识域'}</h2>
-        <p className="domain-description">{node?.description || ''}</p>
-        <div className="domain-stats">
-          <div className="stat-item">
-            <span className="stat-label">知识点</span>
-            <span className="stat-value">{node?.knowledgePoint?.value?.toFixed(2) || '0.00'}</span>
-          </div>
-          <div className="stat-item">
-            <span className="stat-label">内容分数</span>
-            <span className="stat-value">{node?.contentScore || 1}</span>
-          </div>
+        <div className="domain-tabs">
+          <button
+            type="button"
+            className={`domain-tab-btn ${activeTab === 'info' ? 'active' : ''}`}
+            onClick={() => setActiveTab('info')}
+          >
+            知识域信息
+          </button>
+          <button
+            type="button"
+            className={`domain-tab-btn ${activeTab === 'manage' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('manage');
+              fetchDomainAdmins(false);
+            }}
+          >
+            管理知识域
+          </button>
         </div>
+
+        {activeTab === 'info' ? (
+          <div className="domain-tab-content">
+            <h2 className="domain-title">{node?.name || '知识域'}</h2>
+            <p className="domain-description">{node?.description || ''}</p>
+            <div className="domain-stats">
+              <div className="stat-item">
+                <span className="stat-label">知识点</span>
+                <span className="stat-value">{node?.knowledgePoint?.value?.toFixed(2) || '0.00'}</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">内容分数</span>
+                <span className="stat-value">{node?.contentScore || 1}</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="domain-tab-content manage-tab-content">
+            <h3 className="domain-manage-title">知识域管理员</h3>
+
+            {domainAdminState.loading && <div className="domain-manage-tip">加载中...</div>}
+            {!domainAdminState.loading && domainAdminState.error && (
+              <div className="domain-manage-error">{domainAdminState.error}</div>
+            )}
+
+            {!domainAdminState.loading && !domainAdminState.error && !domainAdminState.canView && (
+              <div className="domain-manage-tip">你没有权限查看该知识域管理员列表</div>
+            )}
+
+            {domainAdminState.canView && (
+              <>
+                {manageFeedback && <div className="domain-manage-feedback">{manageFeedback}</div>}
+
+                <div className="domain-admins-section">
+                  <div className="domain-admins-subtitle">域主</div>
+                  <div className="domain-admin-row domain-master-row">
+                    <span className="domain-admin-name">{domainAdminState.domainMaster?.username || '未设置'}</span>
+                    <span className="domain-admin-badge master">域主</span>
+                  </div>
+                </div>
+
+                <div className="domain-admins-section">
+                  <div className="domain-admins-subtitle">管理员列表</div>
+                  {domainAdminState.domainAdmins.length === 0 ? (
+                    <div className="domain-manage-tip">当前暂无其他管理员</div>
+                  ) : (
+                    <div className="domain-admin-list">
+                      {domainAdminState.domainAdmins.map((adminUser) => (
+                        <div key={adminUser._id} className="domain-admin-row">
+                          <span className="domain-admin-name">{adminUser.username}</span>
+                          {domainAdminState.canEdit ? (
+                            <button
+                              type="button"
+                              className="btn btn-small btn-danger"
+                              onClick={() => removeDomainAdmin(adminUser._id)}
+                              disabled={removingAdminId === adminUser._id}
+                            >
+                              {removingAdminId === adminUser._id ? '移除中...' : '移除'}
+                            </button>
+                          ) : (
+                            <span className="domain-admin-badge readonly">仅查看</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {domainAdminState.canEdit ? (
+                  <div className="domain-admin-invite">
+                    <div className="domain-admins-subtitle">邀请普通用户成为管理员</div>
+                    <input
+                      type="text"
+                      className="domain-admin-search-input"
+                      placeholder="输入用户名自动搜索"
+                      value={searchKeyword}
+                      onChange={(e) => {
+                        setSearchKeyword(e.target.value);
+                        setManageFeedback('');
+                      }}
+                    />
+                    {isSearchingUsers && <div className="domain-manage-tip">搜索中...</div>}
+                    {!isSearchingUsers && searchKeyword.trim() && (
+                      <div className="domain-search-results">
+                        {searchResults.length > 0 ? (
+                          searchResults.map((userItem) => (
+                            <div key={userItem._id} className="domain-search-row">
+                              <span className="domain-admin-name">{userItem.username}</span>
+                              <button
+                                type="button"
+                                className="btn btn-small btn-success"
+                                onClick={() => inviteDomainAdmin(userItem.username)}
+                                disabled={invitingUsername === userItem.username}
+                              >
+                                {invitingUsername === userItem.username ? '邀请中...' : '邀请'}
+                              </button>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="domain-manage-tip">没有匹配的普通用户</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="domain-admin-invite">
+                    <div className="domain-manage-tip">你是该知识域管理员，可查看但不可编辑管理员名单</div>
+                    {domainAdminState.canResign && (
+                      <button
+                        type="button"
+                        className="btn btn-small btn-warning"
+                        onClick={applyResignDomainAdmin}
+                        disabled={isSubmittingResign || domainAdminState.resignPending}
+                      >
+                        {domainAdminState.resignPending
+                          ? '卸任申请待处理'
+                          : (isSubmittingResign ? '提交中...' : '申请卸任管理员')}
+                      </button>
+                    )}
+                    {domainAdminState.resignPending && (
+                      <div className="domain-manage-tip">已提交卸任申请，等待域主处理（3天超时自动同意）</div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         <button className="exit-domain-btn" onClick={onExit}>
           离开知识域
         </button>

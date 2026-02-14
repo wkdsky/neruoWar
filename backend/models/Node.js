@@ -33,6 +33,10 @@ const NodeSchema = new mongoose.Schema({
     ref: 'User',
     default: null  // 默认为null，节点的域主
   },
+  domainAdmins: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
   name: {
     type: String,
     required: true,
