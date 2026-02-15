@@ -1,5 +1,45 @@
 const mongoose = require('mongoose');
 
+const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
+
+const AllianceVisualStyleSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  primaryColor: {
+    type: String,
+    required: true,
+    default: '#7c3aed'
+  },
+  secondaryColor: {
+    type: String,
+    required: true,
+    default: '#312e81'
+  },
+  glowColor: {
+    type: String,
+    required: true,
+    default: '#c084fc'
+  },
+  rimColor: {
+    type: String,
+    required: true,
+    default: '#f5d0fe'
+  },
+  textColor: {
+    type: String,
+    required: true,
+    default: '#ffffff'
+  },
+  patternType: {
+    type: String,
+    enum: VISUAL_PATTERN_TYPES,
+    default: 'diagonal'
+  }
+}, { timestamps: true });
+
 const EntropyAllianceSchema = new mongoose.Schema({
   name: {
     type: String,
@@ -26,6 +66,14 @@ const EntropyAllianceSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  visualStyles: {
+    type: [AllianceVisualStyleSchema],
+    default: []
+  },
+  activeVisualStyleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null
+  },
   founder: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -41,6 +89,34 @@ const EntropyAllianceSchema = new mongoose.Schema({
   }
 }, {
   timestamps: true
+});
+
+EntropyAllianceSchema.pre('validate', function ensureVisualStyle(next) {
+  if (!Array.isArray(this.visualStyles)) {
+    this.visualStyles = [];
+  }
+
+  if (this.visualStyles.length === 0) {
+    this.visualStyles.push({
+      name: '默认风格',
+      primaryColor: this.flag || '#7c3aed',
+      secondaryColor: '#312e81',
+      glowColor: '#c084fc',
+      rimColor: '#f5d0fe',
+      textColor: '#ffffff',
+      patternType: 'diagonal'
+    });
+  }
+
+  const activeId = this.activeVisualStyleId ? this.activeVisualStyleId.toString() : '';
+  const hasActive = this.visualStyles.some((styleItem) => (
+    styleItem?._id && styleItem._id.toString() === activeId
+  ));
+  if (!hasActive) {
+    this.activeVisualStyleId = this.visualStyles[0]?._id || null;
+  }
+
+  next();
 });
 
 // 索引优化

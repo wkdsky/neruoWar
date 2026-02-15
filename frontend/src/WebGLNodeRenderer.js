@@ -45,13 +45,43 @@ const fragmentShaderSource = `
   precision mediump float;
 
   uniform vec4 u_color;
+  uniform vec4 u_secondaryColor;
+  uniform vec4 u_rimColor;
   uniform vec4 u_glowColor;
   uniform float u_glowIntensity;
   uniform float u_opacity;
   uniform int u_shapeType; // 0: 圆形, 1: 矩形
+  uniform int u_patternType; // 0:none 1:dots 2:grid 3:diagonal 4:rings 5:noise
   uniform vec2 u_size;
 
   varying vec2 v_texCoord;
+
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+  }
+
+  float getPattern(vec2 uv, vec2 pos) {
+    if (u_patternType == 1) {
+      vec2 g = fract(uv * 10.0);
+      return step(length(g - 0.5), 0.18);
+    }
+    if (u_patternType == 2) {
+      vec2 g = abs(fract(uv * 8.0) - 0.5);
+      return step(min(g.x, g.y), 0.06);
+    }
+    if (u_patternType == 3) {
+      float d = fract((uv.x + uv.y) * 9.0);
+      return step(d, 0.18);
+    }
+    if (u_patternType == 4) {
+      float r = length(pos) * 14.0;
+      return step(fract(r), 0.13);
+    }
+    if (u_patternType == 5) {
+      return step(0.72, hash(floor(uv * 36.0)));
+    }
+    return 0.0;
+  }
 
   void main() {
     vec2 center = vec2(0.5, 0.5);
@@ -67,19 +97,38 @@ const fragmentShaderSource = `
       dist = max(absPos.x, absPos.y);
     }
 
-    // 基础颜色
-    vec4 baseColor = u_color;
+    float sphereMask = 1.0 - smoothstep(0.93, 1.0, dist);
+    if (sphereMask <= 0.01) discard;
+
+    float d = min(dist, 0.999);
+    float z = sqrt(max(0.0, 1.0 - d * d));
+    vec3 normal = normalize(vec3(pos * 1.15, z));
+    vec3 lightDir = normalize(vec3(-0.55, -0.60, 1.0));
+    float diffuse = max(dot(normal, lightDir), 0.0);
+    float ambient = 0.25;
+    float shade = ambient + diffuse * 0.75;
+    vec4 baseColor = mix(u_secondaryColor, u_color, shade);
+
+    // 镜面高光
+    vec3 viewDir = vec3(0.0, 0.0, 1.0);
+    float spec = pow(max(dot(reflect(-lightDir, normal), viewDir), 0.0), 22.0);
+    baseColor.rgb += spec * 0.28;
+
+    // 边缘高光
+    float rim = pow(1.0 - z, 1.8);
+    baseColor = mix(baseColor, u_rimColor, rim * 0.55);
+
+    // 底纹
+    float pattern = getPattern(v_texCoord, pos);
+    baseColor.rgb = mix(baseColor.rgb, u_rimColor.rgb, pattern * 0.16);
 
     // 发光效果
     float glow = 1.0 - smoothstep(0.0, 1.0, dist);
     float glowEffect = pow(glow, 2.0) * u_glowIntensity;
 
-    // 边缘平滑
-    float alpha = 1.0 - smoothstep(0.9, 1.0, dist);
-
     // 混合发光
-    vec4 finalColor = mix(baseColor, u_glowColor, glowEffect * 0.5);
-    finalColor.a = alpha * u_opacity;
+    vec4 finalColor = mix(baseColor, u_glowColor, glowEffect * 0.38);
+    finalColor.a = sphereMask * u_opacity;
 
     if (finalColor.a < 0.01) discard;
 
@@ -143,6 +192,59 @@ const NodeColors = {
   previewAffected: { base: [0.70, 0.70, 0.70, 1], glow: [0.50, 0.50, 0.50, 1] } // 灰色（受影响节点）
 };
 
+const DEFAULT_UNALLIED_NODE_VISUAL_STYLE = {
+  primaryColor: '#6f8fb1',
+  secondaryColor: '#2f3f52',
+  glowColor: '#b6d7ff',
+  rimColor: '#e2ecff',
+  textColor: '#f1f5f9',
+  patternType: 'noise'
+};
+
+const DEFAULT_ALLIANCE_NODE_VISUAL_STYLE = {
+  primaryColor: '#7c3aed',
+  secondaryColor: '#312e81',
+  glowColor: '#c084fc',
+  rimColor: '#f5d0fe',
+  textColor: '#ffffff',
+  patternType: 'diagonal'
+};
+
+const PATTERN_TYPE_MAP = {
+  none: 0,
+  dots: 1,
+  grid: 2,
+  diagonal: 3,
+  rings: 4,
+  noise: 5
+};
+
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+const normalizeHexColor = (value, fallback) => {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim();
+  return HEX_COLOR_RE.test(normalized) ? normalized.toLowerCase() : fallback;
+};
+
+const hexToVec4 = (hex, alpha = 1) => {
+  const normalized = normalizeHexColor(hex, '#ffffff').slice(1);
+  const r = parseInt(normalized.slice(0, 2), 16) / 255;
+  const g = parseInt(normalized.slice(2, 4), 16) / 255;
+  const b = parseInt(normalized.slice(4, 6), 16) / 255;
+  return [r, g, b, alpha];
+};
+
+const blendHexColors = (hexA, hexB, ratio = 0.5) => {
+  const colorA = hexToVec4(hexA, 1);
+  const colorB = hexToVec4(hexB, 1);
+  const t = Math.max(0, Math.min(1, ratio));
+  const r = Math.round((colorA[0] * (1 - t) + colorB[0] * t) * 255).toString(16).padStart(2, '0');
+  const g = Math.round((colorA[1] * (1 - t) + colorB[1] * t) * 255).toString(16).padStart(2, '0');
+  const b = Math.round((colorA[2] * (1 - t) + colorB[2] * t) * 255).toString(16).padStart(2, '0');
+  return `#${r}${g}${b}`;
+};
+
 class WebGLNodeRenderer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -200,10 +302,13 @@ class WebGLNodeRenderer {
       scale: gl.getUniformLocation(this.nodeProgram, 'u_scale'),
       rotation: gl.getUniformLocation(this.nodeProgram, 'u_rotation'),
       color: gl.getUniformLocation(this.nodeProgram, 'u_color'),
+      secondaryColor: gl.getUniformLocation(this.nodeProgram, 'u_secondaryColor'),
+      rimColor: gl.getUniformLocation(this.nodeProgram, 'u_rimColor'),
       glowColor: gl.getUniformLocation(this.nodeProgram, 'u_glowColor'),
       glowIntensity: gl.getUniformLocation(this.nodeProgram, 'u_glowIntensity'),
       opacity: gl.getUniformLocation(this.nodeProgram, 'u_opacity'),
       shapeType: gl.getUniformLocation(this.nodeProgram, 'u_shapeType'),
+      patternType: gl.getUniformLocation(this.nodeProgram, 'u_patternType'),
       size: gl.getUniformLocation(this.nodeProgram, 'u_size')
     };
 
@@ -357,7 +462,7 @@ class WebGLNodeRenderer {
   }
 
   hitTest(x, y) {
-    for (const [id, node] of this.nodes) {
+    for (const [, node] of this.nodes) {
       if (!node.visible) continue;
 
       const dx = x - node.x;
@@ -388,6 +493,8 @@ class WebGLNodeRenderer {
       label: config.label ?? existing?.label ?? '',
       subLabel: config.subLabel ?? existing?.subLabel ?? '',
       data: config.data ?? existing?.data ?? null,
+      visualStyle: config.visualStyle ?? existing?.visualStyle ?? config.data?.visualStyle ?? existing?.data?.visualStyle ?? null,
+      labelColor: config.labelColor ?? existing?.labelColor ?? config.visualStyle?.textColor ?? config.data?.visualStyle?.textColor ?? existing?.labelColor ?? '',
       glowIntensity: config.glowIntensity ?? existing?.glowIntensity ?? 0.5,
       // 知识点动态增长相关
       knowledgePointValue: config.data?.knowledgePoint?.value ?? existing?.knowledgePointValue ?? 0,
@@ -403,6 +510,80 @@ class WebGLNodeRenderer {
 
     this.nodes.set(id, node);
     return node;
+  }
+
+  resolveNodeRenderStyle(node) {
+    if (node?.type === 'preview') {
+      const previewColors = NodeColors.preview;
+      return {
+        base: previewColors.base,
+        secondary: [0.20, 0.39, 0.63, 1],
+        rim: [0.90, 0.97, 1, 1],
+        glow: previewColors.glow,
+        patternType: PATTERN_TYPE_MAP.none,
+        textColor: '#a5d8ff',
+        subTextColor: '#74c0fc',
+        opacityFactor: 1
+      };
+    }
+
+    const visualStyle = node?.visualStyle || node?.data?.visualStyle || null;
+    if (visualStyle) {
+      const primary = normalizeHexColor(visualStyle.primaryColor, DEFAULT_ALLIANCE_NODE_VISUAL_STYLE.primaryColor);
+      const secondary = normalizeHexColor(visualStyle.secondaryColor, DEFAULT_ALLIANCE_NODE_VISUAL_STYLE.secondaryColor);
+      const glow = normalizeHexColor(visualStyle.glowColor, DEFAULT_ALLIANCE_NODE_VISUAL_STYLE.glowColor);
+      const rim = normalizeHexColor(visualStyle.rimColor, DEFAULT_ALLIANCE_NODE_VISUAL_STYLE.rimColor);
+      const textColor = normalizeHexColor(visualStyle.textColor, DEFAULT_ALLIANCE_NODE_VISUAL_STYLE.textColor);
+      const patternType = typeof visualStyle.patternType === 'string'
+        ? visualStyle.patternType.trim().toLowerCase()
+        : DEFAULT_ALLIANCE_NODE_VISUAL_STYLE.patternType;
+      return {
+        base: hexToVec4(primary, 1),
+        secondary: hexToVec4(secondary, 1),
+        rim: hexToVec4(rim, 1),
+        glow: hexToVec4(glow, 1),
+        patternType: PATTERN_TYPE_MAP[patternType] ?? PATTERN_TYPE_MAP.diagonal,
+        textColor,
+        subTextColor: blendHexColors(textColor, '#cbd5e1', 0.45),
+        opacityFactor: 1
+      };
+    }
+
+    const isKnowledgeDomainNode = ['root', 'featured', 'center', 'parent', 'child', 'search'].includes(node?.type);
+    if (isKnowledgeDomainNode) {
+      return {
+        base: hexToVec4(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.primaryColor, 1),
+        secondary: hexToVec4(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.secondaryColor, 1),
+        rim: hexToVec4(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.rimColor, 1),
+        glow: hexToVec4(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.glowColor, 1),
+        patternType: PATTERN_TYPE_MAP[DEFAULT_UNALLIED_NODE_VISUAL_STYLE.patternType],
+        textColor: DEFAULT_UNALLIED_NODE_VISUAL_STYLE.textColor,
+        subTextColor: blendHexColors(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.textColor, '#bfdbfe', 0.45),
+        opacityFactor: 0.78
+      };
+    }
+
+    const fallback = NodeColors[node?.type] || NodeColors.center;
+    return {
+      base: fallback.base,
+      secondary: [
+        Math.max(0, fallback.base[0] * 0.42),
+        Math.max(0, fallback.base[1] * 0.42),
+        Math.max(0, fallback.base[2] * 0.42),
+        1
+      ],
+      rim: [
+        Math.min(1, fallback.base[0] * 1.22),
+        Math.min(1, fallback.base[1] * 1.22),
+        Math.min(1, fallback.base[2] * 1.22),
+        1
+      ],
+      glow: fallback.glow,
+      patternType: PATTERN_TYPE_MAP.none,
+      textColor: node?.labelColor || '#ffffff',
+      subTextColor: '#e9d5ff',
+      opacityFactor: 1
+    };
   }
 
   removeNode(id) {
@@ -441,6 +622,14 @@ class WebGLNodeRenderer {
     const node = this.nodes.get(id);
     if (!node) return Promise.resolve();
 
+    // 先同步非数值动画字段，避免样式和文案在动画后才生效
+    const staticKeys = ['type', 'label', 'subLabel', 'data', 'visualStyle', 'labelColor', 'visible'];
+    staticKeys.forEach((key) => {
+      if (target[key] !== undefined) {
+        node[key] = target[key];
+      }
+    });
+
     // 标记节点正在动画
     node.isAnimating = true;
 
@@ -460,6 +649,7 @@ class WebGLNodeRenderer {
         start: {
           x: node.x,
           y: node.y,
+          radius: node.radius,
           scale: node.scale,
           opacity: node.opacity,
           rotation: node.rotation
@@ -467,6 +657,7 @@ class WebGLNodeRenderer {
         end: {
           x: target.x ?? node.x,
           y: target.y ?? node.y,
+          radius: target.radius ?? node.radius,
           scale: target.scale ?? node.scale,
           opacity: target.opacity ?? node.opacity,
           rotation: target.rotation ?? node.rotation
@@ -519,6 +710,7 @@ class WebGLNodeRenderer {
       if (node) {
         node.x = anim.start.x + (anim.end.x - anim.start.x) * easedProgress;
         node.y = anim.start.y + (anim.end.y - anim.start.y) * easedProgress;
+        node.radius = anim.start.radius + (anim.end.radius - anim.start.radius) * easedProgress;
         node.scale = anim.start.scale + (anim.end.scale - anim.start.scale) * easedProgress;
         node.opacity = anim.start.opacity + (anim.end.opacity - anim.start.opacity) * easedProgress;
         node.rotation = anim.start.rotation + (anim.end.rotation - anim.start.rotation) * easedProgress;
@@ -675,18 +867,21 @@ class WebGLNodeRenderer {
       .sort((a, b) => a.opacity - b.opacity);
 
     for (const node of sortedNodes) {
-      const colors = NodeColors[node.type] || NodeColors.center;
+      const style = this.resolveNodeRenderStyle(node);
 
       const size = node.radius * 2;
       gl.uniform2f(this.nodeLocations.translation, node.x, node.y);
       gl.uniform2f(this.nodeLocations.scale, size * node.scale, size * node.scale);
       gl.uniform1f(this.nodeLocations.rotation, node.rotation);
-      gl.uniform4fv(this.nodeLocations.color, colors.base);
-      gl.uniform4fv(this.nodeLocations.glowColor, colors.glow);
+      gl.uniform4fv(this.nodeLocations.color, style.base);
+      gl.uniform4fv(this.nodeLocations.secondaryColor, style.secondary);
+      gl.uniform4fv(this.nodeLocations.rimColor, style.rim);
+      gl.uniform4fv(this.nodeLocations.glowColor, style.glow);
       gl.uniform1f(this.nodeLocations.glowIntensity,
         this.hoveredNode === node ? 0.8 : node.glowIntensity);
-      gl.uniform1f(this.nodeLocations.opacity, node.opacity);
+      gl.uniform1f(this.nodeLocations.opacity, node.opacity * (style.opacityFactor ?? 1));
       gl.uniform1i(this.nodeLocations.shapeType, 0); // 圆形
+      gl.uniform1i(this.nodeLocations.patternType, style.patternType ?? PATTERN_TYPE_MAP.none);
       gl.uniform2f(this.nodeLocations.size, size, size);
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -733,10 +928,23 @@ class WebGLNodeRenderer {
         gl.uniform2f(this.nodeLocations.scale, btnSize, btnSize);
         gl.uniform1f(this.nodeLocations.rotation, 0);
         gl.uniform4fv(this.nodeLocations.color, baseColor);
+        gl.uniform4fv(this.nodeLocations.secondaryColor, [
+          Math.max(0, baseColor[0] * 0.45),
+          Math.max(0, baseColor[1] * 0.45),
+          Math.max(0, baseColor[2] * 0.45),
+          baseColor[3] || 1
+        ]);
+        gl.uniform4fv(this.nodeLocations.rimColor, [
+          Math.min(1, baseColor[0] * 1.2),
+          Math.min(1, baseColor[1] * 1.2),
+          Math.min(1, baseColor[2] * 1.2),
+          1
+        ]);
         gl.uniform4fv(this.nodeLocations.glowColor, glowColor);
         gl.uniform1f(this.nodeLocations.glowIntensity, isDisabled ? 0.05 : 0.3);
         gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isDisabled ? 0.45 : 0.8));
         gl.uniform1i(this.nodeLocations.shapeType, 0); // 圆形
+        gl.uniform1i(this.nodeLocations.patternType, PATTERN_TYPE_MAP.none);
         gl.uniform2f(this.nodeLocations.size, btnSize, btnSize);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -771,39 +979,7 @@ class WebGLNodeRenderer {
 
     for (const [, node] of this.nodes) {
       if (!node.visible || node.opacity < 0.3 || !node.label) continue;
-
-      ctx.globalAlpha = node.opacity;
-      ctx.fillStyle = '#ffffff';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-
-      // 主标签
-      const fontSize = Math.max(12, node.radius * node.scale * 0.35);
-      ctx.font = `bold ${fontSize}px sans-serif`;
-
-      // 截断长文本
-      let label = node.label;
-      const maxWidth = node.radius * node.scale * 1.8;
-      while (ctx.measureText(label).width > maxWidth && label.length > 3) {
-        label = label.slice(0, -1);
-      }
-      if (label !== node.label) label += '...';
-
-      ctx.fillText(label, node.x, node.y - fontSize * 0.3);
-
-      // 副标签 (动态知识点)
-      if (node.knowledgePointValue > 0) {
-        ctx.font = `${fontSize * 0.7}px sans-serif`;
-        ctx.fillStyle = '#e9d5ff';
-        // 显示动态更新的知识点值
-        const dynamicSubLabel = `${node.knowledgePointValue.toFixed(2)} 知识点`;
-        ctx.fillText(dynamicSubLabel, node.x, node.y + fontSize * 0.6);
-      } else if (node.subLabel) {
-        // 回退到静态subLabel（如果没有知识点值）
-        ctx.font = `${fontSize * 0.7}px sans-serif`;
-        ctx.fillStyle = '#e9d5ff';
-        ctx.fillText(node.subLabel, node.x, node.y + fontSize * 0.6);
-      }
+      this.renderNodeLabel(ctx, node, false);
     }
 
     // 渲染按钮图标
@@ -1217,18 +1393,21 @@ class WebGLNodeRenderer {
       .sort((a, b) => a.opacity - b.opacity);
 
     for (const node of sortedNodes) {
-      const colors = NodeColors[node.type] || NodeColors.center;
+      const style = this.resolveNodeRenderStyle(node);
       const size = node.radius * 2;
 
       gl.uniform2f(this.nodeLocations.translation, node.x, node.y);
       gl.uniform2f(this.nodeLocations.scale, size * node.scale, size * node.scale);
       gl.uniform1f(this.nodeLocations.rotation, node.rotation);
-      gl.uniform4fv(this.nodeLocations.color, colors.base);
-      gl.uniform4fv(this.nodeLocations.glowColor, colors.glow);
+      gl.uniform4fv(this.nodeLocations.color, style.base);
+      gl.uniform4fv(this.nodeLocations.secondaryColor, style.secondary);
+      gl.uniform4fv(this.nodeLocations.rimColor, style.rim);
+      gl.uniform4fv(this.nodeLocations.glowColor, style.glow);
       gl.uniform1f(this.nodeLocations.glowIntensity,
         this.hoveredNode === node ? 0.8 : node.glowIntensity);
-      gl.uniform1f(this.nodeLocations.opacity, node.opacity);
+      gl.uniform1f(this.nodeLocations.opacity, node.opacity * (style.opacityFactor ?? 1));
       gl.uniform1i(this.nodeLocations.shapeType, 0);
+      gl.uniform1i(this.nodeLocations.patternType, style.patternType ?? PATTERN_TYPE_MAP.none);
       gl.uniform2f(this.nodeLocations.size, size, size);
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -1265,10 +1444,13 @@ class WebGLNodeRenderer {
       gl.uniform2f(this.nodeLocations.scale, size * node.scale * pulseScale, size * node.scale * pulseScale);
       gl.uniform1f(this.nodeLocations.rotation, node.rotation);
       gl.uniform4fv(this.nodeLocations.color, colors.base);
+      gl.uniform4fv(this.nodeLocations.secondaryColor, [0.19, 0.38, 0.62, 1]);
+      gl.uniform4fv(this.nodeLocations.rimColor, [0.89, 0.96, 1, 1]);
       gl.uniform4fv(this.nodeLocations.glowColor, colors.glow);
       gl.uniform1f(this.nodeLocations.glowIntensity, 0.6 + Math.abs(node.pulsePhase || 0) * 4);
       gl.uniform1f(this.nodeLocations.opacity, node.opacity * (0.7 + Math.abs(node.pulsePhase || 0) * 2));
       gl.uniform1i(this.nodeLocations.shapeType, 0);
+      gl.uniform1i(this.nodeLocations.patternType, PATTERN_TYPE_MAP.none);
       gl.uniform2f(this.nodeLocations.size, size, size);
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -1320,8 +1502,12 @@ class WebGLNodeRenderer {
    * 渲染单个节点的标签
    */
   renderNodeLabel(ctx, node, isPreview = false) {
+    const style = this.resolveNodeRenderStyle(node);
+    const labelColor = isPreview ? '#a5d8ff' : (node.labelColor || style.textColor || '#ffffff');
+    const subLabelColor = isPreview ? '#74c0fc' : (style.subTextColor || '#e9d5ff');
+
     ctx.globalAlpha = node.opacity * (isPreview ? 0.9 : 1);
-    ctx.fillStyle = isPreview ? '#a5d8ff' : '#ffffff';
+    ctx.fillStyle = labelColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
@@ -1340,7 +1526,7 @@ class WebGLNodeRenderer {
     // 副标签
     if (node.subLabel || node.knowledgePointValue > 0) {
       ctx.font = `${fontSize * 0.7}px sans-serif`;
-      ctx.fillStyle = isPreview ? '#74c0fc' : '#e9d5ff';
+      ctx.fillStyle = subLabelColor;
       const subLabel = node.knowledgePointValue > 0
         ? `${node.knowledgePointValue.toFixed(2)} 知识点`
         : node.subLabel;

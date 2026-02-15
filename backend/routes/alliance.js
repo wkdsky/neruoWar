@@ -17,6 +17,93 @@ const getIdString = (value) => {
   return '';
 };
 
+const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+const normalizeHexColor = (value, fallback) => {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim();
+  return HEX_COLOR_RE.test(normalized) ? normalized.toLowerCase() : fallback;
+};
+
+const normalizePatternType = (value, fallback = 'diagonal') => {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim().toLowerCase();
+  return VISUAL_PATTERN_TYPES.includes(normalized) ? normalized : fallback;
+};
+
+const normalizeVisualStyleInput = (rawStyle = {}, fallbackName = '主视觉') => {
+  const style = rawStyle && typeof rawStyle === 'object' ? rawStyle : {};
+  const normalizedName = typeof style.name === 'string' ? style.name.trim() : '';
+  return {
+    name: normalizedName || fallbackName,
+    primaryColor: normalizeHexColor(style.primaryColor, '#7c3aed'),
+    secondaryColor: normalizeHexColor(style.secondaryColor, '#312e81'),
+    glowColor: normalizeHexColor(style.glowColor, '#c084fc'),
+    rimColor: normalizeHexColor(style.rimColor, '#f5d0fe'),
+    textColor: normalizeHexColor(style.textColor, '#ffffff'),
+    patternType: normalizePatternType(style.patternType, 'diagonal')
+  };
+};
+
+const serializeVisualStyle = (style) => {
+  if (!style) return null;
+  const styleObj = typeof style.toObject === 'function' ? style.toObject() : style;
+  return {
+    _id: getIdString(styleObj._id),
+    name: styleObj.name || '',
+    primaryColor: styleObj.primaryColor || '#7c3aed',
+    secondaryColor: styleObj.secondaryColor || '#312e81',
+    glowColor: styleObj.glowColor || '#c084fc',
+    rimColor: styleObj.rimColor || '#f5d0fe',
+    textColor: styleObj.textColor || '#ffffff',
+    patternType: normalizePatternType(styleObj.patternType, 'diagonal')
+  };
+};
+
+const resolveActiveVisualStyle = (alliance) => {
+  if (!alliance) return null;
+  const styles = Array.isArray(alliance.visualStyles) ? alliance.visualStyles : [];
+  if (styles.length === 0) {
+    return normalizeVisualStyleInput({
+      name: '默认风格',
+      primaryColor: alliance.flag || '#7c3aed',
+      secondaryColor: '#312e81',
+      glowColor: '#c084fc',
+      rimColor: '#f5d0fe',
+      textColor: '#ffffff',
+      patternType: 'diagonal'
+    }, '默认风格');
+  }
+  const activeId = getIdString(alliance.activeVisualStyleId);
+  const active = styles.find((styleItem) => getIdString(styleItem?._id) === activeId);
+  return active || styles[0] || null;
+};
+
+const buildAlliancePayload = (alliance, extras = {}) => {
+  let styles = Array.isArray(alliance?.visualStyles) ? alliance.visualStyles.map(serializeVisualStyle).filter(Boolean) : [];
+  const active = resolveActiveVisualStyle(alliance);
+  const serializedActive = serializeVisualStyle(active);
+  if (styles.length === 0 && serializedActive) {
+    styles = [serializedActive];
+  }
+  return {
+    _id: alliance._id,
+    name: alliance.name,
+    flag: alliance.flag,
+    declaration: alliance.declaration,
+    announcement: alliance.announcement || '',
+    announcementUpdatedAt: alliance.announcementUpdatedAt || null,
+    founder: alliance.founder,
+    visualStyles: styles,
+    activeVisualStyleId: serializedActive?._id || '',
+    activeVisualStyle: serializedActive,
+    createdAt: alliance.createdAt,
+    updatedAt: alliance.updatedAt,
+    ...extras
+  };
+};
+
 // 获取所有熵盟列表（包括成员数量和管辖知识域数量）
 router.get('/list', async (req, res) => {
   try {
@@ -40,18 +127,10 @@ router.get('/list', async (req, res) => {
         status: 'approved'
       });
 
-      return {
-        _id: alliance._id,
-        name: alliance.name,
-        flag: alliance.flag,
-        declaration: alliance.declaration,
-        announcement: alliance.announcement || '',
-        announcementUpdatedAt: alliance.announcementUpdatedAt || null,
-        founder: alliance.founder,
+      return buildAlliancePayload(alliance, {
         memberCount,
-        domainCount,
-        createdAt: alliance.createdAt
-      };
+        domainCount
+      });
     }));
 
     res.json({ alliances: alliancesWithStats });
@@ -85,18 +164,10 @@ router.get('/:allianceId', async (req, res) => {
       .select('name description domainMaster');
 
     res.json({
-      alliance: {
-        _id: alliance._id,
-        name: alliance.name,
-        flag: alliance.flag,
-        declaration: alliance.declaration,
-        announcement: alliance.announcement || '',
-        announcementUpdatedAt: alliance.announcementUpdatedAt || null,
-        founder: alliance.founder,
+      alliance: buildAlliancePayload(alliance, {
         memberCount: members.length,
-        domainCount: domains.length,
-        createdAt: alliance.createdAt
-      },
+        domainCount: domains.length
+      }),
       members,
       domains
     });
@@ -109,7 +180,7 @@ router.get('/:allianceId', async (req, res) => {
 // 创建新熵盟（需要认证）
 router.post('/create', authenticateToken, async (req, res) => {
   try {
-    const { name, flag, declaration } = req.body;
+    const { name, flag, declaration, visualStyle } = req.body;
     const userId = req.user.userId;
 
     // 检查是否是管理员
@@ -143,13 +214,26 @@ router.post('/create', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '熵盟名称已存在' });
     }
 
+    if (!visualStyle || typeof visualStyle !== 'object') {
+      return res.status(400).json({ error: '创建熵盟必须设置一套知识域视觉样式' });
+    }
+
+    const normalizedVisualStyle = normalizeVisualStyleInput(visualStyle, '主视觉');
+    if (!normalizedVisualStyle.name) {
+      return res.status(400).json({ error: '视觉样式名称不能为空' });
+    }
+
     // 创建熵盟
     const alliance = new EntropyAlliance({
       name,
       flag: flag || '#7c3aed',
       declaration,
-      founder: userId
+      founder: userId,
+      visualStyles: [normalizedVisualStyle]
     });
+    if (alliance.visualStyles[0]?._id) {
+      alliance.activeVisualStyleId = alliance.visualStyles[0]._id;
+    }
 
     await alliance.save();
 
@@ -162,7 +246,7 @@ router.post('/create', authenticateToken, async (req, res) => {
 
     res.json({
       message: '熵盟创建成功',
-      alliance: populatedAlliance
+      alliance: buildAlliancePayload(populatedAlliance)
     });
   } catch (error) {
     console.error('创建熵盟失败:', error);
@@ -374,7 +458,13 @@ router.post('/leader/:allianceId/remove-member', authenticateToken, async (req, 
 router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => {
   try {
     const { allianceId } = req.params;
-    const { declaration, announcement } = req.body || {};
+    const {
+      declaration,
+      announcement,
+      createVisualStyle,
+      deleteVisualStyleId,
+      activateVisualStyleId
+    } = req.body || {};
 
     const leader = await User.findById(req.user.userId).select('_id');
     if (!leader) {
@@ -408,6 +498,51 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
       hasChanges = true;
     }
 
+    if (createVisualStyle && typeof createVisualStyle === 'object') {
+      const normalizedStyle = normalizeVisualStyleInput(createVisualStyle, `风格${(alliance.visualStyles || []).length + 1}`);
+      const styleNameTaken = (alliance.visualStyles || []).some((item) => (
+        (item?.name || '').trim() === normalizedStyle.name
+      ));
+      if (styleNameTaken) {
+        return res.status(400).json({ error: '已存在同名视觉样式，请更换名称' });
+      }
+      alliance.visualStyles.push(normalizedStyle);
+      if (!alliance.activeVisualStyleId && alliance.visualStyles[alliance.visualStyles.length - 1]?._id) {
+        alliance.activeVisualStyleId = alliance.visualStyles[alliance.visualStyles.length - 1]._id;
+      }
+      hasChanges = true;
+    }
+
+    if (typeof activateVisualStyleId === 'string' && activateVisualStyleId.trim()) {
+      const targetStyle = (alliance.visualStyles || []).find((item) => (
+        getIdString(item?._id) === activateVisualStyleId.trim()
+      ));
+      if (!targetStyle) {
+        return res.status(400).json({ error: '目标视觉样式不存在，无法启用' });
+      }
+      alliance.activeVisualStyleId = targetStyle._id;
+      hasChanges = true;
+    }
+
+    if (typeof deleteVisualStyleId === 'string' && deleteVisualStyleId.trim()) {
+      const styleList = alliance.visualStyles || [];
+      const deleteIndex = styleList.findIndex((item) => (
+        getIdString(item?._id) === deleteVisualStyleId.trim()
+      ));
+      if (deleteIndex === -1) {
+        return res.status(400).json({ error: '目标视觉样式不存在，无法删除' });
+      }
+      if (styleList.length <= 1) {
+        return res.status(400).json({ error: '至少保留一套视觉样式，不能删除最后一套' });
+      }
+      const removedStyle = styleList[deleteIndex];
+      styleList.splice(deleteIndex, 1);
+      if (getIdString(alliance.activeVisualStyleId) === getIdString(removedStyle?._id)) {
+        alliance.activeVisualStyleId = styleList[0]?._id || null;
+      }
+      hasChanges = true;
+    }
+
     if (!hasChanges) {
       return res.status(400).json({ error: '未提供可更新内容' });
     }
@@ -417,17 +552,7 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
     res.json({
       success: true,
       message: '熵盟信息已更新',
-      alliance: {
-        _id: alliance._id,
-        name: alliance.name,
-        flag: alliance.flag,
-        declaration: alliance.declaration,
-        announcement: alliance.announcement || '',
-        announcementUpdatedAt: alliance.announcementUpdatedAt || null,
-        founder: alliance.founder,
-        createdAt: alliance.createdAt,
-        updatedAt: alliance.updatedAt
-      }
+      alliance: buildAlliancePayload(alliance)
     });
   } catch (error) {
     console.error('更新熵盟信息失败:', error);
@@ -532,16 +657,10 @@ router.get('/my/info', authenticateToken, async (req, res) => {
     });
 
     res.json({
-      alliance: {
-        _id: user.allianceId._id,
-        name: user.allianceId.name,
-        flag: user.allianceId.flag,
-        declaration: user.allianceId.declaration,
-        announcement: user.allianceId.announcement || '',
-        announcementUpdatedAt: user.allianceId.announcementUpdatedAt || null,
+      alliance: buildAlliancePayload(user.allianceId, {
         memberCount,
         domainCount
-      }
+      })
     });
   } catch (error) {
     console.error('获取用户熵盟信息失败:', error);
@@ -574,19 +693,10 @@ router.get('/admin/all', authenticateToken, async (req, res) => {
         status: 'approved'
       });
 
-      return {
-        _id: alliance._id,
-        name: alliance.name,
-        flag: alliance.flag,
-        declaration: alliance.declaration,
-        announcement: alliance.announcement || '',
-        announcementUpdatedAt: alliance.announcementUpdatedAt || null,
-        founder: alliance.founder,
+      return buildAlliancePayload(alliance, {
         memberCount,
-        domainCount,
-        createdAt: alliance.createdAt,
-        updatedAt: alliance.updatedAt
-      };
+        domainCount
+      });
     }));
 
     res.json({ success: true, alliances: alliancesWithStats });
@@ -637,7 +747,7 @@ router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
     res.json({
       success: true,
       message: '熵盟信息已更新',
-      alliance: updatedAlliance
+      alliance: buildAlliancePayload(updatedAlliance)
     });
   } catch (error) {
     console.error('更新熵盟失败:', error);

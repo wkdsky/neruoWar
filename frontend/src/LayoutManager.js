@@ -64,6 +64,8 @@ class LayoutManager {
         type: 'root',
         label: node.name,
         subLabel: `${(node.knowledgePoint?.value || 0).toFixed(2)} 知识点`,
+        visualStyle: node.visualStyle || null,
+        labelColor: node.visualStyle?.textColor || '',
         data: node,
         visible: true
       });
@@ -85,6 +87,8 @@ class LayoutManager {
         type: 'featured',
         label: node.name,
         subLabel: `${(node.knowledgePoint?.value || 0).toFixed(2)} 知识点`,
+        visualStyle: node.visualStyle || null,
+        labelColor: node.visualStyle?.textColor || '',
         data: node,
         visible: true
       });
@@ -117,6 +121,8 @@ class LayoutManager {
       type: 'center',
       label: centerNode.name,
       subLabel: `${(centerNode.knowledgePoint?.value || 0).toFixed(2)} 知识点`,
+      visualStyle: centerNode.visualStyle || null,
+      labelColor: centerNode.visualStyle?.textColor || '',
       data: centerNode,
       visible: true
     });
@@ -142,6 +148,8 @@ class LayoutManager {
         type: 'parent',
         label: node.name,
         subLabel: `${(node.knowledgePoint?.value || 0).toFixed(1)} 点`,
+        visualStyle: node.visualStyle || null,
+        labelColor: node.visualStyle?.textColor || '',
         data: node,
         visible: true
       });
@@ -175,6 +183,8 @@ class LayoutManager {
         type: 'child',
         label: node.name,
         subLabel: `${(node.knowledgePoint?.value || 0).toFixed(1)} 点`,
+        visualStyle: node.visualStyle || null,
+        labelColor: node.visualStyle?.textColor || '',
         data: node,
         visible: true
       });
@@ -228,8 +238,13 @@ class LayoutManager {
       } else {
         // 已存在的节点：检查是否移动
         const currentNode = currentLayout.nodes.find(n => n.id === node.id);
+        const styleChanged = JSON.stringify(currentNode.visualStyle || null) !== JSON.stringify(node.visualStyle || null)
+          || (currentNode.labelColor || '') !== (node.labelColor || '')
+          || (currentNode.label || '') !== (node.label || '')
+          || (currentNode.subLabel || '') !== (node.subLabel || '');
         const moved = currentNode.x !== node.x || currentNode.y !== node.y ||
-                     currentNode.scale !== node.scale || currentNode.radius !== node.radius;
+                     currentNode.scale !== node.scale || currentNode.radius !== node.radius ||
+                     styleChanged;
 
         if (moved) {
           transitions.move.push({

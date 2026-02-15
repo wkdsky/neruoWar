@@ -61,7 +61,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
     };
 
     const createAlliance = async (allianceData) => {
-        const { name, flag, declaration } = allianceData;
+        const { name, flag, declaration, visualStyle } = allianceData;
         try {
             const response = await fetch('http://localhost:5000/api/alliances/create', {
                 method: 'POST',
@@ -69,7 +69,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ name, flag, declaration })
+                body: JSON.stringify({ name, flag, declaration, visualStyle })
             });
             const data = await response.json();
             if (response.ok) {

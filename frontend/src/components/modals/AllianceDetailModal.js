@@ -1,6 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Users, Zap, X } from 'lucide-react';
 import './AllianceDetailModal.css';
+import AllianceStylePreview from './AllianceStylePreview';
+import {
+    ALLIANCE_PATTERN_OPTIONS,
+    DEFAULT_ALLIANCE_VISUAL_STYLE,
+    getActiveAllianceVisualStyle,
+    normalizeAllianceVisualStyle
+} from '../../utils/allianceVisualStyle';
 
 const EMPTY_ITEMS = [];
 
@@ -43,12 +50,19 @@ const AllianceDetailModal = ({
     const [manageActionKey, setManageActionKey] = useState('');
     const [announcementDraft, setAnnouncementDraft] = useState('');
     const [declarationDraft, setDeclarationDraft] = useState('');
+    const [styleDraft, setStyleDraft] = useState(DEFAULT_ALLIANCE_VISUAL_STYLE);
+    const [isStyleCreatorOpen, setIsStyleCreatorOpen] = useState(false);
+    const activeVisualStyle = useMemo(
+        () => getActiveAllianceVisualStyle(alliance),
+        [alliance]
+    );
 
     useEffect(() => {
         if (!isOpen) {
             setNewLeaderId('');
             setActiveTab('overview');
             setPendingApplications([]);
+            setIsStyleCreatorOpen(false);
             return;
         }
         if (isCurrentUserFounder && successorCandidates.length > 0) {
@@ -62,7 +76,11 @@ const AllianceDetailModal = ({
         if (!isOpen || !alliance) return;
         setAnnouncementDraft(alliance.announcement || '');
         setDeclarationDraft(alliance.declaration || '');
-    }, [isOpen, alliance?._id, alliance?.announcement, alliance?.declaration]);
+        setStyleDraft(normalizeAllianceVisualStyle({
+            ...activeVisualStyle,
+            name: `${alliance.name || '熵盟'}风格${(alliance.visualStyles || []).length + 1}`
+        }, `风格${(alliance.visualStyles || []).length + 1}`));
+    }, [isOpen, alliance?._id, alliance?.announcement, alliance?.declaration, alliance?.name, alliance?.visualStyles, activeVisualStyle]);
 
     // Handler for stopping propagation of clicks to the backdrop
     const handleContentClick = (e) => {
@@ -201,7 +219,7 @@ const AllianceDetailModal = ({
     };
 
     const handleSaveManageContent = async (payload, fallbackError) => {
-        if (!token) return;
+        if (!token) return false;
         setManageActionKey('save:manage');
         try {
             const response = await fetch(`http://localhost:5000/api/alliances/leader/${alliance._id}/manage`, {
@@ -215,7 +233,7 @@ const AllianceDetailModal = ({
             const data = await response.json();
             if (!response.ok) {
                 window.alert(data.error || fallbackError);
-                return;
+                return false;
             }
             window.alert(data.message || '更新成功');
             if (typeof onAllianceChanged === 'function') {
@@ -224,8 +242,10 @@ const AllianceDetailModal = ({
             if (typeof onRefreshAllianceDetail === 'function') {
                 await onRefreshAllianceDetail(alliance._id);
             }
+            return true;
         } catch (error) {
             window.alert(`${fallbackError}: ${error.message}`);
+            return false;
         } finally {
             setManageActionKey('');
         }
@@ -242,6 +262,36 @@ const AllianceDetailModal = ({
         await handleSaveManageContent(
             { declaration: declarationDraft },
             '更新盟宣言失败'
+        );
+    };
+
+    const handleCreateVisualStyle = async () => {
+        const normalizedStyle = normalizeAllianceVisualStyle(styleDraft, `风格${(alliance?.visualStyles || []).length + 1}`);
+        if (!normalizedStyle.name) {
+            window.alert('样式名称不能为空');
+            return false;
+        }
+        const ok = await handleSaveManageContent(
+            { createVisualStyle: normalizedStyle },
+            '新建视觉样式失败'
+        );
+        return ok;
+    };
+
+    const handleActivateVisualStyle = async (styleId) => {
+        if (!styleId) return;
+        await handleSaveManageContent(
+            { activateVisualStyleId: styleId },
+            '启用视觉样式失败'
+        );
+    };
+
+    const handleDeleteVisualStyle = async (styleId, styleName) => {
+        if (!styleId) return;
+        if (!window.confirm(`确定删除视觉样式「${styleName || '未命名'}」吗？`)) return;
+        await handleSaveManageContent(
+            { deleteVisualStyleId: styleId },
+            '删除视觉样式失败'
         );
     };
 
@@ -378,6 +428,62 @@ const AllianceDetailModal = ({
             </div>
 
             <div className="alliance-section-detail">
+                <h3>知识域视觉样式</h3>
+                <div className="alliance-style-list">
+                    {(alliance.visualStyles || []).map((styleItem) => {
+                        const styleId = (styleItem?._id || '').toString();
+                        const isActive = (alliance.activeVisualStyleId || '').toString() === styleId;
+                        return (
+                            <div key={styleId || styleItem.name} className={`alliance-style-item ${isActive ? 'active' : ''}`}>
+                                <div className="alliance-style-item-header">
+                                    <strong>{styleItem.name || '未命名风格'}</strong>
+                                    {isActive && <span className="alliance-style-active-badge">启用中</span>}
+                                </div>
+                                <AllianceStylePreview styleConfig={styleItem} label="示例" className="compact" />
+                                <div className="alliance-style-item-actions">
+                                    {!isActive && (
+                                        <button
+                                            type="button"
+                                            className="btn btn-small btn-success"
+                                            onClick={() => handleActivateVisualStyle(styleId)}
+                                            disabled={manageActionKey === 'save:manage'}
+                                        >
+                                            启用
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        className="btn btn-small btn-danger"
+                                        onClick={() => handleDeleteVisualStyle(styleId, styleItem.name)}
+                                        disabled={manageActionKey === 'save:manage' || (alliance.visualStyles || []).length <= 1}
+                                    >
+                                        删除
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+                <div className="alliance-style-create-entry">
+                    <button
+                        type="button"
+                        className="btn btn-small btn-primary"
+                        onClick={() => {
+                            const nextIndex = (alliance?.visualStyles || []).length + 1;
+                            setStyleDraft(normalizeAllianceVisualStyle({
+                                ...activeVisualStyle,
+                                name: `${alliance?.name || '熵盟'}风格${nextIndex}`
+                            }, `风格${nextIndex}`));
+                            setIsStyleCreatorOpen(true);
+                        }}
+                        disabled={manageActionKey === 'save:manage'}
+                    >
+                        新建样式
+                    </button>
+                </div>
+            </div>
+
+            <div className="alliance-section-detail">
                 <h3>盟公告发布</h3>
                 <textarea
                     className="form-textarea"
@@ -420,6 +526,132 @@ const AllianceDetailModal = ({
             </div>
         </>
     );
+
+    const renderStyleCreatorModal = () => {
+        if (!isStyleCreatorOpen) return null;
+        return (
+            <div
+                className="alliance-style-creator-backdrop"
+                onClick={(event) => {
+                    event.stopPropagation();
+                    setIsStyleCreatorOpen(false);
+                }}
+            >
+                <div className="alliance-style-creator-modal" onClick={(event) => event.stopPropagation()}>
+                    <div className="alliance-style-creator-header">
+                        <h4>新建视觉样式</h4>
+                        <button
+                            type="button"
+                            className="modal-close"
+                            onClick={() => setIsStyleCreatorOpen(false)}
+                        >
+                            <X size={18} />
+                        </button>
+                    </div>
+                    <div className="alliance-style-creator-content">
+                        <div className="alliance-style-creator-left">
+                            <div className="alliance-style-form-grid">
+                                <label className="mini-field">
+                                    <span>样式名称</span>
+                                    <input
+                                        type="text"
+                                        className="form-input"
+                                        value={styleDraft.name}
+                                        onChange={(event) => setStyleDraft((prev) => ({ ...prev, name: event.target.value }))}
+                                        placeholder="输入新样式名称"
+                                    />
+                                </label>
+                                <label className="mini-field">
+                                    <span>底纹类型</span>
+                                    <select
+                                        className="form-input alliance-style-select"
+                                        value={styleDraft.patternType}
+                                        onChange={(event) => setStyleDraft((prev) => ({ ...prev, patternType: event.target.value }))}
+                                    >
+                                        {ALLIANCE_PATTERN_OPTIONS.map((item) => (
+                                            <option key={item.value} value={item.value}>{item.label}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                            </div>
+                            <div className="alliance-style-color-stack">
+                                <label className="alliance-style-color-line">
+                                    <span>主色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={styleDraft.primaryColor}
+                                        onChange={(event) => setStyleDraft((prev) => ({ ...prev, primaryColor: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="alliance-style-color-line">
+                                    <span>辅色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={styleDraft.secondaryColor}
+                                        onChange={(event) => setStyleDraft((prev) => ({ ...prev, secondaryColor: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="alliance-style-color-line">
+                                    <span>发光</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={styleDraft.glowColor}
+                                        onChange={(event) => setStyleDraft((prev) => ({ ...prev, glowColor: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="alliance-style-color-line">
+                                    <span>高光边</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={styleDraft.rimColor}
+                                        onChange={(event) => setStyleDraft((prev) => ({ ...prev, rimColor: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="alliance-style-color-line">
+                                    <span>字体色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={styleDraft.textColor}
+                                        onChange={(event) => setStyleDraft((prev) => ({ ...prev, textColor: event.target.value }))}
+                                    />
+                                </label>
+                            </div>
+                            <div className="alliance-manage-actions">
+                                <button
+                                    type="button"
+                                    className="btn btn-small btn-secondary"
+                                    onClick={() => setIsStyleCreatorOpen(false)}
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn btn-small btn-primary"
+                                    onClick={async () => {
+                                        const ok = await handleCreateVisualStyle();
+                                        if (ok) {
+                                            setIsStyleCreatorOpen(false);
+                                        }
+                                    }}
+                                    disabled={manageActionKey === 'save:manage' || !styleDraft.name.trim()}
+                                >
+                                    创建样式
+                                </button>
+                            </div>
+                        </div>
+                        <div className="alliance-style-creator-right">
+                            <AllianceStylePreview styleConfig={styleDraft} label="示例" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
 
     return (
         <div className="modal-backdrop" onClick={onClose}>
@@ -539,6 +771,7 @@ const AllianceDetailModal = ({
                     <button className="btn btn-secondary" onClick={onClose}>关闭</button>
                 </div>
             </div>
+            {renderStyleCreatorModal()}
         </div>
     );
 };

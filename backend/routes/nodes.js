@@ -3,6 +3,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const Node = require('../models/Node');
 const User = require('../models/User');
+const EntropyAlliance = require('../models/EntropyAlliance');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
 
@@ -34,6 +35,131 @@ const isDomainAdmin = (node, userId) => {
 const DOMAIN_CARD_SELECT = '_id name description knowledgePoint contentScore';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+const normalizeHexColor = (value, fallback) => {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim();
+  return HEX_COLOR_RE.test(normalized) ? normalized.toLowerCase() : fallback;
+};
+
+const normalizePatternType = (value, fallback = 'diagonal') => {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim().toLowerCase();
+  return VISUAL_PATTERN_TYPES.includes(normalized) ? normalized : fallback;
+};
+
+const toPlainObject = (value) => (
+  value && typeof value.toObject === 'function'
+    ? value.toObject()
+    : value
+);
+
+const normalizeVisualStyleForNode = (style = {}, fallbackFlag = '#7c3aed') => ({
+  name: typeof style?.name === 'string' ? style.name : '默认风格',
+  primaryColor: normalizeHexColor(style?.primaryColor, normalizeHexColor(fallbackFlag, '#7c3aed')),
+  secondaryColor: normalizeHexColor(style?.secondaryColor, '#334155'),
+  glowColor: normalizeHexColor(style?.glowColor, '#c084fc'),
+  rimColor: normalizeHexColor(style?.rimColor, '#f5d0fe'),
+  textColor: normalizeHexColor(style?.textColor, '#ffffff'),
+  patternType: normalizePatternType(style?.patternType, 'diagonal')
+});
+
+const resolveAllianceActiveStyle = (alliance) => {
+  if (!alliance) return null;
+  const styleList = Array.isArray(alliance.visualStyles) ? alliance.visualStyles : [];
+  if (styleList.length === 0) {
+    return normalizeVisualStyleForNode({
+      name: '默认风格',
+      primaryColor: alliance.flag || '#7c3aed',
+      secondaryColor: '#334155',
+      glowColor: '#c084fc',
+      rimColor: '#f5d0fe',
+      textColor: '#ffffff',
+      patternType: 'diagonal'
+    }, alliance.flag);
+  }
+  const activeId = getIdString(alliance.activeVisualStyleId);
+  const active = styleList.find((styleItem) => getIdString(styleItem?._id) === activeId) || styleList[0];
+  return normalizeVisualStyleForNode(active, alliance.flag);
+};
+
+const attachVisualStyleToNodeList = async (nodes = []) => {
+  const plainNodes = (nodes || []).map(toPlainObject).filter(Boolean);
+  if (plainNodes.length === 0) return [];
+
+  const domainMasterIds = new Set();
+  const allianceByMasterId = new Map();
+
+  plainNodes.forEach((nodeItem) => {
+    const domainMasterValue = nodeItem.domainMaster;
+    const domainMasterId = getIdString(
+      domainMasterValue && typeof domainMasterValue === 'object'
+        ? domainMasterValue._id
+        : domainMasterValue
+    );
+    if (!isValidObjectId(domainMasterId)) return;
+    domainMasterIds.add(domainMasterId);
+
+    if (domainMasterValue && typeof domainMasterValue === 'object') {
+      const allianceRef = domainMasterValue.alliance || domainMasterValue.allianceId;
+      if (allianceRef && typeof allianceRef === 'object') {
+        allianceByMasterId.set(domainMasterId, toPlainObject(allianceRef));
+      }
+    }
+  });
+
+  const unresolvedMasterIds = Array.from(domainMasterIds).filter((id) => !allianceByMasterId.has(id));
+  if (unresolvedMasterIds.length > 0) {
+    const masters = await User.find({ _id: { $in: unresolvedMasterIds } })
+      .select('_id allianceId')
+      .lean();
+    const unresolvedAllianceIds = Array.from(new Set(
+      masters.map((userItem) => getIdString(userItem.allianceId)).filter((id) => isValidObjectId(id))
+    ));
+    let allianceMap = new Map();
+    if (unresolvedAllianceIds.length > 0) {
+      const alliances = await EntropyAlliance.find({ _id: { $in: unresolvedAllianceIds } })
+        .select('name flag visualStyles activeVisualStyleId')
+        .lean();
+      allianceMap = new Map(alliances.map((allianceItem) => [getIdString(allianceItem._id), allianceItem]));
+    }
+    masters.forEach((masterItem) => {
+      const masterId = getIdString(masterItem._id);
+      const allianceId = getIdString(masterItem.allianceId);
+      if (masterId && allianceMap.has(allianceId)) {
+        allianceByMasterId.set(masterId, allianceMap.get(allianceId));
+      }
+    });
+  }
+
+  return plainNodes.map((nodeItem) => {
+    const domainMasterId = getIdString(
+      nodeItem.domainMaster && typeof nodeItem.domainMaster === 'object'
+        ? nodeItem.domainMaster._id
+        : nodeItem.domainMaster
+    );
+    const alliance = allianceByMasterId.get(domainMasterId) || null;
+    if (!alliance) {
+      return {
+        ...nodeItem,
+        visualStyle: null
+      };
+    }
+    const style = resolveAllianceActiveStyle(alliance);
+    return {
+      ...nodeItem,
+      visualStyle: {
+        ...style,
+        allianceId: getIdString(alliance._id),
+        allianceName: alliance.name || '',
+        styleId: getIdString(alliance.activeVisualStyleId) || ''
+      }
+    };
+  });
+};
 
 // 搜索节点
 router.get('/search', authenticateToken, async (req, res) => {
@@ -690,17 +816,18 @@ router.get('/public/root-nodes', async (req, res) => {
     // 查找所有已批准的节点
     const nodes = await Node.find({ status: 'approved' })
       .populate('owner', 'username profession')
-      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore');
+      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster');
 
     // 过滤出根节点（没有母节点的节点）
     const rootNodes = nodes.filter(node =>
       !node.relatedParentDomains || node.relatedParentDomains.length === 0
     );
+    const styledRootNodes = await attachVisualStyleToNodeList(rootNodes);
 
     res.json({
       success: true,
-      count: rootNodes.length,
-      nodes: rootNodes
+      count: styledRootNodes.length,
+      nodes: styledRootNodes
     });
   } catch (error) {
     console.error('获取根节点错误:', error);
@@ -717,12 +844,13 @@ router.get('/public/featured-nodes', async (req, res) => {
     })
       .populate('owner', 'username profession')
       .sort({ featuredOrder: 1, createdAt: -1 })
-      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder');
+      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder domainMaster');
+    const styledFeaturedNodes = await attachVisualStyleToNodeList(featuredNodes);
 
     res.json({
       success: true,
-      count: featuredNodes.length,
-      nodes: featuredNodes
+      count: styledFeaturedNodes.length,
+      nodes: styledFeaturedNodes
     });
   } catch (error) {
     console.error('获取热门节点错误:', error);
@@ -787,9 +915,21 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     const { nodeId } = req.params;
 
     const node = await Node.findById(nodeId)
-      .populate('owner', 'username profession avatar level role')
-      .populate('domainMaster', 'username profession avatar level')
-      .populate('domainAdmins', 'username profession avatar level')
+      .populate({
+        path: 'owner',
+        select: 'username profession avatar level role allianceId',
+        populate: { path: 'allianceId', select: 'name flag visualStyles activeVisualStyleId' }
+      })
+      .populate({
+        path: 'domainMaster',
+        select: 'username profession avatar level allianceId',
+        populate: { path: 'allianceId', select: 'name flag visualStyles activeVisualStyleId' }
+      })
+      .populate({
+        path: 'domainAdmins',
+        select: 'username profession avatar level allianceId',
+        populate: { path: 'allianceId', select: 'name flag visualStyles activeVisualStyleId' }
+      })
       .select('name description owner domainMaster domainAdmins relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
 
     if (!node) {
@@ -804,20 +944,51 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     const parentNodes = await Node.find({
       name: { $in: node.relatedParentDomains },
       status: 'approved'
-    }).select('_id name description knowledgePoint contentScore');
+    }).select('_id name description knowledgePoint contentScore domainMaster');
 
     // 获取关联的子域节点信息（ID和名称）
     const childNodes = await Node.find({
       name: { $in: node.relatedChildDomains },
       status: 'approved'
-    }).select('_id name description knowledgePoint contentScore');
+    }).select('_id name description knowledgePoint contentScore domainMaster');
+
+    const normalizeUserForNodeDetail = (user) => {
+      if (!user) return null;
+      const userObj = typeof user.toObject === 'function' ? user.toObject() : user;
+      const allianceObj = userObj?.allianceId && typeof userObj.allianceId === 'object'
+        ? userObj.allianceId
+        : null;
+      return {
+        ...userObj,
+        _id: getIdString(userObj._id),
+        alliance: allianceObj
+          ? {
+              _id: getIdString(allianceObj._id),
+              name: allianceObj.name || '',
+              flag: allianceObj.flag || '',
+              visualStyles: Array.isArray(allianceObj.visualStyles) ? allianceObj.visualStyles : [],
+              activeVisualStyleId: getIdString(allianceObj.activeVisualStyleId)
+            }
+          : null
+      };
+    };
+
+    const nodeObj = node.toObject();
+    nodeObj.owner = normalizeUserForNodeDetail(node.owner);
+    nodeObj.domainMaster = normalizeUserForNodeDetail(node.domainMaster);
+    nodeObj.domainAdmins = Array.isArray(node.domainAdmins)
+      ? node.domainAdmins.map(normalizeUserForNodeDetail).filter(Boolean)
+      : [];
+    const [styledNode] = await attachVisualStyleToNodeList([nodeObj]);
+    const styledParentNodes = await attachVisualStyleToNodeList(parentNodes);
+    const styledChildNodes = await attachVisualStyleToNodeList(childNodes);
 
     res.json({
       success: true,
       node: {
-        ...node.toObject(),
-        parentNodesInfo: parentNodes,
-        childNodesInfo: childNodes
+        ...(styledNode || nodeObj),
+        parentNodesInfo: styledParentNodes,
+        childNodesInfo: styledChildNodes
       }
     });
   } catch (error) {

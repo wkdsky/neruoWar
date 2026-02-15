@@ -140,6 +140,24 @@
     display: block;
 }
 
+.user-avatar-alliance-flag {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 14px;
+    height: 14px;
+    border-radius: 9999px;
+    border: 2px solid rgba(15, 23, 42, 0.95);
+    box-shadow: 0 0 0 1px rgba(226, 232, 240, 0.45);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.user-avatar-item.is-master .user-avatar-alliance-flag {
+    width: 16px;
+    height: 16px;
+}
+
 .user-avatar-tooltip {
     position: absolute;
     left: 50%;

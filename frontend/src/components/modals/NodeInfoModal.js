@@ -17,11 +17,6 @@ const avatarMap = {
     default_female_3: defaultFemale3
 };
 
-const getUserLevel = (user) => {
-    const level = Number(user?.level);
-    return Number.isFinite(level) ? level : 0;
-};
-
 const getUserId = (user) => {
     if (!user) return '';
     return user._id?.toString?.() || user._id || user.id || '';
@@ -34,9 +29,19 @@ const formatCreatedAt = (createdAt) => {
     return date.toLocaleString('zh-CN', { hour12: false });
 };
 
+const getUserAlliance = (user) => {
+    const alliance = user?.alliance || user?.allianceId;
+    if (!alliance || typeof alliance !== 'object') return null;
+    const name = typeof alliance.name === 'string' ? alliance.name.trim() : '';
+    const flag = typeof alliance.flag === 'string' ? alliance.flag.trim() : '';
+    if (!name && !flag) return null;
+    return { name, flag };
+};
+
 const UserAvatar = ({ user, isMaster = false, fallbackKey = '' }) => {
-    const level = getUserLevel(user);
-    const tooltip = `Lv${level} ${user.username}`;
+    const username = user?.username || '未知用户';
+    const alliance = getUserAlliance(user);
+    const tooltip = alliance?.name ? `【${alliance.name}】${username}` : username;
     return (
         <div
             key={getUserId(user) || fallbackKey}
@@ -45,9 +50,16 @@ const UserAvatar = ({ user, isMaster = false, fallbackKey = '' }) => {
         >
             <img
                 src={avatarMap[user.avatar] || defaultMale1}
-                alt={user.username}
+                alt={tooltip}
                 className="user-avatar-img"
             />
+            {alliance?.flag && (
+                <span
+                    className="user-avatar-alliance-flag"
+                    style={{ backgroundColor: alliance.flag }}
+                    aria-label={alliance.name ? `熵盟：${alliance.name}` : '熵盟旗帜'}
+                />
+            )}
             <span className="user-avatar-tooltip">{tooltip}</span>
         </div>
     );
