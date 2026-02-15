@@ -1052,6 +1052,21 @@ const App = () => {
   }, [authenticated, isAdmin]);
 
   useEffect(() => {
+    if (!socket) return;
+
+    const handleAdminSyncPending = async () => {
+      if (!authenticated || !isAdmin) return;
+      await fetchNotifications(true);
+      await fetchAdminPendingNodeReminders(true);
+    };
+
+    socket.on('admin-sync-pending', handleAdminSyncPending);
+    return () => {
+      socket.off('admin-sync-pending', handleAdminSyncPending);
+    };
+  }, [socket, authenticated, isAdmin]);
+
+  useEffect(() => {
     if (!authenticated || isAdmin) {
       setRelatedDomainsData({
         loading: false,

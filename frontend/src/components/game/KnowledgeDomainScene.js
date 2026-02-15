@@ -307,6 +307,7 @@ const KnowledgeDomainScene = ({
     error: '',
     canView: false,
     canEdit: false,
+    isSystemAdmin: false,
     canResign: false,
     resignPending: false,
     domainMaster: null,
@@ -361,6 +362,7 @@ const KnowledgeDomainScene = ({
             loading: false,
             canView: false,
             canEdit: false,
+            isSystemAdmin: false,
             canResign: false,
             resignPending: false,
             error: ''
@@ -373,6 +375,7 @@ const KnowledgeDomainScene = ({
           loading: false,
           canView: false,
           canEdit: false,
+          isSystemAdmin: false,
           canResign: false,
           resignPending: false,
           error: getApiError(parsed, '获取域相列表失败')
@@ -385,6 +388,7 @@ const KnowledgeDomainScene = ({
         error: '',
         canView: !!data.canView,
         canEdit: !!data.canEdit,
+        isSystemAdmin: !!data.isSystemAdmin,
         canResign: !!data.canResign,
         resignPending: !!data.resignPending,
         domainMaster: data.domainMaster || null,
@@ -394,6 +398,7 @@ const KnowledgeDomainScene = ({
       setDomainAdminState((prev) => ({
         ...prev,
         loading: false,
+        isSystemAdmin: false,
         canResign: false,
         resignPending: false,
         error: `获取域相列表失败: ${error.message}`
@@ -746,7 +751,11 @@ const KnowledgeDomainScene = ({
                   </div>
                 ) : (
                   <div className="domain-admin-invite">
-                    <div className="domain-manage-tip">你是系统管理员，可查看但不可编辑域相名单</div>
+                    <div className="domain-manage-tip">
+                      {domainAdminState.isSystemAdmin
+                        ? '你是系统管理员，可查看但不可编辑域相名单'
+                        : '你当前可查看域相名单，编辑权限仅域主拥有'}
+                    </div>
                     {domainAdminState.canResign && (
                       <button
                         type="button"

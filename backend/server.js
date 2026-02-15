@@ -162,7 +162,21 @@ io.on('connection', (socket) => {
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
       socket.userId = decoded.userId;
-      socket.emit('authenticated', { userId: decoded.userId });
+      const user = await User.findById(decoded.userId).select('role');
+      socket.userRole = user?.role || 'common';
+
+      if (socket.userRole === 'admin') {
+        socket.join('admin-room');
+        io.to('admin-room').emit('admin-sync-pending', {
+          triggeredBy: decoded.userId,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      socket.emit('authenticated', {
+        userId: decoded.userId,
+        role: socket.userRole
+      });
       console.log(`用户认证成功: ${decoded.userId}`);
     } catch (error) {
       socket.emit('auth_error', { error: '认证失败' });

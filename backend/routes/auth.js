@@ -164,9 +164,47 @@ const handleDomainMasterApplyDecision = async ({
     : null;
 
   if (action !== 'accept') {
-    notification.status = 'rejected';
-    notification.read = true;
-    notification.respondedAt = nowDate;
+    const adminUsers = await User.find({
+      role: 'admin',
+      notifications: {
+        $elemMatch: {
+          type: 'domain_master_apply',
+          status: 'pending',
+          nodeId: node._id
+        }
+      }
+    }).select('_id notifications');
+
+    const saveAdminUsers = [];
+    for (const adminUser of adminUsers) {
+      let changed = false;
+      for (const adminNotification of adminUser.notifications || []) {
+        if (
+          adminNotification.type !== 'domain_master_apply' ||
+          adminNotification.status !== 'pending' ||
+          getIdString(adminNotification.nodeId) !== getIdString(node._id) ||
+          getIdString(adminNotification.inviteeId) !== applicantId
+        ) {
+          continue;
+        }
+        adminNotification.status = 'rejected';
+        adminNotification.read = true;
+        adminNotification.respondedAt = nowDate;
+        changed = true;
+      }
+      if (changed) {
+        saveAdminUsers.push(adminUser.save());
+      }
+    }
+
+    if (saveAdminUsers.length > 0) {
+      await Promise.all(saveAdminUsers);
+    } else {
+      notification.status = 'rejected';
+      notification.read = true;
+      notification.respondedAt = nowDate;
+    }
+
     if (applicant) {
       pushDomainMasterApplyResult({
         applicant,
@@ -179,8 +217,8 @@ const handleDomainMasterApplyDecision = async ({
     }
     return {
       decision: 'rejected',
-      message: '已拒绝该域主申请',
-      saveCurrentUser: true
+      message: saveAdminUsers.length > 0 ? '已拒绝该域主申请，并已同步到其他管理员' : '已拒绝该域主申请',
+      saveCurrentUser: saveAdminUsers.length === 0
     };
   }
 

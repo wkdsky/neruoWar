@@ -1288,8 +1288,9 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: '用户不存在' });
     }
 
+    const isSystemAdmin = currentUser.role === 'admin';
     const canEdit = isDomainMaster(node, requestUserId);
-    const canView = canEdit || isDomainAdmin(node, requestUserId) || currentUser.role === 'admin';
+    const canView = canEdit || isDomainAdmin(node, requestUserId) || isSystemAdmin;
 
     if (!canView) {
       return res.status(403).json({ error: '无权限查看该知识域域相' });
@@ -1321,7 +1322,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       })
       .filter(Boolean);
 
-    const canResign = !canEdit && isDomainAdmin(node, requestUserId);
+    const canResign = !canEdit && !isSystemAdmin && isDomainAdmin(node, requestUserId);
     let resignPending = false;
     if (canResign && isValidObjectId(domainMasterId)) {
       const domainMaster = await User.findById(domainMasterId).select('notifications');
@@ -1337,6 +1338,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       success: true,
       canView,
       canEdit,
+      isSystemAdmin,
       canResign,
       resignPending,
       nodeId: node._id,
