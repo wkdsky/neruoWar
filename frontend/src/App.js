@@ -34,6 +34,22 @@ const avatarMap = {
     default_female_3: defaultFemale3
 };
 
+const PAGE_STATE_STORAGE_KEY = 'app:lastPageState';
+
+const readSavedPageState = () => {
+    try {
+        const raw = localStorage.getItem(PAGE_STATE_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+        const view = typeof parsed.view === 'string' ? parsed.view : '';
+        const nodeId = typeof parsed.nodeId === 'string' ? parsed.nodeId : '';
+        return { view, nodeId };
+    } catch (error) {
+        return null;
+    }
+};
+
 const normalizeObjectId = (value) => {
     if (!value) return '';
     if (typeof value === 'string') return value;
@@ -52,7 +68,10 @@ const App = () => {
     const [technologies, setTechnologies] = useState([]);
     const [view, setView] = useState('login');
     const socketRef = useRef(null);
+    const isRestoringPageRef = useRef(false);
+    const hasRestoredPageRef = useRef(false);
     const [isAdmin, setIsAdmin] = useState(false);
+    const [adminEntryTab, setAdminEntryTab] = useState('users');
 
 
     // 修改检查登录状态的useEffect
@@ -92,6 +111,13 @@ const App = () => {
         }
     }, []); // 只在组件挂载时执行一次
 
+    useEffect(() => {
+        if (!authenticated) {
+            hasRestoredPageRef.current = false;
+            isRestoringPageRef.current = false;
+        }
+    }, [authenticated]);
+
 
     // 新节点创建状态
     const [showCreateNodeModal, setShowCreateNodeModal] = useState(false);
@@ -113,7 +139,9 @@ const App = () => {
     const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
     const [showNotificationsPanel, setShowNotificationsPanel] = useState(false);
     const [isNotificationsLoading, setIsNotificationsLoading] = useState(false);
+    const [isClearingNotifications, setIsClearingNotifications] = useState(false);
     const [notificationActionId, setNotificationActionId] = useState('');
+    const [adminPendingNodes, setAdminPendingNodes] = useState([]);
     const [showRelatedDomainsPanel, setShowRelatedDomainsPanel] = useState(false);
     const [relatedDomainsData, setRelatedDomainsData] = useState({
         loading: false,
@@ -136,6 +164,7 @@ const App = () => {
     // 节点详情页面相关状态
     const [currentNodeDetail, setCurrentNodeDetail] = useState(null);
     const [showNodeInfoModal, setShowNodeInfoModal] = useState(false);
+    const [isApplyingDomainMaster, setIsApplyingDomainMaster] = useState(false);
 
 
     // 导航路径相关状态
@@ -598,6 +627,37 @@ const App = () => {
     }
   };
 
+  const fetchAdminPendingNodeReminders = async (silent = true) => {
+    const token = localStorage.getItem('token');
+    if (!token || !isAdmin) {
+      setAdminPendingNodes([]);
+      return [];
+    }
+
+    try {
+      const response = await fetch('http://localhost:5000/api/nodes/pending', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !Array.isArray(data)) {
+        if (!silent) {
+          window.alert(getApiErrorMessage(parsed, '获取待审批创建申请失败'));
+        }
+        return [];
+      }
+
+      setAdminPendingNodes(data);
+      return data;
+    } catch (error) {
+      if (!silent) {
+        window.alert(`获取待审批创建申请失败: ${error.message}`);
+      }
+      return [];
+    }
+  };
+
   const markNotificationRead = async (notificationId) => {
     const token = localStorage.getItem('token');
     if (!token || !notificationId) return;
@@ -624,6 +684,45 @@ const App = () => {
     }
   };
 
+  const clearNotifications = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    if (!notifications.length) {
+      window.alert('暂无可清空通知');
+      return;
+    }
+
+    if (!window.confirm('确定清空全部通知吗？')) return;
+
+    setIsClearingNotifications(true);
+    try {
+      const response = await fetch('http://localhost:5000/api/notifications/clear', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        window.alert(getApiErrorMessage(parsed, '清空通知失败'));
+        return;
+      }
+
+      await fetchNotifications(true);
+      if (isAdmin) {
+        await fetchAdminPendingNodeReminders(true);
+      }
+
+      window.alert(data.message || '通知已清空');
+    } catch (error) {
+      window.alert(`清空通知失败: ${error.message}`);
+    } finally {
+      setIsClearingNotifications(false);
+    }
+  };
+
   const respondDomainAdminInvite = async (notificationId, action) => {
     const token = localStorage.getItem('token');
     if (!token || !notificationId) return;
@@ -644,16 +743,58 @@ const App = () => {
       const data = parsed.data;
 
       if (!response.ok || !data) {
-        window.alert(getApiErrorMessage(parsed, '处理邀请失败'));
+        window.alert(getApiErrorMessage(parsed, '处理失败'));
         return;
       }
 
-      window.alert(data.message || '邀请处理完成');
+      window.alert(data.message || '处理完成');
       await fetchNotifications(true);
     } catch (error) {
-      window.alert(`处理邀请失败: ${error.message}`);
+      window.alert(`处理失败: ${error.message}`);
     } finally {
       setNotificationActionId('');
+    }
+  };
+
+  const applyDomainMaster = async (nodeId, reason) => {
+    const token = localStorage.getItem('token');
+    const targetNodeId = normalizeObjectId(nodeId);
+    if (!token || !targetNodeId) return false;
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${targetNodeId}/domain-master/apply`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ reason })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        window.alert(getApiErrorMessage(parsed, '提交域主申请失败'));
+        return false;
+      }
+
+      window.alert(data.message || '域主申请已提交');
+      await fetchNotifications(true);
+      return true;
+    } catch (error) {
+      window.alert(`提交域主申请失败: ${error.message}`);
+      return false;
+    }
+  };
+
+  const handleApplyDomainMaster = async (reason) => {
+    const targetNodeId = normalizeObjectId(currentNodeDetail?._id);
+    if (!targetNodeId) return false;
+    setIsApplyingDomainMaster(true);
+    try {
+      return await applyDomainMaster(targetNodeId, reason);
+    } finally {
+      setIsApplyingDomainMaster(false);
     }
   };
 
@@ -662,6 +803,11 @@ const App = () => {
     const date = new Date(time);
     if (Number.isNaN(date.getTime())) return '';
     return date.toLocaleString('zh-CN', { hour12: false });
+  };
+
+  const openAdminPanel = (tab = 'users') => {
+    setAdminEntryTab(tab);
+    setView('admin');
   };
 
   const fetchTravelStatus = async (silent = true) => {
@@ -854,16 +1000,25 @@ const App = () => {
   }, [authenticated, isAdmin]);
 
   useEffect(() => {
-    if (!authenticated || isAdmin) {
+    if (!authenticated) {
       setNotifications([]);
       setNotificationUnreadCount(0);
       setShowNotificationsPanel(false);
+      setAdminPendingNodes([]);
       return;
     }
 
     fetchNotifications(true);
+    if (isAdmin) {
+      fetchAdminPendingNodeReminders(true);
+    } else {
+      setAdminPendingNodes([]);
+    }
     const timer = setInterval(() => {
       fetchNotifications(true);
+      if (isAdmin) {
+        fetchAdminPendingNodeReminders(true);
+      }
     }, 8000);
 
     return () => clearInterval(timer);
@@ -885,6 +1040,101 @@ const App = () => {
 
     fetchRelatedDomains(true);
   }, [authenticated, isAdmin]);
+
+  useEffect(() => {
+    if (!authenticated || showLocationModal || hasRestoredPageRef.current) return;
+
+    const saved = readSavedPageState();
+    if (!saved?.view || saved.view === 'home') {
+      hasRestoredPageRef.current = true;
+      return;
+    }
+
+    isRestoringPageRef.current = true;
+
+    const restorePage = async () => {
+      const targetView = saved.view;
+      const targetNodeId = normalizeObjectId(saved.nodeId);
+
+      if ((targetView === 'nodeDetail' || targetView === 'knowledgeDomain') && targetNodeId) {
+        const restoredNode = await fetchNodeDetail(targetNodeId);
+        if (!restoredNode) {
+          setView('home');
+          return;
+        }
+
+        if (targetView === 'knowledgeDomain') {
+          setKnowledgeDomainNode(restoredNode);
+          setShowKnowledgeDomain(true);
+          setIsTransitioningToDomain(false);
+          setDomainTransitionProgress(1);
+        }
+        return;
+      }
+
+      if (targetView === 'alliance' || targetView === 'profile' || targetView === 'home') {
+        setView(targetView);
+        return;
+      }
+
+      if (targetView === 'admin' && isAdmin) {
+        setView('admin');
+        return;
+      }
+
+      setView('home');
+    };
+
+    restorePage()
+      .finally(() => {
+        hasRestoredPageRef.current = true;
+        isRestoringPageRef.current = false;
+      });
+  }, [authenticated, showLocationModal, isAdmin]);
+
+  useEffect(() => {
+    if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
+
+    const currentView = (showKnowledgeDomain || isTransitioningToDomain) ? 'knowledgeDomain' : view;
+    const nodeId = normalizeObjectId(
+      currentView === 'knowledgeDomain'
+        ? (knowledgeDomainNode?._id || currentNodeDetail?._id)
+        : (currentView === 'nodeDetail' ? currentNodeDetail?._id : '')
+    );
+
+    localStorage.setItem(PAGE_STATE_STORAGE_KEY, JSON.stringify({
+      view: currentView,
+      nodeId,
+      updatedAt: Date.now()
+    }));
+  }, [
+    authenticated,
+    showLocationModal,
+    view,
+    showKnowledgeDomain,
+    isTransitioningToDomain,
+    currentNodeDetail,
+    knowledgeDomainNode
+  ]);
+
+  useEffect(() => {
+    if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
+
+    const isKnownView = ['home', 'nodeDetail', 'alliance', 'admin', 'profile'].includes(view);
+    if (!isKnownView) {
+      setView('home');
+      return;
+    }
+
+    if (view === 'admin' && !isAdmin) {
+      setView('home');
+      return;
+    }
+
+    if (view === 'nodeDetail' && !currentNodeDetail && hasRestoredPageRef.current) {
+      setView('home');
+    }
+  }, [authenticated, showLocationModal, view, isAdmin, currentNodeDetail]);
 
   useEffect(() => {
     if (!showNotificationsPanel) return undefined;
@@ -922,11 +1172,15 @@ const App = () => {
         localStorage.removeItem('userLocation');
         localStorage.removeItem('profession');
         localStorage.removeItem('userAvatar');
+        localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
+        hasRestoredPageRef.current = false;
+        isRestoringPageRef.current = false;
         setAuthenticated(false);
         setUsername('');
         setProfession('');
         setView('login');
         setIsAdmin(false);
+        setAdminEntryTab('users');
         setUserLocation('');
         setTravelStatus({ isTraveling: false });
         setIsStoppingTravel(false);
@@ -935,6 +1189,7 @@ const App = () => {
         setShowNotificationsPanel(false);
         setIsNotificationsLoading(false);
         setNotificationActionId('');
+        setAdminPendingNodes([]);
         setShowRelatedDomainsPanel(false);
         setRelatedDomainsData({
             loading: false,
@@ -945,6 +1200,7 @@ const App = () => {
             recentDomains: []
         });
         setFavoriteActionDomainId('');
+        setIsApplyingDomainMaster(false);
         setCurrentLocationNodeDetail(null);
         setUserAvatar('default_male_1');
         setSelectedLocationNode(null);
@@ -1014,7 +1270,6 @@ const App = () => {
         newSocket.on('authenticated', (data) => {
             console.log('认证成功');
             setAuthenticated(true);
-            setView('home');
             newSocket.emit('getGameState');
         });
     
@@ -1329,12 +1584,15 @@ const App = () => {
                 const navPath = generateNavigationPath(paths);
                 setNavigationPath(navPath);
                 // WebGL场景更新由useEffect自动处理
+                return data.node;
             } else {
                 alert('获取节点详情失败');
+                return null;
             }
         } catch (error) {
             console.error('获取节点详情失败:', error);
             alert('获取节点详情失败');
+            return null;
         }
     };
 
@@ -1374,6 +1632,21 @@ const App = () => {
         ...favoriteDomains.map((node) => normalizeObjectId(node?._id)),
         ...recentDomains.map((node) => normalizeObjectId(node?._id))
     ].filter(Boolean)).size;
+    const pendingMasterApplyCount = notifications.filter((notification) => (
+        notification.type === 'domain_master_apply' &&
+        notification.status === 'pending'
+    )).length;
+    const adminPendingApprovalCount = pendingMasterApplyCount + adminPendingNodes.length;
+    const notificationBadgeCount = isAdmin ? adminPendingApprovalCount : notificationUnreadCount;
+    const currentNodeMasterId = normalizeObjectId(currentNodeDetail?.domainMaster);
+    const currentNodeOwnerRole = currentNodeDetail?.owner?.role || '';
+    const canApplyDomainMaster = Boolean(
+        authenticated &&
+        !isAdmin &&
+        normalizeObjectId(currentNodeDetail?._id) &&
+        !currentNodeMasterId &&
+        (currentNodeOwnerRole === 'admin' || currentNodeOwnerRole === '')
+    );
 
     const handleOpenRelatedDomain = async (node) => {
         const nodeId = normalizeObjectId(node?._id);
@@ -1761,7 +2034,97 @@ const App = () => {
     };
 
     const renderNotificationsPanel = () => {
-        if (isAdmin || !showNotificationsPanel) return null;
+        if (!showNotificationsPanel) return null;
+        const refreshNotifications = async () => {
+            await fetchNotifications(false);
+            if (isAdmin) {
+                await fetchAdminPendingNodeReminders(false);
+            }
+        };
+
+        if (isAdmin) {
+            const latestPendingNode = [...adminPendingNodes]
+                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] || null;
+            const adminReminders = [];
+
+            if (pendingMasterApplyCount > 0) {
+                adminReminders.push({
+                    key: 'pending-master-apply',
+                    title: '有用户申请域主',
+                    message: `当前有 ${pendingMasterApplyCount} 条域主申请待处理。`,
+                    createdAt: notifications.find((item) => (
+                        item.type === 'domain_master_apply' && item.status === 'pending'
+                    ))?.createdAt || null
+                });
+            }
+
+            if (adminPendingNodes.length > 0) {
+                adminReminders.push({
+                    key: 'pending-node-create',
+                    title: (adminPendingNodes.length === 1 && latestPendingNode?.name)
+                        ? `有用户提交了创建「${latestPendingNode.name}」知识域`
+                        : '有用户提交了创建知识域申请',
+                    message: `当前有 ${adminPendingNodes.length} 条建节点申请待审批。`,
+                    createdAt: latestPendingNode?.createdAt || null
+                });
+            }
+
+            return (
+                <div className="notifications-panel">
+                    <div className="notifications-header">
+                        <h3>通知中心</h3>
+                        <button
+                            type="button"
+                            className="btn btn-small btn-danger"
+                            onClick={clearNotifications}
+                            disabled={isNotificationsLoading || isClearingNotifications || notifications.length === 0}
+                        >
+                            {isClearingNotifications ? '清空中...' : '清空通知'}
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-small btn-secondary"
+                            onClick={refreshNotifications}
+                            disabled={isNotificationsLoading}
+                        >
+                            {isNotificationsLoading ? '刷新中...' : '刷新'}
+                        </button>
+                    </div>
+                    <div className="notifications-body">
+                        {adminReminders.length === 0 ? (
+                            <div className="no-notifications">暂无审批提醒</div>
+                        ) : (
+                            <div className="notifications-list">
+                                {adminReminders.map((reminder) => (
+                                    <div key={reminder.key} className="notification-item unread">
+                                        <div className="notification-item-title-row">
+                                            <h4>{reminder.title}</h4>
+                                            <span className="notification-dot" />
+                                        </div>
+                                        <div className="notification-item-message">{reminder.message}</div>
+                                        <div className="notification-item-meta">
+                                            {formatNotificationTime(reminder.createdAt)}
+                                        </div>
+                                        <div className="notification-actions">
+                                            <button
+                                                type="button"
+                                                className="btn btn-small btn-warning"
+                                                onClick={() => {
+                                                    setShowNotificationsPanel(false);
+                                                    openAdminPanel('pending');
+                                                }}
+                                            >
+                                                前往待审批
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
 
         return (
             <div className="notifications-panel">
@@ -1769,8 +2132,16 @@ const App = () => {
                     <h3>通知中心</h3>
                     <button
                         type="button"
+                        className="btn btn-small btn-danger"
+                        onClick={clearNotifications}
+                        disabled={isNotificationsLoading || isClearingNotifications || notifications.length === 0}
+                    >
+                        {isClearingNotifications ? '清空中...' : '清空通知'}
+                    </button>
+                    <button
+                        type="button"
                         className="btn btn-small btn-secondary"
-                        onClick={() => fetchNotifications(false)}
+                        onClick={refreshNotifications}
                         disabled={isNotificationsLoading}
                     >
                         {isNotificationsLoading ? '刷新中...' : '刷新'}
@@ -1788,6 +2159,12 @@ const App = () => {
                                 const isResignRequestPending =
                                     notification.type === 'domain_admin_resign_request' &&
                                     notification.status === 'pending';
+                                const isMasterApplyPending =
+                                    notification.type === 'domain_master_apply' &&
+                                    notification.status === 'pending';
+                                const isAllianceJoinApplyPending =
+                                    notification.type === 'alliance_join_apply' &&
+                                    notification.status === 'pending';
                                 const currentActionKey = notificationActionId.split(':')[0];
                                 const isActing = currentActionKey === notification._id;
 
@@ -1804,11 +2181,26 @@ const App = () => {
                                         <div className="notification-item-meta">
                                             {formatNotificationTime(notification.createdAt)}
                                         </div>
-                                        {(notification.type === 'domain_admin_invite_result' || notification.type === 'domain_admin_resign_result') && (
+                                        {(notification.type === 'domain_admin_invite_result'
+                                            || notification.type === 'domain_admin_resign_result'
+                                            || notification.type === 'domain_master_apply_result'
+                                            || notification.type === 'alliance_join_apply_result') && (
                                             <div className={`notification-result-tag ${notification.status === 'accepted' ? 'accepted' : 'rejected'}`}>
                                                 {notification.status === 'accepted'
-                                                    ? (notification.type === 'domain_admin_resign_result' ? '域主已同意卸任' : '对方已接受')
-                                                    : (notification.type === 'domain_admin_resign_result' ? '域主已拒绝卸任' : '对方已拒绝')}
+                                                    ? (notification.type === 'domain_admin_resign_result'
+                                                        ? '域主已同意卸任'
+                                                        : notification.type === 'domain_master_apply_result'
+                                                            ? '管理员已同意你成为域主'
+                                                            : notification.type === 'alliance_join_apply_result'
+                                                                ? '盟主已同意入盟'
+                                                            : '对方已接受')
+                                                    : (notification.type === 'domain_admin_resign_result'
+                                                        ? '域主已拒绝卸任'
+                                                        : notification.type === 'domain_master_apply_result'
+                                                            ? '管理员已拒绝你的域主申请'
+                                                            : notification.type === 'alliance_join_apply_result'
+                                                                ? '盟主已拒绝入盟'
+                                                            : '对方已拒绝')}
                                             </div>
                                         )}
 
@@ -1840,6 +2232,38 @@ const App = () => {
                                                     disabled={isActing}
                                                 >
                                                     同意卸任
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-small btn-danger"
+                                                    onClick={() => respondDomainAdminInvite(notification._id, 'reject')}
+                                                    disabled={isActing}
+                                                >
+                                                    拒绝
+                                                </button>
+                                            </div>
+                                        ) : isMasterApplyPending ? (
+                                            <div className="notification-actions">
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-small btn-warning"
+                                                    onClick={() => {
+                                                        setShowNotificationsPanel(false);
+                                                        openAdminPanel('pending');
+                                                    }}
+                                                >
+                                                    前往待审批
+                                                </button>
+                                            </div>
+                                        ) : isAllianceJoinApplyPending ? (
+                                            <div className="notification-actions">
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-small btn-success"
+                                                    onClick={() => respondDomainAdminInvite(notification._id, 'accept')}
+                                                    disabled={isActing}
+                                                >
+                                                    同意加入
                                                 </button>
                                                 <button
                                                     type="button"
@@ -1913,31 +2337,32 @@ const App = () => {
                                         {username} {profession && `【${profession}】`}
                                     </span>
                                 </div>
-                                {!isAdmin && (
-                                    <div className="notifications-wrapper" ref={notificationsWrapperRef}>
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary notification-trigger-btn"
-                                            onClick={async () => {
-                                                const nextVisible = !showNotificationsPanel;
-                                                setShowNotificationsPanel(nextVisible);
-                                                setShowRelatedDomainsPanel(false);
-                                                if (nextVisible) {
-                                                    await fetchNotifications(false);
+                                <div className="notifications-wrapper" ref={notificationsWrapperRef}>
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary notification-trigger-btn"
+                                        onClick={async () => {
+                                            const nextVisible = !showNotificationsPanel;
+                                            setShowNotificationsPanel(nextVisible);
+                                            setShowRelatedDomainsPanel(false);
+                                            if (nextVisible) {
+                                                await fetchNotifications(false);
+                                                if (isAdmin) {
+                                                    await fetchAdminPendingNodeReminders(false);
                                                 }
-                                            }}
-                                        >
-                                            <Bell size={18} />
-                                            通知
-                                            {notificationUnreadCount > 0 && (
-                                                <span className="notification-badge">
-                                                    {notificationUnreadCount > 99 ? '99+' : notificationUnreadCount}
-                                                </span>
-                                            )}
-                                        </button>
-                                        {renderNotificationsPanel()}
-                                    </div>
-                                )}
+                                            }
+                                        }}
+                                    >
+                                        <Bell size={18} />
+                                        通知
+                                        {notificationBadgeCount > 0 && (
+                                            <span className="notification-badge">
+                                                {notificationBadgeCount > 99 ? '99+' : notificationBadgeCount}
+                                            </span>
+                                        )}
+                                    </button>
+                                    {renderNotificationsPanel()}
+                                </div>
                                 <div className="related-domains-wrapper" ref={relatedDomainsWrapperRef}>
                                     <button
                                         type="button"
@@ -1989,7 +2414,7 @@ const App = () => {
                                 {isAdmin && (
                                     <button
                                         onClick={() => {
-                                            setView('admin');
+                                            openAdminPanel('users');
                                         }}
                                         className="btn btn-warning"
                                     >
@@ -2084,7 +2509,11 @@ const App = () => {
                     />
                 )}
                 {view === "admin" && isAdmin && (
-                    <AdminPanel />
+                    <AdminPanel
+                        key={`admin-${adminEntryTab}`}
+                        initialTab={adminEntryTab}
+                        onPendingMasterApplyHandled={() => fetchNotifications(true)}
+                    />
                 )}
                 {view === "profile" && (
                     <ProfilePanel
@@ -2094,6 +2523,26 @@ const App = () => {
                             localStorage.setItem('userAvatar', newAvatar);
                         }}
                     />
+                )}
+
+                {view !== "home" &&
+                 !(view === "nodeDetail" && currentNodeDetail) &&
+                 view !== "alliance" &&
+                 !(view === "admin" && isAdmin) &&
+                 view !== "profile" && (
+                    <div className="no-pending-nodes">
+                        <p>页面状态异常，已为你回退到首页</p>
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => {
+                                setView('home');
+                                setNavigationPath([{ type: 'home', label: '首页' }]);
+                            }}
+                        >
+                            返回首页
+                        </button>
+                    </div>
                 )}
                 
                 <AssociationModal 
@@ -2107,6 +2556,9 @@ const App = () => {
                     onClose={() => setShowNodeInfoModal(false)}
                     nodeDetail={currentNodeDetail}
                     onEnterKnowledgeDomain={handleEnterKnowledgeDomain}
+                    canApplyDomainMaster={canApplyDomainMaster}
+                    isApplyingDomainMaster={isApplyingDomainMaster}
+                    onApplyDomainMaster={handleApplyDomainMaster}
                 />
 
                 {showCreateNodeModal && (

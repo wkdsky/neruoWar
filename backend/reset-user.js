@@ -25,8 +25,8 @@ const USER_CONFIG = {
   // 角色（可选：'admin' 或 'common'，默认 'common'）
   role: 'common',
 
-  // 等级（可选，默认 1）
-  level: 1,
+  // 等级（可选，默认 0）
+  level: 0,
 
   // 经验值（可选，默认 0）
   experience: 0,
@@ -222,7 +222,7 @@ async function updateUser(config) {
     if (config.level !== undefined) {
       user.level = config.level;
     } else if (isNewUser) {
-      user.level = 1;
+      user.level = 0;
     }
 
     if (config.experience !== undefined) {
@@ -304,7 +304,7 @@ function showHelp() {
   console.log(`     username: 'admin',          // 用户名`);
   console.log(`     password: '123456',         // 密码`);
   console.log(`     role: 'admin',              // 角色: 'admin' 或 'common'`);
-  console.log(`     level: 1,                   // 等级`);
+  console.log(`     level: 0,                   // 等级`);
   console.log(`     experience: 0,              // 经验值`);
   console.log(`     location: '任意'            // 位置（管理员建议'任意'）`);
   console.log(`   ${colors.yellow}};${colors.reset}`);

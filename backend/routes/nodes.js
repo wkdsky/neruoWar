@@ -142,7 +142,7 @@ router.post('/create', authenticateToken, async (req, res) => {
     const node = new Node({
       nodeId,
       owner: req.user.userId,
-      domainMaster: req.user.userId, // 创建者自动成为域主
+      domainMaster: isUserAdmin ? null : req.user.userId, // 管理员创建默认无域主，普通用户创建默认自己为域主
       name,
       description,
       position,
@@ -242,6 +242,15 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     node.status = 'approved';
     node.relatedParentDomains = relatedParentDomains;
     node.relatedChildDomains = relatedChildDomains;
+    const owner = await User.findById(node.owner).select('role');
+    if (owner?.role === 'admin') {
+      node.domainMaster = null;
+    } else if (node.domainMaster) {
+      const currentMaster = await User.findById(node.domainMaster).select('role');
+      if (!currentMaster || currentMaster.role === 'admin') {
+        node.domainMaster = null;
+      }
+    }
     // 设置默认内容分数为1
     node.contentScore = 1;
     await node.save();
@@ -778,8 +787,10 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     const { nodeId } = req.params;
 
     const node = await Node.findById(nodeId)
-      .populate('owner', 'username profession')
-      .select('name description owner relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
+      .populate('owner', 'username profession avatar level role')
+      .populate('domainMaster', 'username profession avatar level')
+      .populate('domainAdmins', 'username profession avatar level')
+      .select('name description owner domainMaster domainAdmins relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
 
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
@@ -862,9 +873,12 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
     }
 
     // 查找新域主用户
-    const newMaster = await User.findById(domainMasterId);
+    const newMaster = await User.findById(domainMasterId).select('role');
     if (!newMaster) {
       return res.status(404).json({ error: '用户不存在' });
+    }
+    if (newMaster.role === 'admin') {
+      return res.status(400).json({ error: '管理员不能作为域主' });
     }
 
     // 更新域主
@@ -896,9 +910,10 @@ router.get('/admin/search-users', authenticateToken, async (req, res) => {
 
     const { keyword } = req.query;
 
-    let query = {};
+    let query = { role: { $ne: 'admin' } };
     if (keyword && keyword.trim()) {
       query = {
+        role: { $ne: 'admin' },
         username: { $regex: keyword, $options: 'i' }
       };
     }
@@ -1067,6 +1082,100 @@ router.post('/:nodeId/recent-visit', authenticateToken, async (req, res) => {
   }
 });
 
+// 普通用户申请成为无域主知识域的域主（提交给系统管理员审批）
+router.post('/:nodeId/domain-master/apply', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+    if (!reason) {
+      return res.status(400).json({ error: '申请理由不能为空' });
+    }
+    if (reason.length > 300) {
+      return res.status(400).json({ error: '申请理由不能超过300字' });
+    }
+
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+
+    const requester = await User.findById(requestUserId).select('username role');
+    if (!requester) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (requester.role !== 'common') {
+      return res.status(403).json({ error: '仅普通用户可申请成为域主' });
+    }
+
+    const node = await Node.findById(nodeId).select('name status owner domainMaster');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可访问' });
+    }
+
+    if (node.domainMaster) {
+      const currentMaster = await User.findById(node.domainMaster).select('role');
+      if (!currentMaster || currentMaster.role === 'admin') {
+        // 兼容历史数据：管理员或失效账号不应作为域主，自动清空
+        node.domainMaster = null;
+        await node.save();
+      } else {
+        return res.status(400).json({ error: '该知识域已有域主，无法申请' });
+      }
+    }
+
+    const owner = await User.findById(node.owner).select('role');
+    if (!owner || owner.role !== 'admin') {
+      return res.status(400).json({ error: '该知识域不支持域主申请' });
+    }
+
+    const adminUsers = await User.find({ role: 'admin' }).select('_id username notifications');
+    if (!adminUsers.length) {
+      return res.status(400).json({ error: '系统当前无可处理申请的管理员' });
+    }
+
+    const hasPendingRequest = adminUsers.some((adminUser) => (adminUser.notifications || []).some((notification) => (
+      notification.type === 'domain_master_apply' &&
+      notification.status === 'pending' &&
+      getIdString(notification.nodeId) === nodeId &&
+      getIdString(notification.inviteeId) === requestUserId
+    )));
+
+    if (hasPendingRequest) {
+      return res.status(409).json({ error: '你已提交过该知识域域主申请，请等待管理员处理' });
+    }
+
+    for (const adminUser of adminUsers) {
+      adminUser.notifications.unshift({
+        type: 'domain_master_apply',
+        title: `域主申请：${node.name}`,
+        message: `${requester.username} 申请成为知识域「${node.name}」的域主`,
+        read: false,
+        status: 'pending',
+        nodeId: node._id,
+        nodeName: node.name,
+        inviterId: requester._id,
+        inviterUsername: requester.username,
+        inviteeId: requester._id,
+        inviteeUsername: requester.username,
+        applicationReason: reason,
+        createdAt: new Date()
+      });
+      await adminUser.save();
+    }
+
+    res.json({
+      success: true,
+      message: '域主申请已提交，等待管理员审核'
+    });
+  } catch (error) {
+    console.error('申请成为域主错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 // 普通管理员申请卸任（提交给域主审批，3天超时自动同意）
 router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res) => {
   try {
@@ -1086,11 +1195,11 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
     }
 
     if (isDomainMaster(node, requestUserId)) {
-      return res.status(400).json({ error: '域主无需申请卸任管理员' });
+      return res.status(400).json({ error: '域主无需申请卸任域相' });
     }
 
     if (!isDomainAdmin(node, requestUserId)) {
-      return res.status(403).json({ error: '你不是该知识域管理员' });
+      return res.status(403).json({ error: '你不是该知识域域相' });
     }
 
     const requester = await User.findById(requestUserId).select('username role');
@@ -1098,7 +1207,7 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
       return res.status(404).json({ error: '用户不存在' });
     }
     if (requester.role !== 'common') {
-      return res.status(403).json({ error: '仅普通用户可申请卸任管理员' });
+      return res.status(403).json({ error: '仅普通用户可申请卸任域相' });
     }
 
     const domainMasterId = getIdString(node.domainMaster);
@@ -1107,7 +1216,7 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
       await node.save();
       return res.json({
         success: true,
-        message: '该知识域当前无域主，已自动卸任管理员'
+        message: '该知识域当前无域主，已自动卸任域相'
       });
     }
 
@@ -1117,7 +1226,7 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
       await node.save();
       return res.json({
         success: true,
-        message: '域主信息缺失，已自动卸任管理员'
+        message: '域主信息缺失，已自动卸任域相'
       });
     }
 
@@ -1134,8 +1243,8 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
 
     domainMaster.notifications.unshift({
       type: 'domain_admin_resign_request',
-      title: `管理员卸任申请：${node.name}`,
-      message: `${requester.username} 申请卸任知识域「${node.name}」管理员`,
+      title: `域相卸任申请：${node.name}`,
+      message: `${requester.username} 申请卸任知识域「${node.name}」域相`,
       read: false,
       status: 'pending',
       nodeId: node._id,
@@ -1151,12 +1260,12 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
       message: '卸任申请已提交给域主，3天内未处理将自动同意'
     });
   } catch (error) {
-    console.error('申请卸任管理员错误:', error);
+    console.error('申请卸任域相错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });
 
-// 获取知识域管理员列表（域主可编辑，其他域管理员只读）
+// 获取知识域域相列表（域主可编辑，其他域相只读）
 router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
   try {
     const { nodeId } = req.params;
@@ -1183,7 +1292,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
     const canView = canEdit || isDomainAdmin(node, requestUserId) || currentUser.role === 'admin';
 
     if (!canView) {
-      return res.status(403).json({ error: '无权限查看该知识域管理员' });
+      return res.status(403).json({ error: '无权限查看该知识域域相' });
     }
 
     const domainMasterId = getIdString(node.domainMaster);
@@ -1242,7 +1351,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       domainAdmins: admins
     });
   } catch (error) {
-    console.error('获取知识域管理员错误:', error);
+    console.error('获取知识域域相错误:', error);
     if (error?.name === 'CastError') {
       return res.status(400).json({ error: '数据格式错误，请检查用户或知识域数据' });
     }
@@ -1250,7 +1359,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
   }
 });
 
-// 域主搜索普通用户（用于邀请管理员）
+// 域主搜索普通用户（用于邀请域相）
 router.get('/:nodeId/domain-admins/search-users', authenticateToken, async (req, res) => {
   try {
     const { nodeId } = req.params;
@@ -1265,7 +1374,7 @@ router.get('/:nodeId/domain-admins/search-users', authenticateToken, async (req,
     }
 
     if (!isDomainMaster(node, req.user.userId)) {
-      return res.status(403).json({ error: '只有域主可以邀请管理员' });
+      return res.status(403).json({ error: '只有域主可以邀请域相' });
     }
 
     const excludedIds = [getIdString(node.domainMaster), ...(node.domainAdmins || []).map((id) => getIdString(id))]
@@ -1290,12 +1399,12 @@ router.get('/:nodeId/domain-admins/search-users', authenticateToken, async (req,
       users
     });
   } catch (error) {
-    console.error('搜索知识域管理员候选用户错误:', error);
+    console.error('搜索知识域域相候选用户错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });
 
-// 域主邀请普通用户成为知识域管理员
+// 域主邀请普通用户成为知识域域相
 router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res) => {
   try {
     const { nodeId } = req.params;
@@ -1315,7 +1424,7 @@ router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res)
     }
 
     if (!isDomainMaster(node, req.user.userId)) {
-      return res.status(403).json({ error: '只有域主可以邀请管理员' });
+      return res.status(403).json({ error: '只有域主可以邀请域相' });
     }
 
     const inviter = await User.findById(req.user.userId).select('username');
@@ -1333,7 +1442,7 @@ router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res)
     }
 
     if (isDomainAdmin(node, invitee._id.toString())) {
-      return res.status(400).json({ error: '该用户已经是此知识域管理员' });
+      return res.status(400).json({ error: '该用户已经是此知识域域相' });
     }
 
     const hasPendingInvite = (invitee.notifications || []).some((notification) => (
@@ -1349,8 +1458,8 @@ router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res)
 
     invitee.notifications.unshift({
       type: 'domain_admin_invite',
-      title: `管理员邀请：${node.name}`,
-      message: `${inviter.username} 邀请你成为知识域「${node.name}」的管理员`,
+      title: `域相邀请：${node.name}`,
+      message: `${inviter.username} 邀请你成为知识域「${node.name}」的域相`,
       read: false,
       status: 'pending',
       nodeId: node._id,
@@ -1365,12 +1474,12 @@ router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res)
       message: `已向 ${invitee.username} 发出邀请`
     });
   } catch (error) {
-    console.error('邀请知识域管理员错误:', error);
+    console.error('邀请知识域域相错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });
 
-// 域主移除知识域管理员
+// 域主移除知识域域相
 router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (req, res) => {
   try {
     const { nodeId, adminUserId } = req.params;
@@ -1384,7 +1493,7 @@ router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (r
     }
 
     if (!isDomainMaster(node, req.user.userId)) {
-      return res.status(403).json({ error: '只有域主可以编辑管理员' });
+      return res.status(403).json({ error: '只有域主可以编辑域相' });
     }
 
     if (node.domainMaster && node.domainMaster.toString() === adminUserId) {
@@ -1392,7 +1501,7 @@ router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (r
     }
 
     if (!isDomainAdmin(node, adminUserId)) {
-      return res.status(404).json({ error: '该用户不是此知识域管理员' });
+      return res.status(404).json({ error: '该用户不是此知识域域相' });
     }
 
     node.domainAdmins = (node.domainAdmins || []).filter((id) => id.toString() !== adminUserId);
@@ -1400,10 +1509,10 @@ router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (r
 
     res.json({
       success: true,
-      message: '已移除知识域管理员'
+      message: '已移除知识域域相'
     });
   } catch (error) {
-    console.error('移除知识域管理员错误:', error);
+    console.error('移除知识域域相错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });

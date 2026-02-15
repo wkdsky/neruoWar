@@ -1,15 +1,113 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Compass } from 'lucide-react';
 import './NodeInfoModal.css';
+import defaultMale1 from '../../assets/avatars/default_male_1.svg';
+import defaultMale2 from '../../assets/avatars/default_male_2.svg';
+import defaultMale3 from '../../assets/avatars/default_male_3.svg';
+import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
+import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
+import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
 
-const NodeInfoModal = ({ isOpen, onClose, nodeDetail, onEnterKnowledgeDomain }) => {
+const avatarMap = {
+    default_male_1: defaultMale1,
+    default_male_2: defaultMale2,
+    default_male_3: defaultMale3,
+    default_female_1: defaultFemale1,
+    default_female_2: defaultFemale2,
+    default_female_3: defaultFemale3
+};
+
+const getUserLevel = (user) => {
+    const level = Number(user?.level);
+    return Number.isFinite(level) ? level : 0;
+};
+
+const getUserId = (user) => {
+    if (!user) return '';
+    return user._id?.toString?.() || user._id || user.id || '';
+};
+
+const formatCreatedAt = (createdAt) => {
+    if (!createdAt) return '未知';
+    const date = new Date(createdAt);
+    if (Number.isNaN(date.getTime())) return '未知';
+    return date.toLocaleString('zh-CN', { hour12: false });
+};
+
+const UserAvatar = ({ user, isMaster = false, fallbackKey = '' }) => {
+    const level = getUserLevel(user);
+    const tooltip = `Lv${level} ${user.username}`;
+    return (
+        <div
+            key={getUserId(user) || fallbackKey}
+            className={`user-avatar-item ${isMaster ? 'is-master' : ''}`}
+            title={tooltip}
+        >
+            <img
+                src={avatarMap[user.avatar] || defaultMale1}
+                alt={user.username}
+                className="user-avatar-img"
+            />
+            <span className="user-avatar-tooltip">{tooltip}</span>
+        </div>
+    );
+};
+
+const NodeInfoModal = ({
+    isOpen,
+    onClose,
+    nodeDetail,
+    onEnterKnowledgeDomain,
+    canApplyDomainMaster = false,
+    isApplyingDomainMaster = false,
+    onApplyDomainMaster
+}) => {
+    const [showApplyForm, setShowApplyForm] = useState(false);
+    const [applyReason, setApplyReason] = useState('');
+
+    useEffect(() => {
+        if (!isOpen) {
+            setShowApplyForm(false);
+            setApplyReason('');
+        }
+    }, [isOpen, nodeDetail?._id]);
+
     if (!isOpen || !nodeDetail) return null;
+
+    const creator = nodeDetail.owner || null;
+    const domainMaster = nodeDetail.domainMaster ? [nodeDetail.domainMaster] : [];
+    const domainMasterId = getUserId(nodeDetail.domainMaster);
+    const admins = Array.isArray(nodeDetail.domainAdmins)
+        ? nodeDetail.domainAdmins
+            .filter(Boolean)
+            .filter((admin, index, arr) => {
+                const adminId = getUserId(admin);
+                if (!adminId) return true;
+                if (adminId === domainMasterId) return false;
+                return arr.findIndex((candidate) => getUserId(candidate) === adminId) === index;
+            })
+        : [];
+
+    const handleSubmitApply = async () => {
+        const reason = applyReason.trim();
+        if (!reason) {
+            window.alert('请填写申请理由');
+            return;
+        }
+        if (!onApplyDomainMaster) return;
+
+        const success = await onApplyDomainMaster(reason);
+        if (success) {
+            setShowApplyForm(false);
+            setApplyReason('');
+        }
+    };
 
     return (
         <div className="modal-backdrop" onClick={onClose}>
             <div className="modal-content node-info-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h2>节点详细信息</h2>
+                    <h2>知识域详细信息</h2>
                     <button
                         className="btn-close"
                         onClick={onClose}
@@ -24,49 +122,90 @@ const NodeInfoModal = ({ isOpen, onClose, nodeDetail, onEnterKnowledgeDomain }) 
                         <p className="info-section-desc">{nodeDetail.description}</p>
                     </div>
 
-                    <div className="node-info-grid">
-                        <div className="info-item">
-                            <span className="info-label">创建者</span>
-                            <span className="info-value">
-                                {nodeDetail.owner?.username || '系统'}
-                                {nodeDetail.owner?.profession && ` 【${nodeDetail.owner.profession}】`}
-                            </span>
+                    <div className="node-user-sections">
+                        <div className="user-group-section">
+                            <h4 className="user-group-title">创建者</h4>
+                            <div className="creator-row">
+                                {creator ? (
+                                    <div className="user-avatar-list">
+                                        <UserAvatar user={creator} fallbackKey="creator" />
+                                    </div>
+                                ) : (
+                                    <div className="user-group-empty">暂无</div>
+                                )}
+                                <div className="creator-meta">
+                                    <span className="creator-meta-label">创建时间：</span>
+                                    <span className="creator-meta-value">{formatCreatedAt(nodeDetail.createdAt)}</span>
+                                </div>
+                            </div>
                         </div>
-                        <div className="info-item">
-                            <span className="info-label">创建时间</span>
-                            <span className="info-value">
-                                {new Date(nodeDetail.createdAt).toLocaleString('zh-CN')}
-                            </span>
-                        </div>
-                        <div className="info-item">
-                            <span className="info-label">内容分数</span>
-                            <span className="info-value highlight">{nodeDetail.contentScore || 1} 点/分钟</span>
-                        </div>
-                        <div className="info-item">
-                            <span className="info-label">知识点存量</span>
-                            <span className="info-value highlight">
-                                {(nodeDetail.knowledgePoint?.value || 0).toFixed(2)} 点
-                            </span>
+
+                        <div className="user-group-section">
+                            <h4 className="user-group-title">管理者</h4>
+                            {domainMaster.length > 0 || admins.length > 0 ? (
+                                <div className="user-avatar-list manager-avatar-list">
+                                    {domainMaster.length > 0 && (
+                                        <UserAvatar user={domainMaster[0]} isMaster fallbackKey="domain-master" />
+                                    )}
+                                    {admins.map((admin, index) => (
+                                        <UserAvatar
+                                            key={getUserId(admin) || `admin-${index}`}
+                                            user={admin}
+                                            fallbackKey={`admin-${index}`}
+                                        />
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="user-group-empty">暂无管理者</div>
+                            )}
                         </div>
                     </div>
 
-                    <div className="node-info-section">
-                        <h4 className="info-section-subtitle">关联域</h4>
-                        <div className="domain-summary">
-                            <div className="domain-summary-item">
-                                <span className="domain-summary-label">母域节点：</span>
-                                <span className="domain-summary-value">
-                                    {nodeDetail.relatedParentDomains?.length || 0} 个
-                                </span>
-                            </div>
-                            <div className="domain-summary-item">
-                                <span className="domain-summary-label">子域节点：</span>
-                                <span className="domain-summary-value">
-                                    {nodeDetail.relatedChildDomains?.length || 0} 个
-                                </span>
-                            </div>
+                    {canApplyDomainMaster && (
+                        <div className="domain-master-apply-section">
+                            {!showApplyForm ? (
+                                <button
+                                    type="button"
+                                    className="btn btn-blue domain-master-apply-open-btn"
+                                    onClick={() => setShowApplyForm(true)}
+                                >
+                                    申请成为域主
+                                </button>
+                            ) : (
+                                <div className="domain-master-apply-form">
+                                    <label className="domain-master-apply-label">申请理由</label>
+                                    <textarea
+                                        className="domain-master-apply-textarea"
+                                        value={applyReason}
+                                        maxLength={300}
+                                        placeholder="请填写你申请成为该知识域域主的理由（最多300字）"
+                                        onChange={(event) => setApplyReason(event.target.value)}
+                                    />
+                                    <div className="domain-master-apply-counter">
+                                        {applyReason.trim().length}/300
+                                    </div>
+                                    <div className="domain-master-apply-actions">
+                                        <button
+                                            type="button"
+                                            className="btn btn-small btn-success"
+                                            onClick={handleSubmitApply}
+                                            disabled={isApplyingDomainMaster}
+                                        >
+                                            {isApplyingDomainMaster ? '提交中...' : '提交申请'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-small btn-secondary"
+                                            onClick={() => setShowApplyForm(false)}
+                                            disabled={isApplyingDomainMaster}
+                                        >
+                                            取消
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                    </div>
+                    )}
                 </div>
 
                 <div className="modal-footer">

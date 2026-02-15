@@ -2,11 +2,14 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Node = require('../models/Node');
+const EntropyAlliance = require('../models/EntropyAlliance');
 const GameSetting = require('../models/GameSetting');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
   { key: 'global' },
@@ -65,7 +68,7 @@ const handleResignRequestDecision = async ({
 
   const shouldAccept = isAuto ? true : action === 'accept';
   let decision = shouldAccept ? 'accepted' : 'rejected';
-  let decisionMessage = shouldAccept ? '已同意该管理员卸任申请' : '已拒绝该管理员卸任申请';
+  let decisionMessage = shouldAccept ? '已同意该域相卸任申请' : '已拒绝该域相卸任申请';
 
   if (shouldAccept && node && node.status === 'approved' && getIdString(node.domainMaster) === domainMasterId) {
     const beforeCount = (node.domainAdmins || []).length;
@@ -74,7 +77,7 @@ const handleResignRequestDecision = async ({
       await node.save();
       decisionMessage = isAuto ? '申请超时，已自动同意并完成卸任' : '已同意并完成卸任';
     } else {
-      decisionMessage = isAuto ? '申请超时自动同意（该用户已非管理员）' : '已同意（该用户已非管理员）';
+      decisionMessage = isAuto ? '申请超时自动同意（该用户已非域相）' : '已同意（该用户已非域相）';
     }
   }
 
@@ -105,6 +108,289 @@ const handleResignRequestDecision = async ({
   return {
     decision,
     message: decisionMessage
+  };
+};
+
+const pushDomainMasterApplyResult = ({
+  applicant,
+  node,
+  decision,
+  processorUser,
+  nowDate
+}) => {
+  if (!applicant || applicant.role !== 'common') return;
+
+  applicant.notifications.unshift({
+    type: 'domain_master_apply_result',
+    title: `域主申请结果：${node?.name || '知识域'}`,
+    message: decision === 'accepted'
+      ? `${processorUser.username} 已同意你成为知识域「${node?.name || ''}」域主`
+      : `${processorUser.username} 已拒绝你成为知识域「${node?.name || ''}」域主的申请`,
+    read: false,
+    status: decision,
+    nodeId: node?._id || null,
+    nodeName: node?.name || '',
+    inviterId: processorUser._id,
+    inviterUsername: processorUser.username,
+    inviteeId: applicant._id,
+    inviteeUsername: applicant.username,
+    respondedAt: nowDate
+  });
+};
+
+const handleDomainMasterApplyDecision = async ({
+  processorUser,
+  notification,
+  action = 'reject'
+}) => {
+  const nowDate = new Date();
+  const applicantId = getIdString(notification?.inviteeId);
+  const nodeId = getIdString(notification?.nodeId);
+
+  const node = await Node.findById(nodeId).select('name status domainMaster');
+  if (!node || node.status !== 'approved') {
+    notification.status = 'rejected';
+    notification.read = true;
+    notification.respondedAt = nowDate;
+    return {
+      decision: 'rejected',
+      message: '该知识域不存在或不可操作',
+      saveCurrentUser: true
+    };
+  }
+
+  const applicant = isValidObjectId(applicantId)
+    ? await User.findById(applicantId).select('username role notifications')
+    : null;
+
+  if (action !== 'accept') {
+    notification.status = 'rejected';
+    notification.read = true;
+    notification.respondedAt = nowDate;
+    if (applicant) {
+      pushDomainMasterApplyResult({
+        applicant,
+        node,
+        decision: 'rejected',
+        processorUser,
+        nowDate
+      });
+      await applicant.save();
+    }
+    return {
+      decision: 'rejected',
+      message: '已拒绝该域主申请',
+      saveCurrentUser: true
+    };
+  }
+
+  if (!applicant || applicant.role !== 'common') {
+    notification.status = 'rejected';
+    notification.read = true;
+    notification.respondedAt = nowDate;
+    return {
+      decision: 'rejected',
+      message: '申请用户不存在或不符合条件',
+      saveCurrentUser: true
+    };
+  }
+
+  const currentMasterId = getIdString(node.domainMaster);
+  if (currentMasterId && currentMasterId !== applicantId) {
+    notification.status = 'rejected';
+    notification.read = true;
+    notification.respondedAt = nowDate;
+    return {
+      decision: 'rejected',
+      message: '该知识域已有域主，申请已失效',
+      saveCurrentUser: true
+    };
+  }
+
+  if (!currentMasterId) {
+    node.domainMaster = applicant._id;
+    await node.save();
+  }
+
+  const adminUsers = await User.find({
+    role: 'admin',
+    notifications: {
+      $elemMatch: {
+        type: 'domain_master_apply',
+        status: 'pending',
+        nodeId: node._id
+      }
+    }
+  }).select('_id notifications');
+
+  const applicantDecisionMap = new Map();
+  const updatedAdminUsers = [];
+
+  for (const adminUser of adminUsers) {
+    let changed = false;
+    for (const adminNotification of adminUser.notifications || []) {
+      if (
+        adminNotification.type !== 'domain_master_apply' ||
+        adminNotification.status !== 'pending' ||
+        getIdString(adminNotification.nodeId) !== getIdString(node._id)
+      ) {
+        continue;
+      }
+
+      const candidateId = getIdString(adminNotification.inviteeId);
+      const decision = candidateId === applicantId ? 'accepted' : 'rejected';
+      adminNotification.status = decision;
+      adminNotification.read = true;
+      adminNotification.respondedAt = nowDate;
+      applicantDecisionMap.set(candidateId, decision);
+      changed = true;
+    }
+    if (changed) {
+      updatedAdminUsers.push(adminUser.save());
+    }
+  }
+
+  if (updatedAdminUsers.length > 0) {
+    await Promise.all(updatedAdminUsers);
+  } else {
+    notification.status = 'accepted';
+    notification.read = true;
+    notification.respondedAt = nowDate;
+    pushDomainMasterApplyResult({
+      applicant,
+      node,
+      decision: 'accepted',
+      processorUser,
+      nowDate
+    });
+    await applicant.save();
+    return {
+      decision: 'accepted',
+      message: '已同意该用户成为域主',
+      saveCurrentUser: true
+    };
+  }
+
+  const decisionApplicantIds = Array.from(applicantDecisionMap.keys()).filter((id) => isValidObjectId(id));
+  if (decisionApplicantIds.length > 0) {
+    const applicants = await User.find({ _id: { $in: decisionApplicantIds } })
+      .select('_id username role notifications');
+    const applicantMap = new Map(applicants.map((userItem) => [getIdString(userItem._id), userItem]));
+
+    const saveApplicants = [];
+    for (const [candidateId, decision] of applicantDecisionMap.entries()) {
+      const candidate = applicantMap.get(candidateId);
+      if (!candidate || candidate.role !== 'common') continue;
+      pushDomainMasterApplyResult({
+        applicant: candidate,
+        node,
+        decision,
+        processorUser,
+        nowDate
+      });
+      saveApplicants.push(candidate.save());
+    }
+    if (saveApplicants.length > 0) {
+      await Promise.all(saveApplicants);
+    }
+  }
+
+  return {
+    decision: 'accepted',
+    message: '已同意该用户成为域主，其他申请者已自动拒绝',
+    saveCurrentUser: false
+  };
+};
+
+const handleAllianceJoinApplyDecision = async ({
+  leaderUser,
+  notification,
+  action = 'reject'
+}) => {
+  const nowDate = new Date();
+  const allianceId = getIdString(notification?.allianceId);
+  const applicantId = getIdString(notification?.inviteeId || notification?.inviterId);
+
+  const alliance = isValidObjectId(allianceId)
+    ? await EntropyAlliance.findById(allianceId).select('_id name founder')
+    : null;
+
+  if (!alliance) {
+    notification.status = 'rejected';
+    notification.read = true;
+    notification.respondedAt = nowDate;
+    return {
+      decision: 'rejected',
+      message: '该熵盟不存在或已解散',
+      saveLeader: true
+    };
+  }
+
+  if (getIdString(alliance.founder) !== getIdString(leaderUser?._id)) {
+    return {
+      error: '只有盟主可以处理该入盟申请'
+    };
+  }
+
+  const applicant = isValidObjectId(applicantId)
+    ? await User.findById(applicantId).select('_id username role allianceId notifications')
+    : null;
+
+  let decision = 'rejected';
+  let decisionMessage = '已拒绝该入盟申请';
+
+  if (action === 'accept') {
+    if (!applicant || applicant.role !== 'common') {
+      decision = 'rejected';
+      decisionMessage = '申请用户不存在或不符合条件';
+    } else {
+      const applicantAllianceId = getIdString(applicant.allianceId);
+      const targetAllianceId = getIdString(alliance._id);
+
+      if (applicantAllianceId && applicantAllianceId !== targetAllianceId) {
+        decision = 'rejected';
+        decisionMessage = '该用户已加入其他熵盟，无法批准';
+      } else {
+        if (!applicantAllianceId) {
+          applicant.allianceId = alliance._id;
+        }
+        decision = 'accepted';
+        decisionMessage = applicantAllianceId === targetAllianceId
+          ? '该用户已在该熵盟中'
+          : '已同意该入盟申请';
+      }
+    }
+  }
+
+  notification.status = decision;
+  notification.read = true;
+  notification.respondedAt = nowDate;
+
+  if (applicant) {
+    const allianceName = alliance.name || notification.allianceName || '熵盟';
+    applicant.notifications.unshift({
+      type: 'alliance_join_apply_result',
+      title: `入盟申请结果：${allianceName}`,
+      message: decision === 'accepted'
+        ? `${leaderUser.username} 已同意你加入熵盟「${allianceName}」`
+        : `${leaderUser.username} 已拒绝你加入熵盟「${allianceName}」的申请`,
+      read: false,
+      status: decision,
+      allianceId: alliance._id,
+      allianceName,
+      inviterId: leaderUser._id,
+      inviterUsername: leaderUser.username,
+      inviteeId: applicant._id,
+      inviteeUsername: applicant.username,
+      respondedAt: nowDate
+    });
+    await applicant.save();
+  }
+
+  return {
+    decision,
+    message: decisionMessage,
+    saveLeader: true
   };
 };
 
@@ -883,10 +1169,13 @@ router.get('/notifications', async (req, res) => {
         status: notification.status,
         nodeId: notification.nodeId,
         nodeName: notification.nodeName,
+        allianceId: notification.allianceId,
+        allianceName: notification.allianceName,
         inviterId: notification.inviterId,
         inviterUsername: notification.inviterUsername,
         inviteeId: notification.inviteeId,
         inviteeUsername: notification.inviteeUsername,
+        applicationReason: notification.applicationReason,
         createdAt: notification.createdAt,
         respondedAt: notification.respondedAt
       }));
@@ -900,6 +1189,35 @@ router.get('/notifications', async (req, res) => {
     });
   } catch (error) {
     console.error('获取通知列表错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 清空通知列表
+router.post('/notifications/clear', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('notifications');
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const clearedCount = Array.isArray(user.notifications) ? user.notifications.length : 0;
+    user.notifications = [];
+    await user.save();
+
+    res.json({
+      success: true,
+      clearedCount,
+      message: '通知已清空'
+    });
+  } catch (error) {
+    console.error('清空通知错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });
@@ -936,7 +1254,7 @@ router.post('/notifications/:notificationId/read', async (req, res) => {
   }
 });
 
-// 响应通知动作（管理员邀请/管理员卸任申请）
+// 响应通知动作（域相邀请/域相卸任申请/域主申请/熵盟入盟申请）
 router.post('/notifications/:notificationId/respond', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -974,7 +1292,7 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
 
       const node = await Node.findById(notification.nodeId).select('name status domainMaster domainAdmins');
       if (!node || node.status !== 'approved') {
-        return res.status(400).json({ error: '该知识域不存在或不可加入管理员' });
+        return res.status(400).json({ error: '该知识域不存在或不可加入域相' });
       }
 
       if (!node.domainMaster || !notification.inviterId || getIdString(node.domainMaster) !== getIdString(notification.inviterId)) {
@@ -992,7 +1310,7 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
           await node.save();
         }
         decision = 'accepted';
-        decisionMessage = alreadyAdmin ? '你已是该知识域管理员' : '已接受邀请，成为知识域管理员';
+        decisionMessage = alreadyAdmin ? '你已是该知识域域相' : '已接受邀请，成为知识域域相';
       } else {
         decision = 'rejected';
         decisionMessage = '已拒绝邀请';
@@ -1009,7 +1327,7 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
           inviter.notifications.unshift({
             type: 'domain_admin_invite_result',
             title: `邀请结果：${notification.nodeName || '知识域'}`,
-            message: `${user.username} ${decision === 'accepted' ? '已接受' : '已拒绝'}你的管理员邀请`,
+            message: `${user.username} ${decision === 'accepted' ? '已接受' : '已拒绝'}你的域相邀请`,
             read: false,
             status: decision,
             nodeId: notification.nodeId || null,
@@ -1034,6 +1352,35 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       decision = result.decision;
       decisionMessage = result.message;
       await user.save();
+    } else if (notification.type === 'domain_master_apply') {
+      if (user.role !== 'admin') {
+        return res.status(403).json({ error: '只有管理员可以处理域主申请' });
+      }
+
+      const result = await handleDomainMasterApplyDecision({
+        processorUser: user,
+        notification,
+        action
+      });
+      decision = result.decision;
+      decisionMessage = result.message;
+      if (result.saveCurrentUser) {
+        await user.save();
+      }
+    } else if (notification.type === 'alliance_join_apply') {
+      const result = await handleAllianceJoinApplyDecision({
+        leaderUser: user,
+        notification,
+        action
+      });
+      if (result.error) {
+        return res.status(403).json({ error: result.error });
+      }
+      decision = result.decision;
+      decisionMessage = result.message;
+      if (result.saveLeader) {
+        await user.save();
+      }
     } else {
       return res.status(400).json({ error: '该通知类型不支持响应操作' });
     }

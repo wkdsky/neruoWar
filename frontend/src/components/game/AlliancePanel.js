@@ -45,13 +45,15 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
         }
     };
 
-    const fetchAllianceDetail = async (allianceId) => {
+    const fetchAllianceDetail = async (allianceId, openModal = true) => {
         try {
             const response = await fetch(`http://localhost:5000/api/alliances/${allianceId}`);
             if (response.ok) {
                 const data = await response.json();
                 setSelectedAlliance(data);
-                setShowAllianceDetailModal(true);
+                if (openModal) {
+                    setShowAllianceDetailModal(true);
+                }
             }
         } catch (error) {
             console.error('获取熵盟详情失败:', error);
@@ -94,7 +96,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
             });
             const data = await response.json();
             if (response.ok) {
-                alert('成功加入熵盟！');
+                alert(data.message || '申请已提交，等待盟主审核');
                 setShowAllianceDetailModal(false);
                 fetchAlliances();
                 fetchUserAlliance();
@@ -107,14 +109,16 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
         }
     };
 
-    const leaveAlliance = async () => {
+    const leaveAlliance = async (newLeaderId = '') => {
         if (!window.confirm('确定要退出当前熵盟吗？')) return;
         try {
             const response = await fetch('http://localhost:5000/api/alliances/leave', {
                 method: 'POST',
                 headers: {
+                    'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
-                }
+                },
+                body: JSON.stringify(newLeaderId ? { newLeaderId } : {})
             });
             const data = await response.json();
             if (response.ok) {
@@ -148,8 +152,11 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                                 <h3>{userAlliance.name}</h3>
                                 <p>成员: {userAlliance.memberCount} | 管辖域: {userAlliance.domainCount}</p>
                             </div>
-                            <button onClick={leaveAlliance} className="btn btn-danger btn-small">
-                                退出熵盟
+                            <button
+                                onClick={() => fetchAllianceDetail(userAlliance._id)}
+                                className="btn btn-secondary btn-small"
+                            >
+                                熵盟详情
                             </button>
                         </div>
                     ) : (
@@ -194,7 +201,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                                     </div>
                                 </div>
                                 <div className="alliance-founder">
-                                    创始人: {alliance.founder?.username || '未知'}
+                                    盟主: {alliance.founder?.username || '未知'}
                                 </div>
                             </div>
                         </div>
@@ -211,6 +218,16 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                 onJoin={joinAlliance}
                 onLeave={leaveAlliance}
                 isAdmin={isAdmin}
+                currentUsername={username}
+                token={token}
+                onRefreshAllianceDetail={(allianceId) => fetchAllianceDetail(allianceId, false)}
+                onAllianceChanged={async (allianceId) => {
+                    await fetchAlliances();
+                    await fetchUserAlliance();
+                    if (allianceId) {
+                        await fetchAllianceDetail(allianceId, false);
+                    }
+                }}
             />
 
             {/* 创建熵盟弹窗 */}

@@ -39,7 +39,7 @@
 }
 
 .node-info-section {
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
 }
 
 .info-section-title {
@@ -62,74 +62,166 @@
     padding: 0 1rem;
 }
 
-.info-section-subtitle {
-    color: #e9d5ff;
-    font-size: 1.2rem;
-    font-weight: 600;
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 2px solid rgba(168, 85, 247, 0.3);
-}
-
-.node-info-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1.5rem;
-    margin-bottom: 2rem;
-}
-
-.info-item {
-    background: rgba(168, 85, 247, 0.05);
-    padding: 1rem;
-    border-radius: 8px;
-    border-left: 3px solid #a855f7;
+.node-user-sections {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 1.25rem;
 }
 
-.info-label {
-    color: #94a3b8;
-    font-size: 0.85rem;
-    font-weight: 600;
-    text-transform: uppercase;
+.user-group-section {
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(168, 85, 247, 0.25);
+    border-radius: 10px;
+    padding: 1rem 1rem 1.1rem;
 }
 
-.info-value {
+.user-group-title {
+    margin: 0 0 0.85rem;
     color: #e9d5ff;
-    font-size: 1.1rem;
-    font-weight: 500;
+    font-size: 1.05rem;
+    font-weight: 600;
 }
 
-.info-value.highlight {
-    color: #fbbf24;
-    font-weight: 700;
-}
-
-.domain-summary {
+.user-avatar-list {
     display: flex;
-    gap: 2rem;
-    justify-content: center;
-    background: rgba(30, 41, 59, 0.5);
-    padding: 1.5rem;
-    border-radius: 8px;
+    flex-wrap: wrap;
+    gap: 0.75rem;
 }
 
-.domain-summary-item {
+.creator-row {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.creator-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: #c4b5fd;
+    font-size: 0.95rem;
+}
+
+.creator-meta-label {
+    color: #94a3b8;
+}
+
+.creator-meta-value {
+    color: #e9d5ff;
+}
+
+.manager-avatar-list {
+    align-items: center;
+}
+
+.user-avatar-item {
+    position: relative;
+    width: 46px;
+    height: 46px;
+    border-radius: 9999px;
+    border: 2px solid rgba(168, 85, 247, 0.55);
+    overflow: visible;
+    cursor: default;
+}
+
+.user-avatar-item.is-master {
+    width: 54px;
+    height: 54px;
+    border-width: 2px;
+    border-color: rgba(251, 191, 36, 0.85);
+}
+
+.user-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 9999px;
+    display: block;
+}
+
+.user-avatar-tooltip {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    transform: translateX(-50%);
+    white-space: nowrap;
+    padding: 0.28rem 0.48rem;
+    font-size: 0.78rem;
+    line-height: 1;
+    color: #fff;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(167, 139, 250, 0.8);
+    border-radius: 6px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 2;
+}
+
+.user-avatar-item:hover .user-avatar-tooltip {
+    opacity: 1;
+}
+
+.user-group-empty {
+    color: #94a3b8;
+    font-size: 0.95rem;
+}
+
+.domain-master-apply-section {
+    margin-top: 1rem;
+    padding: 0.95rem 1rem;
+    border-radius: 10px;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    background: rgba(30, 58, 138, 0.2);
+}
+
+.domain-master-apply-open-btn {
+    width: 100%;
+    justify-content: center;
+}
+
+.domain-master-apply-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.domain-master-apply-label {
+    color: #dbeafe;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.domain-master-apply-textarea {
+    min-height: 88px;
+    resize: vertical;
+    border-radius: 8px;
+    border: 1px solid rgba(96, 165, 250, 0.45);
+    background: rgba(15, 23, 42, 0.68);
+    color: #f8fafc;
+    padding: 0.55rem 0.7rem;
+    font-size: 0.88rem;
+    line-height: 1.4;
+}
+
+.domain-master-apply-counter {
+    text-align: right;
+    color: #93c5fd;
+    font-size: 0.78rem;
+}
+
+.domain-master-apply-actions {
+    display: flex;
+    justify-content: flex-end;
     gap: 0.5rem;
 }
 
-.domain-summary-label {
-    color: #94a3b8;
-    font-size: 1rem;
-}
-
-.domain-summary-value {
-    color: #e9d5ff;
-    font-size: 1.25rem;
-    font-weight: 700;
+@media (max-width: 680px) {
+    .creator-row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
 }
 
 .modal-footer {

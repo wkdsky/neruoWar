@@ -243,7 +243,7 @@ const ProfilePanel = ({ username, onAvatarChange }) => {
                             </div>
                             <div className="info-item">
                                 <span className="info-label">等级</span>
-                                <span className="info-value">Lv.{userInfo?.level || 1}</span>
+                                <span className="info-value">Lv.{userInfo?.level ?? 0}</span>
                             </div>
                             <div className="info-item">
                                 <span className="info-label">经验值</span>

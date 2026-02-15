@@ -704,6 +704,35 @@ body {
     font-size: 0.75rem;
 }
 
+.notification-group-nav {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    margin-bottom: 0.45rem;
+}
+
+.notification-group-nav-btn {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.notification-group-index {
+    color: #93c5fd;
+    font-size: 0.75rem;
+    min-width: 38px;
+    text-align: center;
+}
+
+.notification-apply-reason {
+    margin-top: 0.25rem;
+    color: #bfdbfe;
+}
+
 .notification-actions {
     display: flex;
     gap: 0.5rem;

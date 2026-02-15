@@ -20,6 +20,10 @@ const NotificationSchema = new mongoose.Schema({
       'domain_admin_invite_result',
       'domain_admin_resign_request',
       'domain_admin_resign_result',
+      'domain_master_apply',
+      'domain_master_apply_result',
+      'alliance_join_apply',
+      'alliance_join_apply_result',
       'info'
     ],
     default: 'info'
@@ -50,6 +54,15 @@ const NotificationSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  allianceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'EntropyAlliance',
+    default: null
+  },
+  allianceName: {
+    type: String,
+    default: ''
+  },
   inviterId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -65,6 +78,10 @@ const NotificationSchema = new mongoose.Schema({
     default: null
   },
   inviteeUsername: {
+    type: String,
+    default: ''
+  },
+  applicationReason: {
     type: String,
     default: ''
   },
@@ -111,7 +128,7 @@ const userSchema = new mongoose.Schema({
   },
   level: {
     type: Number,
-    default: 1
+    default: 0
   },
   experience: {
     type: Number,

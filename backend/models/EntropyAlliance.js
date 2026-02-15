@@ -17,6 +17,15 @@ const EntropyAllianceSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  announcement: {
+    type: String,  // 熵盟公告
+    default: '',
+    trim: true
+  },
+  announcementUpdatedAt: {
+    type: Date,
+    default: null
+  },
   founder: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

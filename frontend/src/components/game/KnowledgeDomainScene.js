@@ -319,6 +319,7 @@ const KnowledgeDomainScene = ({
   const [removingAdminId, setRemovingAdminId] = useState('');
   const [isSubmittingResign, setIsSubmittingResign] = useState(false);
   const [manageFeedback, setManageFeedback] = useState('');
+  const showManageTab = !!domainAdminState.canView;
 
   const parseApiResponse = async (response) => {
     const rawText = await response.text();
@@ -353,6 +354,20 @@ const KnowledgeDomainScene = ({
       const data = parsed.data;
 
       if (!response.ok || !data) {
+        // 权限不足时，直接隐藏“管理知识域”标签，不展示错误文案
+        if (response.status === 403) {
+          setDomainAdminState((prev) => ({
+            ...prev,
+            loading: false,
+            canView: false,
+            canEdit: false,
+            canResign: false,
+            resignPending: false,
+            error: ''
+          }));
+          return;
+        }
+
         setDomainAdminState((prev) => ({
           ...prev,
           loading: false,
@@ -360,7 +375,7 @@ const KnowledgeDomainScene = ({
           canEdit: false,
           canResign: false,
           resignPending: false,
-          error: getApiError(parsed, '获取管理员列表失败')
+          error: getApiError(parsed, '获取域相列表失败')
         }));
         return;
       }
@@ -381,7 +396,7 @@ const KnowledgeDomainScene = ({
         loading: false,
         canResign: false,
         resignPending: false,
-        error: `获取管理员列表失败: ${error.message}`
+        error: `获取域相列表失败: ${error.message}`
       }));
     }
   };
@@ -530,8 +545,14 @@ const KnowledgeDomainScene = ({
     setSearchKeyword('');
     setSearchResults([]);
     setManageFeedback('');
-    fetchDomainAdmins(true);
+    fetchDomainAdmins(false);
   }, [isVisible, node?._id]);
+
+  useEffect(() => {
+    if (!showManageTab && activeTab === 'manage') {
+      setActiveTab('info');
+    }
+  }, [showManageTab, activeTab]);
 
   useEffect(() => {
     if (!isVisible || activeTab !== 'manage' || !node?._id || !domainAdminState.canEdit) {
@@ -606,19 +627,21 @@ const KnowledgeDomainScene = ({
           >
             知识域信息
           </button>
-          <button
-            type="button"
-            className={`domain-tab-btn ${activeTab === 'manage' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('manage');
-              fetchDomainAdmins(false);
-            }}
-          >
-            管理知识域
-          </button>
+          {showManageTab && (
+            <button
+              type="button"
+              className={`domain-tab-btn ${activeTab === 'manage' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('manage');
+                fetchDomainAdmins(false);
+              }}
+            >
+              管理知识域
+            </button>
+          )}
         </div>
 
-        {activeTab === 'info' ? (
+        {activeTab === 'info' || !showManageTab ? (
           <div className="domain-tab-content">
             <h2 className="domain-title">{node?.name || '知识域'}</h2>
             <p className="domain-description">{node?.description || ''}</p>
@@ -635,7 +658,7 @@ const KnowledgeDomainScene = ({
           </div>
         ) : (
           <div className="domain-tab-content manage-tab-content">
-            <h3 className="domain-manage-title">知识域管理员</h3>
+            <h3 className="domain-manage-title">知识域域相</h3>
 
             {domainAdminState.loading && <div className="domain-manage-tip">加载中...</div>}
             {!domainAdminState.loading && domainAdminState.error && (
@@ -643,7 +666,7 @@ const KnowledgeDomainScene = ({
             )}
 
             {!domainAdminState.loading && !domainAdminState.error && !domainAdminState.canView && (
-              <div className="domain-manage-tip">你没有权限查看该知识域管理员列表</div>
+              <div className="domain-manage-tip">你没有权限查看该知识域域相列表</div>
             )}
 
             {domainAdminState.canView && (
@@ -659,9 +682,9 @@ const KnowledgeDomainScene = ({
                 </div>
 
                 <div className="domain-admins-section">
-                  <div className="domain-admins-subtitle">管理员列表</div>
+                  <div className="domain-admins-subtitle">域相列表</div>
                   {domainAdminState.domainAdmins.length === 0 ? (
-                    <div className="domain-manage-tip">当前暂无其他管理员</div>
+                    <div className="domain-manage-tip">当前暂无其他域相</div>
                   ) : (
                     <div className="domain-admin-list">
                       {domainAdminState.domainAdmins.map((adminUser) => (
@@ -687,7 +710,7 @@ const KnowledgeDomainScene = ({
 
                 {domainAdminState.canEdit ? (
                   <div className="domain-admin-invite">
-                    <div className="domain-admins-subtitle">邀请普通用户成为管理员</div>
+                    <div className="domain-admins-subtitle">邀请普通用户成为域相</div>
                     <input
                       type="text"
                       className="domain-admin-search-input"
@@ -723,7 +746,7 @@ const KnowledgeDomainScene = ({
                   </div>
                 ) : (
                   <div className="domain-admin-invite">
-                    <div className="domain-manage-tip">你是该知识域管理员，可查看但不可编辑管理员名单</div>
+                    <div className="domain-manage-tip">你是系统管理员，可查看但不可编辑域相名单</div>
                     {domainAdminState.canResign && (
                       <button
                         type="button"
@@ -733,7 +756,7 @@ const KnowledgeDomainScene = ({
                       >
                         {domainAdminState.resignPending
                           ? '卸任申请待处理'
-                          : (isSubmittingResign ? '提交中...' : '申请卸任管理员')}
+                          : (isSubmittingResign ? '提交中...' : '申请卸任域相')}
                       </button>
                     )}
                     {domainAdminState.resignPending && (

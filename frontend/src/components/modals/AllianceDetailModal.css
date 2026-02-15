@@ -102,6 +102,51 @@
     margin-bottom: 2rem;
 }
 
+.alliance-tab-bar {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.25rem;
+}
+
+.alliance-tab-btn {
+    border: 1px solid rgba(168, 85, 247, 0.35);
+    background: rgba(30, 41, 59, 0.55);
+    color: #c4b5fd;
+    padding: 0.45rem 0.9rem;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 0.88rem;
+}
+
+.alliance-tab-btn:hover {
+    border-color: rgba(168, 85, 247, 0.6);
+    color: #e9d5ff;
+}
+
+.alliance-tab-btn.active {
+    background: rgba(168, 85, 247, 0.28);
+    color: #f5f3ff;
+    border-color: rgba(192, 132, 252, 0.8);
+}
+
+.alliance-tab-badge {
+    margin-left: 0.45rem;
+    min-width: 1.2rem;
+    height: 1.2rem;
+    padding: 0 0.32rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: #ffffff;
+    background: #ef4444;
+    line-height: 1;
+}
+
 .alliance-section-detail h3 {
     margin: 0 0 1rem 0;
     color: #e9d5ff;
@@ -138,6 +183,64 @@
     background: rgba(168, 85, 247, 0.2);
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
+}
+
+.alliance-apply-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.alliance-apply-item {
+    border: 1px solid rgba(168, 85, 247, 0.22);
+    background: rgba(51, 65, 85, 0.42);
+    border-radius: 8px;
+    padding: 0.8rem 0.9rem;
+}
+
+.alliance-apply-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    color: #cbd5e1;
+}
+
+.alliance-apply-main strong {
+    color: #f5f3ff;
+}
+
+.alliance-apply-meta {
+    margin-top: 0.45rem;
+    font-size: 0.82rem;
+    color: #94a3b8;
+}
+
+.alliance-apply-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.65rem;
+}
+
+.alliance-manage-actions {
+    margin-top: 0.7rem;
+    display: flex;
+    gap: 0.6rem;
+}
+
+.alliance-announcement-content {
+    white-space: pre-wrap;
+    line-height: 1.6;
+    color: #d1d5db;
+    padding: 0.85rem;
+    border-radius: 8px;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.alliance-announcement-time {
+    margin-top: 0.6rem;
+    font-size: 0.85rem;
+    color: #94a3b8;
 }
 
 .domains-list {

@@ -25,7 +25,7 @@ const USER_CONFIG = {
   username: 'testuser',     // 用户名
   password: '123456',       // 密码
   role: 'common',           // 角色: 'admin' 或 'common'
-  level: 1,                 // 等级
+  level: 0,                 // 等级
   experience: 0,            // 经验值
   location: '',             // 位置（管理员建议设为"任意"）
   allianceId: null          // 熵盟ID（可选）
@@ -42,7 +42,7 @@ node reset-user.js update
 - **role**: 角色
   - `admin`: 管理员，可以管理所有节点和用户
   - `common`: 普通用户
-- **level**: 用户等级（默认1）
+- **level**: 用户等级（默认0）
 - **experience**: 经验值（默认0）
 - **location**: 降临的知识域
   - 管理员建议设为 `"任意"`，可以直接进入系统

@@ -16,8 +16,8 @@ const ASSOC_RELATION_TYPES = {
     INSERT: 'insert'
 };
 
-const AdminPanel = () => {
-    const [adminTab, setAdminTab] = useState('users');
+const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
+    const [adminTab, setAdminTab] = useState(initialTab);
     
     // User Management State
     const [allUsers, setAllUsers] = useState([]);
@@ -43,6 +43,10 @@ const AdminPanel = () => {
         contentScore: 1
     });
     const [pendingNodes, setPendingNodes] = useState([]);
+    const [pendingNodeActionId, setPendingNodeActionId] = useState('');
+    const [pendingNodeActionGroupName, setPendingNodeActionGroupName] = useState('');
+    const [pendingMasterApplications, setPendingMasterApplications] = useState([]);
+    const [masterApplyActionId, setMasterApplyActionId] = useState('');
 
     // 将待审核节点按名称分组
     const groupedPendingNodes = useMemo(() => {
@@ -65,6 +69,35 @@ const AdminPanel = () => {
                 return new Date(b.nodes[0].createdAt) - new Date(a.nodes[0].createdAt);
             });
     }, [pendingNodes]);
+
+    const groupedPendingMasterApplications = useMemo(() => {
+        const groups = {};
+        pendingMasterApplications.forEach((application) => {
+            const nodeId = application.nodeId || `unknown_${application._id}`;
+            if (!groups[nodeId]) {
+                groups[nodeId] = {
+                    nodeId,
+                    nodeName: application.nodeName || '知识域',
+                    applications: [],
+                    hasConflict: false
+                };
+            }
+            groups[nodeId].applications.push(application);
+        });
+
+        return Object.values(groups)
+            .map((group) => ({
+                ...group,
+                hasConflict: group.applications.length > 1
+            }))
+            .sort((a, b) => {
+                const aTime = new Date(a.applications[0]?.createdAt || 0).getTime();
+                const bTime = new Date(b.applications[0]?.createdAt || 0).getTime();
+                return bTime - aTime;
+            });
+    }, [pendingMasterApplications]);
+
+    const pendingApprovalCount = pendingNodes.length + pendingMasterApplications.length;
 
     // Master Change State
     const [showChangeMasterModal, setShowChangeMasterModal] = useState(false);
@@ -109,6 +142,7 @@ const AdminPanel = () => {
     // Initial Fetch
     useEffect(() => {
         fetchPendingNodes();
+        fetchPendingMasterApplications();
         fetchAllUsers();
         fetchAllNodes();
         fetchAdminSettings();
@@ -264,8 +298,34 @@ const AdminPanel = () => {
         }
     };
 
+    const fetchPendingMasterApplications = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const response = await fetch('http://localhost:5000/api/notifications', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            const pendingApplications = (data.notifications || []).filter((notification) => (
+                notification.type === 'domain_master_apply' &&
+                notification.status === 'pending'
+            ));
+            setPendingMasterApplications(pendingApplications);
+        } catch (error) {
+            console.error('获取待审批域主申请失败:', error);
+        }
+    };
+
+    const refreshPendingApprovals = () => {
+        fetchPendingNodes();
+        fetchPendingMasterApplications();
+    };
+
     const approveNode = async (nodeId, nodeName) => {
+        if (pendingNodeActionId) return;
         const token = localStorage.getItem('token');
+        setPendingNodeActionId(nodeId);
+        setPendingNodeActionGroupName(nodeName || '');
         try {
             const response = await fetch('http://localhost:5000/api/nodes/approve', {
                 method: 'POST',
@@ -285,16 +345,26 @@ const AdminPanel = () => {
                 fetchPendingNodes();
             } else {
                 const data = await response.json();
-                alert(data.error || '审批失败');
+                if ((data?.error || '').includes('已存在同名的审核通过节点')) {
+                    alert('该同名申请已被其他审批结果处理，列表已刷新');
+                    fetchPendingNodes();
+                } else {
+                    alert(data.error || '审批失败');
+                }
             }
         } catch (error) {
             console.error('审批节点失败:', error);
             alert('审批失败');
+        } finally {
+            setPendingNodeActionId('');
+            setPendingNodeActionGroupName('');
         }
     };
 
     const rejectNode = async (nodeId) => {
+        if (pendingNodeActionId) return;
         const token = localStorage.getItem('token');
+        setPendingNodeActionId(nodeId);
         try {
             const response = await fetch('http://localhost:5000/api/nodes/reject', {
                 method: 'POST',
@@ -314,6 +384,40 @@ const AdminPanel = () => {
         } catch (error) {
             console.error('拒绝节点失败:', error);
             alert('拒绝失败');
+        } finally {
+            setPendingNodeActionId('');
+            setPendingNodeActionGroupName('');
+        }
+    };
+
+    const reviewMasterApplication = async (notificationId, action) => {
+        const token = localStorage.getItem('token');
+        if (!token || !notificationId) return;
+        setMasterApplyActionId(`${notificationId}:${action}`);
+        try {
+            const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/respond`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ action })
+            });
+            const data = await response.json();
+            if (response.ok) {
+                alert(data.message || '域主申请处理完成');
+                await fetchPendingMasterApplications();
+                if (typeof onPendingMasterApplyHandled === 'function') {
+                    await onPendingMasterApplyHandled();
+                }
+            } else {
+                alert(data.error || '处理域主申请失败');
+            }
+        } catch (error) {
+            console.error('处理域主申请失败:', error);
+            alert('处理域主申请失败');
+        } finally {
+            setMasterApplyActionId('');
         }
     };
 
@@ -1280,14 +1384,14 @@ const AdminPanel = () => {
                 <button
                     onClick={() => {
                         setAdminTab('pending');
-                        fetchPendingNodes();
+                        refreshPendingApprovals();
                     }}
                     className={`admin-tab ${adminTab === 'pending' ? 'active' : ''}`}
                 >
                     <Bell className="icon-small" />
-                    待审批节点
-                    {pendingNodes.length > 0 && (
-                        <span className="notification-badge">{pendingNodes.length}</span>
+                    待审批
+                    {pendingApprovalCount > 0 && (
+                        <span className="notification-badge">{pendingApprovalCount}</span>
                     )}
                 </button>
                 <button
@@ -1487,15 +1591,23 @@ const AdminPanel = () => {
             {adminTab === 'pending' && (
                 <div className="pending-nodes-container">
                     <div className="table-info">
-                        <p>待审批节点数: <strong>{pendingNodes.length}</strong></p>
+                        <p>待审批总数: <strong>{pendingApprovalCount}</strong></p>
+                        <span className="pending-summary-tag node">建节点申请: {pendingNodes.length}</span>
+                        <span className="pending-summary-tag master">域主申请: {pendingMasterApplications.length}</span>
                         {groupedPendingNodes.some(g => g.hasConflict) && (
                             <span className="conflict-warning">
                                 <AlertTriangle className="icon-small" />
                                 存在同名申请竞争
                             </span>
                         )}
+                        {groupedPendingMasterApplications.some(g => g.hasConflict) && (
+                            <span className="conflict-warning master">
+                                <AlertTriangle className="icon-small" />
+                                存在同域申请竞争
+                            </span>
+                        )}
                         <button
-                            onClick={fetchPendingNodes}
+                            onClick={refreshPendingApprovals}
                             className="btn btn-primary"
                             style={{ marginLeft: '1rem' }}
                         >
@@ -1503,95 +1615,195 @@ const AdminPanel = () => {
                         </button>
                     </div>
 
-                    {pendingNodes.length === 0 ? (
+                    {pendingApprovalCount === 0 ? (
                         <div className="no-pending-nodes">
-                            <p>暂无待审批节点</p>
+                            <p>暂无待审批申请</p>
                         </div>
                     ) : (
-                        <div className="pending-nodes-list admin">
-                            {groupedPendingNodes.map(group => (
-                                <div key={group.name} className={`pending-group ${group.hasConflict ? 'has-conflict' : ''}`}>
-                                    {/* 同名节点组标题 */}
-                                    {group.hasConflict && (
-                                        <div className="conflict-group-header">
-                                            <AlertTriangle className="icon-small" />
-                                            <span>同名申请竞争: "{group.name}" ({group.nodes.length} 个申请)</span>
-                                            <span className="conflict-hint">请对比后选择一个通过，其他将自动拒绝</span>
-                                        </div>
-                                    )}
-
-                                    <div className={`pending-nodes-grid ${group.hasConflict ? 'conflict-grid' : ''}`}>
-                                        {group.nodes.map((node, index) => (
-                                            <div key={node._id} className={`pending-node-card ${group.hasConflict ? 'conflict-card' : ''}`}>
+                        <div className="pending-approval-sections">
+                            {pendingNodes.length > 0 && (
+                                <div className="pending-approval-section node">
+                                    <div className="pending-approval-section-header">
+                                        <h3>节点创建审批</h3>
+                                        <span className="pending-section-count">{pendingNodes.length}</span>
+                                    </div>
+                                    <div className="pending-nodes-list admin">
+                                        {groupedPendingNodes.map(group => (
+                                            <div key={group.name} className={`pending-group ${group.hasConflict ? 'has-conflict' : ''}`}>
                                                 {group.hasConflict && (
-                                                    <div className="conflict-badge">申请 #{index + 1}</div>
-                                                )}
-                                                <div className="node-header">
-                                                    <h3 className="node-title">{node.name}</h3>
-                                                    <span className={`status-badge status-${node.status}`}>
-                                                        {node.status === 'pending' ? '待审批' :
-                                                         node.status === 'approved' ? '已通过' : '已拒绝'}
-                                                    </span>
-                                                </div>
-
-                                                <div className="node-details">
-                                                    <p className="node-description">{node.description}</p>
-
-                                                    <div className="node-meta">
-                                                        <div className="meta-item">
-                                                            <strong>创建者:</strong> {node.owner?.username || '未知用户'}
-                                                            {node.owner?.profession && (
-                                                                <span className="user-profession">【{node.owner.profession}】</span>
-                                                            )}
-                                                        </div>
-                                                        <div className="meta-item">
-                                                            <strong>提交时间:</strong> {new Date(node.createdAt).toLocaleString('zh-CN')}
-                                                        </div>
-                                                        <div className="meta-item">
-                                                            <strong>位置:</strong> ({Math.round(node.position?.x || 0)}, {Math.round(node.position?.y || 0)})
-                                                        </div>
+                                                    <div className="conflict-group-header">
+                                                        <AlertTriangle className="icon-small" />
+                                                        <span>同名申请竞争: "{group.name}" ({group.nodes.length} 个申请)</span>
+                                                        <span className="conflict-hint">请对比后选择一个通过，其他将自动拒绝</span>
                                                     </div>
+                                                )}
 
-                                                    {node.associations && node.associations.length > 0 && (
-                                                        <div className="associations-section">
-                                                            <h4>关联关系 ({node.associations.length} 个)</h4>
-                                                            <div className="associations-list">
-                                                                {node.associations.map((association, idx) => (
-                                                                    <div key={idx} className="association-item">
-                                                                        <span className="node-name">
-                                                                            {association.targetNode?.name || '未知节点'}
-                                                                        </span>
-                                                                        <span className={`admin-relation-badge ${association.relationType === 'contains' ? 'parent' : 'child'}`}>
-                                                                            {association.relationType === 'contains' ? '母域' : '子域'}
-                                                                        </span>
+                                                <div className={`pending-nodes-grid ${group.hasConflict ? 'conflict-grid' : ''}`}>
+                                                    {group.nodes.map((node, index) => (
+                                                        (() => {
+                                                            const isNodeActing = pendingNodeActionId === node._id;
+                                                            const isGroupActing = Boolean(group.hasConflict && pendingNodeActionGroupName === group.name && pendingNodeActionId);
+                                                            const disableActions = isNodeActing || isGroupActing;
+                                                            return (
+                                                        <div key={node._id} className={`pending-node-card pending-review-card pending-review-card-node ${group.hasConflict ? 'conflict-card' : ''}`}>
+                                                            {group.hasConflict && (
+                                                                <div className="conflict-badge">申请 #{index + 1}</div>
+                                                            )}
+                                                            <div className="node-header">
+                                                                <h3 className="node-title">{node.name}</h3>
+                                                                <div className="pending-card-badges">
+                                                                    <span className="pending-card-type pending-card-type-node">建节点申请</span>
+                                                                    <span className={`status-badge status-${node.status}`}>
+                                                                        {node.status === 'pending' ? '待审批' :
+                                                                            node.status === 'approved' ? '已通过' : '已拒绝'}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="node-details">
+                                                                <p className="node-description">{node.description}</p>
+
+                                                                <div className="node-meta">
+                                                                    <div className="meta-item">
+                                                                        <strong>创建者:</strong> {node.owner?.username || '未知用户'}
+                                                                        {node.owner?.profession && (
+                                                                            <span className="user-profession">【{node.owner.profession}】</span>
+                                                                        )}
                                                                     </div>
-                                                                ))}
+                                                                    <div className="meta-item">
+                                                                        <strong>提交时间:</strong> {new Date(node.createdAt).toLocaleString('zh-CN')}
+                                                                    </div>
+                                                                    <div className="meta-item">
+                                                                        <strong>位置:</strong> ({Math.round(node.position?.x || 0)}, {Math.round(node.position?.y || 0)})
+                                                                    </div>
+                                                                </div>
+
+                                                                {node.associations && node.associations.length > 0 && (
+                                                                    <div className="associations-section">
+                                                                        <h4>关联关系 ({node.associations.length} 个)</h4>
+                                                                        <div className="associations-list">
+                                                                            {node.associations.map((association, idx) => (
+                                                                                <div key={idx} className="association-item">
+                                                                                    <span className="node-name">
+                                                                                        {association.targetNode?.name || '未知节点'}
+                                                                                    </span>
+                                                                                    <span className={`admin-relation-badge ${association.relationType === 'contains' ? 'parent' : 'child'}`}>
+                                                                                        {association.relationType === 'contains' ? '母域' : '子域'}
+                                                                                    </span>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+
+                                                            <div className="node-actions">
+                                                                <button
+                                                                    onClick={() => approveNode(node._id, node.name)}
+                                                                    className="btn btn-success"
+                                                                    disabled={disableActions}
+                                                                >
+                                                                    <Check className="icon-small" />
+                                                                    {isNodeActing ? '处理中...' : (group.hasConflict ? '选择此申请' : '通过')}
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => rejectNode(node._id)}
+                                                                    className="btn btn-danger"
+                                                                    disabled={disableActions}
+                                                                >
+                                                                    <X className="icon-small" />
+                                                                    {isNodeActing ? '处理中...' : '拒绝'}
+                                                                </button>
                                                             </div>
                                                         </div>
-                                                    )}
-                                                </div>
-
-                                                <div className="node-actions">
-                                                    <button
-                                                        onClick={() => approveNode(node._id, node.name)}
-                                                        className="btn btn-success"
-                                                    >
-                                                        <Check className="icon-small" />
-                                                        {group.hasConflict ? '选择此申请' : '通过'}
-                                                    </button>
-                                                    <button
-                                                        onClick={() => rejectNode(node._id)}
-                                                        className="btn btn-danger"
-                                                    >
-                                                        <X className="icon-small" />
-                                                        拒绝
-                                                    </button>
+                                                            );
+                                                        })()
+                                                    ))}
                                                 </div>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
-                            ))}
+                            )}
+
+                            {pendingMasterApplications.length > 0 && (
+                                <div className="pending-approval-section master">
+                                    <div className="pending-approval-section-header">
+                                        <h3>域主申请审批</h3>
+                                        <span className="pending-section-count">{pendingMasterApplications.length}</span>
+                                    </div>
+                                    <div className="pending-nodes-list admin">
+                                        {groupedPendingMasterApplications.map((group) => (
+                                            <div key={group.nodeId} className={`pending-group ${group.hasConflict ? 'has-conflict master-has-conflict' : ''}`}>
+                                                {group.hasConflict && (
+                                                    <div className="conflict-group-header master-apply-group-header">
+                                                        <AlertTriangle className="icon-small" />
+                                                        <span>同域申请竞争: "{group.nodeName}" ({group.applications.length} 个申请)</span>
+                                                        <span className="conflict-hint">请择优同意一个申请</span>
+                                                    </div>
+                                                )}
+
+                                                <div className={`pending-nodes-grid ${group.hasConflict ? 'conflict-grid' : ''}`}>
+                                                    {group.applications.map((application, index) => {
+                                                        const actionKey = masterApplyActionId.split(':')[0];
+                                                        const isActing = actionKey === application._id;
+                                                        const applicantName = application.inviteeUsername || application.inviterUsername || '未知用户';
+                                                        return (
+                                                            <div key={application._id} className={`pending-node-card pending-review-card pending-review-card-master ${group.hasConflict ? 'conflict-card master-conflict-card' : ''}`}>
+                                                                {group.hasConflict && (
+                                                                    <div className="conflict-badge master-conflict-badge">申请 #{index + 1}</div>
+                                                                )}
+                                                                <div className="node-header">
+                                                                    <h3 className="node-title">{group.nodeName}</h3>
+                                                                    <div className="pending-card-badges">
+                                                                        <span className="pending-card-type pending-card-type-master">域主申请</span>
+                                                                        <span className="status-badge status-pending">待审批</span>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="node-details">
+                                                                    <p className="node-description">{`${applicantName} 申请成为该知识域域主`}</p>
+
+                                                                    <div className="node-meta">
+                                                                        <div className="meta-item">
+                                                                            <strong>申请人:</strong> {applicantName}
+                                                                        </div>
+                                                                        <div className="meta-item">
+                                                                            <strong>申请理由:</strong> {application.applicationReason || '（未填写）'}
+                                                                        </div>
+                                                                        <div className="meta-item">
+                                                                            <strong>提交时间:</strong> {new Date(application.createdAt).toLocaleString('zh-CN')}
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="node-actions">
+                                                                    <button
+                                                                        onClick={() => reviewMasterApplication(application._id, 'accept')}
+                                                                        className="btn pending-master-approve-btn"
+                                                                        disabled={isActing}
+                                                                    >
+                                                                        <Check className="icon-small" />
+                                                                        同意成为域主
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => reviewMasterApplication(application._id, 'reject')}
+                                                                        className="btn pending-master-reject-btn"
+                                                                        disabled={isActing}
+                                                                    >
+                                                                        <X className="icon-small" />
+                                                                        拒绝
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
