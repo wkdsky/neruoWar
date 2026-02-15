@@ -1222,6 +1222,43 @@ router.post('/notifications/clear', async (req, res) => {
   }
 });
 
+// 全部标记为已读
+router.post('/notifications/read-all', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('notifications');
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    let updatedCount = 0;
+    for (const notification of (user.notifications || [])) {
+      if (!notification.read) {
+        notification.read = true;
+        updatedCount += 1;
+      }
+    }
+
+    if (updatedCount > 0) {
+      await user.save();
+    }
+
+    res.json({
+      success: true,
+      updatedCount,
+      message: '通知已全部标记为已读'
+    });
+  } catch (error) {
+    console.error('全部标记已读错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 // 标记通知已读
 router.post('/notifications/:notificationId/read', async (req, res) => {
   try {

@@ -140,6 +140,7 @@ const App = () => {
     const [showNotificationsPanel, setShowNotificationsPanel] = useState(false);
     const [isNotificationsLoading, setIsNotificationsLoading] = useState(false);
     const [isClearingNotifications, setIsClearingNotifications] = useState(false);
+    const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
     const [notificationActionId, setNotificationActionId] = useState('');
     const [adminPendingNodes, setAdminPendingNodes] = useState([]);
     const [showRelatedDomainsPanel, setShowRelatedDomainsPanel] = useState(false);
@@ -681,6 +682,32 @@ const App = () => {
       setNotificationUnreadCount((prev) => Math.max(0, prev - 1));
     } catch (error) {
       window.alert(`标记已读失败: ${error.message}`);
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || notificationUnreadCount <= 0) return;
+
+    setIsMarkingAllRead(true);
+    try {
+      const response = await fetch('http://localhost:5000/api/notifications/read-all', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok || !parsed.data) {
+        return;
+      }
+
+      setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+      setNotificationUnreadCount(0);
+    } catch (error) {
+      // 忽略提示，避免打断用户
+    } finally {
+      setIsMarkingAllRead(false);
     }
   };
 
@@ -2075,6 +2102,14 @@ const App = () => {
                         <h3>通知中心</h3>
                         <button
                             type="button"
+                            className="btn btn-small btn-blue"
+                            onClick={markAllNotificationsRead}
+                            disabled={isNotificationsLoading || isMarkingAllRead || notificationUnreadCount === 0}
+                        >
+                            {isMarkingAllRead ? '处理中...' : '全部已读'}
+                        </button>
+                        <button
+                            type="button"
                             className="btn btn-small btn-danger"
                             onClick={clearNotifications}
                             disabled={isNotificationsLoading || isClearingNotifications || notifications.length === 0}
@@ -2132,6 +2167,14 @@ const App = () => {
                     <h3>通知中心</h3>
                     <button
                         type="button"
+                        className="btn btn-small btn-blue"
+                        onClick={markAllNotificationsRead}
+                        disabled={isNotificationsLoading || isMarkingAllRead || notificationUnreadCount === 0}
+                    >
+                        {isMarkingAllRead ? '处理中...' : '全部已读'}
+                    </button>
+                    <button
+                        type="button"
                         className="btn btn-small btn-danger"
                         onClick={clearNotifications}
                         disabled={isNotificationsLoading || isClearingNotifications || notifications.length === 0}
@@ -2172,6 +2215,14 @@ const App = () => {
                                     <div
                                         key={notification._id}
                                         className={`notification-item ${notification.read ? '' : 'unread'}`}
+                                        onClick={(event) => {
+                                            if (event.target.closest('.notification-actions')) {
+                                                return;
+                                            }
+                                            if (!notification.read) {
+                                                markNotificationRead(notification._id);
+                                            }
+                                        }}
                                     >
                                         <div className="notification-item-title-row">
                                             <h4>{notification.title || '系统通知'}</h4>
@@ -2272,16 +2323,6 @@ const App = () => {
                                                     disabled={isActing}
                                                 >
                                                     拒绝
-                                                </button>
-                                            </div>
-                                        ) : !notification.read ? (
-                                            <div className="notification-actions">
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-small btn-blue"
-                                                    onClick={() => markNotificationRead(notification._id)}
-                                                >
-                                                    标记已读
                                                 </button>
                                             </div>
                                         ) : null}
