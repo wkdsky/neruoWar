@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Home, Shield, Bell, Layers, Star } from 'lucide-react';
+import { Home, Shield, Bell, Layers, Star, MapPin, ChevronLeft, ChevronRight } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
 import Login from './components/auth/Login';
@@ -62,6 +62,39 @@ const ANNOUNCEMENT_NOTIFICATION_TYPES = ['domain_distribution_announcement', 'al
 const isAnnouncementNotification = (notification) => (
     ANNOUNCEMENT_NOTIFICATION_TYPES.includes(notification?.type)
 );
+const RIGHT_DOCK_COLLAPSE_MS = 220;
+const createEmptyNodeDistributionStatus = () => ({
+    nodeId: '',
+    active: false,
+    phase: 'none',
+    requiresManualEntry: false,
+    joined: false,
+    canJoin: false,
+    canExit: false,
+    joinTip: ''
+});
+const createDefaultDistributionPanelState = () => ({
+    loading: false,
+    joining: false,
+    exiting: false,
+    error: '',
+    feedback: '',
+    data: null
+});
+const formatCountdownText = (seconds) => {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const day = Math.floor(total / 86400);
+    const hour = Math.floor((total % 86400) / 3600);
+    const minute = Math.floor((total % 3600) / 60);
+    const second = total % 60;
+    const hh = String(hour).padStart(2, '0');
+    const mm = String(minute).padStart(2, '0');
+    const ss = String(second).padStart(2, '0');
+    if (day > 0) {
+        return `${day}天 ${hh}:${mm}:${ss}`;
+    }
+    return `${hh}:${mm}:${ss}`;
+};
 
 const App = () => {
     const [socket, setSocket] = useState(null);
@@ -139,6 +172,9 @@ const App = () => {
     const [selectedLocationNode, setSelectedLocationNode] = useState(null);
     const [currentLocationNodeDetail, setCurrentLocationNodeDetail] = useState(null);
     const [travelStatus, setTravelStatus] = useState({ isTraveling: false });
+    const [nodeDistributionStatus, setNodeDistributionStatus] = useState(createEmptyNodeDistributionStatus);
+    const [showDistributionPanel, setShowDistributionPanel] = useState(false);
+    const [distributionPanelState, setDistributionPanelState] = useState(createDefaultDistributionPanelState);
     const [isStoppingTravel, setIsStoppingTravel] = useState(false);
     const [notifications, setNotifications] = useState([]);
     const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
@@ -147,6 +183,9 @@ const App = () => {
     const [isClearingNotifications, setIsClearingNotifications] = useState(false);
     const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
     const [isMarkingAnnouncementsRead, setIsMarkingAnnouncementsRead] = useState(false);
+    const [isLocationDockExpanded, setIsLocationDockExpanded] = useState(false);
+    const [isAnnouncementDockExpanded, setIsAnnouncementDockExpanded] = useState(false);
+    const [announcementDockTab, setAnnouncementDockTab] = useState('system');
     const [notificationActionId, setNotificationActionId] = useState('');
     const [adminPendingNodes, setAdminPendingNodes] = useState([]);
     const [showRelatedDomainsPanel, setShowRelatedDomainsPanel] = useState(false);
@@ -248,6 +287,8 @@ const App = () => {
                     if (currentNodeDetail) {
                         handleEnterKnowledgeDomain(currentNodeDetail);
                     }
+                } else if (button.action === 'joinDistribution' && currentNodeDetail) {
+                    handleDistributionParticipationAction(currentNodeDetail);
                 } else if (button.action === 'moveToNode' && currentNodeDetail) {
                     handleMoveToNode(currentNodeDetail);
                 } else if (button.action === 'toggleFavoriteNode' && currentNodeDetail?._id) {
@@ -286,6 +327,8 @@ const App = () => {
             sceneManagerRef.current.onButtonClick = (nodeId, button) => {
                 if (button.action === 'enterKnowledgeDomain' && currentNodeDetail) {
                     handleEnterKnowledgeDomain(currentNodeDetail);
+                } else if (button.action === 'joinDistribution' && currentNodeDetail) {
+                    handleDistributionParticipationAction(currentNodeDetail);
                 } else if (button.action === 'moveToNode' && currentNodeDetail) {
                     handleMoveToNode(currentNodeDetail);
                 } else if (button.action === 'toggleFavoriteNode' && currentNodeDetail?._id) {
@@ -293,7 +336,7 @@ const App = () => {
                 }
             };
         }
-    }, [currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling]);
+    }, [currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus]);
 
     useEffect(() => {
         // 只在没有socket时初始化
@@ -503,6 +546,9 @@ const App = () => {
     }
     if (typeof rawText === 'string' && rawText.includes('Cannot POST /api/travel/stop')) {
       return '停止移动接口不存在（后端可能未重启，请重启后端服务）';
+    }
+    if (typeof rawText === 'string' && rawText.includes('Cannot POST /api/travel/estimate')) {
+      return '移动预估接口不存在（后端可能未重启，请重启后端服务）';
     }
     return `${fallbackText}（HTTP ${response.status}）`;
   };
@@ -879,8 +925,9 @@ const App = () => {
     return date.toLocaleString('zh-CN', { hour12: false });
   };
 
-  const openAdminPanel = (tab = 'users') => {
+  const openAdminPanel = async (tab = 'users') => {
     setAdminEntryTab(tab);
+    await prepareForPrimaryNavigation();
     setView('admin');
   };
 
@@ -921,6 +968,118 @@ const App = () => {
         window.alert(`获取移动状态失败: ${error.message}`);
       }
       return null;
+    }
+  };
+
+  const normalizeDistributionParticipationData = (raw = {}, fallbackNodeId = '') => {
+    const rawPool = raw?.pool && typeof raw.pool === 'object' ? raw.pool : {};
+    const hasRewardValue = rawPool.rewardValue !== null && rawPool.rewardValue !== undefined;
+    const parsedRewardValue = Number(rawPool.rewardValue);
+    return {
+      active: !!raw.active,
+      nodeId: normalizeObjectId(raw.nodeId) || fallbackNodeId || '',
+      nodeName: raw.nodeName || '',
+      phase: raw.phase || 'none',
+      executeAt: raw.executeAt || null,
+      entryCloseAt: raw.entryCloseAt || null,
+      endAt: raw.endAt || null,
+      executedAt: raw.executedAt || null,
+      secondsToEntryClose: Number(raw.secondsToEntryClose || 0),
+      secondsToExecute: Number(raw.secondsToExecute || 0),
+      secondsToEnd: Number(raw.secondsToEnd || 0),
+      requiresManualEntry: !!raw.requiresManualEntry,
+      autoEntry: !!raw.autoEntry,
+      joined: !!raw.joined,
+      joinedManual: !!raw.joinedManual,
+      canJoin: !!raw.canJoin,
+      canExit: !!raw.canExit,
+      canExitWithoutConfirm: !!raw.canExitWithoutConfirm,
+      joinTip: raw.joinTip || '',
+      participantTotal: Number(raw.participantTotal || 0),
+      pool: {
+        key: rawPool.key || '',
+        label: rawPool.label || '',
+        poolPercent: Number(rawPool.poolPercent || 0),
+        participantCount: Number(rawPool.participantCount || 0),
+        userActualPercent: Number(rawPool.userActualPercent || 0),
+        estimatedReward: Number(rawPool.estimatedReward || 0),
+        rewardValue: hasRewardValue && Number.isFinite(parsedRewardValue) ? parsedRewardValue : null,
+        rewardFrozen: !!rawPool.rewardFrozen,
+        users: Array.isArray(rawPool.users) ? rawPool.users : []
+      }
+    };
+  };
+
+  const fetchDistributionParticipationStatus = async (nodeId, silent = true, options = {}) => {
+    const token = localStorage.getItem('token');
+    if (!token || !nodeId || isAdmin) {
+      return null;
+    }
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/distribution-participation`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        if (!silent) {
+          window.alert(getApiErrorMessage(parsed, '获取分发参与状态失败'));
+        }
+        return null;
+      }
+      const normalized = normalizeDistributionParticipationData(data, nodeId);
+      setNodeDistributionStatus({
+        nodeId: normalized.nodeId,
+        active: normalized.active,
+        phase: normalized.phase,
+        requiresManualEntry: normalized.requiresManualEntry,
+        joined: normalized.joined,
+        canJoin: normalized.canJoin,
+        canExit: normalized.canExit,
+        joinTip: normalized.joinTip
+      });
+      if (options.updatePanel) {
+        setDistributionPanelState((prev) => ({
+          ...prev,
+          data: normalized,
+          loading: false,
+          error: ''
+        }));
+      }
+      return normalized;
+    } catch (error) {
+      if (!silent) {
+        window.alert(`获取分发参与状态失败: ${error.message}`);
+      }
+      return null;
+    }
+  };
+
+  const estimateTravelToNode = async (targetNodeId) => {
+    const token = localStorage.getItem('token');
+    if (!token) return null;
+
+    try {
+      const response = await fetch('http://localhost:5000/api/travel/estimate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ targetNodeId })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        return {
+          error: getApiErrorMessage(parsed, '获取移动预估失败')
+        };
+      }
+      return data;
+    } catch (error) {
+      return { error: `获取移动预估失败: ${error.message}` };
     }
   };
 
@@ -1007,12 +1166,13 @@ const App = () => {
     }
   };
 
-  const handleMoveToNode = async (targetNode) => {
+  const handleMoveToNode = async (targetNode, options = {}) => {
     if (!targetNode || !targetNode._id) return;
+    const promptMode = options?.promptMode === 'distribution' ? 'distribution' : 'default';
 
     if (isAdmin) {
       window.alert('管理员不可执行移动操作');
-      return;
+      return false;
     }
 
     const isHardMoving = travelStatus.isTraveling && !travelStatus.isStopping;
@@ -1020,36 +1180,51 @@ const App = () => {
 
     if (isHardMoving) {
       window.alert('你正在移动中，不能更换目的地。请先停止移动。');
-      return;
+      return false;
     }
 
     if (!userLocation || userLocation.trim() === '') {
       window.alert('尚未设置当前位置，暂时无法移动');
-      return;
+      return false;
     }
 
     if (!isStopping && targetNode.name === userLocation) {
       window.alert('你已经在该节点，无需移动');
-      return;
+      return false;
     }
 
     if (isStopping && targetNode.name === travelStatus?.stoppingNearestNode?.nodeName) {
       window.alert('停止移动期间不能把最近节点设为新的目标');
-      return;
+      return false;
     }
 
-    const confirmed = window.confirm(
-      isStopping
-        ? `是否将「${targetNode.name}」设为新的目标？将在停止移动完成后自动出发。`
-        : `是否移动到「${targetNode.name}」？将按最短路径计算距离。`
-    );
-    if (!confirmed) return;
+    let confirmMessage = '';
+    if (isStopping) {
+      confirmMessage = `是否将「${targetNode.name}」设为新的目标？将在停止移动完成后自动出发。`;
+    } else {
+      const estimate = await estimateTravelToNode(targetNode._id);
+      if (estimate?.error) {
+        window.alert(estimate.error);
+        return false;
+      }
+      const estimatedText = estimate?.estimatedDurationText || formatTravelSeconds(estimate?.estimatedSeconds);
+      confirmMessage = promptMode === 'distribution'
+        ? `您不在该知识域，需先移动到此，预计花费${estimatedText}，您希望立刻移动吗？`
+        : `是否移动到「${targetNode.name}」？预计花费 ${estimatedText}。`;
+    }
+
+    const confirmed = window.confirm(confirmMessage);
+    if (!confirmed) return false;
 
     const startResult = await startTravelToNode(targetNode._id);
     if (startResult === 'started') {
-      setView('home');
-      setNavigationPath([{ type: 'home', label: '首页' }]);
+      if (promptMode !== 'distribution') {
+        setView('home');
+        setNavigationPath([{ type: 'home', label: '首页' }]);
+      }
+      return true;
     }
+    return startResult === 'queued';
   };
 
   // 当userLocation变化时，获取节点详情
@@ -1072,6 +1247,35 @@ const App = () => {
 
     return () => clearInterval(timer);
   }, [authenticated, isAdmin]);
+
+  useEffect(() => {
+    const targetNodeId = normalizeObjectId(currentNodeDetail?._id);
+    if (!authenticated || isAdmin || view !== 'nodeDetail' || !targetNodeId) {
+      setNodeDistributionStatus(createEmptyNodeDistributionStatus());
+      return undefined;
+    }
+
+    fetchDistributionParticipationStatus(targetNodeId, true);
+    const timer = setInterval(() => {
+      fetchDistributionParticipationStatus(targetNodeId, true);
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [authenticated, isAdmin, view, currentNodeDetail?._id, userLocation, travelStatus.isTraveling]);
+
+  useEffect(() => {
+    if (!showDistributionPanel) return undefined;
+    const targetNodeId = normalizeObjectId(currentNodeDetail?._id);
+    if (!targetNodeId || view !== 'nodeDetail') {
+      setShowDistributionPanel(false);
+      return undefined;
+    }
+    fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
+    const timer = setInterval(() => {
+      fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [showDistributionPanel, view, currentNodeDetail?._id]);
 
   useEffect(() => {
     if (!authenticated) {
@@ -1650,9 +1854,55 @@ const App = () => {
         return nav;
     };
 
+    const formatTravelSeconds = (seconds) => {
+        if (!Number.isFinite(seconds) || seconds <= 0) return '0 秒';
+        const rounded = Math.round(seconds);
+        const mins = Math.floor(rounded / 60);
+        const remain = rounded % 60;
+        if (mins <= 0) return `${remain} 秒`;
+        return `${mins} 分 ${remain} 秒`;
+    };
+
+    const collapseRightDocksBeforeNavigation = async () => {
+        if (isAdmin) return;
+        const hasExpanded = isLocationDockExpanded || isAnnouncementDockExpanded;
+        if (!hasExpanded) return;
+        setIsLocationDockExpanded(false);
+        setIsAnnouncementDockExpanded(false);
+        await new Promise((resolve) => {
+            setTimeout(resolve, RIGHT_DOCK_COLLAPSE_MS);
+        });
+    };
+
+    const closeKnowledgeDomainBeforeNavigation = () => {
+        if (showKnowledgeDomain || isTransitioningToDomain || knowledgeDomainNode) {
+            setShowKnowledgeDomain(false);
+            setIsTransitioningToDomain(false);
+            setDomainTransitionProgress(0);
+            setKnowledgeDomainNode(null);
+            setClickedNodeForTransition(null);
+        }
+        if (showDistributionPanel) {
+            setShowDistributionPanel(false);
+            setDistributionPanelState(createDefaultDistributionPanelState());
+        }
+    };
+
+    const prepareForPrimaryNavigation = async () => {
+        closeKnowledgeDomainBeforeNavigation();
+        await collapseRightDocksBeforeNavigation();
+    };
+
+    const navigateToHomeWithDockCollapse = async () => {
+        await prepareForPrimaryNavigation();
+        setView('home');
+        setNavigationPath([{ type: 'home', label: '首页' }]);
+    };
+
     // 获取节点详情
     const fetchNodeDetail = async (nodeId, clickedNode = null) => {
         try {
+            await prepareForPrimaryNavigation();
             const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}`);
             if (response.ok) {
                 const data = await response.json();
@@ -1696,7 +1946,7 @@ const App = () => {
         };
     };
 
-  const handleJumpToCurrentLocationView = async () => {
+    const handleJumpToCurrentLocationView = async () => {
         if (!currentLocationNodeDetail?._id) {
             return;
         }
@@ -1707,6 +1957,38 @@ const App = () => {
 
         const clickedNode = buildClickedNodeFromScene(currentLocationNodeDetail._id);
         await fetchNodeDetail(currentLocationNodeDetail._id, clickedNode);
+    };
+
+    const openDistributionPanel = (participationData) => {
+        if (!participationData || !participationData.active) return;
+        setDistributionPanelState({
+            loading: false,
+            joining: false,
+            exiting: false,
+            error: '',
+            feedback: '',
+            data: participationData
+        });
+        setShowDistributionPanel(true);
+    };
+
+    const handleDistributionParticipationAction = async (targetNodeDetail) => {
+        if (!targetNodeDetail?._id) return;
+        if (isAdmin) {
+            window.alert('系统管理员不参与知识点分发');
+            return;
+        }
+
+        const participation = await fetchDistributionParticipationStatus(targetNodeDetail._id, false);
+        if (!participation) return;
+        if (!participation.active) {
+            window.alert('该知识域当前没有进行中的分发活动');
+            return;
+        }
+
+        const refreshed = await fetchDistributionParticipationStatus(targetNodeDetail._id, true);
+        const panelData = refreshed && refreshed.active ? refreshed : participation;
+        if (panelData.active) openDistributionPanel(panelData);
     };
 
     const handleDistributionAnnouncementClick = async (notification) => {
@@ -1720,10 +2002,7 @@ const App = () => {
         if (!targetNodeId) return;
 
         const clickedNode = buildClickedNodeFromScene(targetNodeId);
-        const targetNodeDetail = await fetchNodeDetail(targetNodeId, clickedNode);
-        if (notification.requiresArrival && targetNodeDetail) {
-            await handleMoveToNode(targetNodeDetail);
-        }
+        await fetchNodeDetail(targetNodeId, clickedNode);
         setShowSearchResults(false);
     };
 
@@ -1736,6 +2015,134 @@ const App = () => {
 
         if (!notification.read && notification._id) {
             await markNotificationRead(notification._id);
+        }
+    };
+
+    const closeDistributionPanel = () => {
+        setShowDistributionPanel(false);
+        setDistributionPanelState(createDefaultDistributionPanelState());
+    };
+
+    const joinDistributionFromPanel = async () => {
+        const token = localStorage.getItem('token');
+        const nodeId = normalizeObjectId(currentNodeDetail?._id);
+        const panelData = distributionPanelState.data;
+        if (!token || !nodeId || !panelData) return;
+
+        if (!panelData.active) {
+            setDistributionPanelState((prev) => ({
+                ...prev,
+                error: ''
+            }));
+            return;
+        }
+        if (!panelData.canJoin) {
+            const currentNodeName = (currentNodeDetail?.name || '').trim();
+            const currentLocationName = (userLocation || '').trim();
+            const shouldPromptMove = (
+                panelData.requiresManualEntry &&
+                !panelData.joined &&
+                panelData.phase === 'entry_open' &&
+                !!currentNodeName &&
+                currentLocationName !== currentNodeName
+            );
+            if (shouldPromptMove && currentNodeDetail?._id) {
+                await handleMoveToNode(currentNodeDetail, { promptMode: 'distribution' });
+            }
+            setDistributionPanelState((prev) => ({
+                ...prev,
+                error: ''
+            }));
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `确认参与知识域「${currentNodeDetail?.name || ''}」分发活动？确认后在本次分发结束前不可移动。`
+        );
+        if (!confirmed) return;
+
+        setDistributionPanelState((prev) => ({
+            ...prev,
+            joining: true,
+            error: '',
+            feedback: ''
+        }));
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/distribution-participation/join`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const parsed = await parseApiResponse(response);
+            const data = parsed.data;
+            if (!response.ok || !data) {
+                setDistributionPanelState((prev) => ({
+                    ...prev,
+                    joining: false,
+                    error: getApiErrorMessage(parsed, '参与分发失败')
+                }));
+                return;
+            }
+            const refreshed = await fetchDistributionParticipationStatus(nodeId, true, { updatePanel: true });
+            setDistributionPanelState((prev) => ({
+                ...prev,
+                joining: false,
+                feedback: '',
+                data: refreshed || prev.data
+            }));
+        } catch (error) {
+            setDistributionPanelState((prev) => ({
+                ...prev,
+                joining: false,
+                error: `参与分发失败: ${error.message}`
+            }));
+        }
+    };
+
+    const exitDistributionFromPanel = async () => {
+        const token = localStorage.getItem('token');
+        const nodeId = normalizeObjectId(currentNodeDetail?._id);
+        const panelData = distributionPanelState.data;
+        if (!token || !nodeId || !panelData?.canExit) return;
+
+        if (!panelData.canExitWithoutConfirm) {
+            const confirmed = window.confirm(`确认退出知识域「${currentNodeDetail?.name || ''}」分发活动？`);
+            if (!confirmed) return;
+        }
+
+        setDistributionPanelState((prev) => ({
+            ...prev,
+            exiting: true,
+            error: '',
+            feedback: ''
+        }));
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/distribution-participation/exit`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const parsed = await parseApiResponse(response);
+            const data = parsed.data;
+            if (!response.ok || !data) {
+                setDistributionPanelState((prev) => ({
+                    ...prev,
+                    exiting: false,
+                    error: getApiErrorMessage(parsed, '退出分发失败')
+                }));
+                return;
+            }
+            const refreshed = await fetchDistributionParticipationStatus(nodeId, true, { updatePanel: true });
+            setDistributionPanelState((prev) => ({
+                ...prev,
+                exiting: false,
+                feedback: '',
+                data: refreshed || prev.data
+            }));
+        } catch (error) {
+            setDistributionPanelState((prev) => ({
+                ...prev,
+                exiting: false,
+                error: `退出分发失败: ${error.message}`
+            }));
         }
     };
 
@@ -1770,6 +2177,20 @@ const App = () => {
     const announcementUnreadCount = notifications.filter((notification) => (
         isAnnouncementNotification(notification) && !notification.read
     )).length;
+    useEffect(() => {
+        if (announcementDockTab === 'system' && systemAnnouncements.length === 0 && allianceAnnouncements.length > 0) {
+            setAnnouncementDockTab('alliance');
+        } else if (announcementDockTab === 'alliance' && allianceAnnouncements.length === 0 && systemAnnouncements.length > 0) {
+            setAnnouncementDockTab('system');
+        }
+    }, [announcementDockTab, systemAnnouncements.length, allianceAnnouncements.length]);
+    useEffect(() => {
+        const canRenderDock = !isAdmin && (view === 'home' || (view === 'nodeDetail' && currentNodeDetail));
+        if (!canRenderDock) {
+            setIsLocationDockExpanded(false);
+            setIsAnnouncementDockExpanded(false);
+        }
+    }, [view, currentNodeDetail, isAdmin]);
     const adminPendingApprovalCount = pendingMasterApplyCount + adminPendingNodes.length;
     const notificationBadgeCount = isAdmin ? adminPendingApprovalCount : notificationUnreadCount;
     const currentNodeMasterId = normalizeObjectId(currentNodeDetail?.domainMaster);
@@ -1845,7 +2266,7 @@ const App = () => {
                         <div className="related-domains-error">{relatedDomainsData.error}</div>
                     )}
                     {renderRelatedDomainSection('作为域主', domainMasterDomains, '当前没有作为域主的知识域')}
-                    {renderRelatedDomainSection('作为普通管理者', domainAdminDomains, '当前没有管理者身份的知识域')}
+                    {renderRelatedDomainSection('作为域相', domainAdminDomains, '当前没有域相身份的知识域')}
                     {renderRelatedDomainSection('收藏的知识域', favoriteDomains, '暂无收藏，点击右侧星标可收藏')}
                     {renderRelatedDomainSection('最近访问的知识域', recentDomains, '暂无访问记录')}
                 </div>
@@ -1865,12 +2286,26 @@ const App = () => {
                 : (!userLocation
                     ? '未设置当前位置'
                     : (isNearestInStopping ? '停止移动期间不能选择最近节点' : '当前不可移动')));
+        const targetNodeId = normalizeObjectId(nodeDetail?._id);
+        const distributionStatusMatched = nodeDistributionStatus.nodeId === targetNodeId
+            ? nodeDistributionStatus
+            : createEmptyNodeDistributionStatus();
+        const showDistributionButton = !isAdmin && !!distributionStatusMatched.active;
+        const distributionHighlighted = false;
+        const distributionDisabled = false;
+        const distributionDisabledReason = '';
+        const distributionButtonTooltip = '知识点分发';
 
         return {
             showMoveButton: !isAdmin,
             isFavorite: favoriteDomainSet.has(normalizeObjectId(nodeDetail?._id)),
             moveDisabled,
-            moveDisabledReason
+            moveDisabledReason,
+            showDistributionButton,
+            distributionHighlighted,
+            distributionDisabled,
+            distributionDisabledReason,
+            distributionButtonTooltip
         };
     };
 
@@ -1997,7 +2432,7 @@ const App = () => {
             currentNodeDetail,
             getNodeDetailButtonContext(currentNodeDetail)
         );
-    }, [view, currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, relatedDomainsData.favoriteDomains]);
+    }, [view, currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus]);
 
 
     // 新节点创建相关函数
@@ -2059,110 +2494,348 @@ const App = () => {
         );
     };
 
-    const renderNodeDetailLocationSidebar = () => {
-        if (isAdmin || view !== 'nodeDetail') return null;
+    const renderUnifiedRightDock = () => {
+        if (isAdmin) return null;
+        const canRenderDock = view === 'home' || (view === 'nodeDetail' && currentNodeDetail);
+        if (!canRenderDock) return null;
 
         const canJumpToLocationView = Boolean(
             !travelStatus.isTraveling &&
             currentLocationNodeDetail &&
             userLocation &&
-            currentNodeDetail?.name !== userLocation
+            !(view === 'nodeDetail' && currentNodeDetail?.name === userLocation)
         );
+        const activeAnnouncements = announcementDockTab === 'alliance'
+            ? allianceAnnouncements
+            : systemAnnouncements;
 
         return (
-            <div className="location-resident-sidebar">
-                <div className="location-sidebar-header">
-                    <h3>{travelStatus?.isTraveling ? '移动状态' : '当前所在的知识域'}</h3>
+            <>
+                <div className={`home-announcement-dock ${isAnnouncementDockExpanded ? 'expanded' : 'collapsed'}`}>
+                    <aside className={`home-announcement-dock-panel ${isAnnouncementDockExpanded ? 'expanded' : ''}`}>
+                        <div className="home-announcement-dock-header">
+                            <h3>公告栏</h3>
+                            <div className="home-announcement-header-actions">
+                                <button
+                                    type="button"
+                                    className="home-announcement-readall-btn"
+                                    onClick={() => markAnnouncementNotificationsRead()}
+                                    disabled={isMarkingAnnouncementsRead || announcementUnreadCount <= 0}
+                                >
+                                    {isMarkingAnnouncementsRead ? '处理中...' : '全部已读'}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="home-announcement-collapse-btn"
+                                    onClick={() => setIsAnnouncementDockExpanded(false)}
+                                >
+                                    收起
+                                </button>
+                            </div>
+                        </div>
+                        <div className="home-announcement-tab-row">
+                            <button
+                                type="button"
+                                className={`home-announcement-tab ${announcementDockTab === 'system' ? 'active' : ''}`}
+                                onClick={() => setAnnouncementDockTab('system')}
+                            >
+                                系统公告
+                            </button>
+                            <button
+                                type="button"
+                                className={`home-announcement-tab ${announcementDockTab === 'alliance' ? 'active' : ''}`}
+                                onClick={() => setAnnouncementDockTab('alliance')}
+                            >
+                                熵盟公告
+                            </button>
+                        </div>
+                        <div className="home-announcement-dock-body">
+                            {activeAnnouncements.length === 0 ? (
+                                <div className="home-announcement-empty">
+                                    {announcementDockTab === 'alliance' ? '暂无熵盟公告' : '暂无系统公告'}
+                                </div>
+                            ) : (
+                                activeAnnouncements.map((item) => (
+                                    <button
+                                        type="button"
+                                        key={item._id}
+                                        className={`home-announcement-item ${item.read ? '' : 'unread'}`}
+                                        onClick={() => handleHomeAnnouncementClick(item)}
+                                    >
+                                        {!item.read && <span className="home-announcement-new">NEW!</span>}
+                                        <span className="home-announcement-title">{item.title || '知识点分发预告'}</span>
+                                        <span className="home-announcement-message">{item.message || ''}</span>
+                                    </button>
+                                ))
+                            )}
+                        </div>
+                    </aside>
+                    <button
+                        type="button"
+                        className="home-announcement-dock-toggle"
+                        onClick={() => {
+                            setIsAnnouncementDockExpanded((prev) => {
+                                const next = !prev;
+                                if (next) {
+                                    markAnnouncementNotificationsRead();
+                                }
+                                return next;
+                            });
+                        }}
+                        title={isAnnouncementDockExpanded ? '收起公告栏' : '展开公告栏'}
+                    >
+                        <Bell size={18} />
+                        <span className="home-announcement-dock-label">公告</span>
+                        {announcementUnreadCount > 0 && <span className="home-announcement-dock-dot" />}
+                        {isAnnouncementDockExpanded ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+                    </button>
                 </div>
 
-                {travelStatus?.isTraveling ? (
-                    <div className="travel-sidebar-content">
-                        <div className="travel-main-info">
-                                <div className="travel-destination">
-                                {travelStatus?.isStopping ? '停止目标' : '目标节点'}: <strong>{travelStatus?.targetNode?.nodeName}</strong>
-                                </div>
-                                <div className="travel-metrics">
-                                    <span>剩余距离: {travelStatus?.remainingDistanceUnits?.toFixed?.(2) ?? travelStatus?.remainingDistanceUnits} 单位</span>
-                                    <span>剩余时间: {Math.max(0, Math.round(travelStatus?.remainingSeconds || 0))} 秒</span>
-                                    {travelStatus?.queuedTargetNode?.nodeName && (
-                                        <span>已排队目标: {travelStatus.queuedTargetNode.nodeName}</span>
-                                    )}
-                                </div>
-                            </div>
-
-                        <div className="travel-anim-layout">
-                            <div className="travel-node-card next">
-                                <div className="travel-node-label">下一目的地</div>
-                                <div className="travel-node-name">{travelStatus?.nextNode?.nodeName || '-'}</div>
-                            </div>
-                            <div className="travel-track-wrap">
-                                <div className="travel-track">
-                                    <div
-                                        className="travel-progress-dot"
-                                        style={{ left: `${(1 - (travelStatus?.progressInCurrentSegment || 0)) * 100}%` }}
-                                    />
-                                </div>
-                            </div>
-                            <div className="travel-node-card reached">
-                                <div className="travel-node-label">最近到达</div>
-                                <div className="travel-node-name">{travelStatus?.lastReachedNode?.nodeName || '-'}</div>
+                <div className={`home-location-dock ${isLocationDockExpanded ? 'expanded' : 'collapsed'}`}>
+                    <aside className={`home-location-dock-panel ${isLocationDockExpanded ? 'expanded' : ''}`}>
+                        <div className="location-sidebar-header home-location-sidebar-header">
+                            <div className="home-location-header-row">
+                                <h3>{travelStatus?.isTraveling ? '移动状态' : '当前所在的知识域'}</h3>
+                                <button
+                                    type="button"
+                                    className="home-location-collapse-btn"
+                                    onClick={() => setIsLocationDockExpanded(false)}
+                                >
+                                    收起
+                                </button>
                             </div>
                         </div>
 
+                        <div className="home-location-panel-body">
+                            {travelStatus?.isTraveling ? (
+                                <div className="travel-sidebar-content">
+                                    <div className="travel-main-info">
+                                        <div className="travel-destination">
+                                            {travelStatus?.isStopping ? '停止目标' : '目标节点'}: <strong>{travelStatus?.targetNode?.nodeName}</strong>
+                                        </div>
+                                        <div className="travel-metrics">
+                                            <span>剩余距离: {travelStatus?.remainingDistanceUnits?.toFixed?.(2) ?? travelStatus?.remainingDistanceUnits} 单位</span>
+                                            <span>剩余时间: {formatTravelSeconds(travelStatus?.remainingSeconds)}</span>
+                                            {travelStatus?.queuedTargetNode?.nodeName && (
+                                                <span>已排队目标: {travelStatus.queuedTargetNode.nodeName}</span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="travel-anim-layout">
+                                        <div className="travel-node-card next">
+                                            <div className="travel-node-label">下一目的地</div>
+                                            <div className="travel-node-name">{travelStatus?.nextNode?.nodeName || '-'}</div>
+                                        </div>
+                                        <div className="travel-track-wrap">
+                                            <div className="travel-track">
+                                                <div
+                                                    className="travel-progress-dot"
+                                                    style={{ left: `${(1 - (travelStatus?.progressInCurrentSegment || 0)) * 100}%` }}
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="travel-node-card reached">
+                                            <div className="travel-node-label">最近到达</div>
+                                            <div className="travel-node-name">{travelStatus?.lastReachedNode?.nodeName || '-'}</div>
+                                        </div>
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        className="btn btn-danger travel-stop-btn"
+                                        onClick={stopTravel}
+                                        disabled={isStoppingTravel || travelStatus?.isStopping}
+                                    >
+                                        {(isStoppingTravel || travelStatus?.isStopping) ? '停止进行中...' : '停止移动'}
+                                    </button>
+                                </div>
+                            ) : currentLocationNodeDetail ? (
+                                <div
+                                    className={`location-sidebar-content ${canJumpToLocationView ? 'location-sidebar-jumpable' : ''}`}
+                                    onClick={() => {
+                                        if (canJumpToLocationView) {
+                                            handleJumpToCurrentLocationView();
+                                        }
+                                    }}
+                                >
+                                    <div className="location-node-title">{currentLocationNodeDetail.name}</div>
+
+                                    {currentLocationNodeDetail.description && (
+                                        <div className="location-node-section">
+                                            <div className="section-label">描述</div>
+                                            <div className="section-content">{currentLocationNodeDetail.description}</div>
+                                        </div>
+                                    )}
+
+                                    {currentLocationNodeDetail.relatedParentDomains && currentLocationNodeDetail.relatedParentDomains.length > 0 && (
+                                        <div className="location-node-section">
+                                            <div className="section-label">父域</div>
+                                            <div className="section-tags">
+                                                {currentLocationNodeDetail.relatedParentDomains.map((parent, idx) => (
+                                                    <span key={idx} className="node-tag parent-tag">{parent}</span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {currentLocationNodeDetail.relatedChildDomains && currentLocationNodeDetail.relatedChildDomains.length > 0 && (
+                                        <div className="location-node-section">
+                                            <div className="section-label">子域</div>
+                                            <div className="section-tags">
+                                                {currentLocationNodeDetail.relatedChildDomains.map((child, idx) => (
+                                                    <span key={idx} className="node-tag child-tag">{child}</span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {currentLocationNodeDetail.knowledge && (
+                                        <div className="location-node-section">
+                                            <div className="section-label">知识内容</div>
+                                            <div className="section-content knowledge-content">
+                                                {currentLocationNodeDetail.knowledge}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="location-sidebar-empty">
+                                    <p>暂未降临到任何知识域</p>
+                                </div>
+                            )}
+                        </div>
+                    </aside>
+
+                    <button
+                        type="button"
+                        className="home-location-dock-toggle"
+                        onClick={() => setIsLocationDockExpanded((prev) => !prev)}
+                        title={isLocationDockExpanded ? '收起当前所在知识域' : '展开当前所在知识域'}
+                    >
+                        <MapPin size={18} />
+                        <span className="home-location-dock-label">
+                            {travelStatus?.isTraveling ? '移动中' : '知识域'}
+                        </span>
+                        {isLocationDockExpanded ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+                    </button>
+                </div>
+            </>
+        );
+    };
+
+    const renderDistributionParticipationPanel = () => {
+        if (view !== 'nodeDetail' || !showDistributionPanel || !currentNodeDetail) return null;
+        const data = distributionPanelState.data;
+        if (!data) return null;
+        const pool = data.pool || {};
+        const phaseLabelMap = {
+            entry_open: '可入场',
+            entry_closed: '入场截止',
+            settling: '结算中',
+            ended: '已结束',
+            none: '未开始'
+        };
+        const phaseLabel = phaseLabelMap[data.phase] || '进行中';
+        const participationStatusText = data.joined
+            ? '你已参与'
+            : (data.phase === 'entry_open' ? '你未参与' : '已无法参与');
+        const participationStatusClass = data.joined
+            ? 'joined'
+            : (data.phase === 'entry_open' ? 'not-joined' : 'locked');
+        const rewardLabel = pool.rewardFrozen ? '实际获得知识点' : '当前可获得';
+        const rewardText = (pool.rewardValue === null || pool.rewardValue === undefined)
+            ? ''
+            : Number(pool.rewardValue).toFixed(2);
+        const poolUsers = Array.isArray(pool.users) ? pool.users : [];
+        const canPromptMoveThenJoin = (
+            !!data.requiresManualEntry &&
+            !data.joined &&
+            data.phase === 'entry_open' &&
+            ((userLocation || '').trim() !== (currentNodeDetail?.name || '').trim())
+        );
+        const joinButtonDisabled = (!data.canJoin && !canPromptMoveThenJoin) || distributionPanelState.joining;
+        return (
+            <div className="distribution-panel-overlay">
+                <div className="distribution-panel-modal">
+                    <button type="button" className="distribution-panel-close" onClick={closeDistributionPanel}>×</button>
+                    <div className="distribution-panel-title-row">
+                        <h3>{`分发活动：${currentNodeDetail.name}`}</h3>
+                        <div className="distribution-panel-title-tags">
+                            <span className={`distribution-panel-phase phase-${data.phase}`}>{phaseLabel}</span>
+                            <span className={`distribution-panel-participation-status ${participationStatusClass}`}>{participationStatusText}</span>
+                        </div>
+                    </div>
+
+                    {data.phase === 'entry_open' && (
+                        <div className="distribution-panel-timer-row">
+                            <span>{`入场截止：${formatCountdownText(data.secondsToEntryClose)}`}</span>
+                            <span>{`执行倒计时：${formatCountdownText(data.secondsToExecute)}`}</span>
+                        </div>
+                    )}
+                    {data.phase === 'entry_closed' && (
+                        <div className="distribution-panel-timer-row">
+                            <span>{`执行倒计时：${formatCountdownText(data.secondsToExecute)}`}</span>
+                        </div>
+                    )}
+                    {data.phase === 'settling' && (
+                        <div className="distribution-panel-timer-row">
+                            <span>{`活动结束：${formatCountdownText(data.secondsToEnd)}`}</span>
+                        </div>
+                    )}
+
+                    <div className="distribution-panel-grid">
+                        <div className="distribution-panel-card"><span>参与总人数</span><strong>{data.participantTotal || 0}</strong></div>
+                        <div className="distribution-panel-card"><span>本池总比例</span><strong>{Number(pool.poolPercent || 0).toFixed(2)}%</strong></div>
+                        <div className="distribution-panel-card"><span>你的实际比例</span><strong>{Number(pool.userActualPercent || 0).toFixed(2)}%</strong></div>
+                        <div className="distribution-panel-card"><span>{rewardLabel}</span><strong>{rewardText}</strong></div>
+                        <div className="distribution-panel-card"><span>所在规则池</span><strong>{pool.label || '未命中规则池'}</strong></div>
+                    </div>
+
+                    {distributionPanelState.error && <div className="distribution-panel-error">{distributionPanelState.error}</div>}
+                    <div className="distribution-panel-pool-row">
+                        <div className="distribution-panel-pool-row-title">
+                            {`同池人数：${pool.participantCount || 0}`}
+                        </div>
+                        <div className="distribution-panel-pool-avatars">
+                            {poolUsers.length > 0 ? poolUsers.map((item) => (
+                                <div
+                                    key={item.userId || item.username}
+                                    className="distribution-panel-pool-avatar"
+                                    title={item.displayName || item.username || ''}
+                                >
+                                    <img
+                                        src={avatarMap[item.avatar] || avatarMap.default_male_1}
+                                        alt={item.username || '用户'}
+                                    />
+                                </div>
+                            )) : (
+                                <span className="distribution-panel-pool-empty">暂无</span>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="distribution-panel-actions">
                         <button
                             type="button"
-                            className="btn btn-danger travel-stop-btn"
-                            onClick={stopTravel}
-                            disabled={isStoppingTravel || travelStatus?.isStopping}
+                            className="btn btn-small btn-success"
+                            onClick={joinDistributionFromPanel}
+                            disabled={joinButtonDisabled}
                         >
-                            {(isStoppingTravel || travelStatus?.isStopping) ? '停止进行中...' : '停止移动'}
+                            {distributionPanelState.joining ? '参与中...' : '参与分发'}
                         </button>
-                    </div>
-                ) : currentLocationNodeDetail ? (
-                    <div
-                        className={`location-sidebar-content ${canJumpToLocationView ? 'location-sidebar-jumpable' : ''}`}
-                        onClick={() => {
-                            if (canJumpToLocationView) {
-                                handleJumpToCurrentLocationView();
-                            }
-                        }}
-                    >
-                        <div className="location-node-title">{currentLocationNodeDetail.name}</div>
-
-                        {currentLocationNodeDetail.description && (
-                            <div className="location-node-section">
-                                <div className="section-label">描述</div>
-                                <div className="section-content">{currentLocationNodeDetail.description}</div>
-                            </div>
-                        )}
-
-                        {currentLocationNodeDetail.relatedParentDomains && currentLocationNodeDetail.relatedParentDomains.length > 0 && (
-                            <div className="location-node-section">
-                                <div className="section-label">父域</div>
-                                <div className="section-tags">
-                                    {currentLocationNodeDetail.relatedParentDomains.map((parent, idx) => (
-                                        <span key={idx} className="node-tag parent-tag">{parent}</span>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {currentLocationNodeDetail.relatedChildDomains && currentLocationNodeDetail.relatedChildDomains.length > 0 && (
-                            <div className="location-node-section">
-                                <div className="section-label">子域</div>
-                                <div className="section-tags">
-                                    {currentLocationNodeDetail.relatedChildDomains.map((child, idx) => (
-                                        <span key={idx} className="node-tag child-tag">{child}</span>
-                                    ))}
-                                </div>
-                            </div>
+                        {data.canExit && (
+                            <button
+                                type="button"
+                                className="btn btn-small btn-danger"
+                                onClick={exitDistributionFromPanel}
+                                disabled={distributionPanelState.exiting}
+                            >
+                                {distributionPanelState.exiting ? '退出中...' : '退出分发活动'}
+                            </button>
                         )}
                     </div>
-                ) : (
-                    <div className="location-sidebar-empty">
-                        <p>暂未降临到任何知识域</p>
-                    </div>
-                )}
+                </div>
             </div>
         );
     };
@@ -2475,11 +3148,13 @@ const App = () => {
         );
     }
 
+    const isKnowledgeDomainActive = showKnowledgeDomain || isTransitioningToDomain;
+
     return (
-        <div className="game-container">
+        <div className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''}`}>
             <div className="game-content">
                 {/* 头部 */}
-                <div className="header">
+                <div className={`header ${isKnowledgeDomainActive ? 'header-knowledge-domain-active' : ''}`}>
                     <div className="header-content">
                         <h1 className="header-title">
                             <Home className="icon" />
@@ -2489,7 +3164,10 @@ const App = () => {
                             <div className="header-buttons">
                                 <div
                                     className="user-avatar-container"
-                                    onClick={() => setView('profile')}
+                                    onClick={async () => {
+                                        await prepareForPrimaryNavigation();
+                                        setView('profile');
+                                    }}
                                     title="点击进入个人中心"
                                 >
                                     <img
@@ -2557,9 +3235,8 @@ const App = () => {
                                     退出登录
                                 </button>
                                 <button
-                                    onClick={() => {
-                                        setView('home');
-                                        setNavigationPath([{ type: 'home', label: '首页' }]);
+                                    onClick={async () => {
+                                        await navigateToHomeWithDockCollapse();
                                     }}
                                     className="btn btn-primary"
                                 >
@@ -2567,7 +3244,8 @@ const App = () => {
                                     首页
                                 </button>
                                 <button
-                                    onClick={() => {
+                                    onClick={async () => {
+                                        await prepareForPrimaryNavigation();
                                         setView('alliance');
                                     }}
                                     className="btn btn-secondary"
@@ -2631,6 +3309,7 @@ const App = () => {
                         onAnnouncementClick={handleHomeAnnouncementClick}
                         onMarkAllAnnouncementsRead={markAnnouncementNotificationsRead}
                         onAnnouncementPanelViewed={markAnnouncementNotificationsRead}
+                        showRightDocks={false}
                     />
                 )}
                 {/* 节点详情视图 */}
@@ -2640,9 +3319,8 @@ const App = () => {
                             node={currentNodeDetail}
                             navigationPath={navigationPath}
                             onNavigate={(nodeId) => fetchNodeDetail(nodeId)}
-                            onHome={() => {
-                                setView("home");
-                                setNavigationPath([{ type: "home", label: "首页" }]);
+                            onHome={async () => {
+                                await navigateToHomeWithDockCollapse();
                             }}
                             onShowNavigationTree={() => setShowNavigationTree(true)}
                             searchQuery={homeSearchQuery}
@@ -2668,9 +3346,10 @@ const App = () => {
                             onNodeInfoClick={() => setShowNodeInfoModal(true)}
                             webglCanvasRef={webglCanvasRef}
                         />
-                        {renderNodeDetailLocationSidebar()}
                     </>
                 )}
+                {renderUnifiedRightDock()}
+                {renderDistributionParticipationPanel()}
                 {view === "alliance" && (
                     <AlliancePanel 
                         username={username} 
@@ -2705,9 +3384,8 @@ const App = () => {
                         <button
                             type="button"
                             className="btn btn-primary"
-                            onClick={() => {
-                                setView('home');
-                                setNavigationPath([{ type: 'home', label: '首页' }]);
+                            onClick={async () => {
+                                await navigateToHomeWithDockCollapse();
                             }}
                         >
                             返回首页
@@ -2753,9 +3431,8 @@ const App = () => {
                     navigationPaths={fullNavigationPaths}
                     currentNode={currentNodeDetail}
                     onNavigate={(nodeId) => fetchNodeDetail(nodeId)}
-                    onHome={() => {
-                        setView('home');
-                        setNavigationPath([{ type: 'home', label: '首页' }]);
+                    onHome={async () => {
+                        await navigateToHomeWithDockCollapse();
                     }}
                 />
 

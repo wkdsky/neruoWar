@@ -25,7 +25,8 @@ const Home = ({
     isMarkingAnnouncementsRead = false,
     onAnnouncementClick,
     onMarkAllAnnouncementsRead,
-    onAnnouncementPanelViewed
+    onAnnouncementPanelViewed,
+    showRightDocks = true
 }) => {
     const searchBarRef = useRef(null);
     const hasMarkedAnnouncementViewRef = useRef(false);
@@ -161,7 +162,7 @@ const Home = ({
             </div>
 
             {/* Right Sidebar - Normal User Only */}
-            {!isAdmin && (
+            {!isAdmin && showRightDocks && (
                 <>
                     <div className={`home-announcement-dock ${isAnnouncementPanelExpanded ? 'expanded' : 'collapsed'}`}>
                         <aside className={`home-announcement-dock-panel ${isAnnouncementPanelExpanded ? 'expanded' : ''}`}>

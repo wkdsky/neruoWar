@@ -123,6 +123,121 @@
     margin-bottom: 1rem;
 }
 
+.distribution-participation-card {
+    border: 1px solid rgba(100, 116, 139, 0.45);
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.5);
+    padding: 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.distribution-participation-card.active {
+    border-color: rgba(56, 189, 248, 0.55);
+    box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.2);
+}
+
+.distribution-participation-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.45rem;
+}
+
+.distribution-participation-header strong {
+    color: #e2e8f0;
+    font-size: 0.88rem;
+}
+
+.distribution-phase-badge {
+    border-radius: 999px;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.distribution-phase-badge.phase-entry_open {
+    background: rgba(34, 197, 94, 0.2);
+    color: #86efac;
+}
+
+.distribution-phase-badge.phase-entry_closed {
+    background: rgba(251, 191, 36, 0.2);
+    color: #fcd34d;
+}
+
+.distribution-phase-badge.phase-settling {
+    background: rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+}
+
+.distribution-phase-badge.phase-ended,
+.distribution-phase-badge.phase-none {
+    background: rgba(100, 116, 139, 0.25);
+    color: #cbd5e1;
+}
+
+.distribution-participation-timers {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.distribution-participation-timers span {
+    color: #cbd5e1;
+    font-size: 0.78rem;
+}
+
+.distribution-participation-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
+}
+
+.distribution-participation-metric {
+    border-radius: 8px;
+    border: 1px solid rgba(100, 116, 139, 0.45);
+    background: rgba(30, 41, 59, 0.78);
+    padding: 0.4rem 0.45rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+}
+
+.distribution-participation-metric span {
+    color: #a5b4fc;
+    font-size: 0.72rem;
+}
+
+.distribution-participation-metric strong {
+    color: #f8fafc;
+    font-size: 0.86rem;
+    word-break: break-all;
+}
+
+.distribution-participation-users {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+
+.distribution-participant-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid rgba(148, 163, 184, 0.65);
+    background: rgba(15, 23, 42, 0.7);
+}
+
+.distribution-participation-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
 .manage-tab-content {
     display: flex;
     flex-direction: column;
@@ -838,6 +953,10 @@
     .distribution-publish-row {
         grid-template-columns: 1fr;
         gap: 0.35rem;
+    }
+
+    .distribution-participation-metrics {
+        grid-template-columns: 1fr;
     }
 
     .manage-edge-shell {

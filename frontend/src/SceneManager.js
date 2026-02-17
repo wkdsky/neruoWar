@@ -166,6 +166,18 @@ class SceneManager {
       }
     ];
 
+    if (buttonContext.showDistributionButton) {
+      buttons.push({
+        id: 'join-distribution',
+        icon: '✦',
+        angle: -Math.PI * 0.62,
+        action: 'joinDistribution',
+        tooltip: '知识点分发',
+        color: [0.25, 0.72, 0.95, 0.92],
+        disabled: !!buttonContext.distributionDisabled
+      });
+    }
+
     if (buttonContext.showMoveButton) {
       buttons.push({
         id: 'move-to-node',

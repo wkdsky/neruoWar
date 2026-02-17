@@ -144,10 +144,51 @@ const DistributionRuleProfileSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const DistributionParticipantSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  joinedAt: {
+    type: Date,
+    default: Date.now
+  },
+  exitedAt: {
+    type: Date,
+    default: null
+  }
+}, { _id: false });
+
+const DistributionResultUserRewardSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  amount: {
+    type: Number,
+    default: 0,
+    min: 0
+  }
+}, { _id: false });
+
 const NodeLockedDistributionSchema = new mongoose.Schema({
   executeAt: {
     type: Date,
     required: true
+  },
+  entryCloseAt: {
+    type: Date,
+    default: null
+  },
+  endAt: {
+    type: Date,
+    default: null
+  },
+  executedAt: {
+    type: Date,
+    default: null
   },
   announcedAt: {
     type: Date,
@@ -202,6 +243,14 @@ const NodeLockedDistributionSchema = new mongoose.Schema({
       type: mongoose.Schema.Types.ObjectId,
       ref: 'EntropyAlliance'
     }],
+    default: []
+  },
+  participants: {
+    type: [DistributionParticipantSchema],
+    default: []
+  },
+  resultUserRewards: {
+    type: [DistributionResultUserRewardSchema],
     default: []
   },
   ruleSnapshot: {

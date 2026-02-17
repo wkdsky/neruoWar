@@ -41,15 +41,121 @@ const getTravelStatus = (travelState) => {
   return travelState.isTraveling ? 'moving' : 'idle';
 };
 
-const isUserArrivedAtNode = (user, nodeName) => {
-  if (!user || !nodeName) return false;
-  if ((user.location || '') !== nodeName) return false;
-  return getTravelStatus(user.travelState) === 'idle';
+const createIdleTravelState = (unitDurationSeconds = 60) => {
+  const safeDuration = Math.max(1, parseInt(unitDurationSeconds, 10) || 60);
+  return {
+    status: 'idle',
+    isTraveling: false,
+    path: [],
+    startedAt: null,
+    unitDurationSeconds: safeDuration,
+    targetNodeId: null,
+    stoppingNearestNodeId: null,
+    stoppingNearestNodeName: '',
+    stopStartedAt: null,
+    stopDurationSeconds: 0,
+    stopFromNode: null,
+    queuedTargetNodeId: null,
+    queuedTargetNodeName: ''
+  };
+};
+
+const resolveEffectiveUserPresence = (user, now = new Date()) => {
+  const safeNowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const travel = user?.travelState || {};
+  const status = getTravelStatus(travel);
+  const currentLocation = user?.location || '';
+  const unitDurationSeconds = Math.max(1, parseInt(travel.unitDurationSeconds, 10) || 60);
+
+  if (status === 'moving') {
+    const path = Array.isArray(travel.path) ? travel.path : [];
+    const startedAtMs = new Date(travel.startedAt || 0).getTime();
+    const totalDurationMs = (Math.max(0, path.length - 1) * unitDurationSeconds * 1000);
+    if (path.length >= 2 && Number.isFinite(startedAtMs) && startedAtMs > 0 && safeNowMs >= startedAtMs + totalDurationMs) {
+      const arrivedNodeName = path[path.length - 1]?.nodeName || currentLocation;
+      return {
+        location: arrivedNodeName,
+        status: 'idle',
+        shouldPersist: status !== 'idle' || arrivedNodeName !== currentLocation,
+        nextTravelState: createIdleTravelState(unitDurationSeconds)
+      };
+    }
+  }
+
+  if (status === 'stopping') {
+    const stopStartedAtMs = new Date(travel.stopStartedAt || 0).getTime();
+    const stopDurationSeconds = Math.max(0, Number(travel.stopDurationSeconds) || 0);
+    const stopDurationMs = stopDurationSeconds * 1000;
+    const nearestNodeName = travel.stoppingNearestNodeName || currentLocation;
+    if (Number.isFinite(stopStartedAtMs) && stopStartedAtMs > 0 && (stopDurationMs === 0 || safeNowMs >= stopStartedAtMs + stopDurationMs)) {
+      return {
+        location: nearestNodeName,
+        status: 'idle',
+        shouldPersist: status !== 'idle' || nearestNodeName !== currentLocation,
+        nextTravelState: createIdleTravelState(unitDurationSeconds)
+      };
+    }
+  }
+
+  return {
+    location: currentLocation,
+    status: status || 'idle',
+    shouldPersist: false,
+    nextTravelState: null
+  };
+};
+
+const resolveLockTimeline = (lock = {}) => {
+  const executeAtMs = new Date(lock?.executeAt || 0).getTime();
+  if (!Number.isFinite(executeAtMs) || executeAtMs <= 0) {
+    return {
+      executeAtMs: 0,
+      entryCloseAtMs: 0,
+      endAtMs: 0
+    };
+  }
+  const entryCloseAtMsRaw = new Date(lock?.entryCloseAt || 0).getTime();
+  const endAtMsRaw = new Date(lock?.endAt || 0).getTime();
+  const entryCloseAtMs = Number.isFinite(entryCloseAtMsRaw) && entryCloseAtMsRaw > 0
+    ? entryCloseAtMsRaw
+    : (executeAtMs - 60 * 1000);
+  const endAtMs = Number.isFinite(endAtMsRaw) && endAtMsRaw > 0
+    ? endAtMsRaw
+    : (executeAtMs + 60 * 1000);
+  return {
+    executeAtMs,
+    entryCloseAtMs,
+    endAtMs
+  };
+};
+
+const getActiveManualParticipantIdSet = (lock = {}, atMs = Date.now()) => {
+  const targetMs = Number.isFinite(Number(atMs)) ? Number(atMs) : Date.now();
+  const participantSet = new Set();
+  const rows = Array.isArray(lock?.participants) ? lock.participants : [];
+  for (const item of rows) {
+    const userId = getIdString(item?.userId);
+    if (!isValidObjectId(userId)) continue;
+    const joinedAtMs = new Date(item?.joinedAt || 0).getTime();
+    if (Number.isFinite(joinedAtMs) && joinedAtMs > targetMs) continue;
+    const exitedAtMs = new Date(item?.exitedAt || 0).getTime();
+    if (Number.isFinite(exitedAtMs) && exitedAtMs > 0 && exitedAtMs <= targetMs) continue;
+    participantSet.add(userId);
+  }
+  return participantSet;
 };
 
 let isProcessing = false;
 
 class KnowledgeDistributionService {
+  static getLockTimeline(lock = {}) {
+    return resolveLockTimeline(lock);
+  }
+
+  static getActiveManualParticipantIds(lock = {}, atMs = Date.now()) {
+    return Array.from(getActiveManualParticipantIdSet(lock, atMs));
+  }
+
   static async processTick() {
     if (isProcessing) return;
     isProcessing = true;
@@ -78,9 +184,18 @@ class KnowledgeDistributionService {
   static async processNode(node, now) {
     const lock = node.knowledgeDistributionLocked || null;
     if (!lock?.executeAt) return;
+    const timeline = resolveLockTimeline(lock);
+    const nowMs = now.getTime();
 
-    if (new Date(lock.executeAt).getTime() <= now.getTime()) {
+    if (timeline.executeAtMs > 0 && timeline.executeAtMs <= nowMs && !lock.executedAt) {
       await this.executeLockedDistribution(node._id, now);
+      return;
+    }
+
+    if (timeline.endAtMs > 0 && timeline.endAtMs <= nowMs) {
+      await Node.findByIdAndUpdate(node._id, {
+        $set: { knowledgeDistributionLocked: null }
+      });
     }
   }
 
@@ -126,6 +241,63 @@ class KnowledgeDistributionService {
     return false;
   }
 
+  static resolvePreferredCustomPoolForUser({ userId, allianceId, rules, masterAllianceId }) {
+    if (!userId || !isValidObjectId(userId) || !rules) return null;
+
+    const candidates = [];
+    const customUserPercent = clampPercent(rules.customUserPercentMap?.get(userId), 0);
+    if (customUserPercent > 0) {
+      candidates.push({
+        key: 'custom_user',
+        percent: customUserPercent,
+        priority: 4
+      });
+    }
+
+    const safeAllianceId = getIdString(allianceId);
+    if (safeAllianceId) {
+      const specificAlliancePercent = clampPercent(rules.specificAlliancePercentMap?.get(safeAllianceId), 0);
+      if (specificAlliancePercent > 0) {
+        candidates.push({
+          key: 'specific_alliance',
+          percent: specificAlliancePercent,
+          allianceId: safeAllianceId,
+          priority: 3
+        });
+      }
+
+      const nonHostileAlliancePercent = clampPercent(rules.nonHostileAlliancePercent, 0);
+      if (
+        masterAllianceId &&
+        !rules.enemyAllianceIds?.has(safeAllianceId) &&
+        nonHostileAlliancePercent > 0
+      ) {
+        candidates.push({
+          key: 'non_hostile_alliance',
+          percent: nonHostileAlliancePercent,
+          priority: 2
+        });
+      }
+    } else {
+      const noAlliancePercent = clampPercent(rules.noAlliancePercent, 0);
+      if (noAlliancePercent > 0) {
+        candidates.push({
+          key: 'no_alliance',
+          percent: noAlliancePercent,
+          priority: 1
+        });
+      }
+    }
+
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => {
+      const percentDiff = (Number(b.percent) || 0) - (Number(a.percent) || 0);
+      if (percentDiff !== 0) return percentDiff;
+      return (Number(b.priority) || 0) - (Number(a.priority) || 0);
+    });
+    return candidates[0];
+  }
+
   static calculateProjectedMaxPercentForUser({ user, node, lock }) {
     const userId = getIdString(user?._id);
     const allianceId = getIdString(user?.allianceId);
@@ -144,23 +316,20 @@ class KnowledgeDistributionService {
       return 0;
     }
 
-    let percent = 0;
-    if (userId === masterId) percent += rules.masterPercent;
-    if (rules.adminPercentMap.has(userId)) percent += rules.adminPercentMap.get(userId);
-    if (rules.customUserPercentMap.has(userId)) percent += rules.customUserPercentMap.get(userId);
-
-    if (allianceId) {
-      if (masterAllianceId && !rules.enemyAllianceIds.has(allianceId)) {
-        percent += rules.nonHostileAlliancePercent;
-      }
-      if (rules.specificAlliancePercentMap.has(allianceId)) {
-        percent += rules.specificAlliancePercentMap.get(allianceId);
-      }
-    } else {
-      percent += rules.noAlliancePercent;
+    if (userId === masterId) {
+      return round2(Math.max(0, clampPercent(rules.masterPercent, 0)));
+    }
+    if (rules.adminPercentMap.has(userId)) {
+      return round2(Math.max(0, clampPercent(rules.adminPercentMap.get(userId), 0)));
     }
 
-    return round2(Math.max(0, percent));
+    const preferredPool = this.resolvePreferredCustomPoolForUser({
+      userId,
+      allianceId,
+      rules,
+      masterAllianceId
+    });
+    return round2(Math.max(0, Number(preferredPool?.percent) || 0));
   }
 
   static async publishAnnouncementNotifications({ node, masterUser, lock }) {
@@ -173,6 +342,10 @@ class KnowledgeDistributionService {
         : (lock?.projectedTotal || 0)
     );
     const executeAtText = new Date(lock.executeAt).toLocaleString('zh-CN', { hour12: false });
+    const timeline = resolveLockTimeline(lock);
+    const entryCloseText = timeline.entryCloseAtMs > 0
+      ? new Date(timeline.entryCloseAtMs).toLocaleString('zh-CN', { hour12: false })
+      : '';
     const nowDate = new Date();
     const masterId = getIdString(node?.domainMaster);
     const rules = this.getCommonRuleSets(lock?.ruleSnapshot || {}, lock);
@@ -186,7 +359,7 @@ class KnowledgeDistributionService {
       const estimatedMax = fromCents(estimatedMaxCents);
       const message = isFixedRecipient
         ? `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。`
-        : `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。请前往知识域「${node.name}」参与，点击前往（与知识域旁“前往”按钮效果一致）。`;
+        : `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。请前往知识域「${node.name}」参与分发，点击前往${entryCloseText ? `（入场截止 ${entryCloseText}）` : ''}。`;
 
       ops.push({
         updateOne: {
@@ -227,51 +400,103 @@ class KnowledgeDistributionService {
     if (!node || !node.knowledgeDistributionLocked) return;
 
     const lock = node.knowledgeDistributionLocked;
-    if (!lock.executeAt || new Date(lock.executeAt).getTime() > now.getTime()) return;
+    const timeline = resolveLockTimeline(lock);
+    if (!lock.executeAt || timeline.executeAtMs > now.getTime()) return;
+    if (lock.executedAt) return;
 
     const masterId = getIdString(node.domainMaster);
     const masterAllianceId = getIdString(lock.masterAllianceId);
     const rules = this.getCommonRuleSets(lock.ruleSnapshot || {}, lock);
+    const activeManualParticipantSet = getActiveManualParticipantIdSet(lock, timeline.executeAtMs || now.getTime());
     const totalPoolCents = toCents((Number(node.knowledgePoint?.value) || 0) + (Number(node.knowledgeDistributionCarryover) || 0));
     const distributionPercent = getDistributionScopePercent(lock.ruleSnapshot || lock);
     const distributionPoolCents = Math.floor(totalPoolCents * (distributionPercent / 100));
 
-    const finalizeWithoutDistribution = async () => {
+    const finalizeDistribution = async ({ carryoverCents, executedAt, resultUserRewards = [] }) => {
       node.knowledgePoint.value = 0;
-      node.knowledgePoint.lastUpdated = now;
-      node.knowledgeDistributionCarryover = fromCents(totalPoolCents);
-      node.knowledgeDistributionLocked = null;
-      node.knowledgeDistributionLastExecutedAt = now;
+      node.knowledgePoint.lastUpdated = executedAt;
+      node.knowledgeDistributionCarryover = fromCents(carryoverCents);
+      node.knowledgeDistributionLastExecutedAt = executedAt;
+      if (node.knowledgeDistributionLocked) {
+        node.knowledgeDistributionLocked.executedAt = executedAt;
+        node.knowledgeDistributionLocked.resultUserRewards = Array.isArray(resultUserRewards)
+          ? resultUserRewards
+          : [];
+        if (!node.knowledgeDistributionLocked.entryCloseAt) {
+          node.knowledgeDistributionLocked.entryCloseAt = new Date(timeline.entryCloseAtMs || (timeline.executeAtMs - 60 * 1000));
+        }
+        if (!node.knowledgeDistributionLocked.endAt) {
+          node.knowledgeDistributionLocked.endAt = new Date(timeline.endAtMs || (timeline.executeAtMs + 60 * 1000));
+        }
+      }
+      if (timeline.endAtMs > 0 && executedAt.getTime() >= timeline.endAtMs) {
+        node.knowledgeDistributionLocked = null;
+      }
       await node.save();
     };
 
     if (!isValidObjectId(masterId)) {
-      await finalizeWithoutDistribution();
+      await finalizeDistribution({
+        carryoverCents: totalPoolCents,
+        executedAt: now,
+        resultUserRewards: []
+      });
       return;
     }
 
     const masterUser = await User.findById(masterId).select('_id username role allianceId');
     if (!masterUser || masterUser.role !== 'common') {
-      await finalizeWithoutDistribution();
+      await finalizeDistribution({
+        carryoverCents: totalPoolCents,
+        executedAt: now,
+        resultUserRewards: []
+      });
       return;
     }
 
     const fixedUserIds = Array.from(new Set([
       masterId,
       ...Array.from(rules.adminPercentMap.keys()),
-      ...Array.from(rules.customUserPercentMap.keys())
+      ...Array.from(rules.customUserPercentMap.keys()),
+      ...Array.from(activeManualParticipantSet.values())
     ].filter((id) => isValidObjectId(id))));
     const fixedObjectIds = fixedUserIds.map((id) => new mongoose.Types.ObjectId(id));
 
+    const userOrConditions = [
+      { location: node.name },
+      { 'travelState.status': { $in: ['moving', 'stopping'] } },
+      { 'travelState.isTraveling': true }
+    ];
+    if (fixedObjectIds.length > 0) {
+      userOrConditions.push({ _id: { $in: fixedObjectIds } });
+    }
     const userQuery = {
       role: 'common',
-      $or: [
-        { location: node.name },
-        { _id: { $in: fixedObjectIds } }
-      ]
+      $or: userOrConditions
     };
     const candidateUsers = await User.find(userQuery).select('_id username allianceId location travelState knowledgeBalance');
     const userMap = new Map(candidateUsers.map((item) => [getIdString(item._id), item]));
+    const settleOps = [];
+    for (const user of candidateUsers) {
+      const userId = getIdString(user._id);
+      if (!isValidObjectId(userId)) continue;
+      const effectivePresence = resolveEffectiveUserPresence(user, now);
+      if (!effectivePresence.shouldPersist || !effectivePresence.nextTravelState) continue;
+      settleOps.push({
+        updateOne: {
+          filter: { _id: new mongoose.Types.ObjectId(userId) },
+          update: {
+            $set: {
+              location: effectivePresence.location || '',
+              travelState: effectivePresence.nextTravelState
+            }
+          }
+        }
+      });
+    }
+    if (settleOps.length > 0) {
+      await User.bulkWrite(settleOps, { ordered: false });
+    }
 
     const isEligible = (user, requireArrival = false) => {
       if (!user) return false;
@@ -287,8 +512,13 @@ class KnowledgeDistributionService {
       })) {
         return false;
       }
-      if (requireArrival && !isUserArrivedAtNode(user, node.name)) {
-        return false;
+      if (requireArrival) {
+        const isMasterOrAdmin = userId === masterId || rules.adminPercentMap.has(userId);
+        if (!isMasterOrAdmin) {
+          if (!activeManualParticipantSet.has(userId)) {
+            return false;
+          }
+        }
       }
       return true;
     };
@@ -336,12 +566,30 @@ class KnowledgeDistributionService {
       allianceContributionCents = percentPoolCents(allianceContributionPercent);
     }
 
+    const assignedCustomPoolByUserId = new Map();
+    for (const user of candidateUsers) {
+      const userId = getIdString(user?._id);
+      if (!isValidObjectId(userId)) continue;
+      if (userId === masterId || rules.adminPercentMap.has(userId)) continue;
+      if (!isEligible(user, true)) continue;
+      const preferredPool = this.resolvePreferredCustomPoolForUser({
+        userId,
+        allianceId: getIdString(user?.allianceId),
+        rules,
+        masterAllianceId
+      });
+      if (!preferredPool || clampPercent(preferredPool.percent, 0) <= 0) continue;
+      assignedCustomPoolByUserId.set(userId, preferredPool);
+    }
+
     // 自定义规则 1：指定用户（要求到达）
     for (const [targetUserId, percent] of rules.customUserPercentMap.entries()) {
       const poolCents = percentPoolCents(percent);
       if (poolCents <= 0) continue;
       const targetUser = userMap.get(targetUserId);
       if (!isEligible(targetUser, true)) continue;
+      const assignedPool = assignedCustomPoolByUserId.get(targetUserId);
+      if (assignedPool?.key !== 'custom_user') continue;
       addUserReward(targetUserId, poolCents);
     }
 
@@ -355,6 +603,8 @@ class KnowledgeDistributionService {
         if (!allianceId) continue;
         if (!isEligible(user, true)) continue;
         if (rules.enemyAllianceIds.has(allianceId)) continue;
+        const assignedPool = assignedCustomPoolByUserId.get(userId);
+        if (assignedPool?.key !== 'non_hostile_alliance') continue;
         participants.push(userId);
       }
       distributeGroupPool(poolCents, participants);
@@ -370,6 +620,8 @@ class KnowledgeDistributionService {
         const allianceId = getIdString(user.allianceId);
         if (!allianceId || allianceId !== targetAllianceId) continue;
         if (!isEligible(user, true)) continue;
+        const assignedPool = assignedCustomPoolByUserId.get(userId);
+        if (assignedPool?.key !== 'specific_alliance') continue;
         participants.push(userId);
       }
       distributeGroupPool(poolCents, participants);
@@ -384,6 +636,8 @@ class KnowledgeDistributionService {
         const allianceId = getIdString(user.allianceId);
         if (allianceId) continue;
         if (!isEligible(user, true)) continue;
+        const assignedPool = assignedCustomPoolByUserId.get(userId);
+        if (assignedPool?.key !== 'no_alliance') continue;
         participants.push(userId);
       }
       distributeGroupPool(poolCents, participants);
@@ -438,14 +692,20 @@ class KnowledgeDistributionService {
       await User.bulkWrite(userOps, { ordered: false });
     }
 
+    const resultUserRewards = Array.from(userRewardCents.entries())
+      .filter(([userId, cents]) => isValidObjectId(userId) && cents > 0)
+      .map(([userId, cents]) => ({
+        userId: new mongoose.Types.ObjectId(userId),
+        amount: fromCents(cents)
+      }));
+
     const distributedTotalCents = distributedUserCents + effectiveAllianceContributionCents;
     const carryoverCents = Math.max(0, totalPoolCents - distributedTotalCents);
-    node.knowledgePoint.value = 0;
-    node.knowledgePoint.lastUpdated = now;
-    node.knowledgeDistributionCarryover = fromCents(carryoverCents);
-    node.knowledgeDistributionLocked = null;
-    node.knowledgeDistributionLastExecutedAt = now;
-    await node.save();
+    await finalizeDistribution({
+      carryoverCents,
+      executedAt: now,
+      resultUserRewards
+    });
   }
 }
 

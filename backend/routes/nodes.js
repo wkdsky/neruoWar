@@ -407,8 +407,30 @@ const serializeDistributionRuleProfile = (profile = {}) => ({
 
 const serializeDistributionLock = (locked = null) => {
   if (!locked) return null;
+  const executeAtMs = new Date(locked.executeAt || 0).getTime();
+  const entryCloseAtMsRaw = new Date(locked.entryCloseAt || 0).getTime();
+  const endAtMsRaw = new Date(locked.endAt || 0).getTime();
+  const entryCloseAt = Number.isFinite(entryCloseAtMsRaw) && entryCloseAtMsRaw > 0
+    ? new Date(entryCloseAtMsRaw)
+    : (Number.isFinite(executeAtMs) && executeAtMs > 0 ? new Date(executeAtMs - 60 * 1000) : null);
+  const endAt = Number.isFinite(endAtMsRaw) && endAtMsRaw > 0
+    ? new Date(endAtMsRaw)
+    : (Number.isFinite(executeAtMs) && executeAtMs > 0 ? new Date(executeAtMs + 60 * 1000) : null);
+  const participants = (Array.isArray(locked.participants) ? locked.participants : []).map((item) => ({
+    userId: getIdString(item?.userId),
+    joinedAt: item?.joinedAt || null,
+    exitedAt: item?.exitedAt || null
+  })).filter((item) => isValidObjectId(item.userId));
+  const resultUserRewards = (Array.isArray(locked.resultUserRewards) ? locked.resultUserRewards : []).map((item) => ({
+    userId: getIdString(item?.userId),
+    amount: round2(Math.max(0, Number(item?.amount) || 0))
+  })).filter((item) => isValidObjectId(item.userId));
+  const activeParticipantCount = participants.filter((item) => !item.exitedAt).length;
   return {
     executeAt: locked.executeAt || null,
+    entryCloseAt: entryCloseAt || null,
+    endAt: endAt || null,
+    executedAt: locked.executedAt || null,
     announcedAt: locked.announcedAt || null,
     projectedTotal: round2(Number(locked.projectedTotal) || 0),
     projectedDistributableTotal: round2(Number(locked.projectedDistributableTotal) || 0),
@@ -419,6 +441,9 @@ const serializeDistributionLock = (locked = null) => {
     distributionPercent: round2(clampPercent(locked?.distributionPercent, 100)),
     ruleProfileId: typeof locked.ruleProfileId === 'string' ? locked.ruleProfileId : '',
     ruleProfileName: typeof locked.ruleProfileName === 'string' ? locked.ruleProfileName : '',
+    activeParticipantCount,
+    participants,
+    resultUserRewards,
     enemyAllianceIds: (Array.isArray(locked.enemyAllianceIds) ? locked.enemyAllianceIds : []).map((item) => getIdString(item)).filter(Boolean),
     ruleSnapshot: serializeDistributionRule(locked.ruleSnapshot || {})
   };
@@ -468,6 +493,46 @@ const extractDistributionProfilesFromNode = (node) => {
     scheduleSlots
   };
 };
+
+const resolveDistributionLockTimeline = (lock = {}) => {
+  const timeline = KnowledgeDistributionService.getLockTimeline(lock || {});
+  return {
+    executeAtMs: Number(timeline.executeAtMs) || 0,
+    entryCloseAtMs: Number(timeline.entryCloseAtMs) || 0,
+    endAtMs: Number(timeline.endAtMs) || 0
+  };
+};
+
+const getDistributionLockPhase = (lock = {}, now = new Date()) => {
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const { executeAtMs, entryCloseAtMs, endAtMs } = resolveDistributionLockTimeline(lock);
+  if (!Number.isFinite(executeAtMs) || executeAtMs <= 0) return 'none';
+  if (Number.isFinite(endAtMs) && endAtMs > 0 && nowMs >= endAtMs) return 'ended';
+  if (nowMs < entryCloseAtMs) return 'entry_open';
+  if (nowMs < executeAtMs) return 'entry_closed';
+  return 'settling';
+};
+
+const getActiveManualParticipantSet = (lock = {}, atMs = Date.now()) => (
+  new Set(
+    KnowledgeDistributionService
+      .getActiveManualParticipantIds(lock || {}, atMs)
+      .map((id) => getIdString(id))
+      .filter((id) => isValidObjectId(id))
+  )
+);
+
+const getTravelStatus = (travelState) => {
+  if (!travelState) return 'idle';
+  if (typeof travelState.status === 'string' && travelState.status) return travelState.status;
+  return travelState.isTraveling ? 'moving' : 'idle';
+};
+
+const isUserIdleAtNode = (user, nodeName) => (
+  !!user &&
+  (user.location || '') === nodeName &&
+  getTravelStatus(user.travelState) === 'idle'
+);
 
 // 搜索节点
 router.get('/search', authenticateToken, async (req, res) => {
@@ -2163,11 +2228,20 @@ router.get('/:nodeId/distribution-settings', authenticateToken, async (req, res)
       return res.status(400).json({ error: '无效的知识域ID' });
     }
 
-    const node = await Node.findById(nodeId).select(
+    let node = await Node.findById(nodeId).select(
       'name status domainMaster domainAdmins knowledgePoint knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionActiveRuleId knowledgeDistributionScheduleSlots knowledgeDistributionLocked knowledgeDistributionCarryover'
     );
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (node.knowledgeDistributionLocked) {
+      await KnowledgeDistributionService.processNode(node, new Date());
+      node = await Node.findById(nodeId).select(
+        'name status domainMaster domainAdmins knowledgePoint knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionActiveRuleId knowledgeDistributionScheduleSlots knowledgeDistributionLocked knowledgeDistributionCarryover'
+      );
+      if (!node || node.status !== 'approved') {
+        return res.status(404).json({ error: '知识域不存在或不可操作' });
+      }
     }
 
     const currentUser = await User.findById(requestUserId).select('role');
@@ -2441,9 +2515,8 @@ router.put('/:nodeId/distribution-settings', authenticateToken, async (req, res)
     }
 
     const now = new Date();
-    const lockExecuteAt = new Date(node?.knowledgeDistributionLocked?.executeAt || 0).getTime();
-    if (node.knowledgeDistributionLocked && Number.isFinite(lockExecuteAt) && lockExecuteAt <= now.getTime()) {
-      await KnowledgeDistributionService.executeLockedDistribution(node._id, now);
+    if (node.knowledgeDistributionLocked) {
+      await KnowledgeDistributionService.processNode(node, now);
       node = await Node.findById(nodeId).select(
         'name status domainMaster domainAdmins knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionActiveRuleId knowledgeDistributionScheduleSlots knowledgeDistributionLocked'
       );
@@ -2607,9 +2680,8 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
     }
 
     const now = new Date();
-    const lockExecuteAt = new Date(node?.knowledgeDistributionLocked?.executeAt || 0).getTime();
-    if (node.knowledgeDistributionLocked && Number.isFinite(lockExecuteAt) && lockExecuteAt <= now.getTime()) {
-      await KnowledgeDistributionService.executeLockedDistribution(node._id, now);
+    if (node.knowledgeDistributionLocked) {
+      await KnowledgeDistributionService.processNode(node, now);
       node = await Node.findById(nodeId).select(
         'name status domainMaster domainAdmins contentScore knowledgePoint knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionActiveRuleId knowledgeDistributionLocked knowledgeDistributionCarryover'
       );
@@ -2629,6 +2701,9 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
     }
     if (executeAt.getTime() <= now.getTime()) {
       return res.status(400).json({ error: '执行时间必须晚于当前时间' });
+    }
+    if (executeAt.getTime() - now.getTime() < 60 * 1000) {
+      return res.status(400).json({ error: '执行时间至少需要晚于当前 1 分钟，以便用户入场' });
     }
 
     const { profiles, activeRuleId } = extractDistributionProfilesFromNode(node);
@@ -2703,9 +2778,14 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
       ? round2(clampPercent(selectedRule?.distributionPercent, 100))
       : 100;
     const projectedDistributableTotal = round2(projectedTotal * (distributionPercent / 100));
+    const entryCloseAt = new Date(executeAt.getTime() - 60 * 1000);
+    const endAt = new Date(executeAt.getTime() + 60 * 1000);
 
     refreshedNode.knowledgeDistributionLocked = {
       executeAt,
+      entryCloseAt,
+      endAt,
+      executedAt: null,
       announcedAt: now,
       projectedTotal,
       projectedDistributableTotal,
@@ -2717,6 +2797,8 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
       ruleProfileId: selectedProfile.profileId || '',
       ruleProfileName: selectedProfile.name || '',
       enemyAllianceIds: Array.isArray(masterAlliance?.enemyAllianceIds) ? masterAlliance.enemyAllianceIds : [],
+      participants: [],
+      resultUserRewards: [],
       ruleSnapshot: selectedRule
     };
     refreshedNode.knowledgeDistributionLastAnnouncedAt = now;
@@ -2742,6 +2824,598 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
     });
   } catch (error) {
     console.error('发布知识点分发计划错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取当前用户在知识点分发活动中的参与状态与实时预估
+router.get('/:nodeId/distribution-participation', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    let node = await Node.findById(nodeId).select(
+      'name status domainMaster domainAdmins knowledgePoint knowledgeDistributionLocked'
+    );
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (node.knowledgeDistributionLocked) {
+      await KnowledgeDistributionService.processNode(node, new Date());
+      node = await Node.findById(nodeId).select(
+        'name status domainMaster domainAdmins knowledgePoint knowledgeDistributionLocked'
+      );
+      if (!node || node.status !== 'approved') {
+        return res.status(404).json({ error: '知识域不存在或不可操作' });
+      }
+    }
+
+    const currentUser = await User.findById(requestUserId)
+      .select('_id username role allianceId avatar profession location travelState')
+      .lean();
+    if (!currentUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const lock = node.knowledgeDistributionLocked || null;
+    if (!lock) {
+      return res.json({
+        success: true,
+        active: false,
+        nodeId: node._id,
+        nodeName: node.name
+      });
+    }
+
+    const now = new Date();
+    const nowMs = now.getTime();
+    const timeline = resolveDistributionLockTimeline(lock);
+    const phase = getDistributionLockPhase(lock, now);
+
+    const currentUserId = getIdString(currentUser._id);
+    const masterId = getIdString(node.domainMaster);
+    const domainAdminSet = new Set((Array.isArray(node.domainAdmins) ? node.domainAdmins : [])
+      .map((id) => getIdString(id))
+      .filter((id) => isValidObjectId(id)));
+    const isMaster = currentUserId === masterId;
+    const isDomainAdminRole = domainAdminSet.has(currentUserId);
+    const isSystemAdminRole = currentUser.role === 'admin';
+    const autoEntry = isMaster || isDomainAdminRole;
+
+    const rules = KnowledgeDistributionService.getCommonRuleSets(lock.ruleSnapshot || {}, lock);
+    const currentAllianceId = getIdString(currentUser.allianceId);
+    const masterAllianceId = getIdString(lock.masterAllianceId);
+    const rewardSnapshotMap = new Map(
+      (Array.isArray(lock.resultUserRewards) ? lock.resultUserRewards : [])
+        .map((item) => [getIdString(item?.userId), round2(Math.max(0, Number(item?.amount) || 0))])
+        .filter(([userId]) => isValidObjectId(userId))
+    );
+    const isBlocked = KnowledgeDistributionService.isUserBlocked({
+      userId: currentUserId,
+      allianceId: currentAllianceId,
+      masterAllianceId,
+      blacklistUserIds: rules.blacklistUserIds,
+      blacklistAllianceIds: rules.blacklistAllianceIds,
+      enemyAllianceIds: rules.enemyAllianceIds
+    });
+
+    const manualParticipantSet = getActiveManualParticipantSet(lock, nowMs);
+    const isJoinedManual = manualParticipantSet.has(currentUserId);
+    const joined = autoEntry || isJoinedManual;
+    const requiresManualEntry = !autoEntry && !isSystemAdminRole;
+    const autoJoinOrderMsRaw = new Date(lock.announcedAt || lock.executeAt || 0).getTime();
+    const autoJoinOrderMs = Number.isFinite(autoJoinOrderMsRaw) && autoJoinOrderMsRaw > 0 ? autoJoinOrderMsRaw : 0;
+    const manualJoinOrderMap = new Map();
+    for (const item of (Array.isArray(lock.participants) ? lock.participants : [])) {
+      const userId = getIdString(item?.userId);
+      if (!isValidObjectId(userId)) continue;
+      const joinedAtMs = new Date(item?.joinedAt || 0).getTime();
+      const orderMs = Number.isFinite(joinedAtMs) && joinedAtMs > 0 ? joinedAtMs : Number.MAX_SAFE_INTEGER;
+      manualJoinOrderMap.set(userId, orderMs);
+    }
+    const getParticipantJoinOrderMs = (userId = '') => {
+      if (!isValidObjectId(userId)) return Number.MAX_SAFE_INTEGER;
+      if (userId === masterId || domainAdminSet.has(userId)) {
+        return autoJoinOrderMs;
+      }
+      return manualJoinOrderMap.get(userId) || Number.MAX_SAFE_INTEGER;
+    };
+
+    const canJoin = (
+      requiresManualEntry &&
+      !isBlocked &&
+      !isJoinedManual &&
+      phase === 'entry_open' &&
+      isUserIdleAtNode(currentUser, node.name)
+    );
+    const canExit = requiresManualEntry && isJoinedManual;
+    const canExitWithoutConfirm = !!lock.executedAt;
+
+    const activeParticipantIdSet = new Set();
+    if (isValidObjectId(masterId)) activeParticipantIdSet.add(masterId);
+    for (const adminId of domainAdminSet) activeParticipantIdSet.add(adminId);
+    for (const participantId of manualParticipantSet) activeParticipantIdSet.add(participantId);
+
+    const activeParticipantIds = Array.from(activeParticipantIdSet).filter((id) => isValidObjectId(id));
+    const participantUsers = activeParticipantIds.length > 0
+      ? await User.find({ _id: { $in: activeParticipantIds } })
+          .select('_id username avatar profession allianceId role')
+          .lean()
+      : [];
+    const userMap = new Map(participantUsers.map((item) => [getIdString(item._id), item]));
+
+    const participantAllianceIds = Array.from(new Set(
+      participantUsers.map((item) => getIdString(item.allianceId)).filter((id) => isValidObjectId(id))
+    ));
+    const alliances = participantAllianceIds.length > 0
+      ? await EntropyAlliance.find({ _id: { $in: participantAllianceIds } }).select('_id name').lean()
+      : [];
+    const allianceNameMap = new Map(alliances.map((item) => [getIdString(item._id), item.name || '']));
+
+    const isParticipantEligible = (userObj) => {
+      if (!userObj || userObj.role !== 'common') return false;
+      const userId = getIdString(userObj._id);
+      if (!isValidObjectId(userId)) return false;
+      const allianceId = getIdString(userObj.allianceId);
+      if (KnowledgeDistributionService.isUserBlocked({
+        userId,
+        allianceId,
+        masterAllianceId,
+        blacklistUserIds: rules.blacklistUserIds,
+        blacklistAllianceIds: rules.blacklistAllianceIds,
+        enemyAllianceIds: rules.enemyAllianceIds
+      })) {
+        return false;
+      }
+      if (userId === masterId || domainAdminSet.has(userId)) {
+        return true;
+      }
+      return manualParticipantSet.has(userId);
+    };
+
+    const eligibleParticipantIds = activeParticipantIds.filter((id) => isParticipantEligible(userMap.get(id)));
+
+    const isMasterOrAdminParticipant = (userId) => userId === masterId || domainAdminSet.has(userId);
+    const assignedRegularPoolByUserId = new Map();
+    for (const userId of eligibleParticipantIds) {
+      if (isMasterOrAdminParticipant(userId)) continue;
+      const userObj = userMap.get(userId);
+      if (!userObj) continue;
+      const preferredPool = KnowledgeDistributionService.resolvePreferredCustomPoolForUser({
+        userId,
+        allianceId: getIdString(userObj.allianceId),
+        rules,
+        masterAllianceId
+      });
+      if (!preferredPool || clampPercent(preferredPool.percent, 0) <= 0) continue;
+      assignedRegularPoolByUserId.set(userId, preferredPool);
+    }
+
+    const nonHostileParticipants = eligibleParticipantIds.filter((id) => {
+      const userItem = userMap.get(id);
+      const allianceId = getIdString(userItem?.allianceId);
+      if (!allianceId) return false;
+      if (masterAllianceId && rules.enemyAllianceIds.has(allianceId)) return false;
+      return assignedRegularPoolByUserId.get(id)?.key === 'non_hostile_alliance';
+    });
+    const noAllianceParticipants = eligibleParticipantIds.filter((id) => {
+      const userItem = userMap.get(id);
+      const allianceId = getIdString(userItem?.allianceId);
+      if (allianceId) return false;
+      return assignedRegularPoolByUserId.get(id)?.key === 'no_alliance';
+    });
+    const specificAllianceParticipantMap = new Map();
+    for (const [allianceId] of rules.specificAlliancePercentMap.entries()) {
+      specificAllianceParticipantMap.set(
+        allianceId,
+        eligibleParticipantIds.filter((id) => {
+          const userAllianceId = getIdString(userMap.get(id)?.allianceId);
+          if (userAllianceId !== allianceId) return false;
+          const assignedPool = assignedRegularPoolByUserId.get(id);
+          return assignedPool?.key === 'specific_alliance' && assignedPool?.allianceId === allianceId;
+        })
+      );
+    }
+
+    const currentAllianceIdSafe = getIdString(currentUser.allianceId);
+    let selectedPool = null;
+    if (!isBlocked && !isSystemAdminRole) {
+      if (currentUserId === masterId) {
+        const masterPercent = clampPercent(rules.masterPercent, 0);
+        if (masterPercent > 0) {
+          selectedPool = {
+            key: 'master',
+            label: '域主固定池',
+            percent: masterPercent,
+            split: false,
+            memberIds: isValidObjectId(masterId) ? [masterId] : []
+          };
+        }
+      } else if (rules.adminPercentMap.has(currentUserId)) {
+        const adminPercent = clampPercent(rules.adminPercentMap.get(currentUserId), 0);
+        if (adminPercent > 0) {
+          selectedPool = {
+            key: 'admin',
+            label: '域相固定池',
+            percent: adminPercent,
+            split: false,
+            memberIds: [currentUserId]
+          };
+        }
+      } else {
+        const preferredCurrentPool = KnowledgeDistributionService.resolvePreferredCustomPoolForUser({
+          userId: currentUserId,
+          allianceId: currentAllianceIdSafe,
+          rules,
+          masterAllianceId
+        });
+        if (preferredCurrentPool && clampPercent(preferredCurrentPool.percent, 0) > 0) {
+          if (preferredCurrentPool.key === 'custom_user') {
+            const customUserMemberIds = eligibleParticipantIds.includes(currentUserId)
+              ? [currentUserId]
+              : [];
+            selectedPool = {
+              key: 'custom_user',
+              label: '指定用户池',
+              percent: clampPercent(preferredCurrentPool.percent, 0),
+              split: false,
+              memberIds: customUserMemberIds
+            };
+          } else if (preferredCurrentPool.key === 'specific_alliance') {
+            const targetAllianceId = preferredCurrentPool.allianceId || currentAllianceIdSafe;
+            selectedPool = {
+              key: 'specific_alliance',
+              label: '指定熵盟池',
+              percent: clampPercent(preferredCurrentPool.percent, 0),
+              split: true,
+              memberIds: specificAllianceParticipantMap.get(targetAllianceId) || []
+            };
+          } else if (preferredCurrentPool.key === 'non_hostile_alliance') {
+            selectedPool = {
+              key: 'non_hostile_alliance',
+              label: '非敌对熵盟池',
+              percent: clampPercent(preferredCurrentPool.percent, 0),
+              split: true,
+              memberIds: nonHostileParticipants
+            };
+          } else if (preferredCurrentPool.key === 'no_alliance') {
+            selectedPool = {
+              key: 'no_alliance',
+              label: '无熵盟用户池',
+              percent: clampPercent(preferredCurrentPool.percent, 0),
+              split: true,
+              memberIds: noAllianceParticipants
+            };
+          }
+        }
+      }
+    }
+
+    const displayPoolMemberIds = selectedPool ? Array.from(new Set([
+      ...(Array.isArray(selectedPool.memberIds) ? selectedPool.memberIds : [])
+    ].filter((id) => isValidObjectId(id)))) : [];
+    const poolParticipantCount = displayPoolMemberIds.length;
+    const percentDenominator = selectedPool?.split
+      ? (joined
+        ? poolParticipantCount
+        : (poolParticipantCount + 1))
+      : 1;
+    const poolPercent = selectedPool ? round2(selectedPool.percent) : 0;
+    const userActualPercent = selectedPool
+      ? round2(selectedPool.split
+        ? (percentDenominator > 0 ? poolPercent / percentDenominator : 0)
+        : poolPercent)
+      : 0;
+    const estimatedReward = round2((Number(node?.knowledgePoint?.value) || 0) * (userActualPercent / 100));
+    const rewardFrozen = !!lock.executedAt && joined;
+    let rewardValue = null;
+    if (joined) {
+      rewardValue = rewardFrozen
+        ? round2(rewardSnapshotMap.get(currentUserId) || 0)
+        : estimatedReward;
+    }
+    const poolUsers = selectedPool
+      ? displayPoolMemberIds
+          .map((id) => userMap.get(id))
+          .filter(Boolean)
+          .map((item) => {
+            const allianceId = getIdString(item.allianceId);
+            const allianceName = allianceNameMap.get(allianceId) || '';
+            return {
+              userId: getIdString(item._id),
+              username: item.username || '',
+              avatar: item.avatar || 'default_male_1',
+              profession: item.profession || '',
+              allianceId,
+              allianceName,
+              displayName: allianceName ? `【${allianceName}】${item.username || ''}` : (item.username || ''),
+              joinOrderMs: getParticipantJoinOrderMs(getIdString(item._id))
+            };
+          })
+          .sort((a, b) => {
+            const diff = (Number(a.joinOrderMs) || Number.MAX_SAFE_INTEGER) - (Number(b.joinOrderMs) || Number.MAX_SAFE_INTEGER);
+            if (diff !== 0) return diff;
+            return (a.username || '').localeCompare((b.username || ''), 'zh-CN');
+          })
+          .map((item) => ({
+            userId: item.userId,
+            username: item.username,
+            avatar: item.avatar,
+            profession: item.profession,
+            allianceId: item.allianceId,
+            allianceName: item.allianceName,
+            displayName: item.displayName
+          }))
+      : [];
+
+    let joinTip = '';
+    if (isSystemAdminRole) {
+      joinTip = '系统管理员不参与知识点分发';
+    } else if (isBlocked) {
+      joinTip = '你当前命中禁止规则，本次不可参与分发';
+    } else if (!requiresManualEntry) {
+      joinTip = '你为域主/域相，已自动入场';
+    } else if (phase === 'entry_closed') {
+      joinTip = '距离执行不足1分钟，入场已关闭';
+    } else if (phase === 'settling') {
+      joinTip = '分发已进入执行/结算阶段，无法新入场';
+    } else if (phase === 'ended') {
+      joinTip = '本次分发活动已结束';
+    } else if (!isUserIdleAtNode(currentUser, node.name)) {
+      joinTip = '你不在该知识域或仍在移动中，需先到达并停止移动';
+    } else if (isJoinedManual) {
+      joinTip = '你已参与本次分发';
+    } else {
+      joinTip = '可参与本次分发';
+    }
+
+    return res.json({
+      success: true,
+      active: phase !== 'ended',
+      nodeId: node._id,
+      nodeName: node.name,
+      phase,
+      executeAt: lock.executeAt || null,
+      entryCloseAt: timeline.entryCloseAtMs > 0 ? new Date(timeline.entryCloseAtMs) : null,
+      endAt: timeline.endAtMs > 0 ? new Date(timeline.endAtMs) : null,
+      executedAt: lock.executedAt || null,
+      secondsToEntryClose: timeline.entryCloseAtMs > nowMs ? Math.floor((timeline.entryCloseAtMs - nowMs) / 1000) : 0,
+      secondsToExecute: timeline.executeAtMs > nowMs ? Math.floor((timeline.executeAtMs - nowMs) / 1000) : 0,
+      secondsToEnd: timeline.endAtMs > nowMs ? Math.floor((timeline.endAtMs - nowMs) / 1000) : 0,
+      requiresManualEntry,
+      autoEntry,
+      joined,
+      joinedManual: isJoinedManual,
+      canJoin,
+      canExit,
+      canExitWithoutConfirm,
+      joinTip,
+      participantTotal: eligibleParticipantIds.length,
+      currentKnowledgePoint: round2(Number(node?.knowledgePoint?.value) || 0),
+      pool: selectedPool ? {
+        key: selectedPool.key,
+        label: selectedPool.label,
+        poolPercent,
+        participantCount: poolParticipantCount,
+        userActualPercent,
+        estimatedReward,
+        rewardValue,
+        rewardFrozen,
+        users: poolUsers
+      } : {
+        key: '',
+        label: '',
+        poolPercent: 0,
+        participantCount: 0,
+        userActualPercent: 0,
+        estimatedReward: 0,
+        rewardValue,
+        rewardFrozen,
+        users: []
+      }
+    });
+  } catch (error) {
+    console.error('获取分发参与状态错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 普通用户参与分发（入场）
+router.post('/:nodeId/distribution-participation/join', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    let node = await Node.findById(nodeId).select('name status domainMaster domainAdmins knowledgeDistributionLocked');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (node.knowledgeDistributionLocked) {
+      await KnowledgeDistributionService.processNode(node, new Date());
+      node = await Node.findById(nodeId).select('name status domainMaster domainAdmins knowledgeDistributionLocked');
+      if (!node || node.status !== 'approved') {
+        return res.status(404).json({ error: '知识域不存在或不可操作' });
+      }
+    }
+
+    const lock = node.knowledgeDistributionLocked;
+    if (!lock) {
+      return res.status(409).json({ error: '当前知识域没有进行中的分发活动' });
+    }
+
+    const currentUser = await User.findById(requestUserId)
+      .select('_id username role allianceId location travelState')
+      .lean();
+    if (!currentUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (currentUser.role !== 'common') {
+      return res.status(403).json({ error: '系统管理员不参与知识点分发' });
+    }
+
+    const currentUserId = getIdString(currentUser._id);
+    const masterId = getIdString(node.domainMaster);
+    const domainAdminSet = new Set((Array.isArray(node.domainAdmins) ? node.domainAdmins : [])
+      .map((id) => getIdString(id))
+      .filter((id) => isValidObjectId(id)));
+    if (currentUserId === masterId || domainAdminSet.has(currentUserId)) {
+      return res.json({
+        success: true,
+        autoEntry: true,
+        joined: true,
+        message: '域主/域相自动入场，无需手动参与'
+      });
+    }
+
+    const phase = getDistributionLockPhase(lock, new Date());
+    if (phase !== 'entry_open') {
+      return res.status(409).json({ error: '当前不在可入场时间窗口（分发前1分钟停止入场）' });
+    }
+    if (!isUserIdleAtNode(currentUser, node.name)) {
+      return res.status(409).json({ error: `你不在知识域「${node.name}」或仍在移动中，无法参与` });
+    }
+
+    const rules = KnowledgeDistributionService.getCommonRuleSets(lock.ruleSnapshot || {}, lock);
+    const currentAllianceId = getIdString(currentUser.allianceId);
+    const masterAllianceId = getIdString(lock.masterAllianceId);
+    const isBlocked = KnowledgeDistributionService.isUserBlocked({
+      userId: currentUserId,
+      allianceId: currentAllianceId,
+      masterAllianceId,
+      blacklistUserIds: rules.blacklistUserIds,
+      blacklistAllianceIds: rules.blacklistAllianceIds,
+      enemyAllianceIds: rules.enemyAllianceIds
+    });
+    if (isBlocked) {
+      return res.status(403).json({ error: '你当前命中禁止规则，无法参与本次分发' });
+    }
+
+    const nextParticipants = Array.isArray(lock.participants) ? [...lock.participants] : [];
+    const existingIndex = nextParticipants.findIndex((item) => getIdString(item?.userId) === currentUserId);
+    const now = new Date();
+    if (existingIndex >= 0) {
+      if (!nextParticipants[existingIndex].exitedAt) {
+        return res.json({
+          success: true,
+          joined: true,
+          message: '你已参与本次分发'
+        });
+      }
+      nextParticipants[existingIndex] = {
+        ...nextParticipants[existingIndex],
+        joinedAt: now,
+        exitedAt: null
+      };
+    } else {
+      nextParticipants.push({
+        userId: new mongoose.Types.ObjectId(currentUserId),
+        joinedAt: now,
+        exitedAt: null
+      });
+    }
+
+    node.knowledgeDistributionLocked.participants = nextParticipants;
+    await node.save();
+
+    return res.json({
+      success: true,
+      joined: true,
+      message: `你已参与知识域「${node.name}」的分发活动`
+    });
+  } catch (error) {
+    console.error('参与分发错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 普通用户退出分发（手动入场用户）
+router.post('/:nodeId/distribution-participation/exit', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    let node = await Node.findById(nodeId).select('name status domainMaster domainAdmins knowledgeDistributionLocked');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (node.knowledgeDistributionLocked) {
+      await KnowledgeDistributionService.processNode(node, new Date());
+      node = await Node.findById(nodeId).select('name status domainMaster domainAdmins knowledgeDistributionLocked');
+      if (!node || node.status !== 'approved') {
+        return res.status(404).json({ error: '知识域不存在或不可操作' });
+      }
+    }
+
+    const lock = node.knowledgeDistributionLocked;
+    if (!lock) {
+      return res.json({
+        success: true,
+        exited: true,
+        message: '当前分发活动已结束'
+      });
+    }
+
+    const currentUser = await User.findById(requestUserId).select('_id role').lean();
+    if (!currentUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (currentUser.role !== 'common') {
+      return res.status(403).json({ error: '系统管理员不参与知识点分发' });
+    }
+
+    const currentUserId = getIdString(currentUser._id);
+    const masterId = getIdString(node.domainMaster);
+    const domainAdminSet = new Set((Array.isArray(node.domainAdmins) ? node.domainAdmins : [])
+      .map((id) => getIdString(id))
+      .filter((id) => isValidObjectId(id)));
+    if (currentUserId === masterId || domainAdminSet.has(currentUserId)) {
+      return res.status(400).json({ error: '域主/域相为自动入场，不支持手动退出' });
+    }
+
+    const nextParticipants = Array.isArray(lock.participants) ? [...lock.participants] : [];
+    const existingIndex = nextParticipants.findIndex((item) => (
+      getIdString(item?.userId) === currentUserId && !item?.exitedAt
+    ));
+    if (existingIndex < 0) {
+      return res.json({
+        success: true,
+        exited: true,
+        message: '你当前未参与该分发活动'
+      });
+    }
+
+    nextParticipants[existingIndex] = {
+      ...nextParticipants[existingIndex],
+      exitedAt: new Date()
+    };
+    node.knowledgeDistributionLocked.participants = nextParticipants;
+    await node.save();
+
+    return res.json({
+      success: true,
+      exited: true,
+      message: `你已退出知识域「${node.name}」的分发活动`
+    });
+  } catch (error) {
+    console.error('退出分发错误:', error);
     return res.status(500).json({ error: '服务器错误' });
   }
 });

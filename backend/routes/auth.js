@@ -23,6 +23,7 @@ const TRAVEL_STATUS = {
   STOPPING: 'stopping'
 };
 const RESIGN_REQUEST_EXPIRE_MS = 3 * 24 * 60 * 60 * 1000;
+const DISTRIBUTION_ENTRY_LOCK_MS = 60 * 1000;
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -34,6 +35,73 @@ const getIdString = (value) => {
     return text === '[object Object]' ? '' : text;
   }
   return '';
+};
+
+const resolveDistributionLockTimeline = (lock = {}) => {
+  const executeAtMs = new Date(lock?.executeAt || 0).getTime();
+  if (!Number.isFinite(executeAtMs) || executeAtMs <= 0) {
+    return {
+      executeAtMs: 0,
+      endAtMs: 0
+    };
+  }
+  const endAtMsRaw = new Date(lock?.endAt || 0).getTime();
+  const endAtMs = Number.isFinite(endAtMsRaw) && endAtMsRaw > 0
+    ? endAtMsRaw
+    : (executeAtMs + DISTRIBUTION_ENTRY_LOCK_MS);
+  return {
+    executeAtMs,
+    endAtMs
+  };
+};
+
+const formatDurationCN = (secondsRaw = 0) => {
+  const total = Math.max(0, Math.round(Number(secondsRaw) || 0));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes <= 0) return `${seconds}秒`;
+  return `${minutes}分${seconds}秒`;
+};
+
+const appendArrivalNotification = (user, targetNodeName, spentSeconds = 0) => {
+  if (!user || !targetNodeName) return;
+  const message = `您已到达了${targetNodeName}，花费${formatDurationCN(spentSeconds)}。`;
+  user.notifications = Array.isArray(user.notifications) ? user.notifications : [];
+  user.notifications.unshift({
+    type: 'info',
+    title: `已到达：${targetNodeName}`,
+    message,
+    read: false,
+    status: 'info',
+    nodeName: targetNodeName,
+    createdAt: new Date()
+  });
+};
+
+const findActiveManualDistributionLockForUser = async (userId, now = new Date()) => {
+  if (!isValidObjectId(userId)) return null;
+  const currentTimeMs = now.getTime();
+  const nodes = await Node.find({
+    status: 'approved',
+    'knowledgeDistributionLocked.participants': {
+      $elemMatch: {
+        userId: new mongoose.Types.ObjectId(userId),
+        exitedAt: null
+      }
+    }
+  }).select('name knowledgeDistributionLocked');
+  for (const node of nodes) {
+    const lock = node?.knowledgeDistributionLocked;
+    if (!lock) continue;
+    const timeline = resolveDistributionLockTimeline(lock);
+    if (!timeline.endAtMs || currentTimeMs >= timeline.endAtMs) continue;
+    return {
+      node,
+      lock,
+      timeline
+    };
+  }
+  return null;
 };
 
 const syncMasterDomainsAlliance = async ({ userId, allianceId }) => {
@@ -551,6 +619,11 @@ const calculateMovingProgress = (user, now = new Date()) => {
       arrived: true,
       path,
       unitDurationSeconds,
+      totalDistanceUnits: totalSegments,
+      completedDistanceUnits: totalSegments,
+      remainingDistanceUnits: 0,
+      elapsedSeconds: totalDurationMs / 1000,
+      remainingSeconds: 0,
       arrivedNode: path[path.length - 1]
     };
   }
@@ -831,7 +904,8 @@ const startTravelFromCurrentLocation = async (user, targetNodeId, options = {}) 
     ok: true,
     path,
     targetNode,
-    shortestDistance: shortestPathIds.length - 1
+    shortestDistance: shortestPathIds.length - 1,
+    unitDurationSeconds: safeUnitDuration
   };
 };
 
@@ -842,7 +916,9 @@ const settleTravelState = async (user) => {
 
   if (currentStatus === TRAVEL_STATUS.MOVING && progress.arrived) {
     const unitDurationSeconds = Math.max(1, parseInt(travel.unitDurationSeconds, 10) || 60);
-    user.location = progress.arrivedNode.nodeName;
+    const arrivedNodeName = progress.arrivedNode?.nodeName || user.location || '';
+    user.location = arrivedNodeName;
+    appendArrivalNotification(user, arrivedNodeName, progress.elapsedSeconds || 0);
     resetTravelState(user, unitDurationSeconds);
     await user.save();
     return calculateTravelProgress(user);
@@ -1542,6 +1618,72 @@ router.get('/travel/status', async (req, res) => {
   }
 });
 
+// 预估移动耗时（不改变真实移动状态）
+router.post('/travel/estimate', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: '未授权' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    if (user.role === 'admin') {
+      return res.status(403).json({ error: '管理员无需执行移动操作' });
+    }
+
+    const { targetNodeId } = req.body || {};
+    if (!targetNodeId) {
+      return res.status(400).json({ error: '目标节点不能为空' });
+    }
+    if (!isValidObjectId(targetNodeId)) {
+      return res.status(400).json({ error: '无效的目标节点ID' });
+    }
+
+    const settledProgress = await settleTravelState(user);
+    const currentStatus = getTravelStatus(user.travelState || {});
+    if (currentStatus === TRAVEL_STATUS.MOVING && settledProgress.isTraveling) {
+      return res.status(409).json({ error: '正在移动中，请先停止当前移动后再预估' });
+    }
+    if (currentStatus === TRAVEL_STATUS.STOPPING && settledProgress.isStopping) {
+      return res.status(409).json({ error: '停止移动过程中暂不可预估，请等待停靠完成' });
+    }
+
+    const estimateResult = await startTravelFromCurrentLocation(
+      { location: user.location, travelState: {} },
+      targetNodeId
+    );
+    if (!estimateResult.ok) {
+      return res.status(estimateResult.statusCode || 400).json({
+        error: estimateResult.error || '预估移动失败'
+      });
+    }
+
+    const estimatedSeconds = Math.max(
+      0,
+      (Number(estimateResult.shortestDistance) || 0) * (Number(estimateResult.unitDurationSeconds) || 60)
+    );
+
+    return res.json({
+      success: true,
+      fromNodeName: user.location || '',
+      toNodeId: estimateResult.targetNode?._id || targetNodeId,
+      toNodeName: estimateResult.targetNode?.name || '',
+      distanceUnits: Number(estimateResult.shortestDistance) || 0,
+      unitDurationSeconds: Number(estimateResult.unitDurationSeconds) || 60,
+      estimatedSeconds: Number(estimatedSeconds.toFixed(2)),
+      estimatedDurationText: formatDurationCN(estimatedSeconds)
+    });
+  } catch (error) {
+    console.error('预估移动耗时错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 // 开始移动（普通用户）
 router.post('/travel/start', async (req, res) => {
   try {
@@ -1564,9 +1706,21 @@ router.post('/travel/start', async (req, res) => {
     if (!targetNodeId) {
       return res.status(400).json({ error: '目标节点不能为空' });
     }
+    if (!isValidObjectId(targetNodeId)) {
+      return res.status(400).json({ error: '无效的目标节点ID' });
+    }
 
     const settledProgress = await settleTravelState(user);
     const currentStatus = getTravelStatus(user.travelState || {});
+
+    const activeManualDistributionLock = await findActiveManualDistributionLockForUser(decoded.userId, new Date());
+    if (activeManualDistributionLock?.node) {
+      return res.status(409).json({
+        error: `你已参与知识域「${activeManualDistributionLock.node.name}」分发活动，分发结束前不可移动。请先在分发页面点击“退出分发活动”后再移动。`,
+        lockNodeId: activeManualDistributionLock.node._id,
+        lockNodeName: activeManualDistributionLock.node.name
+      });
+    }
 
     if (currentStatus === TRAVEL_STATUS.MOVING && settledProgress.isTraveling) {
       return res.status(409).json({ error: '正在移动中，请先停止当前移动' });

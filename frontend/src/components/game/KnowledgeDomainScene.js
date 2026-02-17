@@ -532,6 +532,7 @@ const KnowledgeDomainScene = ({
   const [isDistributionRuleModalOpen, setIsDistributionRuleModalOpen] = useState(false);
   const [newDistributionRuleName, setNewDistributionRuleName] = useState('');
   const [distributionClockMs, setDistributionClockMs] = useState(Date.now());
+  const [hasUnsavedDistributionDraft, setHasUnsavedDistributionDraft] = useState(false);
   const [activeManageSidePanel, setActiveManageSidePanel] = useState('');
   const showManageTab = !!domainAdminState.canView;
 
@@ -809,6 +810,7 @@ const KnowledgeDomainScene = ({
         feedback: ''
       };
     });
+    setHasUnsavedDistributionDraft(true);
   };
 
   const updateActiveDistributionRuleName = (name) => {
@@ -830,6 +832,7 @@ const KnowledgeDomainScene = ({
         feedback: ''
       };
     });
+    setHasUnsavedDistributionDraft(true);
   };
 
   const setActiveDistributionRule = (profileId) => {
@@ -879,6 +882,7 @@ const KnowledgeDomainScene = ({
       };
     });
     setNewDistributionRuleName('');
+    setHasUnsavedDistributionDraft(true);
   };
 
   const removeActiveDistributionRule = () => {
@@ -904,9 +908,10 @@ const KnowledgeDomainScene = ({
         feedback: ''
       };
     });
+    setHasUnsavedDistributionDraft(true);
   };
 
-  const fetchDistributionSettings = async (silent = true) => {
+  const fetchDistributionSettings = async (silent = true, forceApplyRules = false) => {
     const token = localStorage.getItem('token');
     if (!token || !node?._id) return;
 
@@ -963,29 +968,65 @@ const KnowledgeDomainScene = ({
       const publishExecuteAt = nextLocked?.executeAt
         ? toHourInputValue(nextLocked.executeAt)
         : getDefaultPublishExecuteAtInput();
+      const shouldPreserveLocalDraft = silent && hasUnsavedDistributionDraft && !forceApplyRules;
 
-      setDistributionState((prev) => ({
-        ...prev,
-        loading: false,
-        saving: false,
-        publishing: false,
-        error: '',
-        feedback: '',
-        canView: !!data.canView,
-        canEdit: !!data.canEdit,
-        isRuleLocked: !!data.isRuleLocked,
-        percentSummary: computePercentSummary(activeProfile?.rule || createDefaultDistributionRule(), allianceContributionPercent),
-        allianceContributionPercent,
-        masterAllianceName: data.masterAllianceName || '',
-        carryoverValue: Number(data.carryoverValue || 0),
-        knowledgePointValue: Number(data.knowledgePointValue || 0),
-        lastSyncedAt: Date.now(),
-        locked: nextLocked,
-        publishRuleId,
-        publishExecuteAt,
-        activeRuleId: normalized.activeRuleId,
-        ruleProfiles: normalizedProfiles
-      }));
+      setDistributionState((prev) => {
+        const appliedRuleState = shouldPreserveLocalDraft
+          ? (() => {
+              const localNormalized = normalizeDistributionProfiles(
+                prev.ruleProfiles,
+                prev.activeRuleId,
+                allianceContributionPercent
+              );
+              const localProfiles = hasAlliance
+                ? localNormalized.profiles
+                : localNormalized.profiles.map((profile) => ({
+                    ...profile,
+                    rule: {
+                      ...profile.rule,
+                      nonHostileAlliancePercent: 0,
+                      specificAlliancePercents: []
+                    },
+                    percentSummary: computePercentSummary({
+                      ...profile.rule,
+                      nonHostileAlliancePercent: 0,
+                      specificAlliancePercents: []
+                    }, allianceContributionPercent)
+                  }));
+              const localActiveProfile = localProfiles.find((profile) => profile.profileId === localNormalized.activeRuleId) || localProfiles[0];
+              return {
+                activeRuleId: localNormalized.activeRuleId,
+                ruleProfiles: localProfiles,
+                percentSummary: computePercentSummary(localActiveProfile?.rule || createDefaultDistributionRule(), allianceContributionPercent)
+              };
+            })()
+          : {
+              activeRuleId: normalized.activeRuleId,
+              ruleProfiles: normalizedProfiles,
+              percentSummary: computePercentSummary(activeProfile?.rule || createDefaultDistributionRule(), allianceContributionPercent)
+            };
+
+        return {
+          ...prev,
+          ...appliedRuleState,
+          loading: false,
+          saving: false,
+          publishing: false,
+          error: '',
+          feedback: shouldPreserveLocalDraft ? prev.feedback : '',
+          canView: !!data.canView,
+          canEdit: !!data.canEdit,
+          isRuleLocked: !!data.isRuleLocked,
+          allianceContributionPercent,
+          masterAllianceName: data.masterAllianceName || '',
+          carryoverValue: Number(data.carryoverValue || 0),
+          knowledgePointValue: Number(data.knowledgePointValue || 0),
+          lastSyncedAt: Date.now(),
+          locked: nextLocked,
+          publishRuleId,
+          publishExecuteAt
+        };
+      });
     } catch (error) {
       setDistributionState((prev) => ({
         ...prev,
@@ -1072,7 +1113,8 @@ const KnowledgeDomainScene = ({
         feedback: data.message || '分发规则已保存',
         isRuleLocked: !!data.isRuleLocked
       }));
-      await fetchDistributionSettings(true);
+      setHasUnsavedDistributionDraft(false);
+      await fetchDistributionSettings(true, true);
     } catch (error) {
       setDistributionState((prev) => ({
         ...prev,
@@ -1171,7 +1213,8 @@ const KnowledgeDomainScene = ({
         publishing: false,
         feedback: data.message || '分发计划已发布并锁定，不可撤回'
       }));
-      await fetchDistributionSettings(true);
+      setHasUnsavedDistributionDraft(false);
+      await fetchDistributionSettings(true, true);
     } catch (error) {
       setDistributionState((prev) => ({
         ...prev,
@@ -1234,6 +1277,7 @@ const KnowledgeDomainScene = ({
     setNewDistributionRuleName('');
     setActiveManageSidePanel('distribution');
     setDistributionState(createDefaultDistributionState());
+    setHasUnsavedDistributionDraft(false);
     fetchDomainAdmins(false);
   }, [isVisible, node?._id]);
 
@@ -1289,9 +1333,9 @@ const KnowledgeDomainScene = ({
   }, [activeTab, isVisible, node?._id, searchKeyword, domainAdminState.canEdit]);
 
   useEffect(() => {
-    if (!isVisible || activeTab !== 'manage' || !node?._id) return;
+    if (!isVisible || activeTab !== 'manage' || !node?._id || hasUnsavedDistributionDraft) return;
     fetchDistributionSettings(false);
-  }, [activeTab, isVisible, node?._id]);
+  }, [activeTab, isVisible, node?._id, hasUnsavedDistributionDraft]);
 
   useEffect(() => {
     if (!isVisible || activeTab !== 'manage') return undefined;
@@ -1303,12 +1347,19 @@ const KnowledgeDomainScene = ({
   }, [isVisible, activeTab]);
 
   useEffect(() => {
-    if (!isVisible || activeTab !== 'manage' || !node?._id || !distributionState.canView) return undefined;
+    if (
+      !isVisible ||
+      activeTab !== 'manage' ||
+      !node?._id ||
+      !distributionState.canView ||
+      hasUnsavedDistributionDraft ||
+      isDistributionRuleModalOpen
+    ) return undefined;
     const timerId = setInterval(() => {
       fetchDistributionSettings(true);
     }, 15000);
     return () => clearInterval(timerId);
-  }, [activeTab, isVisible, node?._id, distributionState.canView]);
+  }, [activeTab, isVisible, node?._id, distributionState.canView, hasUnsavedDistributionDraft, isDistributionRuleModalOpen]);
 
   useEffect(() => {
     if (!isVisible || activeTab !== 'manage' || !node?._id || !distributionState.canEdit) {
@@ -1413,30 +1464,16 @@ const KnowledgeDomainScene = ({
     percent: adminPercentMap.get(adminUser._id) || 0
   }));
   const currentPercentSummary = computePercentSummary(distributionRule, distributionState.allianceContributionPercent);
-  const contentScorePerMinute = Number(node?.contentScore || 0);
-  const perSecondGrowth = contentScorePerMinute / 60;
-  const elapsedSinceSyncSeconds = Math.max(0, (distributionClockMs - Number(distributionState.lastSyncedAt || distributionClockMs)) / 1000);
-  const liveKnowledgePointValue = Number(distributionState.knowledgePointValue || 0) + elapsedSinceSyncSeconds * perSecondGrowth;
   const scopePercent = getDistributionScopePercent(distributionRule);
-  const totalPoolValue = liveKnowledgePointValue + Number(distributionState.carryoverValue || 0);
-  const distributablePoolValue = totalPoolValue * (scopePercent / 100);
   const unallocatedPercent = Math.max(0, 100 - currentPercentSummary.total);
-  const estimatedCarryoverValue = totalPoolValue - (distributablePoolValue * Math.min(100, currentPercentSummary.total) / 100);
 
   const lockedDistribution = distributionState.locked || null;
   const lockedExecuteMs = new Date(lockedDistribution?.executeAt || 0).getTime();
-  const lockedAnnouncedMs = new Date(lockedDistribution?.announcedAt || distributionState.lastSyncedAt || distributionClockMs).getTime();
   const hasLockedPlan = !!lockedDistribution && Number.isFinite(lockedExecuteMs);
   const hasUpcomingPublishedPlan = hasLockedPlan && lockedExecuteMs > distributionClockMs;
   const countdownSeconds = hasUpcomingPublishedPlan
     ? Math.max(0, Math.floor((lockedExecuteMs - distributionClockMs) / 1000))
     : 0;
-  const elapsedSinceAnnouncedSeconds = hasLockedPlan && Number.isFinite(lockedAnnouncedMs)
-    ? Math.max(0, (distributionClockMs - lockedAnnouncedMs) / 1000)
-    : 0;
-  const projectedTotalAtExecute = hasUpcomingPublishedPlan
-    ? (Number(lockedDistribution?.projectedTotal || totalPoolValue) + elapsedSinceAnnouncedSeconds * perSecondGrowth)
-    : totalPoolValue;
 
   const blockedRuleNotes = [];
   if (!hasMasterAlliance) {
@@ -1518,6 +1555,7 @@ const KnowledgeDomainScene = ({
                 <span className="stat-value">{node?.contentScore || 1}</span>
               </div>
             </div>
+
           </div>
         ) : (
           <div className="domain-tab-content manage-tab-content">
@@ -1695,16 +1733,8 @@ const KnowledgeDomainScene = ({
                       )}
                       <div className="distribution-summary-grid">
                         <div className="distribution-summary-item">
-                          <span>当前知识点（实时）</span>
-                          <strong>{liveKnowledgePointValue.toFixed(2)}</strong>
-                        </div>
-                        <div className="distribution-summary-item">
-                          <span>滚存知识点</span>
-                          <strong>{distributionState.carryoverValue.toFixed(2)}</strong>
-                        </div>
-                        <div className="distribution-summary-item">
                           <span>盟贡献同步比例</span>
-                          <strong>{distributionState.allianceContributionPercent.toFixed(2)}</strong>
+                          <strong>{distributionState.allianceContributionPercent.toFixed(2)}%</strong>
                         </div>
                         <div className="distribution-summary-item">
                           <span>总比例</span>
@@ -1795,9 +1825,7 @@ const KnowledgeDomainScene = ({
                                 <span>
                                   执行时刻：{new Date(lockedExecuteMs).toLocaleString('zh-CN', { hour12: false })}
                                 </span>
-                                <span>
-                                  预计执行时累计总池（实时估算）：{projectedTotalAtExecute.toFixed(2)}
-                                </span>
+                                <span>执行时按当刻知识点总池结算（规则仅定义比例，不预显示点数）</span>
                               </div>
                             ) : hasLockedPlan ? (
                               <div className="domain-manage-tip">分发计划已到执行时刻，正在等待系统结算。</div>
@@ -1812,16 +1840,12 @@ const KnowledgeDomainScene = ({
                               <strong>{distributionRule.distributionScope === 'partial' ? `部分 ${scopePercent.toFixed(2)}%` : '全部 100%'}</strong>
                             </div>
                             <div className="distribution-summary-item">
-                              <span>当前可分发池</span>
-                              <strong>{distributablePoolValue.toFixed(2)}</strong>
-                            </div>
-                            <div className="distribution-summary-item">
                               <span>未分配比例</span>
                               <strong>{unallocatedPercent.toFixed(2)}%</strong>
                             </div>
                             <div className="distribution-summary-item">
-                              <span>预计结转</span>
-                              <strong>{estimatedCarryoverValue.toFixed(2)}</strong>
+                              <span>结转规则</span>
+                              <strong>未分配比例自动结转</strong>
                             </div>
                           </div>
                         </div>
@@ -1953,7 +1977,7 @@ const KnowledgeDomainScene = ({
                           style={{ width: `${Math.max(0, Math.min(100, scopePercent))}%` }}
                         />
                       </div>
-                      <span>{`本次参与分发池：${distributablePoolValue.toFixed(2)} / 总池 ${totalPoolValue.toFixed(2)}`}</span>
+                      <span>{`本次参与分发比例：${scopePercent.toFixed(2)}%`}</span>
                     </div>
                   </div>
 
@@ -2295,16 +2319,16 @@ const KnowledgeDomainScene = ({
                     </div>
                     <div className="distribution-visual-metrics">
                       <div className="distribution-metric-card">
-                        <span>分发池</span>
-                        <strong>{distributablePoolValue.toFixed(2)}</strong>
+                        <span>分发范围比例</span>
+                        <strong>{scopePercent.toFixed(2)}%</strong>
                       </div>
                       <div className="distribution-metric-card">
-                        <span>预计未分配结转</span>
-                        <strong>{estimatedCarryoverValue.toFixed(2)}</strong>
+                        <span>总分配占比</span>
+                        <strong>{currentPercentSummary.total.toFixed(2)}%</strong>
                       </div>
                       <div className="distribution-metric-card">
-                        <span>域内成员分配总池</span>
-                        <strong>{currentPercentSummary.y.toFixed(2)}%</strong>
+                        <span>未分配比例</span>
+                        <strong>{unallocatedPercent.toFixed(2)}%</strong>
                       </div>
                     </div>
                     <div className="distribution-notes">
