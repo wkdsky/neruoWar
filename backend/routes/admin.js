@@ -8,7 +8,7 @@ const { isAdmin } = require('../middleware/admin');
 
 const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
   { key: 'global' },
-  { $setOnInsert: { travelUnitSeconds: 60 } },
+  { $setOnInsert: { travelUnitSeconds: 60, distributionAnnouncementLeadHours: 24 } },
   { new: true, upsert: true, setDefaultsOnInsert: true }
 );
 
@@ -153,7 +153,8 @@ router.get('/settings', authenticateToken, isAdmin, async (req, res) => {
     res.json({
       success: true,
       settings: {
-        travelUnitSeconds: settings.travelUnitSeconds
+        travelUnitSeconds: settings.travelUnitSeconds,
+        distributionAnnouncementLeadHours: settings.distributionAnnouncementLeadHours
       }
     });
   } catch (error) {
@@ -165,16 +166,25 @@ router.get('/settings', authenticateToken, isAdmin, async (req, res) => {
 // 更新系统设置
 router.put('/settings', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { travelUnitSeconds } = req.body;
-    const parsed = parseInt(travelUnitSeconds, 10);
+    const { travelUnitSeconds, distributionAnnouncementLeadHours } = req.body;
+    const currentSettings = await getOrCreateSettings();
+    const parsedTravel = travelUnitSeconds === undefined
+      ? parseInt(currentSettings.travelUnitSeconds, 10)
+      : parseInt(travelUnitSeconds, 10);
+    const parsedLeadHours = distributionAnnouncementLeadHours === undefined
+      ? parseInt(currentSettings.distributionAnnouncementLeadHours, 10)
+      : parseInt(distributionAnnouncementLeadHours, 10);
 
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 86400) {
+    if (!Number.isInteger(parsedTravel) || parsedTravel < 1 || parsedTravel > 86400) {
       return res.status(400).json({ error: '每单位移动耗时必须是 1-86400 的整数秒' });
+    }
+    if (!Number.isInteger(parsedLeadHours) || parsedLeadHours < 1 || parsedLeadHours > 168) {
+      return res.status(400).json({ error: '分发公告提前时长必须是 1-168 的整数小时' });
     }
 
     const settings = await GameSetting.findOneAndUpdate(
       { key: 'global' },
-      { $set: { travelUnitSeconds: parsed } },
+      { $set: { travelUnitSeconds: parsedTravel, distributionAnnouncementLeadHours: parsedLeadHours } },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
@@ -182,7 +192,8 @@ router.put('/settings', authenticateToken, isAdmin, async (req, res) => {
       success: true,
       message: '系统设置已更新',
       settings: {
-        travelUnitSeconds: settings.travelUnitSeconds
+        travelUnitSeconds: settings.travelUnitSeconds,
+        distributionAnnouncementLeadHours: settings.distributionAnnouncementLeadHours
       }
     });
   } catch (error) {

@@ -12,6 +12,7 @@ const Node = require('./models/Node');
 const Army = require('./models/Army');
 const Technology = require('./models/Technology');
 const GameService = require('./services/GameService');
+const KnowledgeDistributionService = require('./services/KnowledgeDistributionService');
 const adminRoutes = require('./routes/admin');
 const nodeRoutes = require('./routes/nodes');
 const allianceRoutes = require('./routes/alliance');
@@ -389,6 +390,15 @@ setInterval(async () => {
     await processExpiredDomainAdminResignRequests();
   } catch (error) {
     console.error('自动处理卸任申请错误:', error);
+  }
+}, 60 * 1000);
+
+// 定时任务：知识点分发公告与执行
+setInterval(async () => {
+  try {
+    await KnowledgeDistributionService.processTick();
+  } catch (error) {
+    console.error('知识点分发调度错误:', error);
   }
 }, 60 * 1000);
 

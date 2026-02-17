@@ -227,6 +227,22 @@
     gap: 0.6rem;
 }
 
+.alliance-manage-inline {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+}
+
+.alliance-manage-inline .form-input {
+    max-width: 220px;
+}
+
+.alliance-leader-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
 .alliance-announcement-content {
     white-space: pre-wrap;
     line-height: 1.6;
@@ -433,6 +449,131 @@
     margin: 0 0 0.8rem 0;
     color: #e2e8f0;
     font-size: 1rem;
+}
+
+.alliance-handover-backdrop,
+.alliance-confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1020;
+    background: rgba(2, 6, 23, 0.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.alliance-handover-modal {
+    width: min(560px, 94vw);
+    max-height: 88vh;
+    border-radius: 12px;
+    border: 1px solid rgba(168, 85, 247, 0.42);
+    background: rgba(15, 23, 42, 0.97);
+    box-shadow: 0 20px 38px rgba(2, 6, 23, 0.6);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.alliance-handover-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+.alliance-handover-header h4 {
+    margin: 0;
+    color: #f5f3ff;
+    font-size: 1rem;
+}
+
+.alliance-handover-body {
+    padding: 0.9rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+}
+
+.alliance-handover-list {
+    max-height: 320px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.alliance-handover-item {
+    width: 100%;
+    border: 1px solid rgba(148, 163, 184, 0.32);
+    background: rgba(30, 41, 59, 0.66);
+    color: #cbd5e1;
+    border-radius: 8px;
+    padding: 0.52rem 0.65rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    text-align: left;
+}
+
+.alliance-handover-item.active {
+    border-color: rgba(34, 197, 94, 0.72);
+    background: rgba(20, 83, 45, 0.4);
+    color: #dcfce7;
+}
+
+.alliance-handover-item span:last-child {
+    font-size: 0.76rem;
+}
+
+.alliance-handover-error {
+    color: #fecaca;
+    border: 1px solid rgba(239, 68, 68, 0.55);
+    background: rgba(185, 28, 28, 0.22);
+    border-radius: 8px;
+    padding: 0.5rem 0.62rem;
+    font-size: 0.86rem;
+}
+
+.alliance-handover-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.55rem;
+    padding: 0.85rem 1rem 1rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.alliance-confirm-modal {
+    width: min(420px, 92vw);
+    border-radius: 12px;
+    border: 1px solid rgba(248, 113, 113, 0.42);
+    background: rgba(15, 23, 42, 0.98);
+    box-shadow: 0 18px 34px rgba(2, 6, 23, 0.58);
+    padding: 1rem 1rem 0.95rem;
+}
+
+.alliance-confirm-modal h4 {
+    margin: 0 0 0.55rem 0;
+    color: #fee2e2;
+    font-size: 1.02rem;
+}
+
+.alliance-confirm-modal p {
+    margin: 0;
+    color: #cbd5e1;
+    line-height: 1.5;
+    font-size: 0.9rem;
+}
+
+.alliance-confirm-actions {
+    margin-top: 0.9rem;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.55rem;
 }
 
 .alliance-style-form-grid {

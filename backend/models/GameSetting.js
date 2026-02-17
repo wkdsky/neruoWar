@@ -11,6 +11,12 @@ const gameSettingSchema = new mongoose.Schema({
     default: 60,
     min: 1,
     max: 86400
+  },
+  distributionAnnouncementLeadHours: {
+    type: Number,
+    default: 24,
+    min: 1,
+    max: 168
   }
 }, {
   timestamps: true

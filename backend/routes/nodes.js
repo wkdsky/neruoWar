@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const Node = require('../models/Node');
 const User = require('../models/User');
 const EntropyAlliance = require('../models/EntropyAlliance');
+const KnowledgeDistributionService = require('../services/KnowledgeDistributionService');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
 
@@ -90,10 +91,33 @@ const attachVisualStyleToNodeList = async (nodes = []) => {
   const plainNodes = (nodes || []).map(toPlainObject).filter(Boolean);
   if (plainNodes.length === 0) return [];
 
+  const nodeKeyByIndex = new Map();
+  const nodeAllianceIdByKey = new Map();
+  const allianceById = new Map();
+  const unresolvedNodeAllianceIds = new Set();
+
   const domainMasterIds = new Set();
   const allianceByMasterId = new Map();
 
-  plainNodes.forEach((nodeItem) => {
+  plainNodes.forEach((nodeItem, index) => {
+    const nodeKey = getIdString(nodeItem?._id) || `idx_${index}`;
+    nodeKeyByIndex.set(index, nodeKey);
+
+    const nodeAllianceValue = nodeItem?.allianceId;
+    const nodeAllianceId = getIdString(
+      nodeAllianceValue && typeof nodeAllianceValue === 'object'
+        ? nodeAllianceValue._id
+        : nodeAllianceValue
+    );
+    if (isValidObjectId(nodeAllianceId)) {
+      nodeAllianceIdByKey.set(nodeKey, nodeAllianceId);
+      if (nodeAllianceValue && typeof nodeAllianceValue === 'object') {
+        allianceById.set(nodeAllianceId, toPlainObject(nodeAllianceValue));
+      } else {
+        unresolvedNodeAllianceIds.add(nodeAllianceId);
+      }
+    }
+
     const domainMasterValue = nodeItem.domainMaster;
     const domainMasterId = getIdString(
       domainMasterValue && typeof domainMasterValue === 'object'
@@ -110,6 +134,19 @@ const attachVisualStyleToNodeList = async (nodes = []) => {
       }
     }
   });
+
+  const unresolvedNodeAllianceIdList = Array.from(unresolvedNodeAllianceIds).filter((id) => !allianceById.has(id));
+  if (unresolvedNodeAllianceIdList.length > 0) {
+    const directAlliances = await EntropyAlliance.find({ _id: { $in: unresolvedNodeAllianceIdList } })
+      .select('name flag visualStyles activeVisualStyleId')
+      .lean();
+    directAlliances.forEach((allianceItem) => {
+      const allianceId = getIdString(allianceItem?._id);
+      if (allianceId) {
+        allianceById.set(allianceId, allianceItem);
+      }
+    });
+  }
 
   const unresolvedMasterIds = Array.from(domainMasterIds).filter((id) => !allianceByMasterId.has(id));
   if (unresolvedMasterIds.length > 0) {
@@ -130,18 +167,28 @@ const attachVisualStyleToNodeList = async (nodes = []) => {
       const masterId = getIdString(masterItem._id);
       const allianceId = getIdString(masterItem.allianceId);
       if (masterId && allianceMap.has(allianceId)) {
-        allianceByMasterId.set(masterId, allianceMap.get(allianceId));
+        const resolvedAlliance = allianceMap.get(allianceId);
+        allianceByMasterId.set(masterId, resolvedAlliance);
+        if (allianceId) {
+          allianceById.set(allianceId, resolvedAlliance);
+        }
       }
     });
   }
 
-  return plainNodes.map((nodeItem) => {
+  return plainNodes.map((nodeItem, index) => {
+    const nodeKey = nodeKeyByIndex.get(index);
+    const nodeAllianceId = nodeAllianceIdByKey.get(nodeKey) || '';
+    let alliance = nodeAllianceId ? (allianceById.get(nodeAllianceId) || null) : null;
+
     const domainMasterId = getIdString(
       nodeItem.domainMaster && typeof nodeItem.domainMaster === 'object'
         ? nodeItem.domainMaster._id
         : nodeItem.domainMaster
     );
-    const alliance = allianceByMasterId.get(domainMasterId) || null;
+    if (!alliance) {
+      alliance = allianceByMasterId.get(domainMasterId) || null;
+    }
     if (!alliance) {
       return {
         ...nodeItem,
@@ -153,12 +200,273 @@ const attachVisualStyleToNodeList = async (nodes = []) => {
       ...nodeItem,
       visualStyle: {
         ...style,
-        allianceId: getIdString(alliance._id),
+        allianceId: getIdString(alliance._id) || nodeAllianceId,
         allianceName: alliance.name || '',
         styleId: getIdString(alliance.activeVisualStyleId) || ''
       }
     };
   });
+};
+
+const clampPercent = (value, fallback = 0) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(100, parsed));
+};
+
+const round2 = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.round(parsed * 100) / 100;
+};
+
+const normalizePercentUserRules = (items = []) => {
+  const result = [];
+  const seen = new Set();
+  for (const item of (Array.isArray(items) ? items : [])) {
+    const userId = getIdString(item?.userId);
+    if (!isValidObjectId(userId) || seen.has(userId)) continue;
+    seen.add(userId);
+    result.push({
+      userId,
+      percent: clampPercent(item?.percent, 0)
+    });
+  }
+  return result;
+};
+
+const normalizePercentAllianceRules = (items = []) => {
+  const result = [];
+  const seen = new Set();
+  for (const item of (Array.isArray(items) ? items : [])) {
+    const allianceId = getIdString(item?.allianceId);
+    if (!isValidObjectId(allianceId) || seen.has(allianceId)) continue;
+    seen.add(allianceId);
+    result.push({
+      allianceId,
+      percent: clampPercent(item?.percent, 0)
+    });
+  }
+  return result;
+};
+
+const normalizeObjectIdArray = (items = []) => {
+  const result = [];
+  const seen = new Set();
+  for (const item of (Array.isArray(items) ? items : [])) {
+    const id = getIdString(item);
+    if (!isValidObjectId(id) || seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
+};
+
+const normalizeScheduleSlots = (items = []) => {
+  const result = [];
+  const seen = new Set();
+  for (const item of (Array.isArray(items) ? items : [])) {
+    const weekday = parseInt(item?.weekday, 10);
+    const hour = parseInt(item?.hour, 10);
+    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) continue;
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue;
+    const key = `${weekday}-${hour}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ weekday, hour });
+  }
+  return result;
+};
+
+const sanitizeDistributionRuleInput = (rawRule = {}) => ({
+  enabled: !!rawRule?.enabled,
+  distributionScope: rawRule?.distributionScope === 'partial' ? 'partial' : 'all',
+  distributionPercent: clampPercent(rawRule?.distributionPercent, 100),
+  masterPercent: clampPercent(rawRule?.masterPercent, 10),
+  adminPercents: normalizePercentUserRules(rawRule?.adminPercents),
+  customUserPercents: normalizePercentUserRules(rawRule?.customUserPercents),
+  nonHostileAlliancePercent: clampPercent(rawRule?.nonHostileAlliancePercent, 0),
+  specificAlliancePercents: normalizePercentAllianceRules(rawRule?.specificAlliancePercents),
+  noAlliancePercent: clampPercent(rawRule?.noAlliancePercent, 0),
+  blacklistUserIds: normalizeObjectIdArray(
+    rawRule?.blacklistUserIds ||
+    (Array.isArray(rawRule?.blacklistUsers) ? rawRule.blacklistUsers.map((item) => item?.userId || item?._id || item) : [])
+  ),
+  blacklistAllianceIds: normalizeObjectIdArray(
+    rawRule?.blacklistAllianceIds ||
+    (Array.isArray(rawRule?.blacklistAlliances) ? rawRule.blacklistAlliances.map((item) => item?.allianceId || item?._id || item) : [])
+  )
+});
+
+const sanitizeDistributionScheduleInput = (rawSchedule = []) => normalizeScheduleSlots(rawSchedule);
+
+const sanitizeDistributionRuleProfileInput = (rawProfile = {}, index = 0) => {
+  const source = rawProfile && typeof rawProfile === 'object' ? rawProfile : {};
+  const profileId = typeof source.profileId === 'string' && source.profileId.trim()
+    ? source.profileId.trim()
+    : `rule_${Date.now()}_${index + 1}`;
+  const name = typeof source.name === 'string' && source.name.trim()
+    ? source.name.trim()
+    : `规则${index + 1}`;
+  const ruleSource = source.rule && typeof source.rule === 'object' ? source.rule : source;
+  return {
+    profileId,
+    name,
+    rule: sanitizeDistributionRuleInput(ruleSource)
+  };
+};
+
+const collectRuleUserIds = (rule = {}) => Array.from(new Set([
+  ...(Array.isArray(rule?.adminPercents) ? rule.adminPercents.map((item) => getIdString(item?.userId)) : []),
+  ...(Array.isArray(rule?.customUserPercents) ? rule.customUserPercents.map((item) => getIdString(item?.userId)) : []),
+  ...(Array.isArray(rule?.blacklistUserIds) ? rule.blacklistUserIds.map((item) => getIdString(item)) : [])
+].filter((id) => isValidObjectId(id))));
+
+const loadCommonUserIdSet = async (userIds = []) => {
+  const targetIds = Array.from(new Set((Array.isArray(userIds) ? userIds : [])
+    .map((id) => getIdString(id))
+    .filter((id) => isValidObjectId(id))));
+  if (targetIds.length === 0) return new Set();
+  const commonUsers = await User.find({
+    _id: { $in: targetIds },
+    role: 'common'
+  }).select('_id').lean();
+  return new Set(commonUsers.map((item) => getIdString(item._id)).filter((id) => isValidObjectId(id)));
+};
+
+const filterRuleUsersByAllowedSet = (rule = {}, allowedUserIdSet = new Set()) => ({
+  ...rule,
+  adminPercents: (Array.isArray(rule?.adminPercents) ? rule.adminPercents : [])
+    .filter((item) => allowedUserIdSet.has(getIdString(item?.userId))),
+  customUserPercents: (Array.isArray(rule?.customUserPercents) ? rule.customUserPercents : [])
+    .filter((item) => allowedUserIdSet.has(getIdString(item?.userId))),
+  blacklistUserIds: (Array.isArray(rule?.blacklistUserIds) ? rule.blacklistUserIds : [])
+    .map((item) => getIdString(item))
+    .filter((id) => allowedUserIdSet.has(id))
+});
+
+const computeDistributionPercentSummary = (rule = {}, allianceContributionPercent = 0) => {
+  const x = clampPercent(rule?.masterPercent, 10);
+  const y = (Array.isArray(rule?.adminPercents) ? rule.adminPercents : [])
+    .reduce((sum, item) => sum + clampPercent(item?.percent, 0), 0);
+  const z = clampPercent(allianceContributionPercent, 0);
+  const b = (Array.isArray(rule?.customUserPercents) ? rule.customUserPercents : [])
+    .reduce((sum, item) => sum + clampPercent(item?.percent, 0), 0);
+  const d = clampPercent(rule?.nonHostileAlliancePercent, 0);
+  const e = (Array.isArray(rule?.specificAlliancePercents) ? rule.specificAlliancePercents : [])
+    .reduce((sum, item) => sum + clampPercent(item?.percent, 0), 0);
+  const f = clampPercent(rule?.noAlliancePercent, 0);
+  const total = x + y + z + b + d + e + f;
+  return {
+    x: round2(x),
+    y: round2(y),
+    z: round2(z),
+    b: round2(b),
+    d: round2(d),
+    e: round2(e),
+    f: round2(f),
+    total: round2(total)
+  };
+};
+
+const serializeDistributionRule = (rule = {}) => ({
+  enabled: !!rule?.enabled,
+  distributionScope: rule?.distributionScope === 'partial' ? 'partial' : 'all',
+  distributionPercent: round2(clampPercent(rule?.distributionPercent, 100)),
+  masterPercent: round2(clampPercent(rule?.masterPercent, 10)),
+  adminPercents: (Array.isArray(rule?.adminPercents) ? rule.adminPercents : []).map((item) => ({
+    userId: getIdString(item?.userId),
+    percent: round2(clampPercent(item?.percent, 0))
+  })),
+  customUserPercents: (Array.isArray(rule?.customUserPercents) ? rule.customUserPercents : []).map((item) => ({
+    userId: getIdString(item?.userId),
+    percent: round2(clampPercent(item?.percent, 0))
+  })),
+  nonHostileAlliancePercent: round2(clampPercent(rule?.nonHostileAlliancePercent, 0)),
+  specificAlliancePercents: (Array.isArray(rule?.specificAlliancePercents) ? rule.specificAlliancePercents : []).map((item) => ({
+    allianceId: getIdString(item?.allianceId),
+    percent: round2(clampPercent(item?.percent, 0))
+  })),
+  noAlliancePercent: round2(clampPercent(rule?.noAlliancePercent, 0)),
+  blacklistUserIds: (Array.isArray(rule?.blacklistUserIds) ? rule.blacklistUserIds : []).map((item) => getIdString(item)).filter(Boolean),
+  blacklistAllianceIds: (Array.isArray(rule?.blacklistAllianceIds) ? rule.blacklistAllianceIds : []).map((item) => getIdString(item)).filter(Boolean)
+});
+
+const serializeDistributionSchedule = (schedule = []) => (
+  Array.isArray(schedule) ? schedule.map((item) => ({
+    weekday: parseInt(item?.weekday, 10),
+    hour: parseInt(item?.hour, 10)
+  })).filter((item) => Number.isInteger(item.weekday) && Number.isInteger(item.hour)) : []
+);
+
+const serializeDistributionRuleProfile = (profile = {}) => ({
+  profileId: typeof profile?.profileId === 'string' ? profile.profileId : '',
+  name: typeof profile?.name === 'string' ? profile.name : '',
+  rule: serializeDistributionRule(profile?.rule || {})
+});
+
+const serializeDistributionLock = (locked = null) => {
+  if (!locked) return null;
+  return {
+    executeAt: locked.executeAt || null,
+    announcedAt: locked.announcedAt || null,
+    projectedTotal: round2(Number(locked.projectedTotal) || 0),
+    projectedDistributableTotal: round2(Number(locked.projectedDistributableTotal) || 0),
+    masterAllianceId: getIdString(locked.masterAllianceId) || '',
+    masterAllianceName: locked.masterAllianceName || '',
+    allianceContributionPercent: round2(clampPercent(locked.allianceContributionPercent, 0)),
+    distributionScope: locked?.distributionScope === 'partial' ? 'partial' : 'all',
+    distributionPercent: round2(clampPercent(locked?.distributionPercent, 100)),
+    ruleProfileId: typeof locked.ruleProfileId === 'string' ? locked.ruleProfileId : '',
+    ruleProfileName: typeof locked.ruleProfileName === 'string' ? locked.ruleProfileName : '',
+    enemyAllianceIds: (Array.isArray(locked.enemyAllianceIds) ? locked.enemyAllianceIds : []).map((item) => getIdString(item)).filter(Boolean),
+    ruleSnapshot: serializeDistributionRule(locked.ruleSnapshot || {})
+  };
+};
+
+const parseDistributionExecuteAtHour = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  if (parsed.getMinutes() !== 0 || parsed.getSeconds() !== 0 || parsed.getMilliseconds() !== 0) {
+    return null;
+  }
+  return parsed;
+};
+
+const extractDistributionProfilesFromNode = (node) => {
+  const inputProfiles = Array.isArray(node?.knowledgeDistributionRuleProfiles)
+    ? node.knowledgeDistributionRuleProfiles
+    : [];
+  const profiles = inputProfiles
+    .map((profile, index) => sanitizeDistributionRuleProfileInput(profile, index))
+    .filter((profile, index, arr) => profile.profileId && arr.findIndex((item) => item.profileId === profile.profileId) === index);
+
+  if (profiles.length === 0) {
+    profiles.push({
+      profileId: 'default',
+      name: '默认规则',
+      rule: sanitizeDistributionRuleInput(node?.knowledgeDistributionRule || {})
+    });
+  }
+
+  const rawActiveRuleId = typeof node?.knowledgeDistributionActiveRuleId === 'string'
+    ? node.knowledgeDistributionActiveRuleId.trim()
+    : '';
+  const activeRuleId = profiles.some((profile) => profile.profileId === rawActiveRuleId)
+    ? rawActiveRuleId
+    : profiles[0].profileId;
+  const scheduleSlots = serializeDistributionSchedule(
+    Array.isArray(node?.knowledgeDistributionScheduleSlots) && node.knowledgeDistributionScheduleSlots.length > 0
+      ? node.knowledgeDistributionScheduleSlots
+      : node?.knowledgeDistributionRule?.scheduleSlots
+  );
+
+  return {
+    profiles,
+    activeRuleId,
+    scheduleSlots
+  };
 };
 
 // 搜索节点
@@ -269,6 +577,7 @@ router.post('/create', authenticateToken, async (req, res) => {
       nodeId,
       owner: req.user.userId,
       domainMaster: isUserAdmin ? null : req.user.userId, // 管理员创建默认无域主，普通用户创建默认自己为域主
+      allianceId: isUserAdmin ? null : (user.allianceId || null),
       name,
       description,
       position,
@@ -368,14 +677,20 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     node.status = 'approved';
     node.relatedParentDomains = relatedParentDomains;
     node.relatedChildDomains = relatedChildDomains;
-    const owner = await User.findById(node.owner).select('role');
+    const owner = await User.findById(node.owner).select('role allianceId');
     if (owner?.role === 'admin') {
       node.domainMaster = null;
+      node.allianceId = null;
     } else if (node.domainMaster) {
-      const currentMaster = await User.findById(node.domainMaster).select('role');
+      const currentMaster = await User.findById(node.domainMaster).select('role allianceId');
       if (!currentMaster || currentMaster.role === 'admin') {
         node.domainMaster = null;
+        node.allianceId = null;
+      } else {
+        node.allianceId = currentMaster.allianceId || null;
       }
+    } else {
+      node.allianceId = null;
     }
     // 设置默认内容分数为1
     node.contentScore = 1;
@@ -816,7 +1131,7 @@ router.get('/public/root-nodes', async (req, res) => {
     // 查找所有已批准的节点
     const nodes = await Node.find({ status: 'approved' })
       .populate('owner', 'username profession')
-      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster');
+      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId');
 
     // 过滤出根节点（没有母节点的节点）
     const rootNodes = nodes.filter(node =>
@@ -844,7 +1159,7 @@ router.get('/public/featured-nodes', async (req, res) => {
     })
       .populate('owner', 'username profession')
       .sort({ featuredOrder: 1, createdAt: -1 })
-      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder domainMaster');
+      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder domainMaster allianceId');
     const styledFeaturedNodes = await attachVisualStyleToNodeList(featuredNodes);
 
     res.json({
@@ -930,7 +1245,7 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
         select: 'username profession avatar level allianceId',
         populate: { path: 'allianceId', select: 'name flag visualStyles activeVisualStyleId' }
       })
-      .select('name description owner domainMaster domainAdmins relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
+      .select('name description owner domainMaster domainAdmins allianceId relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
 
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
@@ -944,13 +1259,13 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     const parentNodes = await Node.find({
       name: { $in: node.relatedParentDomains },
       status: 'approved'
-    }).select('_id name description knowledgePoint contentScore domainMaster');
+    }).select('_id name description knowledgePoint contentScore domainMaster allianceId');
 
     // 获取关联的子域节点信息（ID和名称）
     const childNodes = await Node.find({
       name: { $in: node.relatedChildDomains },
       status: 'approved'
-    }).select('_id name description knowledgePoint contentScore domainMaster');
+    }).select('_id name description knowledgePoint contentScore domainMaster allianceId');
 
     const normalizeUserForNodeDetail = (user) => {
       if (!user) return null;
@@ -1032,9 +1347,36 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
       return res.status(404).json({ error: '节点不存在' });
     }
 
+    const resetDistributionOwnerBoundState = () => {
+      node.knowledgeDistributionRule = {
+        ...(node.knowledgeDistributionRule?.toObject?.() || node.knowledgeDistributionRule || {}),
+        blacklistUserIds: [],
+        blacklistAllianceIds: []
+      };
+      node.knowledgeDistributionRuleProfiles = (Array.isArray(node.knowledgeDistributionRuleProfiles)
+        ? node.knowledgeDistributionRuleProfiles
+        : []
+      ).map((profile) => ({
+        profileId: profile.profileId,
+        name: profile.name,
+        rule: {
+          ...(profile?.rule?.toObject?.() || profile?.rule || {}),
+          blacklistUserIds: [],
+          blacklistAllianceIds: []
+        }
+      }));
+      node.knowledgeDistributionLocked = null;
+    };
+
+    const currentMasterId = getIdString(node.domainMaster);
+
     // 如果domainMasterId为空或null，清除域主
     if (!domainMasterId) {
       node.domainMaster = null;
+      node.allianceId = null;
+      if (currentMasterId) {
+        resetDistributionOwnerBoundState();
+      }
       await node.save();
       return res.json({
         success: true,
@@ -1044,7 +1386,7 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
     }
 
     // 查找新域主用户
-    const newMaster = await User.findById(domainMasterId).select('role');
+    const newMaster = await User.findById(domainMasterId).select('role allianceId');
     if (!newMaster) {
       return res.status(404).json({ error: '用户不存在' });
     }
@@ -1054,6 +1396,13 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
 
     // 更新域主
     node.domainMaster = domainMasterId;
+    node.allianceId = newMaster.allianceId || null;
+    node.domainAdmins = (node.domainAdmins || []).filter((adminId) => (
+      getIdString(adminId) !== getIdString(domainMasterId)
+    ));
+    if (currentMasterId !== getIdString(domainMasterId)) {
+      resetDistributionOwnerBoundState();
+    }
     await node.save();
 
     const updatedNode = await Node.findById(nodeId)
@@ -1281,7 +1630,7 @@ router.post('/:nodeId/domain-master/apply', authenticateToken, async (req, res) 
       return res.status(403).json({ error: '仅普通用户可申请成为域主' });
     }
 
-    const node = await Node.findById(nodeId).select('name status owner domainMaster');
+    const node = await Node.findById(nodeId).select('name status owner domainMaster allianceId');
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可访问' });
     }
@@ -1291,6 +1640,7 @@ router.post('/:nodeId/domain-master/apply', authenticateToken, async (req, res) 
       if (!currentMaster || currentMaster.role === 'admin') {
         // 兼容历史数据：管理员或失效账号不应作为域主，自动清空
         node.domainMaster = null;
+        node.allianceId = null;
         await node.save();
       } else {
         return res.status(400).json({ error: '该知识域已有域主，无法申请' });
@@ -1493,6 +1843,46 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       })
       .filter(Boolean);
 
+    let pendingInvites = [];
+    if (canEdit) {
+      const pendingInviteUsers = await User.find({
+        notifications: {
+          $elemMatch: {
+            type: 'domain_admin_invite',
+            status: 'pending',
+            nodeId: node._id,
+            inviterId: requestUserId
+          }
+        }
+      }).select('_id username profession notifications');
+
+      pendingInvites = pendingInviteUsers
+        .map((userItem) => {
+          const inviteeId = getIdString(userItem._id);
+          if (!inviteeId || inviteeId === domainMasterId || domainAdminIds.includes(inviteeId)) {
+            return null;
+          }
+          const matchedInvite = (userItem.notifications || [])
+            .filter((notification) => (
+              notification.type === 'domain_admin_invite'
+              && notification.status === 'pending'
+              && getIdString(notification.nodeId) === nodeId
+              && getIdString(notification.inviterId) === requestUserId
+            ))
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+          if (!matchedInvite) return null;
+          return {
+            inviteeId,
+            username: userItem.username,
+            profession: userItem.profession || '',
+            notificationId: getIdString(matchedInvite._id),
+            createdAt: matchedInvite.createdAt
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+
     const canResign = !canEdit && !isSystemAdmin && isDomainAdmin(node, requestUserId);
     let resignPending = false;
     if (canResign && isValidObjectId(domainMasterId)) {
@@ -1521,7 +1911,8 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
             profession: domainMasterUser.profession
           }
         : null,
-      domainAdmins: admins
+      domainAdmins: admins,
+      pendingInvites
     });
   } catch (error) {
     console.error('获取知识域域相错误:', error);
@@ -1555,7 +1946,17 @@ router.get('/:nodeId/domain-admins/search-users', authenticateToken, async (req,
 
     const query = {
       role: 'common',
-      _id: { $nin: excludedIds }
+      _id: { $nin: excludedIds },
+      notifications: {
+        $not: {
+          $elemMatch: {
+            type: 'domain_admin_invite',
+            status: 'pending',
+            nodeId: node._id,
+            inviterId: req.user.userId
+          }
+        }
+      }
     };
 
     if (keyword.trim()) {
@@ -1652,6 +2053,66 @@ router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res)
   }
 });
 
+// 域主撤销待处理域相邀请
+router.post('/:nodeId/domain-admins/invite/:notificationId/revoke', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId, notificationId } = req.params;
+    const inviterId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(nodeId) || !isValidObjectId(notificationId)) {
+      return res.status(400).json({ error: '无效的知识域或邀请ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name domainMaster');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+    if (!isDomainMaster(node, inviterId)) {
+      return res.status(403).json({ error: '只有域主可以撤销域相邀请' });
+    }
+
+    const inviter = await User.findById(inviterId).select('_id username');
+    if (!inviter) {
+      return res.status(404).json({ error: '邀请人不存在' });
+    }
+
+    const invitee = await User.findOne({
+      notifications: {
+        $elemMatch: {
+          _id: notificationId,
+          type: 'domain_admin_invite',
+          status: 'pending',
+          nodeId: node._id,
+          inviterId: inviter._id
+        }
+      }
+    }).select('_id username notifications');
+
+    if (!invitee) {
+      return res.status(404).json({ error: '该邀请不存在或已处理，无法撤销' });
+    }
+
+    const inviteNotification = invitee.notifications.id(notificationId);
+    if (!inviteNotification || inviteNotification.status !== 'pending') {
+      return res.status(404).json({ error: '该邀请不存在或已处理，无法撤销' });
+    }
+
+    inviteNotification.status = 'rejected';
+    inviteNotification.read = false;
+    inviteNotification.title = `域相邀请已撤销：${node.name}`;
+    inviteNotification.message = `${inviter.username} 已撤销你在知识域「${node.name}」的域相邀请`;
+    inviteNotification.respondedAt = new Date();
+    await invitee.save();
+
+    res.json({
+      success: true,
+      message: `已撤销对 ${invitee.username} 的邀请`
+    });
+  } catch (error) {
+    console.error('撤销域相邀请错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 // 域主移除知识域域相
 router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (req, res) => {
   try {
@@ -1687,6 +2148,601 @@ router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (r
   } catch (error) {
     console.error('移除知识域域相错误:', error);
     res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取知识点分发规则（域主可编辑，域相/系统管理员可查看）
+router.get('/:nodeId/distribution-settings', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select(
+      'name status domainMaster domainAdmins knowledgePoint knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionActiveRuleId knowledgeDistributionScheduleSlots knowledgeDistributionLocked knowledgeDistributionCarryover'
+    );
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+
+    const currentUser = await User.findById(requestUserId).select('role');
+    if (!currentUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const isSystemAdmin = currentUser.role === 'admin';
+    const canEdit = isDomainMaster(node, requestUserId);
+    const canView = canEdit || isDomainAdmin(node, requestUserId) || isSystemAdmin;
+    if (!canView) {
+      return res.status(403).json({ error: '无权限查看该知识域分发规则' });
+    }
+
+    const domainMasterId = getIdString(node.domainMaster);
+    const { profiles, activeRuleId, scheduleSlots } = extractDistributionProfilesFromNode(node);
+    const activeProfile = profiles.find((item) => item.profileId === activeRuleId) || profiles[0];
+    const serializedProfiles = profiles.map((profile) => ({
+      profileId: profile.profileId,
+      name: profile.name,
+      rule: serializeDistributionRule(profile.rule || {})
+    }));
+    const activeSerializedProfile = serializedProfiles.find((item) => item.profileId === activeRuleId) || serializedProfiles[0];
+    const rulePayload = activeSerializedProfile?.rule || serializeDistributionRule(activeProfile?.rule || {});
+    const lockPayload = serializeDistributionLock(node.knowledgeDistributionLocked || null);
+
+    const relatedUserIds = new Set([
+      ...serializedProfiles.flatMap((profile) => profile.rule.adminPercents.map((item) => item.userId)),
+      ...serializedProfiles.flatMap((profile) => profile.rule.customUserPercents.map((item) => item.userId)),
+      ...serializedProfiles.flatMap((profile) => profile.rule.blacklistUserIds),
+      domainMasterId,
+      ...(Array.isArray(node.domainAdmins) ? node.domainAdmins.map((id) => getIdString(id)) : [])
+    ].filter((id) => isValidObjectId(id)));
+    const relatedAllianceIds = new Set([
+      ...profiles.flatMap((profile) => serializeDistributionRule(profile.rule || {}).specificAlliancePercents.map((item) => item.allianceId)),
+      ...profiles.flatMap((profile) => serializeDistributionRule(profile.rule || {}).blacklistAllianceIds),
+      ...(lockPayload?.enemyAllianceIds || [])
+    ].filter((id) => isValidObjectId(id)));
+
+    const [relatedUsers, masterUser] = await Promise.all([
+      relatedUserIds.size > 0
+        ? User.find({
+            _id: { $in: Array.from(relatedUserIds) },
+            role: 'common'
+          }).select('_id username allianceId').lean()
+        : [],
+      isValidObjectId(domainMasterId)
+        ? User.findById(domainMasterId).select('_id username allianceId').lean()
+        : null
+    ]);
+    const relatedUserMap = new Map(relatedUsers.map((item) => [getIdString(item._id), item]));
+    const commonUserIdSet = new Set(Array.from(relatedUserMap.keys()).filter((id) => isValidObjectId(id)));
+
+    let masterAlliance = null;
+    if (masterUser?.allianceId && isValidObjectId(getIdString(masterUser.allianceId))) {
+      const allianceId = getIdString(masterUser.allianceId);
+      relatedAllianceIds.add(allianceId);
+      masterAlliance = await EntropyAlliance.findById(allianceId)
+        .select('_id name knowledgeContributionPercent enemyAllianceIds')
+        .lean();
+    }
+
+    const relatedAlliances = relatedAllianceIds.size > 0
+      ? await EntropyAlliance.find({ _id: { $in: Array.from(relatedAllianceIds) } })
+          .select('_id name')
+          .lean()
+      : [];
+    const allianceMap = new Map(relatedAlliances.map((item) => [getIdString(item._id), item]));
+
+    const enrichPercentUsers = (items = []) => items.map((item) => ({
+      ...item,
+      username: relatedUserMap.get(item.userId)?.username || ''
+    }));
+    const enrichPercentAlliances = (items = []) => items.map((item) => ({
+      ...item,
+      allianceName: allianceMap.get(item.allianceId)?.name || ''
+    }));
+    const enrichIdUsers = (items = []) => items.map((id) => ({
+      userId: id,
+      username: relatedUserMap.get(id)?.username || ''
+    }));
+    const enrichIdAlliances = (items = []) => items.map((id) => ({
+      allianceId: id,
+      allianceName: allianceMap.get(id)?.name || ''
+    }));
+
+    const allianceContributionPercent = round2(clampPercent(masterAlliance?.knowledgeContributionPercent || 0, 0));
+    const enemyAllianceIds = (Array.isArray(masterAlliance?.enemyAllianceIds) ? masterAlliance.enemyAllianceIds : [])
+      .map((item) => getIdString(item))
+      .filter((id) => isValidObjectId(id));
+    const hasMasterAlliance = !!masterAlliance;
+
+    const normalizeAllianceScopedRule = (rule = {}) => (
+      hasMasterAlliance
+        ? rule
+        : {
+            ...rule,
+            nonHostileAlliancePercent: 0,
+            specificAlliancePercents: []
+          }
+    );
+
+    const enrichRulePayload = (rule) => ({
+      ...normalizeAllianceScopedRule(rule),
+      adminPercents: enrichPercentUsers(rule.adminPercents),
+      customUserPercents: enrichPercentUsers(rule.customUserPercents),
+      specificAlliancePercents: hasMasterAlliance ? enrichPercentAlliances(rule.specificAlliancePercents) : [],
+      blacklistUsers: enrichIdUsers(rule.blacklistUserIds),
+      blacklistAlliances: enrichIdAlliances(rule.blacklistAllianceIds)
+    });
+
+    const profilePayloads = serializedProfiles.map((profile) => {
+      const serializedRule = normalizeAllianceScopedRule(
+        filterRuleUsersByAllowedSet(profile.rule, commonUserIdSet)
+      );
+      return {
+        profileId: profile.profileId,
+        name: profile.name,
+        enabled: profile.profileId === activeRuleId,
+        rule: enrichRulePayload(serializedRule),
+        percentSummary: computeDistributionPercentSummary(serializedRule, allianceContributionPercent)
+      };
+    });
+    const activeRulePayload = profilePayloads.find((item) => item.profileId === activeRuleId) || profilePayloads[0];
+
+    res.json({
+      success: true,
+      canView,
+      canEdit,
+      isSystemAdmin,
+      nodeId: node._id,
+      nodeName: node.name,
+      knowledgePointValue: round2(Number(node?.knowledgePoint?.value) || 0),
+      carryoverValue: round2(Number(node?.knowledgeDistributionCarryover) || 0),
+      masterAllianceId: masterAlliance ? getIdString(masterAlliance._id) : '',
+      masterAllianceName: masterAlliance?.name || '',
+      allianceContributionPercent,
+      enemyAllianceIds,
+      scheduleSlots,
+      activeRuleId,
+      activeRule: activeRulePayload || null,
+      ruleProfiles: profilePayloads,
+      rule: activeRulePayload?.rule || enrichRulePayload(
+        normalizeAllianceScopedRule(filterRuleUsersByAllowedSet(rulePayload, commonUserIdSet))
+      ),
+      percentSummary: activeRulePayload?.percentSummary || computeDistributionPercentSummary(
+        normalizeAllianceScopedRule(filterRuleUsersByAllowedSet(rulePayload, commonUserIdSet)),
+        allianceContributionPercent
+      ),
+      locked: lockPayload,
+      isRuleLocked: !!node.knowledgeDistributionLocked
+    });
+  } catch (error) {
+    console.error('获取知识点分发规则错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 域主搜索用户（用于分发规则中的指定用户/黑名单）
+router.get('/:nodeId/distribution-settings/search-users', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const keyword = typeof req.query?.keyword === 'string' ? req.query.keyword.trim() : '';
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('domainMaster');
+    if (!node) {
+      return res.status(404).json({ error: '知识域不存在' });
+    }
+    if (!isDomainMaster(node, req.user.userId)) {
+      return res.status(403).json({ error: '只有域主可以搜索分发对象' });
+    }
+
+    const query = {
+      role: 'common',
+      _id: { $ne: node.domainMaster }
+    };
+    if (keyword) {
+      query.username = { $regex: keyword, $options: 'i' };
+    }
+
+    const users = await User.find(query)
+      .select('_id username profession allianceId')
+      .sort({ username: 1 })
+      .limit(20)
+      .lean();
+
+    res.json({
+      success: true,
+      users: users.map((userItem) => ({
+        _id: getIdString(userItem._id),
+        username: userItem.username || '',
+        profession: userItem.profession || '',
+        allianceId: getIdString(userItem.allianceId) || ''
+      }))
+    });
+  } catch (error) {
+    console.error('搜索分发用户失败:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 域主搜索熵盟（用于分发规则中的指定熵盟/黑名单）
+router.get('/:nodeId/distribution-settings/search-alliances', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const keyword = typeof req.query?.keyword === 'string' ? req.query.keyword.trim() : '';
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('domainMaster');
+    if (!node) {
+      return res.status(404).json({ error: '知识域不存在' });
+    }
+    if (!isDomainMaster(node, req.user.userId)) {
+      return res.status(403).json({ error: '只有域主可以搜索熵盟' });
+    }
+
+    const query = {};
+    if (keyword) {
+      query.name = { $regex: keyword, $options: 'i' };
+    }
+
+    const alliances = await EntropyAlliance.find(query)
+      .select('_id name')
+      .sort({ name: 1 })
+      .limit(20)
+      .lean();
+
+    res.json({
+      success: true,
+      alliances: alliances.map((item) => ({
+        _id: getIdString(item._id),
+        name: item.name || ''
+      }))
+    });
+  } catch (error) {
+    console.error('搜索分发熵盟失败:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 保存知识点分发规则（仅域主）
+router.put('/:nodeId/distribution-settings', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    let node = await Node.findById(nodeId).select(
+      'name status domainMaster domainAdmins knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionActiveRuleId knowledgeDistributionScheduleSlots knowledgeDistributionLocked'
+    );
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!isDomainMaster(node, requestUserId)) {
+      return res.status(403).json({ error: '只有域主可以修改分发规则' });
+    }
+
+    const masterUser = await User.findById(requestUserId).select('_id role allianceId');
+    if (!masterUser || masterUser.role !== 'common') {
+      return res.status(400).json({ error: '当前域主身份异常，无法设置分发规则' });
+    }
+
+    const now = new Date();
+    const lockExecuteAt = new Date(node?.knowledgeDistributionLocked?.executeAt || 0).getTime();
+    if (node.knowledgeDistributionLocked && Number.isFinite(lockExecuteAt) && lockExecuteAt <= now.getTime()) {
+      await KnowledgeDistributionService.executeLockedDistribution(node._id, now);
+      node = await Node.findById(nodeId).select(
+        'name status domainMaster domainAdmins knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionActiveRuleId knowledgeDistributionScheduleSlots knowledgeDistributionLocked'
+      );
+      if (!node || node.status !== 'approved') {
+        return res.status(404).json({ error: '知识域不存在或不可操作' });
+      }
+    }
+
+    if (node.knowledgeDistributionLocked) {
+      return res.status(409).json({ error: '当前分发计划已发布，采用规则已锁定，需等待本次分发结束后才能修改规则' });
+    }
+
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+    const inputProfilesRaw = Array.isArray(body.ruleProfiles)
+      ? body.ruleProfiles
+      : (body.rule && typeof body.rule === 'object'
+          ? [{ profileId: body.activeRuleId || 'default', name: '默认规则', rule: body.rule }]
+          : []);
+    if (inputProfilesRaw.length === 0) {
+      return res.status(400).json({ error: '请至少配置一套分发规则' });
+    }
+
+    const profileSeen = new Set();
+    const nextProfiles = [];
+    inputProfilesRaw.forEach((profile, index) => {
+      const normalized = sanitizeDistributionRuleProfileInput(profile, index);
+      if (!normalized.profileId || profileSeen.has(normalized.profileId)) return;
+      profileSeen.add(normalized.profileId);
+      nextProfiles.push(normalized);
+    });
+    if (nextProfiles.length === 0) {
+      return res.status(400).json({ error: '分发规则数据无效' });
+    }
+
+    const requestedActiveRuleId = typeof body.activeRuleId === 'string' ? body.activeRuleId.trim() : '';
+    const nextActiveRuleId = nextProfiles.some((profile) => profile.profileId === requestedActiveRuleId)
+      ? requestedActiveRuleId
+      : nextProfiles[0].profileId;
+    let allianceContributionPercent = 0;
+    let masterAlliance = null;
+    if (masterUser.allianceId && isValidObjectId(getIdString(masterUser.allianceId))) {
+      masterAlliance = await EntropyAlliance.findById(masterUser.allianceId)
+        .select('_id name knowledgeContributionPercent');
+      allianceContributionPercent = round2(clampPercent(masterAlliance?.knowledgeContributionPercent || 0, 0));
+      const masterAllianceId = getIdString(masterAlliance?._id);
+      if (masterAllianceId) {
+        nextProfiles.forEach((profile) => {
+          profile.rule.blacklistAllianceIds = (profile.rule.blacklistAllianceIds || []).filter((id) => id !== masterAllianceId);
+        });
+      }
+    }
+    if (!masterAlliance) {
+      nextProfiles.forEach((profile) => {
+        profile.rule.nonHostileAlliancePercent = 0;
+        profile.rule.specificAlliancePercents = [];
+      });
+    }
+
+    const ruleReferencedUserIds = Array.from(new Set([
+      ...nextProfiles.flatMap((profile) => collectRuleUserIds(profile.rule || {})),
+      ...(Array.isArray(node.domainAdmins) ? node.domainAdmins.map((adminId) => getIdString(adminId)) : [])
+    ].filter((id) => isValidObjectId(id))));
+    const commonUserIdSet = await loadCommonUserIdSet(ruleReferencedUserIds);
+    const domainAdminSet = new Set(
+      (node.domainAdmins || [])
+        .map((adminId) => getIdString(adminId))
+        .filter((id) => isValidObjectId(id) && commonUserIdSet.has(id))
+    );
+    const profileSummaries = [];
+    for (const profile of nextProfiles) {
+      profile.rule = filterRuleUsersByAllowedSet(profile.rule || {}, commonUserIdSet);
+      profile.rule.adminPercents = (profile.rule.adminPercents || []).filter((item) => domainAdminSet.has(item.userId));
+      profile.rule.blacklistUserIds = (profile.rule.blacklistUserIds || []).filter((id) => id !== requestUserId);
+      const summary = computeDistributionPercentSummary(profile.rule, allianceContributionPercent);
+      if (summary.total > 100) {
+        return res.status(400).json({
+          error: `规则「${profile.name}」分配总比例不能超过100%（当前 ${summary.total}%）`,
+          profileId: profile.profileId,
+          percentSummary: summary
+        });
+      }
+      profileSummaries.push({
+        profileId: profile.profileId,
+        name: profile.name,
+        percentSummary: summary
+      });
+    }
+
+    node.knowledgeDistributionRuleProfiles = nextProfiles.map((profile) => ({
+      profileId: profile.profileId,
+      name: profile.name,
+      rule: profile.rule
+    }));
+    node.knowledgeDistributionActiveRuleId = nextActiveRuleId;
+    const activeProfile = nextProfiles.find((profile) => profile.profileId === nextActiveRuleId) || nextProfiles[0];
+    node.knowledgeDistributionRule = activeProfile?.rule || sanitizeDistributionRuleInput({});
+    // 新流程中分发时间由“发布分发计划”单独管理
+    node.knowledgeDistributionScheduleSlots = [];
+
+    await node.save();
+
+    const saved = extractDistributionProfilesFromNode(node);
+    const savedProfiles = saved.profiles.map((profile) => ({
+      profileId: profile.profileId,
+      name: profile.name,
+      enabled: profile.profileId === saved.activeRuleId,
+      rule: serializeDistributionRule(profile.rule || {})
+    }));
+    const savedActive = savedProfiles.find((profile) => profile.profileId === saved.activeRuleId) || savedProfiles[0];
+    const isRuleLocked = !!node.knowledgeDistributionLocked;
+    res.json({
+      success: true,
+      message: isRuleLocked
+        ? '分发规则已保存。当前周期已锁定，修改将在下一次分发生效'
+        : '分发规则已保存',
+      nodeId: node._id,
+      nodeName: node.name,
+      masterAllianceId: masterAlliance ? getIdString(masterAlliance._id) : '',
+      masterAllianceName: masterAlliance?.name || '',
+      allianceContributionPercent,
+      scheduleSlots: [],
+      activeRuleId: saved.activeRuleId,
+      activeRule: savedActive || null,
+      ruleProfiles: savedProfiles.map((profile) => ({
+        ...profile,
+        percentSummary: computeDistributionPercentSummary(profile.rule, allianceContributionPercent)
+      })),
+      rule: savedActive?.rule || serializeDistributionRule(node.knowledgeDistributionRule || {}),
+      percentSummary: computeDistributionPercentSummary(savedActive?.rule || node.knowledgeDistributionRule || {}, allianceContributionPercent),
+      profileSummaries,
+      locked: serializeDistributionLock(node.knowledgeDistributionLocked || null),
+      isRuleLocked
+    });
+  } catch (error) {
+    console.error('保存知识点分发规则错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 发布知识点分发计划（仅域主）：选择规则 + 设置执行时刻（整点）后立即发布并锁定，不可撤回
+router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    let node = await Node.findById(nodeId).select(
+      'name status domainMaster domainAdmins contentScore knowledgePoint knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionActiveRuleId knowledgeDistributionLocked knowledgeDistributionCarryover'
+    );
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!isDomainMaster(node, requestUserId)) {
+      return res.status(403).json({ error: '只有域主可以发布分发计划' });
+    }
+
+    const now = new Date();
+    const lockExecuteAt = new Date(node?.knowledgeDistributionLocked?.executeAt || 0).getTime();
+    if (node.knowledgeDistributionLocked && Number.isFinite(lockExecuteAt) && lockExecuteAt <= now.getTime()) {
+      await KnowledgeDistributionService.executeLockedDistribution(node._id, now);
+      node = await Node.findById(nodeId).select(
+        'name status domainMaster domainAdmins contentScore knowledgePoint knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionActiveRuleId knowledgeDistributionLocked knowledgeDistributionCarryover'
+      );
+      if (!node) {
+        return res.status(404).json({ error: '知识域不存在' });
+      }
+    }
+
+    if (node.knowledgeDistributionLocked) {
+      return res.status(409).json({ error: '该知识域已有已发布分发计划，发布后不可撤回，请等待本次执行后再发布新计划' });
+    }
+
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const executeAt = parseDistributionExecuteAtHour(body.executeAt);
+    if (!executeAt) {
+      return res.status(400).json({ error: '执行时间格式无效，请设置为整点（例如 2026-02-16T16:00）' });
+    }
+    if (executeAt.getTime() <= now.getTime()) {
+      return res.status(400).json({ error: '执行时间必须晚于当前时间' });
+    }
+
+    const { profiles, activeRuleId } = extractDistributionProfilesFromNode(node);
+    const requestedProfileId = typeof body.ruleProfileId === 'string' ? body.ruleProfileId.trim() : '';
+    const selectedProfile = profiles.find((item) => item.profileId === requestedProfileId)
+      || profiles.find((item) => item.profileId === activeRuleId)
+      || profiles[0];
+    if (!selectedProfile) {
+      return res.status(400).json({ error: '未找到可发布的分发规则' });
+    }
+
+    const masterUser = await User.findById(requestUserId).select('_id username role allianceId');
+    if (!masterUser || masterUser.role !== 'common') {
+      return res.status(400).json({ error: '当前域主身份异常，无法发布分发计划' });
+    }
+
+    const selectedRule = sanitizeDistributionRuleInput(selectedProfile.rule || {});
+    const ruleReferencedUserIds = Array.from(new Set([
+      ...collectRuleUserIds(selectedRule),
+      ...(Array.isArray(node.domainAdmins) ? node.domainAdmins.map((adminId) => getIdString(adminId)) : [])
+    ].filter((id) => isValidObjectId(id))));
+    const commonUserIdSet = await loadCommonUserIdSet(ruleReferencedUserIds);
+    const domainAdminSet = new Set(
+      (node.domainAdmins || [])
+        .map((adminId) => getIdString(adminId))
+        .filter((id) => isValidObjectId(id) && commonUserIdSet.has(id))
+    );
+    const filteredRule = filterRuleUsersByAllowedSet(selectedRule, commonUserIdSet);
+    selectedRule.adminPercents = filteredRule.adminPercents;
+    selectedRule.customUserPercents = filteredRule.customUserPercents;
+    selectedRule.blacklistUserIds = filteredRule.blacklistUserIds;
+    selectedRule.adminPercents = (selectedRule.adminPercents || []).filter((item) => domainAdminSet.has(item.userId));
+    selectedRule.blacklistUserIds = (selectedRule.blacklistUserIds || []).filter((id) => id !== requestUserId);
+
+    let masterAlliance = null;
+    let allianceContributionPercent = 0;
+    if (masterUser.allianceId && isValidObjectId(getIdString(masterUser.allianceId))) {
+      masterAlliance = await EntropyAlliance.findById(masterUser.allianceId)
+        .select('_id name knowledgeContributionPercent enemyAllianceIds')
+        .lean();
+      allianceContributionPercent = round2(clampPercent(masterAlliance?.knowledgeContributionPercent || 0, 0));
+      const masterAllianceId = getIdString(masterAlliance?._id);
+      if (masterAllianceId) {
+        selectedRule.blacklistAllianceIds = (selectedRule.blacklistAllianceIds || []).filter((id) => id !== masterAllianceId);
+      }
+    } else {
+      selectedRule.nonHostileAlliancePercent = 0;
+      selectedRule.specificAlliancePercents = [];
+    }
+
+    const summary = computeDistributionPercentSummary(selectedRule, allianceContributionPercent);
+    if (summary.total > 100) {
+      return res.status(400).json({
+        error: `规则「${selectedProfile.name}」分配总比例不能超过100%（当前 ${summary.total}%）`,
+        profileId: selectedProfile.profileId,
+        percentSummary: summary
+      });
+    }
+
+    const refreshedNode = await Node.updateKnowledgePoint(node._id);
+    if (!refreshedNode) {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+
+    const minutesToExecute = Math.max(0, (executeAt.getTime() - now.getTime()) / (1000 * 60));
+    const projectedTotal = round2(
+      (Number(refreshedNode.knowledgePoint?.value) || 0) +
+      (Number(refreshedNode.knowledgeDistributionCarryover) || 0) +
+      minutesToExecute * (Number(refreshedNode.contentScore) || 0)
+    );
+    const distributionPercent = selectedRule?.distributionScope === 'partial'
+      ? round2(clampPercent(selectedRule?.distributionPercent, 100))
+      : 100;
+    const projectedDistributableTotal = round2(projectedTotal * (distributionPercent / 100));
+
+    refreshedNode.knowledgeDistributionLocked = {
+      executeAt,
+      announcedAt: now,
+      projectedTotal,
+      projectedDistributableTotal,
+      masterAllianceId: masterAlliance?._id || null,
+      masterAllianceName: masterAlliance?.name || '',
+      allianceContributionPercent,
+      distributionScope: selectedRule?.distributionScope === 'partial' ? 'partial' : 'all',
+      distributionPercent,
+      ruleProfileId: selectedProfile.profileId || '',
+      ruleProfileName: selectedProfile.name || '',
+      enemyAllianceIds: Array.isArray(masterAlliance?.enemyAllianceIds) ? masterAlliance.enemyAllianceIds : [],
+      ruleSnapshot: selectedRule
+    };
+    refreshedNode.knowledgeDistributionLastAnnouncedAt = now;
+    await refreshedNode.save();
+
+    await KnowledgeDistributionService.publishAnnouncementNotifications({
+      node: refreshedNode,
+      masterUser,
+      lock: refreshedNode.knowledgeDistributionLocked
+    });
+
+    return res.json({
+      success: true,
+      message: '分发计划已发布并锁定，不可撤回',
+      nodeId: refreshedNode._id,
+      nodeName: refreshedNode.name,
+      activeRuleId: selectedProfile.profileId,
+      activeRuleName: selectedProfile.name,
+      knowledgePointValue: round2(Number(refreshedNode?.knowledgePoint?.value) || 0),
+      carryoverValue: round2(Number(refreshedNode?.knowledgeDistributionCarryover) || 0),
+      locked: serializeDistributionLock(refreshedNode.knowledgeDistributionLocked || null),
+      isRuleLocked: true
+    });
+  } catch (error) {
+    console.error('发布知识点分发计划错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
   }
 });
 

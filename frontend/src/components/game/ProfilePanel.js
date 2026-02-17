@@ -250,6 +250,10 @@ const ProfilePanel = ({ username, onAvatarChange }) => {
                                 <span className="info-value">{userInfo?.experience || 0}</span>
                             </div>
                             <div className="info-item">
+                                <span className="info-label">账户知识点</span>
+                                <span className="info-value">{Number(userInfo?.knowledgeBalance || 0).toFixed(2)}</span>
+                            </div>
+                            <div className="info-item">
                                 <span className="info-label">职业</span>
                                 <span className="info-value">{userInfo?.profession}</span>
                             </div>

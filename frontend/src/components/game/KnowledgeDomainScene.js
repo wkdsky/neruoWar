@@ -4,7 +4,207 @@
  */
 
 import React, { useRef, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import './KnowledgeDomainScene.css';
+
+const DISTRIBUTION_SCOPE_OPTIONS = [
+  { value: 'all', label: '全部分发（100%）' },
+  { value: 'partial', label: '部分分发（按比例）' }
+];
+
+const clampPercent = (value, fallback = 0) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(100, parsed));
+};
+
+const createDefaultDistributionRule = () => ({
+  enabled: false,
+  distributionScope: 'all',
+  distributionPercent: 100,
+  masterPercent: 10,
+  adminPercents: [],
+  customUserPercents: [],
+  nonHostileAlliancePercent: 0,
+  specificAlliancePercents: [],
+  noAlliancePercent: 0,
+  blacklistUsers: [],
+  blacklistAlliances: []
+});
+
+const createDistributionRuleProfileId = () => (
+  `rule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+);
+
+const mapDistributionRuleFromApi = (rawRule = {}) => ({
+  enabled: !!rawRule.enabled,
+  distributionScope: rawRule?.distributionScope === 'partial' ? 'partial' : 'all',
+  distributionPercent: clampPercent(rawRule?.distributionPercent, 100),
+  masterPercent: clampPercent(rawRule.masterPercent, 10),
+  adminPercents: Array.isArray(rawRule.adminPercents)
+    ? rawRule.adminPercents.map((item) => ({
+        userId: item.userId,
+        username: item.username || '',
+        percent: clampPercent(item.percent, 0)
+      })).filter((item) => item.userId)
+    : [],
+  customUserPercents: Array.isArray(rawRule.customUserPercents)
+    ? rawRule.customUserPercents.map((item) => ({
+        userId: item.userId,
+        username: item.username || '',
+        percent: clampPercent(item.percent, 0)
+      })).filter((item) => item.userId)
+    : [],
+  nonHostileAlliancePercent: clampPercent(rawRule.nonHostileAlliancePercent, 0),
+  specificAlliancePercents: Array.isArray(rawRule.specificAlliancePercents)
+    ? rawRule.specificAlliancePercents.map((item) => ({
+        allianceId: item.allianceId,
+        allianceName: item.allianceName || '',
+        percent: clampPercent(item.percent, 0)
+      })).filter((item) => item.allianceId)
+    : [],
+  noAlliancePercent: clampPercent(rawRule.noAlliancePercent, 0),
+  blacklistUsers: Array.isArray(rawRule.blacklistUsers)
+    ? rawRule.blacklistUsers.map((item) => ({
+        userId: item.userId || item._id || '',
+        username: item.username || ''
+      })).filter((item) => item.userId)
+    : [],
+  blacklistAlliances: Array.isArray(rawRule.blacklistAlliances)
+    ? rawRule.blacklistAlliances.map((item) => ({
+        allianceId: item.allianceId || item._id || '',
+        allianceName: item.allianceName || ''
+      })).filter((item) => item.allianceId)
+    : []
+});
+
+const mapDistributionRuleProfileFromApi = (rawProfile = {}, index = 0) => {
+  const fallbackRule = mapDistributionRuleFromApi(rawProfile?.rule || rawProfile);
+  return {
+    profileId: typeof rawProfile.profileId === 'string' && rawProfile.profileId.trim()
+      ? rawProfile.profileId.trim()
+      : `rule_${index + 1}`,
+    name: typeof rawProfile.name === 'string' && rawProfile.name.trim()
+      ? rawProfile.name.trim()
+      : `规则${index + 1}`,
+    enabled: !!rawProfile.enabled,
+    rule: fallbackRule,
+    percentSummary: rawProfile.percentSummary || null
+  };
+};
+
+const createDistributionRuleProfile = (profileId = 'default', name = '默认规则', rawRule = null) => ({
+  profileId,
+  name,
+  enabled: true,
+  rule: rawRule ? mapDistributionRuleFromApi(rawRule) : createDefaultDistributionRule(),
+  percentSummary: null
+});
+
+const buildDistributionRulePayload = (rule = {}) => ({
+  enabled: false,
+  distributionScope: rule?.distributionScope === 'partial' ? 'partial' : 'all',
+  distributionPercent: clampPercent(rule?.distributionPercent, 100),
+  masterPercent: clampPercent(rule.masterPercent, 10),
+  adminPercents: (rule.adminPercents || [])
+    .filter((item) => item.userId && clampPercent(item.percent, 0) > 0)
+    .map((item) => ({ userId: item.userId, percent: clampPercent(item.percent, 0) })),
+  customUserPercents: (rule.customUserPercents || [])
+    .filter((item) => item.userId && clampPercent(item.percent, 0) > 0)
+    .map((item) => ({ userId: item.userId, percent: clampPercent(item.percent, 0) })),
+  nonHostileAlliancePercent: clampPercent(rule.nonHostileAlliancePercent, 0),
+  specificAlliancePercents: (rule.specificAlliancePercents || [])
+    .filter((item) => item.allianceId && clampPercent(item.percent, 0) > 0)
+    .map((item) => ({ allianceId: item.allianceId, percent: clampPercent(item.percent, 0) })),
+  noAlliancePercent: clampPercent(rule.noAlliancePercent, 0),
+  blacklistUserIds: (rule.blacklistUsers || []).map((item) => item.userId).filter(Boolean),
+  blacklistAllianceIds: (rule.blacklistAlliances || []).map((item) => item.allianceId).filter(Boolean)
+});
+
+const createDefaultDistributionState = () => ({
+  loading: false,
+  saving: false,
+  publishing: false,
+  error: '',
+  feedback: '',
+  canView: false,
+  canEdit: false,
+  isRuleLocked: false,
+  percentSummary: { x: 0, y: 0, z: 0, b: 0, d: 0, e: 0, f: 0, total: 0 },
+  allianceContributionPercent: 0,
+  masterAllianceName: '',
+  carryoverValue: 0,
+  knowledgePointValue: 0,
+  lastSyncedAt: Date.now(),
+  locked: null,
+  publishRuleId: 'default',
+  publishExecuteAt: '',
+  activeRuleId: 'default',
+  ruleProfiles: [createDistributionRuleProfile('default', '默认规则')]
+});
+
+const computePercentSummary = (rule, allianceContributionPercent) => {
+  const x = clampPercent(rule?.masterPercent, 10);
+  const y = (rule?.adminPercents || []).reduce((sum, item) => sum + clampPercent(item?.percent, 0), 0);
+  const z = clampPercent(allianceContributionPercent, 0);
+  const b = (rule?.customUserPercents || []).reduce((sum, item) => sum + clampPercent(item?.percent, 0), 0);
+  const d = clampPercent(rule?.nonHostileAlliancePercent, 0);
+  const e = (rule?.specificAlliancePercents || []).reduce((sum, item) => sum + clampPercent(item?.percent, 0), 0);
+  const f = clampPercent(rule?.noAlliancePercent, 0);
+  const total = x + y + z + b + d + e + f;
+  return {
+    x: Number(x.toFixed(2)),
+    y: Number(y.toFixed(2)),
+    z: Number(z.toFixed(2)),
+    b: Number(b.toFixed(2)),
+    d: Number(d.toFixed(2)),
+    e: Number(e.toFixed(2)),
+    f: Number(f.toFixed(2)),
+    total: Number(total.toFixed(2))
+  };
+};
+
+const getDistributionScopePercent = (rule = {}) => (
+  rule?.distributionScope === 'partial' ? clampPercent(rule?.distributionPercent, 100) : 100
+);
+
+const toHourInputValue = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const pad2 = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:00`;
+};
+
+const getDefaultPublishExecuteAtInput = () => {
+  const date = new Date();
+  date.setMinutes(0, 0, 0);
+  date.setHours(date.getHours() + 1);
+  return toHourInputValue(date);
+};
+
+const parseHourInputToDate = (value) => {
+  if (!value || typeof value !== 'string') return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  if (date.getMinutes() !== 0 || date.getSeconds() !== 0 || date.getMilliseconds() !== 0) return null;
+  return date;
+};
+
+const formatCountdown = (seconds) => {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const day = Math.floor(total / 86400);
+  const hour = Math.floor((total % 86400) / 3600);
+  const minute = Math.floor((total % 3600) / 60);
+  const second = total % 60;
+  const hh = String(hour).padStart(2, '0');
+  const mm = String(minute).padStart(2, '0');
+  const ss = String(second).padStart(2, '0');
+  if (day > 0) {
+    return `${day}天 ${hh}:${mm}:${ss}`;
+  }
+  return `${hh}:${mm}:${ss}`;
+};
 
 // 3D场景渲染器
 class KnowledgeDomainRenderer {
@@ -311,15 +511,28 @@ const KnowledgeDomainScene = ({
     canResign: false,
     resignPending: false,
     domainMaster: null,
-    domainAdmins: []
+    domainAdmins: [],
+    pendingInvites: []
   });
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isSearchingUsers, setIsSearchingUsers] = useState(false);
   const [invitingUsername, setInvitingUsername] = useState('');
+  const [revokingInviteId, setRevokingInviteId] = useState('');
   const [removingAdminId, setRemovingAdminId] = useState('');
   const [isSubmittingResign, setIsSubmittingResign] = useState(false);
   const [manageFeedback, setManageFeedback] = useState('');
+  const [distributionState, setDistributionState] = useState(createDefaultDistributionState);
+  const [distributionUserKeyword, setDistributionUserKeyword] = useState('');
+  const [distributionUserResults, setDistributionUserResults] = useState([]);
+  const [distributionUserSearching, setDistributionUserSearching] = useState(false);
+  const [distributionAllianceKeyword, setDistributionAllianceKeyword] = useState('');
+  const [distributionAllianceResults, setDistributionAllianceResults] = useState([]);
+  const [distributionAllianceSearching, setDistributionAllianceSearching] = useState(false);
+  const [isDistributionRuleModalOpen, setIsDistributionRuleModalOpen] = useState(false);
+  const [newDistributionRuleName, setNewDistributionRuleName] = useState('');
+  const [distributionClockMs, setDistributionClockMs] = useState(Date.now());
+  const [activeManageSidePanel, setActiveManageSidePanel] = useState('');
   const showManageTab = !!domainAdminState.canView;
 
   const parseApiResponse = async (response) => {
@@ -338,6 +551,10 @@ const KnowledgeDomainScene = ({
     parsed?.data?.message ||
     fallback
   );
+
+  const toggleManageSidePanel = (section) => {
+    setActiveManageSidePanel((prev) => (prev === section ? '' : section));
+  };
 
   const fetchDomainAdmins = async (silent = true) => {
     const token = localStorage.getItem('token');
@@ -363,11 +580,12 @@ const KnowledgeDomainScene = ({
             canView: false,
             canEdit: false,
             isSystemAdmin: false,
-            canResign: false,
-            resignPending: false,
-            error: ''
-          }));
-          return;
+              canResign: false,
+              resignPending: false,
+              pendingInvites: [],
+              error: ''
+            }));
+            return;
         }
 
         setDomainAdminState((prev) => ({
@@ -378,6 +596,7 @@ const KnowledgeDomainScene = ({
           isSystemAdmin: false,
           canResign: false,
           resignPending: false,
+          pendingInvites: [],
           error: getApiError(parsed, '获取域相列表失败')
         }));
         return;
@@ -392,7 +611,8 @@ const KnowledgeDomainScene = ({
         canResign: !!data.canResign,
         resignPending: !!data.resignPending,
         domainMaster: data.domainMaster || null,
-        domainAdmins: data.domainAdmins || []
+        domainAdmins: data.domainAdmins || [],
+        pendingInvites: data.pendingInvites || []
       });
     } catch (error) {
       setDomainAdminState((prev) => ({
@@ -401,6 +621,7 @@ const KnowledgeDomainScene = ({
         isSystemAdmin: false,
         canResign: false,
         resignPending: false,
+        pendingInvites: [],
         error: `获取域相列表失败: ${error.message}`
       }));
     }
@@ -466,6 +687,7 @@ const KnowledgeDomainScene = ({
       setSearchKeyword('');
       setSearchResults([]);
       await fetchDomainAdmins(true);
+      await fetchDistributionSettings(true);
     } catch (error) {
       setManageFeedback(`发送邀请失败: ${error.message}`);
     } finally {
@@ -498,10 +720,464 @@ const KnowledgeDomainScene = ({
 
       setManageFeedback(data.message || '管理员已移除');
       await fetchDomainAdmins(true);
+      await fetchDistributionSettings(true);
     } catch (error) {
       setManageFeedback(`移除管理员失败: ${error.message}`);
     } finally {
       setRemovingAdminId('');
+    }
+  };
+
+  const revokeDomainAdminInvite = async (notificationId) => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id || !notificationId) return;
+
+    setRevokingInviteId(notificationId);
+    setManageFeedback('');
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/invite/${notificationId}/revoke`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+
+      if (!response.ok || !data) {
+        setManageFeedback(getApiError(parsed, '撤销邀请失败'));
+        return;
+      }
+
+      setManageFeedback(data.message || '邀请已撤销');
+      await fetchDomainAdmins(true);
+      await fetchDistributionSettings(true);
+    } catch (error) {
+      setManageFeedback(`撤销邀请失败: ${error.message}`);
+    } finally {
+      setRevokingInviteId('');
+    }
+  };
+
+  const normalizeDistributionProfiles = (rawProfiles = [], rawActiveRuleId = '', allianceContributionPercent = 0) => {
+    const input = Array.isArray(rawProfiles) && rawProfiles.length > 0
+      ? rawProfiles
+      : [createDistributionRuleProfile('default', '默认规则')];
+    const seen = new Set();
+    const profiles = input
+      .map((profile, index) => mapDistributionRuleProfileFromApi(profile, index))
+      .filter((profile) => {
+        if (!profile.profileId || seen.has(profile.profileId)) return false;
+        seen.add(profile.profileId);
+        return true;
+      })
+      .map((profile) => ({
+        ...profile,
+        percentSummary: computePercentSummary(profile.rule, allianceContributionPercent)
+      }));
+
+    const safeProfiles = profiles.length > 0 ? profiles : [createDistributionRuleProfile('default', '默认规则')];
+    const activeRuleId = safeProfiles.some((profile) => profile.profileId === rawActiveRuleId)
+      ? rawActiveRuleId
+      : safeProfiles[0].profileId;
+
+    return { profiles: safeProfiles, activeRuleId };
+  };
+
+  const updateDistributionRule = (updater) => {
+    setDistributionState((prev) => {
+      const normalized = normalizeDistributionProfiles(
+        prev.ruleProfiles,
+        prev.activeRuleId,
+        prev.allianceContributionPercent
+      );
+      const nextProfiles = [...normalized.profiles];
+      const targetIndex = nextProfiles.findIndex((item) => item.profileId === normalized.activeRuleId);
+      const currentRule = nextProfiles[targetIndex]?.rule || createDefaultDistributionRule();
+      const nextRule = typeof updater === 'function' ? updater(currentRule) : updater;
+      const nextSummary = computePercentSummary(nextRule, prev.allianceContributionPercent);
+      nextProfiles[targetIndex] = {
+        ...nextProfiles[targetIndex],
+        rule: nextRule,
+        percentSummary: nextSummary
+      };
+
+      return {
+        ...prev,
+        ruleProfiles: nextProfiles,
+        activeRuleId: normalized.activeRuleId,
+        percentSummary: nextSummary,
+        feedback: ''
+      };
+    });
+  };
+
+  const updateActiveDistributionRuleName = (name) => {
+    const nextName = typeof name === 'string' && name.trim() ? name.trim() : '未命名规则';
+    setDistributionState((prev) => {
+      const normalized = normalizeDistributionProfiles(
+        prev.ruleProfiles,
+        prev.activeRuleId,
+        prev.allianceContributionPercent
+      );
+      return {
+        ...prev,
+        ruleProfiles: normalized.profiles.map((profile) => (
+          profile.profileId === normalized.activeRuleId
+            ? { ...profile, name: nextName }
+            : profile
+        )),
+        activeRuleId: normalized.activeRuleId,
+        feedback: ''
+      };
+    });
+  };
+
+  const setActiveDistributionRule = (profileId) => {
+    setDistributionState((prev) => {
+      const normalized = normalizeDistributionProfiles(
+        prev.ruleProfiles,
+        prev.activeRuleId,
+        prev.allianceContributionPercent
+      );
+      const nextActiveRuleId = normalized.profiles.some((profile) => profile.profileId === profileId)
+        ? profileId
+        : normalized.activeRuleId;
+      const activeProfile = normalized.profiles.find((profile) => profile.profileId === nextActiveRuleId) || normalized.profiles[0];
+      return {
+        ...prev,
+        ruleProfiles: normalized.profiles,
+        activeRuleId: nextActiveRuleId,
+        percentSummary: computePercentSummary(activeProfile?.rule || createDefaultDistributionRule(), prev.allianceContributionPercent),
+        feedback: ''
+      };
+    });
+  };
+
+  const createDistributionRuleProfileItem = () => {
+    const trimmedName = newDistributionRuleName.trim();
+    const nextName = trimmedName || `规则${(distributionState.ruleProfiles || []).length + 1}`;
+    const nextId = createDistributionRuleProfileId();
+    setDistributionState((prev) => {
+      const normalized = normalizeDistributionProfiles(
+        prev.ruleProfiles,
+        prev.activeRuleId,
+        prev.allianceContributionPercent
+      );
+      const nextProfiles = [
+        ...normalized.profiles,
+        {
+          ...createDistributionRuleProfile(nextId, nextName),
+          percentSummary: computePercentSummary(createDefaultDistributionRule(), prev.allianceContributionPercent)
+        }
+      ];
+      return {
+        ...prev,
+        ruleProfiles: nextProfiles,
+        activeRuleId: nextId,
+        percentSummary: computePercentSummary(createDefaultDistributionRule(), prev.allianceContributionPercent),
+        feedback: ''
+      };
+    });
+    setNewDistributionRuleName('');
+  };
+
+  const removeActiveDistributionRule = () => {
+    setDistributionState((prev) => {
+      const normalized = normalizeDistributionProfiles(
+        prev.ruleProfiles,
+        prev.activeRuleId,
+        prev.allianceContributionPercent
+      );
+      if (normalized.profiles.length <= 1) {
+        return {
+          ...prev,
+          feedback: '至少保留一套分发规则'
+        };
+      }
+      const filtered = normalized.profiles.filter((profile) => profile.profileId !== normalized.activeRuleId);
+      const nextActive = filtered[0];
+      return {
+        ...prev,
+        ruleProfiles: filtered,
+        activeRuleId: nextActive.profileId,
+        percentSummary: computePercentSummary(nextActive.rule, prev.allianceContributionPercent),
+        feedback: ''
+      };
+    });
+  };
+
+  const fetchDistributionSettings = async (silent = true) => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id) return;
+
+    if (!silent) {
+      setDistributionState((prev) => ({ ...prev, loading: true, error: '', feedback: '' }));
+    }
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/distribution-settings`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        if (response.status === 403) {
+          setDistributionState((prev) => ({ ...prev, loading: false, canView: false, canEdit: false, error: '' }));
+          return;
+        }
+        setDistributionState((prev) => ({
+          ...prev,
+          loading: false,
+          canView: false,
+          canEdit: false,
+          error: getApiError(parsed, '获取分发规则失败')
+        }));
+        return;
+      }
+
+      const allianceContributionPercent = Number(data.allianceContributionPercent || 0);
+      const hasAlliance = !!data.masterAllianceName;
+      const rawProfiles = Array.isArray(data.ruleProfiles) && data.ruleProfiles.length > 0
+        ? data.ruleProfiles
+        : [{ profileId: data.activeRuleId || 'default', name: '默认规则', rule: data.rule || {} }];
+      const normalized = normalizeDistributionProfiles(rawProfiles, data.activeRuleId || '', allianceContributionPercent);
+      const normalizedProfiles = hasAlliance
+        ? normalized.profiles
+        : normalized.profiles.map((profile) => ({
+            ...profile,
+            rule: {
+              ...profile.rule,
+              nonHostileAlliancePercent: 0,
+              specificAlliancePercents: []
+            },
+            percentSummary: computePercentSummary({
+              ...profile.rule,
+              nonHostileAlliancePercent: 0,
+              specificAlliancePercents: []
+            }, allianceContributionPercent)
+          }));
+      const activeProfile = normalizedProfiles.find((profile) => profile.profileId === normalized.activeRuleId) || normalizedProfiles[0];
+      const nextLocked = data.locked || null;
+      const publishRuleId = nextLocked?.ruleProfileId
+        || (normalizedProfiles.some((profile) => profile.profileId === data.activeRuleId) ? data.activeRuleId : activeProfile?.profileId || 'default');
+      const publishExecuteAt = nextLocked?.executeAt
+        ? toHourInputValue(nextLocked.executeAt)
+        : getDefaultPublishExecuteAtInput();
+
+      setDistributionState((prev) => ({
+        ...prev,
+        loading: false,
+        saving: false,
+        publishing: false,
+        error: '',
+        feedback: '',
+        canView: !!data.canView,
+        canEdit: !!data.canEdit,
+        isRuleLocked: !!data.isRuleLocked,
+        percentSummary: computePercentSummary(activeProfile?.rule || createDefaultDistributionRule(), allianceContributionPercent),
+        allianceContributionPercent,
+        masterAllianceName: data.masterAllianceName || '',
+        carryoverValue: Number(data.carryoverValue || 0),
+        knowledgePointValue: Number(data.knowledgePointValue || 0),
+        lastSyncedAt: Date.now(),
+        locked: nextLocked,
+        publishRuleId,
+        publishExecuteAt,
+        activeRuleId: normalized.activeRuleId,
+        ruleProfiles: normalizedProfiles
+      }));
+    } catch (error) {
+      setDistributionState((prev) => ({
+        ...prev,
+        loading: false,
+        error: `获取分发规则失败: ${error.message}`
+      }));
+    }
+  };
+
+  const saveDistributionSettings = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id) return;
+    if (!distributionState.canEdit) return;
+    if (distributionState.locked) {
+      setDistributionState((prev) => ({
+        ...prev,
+        feedback: '当前分发计划已发布，采用规则锁定中，请等待本次分发结束后再修改规则'
+      }));
+      return;
+    }
+
+    const hasMasterAlliance = !!distributionState.masterAllianceName;
+    const normalized = normalizeDistributionProfiles(
+      distributionState.ruleProfiles,
+      distributionState.activeRuleId,
+      distributionState.allianceContributionPercent
+    );
+    const overLimitProfile = normalized.profiles.find((profile) => (
+      computePercentSummary(profile.rule, distributionState.allianceContributionPercent).total > 100
+    ));
+    if (overLimitProfile) {
+      const overTotal = computePercentSummary(overLimitProfile.rule, distributionState.allianceContributionPercent).total;
+      setDistributionState((prev) => ({
+        ...prev,
+        feedback: `规则「${overLimitProfile.name}」总比例 ${overTotal}% 超过 100%，请调整`
+      }));
+      return;
+    }
+
+    setDistributionState((prev) => ({ ...prev, saving: true, feedback: '', error: '' }));
+    try {
+      const payload = {
+        activeRuleId: normalized.activeRuleId,
+        ruleProfiles: normalized.profiles.map((profile) => ({
+          profileId: profile.profileId,
+          name: profile.name,
+          rule: (() => {
+            const baseRule = {
+              ...buildDistributionRulePayload(profile.rule),
+              distributionScope: profile.rule?.distributionScope === 'partial' ? 'partial' : 'all',
+              distributionPercent: getDistributionScopePercent(profile.rule)
+            };
+            if (!hasMasterAlliance) {
+              baseRule.nonHostileAlliancePercent = 0;
+              baseRule.specificAlliancePercents = [];
+            }
+            return baseRule;
+          })()
+        }))
+      };
+
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/distribution-settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        setDistributionState((prev) => ({
+          ...prev,
+          saving: false,
+          error: getApiError(parsed, '保存分发规则失败')
+        }));
+        return;
+      }
+
+      setDistributionState((prev) => ({
+        ...prev,
+        saving: false,
+        feedback: data.message || '分发规则已保存',
+        isRuleLocked: !!data.isRuleLocked
+      }));
+      await fetchDistributionSettings(true);
+    } catch (error) {
+      setDistributionState((prev) => ({
+        ...prev,
+        saving: false,
+        error: `保存分发规则失败: ${error.message}`
+      }));
+    }
+  };
+
+  const publishDistributionPlan = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id) return;
+    if (!distributionState.canEdit) return;
+
+    if (distributionState.locked) {
+      setDistributionState((prev) => ({
+        ...prev,
+        feedback: '当前已有已发布分发计划，发布后不可撤回，请等待本次分发执行后再发布'
+      }));
+      return;
+    }
+
+    const now = Date.now();
+
+    const executeAtDate = parseHourInputToDate(distributionState.publishExecuteAt);
+    if (!executeAtDate) {
+      setDistributionState((prev) => ({
+        ...prev,
+        feedback: '请设置整点执行时间（例如 2026-02-16 16:00）'
+      }));
+      return;
+    }
+    if (executeAtDate.getTime() <= now) {
+      setDistributionState((prev) => ({
+        ...prev,
+        feedback: '执行时间必须晚于当前时间'
+      }));
+      return;
+    }
+
+    const normalized = normalizeDistributionProfiles(
+      distributionState.ruleProfiles,
+      distributionState.activeRuleId,
+      distributionState.allianceContributionPercent
+    );
+    const targetProfile = normalized.profiles.find((profile) => profile.profileId === distributionState.publishRuleId)
+      || normalized.profiles.find((profile) => profile.profileId === normalized.activeRuleId)
+      || normalized.profiles[0];
+
+    if (!targetProfile) {
+      setDistributionState((prev) => ({ ...prev, feedback: '未找到可发布的分发规则' }));
+      return;
+    }
+
+    const targetSummary = computePercentSummary(targetProfile.rule, distributionState.allianceContributionPercent);
+    if (targetSummary.total > 100) {
+      setDistributionState((prev) => ({
+        ...prev,
+        feedback: `规则「${targetProfile.name}」总比例 ${targetSummary.total}% 超过 100%，请先调整再发布`
+      }));
+      return;
+    }
+
+    setDistributionState((prev) => ({
+      ...prev,
+      publishing: true,
+      feedback: '',
+      error: ''
+    }));
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/distribution-settings/publish`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          ruleProfileId: targetProfile.profileId,
+          executeAt: executeAtDate.toISOString()
+        })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        setDistributionState((prev) => ({
+          ...prev,
+          publishing: false,
+          error: getApiError(parsed, '发布分发计划失败')
+        }));
+        return;
+      }
+
+      setDistributionState((prev) => ({
+        ...prev,
+        publishing: false,
+        feedback: data.message || '分发计划已发布并锁定，不可撤回'
+      }));
+      await fetchDistributionSettings(true);
+    } catch (error) {
+      setDistributionState((prev) => ({
+        ...prev,
+        publishing: false,
+        error: `发布分发计划失败: ${error.message}`
+      }));
     }
   };
 
@@ -550,6 +1226,14 @@ const KnowledgeDomainScene = ({
     setSearchKeyword('');
     setSearchResults([]);
     setManageFeedback('');
+    setDistributionUserKeyword('');
+    setDistributionUserResults([]);
+    setDistributionAllianceKeyword('');
+    setDistributionAllianceResults([]);
+    setIsDistributionRuleModalOpen(false);
+    setNewDistributionRuleName('');
+    setActiveManageSidePanel('distribution');
+    setDistributionState(createDefaultDistributionState());
     fetchDomainAdmins(false);
   }, [isVisible, node?._id]);
 
@@ -604,6 +1288,179 @@ const KnowledgeDomainScene = ({
     };
   }, [activeTab, isVisible, node?._id, searchKeyword, domainAdminState.canEdit]);
 
+  useEffect(() => {
+    if (!isVisible || activeTab !== 'manage' || !node?._id) return;
+    fetchDistributionSettings(false);
+  }, [activeTab, isVisible, node?._id]);
+
+  useEffect(() => {
+    if (!isVisible || activeTab !== 'manage') return undefined;
+    setDistributionClockMs(Date.now());
+    const timerId = setInterval(() => {
+      setDistributionClockMs(Date.now());
+    }, 1000);
+    return () => clearInterval(timerId);
+  }, [isVisible, activeTab]);
+
+  useEffect(() => {
+    if (!isVisible || activeTab !== 'manage' || !node?._id || !distributionState.canView) return undefined;
+    const timerId = setInterval(() => {
+      fetchDistributionSettings(true);
+    }, 15000);
+    return () => clearInterval(timerId);
+  }, [activeTab, isVisible, node?._id, distributionState.canView]);
+
+  useEffect(() => {
+    if (!isVisible || activeTab !== 'manage' || !node?._id || !distributionState.canEdit) {
+      setDistributionUserResults([]);
+      return undefined;
+    }
+    const keyword = distributionUserKeyword.trim();
+    if (!keyword) {
+      setDistributionUserResults([]);
+      return undefined;
+    }
+
+    const timerId = setTimeout(async () => {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      setDistributionUserSearching(true);
+      try {
+        const response = await fetch(
+          `http://localhost:5000/api/nodes/${node._id}/distribution-settings/search-users?keyword=${encodeURIComponent(keyword)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const parsed = await parseApiResponse(response);
+        const data = parsed.data;
+        if (!response.ok || !data) {
+          setDistributionUserResults([]);
+          return;
+        }
+        setDistributionUserResults(data.users || []);
+      } catch (error) {
+        setDistributionUserResults([]);
+      } finally {
+        setDistributionUserSearching(false);
+      }
+    }, 280);
+
+    return () => clearTimeout(timerId);
+  }, [activeTab, distributionUserKeyword, distributionState.canEdit, isVisible, node?._id]);
+
+  useEffect(() => {
+    if (!isVisible || activeTab !== 'manage' || !node?._id || !distributionState.canEdit) {
+      setDistributionAllianceResults([]);
+      return undefined;
+    }
+    const keyword = distributionAllianceKeyword.trim();
+    if (!keyword) {
+      setDistributionAllianceResults([]);
+      return undefined;
+    }
+
+    const timerId = setTimeout(async () => {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      setDistributionAllianceSearching(true);
+      try {
+        const response = await fetch(
+          `http://localhost:5000/api/nodes/${node._id}/distribution-settings/search-alliances?keyword=${encodeURIComponent(keyword)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const parsed = await parseApiResponse(response);
+        const data = parsed.data;
+        if (!response.ok || !data) {
+          setDistributionAllianceResults([]);
+          return;
+        }
+        setDistributionAllianceResults(data.alliances || []);
+      } catch (error) {
+        setDistributionAllianceResults([]);
+      } finally {
+        setDistributionAllianceSearching(false);
+      }
+    }, 280);
+
+    return () => clearTimeout(timerId);
+  }, [activeTab, distributionAllianceKeyword, distributionState.canEdit, isVisible, node?._id]);
+
+  const normalizedDistributionProfiles = normalizeDistributionProfiles(
+    distributionState.ruleProfiles,
+    distributionState.activeRuleId,
+    distributionState.allianceContributionPercent
+  );
+  const distributionProfiles = normalizedDistributionProfiles.profiles;
+  const activeDistributionRuleId = normalizedDistributionProfiles.activeRuleId;
+  const activeDistributionProfile = distributionProfiles.find((profile) => profile.profileId === activeDistributionRuleId) || distributionProfiles[0];
+  const publishDistributionProfile = distributionProfiles.find((profile) => profile.profileId === distributionState.publishRuleId)
+    || activeDistributionProfile
+    || distributionProfiles[0];
+  const publishDistributionRuleId = distributionProfiles.some((profile) => profile.profileId === distributionState.publishRuleId)
+    ? distributionState.publishRuleId
+    : (publishDistributionProfile?.profileId || '');
+  const distributionRule = activeDistributionProfile?.rule || createDefaultDistributionRule();
+  const hasMasterAlliance = !!distributionState.masterAllianceName;
+  const adminPercentMap = new Map(
+    (distributionRule.adminPercents || [])
+      .filter((item) => item.userId)
+      .map((item) => [item.userId, clampPercent(item.percent, 0)])
+  );
+  const effectiveAdminPercents = (domainAdminState.domainAdmins || []).map((adminUser) => ({
+    userId: adminUser._id,
+    username: adminUser.username,
+    percent: adminPercentMap.get(adminUser._id) || 0
+  }));
+  const currentPercentSummary = computePercentSummary(distributionRule, distributionState.allianceContributionPercent);
+  const contentScorePerMinute = Number(node?.contentScore || 0);
+  const perSecondGrowth = contentScorePerMinute / 60;
+  const elapsedSinceSyncSeconds = Math.max(0, (distributionClockMs - Number(distributionState.lastSyncedAt || distributionClockMs)) / 1000);
+  const liveKnowledgePointValue = Number(distributionState.knowledgePointValue || 0) + elapsedSinceSyncSeconds * perSecondGrowth;
+  const scopePercent = getDistributionScopePercent(distributionRule);
+  const totalPoolValue = liveKnowledgePointValue + Number(distributionState.carryoverValue || 0);
+  const distributablePoolValue = totalPoolValue * (scopePercent / 100);
+  const unallocatedPercent = Math.max(0, 100 - currentPercentSummary.total);
+  const estimatedCarryoverValue = totalPoolValue - (distributablePoolValue * Math.min(100, currentPercentSummary.total) / 100);
+
+  const lockedDistribution = distributionState.locked || null;
+  const lockedExecuteMs = new Date(lockedDistribution?.executeAt || 0).getTime();
+  const lockedAnnouncedMs = new Date(lockedDistribution?.announcedAt || distributionState.lastSyncedAt || distributionClockMs).getTime();
+  const hasLockedPlan = !!lockedDistribution && Number.isFinite(lockedExecuteMs);
+  const hasUpcomingPublishedPlan = hasLockedPlan && lockedExecuteMs > distributionClockMs;
+  const countdownSeconds = hasUpcomingPublishedPlan
+    ? Math.max(0, Math.floor((lockedExecuteMs - distributionClockMs) / 1000))
+    : 0;
+  const elapsedSinceAnnouncedSeconds = hasLockedPlan && Number.isFinite(lockedAnnouncedMs)
+    ? Math.max(0, (distributionClockMs - lockedAnnouncedMs) / 1000)
+    : 0;
+  const projectedTotalAtExecute = hasUpcomingPublishedPlan
+    ? (Number(lockedDistribution?.projectedTotal || totalPoolValue) + elapsedSinceAnnouncedSeconds * perSecondGrowth)
+    : totalPoolValue;
+
+  const blockedRuleNotes = [];
+  if (!hasMasterAlliance) {
+    blockedRuleNotes.push('域主当前未加入熵盟，Z / D / E 与敌对判定已自动禁用');
+  } else {
+    blockedRuleNotes.push('敌对熵盟成员优先级最高，固定不可获取（0%）');
+  }
+  blockedRuleNotes.push('黑名单（用户/熵盟）跟随域主，域主变更时将自动重置');
+
+  const conflictMessages = [];
+  const blackUserSet = new Set((distributionRule.blacklistUsers || []).map((item) => item.userId).filter(Boolean));
+  const blackAllianceSet = new Set((distributionRule.blacklistAlliances || []).map((item) => item.allianceId).filter(Boolean));
+  const conflictUsers = (distributionRule.customUserPercents || []).filter((item) => blackUserSet.has(item.userId));
+  const conflictAlliances = (distributionRule.specificAlliancePercents || []).filter((item) => blackAllianceSet.has(item.allianceId));
+  if (conflictUsers.length > 0) {
+    conflictMessages.push(`指定用户与黑名单冲突 ${conflictUsers.length} 项，最终按“禁止”处理`);
+  }
+  if (conflictAlliances.length > 0) {
+    conflictMessages.push(`指定熵盟与黑名单冲突 ${conflictAlliances.length} 项，最终按“禁止”处理`);
+  }
+  if (currentPercentSummary.total > 100) {
+    conflictMessages.push(`总比例超限 ${currentPercentSummary.total.toFixed(2)}%，超出部分不会被允许保存`);
+  }
+
   if (!isVisible && transitionProgress <= 0) return null;
 
   return (
@@ -639,6 +1496,7 @@ const KnowledgeDomainScene = ({
               onClick={() => {
                 setActiveTab('manage');
                 fetchDomainAdmins(false);
+                fetchDistributionSettings(false);
               }}
             >
               管理知识域
@@ -678,104 +1536,802 @@ const KnowledgeDomainScene = ({
               <>
                 {manageFeedback && <div className="domain-manage-feedback">{manageFeedback}</div>}
 
-                <div className="domain-admins-section">
-                  <div className="domain-admins-subtitle">域主</div>
-                  <div className="domain-admin-row domain-master-row">
-                    <span className="domain-admin-name">{domainAdminState.domainMaster?.username || '未设置'}</span>
-                    <span className="domain-admin-badge master">域主</span>
+                <div className="manage-edge-shell">
+                  <div className="manage-edge-tabs">
+                    <button
+                      type="button"
+                      className={`manage-edge-tab ${activeManageSidePanel === 'admins' ? 'active' : ''}`}
+                      onClick={() => toggleManageSidePanel('admins')}
+                    >
+                      域相管理
+                    </button>
+                    <button
+                      type="button"
+                      className={`manage-edge-tab ${activeManageSidePanel === 'distribution' ? 'active' : ''}`}
+                      onClick={() => toggleManageSidePanel('distribution')}
+                    >
+                      知识点分发
+                    </button>
                   </div>
-                </div>
 
-                <div className="domain-admins-section">
-                  <div className="domain-admins-subtitle">域相列表</div>
-                  {domainAdminState.domainAdmins.length === 0 ? (
-                    <div className="domain-manage-tip">当前暂无其他域相</div>
-                  ) : (
-                    <div className="domain-admin-list">
-                      {domainAdminState.domainAdmins.map((adminUser) => (
-                        <div key={adminUser._id} className="domain-admin-row">
-                          <span className="domain-admin-name">{adminUser.username}</span>
-                          {domainAdminState.canEdit ? (
-                            <button
-                              type="button"
-                              className="btn btn-small btn-danger"
-                              onClick={() => removeDomainAdmin(adminUser._id)}
-                              disabled={removingAdminId === adminUser._id}
-                            >
-                              {removingAdminId === adminUser._id ? '移除中...' : '移除'}
-                            </button>
+                  <div className={`manage-edge-panel ${activeManageSidePanel ? 'open' : 'collapsed'}`}>
+                    {!activeManageSidePanel && (
+                      <div className="domain-manage-tip">点击左侧标签可展开对应管理面板，再次点击同标签可收回。</div>
+                    )}
+
+                    {activeManageSidePanel === 'admins' && (
+                      <div className="manage-edge-panel-body">
+                        <div className="domain-admins-section">
+                          <div className="domain-admins-subtitle">域主</div>
+                          <div className="domain-admin-row domain-master-row">
+                            <span className="domain-admin-name">{domainAdminState.domainMaster?.username || '未设置'}</span>
+                            <span className="domain-admin-badge master">域主</span>
+                          </div>
+                        </div>
+
+                        <div className="domain-admins-section">
+                          <div className="domain-admins-subtitle">域相列表</div>
+                          {domainAdminState.domainAdmins.length === 0 && (!domainAdminState.pendingInvites || domainAdminState.pendingInvites.length === 0) ? (
+                            <div className="domain-manage-tip">当前暂无其他域相</div>
                           ) : (
-                            <span className="domain-admin-badge readonly">仅查看</span>
+                            <div className="domain-admin-list">
+                              {domainAdminState.domainAdmins.map((adminUser) => (
+                                <div key={adminUser._id} className="domain-admin-row">
+                                  <span className="domain-admin-name">{adminUser.username}</span>
+                                  {domainAdminState.canEdit ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-small btn-danger"
+                                      onClick={() => removeDomainAdmin(adminUser._id)}
+                                      disabled={removingAdminId === adminUser._id}
+                                    >
+                                      {removingAdminId === adminUser._id ? '移除中...' : '移除'}
+                                    </button>
+                                  ) : (
+                                    <span className="domain-admin-badge readonly">仅查看</span>
+                                  )}
+                                </div>
+                              ))}
+                              {domainAdminState.canEdit && (domainAdminState.pendingInvites || []).map((pendingItem) => (
+                                <div key={pendingItem.notificationId} className="domain-admin-row pending">
+                                  <span className="domain-admin-name pending">{pendingItem.username}</span>
+                                  <div className="domain-admin-pending-actions">
+                                    <span className="domain-admin-badge pending">邀请中</span>
+                                    <button
+                                      type="button"
+                                      className="btn btn-small btn-secondary"
+                                      onClick={() => revokeDomainAdminInvite(pendingItem.notificationId)}
+                                      disabled={revokingInviteId === pendingItem.notificationId}
+                                    >
+                                      {revokingInviteId === pendingItem.notificationId ? '撤销中...' : '撤销邀请'}
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {domainAdminState.canEdit && (domainAdminState.pendingInvites || []).length > 0 && (
+                            <div className="domain-manage-tip">灰色名称为内部待确认邀请，仅域主可见。</div>
                           )}
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
 
-                {domainAdminState.canEdit ? (
-                  <div className="domain-admin-invite">
-                    <div className="domain-admins-subtitle">邀请普通用户成为域相</div>
-                    <input
-                      type="text"
-                      className="domain-admin-search-input"
-                      placeholder="输入用户名自动搜索"
-                      value={searchKeyword}
-                      onChange={(e) => {
-                        setSearchKeyword(e.target.value);
-                        setManageFeedback('');
-                      }}
-                    />
-                    {isSearchingUsers && <div className="domain-manage-tip">搜索中...</div>}
-                    {!isSearchingUsers && searchKeyword.trim() && (
-                      <div className="domain-search-results">
-                        {searchResults.length > 0 ? (
-                          searchResults.map((userItem) => (
-                            <div key={userItem._id} className="domain-search-row">
-                              <span className="domain-admin-name">{userItem.username}</span>
+                        {domainAdminState.canEdit ? (
+                          <div className="domain-admin-invite">
+                            <div className="domain-admins-subtitle">邀请普通用户成为域相</div>
+                            <input
+                              type="text"
+                              className="domain-admin-search-input"
+                              placeholder="输入用户名自动搜索"
+                              value={searchKeyword}
+                              onChange={(e) => {
+                                setSearchKeyword(e.target.value);
+                                setManageFeedback('');
+                              }}
+                            />
+                            {isSearchingUsers && <div className="domain-manage-tip">搜索中...</div>}
+                            {!isSearchingUsers && searchKeyword.trim() && (
+                              <div className="domain-search-results">
+                                {searchResults.length > 0 ? (
+                                  searchResults.map((userItem) => (
+                                    <div key={userItem._id} className="domain-search-row">
+                                      <span className="domain-admin-name">{userItem.username}</span>
+                                      <button
+                                        type="button"
+                                        className="btn btn-small btn-success"
+                                        onClick={() => inviteDomainAdmin(userItem.username)}
+                                        disabled={invitingUsername === userItem.username}
+                                      >
+                                        {invitingUsername === userItem.username ? '邀请中...' : '邀请'}
+                                      </button>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="domain-manage-tip">没有匹配的普通用户</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="domain-admin-invite">
+                            <div className="domain-manage-tip">
+                              {domainAdminState.isSystemAdmin
+                                ? '你是系统管理员，可查看但不可编辑域相名单'
+                                : '你当前可查看域相名单，编辑权限仅域主拥有'}
+                            </div>
+                            {domainAdminState.canResign && (
                               <button
                                 type="button"
-                                className="btn btn-small btn-success"
-                                onClick={() => inviteDomainAdmin(userItem.username)}
-                                disabled={invitingUsername === userItem.username}
+                                className="btn btn-small btn-warning"
+                                onClick={applyResignDomainAdmin}
+                                disabled={isSubmittingResign || domainAdminState.resignPending}
                               >
-                                {invitingUsername === userItem.username ? '邀请中...' : '邀请'}
+                                {domainAdminState.resignPending
+                                  ? '卸任申请待处理'
+                                  : (isSubmittingResign ? '提交中...' : '申请卸任域相')}
                               </button>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="domain-manage-tip">没有匹配的普通用户</div>
+                            )}
+                            {domainAdminState.resignPending && (
+                              <div className="domain-manage-tip">已提交卸任申请，等待域主处理（3天超时自动同意）</div>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
-                  </div>
-                ) : (
-                  <div className="domain-admin-invite">
-                    <div className="domain-manage-tip">
-                      {domainAdminState.isSystemAdmin
-                        ? '你是系统管理员，可查看但不可编辑域相名单'
-                        : '你当前可查看域相名单，编辑权限仅域主拥有'}
-                    </div>
-                    {domainAdminState.canResign && (
-                      <button
-                        type="button"
-                        className="btn btn-small btn-warning"
-                        onClick={applyResignDomainAdmin}
-                        disabled={isSubmittingResign || domainAdminState.resignPending}
-                      >
-                        {domainAdminState.resignPending
-                          ? '卸任申请待处理'
-                          : (isSubmittingResign ? '提交中...' : '申请卸任域相')}
-                      </button>
+
+                    {activeManageSidePanel === 'distribution' && (
+                      <div className="manage-edge-panel-body">
+                        <div className="domain-distribution-section">
+                  <div className="domain-admins-subtitle">知识点分发规则</div>
+                  {distributionState.loading && <div className="domain-manage-tip">加载分发规则中...</div>}
+                  {!distributionState.loading && distributionState.error && (
+                    <div className="domain-manage-error">{distributionState.error}</div>
+                  )}
+                  {!distributionState.loading && !distributionState.error && (
+                    <>
+                      {(distributionState.feedback || distributionState.isRuleLocked) && (
+                        <div className="domain-manage-feedback">
+                          {distributionState.feedback || '当前存在已发布分发计划：发布后不可撤回，本次分发使用发布时快照规则。'}
+                        </div>
+                      )}
+                      <div className="distribution-summary-grid">
+                        <div className="distribution-summary-item">
+                          <span>当前知识点（实时）</span>
+                          <strong>{liveKnowledgePointValue.toFixed(2)}</strong>
+                        </div>
+                        <div className="distribution-summary-item">
+                          <span>滚存知识点</span>
+                          <strong>{distributionState.carryoverValue.toFixed(2)}</strong>
+                        </div>
+                        <div className="distribution-summary-item">
+                          <span>盟贡献同步比例</span>
+                          <strong>{distributionState.allianceContributionPercent.toFixed(2)}</strong>
+                        </div>
+                        <div className="distribution-summary-item">
+                          <span>总比例</span>
+                          <strong className={currentPercentSummary.total > 100 ? 'distribution-over-limit' : ''}>
+                            {currentPercentSummary.total.toFixed(2)}%
+                          </strong>
+                        </div>
+                      </div>
+                      <div className="domain-manage-tip">
+                        比例汇总：域主 {currentPercentSummary.x}% / 域内成员总池 {currentPercentSummary.y}% / 盟贡献 {currentPercentSummary.z}% /
+                        指定用户 {currentPercentSummary.b}% / 非敌对熵盟总池 {currentPercentSummary.d}% / 指定熵盟总池 {currentPercentSummary.e}% /
+                        无熵盟用户总池 {currentPercentSummary.f}%
+                      </div>
+                      <div className="domain-manage-tip">
+                        {distributionState.masterAllianceName
+                          ? `域主所在熵盟：${distributionState.masterAllianceName}`
+                          : '域主当前不在熵盟，盟贡献同步比例固定为 0'}
+                      </div>
+
+                      {distributionState.canEdit ? (
+                        <div className="distribution-editor">
+                          <div className="distribution-rule-toolbar">
+                            <div className="domain-manage-tip">
+                              当前编辑规则：{activeDistributionProfile?.name || '默认规则'}（共 {distributionProfiles.length} 套）
+                            </div>
+                              <button
+                                type="button"
+                                className="btn btn-small btn-primary"
+                                onClick={() => setIsDistributionRuleModalOpen(true)}
+                                disabled={hasLockedPlan}
+                              >
+                                {hasLockedPlan ? '规则锁定中' : '打开分发规则工作台'}
+                              </button>
+                          </div>
+
+                          <div className="distribution-subblock distribution-publish-panel">
+                            <div className="distribution-subtitle">分发发布流程：选规则 -> 设时间 -> 发布（发布后不可撤回）</div>
+                            <div className="distribution-publish-row">
+                              <label>发布规则</label>
+                              <select
+                                value={publishDistributionRuleId}
+                                onChange={(e) => setDistributionState((prev) => ({
+                                  ...prev,
+                                  publishRuleId: e.target.value,
+                                  feedback: ''
+                                }))}
+                                disabled={hasLockedPlan || distributionState.publishing}
+                              >
+                                {distributionProfiles.map((profile) => (
+                                  <option key={profile.profileId} value={profile.profileId}>{profile.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="distribution-publish-row">
+                              <label>执行时间（整点）</label>
+                              <input
+                                type="datetime-local"
+                                step="3600"
+                                value={distributionState.publishExecuteAt || ''}
+                                onChange={(e) => setDistributionState((prev) => ({
+                                  ...prev,
+                                  publishExecuteAt: e.target.value,
+                                  feedback: ''
+                                }))}
+                                disabled={hasLockedPlan || distributionState.publishing}
+                              />
+                            </div>
+                            <div className="distribution-publish-actions">
+                              <button
+                                type="button"
+                                className="btn btn-small btn-success"
+                                onClick={publishDistributionPlan}
+                                disabled={hasLockedPlan || distributionState.publishing}
+                              >
+                                {distributionState.publishing ? '发布中...' : '发布分发计划'}
+                              </button>
+                              {publishDistributionProfile && (
+                                <div className="domain-manage-tip">
+                                  选中规则：{publishDistributionProfile.name}
+                                </div>
+                              )}
+                            </div>
+                            {hasUpcomingPublishedPlan ? (
+                              <div className="distribution-countdown">
+                                <strong>
+                                  距离执行：{formatCountdown(countdownSeconds)}
+                                </strong>
+                                <span>
+                                  执行时刻：{new Date(lockedExecuteMs).toLocaleString('zh-CN', { hour12: false })}
+                                </span>
+                                <span>
+                                  预计执行时累计总池（实时估算）：{projectedTotalAtExecute.toFixed(2)}
+                                </span>
+                              </div>
+                            ) : hasLockedPlan ? (
+                              <div className="domain-manage-tip">分发计划已到执行时刻，正在等待系统结算。</div>
+                            ) : (
+                              <div className="domain-manage-tip">当前未发布分发计划，可设置执行时刻后发布。</div>
+                            )}
+                          </div>
+
+                          <div className="distribution-summary-grid distribution-summary-grid-wide">
+                            <div className="distribution-summary-item">
+                              <span>分发范围</span>
+                              <strong>{distributionRule.distributionScope === 'partial' ? `部分 ${scopePercent.toFixed(2)}%` : '全部 100%'}</strong>
+                            </div>
+                            <div className="distribution-summary-item">
+                              <span>当前可分发池</span>
+                              <strong>{distributablePoolValue.toFixed(2)}</strong>
+                            </div>
+                            <div className="distribution-summary-item">
+                              <span>未分配比例</span>
+                              <strong>{unallocatedPercent.toFixed(2)}%</strong>
+                            </div>
+                            <div className="distribution-summary-item">
+                              <span>预计结转</span>
+                              <strong>{estimatedCarryoverValue.toFixed(2)}</strong>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="domain-manage-tip">你可以查看分发汇总，但仅域主可编辑分发规则。</div>
+                      )}
+                    </>
+                  )}
+                        </div>
+                      </div>
                     )}
-                    {domainAdminState.resignPending && (
-                      <div className="domain-manage-tip">已提交卸任申请，等待域主处理（3天超时自动同意）</div>
-                    )}
                   </div>
-                )}
+                </div>
               </>
             )}
           </div>
+        )}
+
+        {isDistributionRuleModalOpen && distributionState.canEdit && createPortal(
+          <div
+            className="distribution-rule-modal-overlay"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                setIsDistributionRuleModalOpen(false);
+              }
+            }}
+          >
+            <div className="distribution-rule-modal">
+              <div className="distribution-rule-modal-header">
+                <strong>知识域知识点分发规则工作台</strong>
+                <div className="distribution-modal-header-actions">
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    onClick={saveDistributionSettings}
+                    disabled={distributionState.saving}
+                  >
+                    {distributionState.saving ? '保存中...' : '保存规则配置'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-secondary"
+                    onClick={() => setIsDistributionRuleModalOpen(false)}
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+              <div className="distribution-rule-modal-body">
+                <div className="distribution-rule-sidebar">
+                  <div className="distribution-subtitle">规则列表</div>
+                  <div className="distribution-rule-list">
+                    {distributionProfiles.map((profile) => (
+                      <button
+                        key={profile.profileId}
+                        type="button"
+                        className={`distribution-rule-list-item ${profile.profileId === activeDistributionRuleId ? 'active' : ''}`}
+                        onClick={() => setActiveDistributionRule(profile.profileId)}
+                      >
+                        <span>{profile.name}</span>
+                        {profile.profileId === activeDistributionRuleId ? <em>当前编辑</em> : null}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="distribution-rule-create">
+                    <input
+                      type="text"
+                      className="domain-admin-search-input"
+                      placeholder="输入新规则名称"
+                      value={newDistributionRuleName}
+                      onChange={(e) => setNewDistributionRuleName(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-small btn-success"
+                      onClick={createDistributionRuleProfileItem}
+                    >
+                      新建规则
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-small btn-danger"
+                      onClick={removeActiveDistributionRule}
+                      disabled={distributionProfiles.length <= 1}
+                    >
+                      删除当前规则
+                    </button>
+                  </div>
+                </div>
+
+                <div className="distribution-rule-main">
+
+                  <div className="distribution-subblock">
+                    <div className="distribution-subtitle">分发范围</div>
+                    <div className="distribution-input-row">
+                      <span>范围模式</span>
+                      <select
+                        value={distributionRule.distributionScope === 'partial' ? 'partial' : 'all'}
+                        onChange={(e) => updateDistributionRule((prev) => ({
+                          ...prev,
+                          distributionScope: e.target.value === 'partial' ? 'partial' : 'all'
+                        }))}
+                      >
+                        {DISTRIBUTION_SCOPE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {distributionRule.distributionScope === 'partial' && (
+                      <div className="distribution-input-row">
+                        <span>部分分发比例</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          value={scopePercent}
+                          onChange={(e) => updateDistributionRule((prev) => ({
+                            ...prev,
+                            distributionPercent: clampPercent(e.target.value, 100)
+                          }))}
+                        />
+                      </div>
+                    )}
+                    <div className="distribution-progress-wrap">
+                      <div className="distribution-progress-track">
+                        <div
+                          className="distribution-progress-fill scope"
+                          style={{ width: `${Math.max(0, Math.min(100, scopePercent))}%` }}
+                        />
+                      </div>
+                      <span>{`本次参与分发池：${distributablePoolValue.toFixed(2)} / 总池 ${totalPoolValue.toFixed(2)}`}</span>
+                    </div>
+                  </div>
+
+                  <div className="distribution-subblock">
+                    <div className="distribution-subtitle">规则名称</div>
+                    <div className="distribution-input-row">
+                      <span>规则名称</span>
+                      <input
+                        type="text"
+                        value={activeDistributionProfile?.name || ''}
+                        onChange={(e) => updateActiveDistributionRuleName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="distribution-input-row">
+                    <span>域主分配比例</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={distributionRule.masterPercent}
+                      onChange={(e) => updateDistributionRule((prev) => ({ ...prev, masterPercent: clampPercent(e.target.value, 10) }))}
+                    />
+                  </div>
+
+                  <div className="distribution-subblock">
+                    <div className="distribution-subtitle">固定规则说明</div>
+                    <div className="distribution-fixed-row">
+                      <span>固定规则：盟贡献同步比例</span>
+                      <strong>{distributionState.allianceContributionPercent.toFixed(2)}%</strong>
+                      <em>{hasMasterAlliance ? `同步自熵盟「${distributionState.masterAllianceName}」` : '域主未加入熵盟，固定为 0'}</em>
+                    </div>
+                    <div className="distribution-fixed-row danger">
+                      <span>规则 4：敌对熵盟成员</span>
+                      <strong>0%</strong>
+                      <em>{hasMasterAlliance ? '系统自动判定，优先级最高，不可更改' : '无熵盟时不触发敌对判定'}</em>
+                    </div>
+                  </div>
+
+                  <div className="distribution-subblock">
+                    <div className="distribution-subtitle">域内成员分配总池（当前 {currentPercentSummary.y.toFixed(2)}%）</div>
+                    {effectiveAdminPercents.length === 0 ? (
+                      <div className="domain-manage-tip">当前无域相可配置</div>
+                    ) : effectiveAdminPercents.map((adminItem) => (
+                      <div key={adminItem.userId} className="distribution-input-row">
+                        <span>{adminItem.username}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          value={adminItem.percent}
+                          onChange={(e) => {
+                            const nextPercent = clampPercent(e.target.value, 0);
+                            updateDistributionRule((prev) => {
+                              const nextList = (prev.adminPercents || []).filter((item) => item.userId !== adminItem.userId);
+                              if (nextPercent > 0) {
+                                nextList.push({
+                                  userId: adminItem.userId,
+                                  username: adminItem.username,
+                                  percent: nextPercent
+                                });
+                              }
+                              return { ...prev, adminPercents: nextList };
+                            });
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="distribution-subblock">
+                    <div className="distribution-subtitle">指定用户分配比例与用户黑名单</div>
+                    <div className="domain-manage-tip">黑名单跟随域主，域主变更时会自动重置</div>
+                    <input
+                      type="text"
+                      className="domain-admin-search-input"
+                      placeholder="搜索用户后加入指定比例或黑名单"
+                      value={distributionUserKeyword}
+                      onChange={(e) => setDistributionUserKeyword(e.target.value)}
+                    />
+                    {distributionUserSearching && <div className="domain-manage-tip">搜索中...</div>}
+                    {!distributionUserSearching && distributionUserKeyword.trim() && (
+                      <div className="domain-search-results">
+                        {distributionUserResults.length === 0 ? (
+                          <div className="domain-manage-tip">没有匹配用户</div>
+                        ) : distributionUserResults.map((userItem) => (
+                          <div key={userItem._id} className="domain-search-row">
+                            <span className="domain-admin-name">{userItem.username}</span>
+                            <div className="distribution-row-actions">
+                              <button
+                                type="button"
+                                className="btn btn-small btn-success"
+                                onClick={() => updateDistributionRule((prev) => {
+                                  if ((prev.customUserPercents || []).some((item) => item.userId === userItem._id)) {
+                                    return prev;
+                                  }
+                                  return {
+                                    ...prev,
+                                    customUserPercents: [...(prev.customUserPercents || []), {
+                                      userId: userItem._id,
+                                      username: userItem.username,
+                                      percent: 0
+                                    }]
+                                  };
+                                })}
+                              >
+                                加入指定用户池
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-small btn-danger"
+                                onClick={() => updateDistributionRule((prev) => {
+                                  if ((prev.blacklistUsers || []).some((item) => item.userId === userItem._id)) {
+                                    return prev;
+                                  }
+                                  return {
+                                    ...prev,
+                                    blacklistUsers: [...(prev.blacklistUsers || []), {
+                                      userId: userItem._id,
+                                      username: userItem.username
+                                    }]
+                                  };
+                                })}
+                              >
+                                加黑
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {(distributionRule.customUserPercents || []).map((item) => (
+                      <div key={item.userId} className="distribution-input-row">
+                        <span>{item.username || item.userId}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          value={item.percent}
+                          onChange={(e) => {
+                            const nextPercent = clampPercent(e.target.value, 0);
+                            updateDistributionRule((prev) => ({
+                              ...prev,
+                              customUserPercents: (prev.customUserPercents || []).map((row) => (
+                                row.userId === item.userId ? { ...row, percent: nextPercent } : row
+                              ))
+                            }));
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-small btn-danger"
+                          onClick={() => updateDistributionRule((prev) => ({
+                            ...prev,
+                            customUserPercents: (prev.customUserPercents || []).filter((row) => row.userId !== item.userId)
+                          }))}
+                        >
+                          移除
+                        </button>
+                      </div>
+                    ))}
+                    {(distributionRule.blacklistUsers || []).map((item) => (
+                      <div key={item.userId} className="distribution-tag-row danger">
+                        <span>{item.username || item.userId}</span>
+                        <button
+                          type="button"
+                          className="btn btn-small btn-secondary"
+                          onClick={() => updateDistributionRule((prev) => ({
+                            ...prev,
+                            blacklistUsers: (prev.blacklistUsers || []).filter((row) => row.userId !== item.userId)
+                          }))}
+                        >
+                          取消黑名单
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="distribution-subblock">
+                    <div className="distribution-input-row">
+                      <span>非敌对熵盟成员分配总池</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={distributionRule.nonHostileAlliancePercent}
+                        disabled={!hasMasterAlliance}
+                        onChange={(e) => updateDistributionRule((prev) => ({ ...prev, nonHostileAlliancePercent: clampPercent(e.target.value, 0) }))}
+                      />
+                    </div>
+                    {!hasMasterAlliance && (
+                      <div className="domain-manage-tip">域主未加入熵盟，非敌对熵盟相关分配已禁用</div>
+                    )}
+                    <div className="distribution-input-row">
+                      <span>无熵盟用户分配总池</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={distributionRule.noAlliancePercent}
+                        onChange={(e) => updateDistributionRule((prev) => ({ ...prev, noAlliancePercent: clampPercent(e.target.value, 0) }))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="distribution-subblock">
+                    <div className="distribution-subtitle">指定熵盟成员分配池与熵盟黑名单</div>
+                    <div className="domain-manage-tip">熵盟黑名单同样跟随域主，和允许池冲突时按“禁止”优先</div>
+                    {hasMasterAlliance ? (
+                      <>
+                        <input
+                          type="text"
+                          className="domain-admin-search-input"
+                          placeholder="搜索熵盟后加入指定比例或黑名单"
+                          value={distributionAllianceKeyword}
+                          onChange={(e) => setDistributionAllianceKeyword(e.target.value)}
+                        />
+                        {distributionAllianceSearching && <div className="domain-manage-tip">搜索中...</div>}
+                        {!distributionAllianceSearching && distributionAllianceKeyword.trim() && (
+                          <div className="domain-search-results">
+                            {distributionAllianceResults.length === 0 ? (
+                              <div className="domain-manage-tip">没有匹配熵盟</div>
+                            ) : distributionAllianceResults.map((allianceItem) => (
+                              <div key={allianceItem._id} className="domain-search-row">
+                                <span className="domain-admin-name">{allianceItem.name}</span>
+                                <div className="distribution-row-actions">
+                                  <button
+                                    type="button"
+                                    className="btn btn-small btn-success"
+                                    onClick={() => updateDistributionRule((prev) => {
+                                      if ((prev.specificAlliancePercents || []).some((item) => item.allianceId === allianceItem._id)) {
+                                        return prev;
+                                      }
+                                      return {
+                                        ...prev,
+                                        specificAlliancePercents: [...(prev.specificAlliancePercents || []), {
+                                          allianceId: allianceItem._id,
+                                          allianceName: allianceItem.name,
+                                          percent: 0
+                                        }]
+                                      };
+                                    })}
+                                  >
+                                    加入指定熵盟池
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-small btn-danger"
+                                    onClick={() => updateDistributionRule((prev) => {
+                                      if ((prev.blacklistAlliances || []).some((item) => item.allianceId === allianceItem._id)) {
+                                        return prev;
+                                      }
+                                      return {
+                                        ...prev,
+                                        blacklistAlliances: [...(prev.blacklistAlliances || []), {
+                                          allianceId: allianceItem._id,
+                                          allianceName: allianceItem.name
+                                        }]
+                                      };
+                                    })}
+                                  >
+                                    加黑
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="domain-manage-tip">域主未加入熵盟，指定熵盟分配池自动禁用</div>
+                    )}
+
+                    {hasMasterAlliance && (distributionRule.specificAlliancePercents || []).map((item) => (
+                      <div key={item.allianceId} className="distribution-input-row">
+                        <span>{item.allianceName || item.allianceId}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          value={item.percent}
+                          onChange={(e) => {
+                            const nextPercent = clampPercent(e.target.value, 0);
+                            updateDistributionRule((prev) => ({
+                              ...prev,
+                              specificAlliancePercents: (prev.specificAlliancePercents || []).map((row) => (
+                                row.allianceId === item.allianceId ? { ...row, percent: nextPercent } : row
+                              ))
+                            }));
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-small btn-danger"
+                          onClick={() => updateDistributionRule((prev) => ({
+                            ...prev,
+                            specificAlliancePercents: (prev.specificAlliancePercents || []).filter((row) => row.allianceId !== item.allianceId)
+                          }))}
+                        >
+                          移除
+                        </button>
+                      </div>
+                    ))}
+                    {(distributionRule.blacklistAlliances || []).map((item) => (
+                      <div key={item.allianceId} className="distribution-tag-row danger">
+                        <span>{item.allianceName || item.allianceId}</span>
+                        <button
+                          type="button"
+                          className="btn btn-small btn-secondary"
+                          onClick={() => updateDistributionRule((prev) => ({
+                            ...prev,
+                            blacklistAlliances: (prev.blacklistAlliances || []).filter((row) => row.allianceId !== item.allianceId)
+                          }))}
+                        >
+                          取消黑名单
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="distribution-subblock">
+                    <div className="distribution-subtitle">规则结果可视化与冲突解释</div>
+                    <div className="distribution-progress-wrap">
+                      <div className="distribution-progress-track">
+                        <div
+                          className={`distribution-progress-fill ${currentPercentSummary.total > 100 ? 'over' : ''}`}
+                          style={{ width: `${Math.max(0, Math.min(100, currentPercentSummary.total))}%` }}
+                        />
+                      </div>
+                      <span>{`分配占比 ${currentPercentSummary.total.toFixed(2)}%，未分配 ${unallocatedPercent.toFixed(2)}% 将结转`}</span>
+                    </div>
+                    <div className="distribution-visual-metrics">
+                      <div className="distribution-metric-card">
+                        <span>分发池</span>
+                        <strong>{distributablePoolValue.toFixed(2)}</strong>
+                      </div>
+                      <div className="distribution-metric-card">
+                        <span>预计未分配结转</span>
+                        <strong>{estimatedCarryoverValue.toFixed(2)}</strong>
+                      </div>
+                      <div className="distribution-metric-card">
+                        <span>域内成员分配总池</span>
+                        <strong>{currentPercentSummary.y.toFixed(2)}%</strong>
+                      </div>
+                    </div>
+                    <div className="distribution-notes">
+                      {blockedRuleNotes.map((note) => (
+                        <div key={note} className="domain-manage-tip">{note}</div>
+                      ))}
+                      {conflictMessages.length === 0 ? (
+                        <div className="domain-manage-tip">当前未发现允许/禁止规则冲突</div>
+                      ) : conflictMessages.map((message) => (
+                        <div key={message} className="domain-manage-error">{message}</div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={saveDistributionSettings}
+                    disabled={distributionState.saving}
+                  >
+                    {distributionState.saving ? '保存中...' : '保存当前规则'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
         )}
 
         <button className="exit-domain-btn" onClick={onExit}>

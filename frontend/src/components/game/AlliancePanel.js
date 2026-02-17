@@ -110,7 +110,6 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
     };
 
     const leaveAlliance = async (newLeaderId = '') => {
-        if (!window.confirm('确定要退出当前熵盟吗？')) return;
         try {
             const response = await fetch('http://localhost:5000/api/alliances/leave', {
                 method: 'POST',
@@ -126,12 +125,42 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                 setShowAllianceDetailModal(false);
                 fetchAlliances();
                 fetchUserAlliance();
+                return true;
             } else {
                 alert(data.error || '退出失败');
+                return false;
             }
         } catch (error) {
             console.error('退出熵盟失败:', error);
             alert('退出失败');
+            return false;
+        }
+    };
+
+    const transferAllianceLeadership = async (allianceId, newLeaderId) => {
+        if (!allianceId || !newLeaderId) return false;
+        try {
+            const response = await fetch(`http://localhost:5000/api/alliances/leader/${allianceId}/transfer`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ newLeaderId })
+            });
+            const data = await response.json();
+            if (response.ok) {
+                alert(data.message || '盟主身份已转交');
+                await fetchAlliances();
+                await fetchUserAlliance();
+                return true;
+            }
+            alert(data.error || '转交盟主失败');
+            return false;
+        } catch (error) {
+            console.error('转交盟主失败:', error);
+            alert('转交盟主失败');
+            return false;
         }
     };
 
@@ -217,6 +246,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                 userAlliance={userAlliance}
                 onJoin={joinAlliance}
                 onLeave={leaveAlliance}
+                onTransferLeadership={transferAllianceLeadership}
                 isAdmin={isAdmin}
                 currentUsername={username}
                 token={token}

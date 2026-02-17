@@ -18,6 +18,7 @@ const AllianceDetailModal = ({
     userAlliance, 
     onJoin, 
     onLeave, 
+    onTransferLeadership,
     isAdmin,
     currentUsername,
     token,
@@ -42,14 +43,27 @@ const AllianceDetailModal = ({
         () => members.filter((member) => member.username !== currentUsername),
         [members, currentUsername]
     );
+    const [handoverKeyword, setHandoverKeyword] = useState('');
+    const [selectedSuccessorId, setSelectedSuccessorId] = useState('');
+    const [handoverMode, setHandoverMode] = useState('');
+    const [isHandoverModalOpen, setIsHandoverModalOpen] = useState(false);
+    const [handoverError, setHandoverError] = useState('');
+    const [handoverSubmitting, setHandoverSubmitting] = useState(false);
+    const [confirmState, setConfirmState] = useState({
+        open: false,
+        title: '',
+        message: '',
+        confirmText: '',
+        action: ''
+    });
     const isLeaderManager = !isAdmin && isCurrentUserFounder;
     const [activeTab, setActiveTab] = useState('overview');
-    const [newLeaderId, setNewLeaderId] = useState('');
     const [pendingApplications, setPendingApplications] = useState([]);
     const [isManageLoading, setIsManageLoading] = useState(false);
     const [manageActionKey, setManageActionKey] = useState('');
     const [announcementDraft, setAnnouncementDraft] = useState('');
     const [declarationDraft, setDeclarationDraft] = useState('');
+    const [knowledgeContributionDraft, setKnowledgeContributionDraft] = useState('10');
     const [styleDraft, setStyleDraft] = useState(DEFAULT_ALLIANCE_VISUAL_STYLE);
     const [isStyleCreatorOpen, setIsStyleCreatorOpen] = useState(false);
     const activeVisualStyle = useMemo(
@@ -59,40 +73,86 @@ const AllianceDetailModal = ({
 
     useEffect(() => {
         if (!isOpen) {
-            setNewLeaderId('');
             setActiveTab('overview');
             setPendingApplications([]);
             setIsStyleCreatorOpen(false);
+            setIsHandoverModalOpen(false);
+            setHandoverMode('');
+            setHandoverKeyword('');
+            setSelectedSuccessorId('');
+            setHandoverError('');
+            setHandoverSubmitting(false);
+            setConfirmState({
+                open: false,
+                title: '',
+                message: '',
+                confirmText: '',
+                action: ''
+            });
             return;
         }
-        if (isCurrentUserFounder && successorCandidates.length > 0) {
-            setNewLeaderId(successorCandidates[0]._id);
+        if (!isCurrentUserFounder) {
+            setSelectedSuccessorId('');
             return;
         }
-        setNewLeaderId('');
+        setSelectedSuccessorId((prev) => (
+            successorCandidates.some((member) => member._id === prev) ? prev : ''
+        ));
     }, [isOpen, alliance?._id, isCurrentUserFounder, successorCandidates]);
 
     useEffect(() => {
         if (!isOpen || !alliance) return;
         setAnnouncementDraft(alliance.announcement || '');
         setDeclarationDraft(alliance.declaration || '');
+        setKnowledgeContributionDraft(String(alliance.knowledgeContributionPercent ?? 10));
         setStyleDraft(normalizeAllianceVisualStyle({
             ...activeVisualStyle,
             name: `${alliance.name || '熵盟'}风格${(alliance.visualStyles || []).length + 1}`
         }, `风格${(alliance.visualStyles || []).length + 1}`));
-    }, [isOpen, alliance?._id, alliance?.announcement, alliance?.declaration, alliance?.name, alliance?.visualStyles, activeVisualStyle]);
+    }, [isOpen, alliance?._id, alliance?.announcement, alliance?.declaration, alliance?.name, alliance?.visualStyles, alliance?.knowledgeContributionPercent, activeVisualStyle]);
 
     // Handler for stopping propagation of clicks to the backdrop
     const handleContentClick = (e) => {
         e.stopPropagation();
     };
 
-    const handleLeaveClick = () => {
-        if (isCurrentUserFounder && successorCandidates.length > 0 && !newLeaderId) {
-            window.alert('请选择一位新盟主后再退出');
-            return;
-        }
-        onLeave(isCurrentUserFounder ? newLeaderId : '');
+    const filteredSuccessorCandidates = useMemo(() => {
+        const keyword = handoverKeyword.trim().toLowerCase();
+        if (!keyword) return successorCandidates;
+        return successorCandidates.filter((member) => {
+            const username = (member.username || '').toLowerCase();
+            const profession = (member.profession || '').toLowerCase();
+            return username.includes(keyword) || profession.includes(keyword);
+        });
+    }, [successorCandidates, handoverKeyword]);
+
+    const closeHandoverModal = () => {
+        setIsHandoverModalOpen(false);
+        setHandoverMode('');
+        setHandoverKeyword('');
+        setSelectedSuccessorId('');
+        setHandoverError('');
+    };
+
+    const openHandoverModal = (mode) => {
+        if (!isCurrentUserFounder) return;
+        setHandoverMode(mode);
+        setIsHandoverModalOpen(true);
+        setHandoverKeyword('');
+        setHandoverError('');
+        setSelectedSuccessorId((prev) => (
+            successorCandidates.some((item) => item._id === prev) ? prev : ''
+        ));
+    };
+
+    const closeConfirmModal = () => {
+        setConfirmState({
+            open: false,
+            title: '',
+            message: '',
+            confirmText: '',
+            action: ''
+        });
     };
 
     const fetchPendingApplications = useCallback(async (silent = false) => {
@@ -265,6 +325,18 @@ const AllianceDetailModal = ({
         );
     };
 
+    const handleUpdateKnowledgeContribution = async () => {
+        const parsed = parseFloat(knowledgeContributionDraft);
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+            window.alert('知识贡献比例必须在 0-100 之间');
+            return;
+        }
+        await handleSaveManageContent(
+            { knowledgeContributionPercent: parsed },
+            '更新知识贡献比例失败'
+        );
+    };
+
     const handleCreateVisualStyle = async () => {
         const normalizedStyle = normalizeAllianceVisualStyle(styleDraft, `风格${(alliance?.visualStyles || []).length + 1}`);
         if (!normalizedStyle.name) {
@@ -293,6 +365,82 @@ const AllianceDetailModal = ({
             { deleteVisualStyleId: styleId },
             '删除视觉样式失败'
         );
+    };
+
+    const handleOpenHandoverConfirm = () => {
+        if (!isCurrentUserFounder) return;
+        const hasCandidates = successorCandidates.length > 0;
+        if (!hasCandidates && handoverMode === 'transfer') {
+            setHandoverError('当前没有可交接的其他成员，无法转交盟主');
+            return;
+        }
+        if (hasCandidates && !selectedSuccessorId) {
+            setHandoverError('请先选择一位新盟主');
+            return;
+        }
+        setHandoverError('');
+        if (handoverMode === 'leave') {
+            setConfirmState({
+                open: true,
+                title: '确认退盟',
+                message: hasCandidates
+                    ? '盟主身份将先转交给所选成员，然后你将退出熵盟。该操作无法撤回，是否继续？'
+                    : '当前没有其他成员可交接，退盟后熵盟可能解散。该操作无法撤回，是否继续？',
+                confirmText: '确认退盟',
+                action: 'leader_leave'
+            });
+            return;
+        }
+        setConfirmState({
+            open: true,
+            title: '确认转交盟主',
+            message: '你将卸任盟主并保留普通成员身份。该操作无法撤回，是否继续？',
+            confirmText: '确认转交',
+            action: 'leader_transfer'
+        });
+    };
+
+    const executeLeaderAction = async () => {
+        if (!confirmState.action || handoverSubmitting) return;
+        setHandoverSubmitting(true);
+        try {
+            if (confirmState.action === 'member_leave') {
+                const ok = await onLeave('');
+                if (ok) {
+                    closeConfirmModal();
+                }
+                return;
+            }
+            if (confirmState.action === 'leader_leave') {
+                const nextLeaderId = successorCandidates.length > 0 ? selectedSuccessorId : '';
+                const ok = await onLeave(nextLeaderId);
+                if (ok) {
+                    closeConfirmModal();
+                    closeHandoverModal();
+                }
+                return;
+            }
+            if (confirmState.action === 'leader_transfer') {
+                if (!selectedSuccessorId) {
+                    setHandoverError('请先选择一位新盟主');
+                    closeConfirmModal();
+                    return;
+                }
+                const ok = await onTransferLeadership?.(alliance._id, selectedSuccessorId);
+                if (ok) {
+                    closeConfirmModal();
+                    closeHandoverModal();
+                    if (typeof onAllianceChanged === 'function') {
+                        await onAllianceChanged(alliance._id);
+                    }
+                    if (typeof onRefreshAllianceDetail === 'function') {
+                        await onRefreshAllianceDetail(alliance._id);
+                    }
+                }
+            }
+        } finally {
+            setHandoverSubmitting(false);
+        }
     };
 
     if (!isOpen || !selectedAlliance || !alliance) return null;
@@ -425,6 +573,30 @@ const AllianceDetailModal = ({
                 {removableMembers.length === 0 ? (
                     <p className="empty-message">当前没有可移除成员</p>
                 ) : renderMemberGrid(true)}
+            </div>
+
+            <div className="alliance-section-detail">
+                <h3>知识贡献比例（Z%）</h3>
+                <div className="alliance-manage-inline">
+                    <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        className="form-input"
+                        value={knowledgeContributionDraft}
+                        onChange={(event) => setKnowledgeContributionDraft(event.target.value)}
+                    />
+                    <button
+                        type="button"
+                        className="btn btn-small btn-primary"
+                        onClick={handleUpdateKnowledgeContribution}
+                        disabled={manageActionKey === 'save:manage'}
+                    >
+                        保存比例
+                    </button>
+                </div>
+                <p className="empty-message">该比例用于域主知识点分发时贡献给熵盟的固定占比（Z%）。</p>
             </div>
 
             <div className="alliance-section-detail">
@@ -736,33 +908,45 @@ const AllianceDetailModal = ({
                     {activeTab === 'members' && renderMembersList(false)}
                     {activeTab === 'domains' && renderDomainsList()}
                     {activeTab === 'manage' && isLeaderManager && renderManageTab()}
-
-                    {isCurrentUserFounder && successorCandidates.length > 0 && activeTab !== 'manage' && (
-                        <div className="alliance-section-detail">
-                            <h3>盟主交接</h3>
-                            <select
-                                className="form-input"
-                                value={newLeaderId}
-                                onChange={(event) => setNewLeaderId(event.target.value)}
-                            >
-                                {successorCandidates.map((member) => (
-                                    <option key={member._id} value={member._id}>
-                                        {member.username}
-                                        {member.profession ? ` 【${member.profession}】` : ''}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-                    )}
                 </div>
 
                 <div className="modal-footer">
                     {!isAdmin && (
                         <>
                             {isCurrentAllianceMember ? (
-                                <button className="btn btn-danger" onClick={handleLeaveClick}>
-                                    {isCurrentUserFounder && successorCandidates.length > 0 ? '交接盟主并退出' : '退出熵盟'}
-                                </button>
+                                isCurrentUserFounder ? (
+                                    <div className="alliance-leader-footer-actions">
+                                        <button
+                                            type="button"
+                                            className="btn btn-danger"
+                                            onClick={() => openHandoverModal('leave')}
+                                        >
+                                            退盟
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-warning"
+                                            onClick={() => openHandoverModal('transfer')}
+                                            disabled={successorCandidates.length === 0}
+                                            title={successorCandidates.length === 0 ? '暂无其他成员可转交盟主' : '卸任并转交盟主'}
+                                        >
+                                            卸任
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button
+                                        className="btn btn-danger"
+                                        onClick={() => setConfirmState({
+                                            open: true,
+                                            title: '确认退盟',
+                                            message: '你将退出当前熵盟，是否继续？',
+                                            confirmText: '确认退盟',
+                                            action: 'member_leave'
+                                        })}
+                                    >
+                                        退出熵盟
+                                    </button>
+                                )
                             ) : !userAlliance ? (
                                 <button className="btn btn-primary" onClick={() => onJoin(alliance._id)}>申请加入熵盟</button>
                             ) : null}
@@ -771,6 +955,78 @@ const AllianceDetailModal = ({
                     <button className="btn btn-secondary" onClick={onClose}>关闭</button>
                 </div>
             </div>
+            {isHandoverModalOpen && (
+                <div className="alliance-handover-backdrop" onClick={closeHandoverModal}>
+                    <div className="alliance-handover-modal" onClick={(event) => event.stopPropagation()}>
+                        <div className="alliance-handover-header">
+                            <h4>{handoverMode === 'transfer' ? '转交盟主' : '退盟交接'}</h4>
+                            <button type="button" className="modal-close" onClick={closeHandoverModal}>
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="alliance-handover-body">
+                            <input
+                                type="text"
+                                className="form-input"
+                                placeholder="搜索成员用户名/职业"
+                                value={handoverKeyword}
+                                onChange={(event) => setHandoverKeyword(event.target.value)}
+                            />
+                            <div className="alliance-handover-list">
+                                {filteredSuccessorCandidates.length === 0 ? (
+                                    <div className="empty-message">没有匹配的成员</div>
+                                ) : (
+                                    filteredSuccessorCandidates.map((member) => (
+                                        <button
+                                            key={member._id}
+                                            type="button"
+                                            className={`alliance-handover-item ${selectedSuccessorId === member._id ? 'active' : ''}`}
+                                            onClick={() => {
+                                                setSelectedSuccessorId(member._id);
+                                                setHandoverError('');
+                                            }}
+                                        >
+                                            <span>{member.username}{member.profession ? ` 【${member.profession}】` : ''}</span>
+                                            {selectedSuccessorId === member._id && <span>已选中</span>}
+                                        </button>
+                                    ))
+                                )}
+                            </div>
+                            {handoverError && <div className="alliance-handover-error">{handoverError}</div>}
+                        </div>
+                        <div className="alliance-handover-footer">
+                            <button type="button" className="btn btn-secondary" onClick={closeHandoverModal}>取消</button>
+                            <button
+                                type="button"
+                                className={handoverMode === 'transfer' ? 'btn btn-warning' : 'btn btn-danger'}
+                                onClick={handleOpenHandoverConfirm}
+                                disabled={handoverSubmitting || (handoverMode === 'transfer' && successorCandidates.length === 0)}
+                            >
+                                {handoverMode === 'transfer' ? '转交盟主' : '退盟'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {confirmState.open && (
+                <div className="alliance-confirm-backdrop" onClick={closeConfirmModal}>
+                    <div className="alliance-confirm-modal" onClick={(event) => event.stopPropagation()}>
+                        <h4>{confirmState.title}</h4>
+                        <p>{confirmState.message}</p>
+                        <div className="alliance-confirm-actions">
+                            <button type="button" className="btn btn-secondary" onClick={closeConfirmModal}>取消</button>
+                            <button
+                                type="button"
+                                className={`btn ${confirmState.action === 'leader_transfer' ? 'btn-warning' : 'btn-danger'}`}
+                                onClick={executeLeaderAction}
+                                disabled={handoverSubmitting}
+                            >
+                                {handoverSubmitting ? '处理中...' : confirmState.confirmText}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {renderStyleCreatorModal()}
         </div>
     );

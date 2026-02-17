@@ -98,10 +98,71 @@ const buildAlliancePayload = (alliance, extras = {}) => {
     visualStyles: styles,
     activeVisualStyleId: serializedActive?._id || '',
     activeVisualStyle: serializedActive,
+    knowledgeContributionPercent: typeof alliance.knowledgeContributionPercent === 'number'
+      ? alliance.knowledgeContributionPercent
+      : 10,
+    knowledgeReserve: typeof alliance.knowledgeReserve === 'number'
+      ? alliance.knowledgeReserve
+      : 0,
+    enemyAllianceIds: Array.isArray(alliance.enemyAllianceIds)
+      ? alliance.enemyAllianceIds.map((item) => getIdString(item)).filter(Boolean)
+      : [],
     createdAt: alliance.createdAt,
     updatedAt: alliance.updatedAt,
     ...extras
   };
+};
+
+const syncMasterDomainsAlliance = async ({ userId, allianceId }) => {
+  const domainMasterId = getIdString(userId);
+  if (!domainMasterId) return;
+  await Node.updateMany(
+    { domainMaster: domainMasterId },
+    { $set: { allianceId: allianceId || null } }
+  );
+};
+
+const broadcastAllianceAnnouncement = async ({
+  allianceId,
+  allianceName,
+  announcement,
+  actorUserId = null
+}) => {
+  const normalizedAnnouncement = typeof announcement === 'string' ? announcement.trim() : '';
+  const targetAllianceId = getIdString(allianceId);
+  const normalizedAllianceName = typeof allianceName === 'string' ? allianceName.trim() : '';
+  const actorId = getIdString(actorUserId);
+
+  if (!targetAllianceId || !normalizedAnnouncement || !normalizedAllianceName) {
+    return 0;
+  }
+
+  const members = await User.find({ allianceId: targetAllianceId }).select('_id notifications');
+  if (!Array.isArray(members) || members.length === 0) {
+    return 0;
+  }
+
+  const changedMembers = [];
+  for (const member of members) {
+    if (actorId && getIdString(member._id) === actorId) {
+      continue;
+    }
+    member.notifications.unshift({
+      type: 'alliance_announcement',
+      title: `熵盟「${normalizedAllianceName}」发布了新公告`,
+      message: normalizedAnnouncement,
+      read: false,
+      status: 'info',
+      allianceId: targetAllianceId,
+      allianceName: normalizedAllianceName
+    });
+    changedMembers.push(member);
+  }
+
+  if (changedMembers.length > 0) {
+    await Promise.all(changedMembers.map((member) => member.save()));
+  }
+  return changedMembers.length;
 };
 
 // 获取所有熵盟列表（包括成员数量和管辖知识域数量）
@@ -113,18 +174,16 @@ router.get('/list', async (req, res) => {
 
     // 为每个熵盟计算成员数量和管辖知识域数量
     const alliancesWithStats = await Promise.all(alliances.map(async (alliance) => {
-      // 计算成员数量
-      const memberCount = await User.countDocuments({ allianceId: alliance._id });
+      const allianceMembers = await User.find({ allianceId: alliance._id }).select('_id').lean();
+      const memberIds = allianceMembers.map((item) => item._id);
+      const memberCount = memberIds.length;
 
-      // 计算管辖知识域数量
-      // 找出所有属于该熵盟成员的用户ID
-      const allianceMembers = await User.find({ allianceId: alliance._id }).select('_id');
-      const memberIds = allianceMembers.map(m => m._id);
-
-      // 统计这些用户作为域主的节点数量
       const domainCount = await Node.countDocuments({
-        domainMaster: { $in: memberIds },
-        status: 'approved'
+        status: 'approved',
+        $or: [
+          { allianceId: alliance._id },
+          { allianceId: null, domainMaster: { $in: memberIds } }
+        ]
       });
 
       return buildAlliancePayload(alliance, {
@@ -155,10 +214,13 @@ router.get('/:allianceId', async (req, res) => {
       .select('username level profession createdAt');
 
     // 获取管辖域列表
-    const memberIds = members.map(m => m._id);
+    const memberIds = members.map((item) => item._id);
     const domains = await Node.find({
-      domainMaster: { $in: memberIds },
-      status: 'approved'
+      status: 'approved',
+      $or: [
+        { allianceId: alliance._id },
+        { allianceId: null, domainMaster: { $in: memberIds } }
+      ]
     })
       .populate('domainMaster', 'username profession')
       .select('name description domainMaster');
@@ -240,6 +302,10 @@ router.post('/create', authenticateToken, async (req, res) => {
     // 自动将创建者加入熵盟
     user.allianceId = alliance._id;
     await user.save();
+    await syncMasterDomainsAlliance({
+      userId: user._id,
+      allianceId: alliance._id
+    });
 
     const populatedAlliance = await EntropyAlliance.findById(alliance._id)
       .populate('founder', 'username profession');
@@ -290,6 +356,10 @@ router.post('/join/:allianceId', authenticateToken, async (req, res) => {
     if (founderId === getIdString(user._id)) {
       user.allianceId = alliance._id;
       await user.save();
+      await syncMasterDomainsAlliance({
+        userId: user._id,
+        allianceId: alliance._id
+      });
 
       return res.json({
         message: '盟主已回归熵盟',
@@ -424,9 +494,17 @@ router.post('/leader/:allianceId/remove-member', authenticateToken, async (req, 
 
     member.allianceId = null;
     await member.save();
+    await syncMasterDomainsAlliance({
+      userId: member._id,
+      allianceId: null
+    });
 
     const remainingMembers = await User.countDocuments({ allianceId: alliance._id });
     if (remainingMembers === 0) {
+      await Node.updateMany(
+        { allianceId: alliance._id },
+        { $set: { allianceId: null } }
+      );
       await EntropyAlliance.findByIdAndDelete(alliance._id);
       return res.json({ message: `已将成员 ${member.username} 移出熵盟，熵盟因无成员自动解散` });
     }
@@ -440,6 +518,10 @@ router.post('/leader/:allianceId/remove-member', authenticateToken, async (req, 
 
     if (remainingDomainMasterCount === 0) {
       await User.updateMany(
+        { allianceId: alliance._id },
+        { $set: { allianceId: null } }
+      );
+      await Node.updateMany(
         { allianceId: alliance._id },
         { $set: { allianceId: null } }
       );
@@ -461,6 +543,7 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
     const {
       declaration,
       announcement,
+      knowledgeContributionPercent,
       createVisualStyle,
       deleteVisualStyleId,
       activateVisualStyleId
@@ -481,7 +564,9 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
       return res.status(403).json({ error: '只有盟主可以管理熵盟信息' });
     }
 
+    const previousAnnouncement = (alliance.announcement || '').trim();
     let hasChanges = false;
+    let shouldBroadcastAllianceAnnouncement = false;
 
     if (typeof declaration === 'string') {
       const normalizedDeclaration = declaration.trim();
@@ -493,8 +578,19 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
     }
 
     if (typeof announcement === 'string') {
-      alliance.announcement = announcement.trim();
+      const normalizedAnnouncement = announcement.trim();
+      alliance.announcement = normalizedAnnouncement;
       alliance.announcementUpdatedAt = new Date();
+      shouldBroadcastAllianceAnnouncement = Boolean(normalizedAnnouncement) && normalizedAnnouncement !== previousAnnouncement;
+      hasChanges = true;
+    }
+
+    if (knowledgeContributionPercent !== undefined) {
+      const parsedContribution = Number(knowledgeContributionPercent);
+      if (!Number.isFinite(parsedContribution) || parsedContribution < 0 || parsedContribution > 100) {
+        return res.status(400).json({ error: '知识贡献比例必须在 0-100 之间' });
+      }
+      alliance.knowledgeContributionPercent = parsedContribution;
       hasChanges = true;
     }
 
@@ -548,6 +644,14 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
     }
 
     await alliance.save();
+    if (shouldBroadcastAllianceAnnouncement) {
+      await broadcastAllianceAnnouncement({
+        allianceId: alliance._id,
+        allianceName: alliance.name,
+        announcement: alliance.announcement,
+        actorUserId: leader._id
+      });
+    }
 
     res.json({
       success: true,
@@ -597,8 +701,10 @@ router.post('/leave', authenticateToken, async (req, res) => {
         if (!candidateIdSet.has(targetLeaderId)) {
           return res.status(400).json({ error: '新盟主必须是该熵盟的剩余成员' });
         }
-        alliance.founder = targetLeaderId;
-        await alliance.save();
+        await EntropyAlliance.updateOne(
+          { _id: alliance._id },
+          { $set: { founder: targetLeaderId } }
+        );
         leaderTransferred = true;
       }
     }
@@ -606,10 +712,18 @@ router.post('/leave', authenticateToken, async (req, res) => {
     // 退出熵盟
     user.allianceId = null;
     await user.save();
+    await syncMasterDomainsAlliance({
+      userId: user._id,
+      allianceId: null
+    });
 
     // 检查熵盟是否还有成员，如果没有则删除熵盟
     const remainingMembers = await User.countDocuments({ allianceId });
     if (remainingMembers === 0) {
+      await Node.updateMany(
+        { allianceId },
+        { $set: { allianceId: null } }
+      );
       await EntropyAlliance.findByIdAndDelete(allianceId);
       return res.json({ message: '成功退出熵盟，该熵盟已解散（无剩余成员）' });
     }
@@ -627,6 +741,10 @@ router.post('/leave', authenticateToken, async (req, res) => {
         { allianceId },
         { $set: { allianceId: null } }
       );
+      await Node.updateMany(
+        { allianceId },
+        { $set: { allianceId: null } }
+      );
       await EntropyAlliance.findByIdAndDelete(allianceId);
       return res.json({ message: '成功退出熵盟，该熵盟已自动解散（剩余成员均非域主）' });
     }
@@ -634,6 +752,101 @@ router.post('/leave', authenticateToken, async (req, res) => {
     res.json({ message: leaderTransferred ? '已指定新盟主并成功退出熵盟' : '成功退出熵盟' });
   } catch (error) {
     console.error('退出熵盟失败:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 盟主转交（自己保留成员身份，仅卸任盟主）
+router.post('/leader/:allianceId/transfer', authenticateToken, async (req, res) => {
+  try {
+    const { allianceId } = req.params;
+    const { newLeaderId } = req.body || {};
+    const userId = getIdString(req?.user?.userId);
+    const targetLeaderId = getIdString(newLeaderId);
+
+    if (!targetLeaderId) {
+      return res.status(400).json({ error: '请选择新盟主' });
+    }
+
+    const currentUser = await User.findById(userId).select('_id allianceId');
+    if (!currentUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    if (getIdString(currentUser.allianceId) !== getIdString(allianceId)) {
+      return res.status(403).json({ error: '你不在该熵盟中，无法转交盟主' });
+    }
+
+    const alliance = await EntropyAlliance.findById(allianceId).select('_id founder name');
+    if (!alliance) {
+      return res.status(404).json({ error: '熵盟不存在' });
+    }
+
+    if (getIdString(alliance.founder) !== userId) {
+      return res.status(403).json({ error: '只有盟主可以转交盟主身份' });
+    }
+
+    if (targetLeaderId === userId) {
+      return res.status(400).json({ error: '新盟主不能是自己' });
+    }
+
+    const targetMember = await User.findById(targetLeaderId).select('_id allianceId');
+    if (!targetMember || getIdString(targetMember.allianceId) !== getIdString(alliance._id)) {
+      return res.status(400).json({ error: '新盟主必须是该熵盟的现有成员' });
+    }
+
+    const previousLeader = await User.findById(userId).select('_id username');
+    if (!previousLeader) {
+      return res.status(404).json({ error: '原盟主不存在' });
+    }
+    const nextLeader = await User.findById(targetMember._id).select('_id username notifications');
+    if (!nextLeader) {
+      return res.status(404).json({ error: '新盟主不存在' });
+    }
+
+    const transferAnnouncement = `${previousLeader.username}已将盟主转交给${nextLeader.username}`;
+    const transferAt = new Date();
+    await EntropyAlliance.updateOne(
+      { _id: alliance._id },
+      {
+        $set: {
+          founder: targetMember._id,
+          announcement: transferAnnouncement,
+          announcementUpdatedAt: transferAt
+        }
+      }
+    );
+
+    // 给新盟主一条明确通知
+    nextLeader.notifications.unshift({
+      type: 'info',
+      title: `你已成为熵盟「${alliance.name}」盟主`,
+      message: `${previousLeader.username}已将盟主转交给你`,
+      read: false,
+      status: 'info',
+      allianceId: alliance._id,
+      allianceName: alliance.name,
+      inviterId: previousLeader._id,
+      inviterUsername: previousLeader.username,
+      inviteeId: nextLeader._id,
+      inviteeUsername: nextLeader.username,
+      respondedAt: transferAt
+    });
+    await nextLeader.save();
+
+    // 自动发布并广播熵盟公告（所有盟内成员可见）
+    await broadcastAllianceAnnouncement({
+      allianceId: alliance._id,
+      allianceName: alliance.name,
+      announcement: transferAnnouncement
+    });
+
+    res.json({
+      success: true,
+      message: '盟主身份已成功转交，你当前为普通盟成员'
+    });
+  } catch (error) {
+    console.error('转交盟主失败:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });
@@ -649,11 +862,14 @@ router.get('/my/info', authenticateToken, async (req, res) => {
 
     // 获取熵盟的成员数和管辖域数
     const memberCount = await User.countDocuments({ allianceId: user.allianceId._id });
-    const allianceMembers = await User.find({ allianceId: user.allianceId._id }).select('_id');
-    const memberIds = allianceMembers.map(m => m._id);
+    const memberDocs = await User.find({ allianceId: user.allianceId._id }).select('_id').lean();
+    const memberIds = memberDocs.map((item) => item._id);
     const domainCount = await Node.countDocuments({
-      domainMaster: { $in: memberIds },
-      status: 'approved'
+      status: 'approved',
+      $or: [
+        { allianceId: user.allianceId._id },
+        { allianceId: null, domainMaster: { $in: memberIds } }
+      ]
     });
 
     res.json({
@@ -685,12 +901,15 @@ router.get('/admin/all', authenticateToken, async (req, res) => {
 
     // 为每个熵盟计算成员数量和管辖知识域数量
     const alliancesWithStats = await Promise.all(alliances.map(async (alliance) => {
-      const memberCount = await User.countDocuments({ allianceId: alliance._id });
-      const allianceMembers = await User.find({ allianceId: alliance._id }).select('_id');
-      const memberIds = allianceMembers.map(m => m._id);
+      const allianceMembers = await User.find({ allianceId: alliance._id }).select('_id').lean();
+      const memberIds = allianceMembers.map((item) => item._id);
+      const memberCount = memberIds.length;
       const domainCount = await Node.countDocuments({
-        domainMaster: { $in: memberIds },
-        status: 'approved'
+        status: 'approved',
+        $or: [
+          { allianceId: alliance._id },
+          { allianceId: null, domainMaster: { $in: memberIds } }
+        ]
       });
 
       return buildAlliancePayload(alliance, {
@@ -723,6 +942,9 @@ router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: '熵盟不存在' });
     }
 
+    const previousAnnouncement = (alliance.announcement || '').trim();
+    let shouldBroadcastAllianceAnnouncement = false;
+
     // 如果更改名称，检查是否已被使用
     if (name && name !== alliance.name) {
       const existing = await EntropyAlliance.findOne({ name, _id: { $ne: allianceId } });
@@ -735,11 +957,21 @@ router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
     if (flag) alliance.flag = flag;
     if (declaration) alliance.declaration = declaration;
     if (typeof announcement === 'string') {
-      alliance.announcement = announcement.trim();
+      const normalizedAnnouncement = announcement.trim();
+      alliance.announcement = normalizedAnnouncement;
       alliance.announcementUpdatedAt = new Date();
+      shouldBroadcastAllianceAnnouncement = Boolean(normalizedAnnouncement) && normalizedAnnouncement !== previousAnnouncement;
     }
 
     await alliance.save();
+    if (shouldBroadcastAllianceAnnouncement) {
+      await broadcastAllianceAnnouncement({
+        allianceId: alliance._id,
+        allianceName: alliance.name,
+        announcement: alliance.announcement,
+        actorUserId: adminUser._id
+      });
+    }
 
     const updatedAlliance = await EntropyAlliance.findById(allianceId)
       .populate('founder', 'username profession');
@@ -773,6 +1005,10 @@ router.delete('/admin/:allianceId', authenticateToken, async (req, res) => {
 
     // 清除所有成员的熵盟关联
     await User.updateMany(
+      { allianceId: allianceId },
+      { $set: { allianceId: null } }
+    );
+    await Node.updateMany(
       { allianceId: allianceId },
       { $set: { allianceId: null } }
     );

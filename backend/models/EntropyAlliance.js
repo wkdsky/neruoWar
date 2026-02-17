@@ -66,6 +66,24 @@ const EntropyAllianceSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  knowledgeContributionPercent: {
+    type: Number,
+    default: 10,
+    min: 0,
+    max: 100
+  },
+  knowledgeReserve: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  enemyAllianceIds: {
+    type: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'EntropyAlliance'
+    }],
+    default: []
+  },
   visualStyles: {
     type: [AllianceVisualStyleSchema],
     default: []

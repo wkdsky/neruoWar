@@ -30,6 +30,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     });
     const [travelUnitSeconds, setTravelUnitSeconds] = useState(60);
     const [travelUnitInput, setTravelUnitInput] = useState('60');
+    const [distributionAnnouncementLeadHours, setDistributionAnnouncementLeadHours] = useState(24);
+    const [distributionLeadInput, setDistributionLeadInput] = useState('24');
 
     // Node Management State
     const [allNodes, setAllNodes] = useState([]);
@@ -240,8 +242,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             if (response.ok) {
                 const data = await response.json();
                 const seconds = String(data?.settings?.travelUnitSeconds ?? 60);
+                const leadHours = String(data?.settings?.distributionAnnouncementLeadHours ?? 24);
                 setTravelUnitSeconds(parseInt(seconds, 10));
                 setTravelUnitInput(seconds);
+                setDistributionAnnouncementLeadHours(parseInt(leadHours, 10));
+                setDistributionLeadInput(leadHours);
             }
         } catch (error) {
             console.error('获取系统设置失败:', error);
@@ -251,9 +256,14 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const saveAdminSettings = async () => {
         const token = localStorage.getItem('token');
         const parsed = parseInt(travelUnitInput, 10);
+        const parsedLeadHours = parseInt(distributionLeadInput, 10);
 
         if (!Number.isInteger(parsed) || parsed < 1 || parsed > 86400) {
             alert('每单位移动耗时必须是 1-86400 的整数秒');
+            return;
+        }
+        if (!Number.isInteger(parsedLeadHours) || parsedLeadHours < 1 || parsedLeadHours > 168) {
+            alert('分发公告提前时长必须是 1-168 的整数小时');
             return;
         }
 
@@ -264,13 +274,19 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ travelUnitSeconds: parsed })
+                body: JSON.stringify({
+                    travelUnitSeconds: parsed,
+                    distributionAnnouncementLeadHours: parsedLeadHours
+                })
             });
             if (response.ok) {
                 const data = await response.json();
                 const seconds = parseInt(String(data?.settings?.travelUnitSeconds ?? parsed), 10);
+                const leadHours = parseInt(String(data?.settings?.distributionAnnouncementLeadHours ?? parsedLeadHours), 10);
                 setTravelUnitSeconds(seconds);
                 setTravelUnitInput(String(seconds));
+                setDistributionAnnouncementLeadHours(leadHours);
+                setDistributionLeadInput(String(leadHours));
                 alert('系统设置已保存');
             } else {
                 const data = await response.json();
@@ -1576,8 +1592,21 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                 className="edit-input-small"
                             />
                         </div>
+                        <div className="admin-settings-row">
+                            <label htmlFor="distributionAnnouncementLeadHours">分发公告提前时长（小时）</label>
+                            <input
+                                id="distributionAnnouncementLeadHours"
+                                type="number"
+                                min="1"
+                                max="168"
+                                value={distributionLeadInput}
+                                onChange={(e) => setDistributionLeadInput(e.target.value)}
+                                className="edit-input-small"
+                            />
+                        </div>
                         <div className="admin-settings-current">
-                            当前生效值: <strong>{travelUnitSeconds}</strong> 秒 / 单位
+                            当前生效值: <strong>{travelUnitSeconds}</strong> 秒 / 单位，
+                            分发公告提前 <strong>{distributionAnnouncementLeadHours}</strong> 小时
                         </div>
                         <div className="admin-settings-actions">
                             <button onClick={saveAdminSettings} className="btn btn-primary">保存设置</button>

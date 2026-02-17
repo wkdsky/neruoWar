@@ -13,7 +13,7 @@ const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
   { key: 'global' },
-  { $setOnInsert: { travelUnitSeconds: 60 } },
+  { $setOnInsert: { travelUnitSeconds: 60, distributionAnnouncementLeadHours: 24 } },
   { new: true, upsert: true, setDefaultsOnInsert: true }
 );
 
@@ -34,6 +34,15 @@ const getIdString = (value) => {
     return text === '[object Object]' ? '' : text;
   }
   return '';
+};
+
+const syncMasterDomainsAlliance = async ({ userId, allianceId }) => {
+  const domainMasterId = getIdString(userId);
+  if (!domainMasterId) return;
+  await Node.updateMany(
+    { domainMaster: domainMasterId },
+    { $set: { allianceId: allianceId || null } }
+  );
 };
 
 const isResignRequestExpired = (notification, now = Date.now()) => {
@@ -147,7 +156,7 @@ const handleDomainMasterApplyDecision = async ({
   const applicantId = getIdString(notification?.inviteeId);
   const nodeId = getIdString(notification?.nodeId);
 
-  const node = await Node.findById(nodeId).select('name status domainMaster');
+  const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins allianceId knowledgeDistributionRule knowledgeDistributionRuleProfiles knowledgeDistributionLocked');
   if (!node || node.status !== 'approved') {
     notification.status = 'rejected';
     notification.read = true;
@@ -160,7 +169,7 @@ const handleDomainMasterApplyDecision = async ({
   }
 
   const applicant = isValidObjectId(applicantId)
-    ? await User.findById(applicantId).select('username role notifications')
+    ? await User.findById(applicantId).select('username role allianceId notifications')
     : null;
 
   if (action !== 'accept') {
@@ -247,6 +256,31 @@ const handleDomainMasterApplyDecision = async ({
 
   if (!currentMasterId) {
     node.domainMaster = applicant._id;
+    node.allianceId = applicant.allianceId || null;
+    node.domainAdmins = (node.domainAdmins || []).filter((adminId) => (
+      getIdString(adminId) !== applicantId
+    ));
+    node.knowledgeDistributionRule = {
+      ...(node.knowledgeDistributionRule?.toObject?.() || node.knowledgeDistributionRule || {}),
+      blacklistUserIds: [],
+      blacklistAllianceIds: []
+    };
+    node.knowledgeDistributionRuleProfiles = (Array.isArray(node.knowledgeDistributionRuleProfiles)
+      ? node.knowledgeDistributionRuleProfiles
+      : []
+    ).map((profile) => ({
+      profileId: profile.profileId,
+      name: profile.name,
+      rule: {
+        ...(profile?.rule?.toObject?.() || profile?.rule || {}),
+        blacklistUserIds: [],
+        blacklistAllianceIds: []
+      }
+    }));
+    node.knowledgeDistributionLocked = null;
+    await node.save();
+  } else if (currentMasterId === applicantId) {
+    node.allianceId = applicant.allianceId || null;
     await node.save();
   }
 
@@ -396,6 +430,10 @@ const handleAllianceJoinApplyDecision = async ({
         decisionMessage = applicantAllianceId === targetAllianceId
           ? '该用户已在该熵盟中'
           : '已同意该入盟申请';
+        await syncMasterDomainsAlliance({
+          userId: applicant._id,
+          allianceId: alliance._id
+        });
       }
     }
   }
@@ -1037,6 +1075,7 @@ router.get('/profile', async (req, res) => {
       role: user.role,
       level: user.level,
       experience: user.experience,
+      knowledgeBalance: user.knowledgeBalance || 0,
       location: user.location,
       profession: user.profession,
       avatar: user.avatar,
@@ -1379,13 +1418,18 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       }
 
       if (action === 'accept') {
-        const alreadyAdmin = (node.domainAdmins || []).some((id) => getIdString(id) === getIdString(user._id));
-        if (!alreadyAdmin) {
-          node.domainAdmins.push(user._id);
-          await node.save();
+        if (getIdString(node.domainMaster) === getIdString(user._id)) {
+          decision = 'rejected';
+          decisionMessage = '你已是该知识域域主，无需接受域相邀请';
+        } else {
+          const alreadyAdmin = (node.domainAdmins || []).some((id) => getIdString(id) === getIdString(user._id));
+          if (!alreadyAdmin) {
+            node.domainAdmins.push(user._id);
+            await node.save();
+          }
+          decision = 'accepted';
+          decisionMessage = alreadyAdmin ? '你已是该知识域域相' : '已接受邀请，成为知识域域相';
         }
-        decision = 'accepted';
-        decisionMessage = alreadyAdmin ? '你已是该知识域域相' : '已接受邀请，成为知识域域相';
       } else {
         decision = 'rejected';
         decisionMessage = '已拒绝邀请';

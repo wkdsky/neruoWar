@@ -58,6 +58,11 @@ const normalizeObjectId = (value) => {
     return '';
 };
 
+const ANNOUNCEMENT_NOTIFICATION_TYPES = ['domain_distribution_announcement', 'alliance_announcement'];
+const isAnnouncementNotification = (notification) => (
+    ANNOUNCEMENT_NOTIFICATION_TYPES.includes(notification?.type)
+);
+
 const App = () => {
     const [socket, setSocket] = useState(null);
     const [authenticated, setAuthenticated] = useState(false);
@@ -141,6 +146,7 @@ const App = () => {
     const [isNotificationsLoading, setIsNotificationsLoading] = useState(false);
     const [isClearingNotifications, setIsClearingNotifications] = useState(false);
     const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
+    const [isMarkingAnnouncementsRead, setIsMarkingAnnouncementsRead] = useState(false);
     const [notificationActionId, setNotificationActionId] = useState('');
     const [adminPendingNodes, setAdminPendingNodes] = useState([]);
     const [showRelatedDomainsPanel, setShowRelatedDomainsPanel] = useState(false);
@@ -662,6 +668,8 @@ const App = () => {
   const markNotificationRead = async (notificationId) => {
     const token = localStorage.getItem('token');
     if (!token || !notificationId) return;
+    const target = notifications.find((item) => item._id === notificationId);
+    if (target?.read) return;
 
     try {
       const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/read`, {
@@ -679,7 +687,9 @@ const App = () => {
       setNotifications((prev) => prev.map((item) => (
         item._id === notificationId ? { ...item, read: true } : item
       )));
-      setNotificationUnreadCount((prev) => Math.max(0, prev - 1));
+      if (!target?.read) {
+        setNotificationUnreadCount((prev) => Math.max(0, prev - 1));
+      }
     } catch (error) {
       window.alert(`标记已读失败: ${error.message}`);
     }
@@ -711,16 +721,55 @@ const App = () => {
     }
   };
 
+  const markAnnouncementNotificationsRead = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || isMarkingAnnouncementsRead) return;
+
+    const unreadAnnouncementIds = notifications
+      .filter((notification) => (
+        isAnnouncementNotification(notification) &&
+        !notification.read &&
+        notification._id
+      ))
+      .map((notification) => notification._id);
+
+    if (unreadAnnouncementIds.length === 0) {
+      return;
+    }
+
+    setIsMarkingAnnouncementsRead(true);
+    setNotifications((prev) => prev.map((item) => (
+      isAnnouncementNotification(item) ? { ...item, read: true } : item
+    )));
+    setNotificationUnreadCount((prev) => Math.max(0, prev - unreadAnnouncementIds.length));
+
+    try {
+      await Promise.all(unreadAnnouncementIds.map(async (notificationId) => {
+        const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/read`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        if (!response.ok) {
+          throw new Error('标记公告已读失败');
+        }
+      }));
+    } catch (error) {
+      await fetchNotifications(true);
+      if (isAdmin) {
+        await fetchAdminPendingNodeReminders(true);
+      }
+    } finally {
+      setIsMarkingAnnouncementsRead(false);
+    }
+  };
+
   const clearNotifications = async () => {
     const token = localStorage.getItem('token');
     if (!token) return;
 
-    if (!notifications.length) {
-      window.alert('暂无可清空通知');
-      return;
-    }
-
-    if (!window.confirm('确定清空全部通知吗？')) return;
+    if (!notifications.length) return;
 
     setIsClearingNotifications(true);
     try {
@@ -741,8 +790,6 @@ const App = () => {
       if (isAdmin) {
         await fetchAdminPendingNodeReminders(true);
       }
-
-      window.alert(data.message || '通知已清空');
     } catch (error) {
       window.alert(`清空通知失败: ${error.message}`);
     } finally {
@@ -1649,7 +1696,7 @@ const App = () => {
         };
     };
 
-    const handleJumpToCurrentLocationView = async () => {
+  const handleJumpToCurrentLocationView = async () => {
         if (!currentLocationNodeDetail?._id) {
             return;
         }
@@ -1660,6 +1707,36 @@ const App = () => {
 
         const clickedNode = buildClickedNodeFromScene(currentLocationNodeDetail._id);
         await fetchNodeDetail(currentLocationNodeDetail._id, clickedNode);
+    };
+
+    const handleDistributionAnnouncementClick = async (notification) => {
+        if (!notification) return;
+
+        if (!notification.read && notification._id) {
+            await markNotificationRead(notification._id);
+        }
+
+        const targetNodeId = normalizeObjectId(notification.nodeId);
+        if (!targetNodeId) return;
+
+        const clickedNode = buildClickedNodeFromScene(targetNodeId);
+        const targetNodeDetail = await fetchNodeDetail(targetNodeId, clickedNode);
+        if (notification.requiresArrival && targetNodeDetail) {
+            await handleMoveToNode(targetNodeDetail);
+        }
+        setShowSearchResults(false);
+    };
+
+    const handleHomeAnnouncementClick = async (notification) => {
+        if (!notification) return;
+        if (notification.type === 'domain_distribution_announcement') {
+            await handleDistributionAnnouncementClick(notification);
+            return;
+        }
+
+        if (!notification.read && notification._id) {
+            await markNotificationRead(notification._id);
+        }
     };
 
     const domainMasterDomains = relatedDomainsData.domainMasterDomains || [];
@@ -1677,6 +1754,21 @@ const App = () => {
     const pendingMasterApplyCount = notifications.filter((notification) => (
         notification.type === 'domain_master_apply' &&
         notification.status === 'pending'
+    )).length;
+    const systemAnnouncements = notifications
+        .filter((notification) => notification.type === 'domain_distribution_announcement')
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 10);
+    const allianceAnnouncements = notifications
+        .filter((notification) => notification.type === 'alliance_announcement')
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 10);
+    const announcementGroups = {
+        system: systemAnnouncements,
+        alliance: allianceAnnouncements
+    };
+    const announcementUnreadCount = notifications.filter((notification) => (
+        isAnnouncementNotification(notification) && !notification.read
     )).length;
     const adminPendingApprovalCount = pendingMasterApplyCount + adminPendingNodes.length;
     const notificationBadgeCount = isAdmin ? adminPendingApprovalCount : notificationUnreadCount;
@@ -2223,6 +2315,8 @@ const App = () => {
                                 const isAllianceJoinApplyPending =
                                     notification.type === 'alliance_join_apply' &&
                                     notification.status === 'pending';
+                                const isDistributionAnnouncement =
+                                    notification.type === 'domain_distribution_announcement';
                                 const currentActionKey = notificationActionId.split(':')[0];
                                 const isActing = currentActionKey === notification._id;
 
@@ -2232,6 +2326,10 @@ const App = () => {
                                         className={`notification-item ${notification.read ? '' : 'unread'}`}
                                         onClick={(event) => {
                                             if (event.target.closest('.notification-actions')) {
+                                                return;
+                                            }
+                                            if (isDistributionAnnouncement) {
+                                                handleDistributionAnnouncementClick(notification);
                                                 return;
                                             }
                                             if (!notification.read) {
@@ -2338,6 +2436,16 @@ const App = () => {
                                                     disabled={isActing}
                                                 >
                                                     拒绝
+                                                </button>
+                                            </div>
+                                        ) : (isDistributionAnnouncement && notification.requiresArrival) ? (
+                                            <div className="notification-actions">
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-small btn-warning"
+                                                    onClick={() => handleDistributionAnnouncementClick(notification)}
+                                                >
+                                                    点击前往
                                                 </button>
                                             </div>
                                         ) : null}
@@ -2517,6 +2625,12 @@ const App = () => {
                             userLocation
                         )}
                         onJumpToLocationView={handleJumpToCurrentLocationView}
+                        announcementGroups={announcementGroups}
+                        announcementUnreadCount={announcementUnreadCount}
+                        isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
+                        onAnnouncementClick={handleHomeAnnouncementClick}
+                        onMarkAllAnnouncementsRead={markAnnouncementNotificationsRead}
+                        onAnnouncementPanelViewed={markAnnouncementNotificationsRead}
                     />
                 )}
                 {/* 节点详情视图 */}

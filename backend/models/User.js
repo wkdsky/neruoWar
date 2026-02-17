@@ -24,6 +24,9 @@ const NotificationSchema = new mongoose.Schema({
       'domain_master_apply_result',
       'alliance_join_apply',
       'alliance_join_apply_result',
+      'domain_distribution_announcement',
+      'alliance_announcement',
+      'domain_distribution_result',
       'info'
     ],
     default: 'info'
@@ -129,6 +132,11 @@ const userSchema = new mongoose.Schema({
   level: {
     type: Number,
     default: 0
+  },
+  knowledgeBalance: {
+    type: Number,
+    default: 0,
+    min: 0
   },
   experience: {
     type: Number,
