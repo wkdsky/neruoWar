@@ -5,6 +5,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Info, ChevronLeft, ChevronRight } from 'lucide-react';
 import './KnowledgeDomainScene.css';
 
 const DISTRIBUTION_SCOPE_OPTIONS = [
@@ -534,6 +535,7 @@ const KnowledgeDomainScene = ({
   const [distributionClockMs, setDistributionClockMs] = useState(Date.now());
   const [hasUnsavedDistributionDraft, setHasUnsavedDistributionDraft] = useState(false);
   const [activeManageSidePanel, setActiveManageSidePanel] = useState('');
+  const [isDomainInfoDockExpanded, setIsDomainInfoDockExpanded] = useState(false);
   const showManageTab = !!domainAdminState.canView;
 
   const parseApiResponse = async (response) => {
@@ -1511,13 +1513,8 @@ const KnowledgeDomainScene = ({
     >
       <canvas ref={canvasRef} className="knowledge-domain-canvas" />
 
-      <div
-        className="domain-info-panel"
-        style={{
-          opacity: displayOpacity,
-          transform: `translateY(${(1 - displayOpacity) * -20}px)`
-        }}
-      >
+      <div className={`domain-right-dock ${isDomainInfoDockExpanded ? 'expanded' : 'collapsed'}`}>
+        <div className="domain-info-panel">
         <div className="domain-tabs">
           <button
             type="button"
@@ -1863,8 +1860,21 @@ const KnowledgeDomainScene = ({
             )}
           </div>
         )}
+        </div>
+        <button
+          type="button"
+          className="domain-right-dock-toggle"
+          onClick={() => setIsDomainInfoDockExpanded((prev) => !prev)}
+          aria-label={isDomainInfoDockExpanded ? '收起知识域面板' : '展开知识域面板'}
+          title={isDomainInfoDockExpanded ? '收起知识域面板' : '展开知识域面板'}
+        >
+          <Info size={16} />
+          <span className="domain-right-dock-label">知识域</span>
+          {isDomainInfoDockExpanded ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+        </button>
+      </div>
 
-        {isDistributionRuleModalOpen && distributionState.canEdit && createPortal(
+      {isDistributionRuleModalOpen && distributionState.canEdit && createPortal(
           <div
             className="distribution-rule-modal-overlay"
             onClick={(event) => {
@@ -2361,7 +2371,6 @@ const KnowledgeDomainScene = ({
         <button className="exit-domain-btn" onClick={onExit}>
           离开知识域
         </button>
-      </div>
     </div>
   );
 };

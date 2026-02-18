@@ -73,6 +73,10 @@ body {
         top: 92px;
         max-height: calc(100vh - 112px);
     }
+
+    .knowledge-domain-active .knowledge-domain-container .domain-right-dock-toggle {
+        top: 92px;
+    }
 }
 
 @keyframes slideDown {
