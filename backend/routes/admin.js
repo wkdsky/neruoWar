@@ -3,14 +3,136 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const GameSetting = require('../models/GameSetting');
+const ArmyUnitType = require('../models/ArmyUnitType');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
+const {
+  fetchArmyUnitTypes,
+  serializeArmyUnitType
+} = require('../services/armyUnitTypeService');
 
 const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
   { key: 'global' },
   { $setOnInsert: { travelUnitSeconds: 60, distributionAnnouncementLeadHours: 24 } },
   { new: true, upsert: true, setDefaultsOnInsert: true }
 );
+
+const UNIT_TYPE_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
+const ROLE_TAG_SET = new Set(['近战', '远程']);
+
+const parseNumberField = ({ body, key, required = false, integer = false, min = null }) => {
+  if (!Object.prototype.hasOwnProperty.call(body, key)) {
+    if (required) return { error: `缺少字段：${key}` };
+    return { skip: true };
+  }
+
+  const value = Number(body[key]);
+  if (!Number.isFinite(value)) {
+    return { error: `${key} 必须是数字` };
+  }
+  if (integer && !Number.isInteger(value)) {
+    return { error: `${key} 必须是整数` };
+  }
+  if (min !== null && value < min) {
+    return { error: `${key} 不能小于 ${min}` };
+  }
+  return { value };
+};
+
+const parseUnitTypePayload = (body, { create = false } = {}) => {
+  const source = body && typeof body === 'object' ? body : {};
+  const parsed = {};
+  const errors = [];
+
+  const parseStringField = (key, { required = false, maxLen = 64 } = {}) => {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      if (required) errors.push(`缺少字段：${key}`);
+      return;
+    }
+    const text = typeof source[key] === 'string' ? source[key].trim() : '';
+    if (!text) {
+      if (required) errors.push(`${key} 不能为空`);
+      return;
+    }
+    if (text.length > maxLen) {
+      errors.push(`${key} 过长`);
+      return;
+    }
+    parsed[key] = text;
+  };
+
+  parseStringField('name', { required: create, maxLen: 64 });
+
+  if (create) {
+    parseStringField('unitTypeId', { required: true, maxLen: 64 });
+    if (parsed.unitTypeId && !UNIT_TYPE_ID_RE.test(parsed.unitTypeId)) {
+      errors.push('unitTypeId 仅支持字母、数字、下划线、中划线，长度 2-64');
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'roleTag')) {
+    const roleTag = typeof source.roleTag === 'string' ? source.roleTag.trim() : '';
+    if (!ROLE_TAG_SET.has(roleTag)) {
+      errors.push('roleTag 必须是「近战」或「远程」');
+    } else {
+      parsed.roleTag = roleTag;
+    }
+  } else if (create) {
+    errors.push('缺少字段：roleTag');
+  }
+
+  [
+    ['speed', false, 0],
+    ['hp', true, 1],
+    ['atk', true, 0],
+    ['def', true, 0],
+    ['range', true, 1],
+    ['costKP', true, 1],
+    ['level', true, 1],
+    ['sortOrder', true, null]
+  ].forEach(([key, integer, min]) => {
+    const result = parseNumberField({
+      body: source,
+      key,
+      required: create && ['speed', 'hp', 'atk', 'def', 'range', 'costKP'].includes(key),
+      integer,
+      min
+    });
+    if (result.error) {
+      errors.push(result.error);
+      return;
+    }
+    if (!result.skip) {
+      parsed[key] = result.value;
+    }
+  });
+
+  if (Object.prototype.hasOwnProperty.call(source, 'nextUnitTypeId')) {
+    const nextUnitTypeId = typeof source.nextUnitTypeId === 'string' ? source.nextUnitTypeId.trim() : '';
+    parsed.nextUnitTypeId = nextUnitTypeId || null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'upgradeCostKP')) {
+    if (source.upgradeCostKP === null || source.upgradeCostKP === '') {
+      parsed.upgradeCostKP = null;
+    } else {
+      const result = parseNumberField({
+        body: source,
+        key: 'upgradeCostKP',
+        required: false,
+        integer: true,
+        min: 0
+      });
+      if (result.error) {
+        errors.push(result.error);
+      } else if (!result.skip) {
+        parsed.upgradeCostKP = result.value;
+      }
+    }
+  }
+
+  return { parsed, errors };
+};
 
 // 获取所有用户的完整信息（包括明文密码）
 router.get('/users', authenticateToken, isAdmin, async (req, res) => {
@@ -199,6 +321,110 @@ router.put('/settings', authenticateToken, isAdmin, async (req, res) => {
   } catch (error) {
     console.error('更新系统设置错误:', error);
     res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.get('/army/unit-types', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const unitTypes = await fetchArmyUnitTypes();
+    return res.json({
+      success: true,
+      unitTypes
+    });
+  } catch (error) {
+    console.error('获取兵种列表失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.post('/army/unit-types', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { parsed, errors } = parseUnitTypePayload(req.body, { create: true });
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0] });
+    }
+
+    const exists = await ArmyUnitType.findOne({ unitTypeId: parsed.unitTypeId }).select('_id').lean();
+    if (exists) {
+      return res.status(400).json({ error: 'unitTypeId 已存在' });
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(parsed, 'sortOrder')) {
+      parsed.sortOrder = await ArmyUnitType.countDocuments();
+    }
+
+    const created = await ArmyUnitType.create(parsed);
+    return res.status(201).json({
+      success: true,
+      unitType: serializeArmyUnitType(created)
+    });
+  } catch (error) {
+    console.error('创建兵种失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.put('/army/unit-types/:unitTypeId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const unitTypeId = typeof req.params?.unitTypeId === 'string' ? req.params.unitTypeId.trim() : '';
+    if (!unitTypeId) {
+      return res.status(400).json({ error: '无效的兵种ID' });
+    }
+
+    const { parsed, errors } = parseUnitTypePayload(req.body, { create: false });
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0] });
+    }
+
+    const updateKeys = Object.keys(parsed).filter((key) => key !== 'unitTypeId');
+    if (updateKeys.length === 0) {
+      return res.status(400).json({ error: '没有可更新的字段' });
+    }
+
+    const updated = await ArmyUnitType.findOneAndUpdate(
+      { unitTypeId },
+      { $set: parsed },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ error: '兵种不存在' });
+    }
+
+    return res.json({
+      success: true,
+      unitType: serializeArmyUnitType(updated)
+    });
+  } catch (error) {
+    console.error('更新兵种失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.delete('/army/unit-types/:unitTypeId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const unitTypeId = typeof req.params?.unitTypeId === 'string' ? req.params.unitTypeId.trim() : '';
+    if (!unitTypeId) {
+      return res.status(400).json({ error: '无效的兵种ID' });
+    }
+
+    const total = await ArmyUnitType.countDocuments();
+    if (total <= 1) {
+      return res.status(400).json({ error: '至少需要保留一个兵种' });
+    }
+
+    const deleted = await ArmyUnitType.findOneAndDelete({ unitTypeId });
+    if (!deleted) {
+      return res.status(404).json({ error: '兵种不存在' });
+    }
+
+    return res.json({
+      success: true,
+      message: '兵种已删除'
+    });
+  } catch (error) {
+    console.error('删除兵种失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
   }
 });
 

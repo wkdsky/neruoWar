@@ -110,6 +110,32 @@ const RecentVisitedDomainSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const ArmyRosterEntrySchema = new mongoose.Schema({
+  unitTypeId: {
+    type: String,
+    required: true
+  },
+  count: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  level: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+  nextUnitTypeId: {
+    type: String,
+    default: null
+  },
+  upgradeCostKP: {
+    type: Number,
+    default: null,
+    min: 0
+  }
+}, { _id: false });
+
 const userSchema = new mongoose.Schema({
   username: {
     type: String,
@@ -241,6 +267,10 @@ const userSchema = new mongoose.Schema({
   },
   recentVisitedDomains: {
     type: [RecentVisitedDomainSchema],
+    default: []
+  },
+  armyRoster: {
+    type: [ArmyRosterEntrySchema],
     default: []
   }
 }, {

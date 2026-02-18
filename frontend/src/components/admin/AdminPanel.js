@@ -16,6 +16,24 @@ const ASSOC_RELATION_TYPES = {
     INSERT: 'insert'
 };
 
+const UNIT_TYPE_ID_PATTERN = /^[a-zA-Z0-9_-]{2,64}$/;
+
+const createEmptyUnitTypeForm = () => ({
+    unitTypeId: '',
+    name: '',
+    roleTag: '近战',
+    speed: '1',
+    hp: '120',
+    atk: '20',
+    def: '10',
+    range: '1',
+    costKP: '10',
+    level: '1',
+    nextUnitTypeId: '',
+    upgradeCostKP: '',
+    sortOrder: '0'
+});
+
 const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [adminTab, setAdminTab] = useState(initialTab);
     
@@ -32,6 +50,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [travelUnitInput, setTravelUnitInput] = useState('60');
     const [distributionAnnouncementLeadHours, setDistributionAnnouncementLeadHours] = useState(24);
     const [distributionLeadInput, setDistributionLeadInput] = useState('24');
+    const [armyUnitTypes, setArmyUnitTypes] = useState([]);
+    const [isCreatingUnitType, setIsCreatingUnitType] = useState(false);
+    const [editingUnitTypeId, setEditingUnitTypeId] = useState('');
+    const [unitTypeForm, setUnitTypeForm] = useState(createEmptyUnitTypeForm);
+    const [unitTypeActionId, setUnitTypeActionId] = useState('');
 
     // Node Management State
     const [allNodes, setAllNodes] = useState([]);
@@ -148,6 +171,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         fetchAllUsers();
         fetchAllNodes();
         fetchAdminSettings();
+        fetchArmyUnitTypes();
     }, []);
 
     // --- User Management Functions ---
@@ -295,6 +319,175 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         } catch (error) {
             console.error('保存系统设置失败:', error);
             alert('保存失败');
+        }
+    };
+
+    const fetchArmyUnitTypes = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch('http://localhost:5000/api/admin/army/unit-types', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            setArmyUnitTypes(Array.isArray(data.unitTypes) ? data.unitTypes : []);
+        } catch (error) {
+            console.error('获取兵种列表失败:', error);
+        }
+    };
+
+    const resetUnitTypeEditor = () => {
+        setIsCreatingUnitType(false);
+        setEditingUnitTypeId('');
+        setUnitTypeForm(createEmptyUnitTypeForm());
+    };
+
+    const startCreateUnitType = () => {
+        setIsCreatingUnitType(true);
+        setEditingUnitTypeId('');
+        setUnitTypeForm(createEmptyUnitTypeForm());
+    };
+
+    const startEditUnitType = (unitType) => {
+        setIsCreatingUnitType(false);
+        setEditingUnitTypeId(unitType.unitTypeId);
+        setUnitTypeForm({
+            unitTypeId: unitType.unitTypeId || '',
+            name: unitType.name || '',
+            roleTag: unitType.roleTag || '近战',
+            speed: String(unitType.speed ?? 1),
+            hp: String(unitType.hp ?? 120),
+            atk: String(unitType.atk ?? 20),
+            def: String(unitType.def ?? 10),
+            range: String(unitType.range ?? 1),
+            costKP: String(unitType.costKP ?? 10),
+            level: String(unitType.level ?? 1),
+            nextUnitTypeId: unitType.nextUnitTypeId || '',
+            upgradeCostKP: unitType.upgradeCostKP === null || unitType.upgradeCostKP === undefined
+                ? ''
+                : String(unitType.upgradeCostKP),
+            sortOrder: String(unitType.sortOrder ?? 0)
+        });
+    };
+
+    const buildUnitTypePayload = (form, includeUnitTypeId) => {
+        const payload = {
+            name: form.name.trim(),
+            roleTag: form.roleTag,
+            speed: Number(form.speed),
+            hp: Number(form.hp),
+            atk: Number(form.atk),
+            def: Number(form.def),
+            range: Number(form.range),
+            costKP: Number(form.costKP),
+            level: Number(form.level),
+            nextUnitTypeId: form.nextUnitTypeId.trim() || null,
+            upgradeCostKP: form.upgradeCostKP.trim() === '' ? null : Number(form.upgradeCostKP),
+            sortOrder: Number(form.sortOrder)
+        };
+
+        if (includeUnitTypeId) {
+            payload.unitTypeId = form.unitTypeId.trim();
+        }
+        return payload;
+    };
+
+    const validateUnitTypeForm = (form, includeUnitTypeId) => {
+        if (includeUnitTypeId && !UNIT_TYPE_ID_PATTERN.test(form.unitTypeId.trim())) {
+            return '兵种ID格式不正确（2-64位字母/数字/下划线/中划线）';
+        }
+        if (!form.name.trim()) {
+            return '兵种名称不能为空';
+        }
+        if (!['近战', '远程'].includes(form.roleTag)) {
+            return 'roleTag 仅支持近战或远程';
+        }
+
+        const numericRules = [
+            ['speed', 0, false],
+            ['hp', 1, true],
+            ['atk', 0, true],
+            ['def', 0, true],
+            ['range', 1, true],
+            ['costKP', 1, true],
+            ['level', 1, true]
+        ];
+        for (const [key, min, integer] of numericRules) {
+            const value = Number(form[key]);
+            if (!Number.isFinite(value)) return `${key} 必须为数字`;
+            if (integer && !Number.isInteger(value)) return `${key} 必须为整数`;
+            if (value < min) return `${key} 不能小于 ${min}`;
+        }
+        return '';
+    };
+
+    const saveUnitType = async () => {
+        const token = localStorage.getItem('token');
+        const isCreate = isCreatingUnitType;
+        const validationError = validateUnitTypeForm(unitTypeForm, isCreate);
+        if (validationError) {
+            alert(validationError);
+            return;
+        }
+
+        const payload = buildUnitTypePayload(unitTypeForm, isCreate);
+        const actionId = isCreate ? '__create__' : editingUnitTypeId;
+        setUnitTypeActionId(actionId);
+
+        try {
+            const response = await fetch(
+                isCreate
+                    ? 'http://localhost:5000/api/admin/army/unit-types'
+                    : `http://localhost:5000/api/admin/army/unit-types/${editingUnitTypeId}`,
+                {
+                    method: isCreate ? 'POST' : 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`
+                    },
+                    body: JSON.stringify(payload)
+                }
+            );
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || '保存失败');
+                return;
+            }
+            alert(isCreate ? '兵种创建成功' : '兵种更新成功');
+            resetUnitTypeEditor();
+            fetchArmyUnitTypes();
+        } catch (error) {
+            console.error('保存兵种失败:', error);
+            alert('保存失败');
+        } finally {
+            setUnitTypeActionId('');
+        }
+    };
+
+    const deleteUnitType = async (unitType) => {
+        if (!window.confirm(`确定删除兵种「${unitType.name}」吗？`)) return;
+        const token = localStorage.getItem('token');
+        setUnitTypeActionId(unitType.unitTypeId);
+        try {
+            const response = await fetch(`http://localhost:5000/api/admin/army/unit-types/${unitType.unitTypeId}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || '删除失败');
+                return;
+            }
+            alert('兵种已删除');
+            if (editingUnitTypeId === unitType.unitTypeId) {
+                resetUnitTypeEditor();
+            }
+            fetchArmyUnitTypes();
+        } catch (error) {
+            console.error('删除兵种失败:', error);
+            alert('删除失败');
+        } finally {
+            setUnitTypeActionId('');
         }
     };
 
@@ -1430,6 +1623,16 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                     <Settings className="icon-small" />
                     系统设置
                 </button>
+                <button
+                    onClick={() => {
+                        setAdminTab('unitTypes');
+                        fetchArmyUnitTypes();
+                    }}
+                    className={`admin-tab ${adminTab === 'unitTypes' ? 'active' : ''}`}
+                >
+                    <Shield className="icon-small" />
+                    兵种管理
+                </button>
             </div>
 
             {/* 用户管理选项卡 */}
@@ -1612,6 +1815,230 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                             <button onClick={saveAdminSettings} className="btn btn-primary">保存设置</button>
                             <button onClick={fetchAdminSettings} className="btn btn-secondary">重新读取</button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {adminTab === 'unitTypes' && (
+                <div className="users-table-container">
+                    <div className="table-info">
+                        <p>兵种数量: <strong>{armyUnitTypes.length}</strong></p>
+                        <button
+                            onClick={fetchArmyUnitTypes}
+                            className="btn btn-primary"
+                            style={{ marginLeft: '1rem' }}
+                        >
+                            刷新数据
+                        </button>
+                        <button
+                            onClick={startCreateUnitType}
+                            className="btn btn-secondary"
+                            style={{ marginLeft: '0.5rem' }}
+                        >
+                            <Plus className="icon-small" />
+                            新增兵种
+                        </button>
+                    </div>
+
+                    {(isCreatingUnitType || editingUnitTypeId) && (
+                        <div className="unit-type-editor-card">
+                            <h3>{isCreatingUnitType ? '新增兵种' : `编辑兵种：${unitTypeForm.name || editingUnitTypeId}`}</h3>
+                            <div className="unit-type-form-grid">
+                                <label>
+                                    兵种ID
+                                    <input
+                                        type="text"
+                                        value={unitTypeForm.unitTypeId}
+                                        disabled={!isCreatingUnitType}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, unitTypeId: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    名称
+                                    <input
+                                        type="text"
+                                        value={unitTypeForm.name}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, name: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    角色
+                                    <select
+                                        value={unitTypeForm.roleTag}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, roleTag: e.target.value }))}
+                                        className="edit-input"
+                                    >
+                                        <option value="近战">近战</option>
+                                        <option value="远程">远程</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    速度
+                                    <input
+                                        type="number"
+                                        step="0.1"
+                                        min="0"
+                                        value={unitTypeForm.speed}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, speed: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    生命
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={unitTypeForm.hp}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, hp: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    攻击
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        value={unitTypeForm.atk}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, atk: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    防御
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        value={unitTypeForm.def}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, def: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    射程
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={unitTypeForm.range}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, range: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    单价（知识点）
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={unitTypeForm.costKP}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, costKP: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    等级
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={unitTypeForm.level}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, level: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    进阶指向ID
+                                    <input
+                                        type="text"
+                                        value={unitTypeForm.nextUnitTypeId}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, nextUnitTypeId: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    进阶成本（知识点）
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        value={unitTypeForm.upgradeCostKP}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, upgradeCostKP: e.target.value }))}
+                                        className="edit-input"
+                                        placeholder="留空表示未配置"
+                                    />
+                                </label>
+                                <label>
+                                    排序
+                                    <input
+                                        type="number"
+                                        value={unitTypeForm.sortOrder}
+                                        onChange={(e) => setUnitTypeForm((prev) => ({ ...prev, sortOrder: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                            </div>
+                            <div className="unit-type-form-actions">
+                                <button onClick={saveUnitType} className="btn btn-primary" disabled={Boolean(unitTypeActionId)}>
+                                    {unitTypeActionId ? '提交中...' : '保存'}
+                                </button>
+                                <button onClick={resetUnitTypeEditor} className="btn btn-secondary" disabled={Boolean(unitTypeActionId)}>
+                                    取消
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="table-responsive">
+                        <table className="users-table">
+                            <thead>
+                                <tr>
+                                    <th>兵种ID</th>
+                                    <th>名称</th>
+                                    <th>定位</th>
+                                    <th>速度</th>
+                                    <th>生命</th>
+                                    <th>攻击</th>
+                                    <th>防御</th>
+                                    <th>射程</th>
+                                    <th>单价</th>
+                                    <th>排序</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {armyUnitTypes.map((unitType) => {
+                                    const rowBusy = unitTypeActionId === unitType.unitTypeId || unitTypeActionId === '__create__';
+                                    return (
+                                        <tr key={unitType.unitTypeId}>
+                                            <td className="id-cell">{unitType.unitTypeId}</td>
+                                            <td className="username-cell">{unitType.name}</td>
+                                            <td>{unitType.roleTag}</td>
+                                            <td>{unitType.speed}</td>
+                                            <td>{unitType.hp}</td>
+                                            <td>{unitType.atk}</td>
+                                            <td>{unitType.def}</td>
+                                            <td>{unitType.range}</td>
+                                            <td>{unitType.costKP}</td>
+                                            <td>{unitType.sortOrder}</td>
+                                            <td className="action-cell">
+                                                <button
+                                                    onClick={() => startEditUnitType(unitType)}
+                                                    className="btn-action btn-edit"
+                                                    disabled={rowBusy}
+                                                >
+                                                    编辑
+                                                </button>
+                                                <button
+                                                    onClick={() => deleteUnitType(unitType)}
+                                                    className="btn-action btn-delete"
+                                                    disabled={rowBusy}
+                                                >
+                                                    删除
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             )}

@@ -109,6 +109,13 @@ body {
     align-items: center;
 }
 
+.user-identity-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: 0.5rem;
+}
+
 /* 用户头像容器 */
 .user-avatar-container {
     display: flex;
@@ -119,7 +126,6 @@ body {
     border-radius: 25px;
     cursor: pointer;
     transition: all 0.3s ease;
-    margin-right: 0.5rem;
 }
 
 .user-avatar-container:hover {

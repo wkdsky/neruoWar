@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Home, Shield, Bell, Layers, Star, MapPin, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Home, Shield, Bell, Layers, Star, MapPin, ChevronLeft, ChevronRight, Users } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
 import Login from './components/auth/Login';
 import AdminPanel from './components/admin/AdminPanel';
 import AlliancePanel from './components/game/AlliancePanel';
 import ProfilePanel from './components/game/ProfilePanel';
+import ArmyPanel from './components/game/ArmyPanel';
 import NodeDetail from './components/game/NodeDetail';
 import HomeView from './components/game/Home';
 import KnowledgeDomainScene from './components/game/KnowledgeDomainScene';
@@ -1371,6 +1372,11 @@ const App = () => {
         return;
       }
 
+      if (targetView === 'army' && !isAdmin) {
+        setView(targetView);
+        return;
+      }
+
       if (targetView === 'admin' && isAdmin) {
         setView('admin');
         return;
@@ -1414,13 +1420,18 @@ const App = () => {
   useEffect(() => {
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
 
-    const isKnownView = ['home', 'nodeDetail', 'alliance', 'admin', 'profile'].includes(view);
+    const isKnownView = ['home', 'nodeDetail', 'alliance', 'admin', 'profile', 'army'].includes(view);
     if (!isKnownView) {
       setView('home');
       return;
     }
 
     if (view === 'admin' && !isAdmin) {
+      setView('home');
+      return;
+    }
+
+    if (view === 'army' && isAdmin) {
       setView('home');
       return;
     }
@@ -3206,22 +3217,30 @@ const App = () => {
                         </h1>
                         <div className="header-right">
                             <div className="header-buttons">
-                                <div
-                                    className="user-avatar-container"
-                                    onClick={async () => {
-                                        await prepareForPrimaryNavigation();
-                                        setView('profile');
-                                    }}
-                                    title="点击进入个人中心"
-                                >
-                                    <img
-                                        src={avatarMap[userAvatar] || avatarMap['default_male_1']}
-                                        alt="头像"
-                                        className="user-avatar-small"
-                                    />
-                                    <span className="user-name">
-                                        {username} {profession && `【${profession}】`}
-                                    </span>
+                                <div className="user-identity-group">
+                                    <div
+                                        className="user-avatar-container"
+                                        onClick={async () => {
+                                            await prepareForPrimaryNavigation();
+                                            setView('profile');
+                                        }}
+                                        title="点击进入个人中心"
+                                    >
+                                        <img
+                                            src={avatarMap[userAvatar] || avatarMap['default_male_1']}
+                                            alt="头像"
+                                            className="user-avatar-small"
+                                        />
+                                        <span className="user-name">
+                                            {username} {profession && `【${profession}】`}
+                                        </span>
+                                    </div>
+                                    <button
+                                        onClick={handleLogout}
+                                        className="btn btn-logout"
+                                    >
+                                        退出
+                                    </button>
                                 </div>
                                 <div className="notifications-wrapper" ref={notificationsWrapperRef}>
                                     <button
@@ -3273,12 +3292,6 @@ const App = () => {
                                     {renderRelatedDomainsPanel()}
                                 </div>
                                 <button
-                                    onClick={handleLogout}
-                                    className="btn btn-logout"
-                                >
-                                    退出登录
-                                </button>
-                                <button
                                     onClick={async () => {
                                         await navigateToHomeWithDockCollapse();
                                     }}
@@ -3297,6 +3310,18 @@ const App = () => {
                                     <Shield size={18} />
                                     熵盟
                                 </button>
+                                {!isAdmin && (
+                                    <button
+                                        onClick={async () => {
+                                            await prepareForPrimaryNavigation();
+                                            setView('army');
+                                        }}
+                                        className="btn btn-secondary"
+                                    >
+                                        <Users size={18} />
+                                        军团编制
+                                    </button>
+                                )}
                                 {isAdmin && (
                                     <button
                                         onClick={() => {
@@ -3417,12 +3442,16 @@ const App = () => {
                         }}
                     />
                 )}
+                {view === "army" && !isAdmin && (
+                    <ArmyPanel />
+                )}
 
                 {view !== "home" &&
                  !(view === "nodeDetail" && currentNodeDetail) &&
                  view !== "alliance" &&
                  !(view === "admin" && isAdmin) &&
-                 view !== "profile" && (
+                 view !== "profile" &&
+                 !(view === "army" && !isAdmin) && (
                     <div className="no-pending-nodes">
                         <p>页面状态异常，已为你回退到首页</p>
                         <button
