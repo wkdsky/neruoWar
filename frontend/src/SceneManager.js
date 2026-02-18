@@ -17,6 +17,7 @@ class SceneManager {
 
     // 回调函数
     this.onNodeClick = null;
+    this.onNodeDoubleClick = null;
     this.onSceneChange = null;
     this.onButtonClick = null; // 按钮点击回调
 
@@ -32,6 +33,12 @@ class SceneManager {
       }
     };
 
+    this.renderer.onDoubleClick = (node) => {
+      if (this.onNodeDoubleClick) {
+        this.onNodeDoubleClick(node);
+      }
+    };
+
     // 绑定按钮点击事件
     this.renderer.onButtonClick = (nodeId, button) => {
       if (this.onButtonClick) {
@@ -44,21 +51,10 @@ class SceneManager {
    * 显示首页场景
    */
   async showHome(rootNodes, featuredNodes, searchResults = []) {
-    console.log('showHome called:', {
-      rootCount: rootNodes?.length,
-      featuredCount: featuredNodes?.length,
-      searchCount: searchResults?.length
-    });
-
     // 清除节点按钮（首页不需要）
     this.renderer.clearNodeButtons();
 
     const newLayout = this.layout.calculateHomeLayout(rootNodes, featuredNodes, searchResults);
-
-    console.log('Home layout:', {
-      nodeCount: newLayout.nodes.length,
-      lineCount: newLayout.lines.length
-    });
 
     if (this.currentScene === null) {
       // 首次加载：直接设置
@@ -82,13 +78,6 @@ class SceneManager {
    * 显示节点详情场景
    */
   async showNodeDetail(centerNode, parentNodes, childNodes, clickedNode = null, buttonContext = {}) {
-    console.log('showNodeDetail called:', {
-      centerNode: centerNode?.name,
-      parentCount: parentNodes?.length,
-      childCount: childNodes?.length,
-      hasClickedNode: !!clickedNode
-    });
-
     this.centerNodeButtonContext = buttonContext || {};
 
     // 清除之前的按钮
@@ -96,15 +85,8 @@ class SceneManager {
 
     const newLayout = this.layout.calculateNodeDetailLayout(centerNode, parentNodes, childNodes);
 
-    console.log('New layout:', {
-      nodeCount: newLayout.nodes.length,
-      lineCount: newLayout.lines.length,
-      nodes: newLayout.nodes.map(n => ({ id: n.id, type: n.type, x: n.x, y: n.y }))
-    });
-
     // 如果当前场景没有节点或者是第一次加载，直接设置布局
     if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
-      console.log('First load, setting layout directly');
       this.setLayout(newLayout);
       this.setupCenterNodeButtons(centerNode, buttonContext);
       this.currentScene = 'nodeDetail';
@@ -116,15 +98,12 @@ class SceneManager {
 
     if (this.currentScene === 'home' && clickedNode) {
       // 从首页点击节点：特殊过渡动画
-      console.log('Transition from home with clicked node');
       await this.clickTransition(clickedNode, newLayout);
     } else if (this.currentScene === 'nodeDetail') {
       // 节点详情之间切换
-      console.log('Transition between node details');
       await this.nodeToNodeTransition(clickedNode, newLayout);
     } else {
       // 其他情况：直接设置布局
-      console.log('Other case, setting layout directly');
       this.setLayout(newLayout);
     }
 
@@ -201,7 +180,6 @@ class SceneManager {
    * 直接设置布局 (无动画)
    */
   setLayout(layout) {
-    console.log('setLayout called with', layout.nodes.length, 'nodes');
     this.renderer.clearNodes();
 
     for (const nodeConfig of layout.nodes) {
@@ -210,9 +188,11 @@ class SceneManager {
 
     this.renderer.setLines(layout.lines);
     this.renderer.render();
-
-    console.log('Layout set, renderer has', this.renderer.nodes.size, 'nodes');
     this.currentLayout = layout;
+  }
+
+  setUserState(locationName, travelStatus) {
+    this.renderer.setUserState({ locationName, travelStatus });
   }
 
   /**

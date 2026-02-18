@@ -731,6 +731,10 @@
     border: 1px solid rgba(148, 163, 184, 0.25);
     border-radius: 8px;
     padding: 0.65rem;
+    text-align: left;
+    width: 100%;
+    color: inherit;
+    appearance: none;
 }
 
 .travel-node-card.next {
@@ -739,6 +743,22 @@
 
 .travel-node-card.reached {
     border-color: rgba(59, 130, 246, 0.4);
+}
+
+.travel-node-card.clickable {
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.travel-node-card.clickable:hover {
+    background: rgba(30, 41, 59, 0.92);
+    border-color: rgba(168, 85, 247, 0.55);
+    transform: translateY(-1px);
+}
+
+.travel-node-card.disabled {
+    cursor: default;
+    opacity: 0.72;
 }
 
 .travel-node-label {

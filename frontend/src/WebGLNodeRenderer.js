@@ -271,7 +271,37 @@ class WebGLNodeRenderer {
     this.hoveredButton = null;
     this.selectedNode = null;
     this.onClick = null;
+    this.onDoubleClick = null;
     this.onButtonClick = null; // 按钮点击回调
+
+    // 相机状态（仅平移 + 缩放，禁用旋转）
+    this.camera = {
+      offsetX: 0,
+      offsetY: 0,
+      zoom: 1
+    };
+
+    // 拖拽平移状态
+    this.dragState = {
+      active: false,
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      startOffsetX: 0,
+      startOffsetY: 0,
+      moved: false,
+      suppressClick: false
+    };
+
+    // 用户位置与移动动画状态
+    this.userState = {
+      locationName: '',
+      travelStatus: null,
+      syncedAt: 0
+    };
+
+    // DOM 标签缓存
+    this.labelElements = new Map();
 
     // 节点操作按钮配置
     this.nodeButtons = new Map(); // nodeId -> [{id, icon, angle, action}]
@@ -380,52 +410,154 @@ class WebGLNodeRenderer {
     this.lineBuffer = gl.createBuffer();
   }
 
+  getCanvasPositionFromEvent(event) {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) * (this.canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (this.canvas.height / rect.height)
+    };
+  }
+
+  worldToScreen(x, y) {
+    return {
+      x: x * this.camera.zoom + this.camera.offsetX,
+      y: y * this.camera.zoom + this.camera.offsetY
+    };
+  }
+
+  screenToWorld(x, y) {
+    return {
+      x: (x - this.camera.offsetX) / this.camera.zoom,
+      y: (y - this.camera.offsetY) / this.camera.zoom
+    };
+  }
+
+  setUserState({ locationName = '', travelStatus = null } = {}) {
+    this.userState = {
+      locationName: locationName || '',
+      travelStatus: travelStatus && typeof travelStatus === 'object' ? { ...travelStatus } : null,
+      syncedAt: performance.now()
+    };
+
+    if (!this.previewMode) {
+      this.render();
+    }
+  }
+
+  setCameraOffset(offsetX, offsetY) {
+    this.camera.offsetX = offsetX;
+    this.camera.offsetY = offsetY;
+    this.render();
+  }
+
+  updateHoverState(x, y) {
+    const prevHoveredButton = this.hoveredButton;
+    this.hoveredButton = this.hitTestButton(x, y);
+    if (this.hoveredButton) {
+      this.hoveredNode = null;
+      this.canvas.style.cursor = 'pointer';
+    } else {
+      this.hoveredNode = this.hitTest(x, y);
+      this.canvas.style.cursor = this.hoveredNode ? 'pointer' : 'default';
+    }
+
+    const buttonHoverChanged = (prevHoveredButton !== this.hoveredButton) ||
+      (prevHoveredButton && this.hoveredButton &&
+        (prevHoveredButton.nodeId !== this.hoveredButton.nodeId ||
+         prevHoveredButton.button.id !== this.hoveredButton.button.id));
+
+    if (buttonHoverChanged && this.nodeButtons.size > 0) {
+      this.render();
+    }
+  }
+
   bindEvents() {
     const canvas = this.canvas;
+    canvas.style.touchAction = 'none';
 
-    canvas.addEventListener('mousemove', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
-
-      const prevHoveredButton = this.hoveredButton;
-
-      // 先检测按钮悬停
-      this.hoveredButton = this.hitTestButton(x, y);
-      if (this.hoveredButton) {
-        this.hoveredNode = null;
-        canvas.style.cursor = 'pointer';
-      } else {
-        this.hoveredNode = this.hitTest(x, y);
-        canvas.style.cursor = this.hoveredNode ? 'pointer' : 'default';
-      }
-
-      // 如果按钮悬浮状态变化，需要重新渲染
-      const buttonHoverChanged = (prevHoveredButton !== this.hoveredButton) ||
-        (prevHoveredButton && this.hoveredButton &&
-          (prevHoveredButton.nodeId !== this.hoveredButton.nodeId ||
-           prevHoveredButton.button.id !== this.hoveredButton.button.id));
-
-      if (buttonHoverChanged && this.nodeButtons.size > 0) {
-        this.render();
-      }
+    canvas.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      const pos = this.getCanvasPositionFromEvent(event);
+      this.dragState.active = true;
+      this.dragState.pointerId = event.pointerId;
+      this.dragState.startX = pos.x;
+      this.dragState.startY = pos.y;
+      this.dragState.startOffsetX = this.camera.offsetX;
+      this.dragState.startOffsetY = this.camera.offsetY;
+      this.dragState.moved = false;
+      canvas.style.cursor = 'grabbing';
+      canvas.setPointerCapture(event.pointerId);
     });
 
-    canvas.addEventListener('click', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    canvas.addEventListener('pointermove', (event) => {
+      const pos = this.getCanvasPositionFromEvent(event);
+      const draggingSamePointer = this.dragState.active && this.dragState.pointerId === event.pointerId;
+
+      if (draggingSamePointer) {
+        const dx = pos.x - this.dragState.startX;
+        const dy = pos.y - this.dragState.startY;
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+          this.dragState.moved = true;
+        }
+        this.camera.offsetX = this.dragState.startOffsetX + dx;
+        this.camera.offsetY = this.dragState.startOffsetY + dy;
+        this.render();
+        return;
+      }
+
+      this.updateHoverState(pos.x, pos.y);
+    });
+
+    canvas.addEventListener('pointerup', (event) => {
+      if (!this.dragState.active || this.dragState.pointerId !== event.pointerId) return;
+
+      canvas.releasePointerCapture(event.pointerId);
+      this.dragState.active = false;
+      this.dragState.pointerId = null;
+      if (this.dragState.moved) {
+        this.dragState.suppressClick = true;
+        setTimeout(() => {
+          this.dragState.suppressClick = false;
+        }, 0);
+      }
+
+      const pos = this.getCanvasPositionFromEvent(event);
+      this.updateHoverState(pos.x, pos.y);
+    });
+
+    canvas.addEventListener('pointercancel', (event) => {
+      if (!this.dragState.active || this.dragState.pointerId !== event.pointerId) return;
+      this.dragState.active = false;
+      this.dragState.pointerId = null;
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+      canvas.style.cursor = 'default';
+    });
+
+    canvas.addEventListener('click', (event) => {
+      if (this.dragState.suppressClick) return;
+      const pos = this.getCanvasPositionFromEvent(event);
 
       // 先检测按钮点击
-      const clickedButton = this.hitTestButton(x, y);
+      const clickedButton = this.hitTestButton(pos.x, pos.y);
       if (clickedButton && this.onButtonClick) {
         this.onButtonClick(clickedButton.nodeId, clickedButton.button);
         return;
       }
 
-      const clickedNode = this.hitTest(x, y);
+      const clickedNode = this.hitTest(pos.x, pos.y);
       if (clickedNode && this.onClick) {
         this.onClick(clickedNode);
+      }
+    });
+
+    canvas.addEventListener('dblclick', (event) => {
+      if (this.dragState.suppressClick) return;
+      const pos = this.getCanvasPositionFromEvent(event);
+      const clickedNode = this.hitTest(pos.x, pos.y);
+      if (clickedNode && this.onDoubleClick) {
+        this.onDoubleClick(clickedNode);
       }
     });
   }
@@ -444,7 +576,7 @@ class WebGLNodeRenderer {
         const dy = y - btnPos.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
-        if (distance <= buttonRadius * node.scale) {
+        if (distance <= buttonRadius * node.scale * this.camera.zoom) {
           return { nodeId, button, node };
         }
       }
@@ -452,7 +584,7 @@ class WebGLNodeRenderer {
     return null;
   }
 
-  getButtonPosition(node, angle) {
+  getButtonWorldPosition(node, angle) {
     // 按钮位置在节点边缘外侧
     const distance = node.radius * node.scale + 25;
     return {
@@ -461,12 +593,19 @@ class WebGLNodeRenderer {
     };
   }
 
+  getButtonPosition(node, angle) {
+    const worldPos = this.getButtonWorldPosition(node, angle);
+    return this.worldToScreen(worldPos.x, worldPos.y);
+  }
+
   hitTest(x, y) {
+    const worldPos = this.screenToWorld(x, y);
+
     for (const [, node] of this.nodes) {
       if (!node.visible) continue;
 
-      const dx = x - node.x;
-      const dy = y - node.y;
+      const dx = worldPos.x - node.x;
+      const dy = worldPos.y - node.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
 
       if (distance <= node.radius * node.scale) {
@@ -491,15 +630,10 @@ class WebGLNodeRenderer {
       visible: config.visible ?? existing?.visible ?? true,
       type: config.type ?? existing?.type ?? 'center',
       label: config.label ?? existing?.label ?? '',
-      subLabel: config.subLabel ?? existing?.subLabel ?? '',
       data: config.data ?? existing?.data ?? null,
       visualStyle: config.visualStyle ?? existing?.visualStyle ?? config.data?.visualStyle ?? existing?.data?.visualStyle ?? null,
       labelColor: config.labelColor ?? existing?.labelColor ?? config.visualStyle?.textColor ?? config.data?.visualStyle?.textColor ?? existing?.labelColor ?? '',
       glowIntensity: config.glowIntensity ?? existing?.glowIntensity ?? 0.5,
-      // 知识点动态增长相关
-      knowledgePointValue: config.data?.knowledgePoint?.value ?? existing?.knowledgePointValue ?? 0,
-      contentScore: config.data?.contentScore ?? existing?.contentScore ?? 1,
-      lastUpdateTime: existing?.lastUpdateTime ?? Date.now(),
       isAnimating: existing?.isAnimating ?? false, // 保持原有的动画状态
       // 目标值 (用于动画)
       targetX: config.x ?? existing?.x ?? 0,
@@ -623,7 +757,7 @@ class WebGLNodeRenderer {
     if (!node) return Promise.resolve();
 
     // 先同步非数值动画字段，避免样式和文案在动画后才生效
-    const staticKeys = ['type', 'label', 'subLabel', 'data', 'visualStyle', 'labelColor', 'visible'];
+    const staticKeys = ['type', 'label', 'data', 'visualStyle', 'labelColor', 'visible'];
     staticKeys.forEach((key) => {
       if (target[key] !== undefined) {
         node[key] = target[key];
@@ -746,8 +880,6 @@ class WebGLNodeRenderer {
     const gl = this.gl;
     const canvas = this.canvas;
 
-    console.log('render() called, canvas size:', canvas.width, 'x', canvas.height, ', nodes:', this.nodes.size);
-
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0.07, 0.09, 0.15, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -761,8 +893,7 @@ class WebGLNodeRenderer {
     // 渲染节点操作按钮
     this.renderNodeButtons();
 
-    // 更新并渲染文字标签
-    this.updateKnowledgePoints();
+    // 渲染标签与2D overlay
     this.renderLabels();
 
     // 启动持续渲染循环（如果还没有在运行）
@@ -775,6 +906,10 @@ class WebGLNodeRenderer {
   // 持续渲染循环
   startRenderLoop() {
     if (!this.renderingLoop) return;
+    if (this.previewMode) {
+      this.renderingLoop = false;
+      return;
+    }
 
     // 如果没有节点或者在动画中，停止循环
     if (this.nodes.size === 0 || this.animating) {
@@ -782,34 +917,11 @@ class WebGLNodeRenderer {
       return;
     }
 
-    // 更新知识点
-    this.updateKnowledgePoints();
-
-    // 只重新渲染文字（性能优化）
-    this.renderLabels();
+    // 每帧刷新overlay动画（按钮图标、用户标记、移动亮点）
+    this.renderOverlayCanvas();
 
     // 继续下一帧
     this.renderLoopId = requestAnimationFrame(() => this.startRenderLoop());
-  }
-
-  // 更新知识点值
-  updateKnowledgePoints() {
-    const now = Date.now();
-
-    for (const [, node] of this.nodes) {
-      // 只更新不在动画中的节点
-      if (node.isAnimating || !node.visible) continue;
-
-      const deltaTime = (now - node.lastUpdateTime) / 1000; // 转换为秒
-      node.lastUpdateTime = now;
-
-      // 根据contentScore增长知识点
-      // contentScore范围通常是0-10，我们让每个contentScore点相当于每秒增长0.1知识点
-      // 这样contentScore为5时，每秒增长0.5，每分钟增长30知识点
-      const growthRate = (node.contentScore || 1) * 0.1;
-      const increment = growthRate * deltaTime;
-      node.knowledgePointValue += increment;
-    }
   }
 
   renderLines() {
@@ -825,10 +937,12 @@ class WebGLNodeRenderer {
       const toNode = this.nodes.get(line.to);
 
       if (!fromNode || !toNode || !fromNode.visible || !toNode.visible) continue;
+      const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
+      const toPos = this.worldToScreen(toNode.x, toNode.y);
 
       const vertices = new Float32Array([
-        fromNode.x, fromNode.y,
-        toNode.x, toNode.y
+        fromPos.x, fromPos.y,
+        toPos.x, toPos.y
       ]);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
@@ -869,8 +983,9 @@ class WebGLNodeRenderer {
     for (const node of sortedNodes) {
       const style = this.resolveNodeRenderStyle(node);
 
-      const size = node.radius * 2;
-      gl.uniform2f(this.nodeLocations.translation, node.x, node.y);
+      const size = node.radius * 2 * this.camera.zoom;
+      const nodePos = this.worldToScreen(node.x, node.y);
+      gl.uniform2f(this.nodeLocations.translation, nodePos.x, nodePos.y);
       gl.uniform2f(this.nodeLocations.scale, size * node.scale, size * node.scale);
       gl.uniform1f(this.nodeLocations.rotation, node.rotation);
       gl.uniform4fv(this.nodeLocations.color, style.base);
@@ -925,7 +1040,7 @@ class WebGLNodeRenderer {
           : [baseColor[0] * 1.2, baseColor[1] * 1.2, baseColor[2] * 1.2, 0.8];
 
         gl.uniform2f(this.nodeLocations.translation, btnPos.x, btnPos.y);
-        gl.uniform2f(this.nodeLocations.scale, btnSize, btnSize);
+        gl.uniform2f(this.nodeLocations.scale, btnSize * this.camera.zoom, btnSize * this.camera.zoom);
         gl.uniform1f(this.nodeLocations.rotation, 0);
         gl.uniform4fv(this.nodeLocations.color, baseColor);
         gl.uniform4fv(this.nodeLocations.secondaryColor, [
@@ -952,38 +1067,93 @@ class WebGLNodeRenderer {
     }
   }
 
-  renderLabels() {
-    // 获取或创建叠加的2D canvas
-    let labelCanvas = this.labelCanvas;
-    if (!labelCanvas) {
-      labelCanvas = document.createElement('canvas');
-      labelCanvas.style.position = 'absolute';
-      labelCanvas.style.top = '0';
-      labelCanvas.style.left = '0';
-      labelCanvas.style.pointerEvents = 'none';
-      labelCanvas.style.zIndex = '1';
+  ensureOverlayCanvas() {
+    let overlayCanvas = this.overlayCanvas;
+    if (!overlayCanvas) {
+      overlayCanvas = document.createElement('canvas');
+      overlayCanvas.style.position = 'absolute';
+      overlayCanvas.style.top = '0';
+      overlayCanvas.style.left = '0';
+      overlayCanvas.style.pointerEvents = 'none';
+      overlayCanvas.style.zIndex = '1';
       if (this.canvas.parentElement) {
-        this.canvas.parentElement.appendChild(labelCanvas);
+        this.canvas.parentElement.appendChild(overlayCanvas);
       }
-      this.labelCanvas = labelCanvas;
+      this.overlayCanvas = overlayCanvas;
     }
 
-    // 同步尺寸
-    labelCanvas.width = this.canvas.width;
-    labelCanvas.height = this.canvas.height;
-    labelCanvas.style.width = this.canvas.offsetWidth + 'px';
-    labelCanvas.style.height = this.canvas.offsetHeight + 'px';
+    overlayCanvas.width = this.canvas.width;
+    overlayCanvas.height = this.canvas.height;
+    overlayCanvas.style.width = `${this.canvas.offsetWidth}px`;
+    overlayCanvas.style.height = `${this.canvas.offsetHeight}px`;
+    return overlayCanvas;
+  }
 
-    const ctx = labelCanvas.getContext('2d');
-    ctx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+  ensureLabelOverlay() {
+    let labelOverlay = this.labelOverlay;
+    if (!labelOverlay) {
+      labelOverlay = document.createElement('div');
+      labelOverlay.className = 'webgl-node-label-layer';
+      if (this.canvas.parentElement) {
+        this.canvas.parentElement.appendChild(labelOverlay);
+      }
+      this.labelOverlay = labelOverlay;
+    }
+    return labelOverlay;
+  }
 
-    for (const [, node] of this.nodes) {
-      if (!node.visible || node.opacity < 0.3 || !node.label) continue;
-      this.renderNodeLabel(ctx, node, false);
+  renderLabels(includePreview = false) {
+    const normalNodes = Array.from(this.nodes.values()).filter((node) => (
+      node.visible && node.opacity > 0.3 && node.label
+    ));
+    const previewNodes = includePreview
+      ? Array.from(this.previewNodes.values()).filter((node) => node.visible && node.label)
+      : [];
+
+    const labelOverlay = this.ensureLabelOverlay();
+    const liveKeys = new Set();
+
+    const syncLabel = (node, isPreview) => {
+      const key = `${isPreview ? 'preview:' : 'node:'}${node.id}`;
+      liveKeys.add(key);
+      let labelEl = this.labelElements.get(key);
+      if (!labelEl) {
+        labelEl = document.createElement('div');
+        labelEl.className = `webgl-node-label${isPreview ? ' is-preview' : ''}`;
+        labelOverlay.appendChild(labelEl);
+        this.labelElements.set(key, labelEl);
+      }
+
+      const nodePos = this.worldToScreen(node.x, node.y);
+      const maxWidth = Math.max(80, node.radius * node.scale * this.camera.zoom * 1.7);
+
+      labelEl.textContent = node.label;
+      labelEl.style.left = `${nodePos.x}px`;
+      labelEl.style.top = `${nodePos.y}px`;
+      labelEl.style.maxWidth = `${maxWidth}px`;
+      labelEl.style.opacity = `${Math.max(0, Math.min(1, node.opacity))}`;
+    };
+
+    normalNodes.forEach((node) => syncLabel(node, false));
+    previewNodes.forEach((node) => syncLabel(node, true));
+
+    for (const [key, labelEl] of this.labelElements) {
+      if (liveKeys.has(key)) continue;
+      labelEl.remove();
+      this.labelElements.delete(key);
     }
 
-    // 渲染按钮图标
+    this.renderOverlayCanvas();
+  }
+
+  renderOverlayCanvas() {
+    const overlayCanvas = this.ensureOverlayCanvas();
+    const ctx = overlayCanvas.getContext('2d');
+    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
     this.renderButtonIcons(ctx);
+    this.renderUserTravelDot(ctx);
+    this.renderUserConeMarker(ctx);
 
     ctx.globalAlpha = 1;
   }
@@ -1040,6 +1210,144 @@ class WebGLNodeRenderer {
     }
   }
 
+  findVisibleNodeByName(nodeName) {
+    if (!nodeName) return null;
+    const target = String(nodeName).trim();
+    if (!target) return null;
+
+    for (const [, node] of this.nodes) {
+      if (!node.visible) continue;
+      const name = node?.data?.name || node.label || '';
+      if (name === target) {
+        return node;
+      }
+    }
+    return null;
+  }
+
+  resolveTravelSegment(nowMs) {
+    const travel = this.userState.travelStatus;
+    if (!travel?.isTraveling) return null;
+
+    const elapsed = Math.max(0, (nowMs - (this.userState.syncedAt || nowMs)) / 1000);
+    const baseProgress = Math.max(0, Math.min(1, Number(travel.progressInCurrentSegment) || 0));
+
+    if (travel.isStopping) {
+      const duration = Math.max(0.001, Number(travel.stopDurationSeconds) || Number(travel.unitDurationSeconds) || 1);
+      const progress = Math.max(0, Math.min(1, baseProgress + elapsed / duration));
+      return {
+        progress,
+        fromName: travel?.lastReachedNode?.nodeName || travel?.stopFromNode?.nodeName || '',
+        toName: travel?.nextNode?.nodeName || travel?.targetNode?.nodeName || ''
+      };
+    }
+
+    const unitDuration = Math.max(0.001, Number(travel.unitDurationSeconds) || 1);
+    const path = Array.isArray(travel.path) ? travel.path : [];
+    if (path.length >= 2) {
+      const totalSegments = path.length - 1;
+      const startSegment = Math.max(0, Number(travel.currentSegmentIndex) || 0);
+      const globalProgress = startSegment + baseProgress + elapsed / unitDuration;
+      const clampedGlobal = Math.max(0, Math.min(totalSegments, globalProgress));
+      const segmentIndex = Math.min(totalSegments - 1, Math.floor(clampedGlobal));
+      const segmentProgress = Math.max(0, Math.min(1, clampedGlobal - segmentIndex));
+
+      return {
+        progress: segmentProgress,
+        fromName: path[segmentIndex]?.nodeName || '',
+        toName: path[segmentIndex + 1]?.nodeName || ''
+      };
+    }
+
+    const fallbackProgress = Math.max(0, Math.min(1, baseProgress + elapsed / unitDuration));
+    return {
+      progress: fallbackProgress,
+      fromName: travel?.lastReachedNode?.nodeName || '',
+      toName: travel?.nextNode?.nodeName || ''
+    };
+  }
+
+  renderUserTravelDot(ctx) {
+    const segment = this.resolveTravelSegment(performance.now());
+    if (!segment) return false;
+
+    const fromNode = this.findVisibleNodeByName(segment.fromName);
+    const toNode = this.findVisibleNodeByName(segment.toName);
+    if (!fromNode || !toNode) return false;
+
+    const px = fromNode.x + (toNode.x - fromNode.x) * segment.progress;
+    const py = fromNode.y + (toNode.y - fromNode.y) * segment.progress;
+
+    const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
+    const toPos = this.worldToScreen(toNode.x, toNode.y);
+    const dotPos = this.worldToScreen(px, py);
+
+    const pulse = 1 + Math.sin(performance.now() * 0.012) * 0.12;
+    const radius = 4.5 * pulse;
+
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(fromPos.x, fromPos.y);
+    ctx.lineTo(toPos.x, toPos.y);
+    ctx.stroke();
+
+    const glow = ctx.createRadialGradient(dotPos.x, dotPos.y, 0, dotPos.x, dotPos.y, radius * 5);
+    glow.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+    glow.addColorStop(0.35, 'rgba(56, 189, 248, 0.9)');
+    glow.addColorStop(1, 'rgba(56, 189, 248, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(dotPos.x, dotPos.y, radius * 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(dotPos.x, dotPos.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return true;
+  }
+
+  renderUserConeMarker(ctx) {
+    if (this.userState?.travelStatus?.isTraveling) return;
+
+    const node = this.findVisibleNodeByName(this.userState.locationName);
+    if (!node) return;
+
+    const nodePos = this.worldToScreen(node.x, node.y);
+    const bob = Math.sin(performance.now() * 0.006) * 3.5;
+    const pulse = 1 + Math.sin(performance.now() * 0.01) * 0.09;
+    const baseY = nodePos.y - node.radius * node.scale * this.camera.zoom - 10 + bob;
+    const coneHeight = 16 * pulse;
+    const coneWidth = 10 * pulse;
+
+    ctx.save();
+    const glow = ctx.createRadialGradient(nodePos.x, baseY, 0, nodePos.x, baseY, 26);
+    glow.addColorStop(0, 'rgba(34, 211, 238, 0.85)');
+    glow.addColorStop(1, 'rgba(34, 211, 238, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(nodePos.x, baseY, 26, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(99, 102, 241, 0.92)';
+    ctx.beginPath();
+    ctx.moveTo(nodePos.x, baseY - coneHeight);
+    ctx.lineTo(nodePos.x - coneWidth, baseY + coneHeight * 0.12);
+    ctx.lineTo(nodePos.x + coneWidth, baseY + coneHeight * 0.12);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(186, 230, 253, 0.95)';
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // 调整大小
   resize(width, height) {
     this.canvas.width = width;
@@ -1069,6 +1377,12 @@ class WebGLNodeRenderer {
     this.previewNodes.clear();
     this.previewLines = [];
     this.previewPulseTime = 0;
+
+    if (this.renderLoopId) {
+      cancelAnimationFrame(this.renderLoopId);
+      this.renderLoopId = null;
+    }
+    this.renderingLoop = false;
 
     // 启动预览渲染循环
     this.startPreviewRenderLoop();
@@ -1119,7 +1433,6 @@ class WebGLNodeRenderer {
       visible: config.visible ?? true,
       type: 'preview',
       label: config.label ?? '新节点',
-      subLabel: config.subLabel ?? '',
       data: config.data ?? null,
       glowIntensity: config.glowIntensity ?? 0.8,
       isPreview: true,           // 标记为预览节点
@@ -1226,7 +1539,7 @@ class WebGLNodeRenderer {
     this.renderPreviewNodes();
 
     // 渲染标签
-    this.renderLabelsWithPreview();
+    this.renderLabels(true);
   }
 
   /**
@@ -1249,10 +1562,12 @@ class WebGLNodeRenderer {
       const isBeingRemoved = this.previewLines.some(
         pl => pl.isRemoved && pl.from === line.from && pl.to === line.to
       );
+      const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
+      const toPos = this.worldToScreen(toNode.x, toNode.y);
 
       const vertices = new Float32Array([
-        fromNode.x, fromNode.y,
-        toNode.x, toNode.y
+        fromPos.x, fromPos.y,
+        toPos.x, toPos.y
       ]);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
@@ -1301,9 +1616,11 @@ class WebGLNodeRenderer {
       if (line.isDashed || line.isNew) {
         this.renderDashedLine(fromNode, toNode, line);
       } else {
+        const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
+        const toPos = this.worldToScreen(toNode.x, toNode.y);
         const vertices = new Float32Array([
-          fromNode.x, fromNode.y,
-          toNode.x, toNode.y
+          fromPos.x, fromPos.y,
+          toPos.x, toPos.y
         ]);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
@@ -1331,8 +1648,10 @@ class WebGLNodeRenderer {
     const gapLength = 8;
     const totalLength = dashLength + gapLength;
 
-    const dx = toNode.x - fromNode.x;
-    const dy = toNode.y - fromNode.y;
+    const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
+    const toPos = this.worldToScreen(toNode.x, toNode.y);
+    const dx = toPos.x - fromPos.x;
+    const dy = toPos.y - fromPos.y;
     const length = Math.sqrt(dx * dx + dy * dy);
     const segments = Math.ceil(length / totalLength);
 
@@ -1354,10 +1673,10 @@ class WebGLNodeRenderer {
 
       if (clampedStart >= clampedEnd || clampedStart >= length) continue;
 
-      const startX = fromNode.x + dirX * clampedStart;
-      const startY = fromNode.y + dirY * clampedStart;
-      const endX = fromNode.x + dirX * clampedEnd;
-      const endY = fromNode.y + dirY * clampedEnd;
+      const startX = fromPos.x + dirX * clampedStart;
+      const startY = fromPos.y + dirY * clampedStart;
+      const endX = fromPos.x + dirX * clampedEnd;
+      const endY = fromPos.y + dirY * clampedEnd;
 
       const vertices = new Float32Array([startX, startY, endX, endY]);
 
@@ -1394,9 +1713,10 @@ class WebGLNodeRenderer {
 
     for (const node of sortedNodes) {
       const style = this.resolveNodeRenderStyle(node);
-      const size = node.radius * 2;
+      const size = node.radius * 2 * this.camera.zoom;
+      const nodePos = this.worldToScreen(node.x, node.y);
 
-      gl.uniform2f(this.nodeLocations.translation, node.x, node.y);
+      gl.uniform2f(this.nodeLocations.translation, nodePos.x, nodePos.y);
       gl.uniform2f(this.nodeLocations.scale, size * node.scale, size * node.scale);
       gl.uniform1f(this.nodeLocations.rotation, node.rotation);
       gl.uniform4fv(this.nodeLocations.color, style.base);
@@ -1437,10 +1757,11 @@ class WebGLNodeRenderer {
       if (!node.visible) continue;
 
       const colors = NodeColors.preview;
-      const size = node.radius * 2;
+      const size = node.radius * 2 * this.camera.zoom;
       const pulseScale = 1 + (node.pulsePhase || 0); // 脉冲缩放
+      const nodePos = this.worldToScreen(node.x, node.y);
 
-      gl.uniform2f(this.nodeLocations.translation, node.x, node.y);
+      gl.uniform2f(this.nodeLocations.translation, nodePos.x, nodePos.y);
       gl.uniform2f(this.nodeLocations.scale, size * node.scale * pulseScale, size * node.scale * pulseScale);
       gl.uniform1f(this.nodeLocations.rotation, node.rotation);
       gl.uniform4fv(this.nodeLocations.color, colors.base);
@@ -1454,90 +1775,6 @@ class WebGLNodeRenderer {
       gl.uniform2f(this.nodeLocations.size, size, size);
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    }
-  }
-
-  /**
-   * 渲染带预览效果的标签
-   */
-  renderLabelsWithPreview() {
-    let labelCanvas = this.labelCanvas;
-    if (!labelCanvas) {
-      labelCanvas = document.createElement('canvas');
-      labelCanvas.style.position = 'absolute';
-      labelCanvas.style.top = '0';
-      labelCanvas.style.left = '0';
-      labelCanvas.style.pointerEvents = 'none';
-      labelCanvas.style.zIndex = '1';
-      if (this.canvas.parentElement) {
-        this.canvas.parentElement.appendChild(labelCanvas);
-      }
-      this.labelCanvas = labelCanvas;
-    }
-
-    labelCanvas.width = this.canvas.width;
-    labelCanvas.height = this.canvas.height;
-    labelCanvas.style.width = this.canvas.offsetWidth + 'px';
-    labelCanvas.style.height = this.canvas.offsetHeight + 'px';
-
-    const ctx = labelCanvas.getContext('2d');
-    ctx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
-
-    // 渲染原有节点标签
-    for (const [, node] of this.nodes) {
-      if (!node.visible || node.opacity < 0.3 || !node.label) continue;
-      this.renderNodeLabel(ctx, node);
-    }
-
-    // 渲染预览节点标签
-    for (const [, node] of this.previewNodes) {
-      if (!node.visible || !node.label) continue;
-      this.renderNodeLabel(ctx, node, true);
-    }
-
-    ctx.globalAlpha = 1;
-  }
-
-  /**
-   * 渲染单个节点的标签
-   */
-  renderNodeLabel(ctx, node, isPreview = false) {
-    const style = this.resolveNodeRenderStyle(node);
-    const labelColor = isPreview ? '#a5d8ff' : (node.labelColor || style.textColor || '#ffffff');
-    const subLabelColor = isPreview ? '#74c0fc' : (style.subTextColor || '#e9d5ff');
-
-    ctx.globalAlpha = node.opacity * (isPreview ? 0.9 : 1);
-    ctx.fillStyle = labelColor;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    const fontSize = Math.max(12, node.radius * node.scale * 0.35);
-    ctx.font = `bold ${fontSize}px sans-serif`;
-
-    let label = node.label;
-    const maxWidth = node.radius * node.scale * 1.8;
-    while (ctx.measureText(label).width > maxWidth && label.length > 3) {
-      label = label.slice(0, -1);
-    }
-    if (label !== node.label) label += '...';
-
-    ctx.fillText(label, node.x, node.y - fontSize * 0.3);
-
-    // 副标签
-    if (node.subLabel || node.knowledgePointValue > 0) {
-      ctx.font = `${fontSize * 0.7}px sans-serif`;
-      ctx.fillStyle = subLabelColor;
-      const subLabel = node.knowledgePointValue > 0
-        ? `${node.knowledgePointValue.toFixed(2)} 知识点`
-        : node.subLabel;
-      ctx.fillText(subLabel, node.x, node.y + fontSize * 0.6);
-    }
-
-    // 预览节点添加"待审核"标识
-    if (isPreview) {
-      ctx.font = `${fontSize * 0.6}px sans-serif`;
-      ctx.fillStyle = '#ffd43b';
-      ctx.fillText('(待审核)', node.x, node.y + fontSize * 1.3);
     }
   }
 
@@ -1556,9 +1793,13 @@ class WebGLNodeRenderer {
       this.previewRenderLoopId = null;
     }
 
-    if (this.labelCanvas) {
-      this.labelCanvas.remove();
+    if (this.overlayCanvas) {
+      this.overlayCanvas.remove();
     }
+    if (this.labelOverlay) {
+      this.labelOverlay.remove();
+    }
+    this.labelElements.clear();
     this.animations = [];
     this.nodes.clear();
     this.nodeButtons.clear();

@@ -339,6 +339,11 @@ const App = () => {
     }, [currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus]);
 
     useEffect(() => {
+        if (!sceneManagerRef.current || !isWebGLReady) return;
+        sceneManagerRef.current.setUserState(userLocation, travelStatus);
+    }, [isWebGLReady, userLocation, travelStatus]);
+
+    useEffect(() => {
         // 只在没有socket时初始化
         if (!socketRef.current) {
             initializeSocket();
@@ -1218,10 +1223,6 @@ const App = () => {
 
     const startResult = await startTravelToNode(targetNode._id);
     if (startResult === 'started') {
-      if (promptMode !== 'distribution') {
-        setView('home');
-        setNavigationPath([{ type: 'home', label: '首页' }]);
-      }
       return true;
     }
     return startResult === 'queued';
@@ -1594,7 +1595,6 @@ const App = () => {
     
         // 【关键修改】添加知识点更新监听器
         newSocket.on('knowledgePointUpdated', (updatedNodes) => {
-            console.log('收到知识点更新:', updatedNodes);
             setNodes(prevNodes => {
                 const updatedNodeMap = new Map();
                 updatedNodes.forEach(node => updatedNodeMap.set(node._id, node));
@@ -1998,12 +1998,31 @@ const App = () => {
             await markNotificationRead(notification._id);
         }
 
-        const targetNodeId = normalizeObjectId(notification.nodeId);
+        let targetNodeId = normalizeObjectId(notification.nodeId);
+        if (!targetNodeId && typeof notification.nodeName === 'string' && notification.nodeName.trim()) {
+            try {
+                const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(notification.nodeName.trim())}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const exactMatch = Array.isArray(data?.results)
+                        ? data.results.find((node) => node?.name === notification.nodeName.trim())
+                        : null;
+                    targetNodeId = normalizeObjectId(exactMatch?._id);
+                }
+            } catch (error) {
+                targetNodeId = '';
+            }
+        }
         if (!targetNodeId) return;
 
         const clickedNode = buildClickedNodeFromScene(targetNodeId);
         await fetchNodeDetail(targetNodeId, clickedNode);
         setShowSearchResults(false);
+    };
+
+    const handleArrivalNotificationClick = async (notification) => {
+        if (!notification) return;
+        await handleDistributionAnnouncementClick(notification);
     };
 
     const handleHomeAnnouncementClick = async (notification) => {
@@ -2207,6 +2226,13 @@ const App = () => {
         const nodeId = normalizeObjectId(node?._id);
         if (!nodeId) return;
         setShowRelatedDomainsPanel(false);
+        const clickedNode = buildClickedNodeFromScene(nodeId);
+        await fetchNodeDetail(nodeId, clickedNode);
+    };
+
+    const handleOpenTravelNode = async (travelNode) => {
+        const nodeId = normalizeObjectId(travelNode?.nodeId);
+        if (!nodeId) return;
         const clickedNode = buildClickedNodeFromScene(nodeId);
         await fetchNodeDetail(nodeId, clickedNode);
     };
@@ -2623,10 +2649,15 @@ const App = () => {
                                     </div>
 
                                     <div className="travel-anim-layout">
-                                        <div className="travel-node-card next">
+                                        <button
+                                            type="button"
+                                            className={`travel-node-card next ${normalizeObjectId(travelStatus?.nextNode?.nodeId) ? 'clickable' : 'disabled'}`}
+                                            onClick={() => handleOpenTravelNode(travelStatus?.nextNode)}
+                                            disabled={!normalizeObjectId(travelStatus?.nextNode?.nodeId)}
+                                        >
                                             <div className="travel-node-label">下一目的地</div>
                                             <div className="travel-node-name">{travelStatus?.nextNode?.nodeName || '-'}</div>
-                                        </div>
+                                        </button>
                                         <div className="travel-track-wrap">
                                             <div className="travel-track">
                                                 <div
@@ -2635,10 +2666,15 @@ const App = () => {
                                                 />
                                             </div>
                                         </div>
-                                        <div className="travel-node-card reached">
+                                        <button
+                                            type="button"
+                                            className={`travel-node-card reached ${normalizeObjectId(travelStatus?.lastReachedNode?.nodeId) ? 'clickable' : 'disabled'}`}
+                                            onClick={() => handleOpenTravelNode(travelStatus?.lastReachedNode)}
+                                            disabled={!normalizeObjectId(travelStatus?.lastReachedNode?.nodeId)}
+                                        >
                                             <div className="travel-node-label">最近到达</div>
                                             <div className="travel-node-name">{travelStatus?.lastReachedNode?.nodeName || '-'}</div>
-                                        </div>
+                                        </button>
                                     </div>
 
                                     <button
@@ -2990,6 +3026,10 @@ const App = () => {
                                     notification.status === 'pending';
                                 const isDistributionAnnouncement =
                                     notification.type === 'domain_distribution_announcement';
+                                const isArrivalNotification =
+                                    notification.type === 'info' &&
+                                    typeof notification.nodeName === 'string' &&
+                                    notification.nodeName.trim() !== '';
                                 const currentActionKey = notificationActionId.split(':')[0];
                                 const isActing = currentActionKey === notification._id;
 
@@ -3003,6 +3043,10 @@ const App = () => {
                                             }
                                             if (isDistributionAnnouncement) {
                                                 handleDistributionAnnouncementClick(notification);
+                                                return;
+                                            }
+                                            if (isArrivalNotification) {
+                                                handleArrivalNotificationClick(notification);
                                                 return;
                                             }
                                             if (!notification.read) {

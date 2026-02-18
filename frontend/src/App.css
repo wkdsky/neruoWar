@@ -1726,6 +1726,35 @@ body {
     cursor: default;
 }
 
+.webgl-node-label-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 2;
+}
+
+.webgl-node-label {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #e2e8f0;
+    font-size: 0.86rem;
+    font-weight: 700;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+    text-shadow: 0 1px 2px rgba(2, 6, 23, 0.9), 0 0 10px rgba(15, 23, 42, 0.7);
+}
+
+.webgl-node-label.is-preview {
+    color: #bae6fd;
+}
+
 /* 悬浮搜索栏 */
 .floating-search-bar {
     position: relative;

@@ -63,7 +63,6 @@ class LayoutManager {
         opacity: 1,
         type: 'root',
         label: node.name,
-        subLabel: `${(node.knowledgePoint?.value || 0).toFixed(2)} 知识点`,
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
@@ -86,7 +85,6 @@ class LayoutManager {
         opacity: 1,
         type: 'featured',
         label: node.name,
-        subLabel: `${(node.knowledgePoint?.value || 0).toFixed(2)} 知识点`,
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
@@ -120,7 +118,6 @@ class LayoutManager {
       opacity: 1,
       type: 'center',
       label: centerNode.name,
-      subLabel: `${(centerNode.knowledgePoint?.value || 0).toFixed(2)} 知识点`,
       visualStyle: centerNode.visualStyle || null,
       labelColor: centerNode.visualStyle?.textColor || '',
       data: centerNode,
@@ -147,7 +144,6 @@ class LayoutManager {
         opacity: 1,
         type: 'parent',
         label: node.name,
-        subLabel: `${(node.knowledgePoint?.value || 0).toFixed(1)} 点`,
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
@@ -182,7 +178,6 @@ class LayoutManager {
         opacity: 1,
         type: 'child',
         label: node.name,
-        subLabel: `${(node.knowledgePoint?.value || 0).toFixed(1)} 点`,
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
@@ -240,8 +235,7 @@ class LayoutManager {
         const currentNode = currentLayout.nodes.find(n => n.id === node.id);
         const styleChanged = JSON.stringify(currentNode.visualStyle || null) !== JSON.stringify(node.visualStyle || null)
           || (currentNode.labelColor || '') !== (node.labelColor || '')
-          || (currentNode.label || '') !== (node.label || '')
-          || (currentNode.subLabel || '') !== (node.subLabel || '');
+          || (currentNode.label || '') !== (node.label || '');
         const moved = currentNode.x !== node.x || currentNode.y !== node.y ||
                      currentNode.scale !== node.scale || currentNode.radius !== node.radius ||
                      styleChanged;
@@ -443,7 +437,6 @@ class LayoutManager {
       scale: 1,
       opacity: 0.75,
       label: newNodeData.name || '新节点',
-      subLabel: '',
       visible: true
     };
 
@@ -514,7 +507,6 @@ class LayoutManager {
       scale: 1,
       opacity: 0.75,
       label: newNodeData.name || '新节点',
-      subLabel: '',
       visible: true
     };
 
