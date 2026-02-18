@@ -1125,12 +1125,18 @@ class WebGLNodeRenderer {
       }
 
       const nodePos = this.worldToScreen(node.x, node.y);
-      const maxWidth = Math.max(80, node.radius * node.scale * this.camera.zoom * 1.7);
+      const screenRadius = Math.max(10, node.radius * node.scale * this.camera.zoom);
+      const baseFontSize = Math.max(10, Math.min(30, screenRadius * 0.42));
+      const labelLength = Math.max(1, String(node.label || '').trim().length);
+      const fitByLength = (screenRadius * 1.7) / (labelLength * 0.56);
+      const fontSize = Math.max(8, Math.min(baseFontSize, fitByLength));
 
       labelEl.textContent = node.label;
       labelEl.style.left = `${nodePos.x}px`;
       labelEl.style.top = `${nodePos.y}px`;
-      labelEl.style.maxWidth = `${maxWidth}px`;
+      labelEl.style.fontSize = `${fontSize}px`;
+      labelEl.style.lineHeight = `${Math.max(1, fontSize * 1.08)}px`;
+      labelEl.style.maxWidth = 'none';
       labelEl.style.opacity = `${Math.max(0, Math.min(1, node.opacity))}`;
     };
 

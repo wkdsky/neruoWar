@@ -58,6 +58,18 @@ const toPlainObject = (value) => (
     : value
 );
 
+const isPopulatedAllianceDoc = (value) => {
+  if (!value || typeof value !== 'object') return false;
+  // 仅有ObjectId时不算已填充文档
+  if (value._bsontype === 'ObjectId') return false;
+  return (
+    typeof value.name === 'string' ||
+    typeof value.flag === 'string' ||
+    Array.isArray(value.visualStyles) ||
+    value.activeVisualStyleId !== undefined
+  );
+};
+
 const normalizeVisualStyleForNode = (style = {}, fallbackFlag = '#7c3aed') => ({
   name: typeof style?.name === 'string' ? style.name : '默认风格',
   primaryColor: normalizeHexColor(style?.primaryColor, normalizeHexColor(fallbackFlag, '#7c3aed')),
@@ -111,7 +123,7 @@ const attachVisualStyleToNodeList = async (nodes = []) => {
     );
     if (isValidObjectId(nodeAllianceId)) {
       nodeAllianceIdByKey.set(nodeKey, nodeAllianceId);
-      if (nodeAllianceValue && typeof nodeAllianceValue === 'object') {
+      if (isPopulatedAllianceDoc(nodeAllianceValue)) {
         allianceById.set(nodeAllianceId, toPlainObject(nodeAllianceValue));
       } else {
         unresolvedNodeAllianceIds.add(nodeAllianceId);
@@ -129,7 +141,7 @@ const attachVisualStyleToNodeList = async (nodes = []) => {
 
     if (domainMasterValue && typeof domainMasterValue === 'object') {
       const allianceRef = domainMasterValue.alliance || domainMasterValue.allianceId;
-      if (allianceRef && typeof allianceRef === 'object') {
+      if (isPopulatedAllianceDoc(allianceRef)) {
         allianceByMasterId.set(domainMasterId, toPlainObject(allianceRef));
       }
     }
