@@ -265,6 +265,7 @@ const CITY_BUILDING_MIN_RADIUS = 0.1;
 const CITY_BUILDING_MAX_RADIUS = 0.24;
 const CITY_BUILDING_MIN_DISTANCE = 0.34;
 const CITY_BUILDING_MAX_DISTANCE = 0.86;
+const CITY_GATE_KEYS = ['cheng', 'qi'];
 
 const CityBuildingSchema = new mongoose.Schema({
   buildingId: {
@@ -310,6 +311,30 @@ const CityBuildingSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const CityGateDefenseEntrySchema = new mongoose.Schema({
+  unitTypeId: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  count: {
+    type: Number,
+    default: 0,
+    min: 0
+  }
+}, { _id: false });
+
+const CityGateDefenseSchema = new mongoose.Schema({
+  cheng: {
+    type: [CityGateDefenseEntrySchema],
+    default: []
+  },
+  qi: {
+    type: [CityGateDefenseEntrySchema],
+    default: []
+  }
+}, { _id: false });
+
 const CityDefenseLayoutSchema = new mongoose.Schema({
   buildings: {
     type: [CityBuildingSchema],
@@ -318,6 +343,17 @@ const CityDefenseLayoutSchema = new mongoose.Schema({
   intelBuildingId: {
     type: String,
     default: ''
+  },
+  gateDefense: {
+    type: CityGateDefenseSchema,
+    default: () => ({ cheng: [], qi: [] })
+  },
+  gateDefenseViewAdminIds: {
+    type: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }],
+    default: []
   },
   updatedAt: {
     type: Date,
@@ -343,6 +379,11 @@ const createDefaultCityDefenseLayout = () => {
       upgradeCostKP: null
     }],
     intelBuildingId: coreId,
+    gateDefense: {
+      cheng: [],
+      qi: []
+    },
+    gateDefenseViewAdminIds: [],
     updatedAt: new Date()
   };
 };
@@ -709,6 +750,23 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
     };
   };
 
+  const sanitizeGateDefenseEntries = (entries = []) => {
+    const list = [];
+    const seenUnitTypeIds = new Set();
+    for (const item of (Array.isArray(entries) ? entries : [])) {
+      const unitTypeId = typeof item?.unitTypeId === 'string' ? item.unitTypeId.trim() : '';
+      const count = Math.max(0, Math.floor(parseNumber(item?.count, 0)));
+      if (!unitTypeId || count <= 0) continue;
+      if (seenUnitTypeIds.has(unitTypeId)) continue;
+      seenUnitTypeIds.add(unitTypeId);
+      list.push({
+        unitTypeId,
+        count
+      });
+    }
+    return list;
+  };
+
   const sourceLayout = this.cityDefenseLayout && typeof this.cityDefenseLayout === 'object'
     ? this.cityDefenseLayout
     : {};
@@ -773,9 +831,32 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
     ? sourceIntelBuildingId
     : normalizedBuildings[0].buildingId;
 
+  const sourceGateDefense = sourceLayout.gateDefense && typeof sourceLayout.gateDefense === 'object'
+    ? sourceLayout.gateDefense
+    : {};
+  const gateDefense = CITY_GATE_KEYS.reduce((acc, key) => {
+    acc[key] = sanitizeGateDefenseEntries(sourceGateDefense[key]);
+    return acc;
+  }, { cheng: [], qi: [] });
+  const sourceGateDefenseViewAdminIds = Array.isArray(sourceLayout.gateDefenseViewAdminIds)
+    ? sourceLayout.gateDefenseViewAdminIds
+    : [];
+  const gateDefenseViewAdminIds = [];
+  const gateDefenseViewerSeen = new Set();
+  for (const userId of sourceGateDefenseViewAdminIds) {
+    const userIdStr = getIdString(userId);
+    if (!userIdStr) continue;
+    if (!domainAdminSet.has(userIdStr)) continue;
+    if (gateDefenseViewerSeen.has(userIdStr)) continue;
+    gateDefenseViewerSeen.add(userIdStr);
+    gateDefenseViewAdminIds.push(userId);
+  }
+
   this.cityDefenseLayout = {
     buildings: normalizedBuildings,
     intelBuildingId,
+    gateDefense,
+    gateDefenseViewAdminIds,
     updatedAt: new Date()
   };
 

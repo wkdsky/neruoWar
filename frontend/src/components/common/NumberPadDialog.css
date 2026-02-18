@@ -1,0 +1,102 @@
+.number-pad-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2100;
+    background: rgba(2, 6, 23, 0.62);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.number-pad-dialog {
+    width: min(360px, calc(100vw - 2rem));
+    border-radius: 12px;
+    border: 1px solid rgba(148, 163, 184, 0.55);
+    background: rgba(15, 23, 42, 0.96);
+    box-shadow: 0 24px 48px rgba(2, 6, 23, 0.55);
+    padding: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.number-pad-dialog-header strong {
+    color: #e2e8f0;
+    font-size: 0.95rem;
+}
+
+.number-pad-dialog-desc {
+    color: #cbd5e1;
+    font-size: 0.8rem;
+}
+
+.number-pad-value-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+.number-pad-value-input {
+    flex: 1;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.55);
+    background: rgba(30, 41, 59, 0.88);
+    color: #ffffff;
+    padding: 0.45rem 0.55rem;
+    font-size: 0.92rem;
+    font-weight: 600;
+}
+
+.number-pad-value-input:focus {
+    outline: none;
+    border-color: rgba(56, 189, 248, 0.85);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+.number-pad-value-limit {
+    color: #94a3b8;
+    font-size: 0.74rem;
+    white-space: nowrap;
+}
+
+.number-pad-slider {
+    width: 100%;
+}
+
+.number-pad-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.45rem;
+}
+
+.number-pad-key {
+    border: 1px solid rgba(100, 116, 139, 0.58);
+    border-radius: 9px;
+    background: rgba(30, 41, 59, 0.9);
+    color: #f8fafc;
+    font-size: 0.92rem;
+    font-weight: 700;
+    min-height: 38px;
+    cursor: pointer;
+}
+
+.number-pad-key.utility {
+    color: #bae6fd;
+    border-color: rgba(56, 189, 248, 0.52);
+}
+
+.number-pad-key:hover {
+    background: rgba(51, 65, 85, 0.92);
+}
+
+.number-pad-error {
+    color: #fca5a5;
+    font-size: 0.78rem;
+}
+
+.number-pad-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.45rem;
+}

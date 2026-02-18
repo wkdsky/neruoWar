@@ -40,6 +40,7 @@ const CITY_BUILDING_LIMIT = 3;
 const CITY_BUILDING_DEFAULT_RADIUS = 0.17;
 const CITY_BUILDING_MIN_DISTANCE = 0.34;
 const CITY_BUILDING_MAX_DISTANCE = 0.86;
+const CITY_GATE_KEYS = ['cheng', 'qi'];
 
 const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -62,6 +63,23 @@ const round3 = (value, fallback = 0) => {
   return Number(parsed.toFixed(3));
 };
 
+const normalizeGateDefenseViewerAdminIds = (viewerIds = [], allowedAdminIds = null) => {
+  const out = [];
+  const seen = new Set();
+  const allowedSet = Array.isArray(allowedAdminIds) && allowedAdminIds.length > 0
+    ? new Set(allowedAdminIds.map((id) => getIdString(id)).filter((id) => isValidObjectId(id)))
+    : null;
+  for (const item of (Array.isArray(viewerIds) ? viewerIds : [])) {
+    const userId = getIdString(item);
+    if (!isValidObjectId(userId)) continue;
+    if (allowedSet && !allowedSet.has(userId)) continue;
+    if (seen.has(userId)) continue;
+    seen.add(userId);
+    out.push(userId);
+  }
+  return out;
+};
+
 const createDefaultDefenseLayout = () => ({
   buildings: [{
     buildingId: 'core',
@@ -73,7 +91,12 @@ const createDefaultDefenseLayout = () => ({
     nextUnitTypeId: '',
     upgradeCostKP: null
   }],
-  intelBuildingId: 'core'
+  intelBuildingId: 'core',
+  gateDefense: {
+    cheng: [],
+    qi: []
+  },
+  gateDefenseViewAdminIds: []
 });
 
 const normalizeDefenseLayoutInput = (input = {}) => {
@@ -126,9 +149,33 @@ const normalizeDefenseLayoutInput = (input = {}) => {
     ? sourceIntelBuildingId
     : normalized[0].buildingId;
 
+  const sourceGateDefense = source.gateDefense && typeof source.gateDefense === 'object'
+    ? source.gateDefense
+    : {};
+  const normalizeGateDefenseEntries = (entries = []) => {
+    const out = [];
+    const seen = new Set();
+    for (const entry of (Array.isArray(entries) ? entries : [])) {
+      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+      const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+      if (!unitTypeId || count <= 0) continue;
+      if (seen.has(unitTypeId)) continue;
+      seen.add(unitTypeId);
+      out.push({ unitTypeId, count });
+    }
+    return out;
+  };
+  const gateDefense = CITY_GATE_KEYS.reduce((acc, key) => {
+    acc[key] = normalizeGateDefenseEntries(sourceGateDefense[key]);
+    return acc;
+  }, { cheng: [], qi: [] });
+  const gateDefenseViewAdminIds = normalizeGateDefenseViewerAdminIds(source.gateDefenseViewAdminIds);
+
   return {
     buildings: normalized,
-    intelBuildingId
+    intelBuildingId,
+    gateDefense,
+    gateDefenseViewAdminIds
   };
 };
 
@@ -150,7 +197,18 @@ const serializeDefenseLayout = (layout = {}) => {
       nextUnitTypeId: item.nextUnitTypeId || '',
       upgradeCostKP: Number.isFinite(Number(item.upgradeCostKP)) ? Number(item.upgradeCostKP) : null
     })),
-    intelBuildingId: normalized.intelBuildingId
+    intelBuildingId: normalized.intelBuildingId,
+    gateDefense: CITY_GATE_KEYS.reduce((acc, key) => {
+      const entries = Array.isArray(normalized?.gateDefense?.[key]) ? normalized.gateDefense[key] : [];
+      acc[key] = entries
+        .map((entry) => ({
+          unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
+          count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+        }))
+        .filter((entry) => entry.unitTypeId && entry.count > 0);
+      return acc;
+    }, { cheng: [], qi: [] }),
+    gateDefenseViewAdminIds: normalizeGateDefenseViewerAdminIds(normalized.gateDefenseViewAdminIds)
   };
 };
 
@@ -1977,7 +2035,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '无效的知识域ID' });
     }
 
-    const node = await Node.findById(nodeId).select('name domainMaster domainAdmins');
+    const node = await Node.findById(nodeId).select('name domainMaster domainAdmins cityDefenseLayout');
 
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
@@ -2021,6 +2079,10 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
         };
       })
       .filter(Boolean);
+    const gateDefenseViewerAdminIds = normalizeGateDefenseViewerAdminIds(
+      node?.cityDefenseLayout?.gateDefenseViewAdminIds,
+      domainAdminIds
+    );
 
     let pendingInvites = [];
     if (canEdit) {
@@ -2091,6 +2153,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
           }
         : null,
       domainAdmins: admins,
+      gateDefenseViewerAdminIds,
       pendingInvites
     });
   } catch (error) {
@@ -2330,6 +2393,50 @@ router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (r
   }
 });
 
+// 域主配置可查看承口/启口兵力的域相
+router.put('/:nodeId/domain-admins/gate-defense-viewers', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!isDomainMaster(node, requestUserId)) {
+      return res.status(403).json({ error: '只有域主可以配置承口/启口可查看权限' });
+    }
+
+    const viewerAdminIds = normalizeGateDefenseViewerAdminIds(
+      req.body?.viewerAdminIds,
+      (node.domainAdmins || []).map((id) => getIdString(id))
+    );
+
+    const currentLayout = serializeDefenseLayout(node.cityDefenseLayout || {});
+    node.cityDefenseLayout = {
+      ...currentLayout,
+      gateDefenseViewAdminIds: viewerAdminIds,
+      updatedAt: new Date()
+    };
+    await node.save();
+
+    res.json({
+      success: true,
+      message: '承口/启口可查看权限已保存',
+      gateDefenseViewerAdminIds: viewerAdminIds
+    });
+  } catch (error) {
+    console.error('保存承口/启口可查看权限错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 // 获取知识域城防建筑配置（域主可编辑）
 router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
   try {
@@ -2338,7 +2445,7 @@ router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '无效的知识域ID' });
     }
 
-    const node = await Node.findById(nodeId).select('name status domainMaster cityDefenseLayout');
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout');
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
     }
@@ -2349,19 +2456,28 @@ router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
     }
 
     const canEdit = isDomainMaster(node, requestUserId);
+    const gateDefenseViewerAdminIds = normalizeGateDefenseViewerAdminIds(
+      node?.cityDefenseLayout?.gateDefenseViewAdminIds,
+      (node.domainAdmins || []).map((id) => getIdString(id))
+    );
+    const canViewGateDefense = canEdit || gateDefenseViewerAdminIds.includes(requestUserId);
     const serializedLayout = serializeDefenseLayout(node.cityDefenseLayout || {});
-    const layout = canEdit
-      ? serializedLayout
-      : {
-          ...serializedLayout,
-          intelBuildingId: ''
-        };
+    const layout = {
+      ...serializedLayout,
+      intelBuildingId: canEdit ? serializedLayout.intelBuildingId : '',
+      gateDefense: canViewGateDefense
+        ? serializedLayout.gateDefense
+        : { cheng: [], qi: [] },
+      gateDefenseViewAdminIds: canEdit ? gateDefenseViewerAdminIds : []
+    };
 
     res.json({
       success: true,
       nodeId: getIdString(node._id),
       nodeName: node.name,
       canEdit,
+      canViewGateDefense,
+      gateDefenseViewerAdminIds: canEdit ? gateDefenseViewerAdminIds : [],
       maxBuildings: CITY_BUILDING_LIMIT,
       minBuildings: 1,
       layout
@@ -2380,7 +2496,7 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '无效的知识域ID' });
     }
 
-    const node = await Node.findById(nodeId).select('name status domainMaster cityDefenseLayout');
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout');
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
     }
@@ -2397,8 +2513,50 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
       ? req.body.layout
       : req.body;
     const normalizedLayout = normalizeDefenseLayoutInput(payload || {});
+
+    const requestUser = await User.findById(requestUserId).select('armyRoster');
+    if (!requestUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    const rosterCountMap = new Map(
+      (Array.isArray(requestUser.armyRoster) ? requestUser.armyRoster : [])
+        .map((entry) => ([
+          typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '',
+          Math.max(0, Math.floor(Number(entry?.count) || 0))
+        ]))
+        .filter(([unitTypeId]) => !!unitTypeId)
+    );
+    const deployedCountMap = new Map();
+    CITY_GATE_KEYS.forEach((key) => {
+      const entries = Array.isArray(normalizedLayout?.gateDefense?.[key]) ? normalizedLayout.gateDefense[key] : [];
+      entries.forEach((entry) => {
+        const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+        const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+        if (!unitTypeId || count <= 0) return;
+        deployedCountMap.set(unitTypeId, (deployedCountMap.get(unitTypeId) || 0) + count);
+      });
+    });
+    for (const [unitTypeId, deployedCount] of deployedCountMap.entries()) {
+      const rosterCount = rosterCountMap.get(unitTypeId) || 0;
+      if (deployedCount > rosterCount) {
+        return res.status(400).json({
+          error: `兵力布防超出可用数量：${unitTypeId} 可用 ${rosterCount}，布防 ${deployedCount}`
+        });
+      }
+    }
+
+    const payloadHasViewerIds = Array.isArray(payload?.gateDefenseViewAdminIds);
+    const existingViewerAdminIds = normalizeGateDefenseViewerAdminIds(
+      node?.cityDefenseLayout?.gateDefenseViewAdminIds,
+      (node.domainAdmins || []).map((id) => getIdString(id))
+    );
+    const nextViewerAdminIds = payloadHasViewerIds
+      ? normalizeGateDefenseViewerAdminIds(normalizedLayout.gateDefenseViewAdminIds, (node.domainAdmins || []).map((id) => getIdString(id)))
+      : existingViewerAdminIds;
+
     node.cityDefenseLayout = {
       ...normalizedLayout,
+      gateDefenseViewAdminIds: nextViewerAdminIds,
       updatedAt: new Date()
     };
     await node.save();

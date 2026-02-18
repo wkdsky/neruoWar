@@ -1,6 +1,6 @@
 /**
  * KnowledgeDomainScene - 知识域3D俯视角场景
- * 显示：出口+道路（左侧15%）、圆形地面（中间70%）、入口+道路（右侧15%）
+ * 显示：承口+道路（上方）、圆形地面（中间）、启口+道路（下方）
  */
 
 import React, { useRef, useEffect, useState } from 'react';
@@ -12,6 +12,7 @@ import defaultMale3 from '../../assets/avatars/default_male_3.svg';
 import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
 import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
 import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
+import NumberPadDialog from '../common/NumberPadDialog';
 import './KnowledgeDomainScene.css';
 
 const avatarMap = {
@@ -229,6 +230,15 @@ const CITY_BUILDING_MAX_DISTANCE = 0.86;
 const CITY_CAMERA_DEFAULT_ANGLE_DEG = 45;
 const CITY_CAMERA_BUILD_ANGLE_DEG = 90;
 const CITY_CAMERA_TRANSITION_MS = 460;
+const CITY_GATE_KEYS = ['cheng', 'qi'];
+const CITY_GATE_LABELS = {
+  cheng: '承口',
+  qi: '启口'
+};
+const CITY_GATE_TOOLTIPS = {
+  cheng: '通往上一级知识域',
+  qi: '通往下一级知识域'
+};
 const CITY_BUILDING_CANDIDATE_POSITIONS = [
   { x: -0.46, y: -0.12 },
   { x: 0.46, y: -0.12 },
@@ -240,7 +250,18 @@ const CITY_BUILDING_CANDIDATE_POSITIONS = [
 
 const cloneDefenseLayout = (layout = {}) => ({
   buildings: Array.isArray(layout.buildings) ? layout.buildings.map((item) => ({ ...item })) : [],
-  intelBuildingId: typeof layout.intelBuildingId === 'string' ? layout.intelBuildingId : ''
+  intelBuildingId: typeof layout.intelBuildingId === 'string' ? layout.intelBuildingId : '',
+  gateDefense: CITY_GATE_KEYS.reduce((acc, key) => {
+    const sourceEntries = Array.isArray(layout?.gateDefense?.[key]) ? layout.gateDefense[key] : [];
+    acc[key] = sourceEntries.map((entry) => ({
+      unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
+      count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+    })).filter((entry) => entry.unitTypeId && entry.count > 0);
+    return acc;
+  }, { cheng: [], qi: [] }),
+  gateDefenseViewAdminIds: Array.isArray(layout.gateDefenseViewAdminIds)
+    ? Array.from(new Set(layout.gateDefenseViewAdminIds.filter((id) => typeof id === 'string' && id)))
+    : []
 });
 
 const createDefaultDefenseLayout = () => ({
@@ -254,7 +275,12 @@ const createDefaultDefenseLayout = () => ({
     nextUnitTypeId: '',
     upgradeCostKP: null
   }],
-  intelBuildingId: 'core'
+  intelBuildingId: 'core',
+  gateDefense: {
+    cheng: [],
+    qi: []
+  },
+  gateDefenseViewAdminIds: []
 });
 
 const normalizeDefenseLayoutFromApi = (rawLayout = {}) => {
@@ -291,9 +317,36 @@ const normalizeDefenseLayoutFromApi = (rawLayout = {}) => {
   const intelBuildingId = normalizedBuildings.some((item) => item.buildingId === sourceIntelBuildingId)
     ? sourceIntelBuildingId
     : normalizedBuildings[0].buildingId;
+  const sourceGateDefense = source.gateDefense && typeof source.gateDefense === 'object'
+    ? source.gateDefense
+    : {};
+  const normalizeGateEntries = (entries = []) => {
+    const out = [];
+    const seen = new Set();
+    for (const entry of (Array.isArray(entries) ? entries : [])) {
+      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+      const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+      if (!unitTypeId || count <= 0) continue;
+      if (seen.has(unitTypeId)) continue;
+      seen.add(unitTypeId);
+      out.push({ unitTypeId, count });
+    }
+    return out;
+  };
+  const gateDefense = CITY_GATE_KEYS.reduce((acc, key) => {
+    acc[key] = normalizeGateEntries(sourceGateDefense[key]);
+    return acc;
+  }, { cheng: [], qi: [] });
+  const gateDefenseViewAdminIds = Array.isArray(source.gateDefenseViewAdminIds)
+    ? Array.from(new Set(source.gateDefenseViewAdminIds
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => !!item)))
+    : [];
   return {
     buildings: normalizedBuildings,
-    intelBuildingId
+    intelBuildingId,
+    gateDefense,
+    gateDefenseViewAdminIds
   };
 };
 
@@ -303,6 +356,7 @@ const createDefaultDefenseLayoutState = () => ({
   error: '',
   feedback: '',
   canEdit: false,
+  canViewGateDefense: false,
   maxBuildings: CITY_BUILDING_LIMIT,
   minBuildings: 1,
   buildMode: false,
@@ -383,7 +437,22 @@ const defenseLayoutToPayload = (layout = {}) => ({
     nextUnitTypeId: item.nextUnitTypeId || '',
     upgradeCostKP: Number.isFinite(Number(item.upgradeCostKP)) ? Number(item.upgradeCostKP) : null
   })),
-  intelBuildingId: layout.intelBuildingId || ''
+  intelBuildingId: layout.intelBuildingId || '',
+  gateDefense: CITY_GATE_KEYS.reduce((acc, key) => {
+    const sourceEntries = Array.isArray(layout?.gateDefense?.[key]) ? layout.gateDefense[key] : [];
+    acc[key] = sourceEntries
+      .map((entry) => ({
+        unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '',
+        count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+      }))
+      .filter((entry) => entry.unitTypeId && entry.count > 0);
+    return acc;
+  }, { cheng: [], qi: [] }),
+  gateDefenseViewAdminIds: Array.isArray(layout?.gateDefenseViewAdminIds)
+    ? Array.from(new Set(layout.gateDefenseViewAdminIds
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => !!item)))
+    : []
 });
 
 const getUserId = (user) => {
@@ -408,6 +477,30 @@ const normalizeDomainManagerUser = (user) => {
   };
 };
 
+const getGateDefenseEntries = (layout = {}, gateKey) => {
+  const sourceEntries = Array.isArray(layout?.gateDefense?.[gateKey]) ? layout.gateDefense[gateKey] : [];
+  return sourceEntries
+    .map((entry) => ({
+      unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
+      count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+    }))
+    .filter((entry) => entry.unitTypeId && entry.count > 0);
+};
+
+const getGateDefenseTotal = (layout = {}, gateKey) => (
+  getGateDefenseEntries(layout, gateKey).reduce((sum, entry) => sum + entry.count, 0)
+);
+
+const getDeployedCountByUnitType = (layout = {}) => {
+  const counter = new Map();
+  CITY_GATE_KEYS.forEach((gateKey) => {
+    getGateDefenseEntries(layout, gateKey).forEach((entry) => {
+      counter.set(entry.unitTypeId, (counter.get(entry.unitTypeId) || 0) + entry.count);
+    });
+  });
+  return counter;
+};
+
 // 3D场景渲染器
 class KnowledgeDomainRenderer {
   constructor(canvas) {
@@ -417,6 +510,10 @@ class KnowledgeDomainRenderer {
     this.time = 0;
     this.viewOffset = { x: 0, y: 0 };
     this.cameraAngleDeg = CITY_CAMERA_DEFAULT_ANGLE_DEG;
+    this.gateVisibility = {
+      cheng: true,
+      qi: true
+    };
 
     // 场景参数
     this.groundColor = '#1a1f35';
@@ -460,6 +557,13 @@ class KnowledgeDomainRenderer {
     this.cameraAngleDeg = clampCityCameraAngle(angleDeg);
   }
 
+  setGateVisibility(visibility = {}) {
+    this.gateVisibility = {
+      cheng: visibility?.cheng !== false,
+      qi: visibility?.qi !== false
+    };
+  }
+
   getSceneMetrics() {
     return getCityMetrics(this.canvas.width, this.canvas.height, this.cameraAngleDeg);
   }
@@ -473,8 +577,6 @@ class KnowledgeDomainRenderer {
 
     // 等距投影
     const scale = Math.min(width, height) * 0.4;
-    const angle = Math.PI / 6; // 30度俯视角
-
     const projX = centerX + (x - y * 0.5) * scale;
     const projY = centerY + (x * 0.3 + y * 0.5 - z) * scale;
 
@@ -526,32 +628,49 @@ class KnowledgeDomainRenderer {
     ctx.stroke();
   }
 
-  // 绘制道路
-  drawRoad(side) {
+  // 绘制道路（上下口）
+  drawRoad(gateKey) {
     const ctx = this.ctx;
-    const width = this.canvas.width;
     const metrics = this.getSceneMetrics();
+    const centerX = metrics.centerX + this.viewOffset.x;
     const centerY = metrics.centerY + this.viewOffset.y;
-    const skewOffset = 10 * (1 - metrics.tiltBlend);
+    const isTop = gateKey === 'cheng';
+    const showRoad = isTop ? this.gateVisibility.cheng : this.gateVisibility.qi;
+    if (!showRoad) return;
 
-    const roadWidth = 60;
+    const roadHalfWidth = 34;
+    const flare = 24 * (1 - metrics.tiltBlend);
+    const outerY = isTop
+      ? centerY - metrics.radiusY - 92
+      : centerY + metrics.radiusY + 92;
+    const innerY = isTop
+      ? centerY - metrics.radiusY * 0.44
+      : centerY + metrics.radiusY * 0.44;
 
-    let startX, endX;
-    if (side === 'left') {
-      startX = 0 + this.viewOffset.x;
-      endX = width * 0.15 + 50 + this.viewOffset.x;
-    } else {
-      startX = width * 0.85 - 50 + this.viewOffset.x;
-      endX = width + this.viewOffset.x;
-    }
+    const points = isTop
+      ? [
+          { x: centerX - roadHalfWidth - flare, y: outerY },
+          { x: centerX + roadHalfWidth + flare, y: outerY },
+          { x: centerX + roadHalfWidth, y: innerY },
+          { x: centerX - roadHalfWidth, y: innerY }
+        ]
+      : [
+          { x: centerX - roadHalfWidth, y: innerY },
+          { x: centerX + roadHalfWidth, y: innerY },
+          { x: centerX + roadHalfWidth + flare, y: outerY },
+          { x: centerX - roadHalfWidth - flare, y: outerY }
+        ];
 
-    // 道路主体
+    // 道路主体（梯形）
     ctx.fillStyle = this.roadColor;
     ctx.beginPath();
-    ctx.moveTo(startX, centerY - roadWidth / 2);
-    ctx.lineTo(endX, centerY - roadWidth / 2 + (side === 'left' ? skewOffset : -skewOffset));
-    ctx.lineTo(endX, centerY + roadWidth / 2 + (side === 'left' ? skewOffset : -skewOffset));
-    ctx.lineTo(startX, centerY + roadWidth / 2);
+    points.forEach((point, index) => {
+      if (index === 0) {
+        ctx.moveTo(point.x, point.y);
+      } else {
+        ctx.lineTo(point.x, point.y);
+      }
+    });
     ctx.closePath();
     ctx.fill();
 
@@ -565,54 +684,67 @@ class KnowledgeDomainRenderer {
     ctx.strokeStyle = 'rgba(168, 85, 247, 0.4)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(startX, centerY);
-    ctx.lineTo(endX, centerY + (side === 'left' ? (skewOffset * 0.5) : -(skewOffset * 0.5)));
+    ctx.moveTo(centerX, outerY);
+    ctx.lineTo(centerX, innerY);
     ctx.stroke();
     ctx.setLineDash([]);
   }
 
-  // 绘制门/入口
-  drawGate(side) {
+  // 绘制门/入口（上下口）
+  drawGate(gateKey) {
     const ctx = this.ctx;
-    const width = this.canvas.width;
     const metrics = this.getSceneMetrics();
+    const centerX = metrics.centerX + this.viewOffset.x;
     const centerY = metrics.centerY + this.viewOffset.y;
+    const isTop = gateKey === 'cheng';
+    const isVisible = isTop ? this.gateVisibility.cheng : this.gateVisibility.qi;
+    if (!isVisible) return;
 
-    let x;
-    if (side === 'left') {
-      x = width * 0.08 + this.viewOffset.x;
+    const x = centerX;
+    const y = isTop
+      ? centerY - metrics.radiusY - 92
+      : centerY + metrics.radiusY + 92;
+    const gateWidth = 108;
+    const gateHeight = 22 + ((1 - metrics.tiltBlend) * 18);
+    const gateColor = isTop ? '#38bdf8' : '#34d399';
+
+    // 扇形外发光
+    const fanGradient = ctx.createRadialGradient(x, y, 8, x, y, 150);
+    fanGradient.addColorStop(0, isTop ? 'rgba(56, 189, 248, 0.38)' : 'rgba(52, 211, 153, 0.38)');
+    fanGradient.addColorStop(0.55, isTop ? 'rgba(56, 189, 248, 0.16)' : 'rgba(52, 211, 153, 0.16)');
+    fanGradient.addColorStop(1, 'transparent');
+    ctx.fillStyle = fanGradient;
+    ctx.beginPath();
+    if (isTop) {
+      ctx.moveTo(x, y);
+      ctx.arc(x, y, 140, Math.PI, Math.PI * 2);
     } else {
-      x = width * 0.92 + this.viewOffset.x;
+      ctx.moveTo(x, y);
+      ctx.arc(x, y, 140, 0, Math.PI);
     }
+    ctx.closePath();
+    ctx.fill();
 
-    const gateWidth = 40;
-    const gateHeight = 80 - (metrics.tiltBlend * 58);
-    const archOffset = 10 * (1 - metrics.tiltBlend);
-
-    // 门柱
-    ctx.fillStyle = '#4a5580';
-    ctx.fillRect(x - gateWidth / 2, centerY - gateHeight, 8, gateHeight);
-    ctx.fillRect(x + gateWidth / 2 - 8, centerY - gateHeight, 8, gateHeight);
-
-    // 门拱
-    ctx.strokeStyle = side === 'left' ? '#ef4444' : '#22c55e';
+    // 口位主体弧线
+    ctx.strokeStyle = gateColor;
     ctx.lineWidth = 4;
     ctx.beginPath();
-    ctx.arc(x, centerY - gateHeight + archOffset, gateWidth / 2, Math.PI, 0);
+    if (isTop) {
+      ctx.ellipse(x, y + 8, gateWidth * 0.5, gateHeight, 0, Math.PI, Math.PI * 2);
+    } else {
+      ctx.ellipse(x, y - 8, gateWidth * 0.5, gateHeight, 0, 0, Math.PI);
+    }
     ctx.stroke();
 
-    // 发光效果
-    const glowGradient = ctx.createRadialGradient(x, centerY - gateHeight / 2, 0, x, centerY - gateHeight / 2, 60 - (metrics.tiltBlend * 20));
-    glowGradient.addColorStop(0, side === 'left' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(34, 197, 94, 0.3)');
-    glowGradient.addColorStop(1, 'transparent');
-    ctx.fillStyle = glowGradient;
-    ctx.fillRect(x - 60, centerY - gateHeight - 30, 120, 100 - (metrics.tiltBlend * 28));
+    // 口位底座
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, gateWidth * 0.26, 11, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
 
-    // 标签
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(side === 'left' ? '出口' : '入口', x, centerY + (30 - (metrics.tiltBlend * 10)));
   }
 
   // 绘制粒子
@@ -674,12 +806,12 @@ class KnowledgeDomainRenderer {
     ctx.fillRect(0, 0, width, height);
 
     // 绘制各层
-    this.drawRoad('left');
-    this.drawRoad('right');
+    this.drawRoad('cheng');
+    this.drawRoad('qi');
     this.drawGround();
     this.drawPulseRings();
-    this.drawGate('left');
-    this.drawGate('right');
+    this.drawGate('cheng');
+    this.drawGate('qi');
     this.drawParticles();
 
     // 更新时间
@@ -716,6 +848,7 @@ const KnowledgeDomainScene = ({
   const rendererRef = useRef(null);
   const containerRef = useRef(null);
   const cityDefenseLayerRef = useRef(null);
+  const cityGateLayerRef = useRef(null);
   const [activeTab, setActiveTab] = useState('info');
   const [domainAdminState, setDomainAdminState] = useState({
     loading: false,
@@ -727,6 +860,7 @@ const KnowledgeDomainScene = ({
     resignPending: false,
     domainMaster: null,
     domainAdmins: [],
+    gateDefenseViewerAdminIds: [],
     pendingInvites: []
   });
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -737,6 +871,9 @@ const KnowledgeDomainScene = ({
   const [removingAdminId, setRemovingAdminId] = useState('');
   const [isSubmittingResign, setIsSubmittingResign] = useState(false);
   const [manageFeedback, setManageFeedback] = useState('');
+  const [gateDefenseViewerDraftIds, setGateDefenseViewerDraftIds] = useState([]);
+  const [gateDefenseViewerDirty, setGateDefenseViewerDirty] = useState(false);
+  const [isSavingGateDefenseViewerPerms, setIsSavingGateDefenseViewerPerms] = useState(false);
   const [distributionState, setDistributionState] = useState(createDefaultDistributionState);
   const [distributionUserKeyword, setDistributionUserKeyword] = useState('');
   const [distributionUserResults, setDistributionUserResults] = useState([]);
@@ -751,6 +888,21 @@ const KnowledgeDomainScene = ({
   const [activeManageSidePanel, setActiveManageSidePanel] = useState('');
   const [isDomainInfoDockExpanded, setIsDomainInfoDockExpanded] = useState(false);
   const [defenseLayoutState, setDefenseLayoutState] = useState(createDefaultDefenseLayoutState);
+  const [gateDeployState, setGateDeployState] = useState({
+    loading: false,
+    error: '',
+    unitTypes: [],
+    roster: [],
+    activeGateKey: '',
+    draggingUnitTypeId: ''
+  });
+  const [gateDeployDialogState, setGateDeployDialogState] = useState({
+    open: false,
+    gateKey: '',
+    unitTypeId: '',
+    unitName: '',
+    max: 1
+  });
   const [sceneSize, setSceneSize] = useState({ width: 0, height: 0 });
   const [isScenePanning, setIsScenePanning] = useState(false);
   const [cameraAngleDeg, setCameraAngleDeg] = useState(CITY_CAMERA_DEFAULT_ANGLE_DEG);
@@ -760,6 +912,8 @@ const KnowledgeDomainScene = ({
   const cameraAngleRef = useRef(CITY_CAMERA_DEFAULT_ANGLE_DEG);
   const cameraAngleAnimRef = useRef(null);
   const showManageTab = !!domainAdminState.canView;
+  const hasParentEntrance = Array.isArray(node?.relatedParentDomains) && node.relatedParentDomains.length > 0;
+  const hasChildEntrance = Array.isArray(node?.relatedChildDomains) && node.relatedChildDomains.length > 0;
 
   const parseApiResponse = async (response) => {
     const rawText = await response.text();
@@ -780,6 +934,16 @@ const KnowledgeDomainScene = ({
 
   const toggleManageSidePanel = (section) => {
     setActiveManageSidePanel((prev) => (prev === section ? '' : section));
+  };
+
+  const closeGateDeployDialog = () => {
+    setGateDeployDialogState({
+      open: false,
+      gateKey: '',
+      unitTypeId: '',
+      unitName: '',
+      max: 1
+    });
   };
 
   const applyCameraAngle = (angleDeg, syncState = true) => {
@@ -805,6 +969,9 @@ const KnowledgeDomainScene = ({
     if (cityDefenseLayerRef.current) {
       cityDefenseLayerRef.current.style.transform = `translate(${clamped.x}px, ${clamped.y}px)`;
     }
+    if (cityGateLayerRef.current) {
+      cityGateLayerRef.current.style.transform = `translate(${clamped.x}px, ${clamped.y}px)`;
+    }
   };
 
   const handleScenePointerDown = (event) => {
@@ -816,6 +983,9 @@ const KnowledgeDomainScene = ({
       target?.closest('.domain-right-dock')
       || target?.closest('.exit-domain-btn')
       || target?.closest('.domain-return-top-btn')
+      || target?.closest('.city-gate-trigger')
+      || target?.closest('.gate-deploy-panel')
+      || target?.closest('.number-pad-dialog-overlay')
       || target?.closest('.distribution-rule-modal-overlay')
       || target?.closest('.city-defense-building.editable')
     ) {
@@ -862,6 +1032,7 @@ const KnowledgeDomainScene = ({
         setDefenseLayoutState((prev) => ({
           ...prev,
           loading: false,
+          canViewGateDefense: false,
           error: getApiError(parsed, '获取城防配置失败'),
           feedback: ''
         }));
@@ -876,6 +1047,7 @@ const KnowledgeDomainScene = ({
         error: '',
         feedback: '',
         canEdit: !!data.canEdit,
+        canViewGateDefense: !!data.canViewGateDefense || !!data.canEdit,
         maxBuildings: Number.isFinite(Number(data.maxBuildings)) ? Math.max(1, Number(data.maxBuildings)) : CITY_BUILDING_LIMIT,
         minBuildings: Number.isFinite(Number(data.minBuildings)) ? Math.max(1, Number(data.minBuildings)) : 1,
         buildMode: false,
@@ -886,14 +1058,191 @@ const KnowledgeDomainScene = ({
         draftLayout: cloneDefenseLayout(layout)
       }));
       buildingDragRef.current = null;
+      setGateDeployState((prev) => ({
+        ...prev,
+        activeGateKey: '',
+        draggingUnitTypeId: ''
+      }));
+      closeGateDeployDialog();
     } catch (error) {
       setDefenseLayoutState((prev) => ({
         ...prev,
         loading: false,
+        canViewGateDefense: false,
         error: `获取城防配置失败: ${error.message}`,
         feedback: ''
       }));
     }
+  };
+
+  const fetchGateDeployArmyData = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id) return;
+    setGateDeployState((prev) => ({
+      ...prev,
+      loading: true,
+      error: ''
+    }));
+    try {
+      const [unitTypeResponse, meResponse] = await Promise.all([
+        fetch('http://localhost:5000/api/army/unit-types', {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        fetch('http://localhost:5000/api/army/me', {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      ]);
+      const [unitTypeParsed, meParsed] = await Promise.all([
+        parseApiResponse(unitTypeResponse),
+        parseApiResponse(meResponse)
+      ]);
+      if (!unitTypeResponse.ok || !unitTypeParsed?.data || !meResponse.ok || !meParsed?.data) {
+        setGateDeployState((prev) => ({
+          ...prev,
+          loading: false,
+          error: getApiError(unitTypeParsed, getApiError(meParsed, '加载兵力配置失败'))
+        }));
+        return;
+      }
+      setGateDeployState((prev) => ({
+        ...prev,
+        loading: false,
+        error: '',
+        unitTypes: Array.isArray(unitTypeParsed.data.unitTypes) ? unitTypeParsed.data.unitTypes : [],
+        roster: Array.isArray(meParsed.data.roster) ? meParsed.data.roster : []
+      }));
+    } catch (error) {
+      setGateDeployState((prev) => ({
+        ...prev,
+        loading: false,
+        error: `加载兵力配置失败: ${error.message}`
+      }));
+    }
+  };
+
+  const openGateDeployPanel = (gateKey) => {
+    const canOpen = defenseLayoutState.canEdit || defenseLayoutState.canViewGateDefense;
+    if (!canOpen) return;
+    if (!CITY_GATE_KEYS.includes(gateKey)) return;
+    closeGateDeployDialog();
+    setGateDeployState((prev) => ({
+      ...prev,
+      activeGateKey: gateKey,
+      error: ''
+    }));
+    if ((gateDeployState.unitTypes || []).length === 0 && !gateDeployState.loading) {
+      fetchGateDeployArmyData();
+    }
+  };
+
+  const updateGateDefenseEntries = (gateKey, updater) => {
+    setDefenseLayoutState((prev) => {
+      if (!prev.canEdit || !prev.buildMode) return prev;
+      if (!CITY_GATE_KEYS.includes(gateKey)) return prev;
+      const nextDraft = cloneDefenseLayout(prev.draftLayout);
+      const currentEntries = getGateDefenseEntries(nextDraft, gateKey);
+      const nextEntries = typeof updater === 'function'
+        ? updater(currentEntries)
+        : currentEntries;
+      nextDraft.gateDefense = {
+        ...(nextDraft.gateDefense || { cheng: [], qi: [] }),
+        [gateKey]: Array.isArray(nextEntries) ? nextEntries.filter((entry) => entry.unitTypeId && entry.count > 0) : []
+      };
+      return {
+        ...prev,
+        draftLayout: nextDraft,
+        isDirty: true,
+        error: '',
+        feedback: ''
+      };
+    });
+  };
+
+  const removeGateDefenseUnit = (gateKey, unitTypeId) => {
+    if (!unitTypeId) return;
+    updateGateDefenseEntries(gateKey, (entries) => entries.filter((entry) => entry.unitTypeId !== unitTypeId));
+  };
+
+  const handleGateDeployDrop = (gateKey, unitTypeId) => {
+    if (!defenseLayoutState.canEdit || !defenseLayoutState.buildMode) return;
+    if (!gateKey || !unitTypeId) return;
+
+    const rosterMap = new Map(
+      (Array.isArray(gateDeployState.roster) ? gateDeployState.roster : [])
+        .map((entry) => [
+          typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
+          Math.max(0, Math.floor(Number(entry?.count) || 0))
+        ])
+        .filter(([id]) => !!id)
+    );
+    const rosterCount = rosterMap.get(unitTypeId) || 0;
+    if (rosterCount <= 0) {
+      setGateDeployState((prev) => ({
+        ...prev,
+        error: '该兵种当前可用兵力为 0'
+      }));
+      return;
+    }
+
+    const currentLayout = cloneDefenseLayout(defenseLayoutState.draftLayout);
+    const deployedCounter = getDeployedCountByUnitType(currentLayout);
+    const deployedTotal = deployedCounter.get(unitTypeId) || 0;
+    const available = Math.max(0, rosterCount - deployedTotal);
+    if (available <= 0) {
+      setGateDeployState((prev) => ({
+        ...prev,
+        error: '该兵种已全部用于布防，无法继续派遣'
+      }));
+      return;
+    }
+
+    const unitTypeMap = new Map(
+      (Array.isArray(gateDeployState.unitTypes) ? gateDeployState.unitTypes : [])
+        .map((unitType) => [unitType?.id || unitType?.unitTypeId, unitType])
+        .filter(([id]) => !!id)
+    );
+    const unitName = unitTypeMap.get(unitTypeId)?.name || unitTypeId;
+    setGateDeployState((prev) => ({ ...prev, error: '' }));
+    setGateDeployDialogState({
+      open: true,
+      gateKey,
+      unitTypeId,
+      unitName,
+      max: available
+    });
+  };
+
+  const confirmGateDeployQuantity = (qty) => {
+    const gateKey = gateDeployDialogState.gateKey;
+    const unitTypeId = gateDeployDialogState.unitTypeId;
+    const max = Math.max(1, Math.floor(Number(gateDeployDialogState.max) || 1));
+    const safeQty = Math.max(1, Math.floor(Number(qty) || 1));
+    if (!gateKey || !unitTypeId) {
+      closeGateDeployDialog();
+      return;
+    }
+    if (safeQty > max) {
+      setGateDeployState((prev) => ({
+        ...prev,
+        error: `超出可用兵力，最多可派遣 ${max}`
+      }));
+      closeGateDeployDialog();
+      return;
+    }
+    updateGateDefenseEntries(gateKey, (entries) => {
+      const nextEntries = [...entries];
+      const index = nextEntries.findIndex((entry) => entry.unitTypeId === unitTypeId);
+      if (index >= 0) {
+        nextEntries[index] = {
+          ...nextEntries[index],
+          count: nextEntries[index].count + safeQty
+        };
+      } else {
+        nextEntries.push({ unitTypeId, count: safeQty });
+      }
+      return nextEntries;
+    });
+    closeGateDeployDialog();
   };
 
   const getPointerNormPosition = (clientX, clientY) => {
@@ -940,6 +1289,12 @@ const KnowledgeDomainScene = ({
       };
     });
     buildingDragRef.current = null;
+    setGateDeployState((prev) => ({
+      ...prev,
+      activeGateKey: '',
+      draggingUnitTypeId: ''
+    }));
+    closeGateDeployDialog();
   };
 
   const addDefenseBuilding = () => {
@@ -1101,6 +1456,12 @@ const KnowledgeDomainScene = ({
         draftLayout: cloneDefenseLayout(layout)
       }));
       buildingDragRef.current = null;
+      setGateDeployState((prev) => ({
+        ...prev,
+        activeGateKey: '',
+        draggingUnitTypeId: ''
+      }));
+      closeGateDeployDialog();
     } catch (error) {
       setDefenseLayoutState((prev) => ({
         ...prev,
@@ -1148,12 +1509,15 @@ const KnowledgeDomainScene = ({
             canView: false,
             canEdit: false,
             isSystemAdmin: false,
-              canResign: false,
-              resignPending: false,
-              pendingInvites: [],
-              error: ''
-            }));
-            return;
+            canResign: false,
+            resignPending: false,
+            gateDefenseViewerAdminIds: [],
+            pendingInvites: [],
+            error: ''
+          }));
+          setGateDefenseViewerDraftIds([]);
+          setGateDefenseViewerDirty(false);
+          return;
         }
 
         setDomainAdminState((prev) => ({
@@ -1164,11 +1528,20 @@ const KnowledgeDomainScene = ({
           isSystemAdmin: false,
           canResign: false,
           resignPending: false,
+          gateDefenseViewerAdminIds: [],
           pendingInvites: [],
           error: getApiError(parsed, '获取域相列表失败')
         }));
+        setGateDefenseViewerDraftIds([]);
+        setGateDefenseViewerDirty(false);
         return;
       }
+
+      const gateDefenseViewerAdminIds = Array.isArray(data.gateDefenseViewerAdminIds)
+        ? Array.from(new Set(data.gateDefenseViewerAdminIds
+          .map((id) => (typeof id === 'string' ? id : ''))
+          .filter((id) => !!id)))
+        : [];
 
       setDomainAdminState({
         loading: false,
@@ -1180,8 +1553,11 @@ const KnowledgeDomainScene = ({
         resignPending: !!data.resignPending,
         domainMaster: data.domainMaster || null,
         domainAdmins: data.domainAdmins || [],
+        gateDefenseViewerAdminIds,
         pendingInvites: data.pendingInvites || []
       });
+      setGateDefenseViewerDraftIds(gateDefenseViewerAdminIds);
+      setGateDefenseViewerDirty(false);
     } catch (error) {
       setDomainAdminState((prev) => ({
         ...prev,
@@ -1189,9 +1565,12 @@ const KnowledgeDomainScene = ({
         isSystemAdmin: false,
         canResign: false,
         resignPending: false,
+        gateDefenseViewerAdminIds: [],
         pendingInvites: [],
         error: `获取域相列表失败: ${error.message}`
       }));
+      setGateDefenseViewerDraftIds([]);
+      setGateDefenseViewerDirty(false);
     }
   };
 
@@ -1204,6 +1583,9 @@ const KnowledgeDomainScene = ({
 
     setIsSubmittingResign(true);
     setManageFeedback('');
+    setGateDefenseViewerDraftIds([]);
+    setGateDefenseViewerDirty(false);
+    setIsSavingGateDefenseViewerPerms(false);
 
     try {
       const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/resign`, {
@@ -1293,6 +1675,62 @@ const KnowledgeDomainScene = ({
       setManageFeedback(`移除管理员失败: ${error.message}`);
     } finally {
       setRemovingAdminId('');
+    }
+  };
+
+  const toggleGateDefenseViewerAdmin = (adminUserId) => {
+    if (!domainAdminState.canEdit || !adminUserId) return;
+    setGateDefenseViewerDraftIds((prev) => {
+      const exists = prev.includes(adminUserId);
+      if (exists) {
+        return prev.filter((id) => id !== adminUserId);
+      }
+      return [...prev, adminUserId];
+    });
+    setGateDefenseViewerDirty(true);
+    setManageFeedback('');
+  };
+
+  const saveGateDefenseViewerPermissions = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id || !domainAdminState.canEdit) return;
+
+    setIsSavingGateDefenseViewerPerms(true);
+    setManageFeedback('');
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/gate-defense-viewers`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          viewerAdminIds: gateDefenseViewerDraftIds
+        })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        setManageFeedback(getApiError(parsed, '保存承口/启口可查看权限失败'));
+        return;
+      }
+
+      const savedViewerIds = Array.isArray(data.gateDefenseViewerAdminIds)
+        ? Array.from(new Set(data.gateDefenseViewerAdminIds
+          .map((id) => (typeof id === 'string' ? id : ''))
+          .filter((id) => !!id)))
+        : [];
+      setDomainAdminState((prev) => ({
+        ...prev,
+        gateDefenseViewerAdminIds: savedViewerIds
+      }));
+      setGateDefenseViewerDraftIds(savedViewerIds);
+      setGateDefenseViewerDirty(false);
+      setManageFeedback(data.message || '承口/启口可查看权限已保存');
+    } catch (error) {
+      setManageFeedback(`保存承口/启口可查看权限失败: ${error.message}`);
+    } finally {
+      setIsSavingGateDefenseViewerPerms(false);
     }
   };
 
@@ -1814,6 +2252,10 @@ const KnowledgeDomainScene = ({
     // 创建渲染器
     rendererRef.current = new KnowledgeDomainRenderer(canvas);
     rendererRef.current.setCameraAngle(cameraAngleRef.current);
+    rendererRef.current.setGateVisibility({
+      cheng: hasParentEntrance,
+      qi: hasChildEntrance
+    });
     applyScenePanOffset(scenePanOffsetRef.current);
     rendererRef.current.startRenderLoop();
 
@@ -1838,7 +2280,7 @@ const KnowledgeDomainScene = ({
         rendererRef.current = null;
       }
     };
-  }, [isVisible]);
+  }, [isVisible, hasParentEntrance, hasChildEntrance]);
 
   useEffect(() => {
     if (!isVisible || !node?._id) return;
@@ -1857,6 +2299,15 @@ const KnowledgeDomainScene = ({
     setDistributionState(createDefaultDistributionState());
     setHasUnsavedDistributionDraft(false);
     setDefenseLayoutState(createDefaultDefenseLayoutState());
+    setGateDeployState({
+      loading: false,
+      error: '',
+      unitTypes: [],
+      roster: [],
+      activeGateKey: '',
+      draggingUnitTypeId: ''
+    });
+    closeGateDeployDialog();
     buildingDragRef.current = null;
     scenePanDragRef.current = null;
     setIsScenePanning(false);
@@ -2025,6 +2476,11 @@ const KnowledgeDomainScene = ({
 
     return () => clearTimeout(timerId);
   }, [activeTab, distributionAllianceKeyword, distributionState.canEdit, isVisible, node?._id]);
+
+  useEffect(() => {
+    if (!isVisible || !defenseLayoutState.canEdit || !defenseLayoutState.buildMode) return;
+    fetchGateDeployArmyData();
+  }, [isVisible, defenseLayoutState.canEdit, defenseLayoutState.buildMode, node?._id]);
 
   useEffect(() => {
     if (!isVisible || !defenseLayoutState.draggingBuildingId || !defenseLayoutState.buildMode || !defenseLayoutState.canEdit) {
@@ -2251,6 +2707,22 @@ const KnowledgeDomainScene = ({
     sceneSize.height || containerRef.current?.clientHeight || 720,
     cameraAngleDeg
   );
+  const gatePositions = {
+    cheng: {
+      x: defenseMetrics.centerX,
+      y: defenseMetrics.centerY - defenseMetrics.radiusY - 92
+    },
+    qi: {
+      x: defenseMetrics.centerX,
+      y: defenseMetrics.centerY + defenseMetrics.radiusY + 92
+    }
+  };
+  const gateTotals = {
+    cheng: getGateDefenseTotal(activeDefenseLayout, 'cheng'),
+    qi: getGateDefenseTotal(activeDefenseLayout, 'qi')
+  };
+  const canInspectGateDefense = !!defenseLayoutState.canViewGateDefense;
+  const canOpenGateDeployPanel = defenseLayoutState.canEdit || canInspectGateDefense;
   const selectedDefenseBuilding = (defenseLayoutState.buildMode
     ? (defenseLayoutState.draftLayout?.buildings || [])
     : defenseBuildings
@@ -2280,12 +2752,49 @@ const KnowledgeDomainScene = ({
     }
   });
   const displayAdmins = Array.from(adminUserMap.values());
+  const gateDefenseViewerIdSet = new Set(
+    (domainAdminState.canEdit ? gateDefenseViewerDraftIds : domainAdminState.gateDefenseViewerAdminIds)
+      .filter((id) => typeof id === 'string' && id)
+  );
   const showDefenseManagerCard = defenseLayoutState.canEdit;
   const displayDefenseBuildings = defenseBuildings.map((building, index) => ({
     ...building,
     ordinal: index + 1,
     isIntel: defenseLayoutState.canEdit && activeDefenseLayout?.intelBuildingId === building.buildingId
   }));
+  const armyUnitTypeMap = new Map(
+    (Array.isArray(gateDeployState.unitTypes) ? gateDeployState.unitTypes : [])
+      .map((unitType) => [unitType?.id || unitType?.unitTypeId, unitType])
+      .filter(([id]) => !!id)
+  );
+  const rosterMap = new Map(
+    (Array.isArray(gateDeployState.roster) ? gateDeployState.roster : [])
+      .map((entry) => [
+        typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
+        Math.max(0, Math.floor(Number(entry?.count) || 0))
+      ])
+      .filter(([id]) => !!id)
+  );
+  const deployedCounter = getDeployedCountByUnitType(activeDefenseLayout);
+  const rosterItems = (Array.isArray(gateDeployState.roster) ? gateDeployState.roster : [])
+    .filter((entry) => (Math.max(0, Math.floor(Number(entry?.count) || 0)) > 0))
+    .map((entry) => {
+      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '';
+      const totalCount = rosterMap.get(unitTypeId) || 0;
+      const deployedCount = deployedCounter.get(unitTypeId) || 0;
+      return {
+        unitTypeId,
+        totalCount,
+        deployedCount,
+        availableCount: Math.max(0, totalCount - deployedCount),
+        name: armyUnitTypeMap.get(unitTypeId)?.name || unitTypeId
+      };
+    })
+    .filter((entry) => !!entry.unitTypeId);
+  const activeGateKey = gateDeployState.activeGateKey;
+  const activeGateEntries = activeGateKey
+    ? getGateDefenseEntries(activeDefenseLayout, activeGateKey)
+    : [];
 
   if (!isVisible && transitionProgress <= 0) return null;
 
@@ -2354,6 +2863,137 @@ const KnowledgeDomainScene = ({
           );
         })}
       </div>
+      <div ref={cityGateLayerRef} className="city-gate-layer">
+        {hasParentEntrance && (
+          <button
+            type="button"
+            className={`city-gate-trigger cheng ${canOpenGateDeployPanel ? 'editable' : ''}`}
+            style={{
+              left: `${gatePositions.cheng.x - 84}px`,
+              top: `${gatePositions.cheng.y - 34}px`
+            }}
+            title={`${CITY_GATE_LABELS.cheng}：${CITY_GATE_TOOLTIPS.cheng}`}
+            onClick={() => openGateDeployPanel('cheng')}
+            disabled={!canOpenGateDeployPanel}
+          >
+            <span className="city-gate-name">{CITY_GATE_LABELS.cheng}</span>
+            {canInspectGateDefense && (
+              <span className="city-gate-total">{`驻防 ${gateTotals.cheng}`}</span>
+            )}
+          </button>
+        )}
+        {hasChildEntrance && (
+          <button
+            type="button"
+            className={`city-gate-trigger qi ${canOpenGateDeployPanel ? 'editable' : ''}`}
+            style={{
+              left: `${gatePositions.qi.x - 84}px`,
+              top: `${gatePositions.qi.y - 34}px`
+            }}
+            title={`${CITY_GATE_LABELS.qi}：${CITY_GATE_TOOLTIPS.qi}`}
+            onClick={() => openGateDeployPanel('qi')}
+            disabled={!canOpenGateDeployPanel}
+          >
+            <span className="city-gate-name">{CITY_GATE_LABELS.qi}</span>
+            {canInspectGateDefense && (
+              <span className="city-gate-total">{`驻防 ${gateTotals.qi}`}</span>
+            )}
+          </button>
+        )}
+      </div>
+      {canOpenGateDeployPanel && canInspectGateDefense && activeGateKey && (
+        <div className="gate-deploy-panel">
+          <div className="gate-deploy-header">
+            <strong>{`${CITY_GATE_LABELS[activeGateKey]}布防`}</strong>
+            <button
+              type="button"
+              className="btn btn-small btn-secondary"
+              onClick={() => {
+                setGateDeployState((prev) => ({ ...prev, activeGateKey: '' }));
+                closeGateDeployDialog();
+              }}
+            >
+              关闭
+            </button>
+          </div>
+          <div className="domain-manage-tip">{CITY_GATE_TOOLTIPS[activeGateKey]}</div>
+          {defenseLayoutState.canEdit && defenseLayoutState.buildMode ? (
+            <>
+              {gateDeployState.loading && <div className="domain-manage-tip">加载兵力中...</div>}
+              {gateDeployState.error && <div className="domain-manage-error">{gateDeployState.error}</div>}
+              {!gateDeployState.loading && (
+                <>
+                  <div
+                    className="gate-deploy-dropzone"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const unitTypeId = event.dataTransfer.getData('text/plain');
+                      handleGateDeployDrop(activeGateKey, unitTypeId);
+                      setGateDeployState((prev) => ({ ...prev, draggingUnitTypeId: '' }));
+                    }}
+                  >
+                    将兵种卡拖到此处进行派遣
+                  </div>
+                  <div className="gate-deploy-section-title">当前布防</div>
+                  <div className="gate-deploy-current-list">
+                    {activeGateEntries.length === 0 ? (
+                      <div className="domain-manage-tip">当前无驻防兵力</div>
+                    ) : activeGateEntries.map((entry) => (
+                      <div key={entry.unitTypeId} className="gate-deploy-current-row">
+                        <span>{armyUnitTypeMap.get(entry.unitTypeId)?.name || entry.unitTypeId}</span>
+                        <strong>{entry.count}</strong>
+                        <button
+                          type="button"
+                          className="btn btn-small btn-danger"
+                          onClick={() => removeGateDefenseUnit(activeGateKey, entry.unitTypeId)}
+                        >
+                          移除
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="gate-deploy-section-title">我的兵力（可拖拽）</div>
+                  <div className="gate-deploy-roster-list">
+                    {rosterItems.length === 0 ? (
+                      <div className="domain-manage-tip">你当前没有可布防兵力</div>
+                    ) : rosterItems.map((item) => (
+                      <div
+                        key={item.unitTypeId}
+                        className={`gate-deploy-roster-card ${item.availableCount > 0 ? 'draggable' : 'disabled'} ${gateDeployState.draggingUnitTypeId === item.unitTypeId ? 'dragging' : ''}`}
+                        draggable={item.availableCount > 0}
+                        onDragStart={(event) => {
+                          event.dataTransfer.setData('text/plain', item.unitTypeId);
+                          setGateDeployState((prev) => ({ ...prev, draggingUnitTypeId: item.unitTypeId }));
+                        }}
+                        onDragEnd={() => setGateDeployState((prev) => ({ ...prev, draggingUnitTypeId: '' }))}
+                      >
+                        <span>{item.name}</span>
+                        <em>{`总 ${item.totalCount} / 已派 ${item.deployedCount} / 可用 ${item.availableCount}`}</em>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="domain-manage-tip">仅可查看承口/启口驻防配置，不可编辑。</div>
+              <div className="gate-deploy-section-title">当前布防</div>
+              <div className="gate-deploy-current-list">
+                {activeGateEntries.length === 0 ? (
+                  <div className="domain-manage-tip">当前无驻防兵力</div>
+                ) : activeGateEntries.map((entry) => (
+                  <div key={entry.unitTypeId} className="gate-deploy-current-row">
+                    <span>{armyUnitTypeMap.get(entry.unitTypeId)?.name || entry.unitTypeId}</span>
+                    <strong>{entry.count}</strong>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <div className={`domain-right-dock ${isDomainInfoDockExpanded ? 'expanded' : 'collapsed'}`}>
         <div className="domain-info-panel">
@@ -2395,34 +3035,39 @@ const KnowledgeDomainScene = ({
               </div>
             </div>
             <div className="domain-managers-card">
-              <div className="domain-admins-subtitle">域主管理层</div>
-              <div className="domain-manager-avatar-row">
-                {displayMaster ? (
-                  <div className="domain-manager-avatar-item master" title={`域主：${displayMaster.username || '未命名用户'}`}>
-                    <img
-                      src={avatarMap[displayMaster.avatar] || defaultMale1}
-                      alt={displayMaster.username || '域主'}
-                      className="domain-manager-avatar-img"
-                    />
-                    <span className="domain-manager-name">{displayMaster.username || '未设置域主'}</span>
-                  </div>
-                ) : (
-                  <div className="domain-manage-tip">暂无域主信息</div>
-                )}
+              <div className="domain-manager-section">
+                <div className="domain-admins-subtitle">域主</div>
+                <div className="domain-manager-avatar-row">
+                  {displayMaster ? (
+                    <div className="domain-manager-avatar-item master" title={`域主：${displayMaster.username || '未命名用户'}`}>
+                      <img
+                        src={avatarMap[displayMaster.avatar] || defaultMale1}
+                        alt={displayMaster.username || '域主'}
+                        className="domain-manager-avatar-img"
+                      />
+                      <span className="domain-manager-name">{displayMaster.username || '未设置域主'}</span>
+                    </div>
+                  ) : (
+                    <div className="domain-manage-tip">暂无域主信息</div>
+                  )}
+                </div>
               </div>
-              <div className="domain-manager-avatar-row admins">
-                {displayAdmins.length > 0 ? displayAdmins.map((adminUser) => (
-                  <div key={adminUser._id} className="domain-manager-avatar-item" title={`域相：${adminUser.username || '未命名用户'}`}>
-                    <img
-                      src={avatarMap[adminUser.avatar] || defaultMale1}
-                      alt={adminUser.username || '域相'}
-                      className="domain-manager-avatar-img"
-                    />
-                    <span className="domain-manager-name">{adminUser.username || '未命名'}</span>
-                  </div>
-                )) : (
-                  <div className="domain-manage-tip">暂无域相</div>
-                )}
+              <div className="domain-manager-section">
+                <div className="domain-admins-subtitle">域相</div>
+                <div className="domain-manager-avatar-row admins">
+                  {displayAdmins.length > 0 ? displayAdmins.map((adminUser) => (
+                    <div key={adminUser._id} className="domain-manager-avatar-item" title={`域相：${adminUser.username || '未命名用户'}`}>
+                      <img
+                        src={avatarMap[adminUser.avatar] || defaultMale1}
+                        alt={adminUser.username || '域相'}
+                        className="domain-manager-avatar-img"
+                      />
+                      <span className="domain-manager-name">{adminUser.username || '未命名'}</span>
+                    </div>
+                  )) : (
+                    <div className="domain-manage-tip">暂无域相</div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -2433,6 +3078,11 @@ const KnowledgeDomainScene = ({
                 {!defenseLayoutState.loading && (
                   <div className="domain-manage-tip">
                     当前建筑 {defenseBuildings.length} / {defenseLayoutState.maxBuildings}
+                  </div>
+                )}
+                {defenseLayoutState.buildMode && (
+                  <div className="domain-manage-tip">
+                    点击城区上方承口或下方启口，可打开布防面板并拖拽兵力进行派遣
                   </div>
                 )}
                 {defenseLayoutState.error && <div className="domain-manage-error">{defenseLayoutState.error}</div>}
@@ -2551,18 +3201,36 @@ const KnowledgeDomainScene = ({
                             <div className="domain-admin-list">
                               {domainAdminState.domainAdmins.map((adminUser) => (
                                 <div key={adminUser._id} className="domain-admin-row">
-                                  <span className="domain-admin-name">{adminUser.username}</span>
                                   {domainAdminState.canEdit ? (
-                                    <button
-                                      type="button"
-                                      className="btn btn-small btn-danger"
-                                      onClick={() => removeDomainAdmin(adminUser._id)}
-                                      disabled={removingAdminId === adminUser._id}
-                                    >
-                                      {removingAdminId === adminUser._id ? '移除中...' : '移除'}
-                                    </button>
+                                    <label className="domain-admin-viewer-toggle">
+                                      <input
+                                        type="checkbox"
+                                        checked={gateDefenseViewerIdSet.has(adminUser._id)}
+                                        onChange={() => toggleGateDefenseViewerAdmin(adminUser._id)}
+                                      />
+                                      <span className="domain-admin-name">{adminUser.username}</span>
+                                    </label>
                                   ) : (
-                                    <span className="domain-admin-badge readonly">仅查看</span>
+                                    <span className="domain-admin-name">{adminUser.username}</span>
+                                  )}
+                                  {domainAdminState.canEdit ? (
+                                    <div className="domain-admin-row-actions">
+                                      {gateDefenseViewerIdSet.has(adminUser._id) && (
+                                        <span className="domain-admin-badge readonly">可查看承口/启口</span>
+                                      )}
+                                      <button
+                                        type="button"
+                                        className="btn btn-small btn-danger"
+                                        onClick={() => removeDomainAdmin(adminUser._id)}
+                                        disabled={removingAdminId === adminUser._id}
+                                      >
+                                        {removingAdminId === adminUser._id ? '移除中...' : '移除'}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="domain-admin-badge readonly">
+                                      {gateDefenseViewerIdSet.has(adminUser._id) ? '可查看承口/启口' : '仅查看'}
+                                    </span>
                                   )}
                                 </div>
                               ))}
@@ -2586,6 +3254,19 @@ const KnowledgeDomainScene = ({
                           )}
                           {domainAdminState.canEdit && (domainAdminState.pendingInvites || []).length > 0 && (
                             <div className="domain-manage-tip">灰色名称为内部待确认邀请，仅域主可见。</div>
+                          )}
+                          {domainAdminState.canEdit && domainAdminState.domainAdmins.length > 0 && (
+                            <div className="domain-admin-permission-actions">
+                              <div className="domain-manage-tip">勾选域相可授予“承口/启口兵力可查看权限”（仅查看，不可编辑）。</div>
+                              <button
+                                type="button"
+                                className="btn btn-small btn-primary"
+                                onClick={saveGateDefenseViewerPermissions}
+                                disabled={!gateDefenseViewerDirty || isSavingGateDefenseViewerPerms}
+                              >
+                                {isSavingGateDefenseViewerPerms ? '保存中...' : '保存查看权限'}
+                              </button>
+                            </div>
                           )}
                         </div>
 
@@ -2800,9 +3481,9 @@ const KnowledgeDomainScene = ({
           </div>
         )}
         </div>
-        <button
-          type="button"
-          className="domain-right-dock-toggle"
+      <button
+        type="button"
+        className="domain-right-dock-toggle"
           onClick={() => setIsDomainInfoDockExpanded((prev) => !prev)}
           aria-label={isDomainInfoDockExpanded ? '收起知识域面板' : '展开知识域面板'}
           title={isDomainInfoDockExpanded ? '收起知识域面板' : '展开知识域面板'}
@@ -2812,6 +3493,19 @@ const KnowledgeDomainScene = ({
           {isDomainInfoDockExpanded ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>
       </div>
+
+      <NumberPadDialog
+        open={gateDeployDialogState.open}
+        title={gateDeployDialogState.unitName ? `派遣「${gateDeployDialogState.unitName}」` : '派遣兵力'}
+        description={`${CITY_GATE_LABELS[gateDeployDialogState.gateKey] || '口位'} 可用兵力 ${Math.max(1, Math.floor(Number(gateDeployDialogState.max) || 1))}`}
+        min={1}
+        max={Math.max(1, Math.floor(Number(gateDeployDialogState.max) || 1))}
+        initialValue={1}
+        confirmLabel="确认派遣"
+        cancelLabel="取消"
+        onCancel={closeGateDeployDialog}
+        onConfirm={confirmGateDeployQuantity}
+      />
 
       {isDistributionRuleModalOpen && distributionState.canEdit && createPortal(
           <div
