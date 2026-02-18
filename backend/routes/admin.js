@@ -152,6 +152,7 @@ router.get('/users', authenticateToken, isAdmin, async (req, res) => {
         passwordSaved: plainPassword.length > 0,
         hashedPassword: user.password,  // 哈希密码（如果你想看）
         level: user.level,
+        knowledgeBalance: Number.isFinite(Number(user.knowledgeBalance)) ? Number(user.knowledgeBalance) : 0,
         experience: user.experience,
         profession: user.profession,
         ownedNodes: user.ownedNodes,
@@ -176,7 +177,7 @@ router.get('/users', authenticateToken, isAdmin, async (req, res) => {
 router.put('/users/:userId', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { userId } = req.params;
-    const { username, password, level, experience } = req.body;
+    const { username, password, level, experience, knowledgeBalance } = req.body;
 
     const user = await User.findById(userId);
     if (!user) {
@@ -219,11 +220,27 @@ router.put('/users/:userId', authenticateToken, isAdmin, async (req, res) => {
     }
 
     if (level !== undefined) {
-      user.level = level;
+      const parsedLevel = Number(level);
+      if (!Number.isInteger(parsedLevel) || parsedLevel < 0) {
+        return res.status(400).json({ error: '等级必须是大于等于0的整数' });
+      }
+      user.level = parsedLevel;
     }
 
     if (experience !== undefined) {
-      user.experience = experience;
+      const parsedExperience = Number(experience);
+      if (!Number.isInteger(parsedExperience) || parsedExperience < 0) {
+        return res.status(400).json({ error: '经验值必须是大于等于0的整数' });
+      }
+      user.experience = parsedExperience;
+    }
+
+    if (knowledgeBalance !== undefined) {
+      const parsedKnowledgeBalance = Number(knowledgeBalance);
+      if (!Number.isFinite(parsedKnowledgeBalance) || parsedKnowledgeBalance < 0) {
+        return res.status(400).json({ error: '知识点余额必须是大于等于0的数字' });
+      }
+      user.knowledgeBalance = Number(parsedKnowledgeBalance.toFixed(2));
     }
 
     await user.save();
@@ -237,6 +254,7 @@ router.put('/users/:userId', authenticateToken, isAdmin, async (req, res) => {
         password: user.plainPassword,
         level: user.level,
         experience: user.experience,
+        knowledgeBalance: Number.isFinite(Number(user.knowledgeBalance)) ? Number(user.knowledgeBalance) : 0,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
       }

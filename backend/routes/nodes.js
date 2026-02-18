@@ -36,6 +36,10 @@ const isDomainAdmin = (node, userId) => {
 const DOMAIN_CARD_SELECT = '_id name description knowledgePoint contentScore';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+const CITY_BUILDING_LIMIT = 3;
+const CITY_BUILDING_DEFAULT_RADIUS = 0.17;
+const CITY_BUILDING_MIN_DISTANCE = 0.34;
+const CITY_BUILDING_MAX_DISTANCE = 0.86;
 
 const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -50,6 +54,104 @@ const normalizePatternType = (value, fallback = 'diagonal') => {
   if (typeof value !== 'string') return fallback;
   const normalized = value.trim().toLowerCase();
   return VISUAL_PATTERN_TYPES.includes(normalized) ? normalized : fallback;
+};
+
+const round3 = (value, fallback = 0) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Number(parsed.toFixed(3));
+};
+
+const createDefaultDefenseLayout = () => ({
+  buildings: [{
+    buildingId: 'core',
+    name: '建筑1',
+    x: 0,
+    y: 0,
+    radius: CITY_BUILDING_DEFAULT_RADIUS,
+    level: 1,
+    nextUnitTypeId: '',
+    upgradeCostKP: null
+  }],
+  intelBuildingId: 'core'
+});
+
+const normalizeDefenseLayoutInput = (input = {}) => {
+  const source = input && typeof input === 'object' ? input : {};
+  const sourceBuildings = Array.isArray(source.buildings) ? source.buildings : [];
+  const normalized = [];
+  const seen = new Set();
+  for (let index = 0; index < sourceBuildings.length; index += 1) {
+    const item = sourceBuildings[index] || {};
+    const rawId = typeof item.buildingId === 'string' ? item.buildingId.trim() : '';
+    const buildingId = rawId || `building_${Date.now()}_${index}`;
+    if (seen.has(buildingId)) continue;
+    seen.add(buildingId);
+    normalized.push({
+      buildingId,
+      name: (typeof item.name === 'string' && item.name.trim()) ? item.name.trim() : `建筑${normalized.length + 1}`,
+      x: Math.max(-1, Math.min(1, round3(item.x, 0))),
+      y: Math.max(-1, Math.min(1, round3(item.y, 0))),
+      radius: Math.max(0.1, Math.min(0.24, round3(item.radius, CITY_BUILDING_DEFAULT_RADIUS))),
+      level: Math.max(1, parseInt(item.level, 10) || 1),
+      nextUnitTypeId: typeof item.nextUnitTypeId === 'string' ? item.nextUnitTypeId.trim() : '',
+      upgradeCostKP: Number.isFinite(Number(item.upgradeCostKP)) && Number(item.upgradeCostKP) >= 0
+        ? Number(Number(item.upgradeCostKP).toFixed(2))
+        : null
+    });
+    if (normalized.length >= CITY_BUILDING_LIMIT) break;
+  }
+
+  if (normalized.length === 0) {
+    return createDefaultDefenseLayout();
+  }
+
+  const isInsideDomain = (item) => Math.sqrt((item.x ** 2) + (item.y ** 2)) <= CITY_BUILDING_MAX_DISTANCE;
+  const overlapsOther = (item, others, selfId) => others.some((target) => {
+    if (target.buildingId === selfId) return false;
+    const dx = item.x - target.x;
+    const dy = item.y - target.y;
+    return Math.sqrt((dx ** 2) + (dy ** 2)) < CITY_BUILDING_MIN_DISTANCE;
+  });
+
+  const valid = normalized.every((item) => isInsideDomain(item) && !overlapsOther(item, normalized, item.buildingId));
+  if (!valid) {
+    const error = new Error('建筑位置无效：建筑必须位于城区内且互不重叠');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const sourceIntelBuildingId = typeof source.intelBuildingId === 'string' ? source.intelBuildingId.trim() : '';
+  const intelBuildingId = normalized.some((item) => item.buildingId === sourceIntelBuildingId)
+    ? sourceIntelBuildingId
+    : normalized[0].buildingId;
+
+  return {
+    buildings: normalized,
+    intelBuildingId
+  };
+};
+
+const serializeDefenseLayout = (layout = {}) => {
+  let normalized;
+  try {
+    normalized = normalizeDefenseLayoutInput(layout);
+  } catch (error) {
+    normalized = createDefaultDefenseLayout();
+  }
+  return {
+    buildings: normalized.buildings.map((item) => ({
+      buildingId: item.buildingId,
+      name: item.name || '',
+      x: round3(item.x, 0),
+      y: round3(item.y, 0),
+      radius: round3(item.radius, CITY_BUILDING_DEFAULT_RADIUS),
+      level: Number(item.level || 1),
+      nextUnitTypeId: item.nextUnitTypeId || '',
+      upgradeCostKP: Number.isFinite(Number(item.upgradeCostKP)) ? Number(item.upgradeCostKP) : null
+    })),
+    intelBuildingId: normalized.intelBuildingId
+  };
 };
 
 const toPlainObject = (value) => (
@@ -2224,6 +2326,96 @@ router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (r
     });
   } catch (error) {
     console.error('移除知识域域相错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取知识域城防建筑配置（域主可编辑）
+router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name status domainMaster cityDefenseLayout');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+
+    const canEdit = isDomainMaster(node, requestUserId);
+    const serializedLayout = serializeDefenseLayout(node.cityDefenseLayout || {});
+    const layout = canEdit
+      ? serializedLayout
+      : {
+          ...serializedLayout,
+          intelBuildingId: ''
+        };
+
+    res.json({
+      success: true,
+      nodeId: getIdString(node._id),
+      nodeName: node.name,
+      canEdit,
+      maxBuildings: CITY_BUILDING_LIMIT,
+      minBuildings: 1,
+      layout
+    });
+  } catch (error) {
+    console.error('获取知识域城防配置错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 保存知识域城防建筑配置（仅域主）
+router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name status domainMaster cityDefenseLayout');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isDomainMaster(node, requestUserId)) {
+      return res.status(403).json({ error: '只有域主可以保存城防配置' });
+    }
+
+    const payload = req.body?.layout && typeof req.body.layout === 'object'
+      ? req.body.layout
+      : req.body;
+    const normalizedLayout = normalizeDefenseLayoutInput(payload || {});
+    node.cityDefenseLayout = {
+      ...normalizedLayout,
+      updatedAt: new Date()
+    };
+    await node.save();
+
+    res.json({
+      success: true,
+      message: '城防配置已保存',
+      nodeId: getIdString(node._id),
+      layout: serializeDefenseLayout(node.cityDefenseLayout || normalizedLayout),
+      maxBuildings: CITY_BUILDING_LIMIT,
+      minBuildings: 1
+    });
+  } catch (error) {
+    console.error('保存知识域城防配置错误:', error);
+    if (error?.statusCode) {
+      return res.status(error.statusCode).json({ error: error.message || '请求参数错误' });
+    }
     res.status(500).json({ error: '服务器错误' });
   }
 });

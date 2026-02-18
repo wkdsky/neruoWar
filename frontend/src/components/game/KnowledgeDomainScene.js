@@ -5,8 +5,23 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Info, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Info, ChevronLeft, ChevronRight, ArrowLeft } from 'lucide-react';
+import defaultMale1 from '../../assets/avatars/default_male_1.svg';
+import defaultMale2 from '../../assets/avatars/default_male_2.svg';
+import defaultMale3 from '../../assets/avatars/default_male_3.svg';
+import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
+import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
+import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
 import './KnowledgeDomainScene.css';
+
+const avatarMap = {
+  male1: defaultMale1,
+  male2: defaultMale2,
+  male3: defaultMale3,
+  female1: defaultFemale1,
+  female2: defaultFemale2,
+  female3: defaultFemale3
+};
 
 const DISTRIBUTION_SCOPE_OPTIONS = [
   { value: 'all', label: '全部分发（100%）' },
@@ -207,6 +222,192 @@ const formatCountdown = (seconds) => {
   return `${hh}:${mm}:${ss}`;
 };
 
+const CITY_BUILDING_LIMIT = 3;
+const CITY_BUILDING_DEFAULT_RADIUS = 0.17;
+const CITY_BUILDING_MIN_DISTANCE = 0.34;
+const CITY_BUILDING_MAX_DISTANCE = 0.86;
+const CITY_CAMERA_DEFAULT_ANGLE_DEG = 45;
+const CITY_CAMERA_BUILD_ANGLE_DEG = 90;
+const CITY_CAMERA_TRANSITION_MS = 460;
+const CITY_BUILDING_CANDIDATE_POSITIONS = [
+  { x: -0.46, y: -0.12 },
+  { x: 0.46, y: -0.12 },
+  { x: -0.34, y: 0.36 },
+  { x: 0.34, y: 0.36 },
+  { x: 0, y: -0.42 },
+  { x: 0, y: 0.42 }
+];
+
+const cloneDefenseLayout = (layout = {}) => ({
+  buildings: Array.isArray(layout.buildings) ? layout.buildings.map((item) => ({ ...item })) : [],
+  intelBuildingId: typeof layout.intelBuildingId === 'string' ? layout.intelBuildingId : ''
+});
+
+const createDefaultDefenseLayout = () => ({
+  buildings: [{
+    buildingId: 'core',
+    name: '建筑1',
+    x: 0,
+    y: 0,
+    radius: CITY_BUILDING_DEFAULT_RADIUS,
+    level: 1,
+    nextUnitTypeId: '',
+    upgradeCostKP: null
+  }],
+  intelBuildingId: 'core'
+});
+
+const normalizeDefenseLayoutFromApi = (rawLayout = {}) => {
+  const source = rawLayout && typeof rawLayout === 'object' ? rawLayout : {};
+  const sourceBuildings = Array.isArray(source.buildings) ? source.buildings : [];
+  const normalizedBuildings = [];
+  const seen = new Set();
+  for (let index = 0; index < sourceBuildings.length; index += 1) {
+    const item = sourceBuildings[index] || {};
+    const rawId = typeof item.buildingId === 'string' ? item.buildingId.trim() : '';
+    const buildingId = rawId || `building_${index + 1}`;
+    if (!buildingId || seen.has(buildingId)) continue;
+    seen.add(buildingId);
+    const parsedX = Number(item.x);
+    const parsedY = Number(item.y);
+    const parsedRadius = Number(item.radius);
+    const parsedName = typeof item.name === 'string' ? item.name.trim() : '';
+    normalizedBuildings.push({
+      buildingId,
+      name: parsedName || `建筑${normalizedBuildings.length + 1}`,
+      x: Number.isFinite(parsedX) ? Math.max(-1, Math.min(1, parsedX)) : 0,
+      y: Number.isFinite(parsedY) ? Math.max(-1, Math.min(1, parsedY)) : 0,
+      radius: Number.isFinite(parsedRadius) ? Math.max(0.1, Math.min(0.24, parsedRadius)) : CITY_BUILDING_DEFAULT_RADIUS,
+      level: Math.max(1, parseInt(item.level, 10) || 1),
+      nextUnitTypeId: typeof item.nextUnitTypeId === 'string' ? item.nextUnitTypeId : '',
+      upgradeCostKP: Number.isFinite(Number(item.upgradeCostKP)) ? Number(item.upgradeCostKP) : null
+    });
+    if (normalizedBuildings.length >= CITY_BUILDING_LIMIT) break;
+  }
+  if (normalizedBuildings.length === 0) {
+    return createDefaultDefenseLayout();
+  }
+  const sourceIntelBuildingId = typeof source.intelBuildingId === 'string' ? source.intelBuildingId.trim() : '';
+  const intelBuildingId = normalizedBuildings.some((item) => item.buildingId === sourceIntelBuildingId)
+    ? sourceIntelBuildingId
+    : normalizedBuildings[0].buildingId;
+  return {
+    buildings: normalizedBuildings,
+    intelBuildingId
+  };
+};
+
+const createDefaultDefenseLayoutState = () => ({
+  loading: false,
+  saving: false,
+  error: '',
+  feedback: '',
+  canEdit: false,
+  maxBuildings: CITY_BUILDING_LIMIT,
+  minBuildings: 1,
+  buildMode: false,
+  isDirty: false,
+  selectedBuildingId: '',
+  draggingBuildingId: '',
+  savedLayout: createDefaultDefenseLayout(),
+  draftLayout: createDefaultDefenseLayout()
+});
+
+const calcDistance = (a, b) => Math.sqrt(((a.x - b.x) ** 2) + ((a.y - b.y) ** 2));
+
+const clampPositionInsideCity = (position = { x: 0, y: 0 }) => {
+  const length = Math.sqrt((position.x ** 2) + (position.y ** 2));
+  if (length <= CITY_BUILDING_MAX_DISTANCE) return position;
+  const ratio = CITY_BUILDING_MAX_DISTANCE / (length || 1);
+  return {
+    x: position.x * ratio,
+    y: position.y * ratio
+  };
+};
+
+const isValidPlacement = (position, buildings, buildingId) => {
+  const distanceToCenter = Math.sqrt((position.x ** 2) + (position.y ** 2));
+  if (distanceToCenter > CITY_BUILDING_MAX_DISTANCE) return false;
+  return buildings.every((item) => {
+    if (item.buildingId === buildingId) return true;
+    return calcDistance(position, item) >= CITY_BUILDING_MIN_DISTANCE;
+  });
+};
+
+const clampCityCameraAngle = (angleDeg) => {
+  const parsed = Number(angleDeg);
+  if (!Number.isFinite(parsed)) return CITY_CAMERA_DEFAULT_ANGLE_DEG;
+  return Math.max(CITY_CAMERA_DEFAULT_ANGLE_DEG, Math.min(CITY_CAMERA_BUILD_ANGLE_DEG, parsed));
+};
+
+const getCityCameraTiltBlend = (angleDeg) => {
+  const normalizedAngle = clampCityCameraAngle(angleDeg);
+  return (normalizedAngle - CITY_CAMERA_DEFAULT_ANGLE_DEG) / (CITY_CAMERA_BUILD_ANGLE_DEG - CITY_CAMERA_DEFAULT_ANGLE_DEG);
+};
+
+const getCityMetrics = (width, height, angleDeg = CITY_CAMERA_DEFAULT_ANGLE_DEG) => {
+  const safeWidth = Math.max(0, Number(width) || 0);
+  const safeHeight = Math.max(0, Number(height) || 0);
+  const tiltBlend = getCityCameraTiltBlend(angleDeg);
+  const radiusX = safeWidth * 0.35;
+  const radiusY45 = safeHeight * 0.25;
+  const radiusY90 = Math.min(safeHeight * 0.35, radiusX);
+  const radiusY = radiusY45 + ((radiusY90 - radiusY45) * tiltBlend);
+  return {
+    centerX: safeWidth / 2,
+    centerY: safeHeight / 2,
+    radiusX,
+    radiusY,
+    tiltBlend,
+    angleDeg: clampCityCameraAngle(angleDeg)
+  };
+};
+
+const clampScenePanOffset = (offset = { x: 0, y: 0 }, width = 0, height = 0) => {
+  const maxX = Math.max(0, (Number(width) || 0) * 0.28);
+  const maxY = Math.max(0, (Number(height) || 0) * 0.2);
+  return {
+    x: Math.max(-maxX, Math.min(maxX, Number(offset.x) || 0)),
+    y: Math.max(-maxY, Math.min(maxY, Number(offset.y) || 0))
+  };
+};
+
+const defenseLayoutToPayload = (layout = {}) => ({
+  buildings: (layout.buildings || []).map((item) => ({
+    buildingId: item.buildingId,
+    name: (typeof item.name === 'string' && item.name.trim()) ? item.name.trim() : '',
+    x: Number(Number(item.x).toFixed(3)),
+    y: Number(Number(item.y).toFixed(3)),
+    radius: Number(Number(item.radius || CITY_BUILDING_DEFAULT_RADIUS).toFixed(3)),
+    level: Number(item.level || 1),
+    nextUnitTypeId: item.nextUnitTypeId || '',
+    upgradeCostKP: Number.isFinite(Number(item.upgradeCostKP)) ? Number(item.upgradeCostKP) : null
+  })),
+  intelBuildingId: layout.intelBuildingId || ''
+});
+
+const getUserId = (user) => {
+  if (!user) return '';
+  if (typeof user === 'string') return user;
+  if (typeof user === 'object') {
+    if (typeof user._id === 'string') return user._id;
+    if (typeof user.id === 'string') return user.id;
+  }
+  return '';
+};
+
+const normalizeDomainManagerUser = (user) => {
+  if (!user || typeof user !== 'object') return null;
+  const userId = getUserId(user);
+  if (!userId) return null;
+  return {
+    _id: userId,
+    username: user.username || '',
+    profession: user.profession || '',
+    avatar: user.avatar || ''
+  };
+};
+
 // 3D场景渲染器
 class KnowledgeDomainRenderer {
   constructor(canvas) {
@@ -214,6 +415,8 @@ class KnowledgeDomainRenderer {
     this.ctx = canvas.getContext('2d');
     this.animationId = null;
     this.time = 0;
+    this.viewOffset = { x: 0, y: 0 };
+    this.cameraAngleDeg = CITY_CAMERA_DEFAULT_ANGLE_DEG;
 
     // 场景参数
     this.groundColor = '#1a1f35';
@@ -246,6 +449,21 @@ class KnowledgeDomainRenderer {
     this.canvas.height = height;
   }
 
+  setViewOffset(offsetX = 0, offsetY = 0) {
+    this.viewOffset = {
+      x: Number.isFinite(Number(offsetX)) ? Number(offsetX) : 0,
+      y: Number.isFinite(Number(offsetY)) ? Number(offsetY) : 0
+    };
+  }
+
+  setCameraAngle(angleDeg = CITY_CAMERA_DEFAULT_ANGLE_DEG) {
+    this.cameraAngleDeg = clampCityCameraAngle(angleDeg);
+  }
+
+  getSceneMetrics() {
+    return getCityMetrics(this.canvas.width, this.canvas.height, this.cameraAngleDeg);
+  }
+
   // 3D到2D投影（俯视角45度）
   project(x, y, z) {
     const width = this.canvas.width;
@@ -266,14 +484,10 @@ class KnowledgeDomainRenderer {
   // 绘制椭圆形地面（俯视角看起来的圆）
   drawGround() {
     const ctx = this.ctx;
-    const width = this.canvas.width;
-    const height = this.canvas.height;
-    const centerX = width / 2;
-    const centerY = height / 2;
-
-    // 地面半径
-    const radiusX = width * 0.35;
-    const radiusY = height * 0.25;
+    const metrics = this.getSceneMetrics();
+    const centerX = metrics.centerX + this.viewOffset.x;
+    const centerY = metrics.centerY + this.viewOffset.y;
+    const { radiusX, radiusY } = metrics;
 
     // 绘制外层发光
     const gradient = ctx.createRadialGradient(
@@ -316,27 +530,27 @@ class KnowledgeDomainRenderer {
   drawRoad(side) {
     const ctx = this.ctx;
     const width = this.canvas.width;
-    const height = this.canvas.height;
-    const centerY = height / 2;
+    const metrics = this.getSceneMetrics();
+    const centerY = metrics.centerY + this.viewOffset.y;
+    const skewOffset = 10 * (1 - metrics.tiltBlend);
 
     const roadWidth = 60;
-    const roadLength = width * 0.2;
 
     let startX, endX;
     if (side === 'left') {
-      startX = 0;
-      endX = width * 0.15 + 50;
+      startX = 0 + this.viewOffset.x;
+      endX = width * 0.15 + 50 + this.viewOffset.x;
     } else {
-      startX = width * 0.85 - 50;
-      endX = width;
+      startX = width * 0.85 - 50 + this.viewOffset.x;
+      endX = width + this.viewOffset.x;
     }
 
     // 道路主体
     ctx.fillStyle = this.roadColor;
     ctx.beginPath();
     ctx.moveTo(startX, centerY - roadWidth / 2);
-    ctx.lineTo(endX, centerY - roadWidth / 2 + (side === 'left' ? 10 : -10));
-    ctx.lineTo(endX, centerY + roadWidth / 2 + (side === 'left' ? 10 : -10));
+    ctx.lineTo(endX, centerY - roadWidth / 2 + (side === 'left' ? skewOffset : -skewOffset));
+    ctx.lineTo(endX, centerY + roadWidth / 2 + (side === 'left' ? skewOffset : -skewOffset));
     ctx.lineTo(startX, centerY + roadWidth / 2);
     ctx.closePath();
     ctx.fill();
@@ -352,7 +566,7 @@ class KnowledgeDomainRenderer {
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(startX, centerY);
-    ctx.lineTo(endX, centerY + (side === 'left' ? 5 : -5));
+    ctx.lineTo(endX, centerY + (side === 'left' ? (skewOffset * 0.5) : -(skewOffset * 0.5)));
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -361,18 +575,19 @@ class KnowledgeDomainRenderer {
   drawGate(side) {
     const ctx = this.ctx;
     const width = this.canvas.width;
-    const height = this.canvas.height;
-    const centerY = height / 2;
+    const metrics = this.getSceneMetrics();
+    const centerY = metrics.centerY + this.viewOffset.y;
 
     let x;
     if (side === 'left') {
-      x = width * 0.08;
+      x = width * 0.08 + this.viewOffset.x;
     } else {
-      x = width * 0.92;
+      x = width * 0.92 + this.viewOffset.x;
     }
 
     const gateWidth = 40;
-    const gateHeight = 80;
+    const gateHeight = 80 - (metrics.tiltBlend * 58);
+    const archOffset = 10 * (1 - metrics.tiltBlend);
 
     // 门柱
     ctx.fillStyle = '#4a5580';
@@ -383,21 +598,21 @@ class KnowledgeDomainRenderer {
     ctx.strokeStyle = side === 'left' ? '#ef4444' : '#22c55e';
     ctx.lineWidth = 4;
     ctx.beginPath();
-    ctx.arc(x, centerY - gateHeight + 10, gateWidth / 2, Math.PI, 0);
+    ctx.arc(x, centerY - gateHeight + archOffset, gateWidth / 2, Math.PI, 0);
     ctx.stroke();
 
     // 发光效果
-    const glowGradient = ctx.createRadialGradient(x, centerY - gateHeight / 2, 0, x, centerY - gateHeight / 2, 60);
+    const glowGradient = ctx.createRadialGradient(x, centerY - gateHeight / 2, 0, x, centerY - gateHeight / 2, 60 - (metrics.tiltBlend * 20));
     glowGradient.addColorStop(0, side === 'left' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(34, 197, 94, 0.3)');
     glowGradient.addColorStop(1, 'transparent');
     ctx.fillStyle = glowGradient;
-    ctx.fillRect(x - 60, centerY - gateHeight - 30, 120, 100);
+    ctx.fillRect(x - 60, centerY - gateHeight - 30, 120, 100 - (metrics.tiltBlend * 28));
 
     // 标签
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 14px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(side === 'left' ? '出口' : '入口', x, centerY + 30);
+    ctx.fillText(side === 'left' ? '出口' : '入口', x, centerY + (30 - (metrics.tiltBlend * 10)));
   }
 
   // 绘制粒子
@@ -405,8 +620,9 @@ class KnowledgeDomainRenderer {
     const ctx = this.ctx;
     const width = this.canvas.width;
     const height = this.canvas.height;
-    const centerX = width / 2;
-    const centerY = height / 2;
+    const metrics = this.getSceneMetrics();
+    const centerX = metrics.centerX + this.viewOffset.x;
+    const centerY = metrics.centerY + this.viewOffset.y;
 
     for (const p of this.particles) {
       // 更新位置（缓慢飘动）
@@ -414,7 +630,7 @@ class KnowledgeDomainRenderer {
       if (p.y > 1) p.y = -1;
 
       const projX = centerX + p.x * width * 0.4;
-      const projY = centerY + p.y * height * 0.3 - p.z * 50;
+      const projY = centerY + p.y * this.canvas.height * (0.3 + (metrics.tiltBlend * 0.08)) - p.z * (50 - (metrics.tiltBlend * 18));
 
       // 只绘制在可见区域内的粒子
       if (projX > 0 && projX < width && projY > 0 && projY < height) {
@@ -429,13 +645,10 @@ class KnowledgeDomainRenderer {
   // 绘制脉冲环
   drawPulseRings() {
     const ctx = this.ctx;
-    const width = this.canvas.width;
-    const height = this.canvas.height;
-    const centerX = width / 2;
-    const centerY = height / 2;
-
-    const radiusX = width * 0.35;
-    const radiusY = height * 0.25;
+    const metrics = this.getSceneMetrics();
+    const centerX = metrics.centerX + this.viewOffset.x;
+    const centerY = metrics.centerY + this.viewOffset.y;
+    const { radiusX, radiusY } = metrics;
 
     // 多个脉冲环
     for (let i = 0; i < 3; i++) {
@@ -502,6 +715,7 @@ const KnowledgeDomainScene = ({
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
   const containerRef = useRef(null);
+  const cityDefenseLayerRef = useRef(null);
   const [activeTab, setActiveTab] = useState('info');
   const [domainAdminState, setDomainAdminState] = useState({
     loading: false,
@@ -536,6 +750,15 @@ const KnowledgeDomainScene = ({
   const [hasUnsavedDistributionDraft, setHasUnsavedDistributionDraft] = useState(false);
   const [activeManageSidePanel, setActiveManageSidePanel] = useState('');
   const [isDomainInfoDockExpanded, setIsDomainInfoDockExpanded] = useState(false);
+  const [defenseLayoutState, setDefenseLayoutState] = useState(createDefaultDefenseLayoutState);
+  const [sceneSize, setSceneSize] = useState({ width: 0, height: 0 });
+  const [isScenePanning, setIsScenePanning] = useState(false);
+  const [cameraAngleDeg, setCameraAngleDeg] = useState(CITY_CAMERA_DEFAULT_ANGLE_DEG);
+  const buildingDragRef = useRef(null);
+  const scenePanOffsetRef = useRef({ x: 0, y: 0 });
+  const scenePanDragRef = useRef(null);
+  const cameraAngleRef = useRef(CITY_CAMERA_DEFAULT_ANGLE_DEG);
+  const cameraAngleAnimRef = useRef(null);
   const showManageTab = !!domainAdminState.canView;
 
   const parseApiResponse = async (response) => {
@@ -557,6 +780,348 @@ const KnowledgeDomainScene = ({
 
   const toggleManageSidePanel = (section) => {
     setActiveManageSidePanel((prev) => (prev === section ? '' : section));
+  };
+
+  const applyCameraAngle = (angleDeg, syncState = true) => {
+    const clamped = clampCityCameraAngle(angleDeg);
+    cameraAngleRef.current = clamped;
+    if (rendererRef.current) {
+      rendererRef.current.setCameraAngle(clamped);
+    }
+    if (syncState) {
+      setCameraAngleDeg(clamped);
+    }
+  };
+
+  const applyScenePanOffset = (nextOffset = { x: 0, y: 0 }) => {
+    const container = containerRef.current;
+    const width = container?.clientWidth || sceneSize.width || 0;
+    const height = container?.clientHeight || sceneSize.height || 0;
+    const clamped = clampScenePanOffset(nextOffset, width, height);
+    scenePanOffsetRef.current = clamped;
+    if (rendererRef.current) {
+      rendererRef.current.setViewOffset(clamped.x, clamped.y);
+    }
+    if (cityDefenseLayerRef.current) {
+      cityDefenseLayerRef.current.style.transform = `translate(${clamped.x}px, ${clamped.y}px)`;
+    }
+  };
+
+  const handleScenePointerDown = (event) => {
+    if (event.button !== 0) return;
+    if (!isVisible || displayOpacity <= 0.5) return;
+    if (defenseLayoutState.draggingBuildingId) return;
+    const target = event.target;
+    if (
+      target?.closest('.domain-right-dock')
+      || target?.closest('.exit-domain-btn')
+      || target?.closest('.domain-return-top-btn')
+      || target?.closest('.distribution-rule-modal-overlay')
+      || target?.closest('.city-defense-building.editable')
+    ) {
+      return;
+    }
+
+    scenePanDragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: scenePanOffsetRef.current.x,
+      originY: scenePanOffsetRef.current.y,
+      pointerId: event.pointerId
+    };
+    setIsScenePanning(true);
+    if (typeof containerRef.current?.setPointerCapture === 'function' && event.pointerId !== undefined) {
+      try {
+        containerRef.current.setPointerCapture(event.pointerId);
+      } catch (e) {
+        // ignore capture errors in unsupported environments
+      }
+    }
+  };
+
+  const fetchDefenseLayout = async (silent = true) => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id) return;
+
+    if (!silent) {
+      setDefenseLayoutState((prev) => ({
+        ...prev,
+        loading: true,
+        error: '',
+        feedback: ''
+      }));
+    }
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/defense-layout`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        setDefenseLayoutState((prev) => ({
+          ...prev,
+          loading: false,
+          error: getApiError(parsed, '获取城防配置失败'),
+          feedback: ''
+        }));
+        return;
+      }
+
+      const layout = normalizeDefenseLayoutFromApi(data.layout || {});
+      setDefenseLayoutState((prev) => ({
+        ...prev,
+        loading: false,
+        saving: false,
+        error: '',
+        feedback: '',
+        canEdit: !!data.canEdit,
+        maxBuildings: Number.isFinite(Number(data.maxBuildings)) ? Math.max(1, Number(data.maxBuildings)) : CITY_BUILDING_LIMIT,
+        minBuildings: Number.isFinite(Number(data.minBuildings)) ? Math.max(1, Number(data.minBuildings)) : 1,
+        buildMode: false,
+        isDirty: false,
+        selectedBuildingId: '',
+        draggingBuildingId: '',
+        savedLayout: cloneDefenseLayout(layout),
+        draftLayout: cloneDefenseLayout(layout)
+      }));
+      buildingDragRef.current = null;
+    } catch (error) {
+      setDefenseLayoutState((prev) => ({
+        ...prev,
+        loading: false,
+        error: `获取城防配置失败: ${error.message}`,
+        feedback: ''
+      }));
+    }
+  };
+
+  const getPointerNormPosition = (clientX, clientY) => {
+    const containerRect = containerRef.current?.getBoundingClientRect();
+    if (!containerRect) return null;
+    const metrics = getCityMetrics(containerRect.width, containerRect.height, cameraAngleRef.current);
+    const panOffset = scenePanOffsetRef.current || { x: 0, y: 0 };
+    const rawX = (clientX - containerRect.left - metrics.centerX - panOffset.x) / (metrics.radiusX || 1);
+    const rawY = (clientY - containerRect.top - metrics.centerY - panOffset.y) / (metrics.radiusY || 1);
+    return clampPositionInsideCity({
+      x: Math.max(-1, Math.min(1, rawX)),
+      y: Math.max(-1, Math.min(1, rawY))
+    });
+  };
+
+  const toggleBuildMode = () => {
+    setDefenseLayoutState((prev) => {
+      if (!prev.canEdit) return prev;
+      if (prev.buildMode) {
+        if (prev.isDirty) {
+          const shouldDiscard = window.confirm('当前有未保存的建造配置，退出建造模式会丢失改动，是否继续？');
+          if (!shouldDiscard) return prev;
+        }
+        return {
+          ...prev,
+          buildMode: false,
+          isDirty: false,
+          selectedBuildingId: '',
+          draggingBuildingId: '',
+          error: '',
+          feedback: '',
+          draftLayout: cloneDefenseLayout(prev.savedLayout)
+        };
+      }
+      return {
+        ...prev,
+        buildMode: true,
+        isDirty: false,
+        selectedBuildingId: '',
+        draggingBuildingId: '',
+        error: '',
+        feedback: '',
+        draftLayout: cloneDefenseLayout(prev.savedLayout)
+      };
+    });
+    buildingDragRef.current = null;
+  };
+
+  const addDefenseBuilding = () => {
+    setDefenseLayoutState((prev) => {
+      if (!prev.canEdit || !prev.buildMode) return prev;
+      const currentBuildings = prev.draftLayout?.buildings || [];
+      if (currentBuildings.length >= prev.maxBuildings) {
+        return {
+          ...prev,
+          feedback: `建筑上限为 ${prev.maxBuildings} 个`,
+          error: ''
+        };
+      }
+
+      const newId = `building_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const foundPosition = CITY_BUILDING_CANDIDATE_POSITIONS.find((candidate) => (
+        isValidPlacement(candidate, currentBuildings, newId)
+      ));
+      if (!foundPosition) {
+        return {
+          ...prev,
+          feedback: '没有可用空位，请先调整现有建筑位置',
+          error: ''
+        };
+      }
+
+      const nextLayout = cloneDefenseLayout(prev.draftLayout);
+      nextLayout.buildings.push({
+        buildingId: newId,
+        name: `建筑${nextLayout.buildings.length + 1}`,
+        x: foundPosition.x,
+        y: foundPosition.y,
+        radius: CITY_BUILDING_DEFAULT_RADIUS,
+        level: 1,
+        nextUnitTypeId: '',
+        upgradeCostKP: null
+      });
+      return {
+        ...prev,
+        draftLayout: nextLayout,
+        isDirty: true,
+        selectedBuildingId: newId,
+        feedback: '',
+        error: ''
+      };
+    });
+  };
+
+  const setIntelOnSelectedBuilding = () => {
+    setDefenseLayoutState((prev) => {
+      if (!prev.canEdit || !prev.buildMode || !prev.selectedBuildingId) return prev;
+      if (!(prev.draftLayout?.buildings || []).some((item) => item.buildingId === prev.selectedBuildingId)) {
+        return prev;
+      }
+      if (prev.draftLayout.intelBuildingId === prev.selectedBuildingId) {
+        return {
+          ...prev,
+          feedback: '当前建筑已存放情报文件',
+          error: ''
+        };
+      }
+      return {
+        ...prev,
+        draftLayout: {
+          ...cloneDefenseLayout(prev.draftLayout),
+          intelBuildingId: prev.selectedBuildingId
+        },
+        isDirty: true,
+        feedback: '',
+        error: ''
+      };
+    });
+  };
+
+  const removeSelectedDefenseBuilding = () => {
+    setDefenseLayoutState((prev) => {
+      if (!prev.canEdit || !prev.buildMode || !prev.selectedBuildingId) return prev;
+      const currentBuildings = prev.draftLayout?.buildings || [];
+      if (currentBuildings.length <= prev.minBuildings) {
+        return {
+          ...prev,
+          feedback: `至少保留 ${prev.minBuildings} 个建筑`,
+          error: ''
+        };
+      }
+      const nextBuildings = currentBuildings.filter((item) => item.buildingId !== prev.selectedBuildingId);
+      if (nextBuildings.length === currentBuildings.length) return prev;
+      const nextIntelBuildingId = prev.draftLayout.intelBuildingId === prev.selectedBuildingId
+        ? nextBuildings[0]?.buildingId || ''
+        : prev.draftLayout.intelBuildingId;
+      return {
+        ...prev,
+        draftLayout: {
+          ...cloneDefenseLayout(prev.draftLayout),
+          buildings: nextBuildings,
+          intelBuildingId: nextIntelBuildingId
+        },
+        isDirty: true,
+        selectedBuildingId: nextBuildings[0]?.buildingId || '',
+        feedback: '',
+        error: ''
+      };
+    });
+  };
+
+  const saveDefenseLayout = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id) return;
+
+    const snapshot = defenseLayoutState;
+    if (!snapshot.canEdit || !snapshot.buildMode) return;
+    if (!snapshot.isDirty) {
+      setDefenseLayoutState((prev) => ({
+        ...prev,
+        feedback: '当前没有需要保存的改动',
+        error: ''
+      }));
+      return;
+    }
+
+    setDefenseLayoutState((prev) => ({
+      ...prev,
+      saving: true,
+      feedback: '',
+      error: ''
+    }));
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/defense-layout`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          layout: defenseLayoutToPayload(snapshot.draftLayout)
+        })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        setDefenseLayoutState((prev) => ({
+          ...prev,
+          saving: false,
+          error: getApiError(parsed, '保存城防配置失败')
+        }));
+        return;
+      }
+      const layout = normalizeDefenseLayoutFromApi(data.layout || snapshot.draftLayout);
+      setDefenseLayoutState((prev) => ({
+        ...prev,
+        saving: false,
+        buildMode: false,
+        isDirty: false,
+        selectedBuildingId: '',
+        draggingBuildingId: '',
+        error: '',
+        feedback: data.message || '城防配置已保存',
+        savedLayout: cloneDefenseLayout(layout),
+        draftLayout: cloneDefenseLayout(layout)
+      }));
+      buildingDragRef.current = null;
+    } catch (error) {
+      setDefenseLayoutState((prev) => ({
+        ...prev,
+        saving: false,
+        error: `保存城防配置失败: ${error.message}`
+      }));
+    }
+  };
+
+  const handleDefenseBuildingPointerDown = (event, buildingId) => {
+    if (!defenseLayoutState.canEdit || !defenseLayoutState.buildMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    buildingDragRef.current = { buildingId };
+    setDefenseLayoutState((prev) => ({
+      ...prev,
+      selectedBuildingId: buildingId,
+      draggingBuildingId: buildingId,
+      feedback: '',
+      error: ''
+    }));
   };
 
   const fetchDomainAdmins = async (silent = true) => {
@@ -1240,16 +1805,27 @@ const KnowledgeDomainScene = ({
     if (container) {
       canvas.width = container.clientWidth;
       canvas.height = container.clientHeight;
+      setSceneSize({
+        width: container.clientWidth,
+        height: container.clientHeight
+      });
     }
 
     // 创建渲染器
     rendererRef.current = new KnowledgeDomainRenderer(canvas);
+    rendererRef.current.setCameraAngle(cameraAngleRef.current);
+    applyScenePanOffset(scenePanOffsetRef.current);
     rendererRef.current.startRenderLoop();
 
     // 监听窗口大小变化
     const handleResize = () => {
       if (container && rendererRef.current) {
         rendererRef.current.resize(container.clientWidth, container.clientHeight);
+        setSceneSize({
+          width: container.clientWidth,
+          height: container.clientHeight
+        });
+        applyScenePanOffset(scenePanOffsetRef.current);
       }
     };
 
@@ -1280,7 +1856,18 @@ const KnowledgeDomainScene = ({
     setActiveManageSidePanel('distribution');
     setDistributionState(createDefaultDistributionState());
     setHasUnsavedDistributionDraft(false);
+    setDefenseLayoutState(createDefaultDefenseLayoutState());
+    buildingDragRef.current = null;
+    scenePanDragRef.current = null;
+    setIsScenePanning(false);
+    if (cameraAngleAnimRef.current) {
+      cancelAnimationFrame(cameraAngleAnimRef.current);
+      cameraAngleAnimRef.current = null;
+    }
+    applyCameraAngle(CITY_CAMERA_DEFAULT_ANGLE_DEG);
+    applyScenePanOffset({ x: 0, y: 0 });
     fetchDomainAdmins(false);
+    fetchDefenseLayout(false);
   }, [isVisible, node?._id]);
 
   useEffect(() => {
@@ -1439,6 +2026,159 @@ const KnowledgeDomainScene = ({
     return () => clearTimeout(timerId);
   }, [activeTab, distributionAllianceKeyword, distributionState.canEdit, isVisible, node?._id]);
 
+  useEffect(() => {
+    if (!isVisible || !defenseLayoutState.draggingBuildingId || !defenseLayoutState.buildMode || !defenseLayoutState.canEdit) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event) => {
+      const draggingId = buildingDragRef.current?.buildingId;
+      if (!draggingId) return;
+      const nextPosition = getPointerNormPosition(event.clientX, event.clientY);
+      if (!nextPosition) return;
+
+      setDefenseLayoutState((prev) => {
+        if (!prev.buildMode || !prev.canEdit) return prev;
+        const draftBuildings = prev.draftLayout?.buildings || [];
+        const target = draftBuildings.find((item) => item.buildingId === draggingId);
+        if (!target) return prev;
+        const clamped = clampPositionInsideCity(nextPosition);
+        if (!isValidPlacement(clamped, draftBuildings, draggingId)) {
+          return prev;
+        }
+        const nextDraftLayout = cloneDefenseLayout(prev.draftLayout);
+        nextDraftLayout.buildings = nextDraftLayout.buildings.map((item) => (
+          item.buildingId === draggingId
+            ? { ...item, x: clamped.x, y: clamped.y }
+            : item
+        ));
+        return {
+          ...prev,
+          draftLayout: nextDraftLayout,
+          selectedBuildingId: draggingId,
+          isDirty: true,
+          feedback: '',
+          error: ''
+        };
+      });
+    };
+
+    const stopDragging = () => {
+      buildingDragRef.current = null;
+      setDefenseLayoutState((prev) => ({
+        ...prev,
+        draggingBuildingId: ''
+      }));
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopDragging);
+    window.addEventListener('pointercancel', stopDragging);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopDragging);
+      window.removeEventListener('pointercancel', stopDragging);
+    };
+  }, [isVisible, defenseLayoutState.draggingBuildingId, defenseLayoutState.buildMode, defenseLayoutState.canEdit]);
+
+  useEffect(() => {
+    if (!isVisible || !isScenePanning) return undefined;
+
+    const handlePointerMove = (event) => {
+      const dragMeta = scenePanDragRef.current;
+      if (!dragMeta) return;
+      const dx = event.clientX - dragMeta.startX;
+      const dy = event.clientY - dragMeta.startY;
+      applyScenePanOffset({
+        x: dragMeta.originX + dx,
+        y: dragMeta.originY + dy
+      });
+    };
+
+    const stopPanning = () => {
+      const dragMeta = scenePanDragRef.current;
+      if (
+        dragMeta?.pointerId !== undefined
+        && typeof containerRef.current?.releasePointerCapture === 'function'
+      ) {
+        try {
+          containerRef.current.releasePointerCapture(dragMeta.pointerId);
+        } catch (e) {
+          // ignore capture errors in unsupported environments
+        }
+      }
+      scenePanDragRef.current = null;
+      setIsScenePanning(false);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopPanning);
+    window.addEventListener('pointercancel', stopPanning);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopPanning);
+      window.removeEventListener('pointercancel', stopPanning);
+    };
+  }, [isVisible, isScenePanning]);
+
+  useEffect(() => {
+    if (!isVisible) {
+      if (cameraAngleAnimRef.current) {
+        cancelAnimationFrame(cameraAngleAnimRef.current);
+        cameraAngleAnimRef.current = null;
+      }
+      applyCameraAngle(CITY_CAMERA_DEFAULT_ANGLE_DEG);
+      return undefined;
+    }
+
+    const targetAngle = defenseLayoutState.buildMode
+      ? CITY_CAMERA_BUILD_ANGLE_DEG
+      : CITY_CAMERA_DEFAULT_ANGLE_DEG;
+    const startAngle = cameraAngleRef.current;
+
+    if (Math.abs(startAngle - targetAngle) < 0.05) {
+      applyCameraAngle(targetAngle);
+      return undefined;
+    }
+
+    if (cameraAngleAnimRef.current) {
+      cancelAnimationFrame(cameraAngleAnimRef.current);
+      cameraAngleAnimRef.current = null;
+    }
+
+    const transitionDuration = CITY_CAMERA_TRANSITION_MS;
+    const startAt = performance.now();
+    const easeInOutCubic = (t) => (
+      t < 0.5
+        ? (4 * t * t * t)
+        : (1 - ((-2 * t + 2) ** 3) / 2)
+    );
+
+    const tick = (timestamp) => {
+      const progress = Math.max(0, Math.min(1, (timestamp - startAt) / transitionDuration));
+      const eased = easeInOutCubic(progress);
+      const nextAngle = startAngle + ((targetAngle - startAngle) * eased);
+      applyCameraAngle(nextAngle);
+      if (progress < 1) {
+        cameraAngleAnimRef.current = requestAnimationFrame(tick);
+      } else {
+        cameraAngleAnimRef.current = null;
+        applyCameraAngle(targetAngle);
+      }
+    };
+
+    cameraAngleAnimRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (cameraAngleAnimRef.current) {
+        cancelAnimationFrame(cameraAngleAnimRef.current);
+        cameraAngleAnimRef.current = null;
+      }
+    };
+  }, [defenseLayoutState.buildMode, isVisible]);
+
   const normalizedDistributionProfiles = normalizeDistributionProfiles(
     distributionState.ruleProfiles,
     distributionState.activeRuleId,
@@ -1500,18 +2240,120 @@ const KnowledgeDomainScene = ({
     conflictMessages.push(`总比例超限 ${currentPercentSummary.total.toFixed(2)}%，超出部分不会被允许保存`);
   }
 
+  const activeDefenseLayout = defenseLayoutState.buildMode
+    ? defenseLayoutState.draftLayout
+    : defenseLayoutState.savedLayout;
+  const defenseBuildings = Array.isArray(activeDefenseLayout?.buildings)
+    ? activeDefenseLayout.buildings
+    : [];
+  const defenseMetrics = getCityMetrics(
+    sceneSize.width || containerRef.current?.clientWidth || 1280,
+    sceneSize.height || containerRef.current?.clientHeight || 720,
+    cameraAngleDeg
+  );
+  const selectedDefenseBuilding = (defenseLayoutState.buildMode
+    ? (defenseLayoutState.draftLayout?.buildings || [])
+    : defenseBuildings
+  ).find((item) => item.buildingId === defenseLayoutState.selectedBuildingId) || null;
+  const canAddDefenseBuilding = (
+    defenseLayoutState.canEdit
+    && defenseLayoutState.buildMode
+    && (defenseLayoutState.draftLayout?.buildings || []).length < defenseLayoutState.maxBuildings
+  );
+  const masterFromNode = normalizeDomainManagerUser(node?.domainMaster);
+  const masterFromAdminState = normalizeDomainManagerUser(domainAdminState.domainMaster);
+  const displayMaster = masterFromNode || masterFromAdminState || null;
+  const adminSourceList = [];
+  if (Array.isArray(node?.domainAdmins)) {
+    adminSourceList.push(...node.domainAdmins);
+  }
+  if (Array.isArray(domainAdminState.domainAdmins)) {
+    adminSourceList.push(...domainAdminState.domainAdmins);
+  }
+  const adminUserMap = new Map();
+  adminSourceList.forEach((item) => {
+    const normalized = normalizeDomainManagerUser(item);
+    if (!normalized) return;
+    if (displayMaster && normalized._id === displayMaster._id) return;
+    if (!adminUserMap.has(normalized._id)) {
+      adminUserMap.set(normalized._id, normalized);
+    }
+  });
+  const displayAdmins = Array.from(adminUserMap.values());
+  const showDefenseManagerCard = defenseLayoutState.canEdit;
+  const displayDefenseBuildings = defenseBuildings.map((building, index) => ({
+    ...building,
+    ordinal: index + 1,
+    isIntel: defenseLayoutState.canEdit && activeDefenseLayout?.intelBuildingId === building.buildingId
+  }));
+
   if (!isVisible && transitionProgress <= 0) return null;
 
   return (
     <div
       ref={containerRef}
-      className="knowledge-domain-container"
+      className={`knowledge-domain-container ${isScenePanning ? 'is-scene-panning' : ''}`}
       style={{
         opacity: displayOpacity,
         pointerEvents: displayOpacity > 0.5 ? 'auto' : 'none'
       }}
+      onPointerDown={handleScenePointerDown}
     >
       <canvas ref={canvasRef} className="knowledge-domain-canvas" />
+      <button
+        type="button"
+        className="domain-return-top-btn"
+        onClick={onExit}
+        title="返回节点主视角"
+        aria-label="返回节点主视角"
+      >
+        <ArrowLeft size={14} />
+        <span>返回节点主视角</span>
+      </button>
+      <div
+        ref={cityDefenseLayerRef}
+        className={`city-defense-layer ${defenseLayoutState.buildMode ? 'build-mode' : ''}`}
+      >
+        {displayDefenseBuildings.map((building) => {
+          const px = defenseMetrics.centerX + building.x * defenseMetrics.radiusX;
+          const py = defenseMetrics.centerY + building.y * defenseMetrics.radiusY;
+          const radiusPx = Math.max(16, Math.min(36, Math.round(defenseMetrics.radiusY * (building.radius || CITY_BUILDING_DEFAULT_RADIUS))));
+          const depthScale = 1 - defenseMetrics.tiltBlend;
+          const topHeightPx = Math.max(10, Math.round(radiusPx * (0.6 + (defenseMetrics.tiltBlend * 0.25))));
+          const bodyHeightPx = Math.max(4, Math.round(radiusPx * (0.35 + (depthScale * 1.05))));
+          const totalHeightPx = bodyHeightPx + topHeightPx;
+          const isSelected = defenseLayoutState.selectedBuildingId === building.buildingId;
+          const isDragging = defenseLayoutState.draggingBuildingId === building.buildingId;
+          return (
+            <button
+              key={building.buildingId}
+              type="button"
+              className={`city-defense-building ${building.isIntel ? 'intel' : ''} ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${defenseLayoutState.canEdit && defenseLayoutState.buildMode ? 'editable' : ''}`}
+              style={{
+                left: `${px - radiusPx}px`,
+                top: `${py - totalHeightPx}px`,
+                width: `${radiusPx * 2}px`,
+                height: `${totalHeightPx}px`,
+                '--cylinder-top-height': `${topHeightPx}px`,
+                '--cylinder-body-height': `${bodyHeightPx}px`
+              }}
+              onPointerDown={(event) => handleDefenseBuildingPointerDown(event, building.buildingId)}
+              onClick={() => {
+                if (!defenseLayoutState.canEdit || !defenseLayoutState.buildMode) return;
+                setDefenseLayoutState((prev) => ({
+                  ...prev,
+                  selectedBuildingId: building.buildingId
+                }));
+              }}
+            >
+              <span className="city-defense-building-top" />
+              <span className="city-defense-building-body" />
+              {building.isIntel && <span className="city-defense-intel-badge">情报文件</span>}
+              <span className="city-defense-building-label">{building.name || `建筑${building.ordinal}`}</span>
+            </button>
+          );
+        })}
+      </div>
 
       <div className={`domain-right-dock ${isDomainInfoDockExpanded ? 'expanded' : 'collapsed'}`}>
         <div className="domain-info-panel">
@@ -1552,7 +2394,104 @@ const KnowledgeDomainScene = ({
                 <span className="stat-value">{node?.contentScore || 1}</span>
               </div>
             </div>
+            <div className="domain-managers-card">
+              <div className="domain-admins-subtitle">域主管理层</div>
+              <div className="domain-manager-avatar-row">
+                {displayMaster ? (
+                  <div className="domain-manager-avatar-item master" title={`域主：${displayMaster.username || '未命名用户'}`}>
+                    <img
+                      src={avatarMap[displayMaster.avatar] || defaultMale1}
+                      alt={displayMaster.username || '域主'}
+                      className="domain-manager-avatar-img"
+                    />
+                    <span className="domain-manager-name">{displayMaster.username || '未设置域主'}</span>
+                  </div>
+                ) : (
+                  <div className="domain-manage-tip">暂无域主信息</div>
+                )}
+              </div>
+              <div className="domain-manager-avatar-row admins">
+                {displayAdmins.length > 0 ? displayAdmins.map((adminUser) => (
+                  <div key={adminUser._id} className="domain-manager-avatar-item" title={`域相：${adminUser.username || '未命名用户'}`}>
+                    <img
+                      src={avatarMap[adminUser.avatar] || defaultMale1}
+                      alt={adminUser.username || '域相'}
+                      className="domain-manager-avatar-img"
+                    />
+                    <span className="domain-manager-name">{adminUser.username || '未命名'}</span>
+                  </div>
+                )) : (
+                  <div className="domain-manage-tip">暂无域相</div>
+                )}
+              </div>
+            </div>
 
+            {showDefenseManagerCard && (
+              <div className="domain-defense-card">
+                <div className="domain-admins-subtitle">城区守备建筑</div>
+                {defenseLayoutState.loading && <div className="domain-manage-tip">加载城防配置中...</div>}
+                {!defenseLayoutState.loading && (
+                  <div className="domain-manage-tip">
+                    当前建筑 {defenseBuildings.length} / {defenseLayoutState.maxBuildings}
+                  </div>
+                )}
+                {defenseLayoutState.error && <div className="domain-manage-error">{defenseLayoutState.error}</div>}
+                {defenseLayoutState.feedback && <div className="domain-manage-feedback">{defenseLayoutState.feedback}</div>}
+                <div className="domain-defense-actions">
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    onClick={toggleBuildMode}
+                  >
+                    {defenseLayoutState.buildMode ? '退出建造模式' : '建造'}
+                  </button>
+                  {defenseLayoutState.buildMode && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-small btn-success"
+                        onClick={addDefenseBuilding}
+                        disabled={!canAddDefenseBuilding}
+                      >
+                        新增建筑
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-small btn-warning"
+                        onClick={saveDefenseLayout}
+                        disabled={defenseLayoutState.saving}
+                      >
+                        {defenseLayoutState.saving ? '保存中...' : '保存配置'}
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {defenseLayoutState.buildMode && selectedDefenseBuilding && (
+                  <div className="domain-defense-selected-card">
+                    <div className="domain-manage-tip">
+                      当前选中：{selectedDefenseBuilding.name || '未命名建筑'}
+                    </div>
+                    <div className="domain-defense-actions">
+                      <button
+                        type="button"
+                        className="btn btn-small btn-secondary"
+                        onClick={setIntelOnSelectedBuilding}
+                      >
+                        存放情报文件
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-small btn-danger"
+                        onClick={removeSelectedDefenseBuilding}
+                      >
+                        移除
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className="domain-tab-content manage-tab-content">

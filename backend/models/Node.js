@@ -259,6 +259,94 @@ const NodeLockedDistributionSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const CITY_BUILDING_LIMIT = 3;
+const CITY_BUILDING_DEFAULT_RADIUS = 0.17;
+const CITY_BUILDING_MIN_RADIUS = 0.1;
+const CITY_BUILDING_MAX_RADIUS = 0.24;
+const CITY_BUILDING_MIN_DISTANCE = 0.34;
+const CITY_BUILDING_MAX_DISTANCE = 0.86;
+
+const CityBuildingSchema = new mongoose.Schema({
+  buildingId: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  name: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  x: {
+    type: Number,
+    required: true,
+    min: -1,
+    max: 1
+  },
+  y: {
+    type: Number,
+    required: true,
+    min: -1,
+    max: 1
+  },
+  radius: {
+    type: Number,
+    default: CITY_BUILDING_DEFAULT_RADIUS,
+    min: CITY_BUILDING_MIN_RADIUS,
+    max: CITY_BUILDING_MAX_RADIUS
+  },
+  level: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+  nextUnitTypeId: {
+    type: String,
+    default: ''
+  },
+  upgradeCostKP: {
+    type: Number,
+    default: null
+  }
+}, { _id: false });
+
+const CityDefenseLayoutSchema = new mongoose.Schema({
+  buildings: {
+    type: [CityBuildingSchema],
+    default: []
+  },
+  intelBuildingId: {
+    type: String,
+    default: ''
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
+const createCityBuildingId = (prefix = 'building') => (
+  `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+);
+
+const createDefaultCityDefenseLayout = () => {
+  const coreId = 'core';
+  return {
+    buildings: [{
+      buildingId: coreId,
+      name: '建筑1',
+      x: 0,
+      y: 0,
+      radius: CITY_BUILDING_DEFAULT_RADIUS,
+      level: 1,
+      nextUnitTypeId: '',
+      upgradeCostKP: null
+    }],
+    intelBuildingId: coreId,
+    updatedAt: new Date()
+  };
+};
+
 const NodeSchema = new mongoose.Schema({
   nodeId: { 
     type: String, 
@@ -364,6 +452,10 @@ const NodeSchema = new mongoose.Schema({
   knowledgeDistributionLastExecutedAt: {
     type: Date,
     default: null
+  },
+  cityDefenseLayout: {
+    type: CityDefenseLayoutSchema,
+    default: () => createDefaultCityDefenseLayout()
   },
   associations: [AssociationSchema],
   relatedParentDomains: {
@@ -581,6 +673,111 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
   if (!Number.isFinite(Number(this.knowledgeDistributionCarryover)) || Number(this.knowledgeDistributionCarryover) < 0) {
     this.knowledgeDistributionCarryover = 0;
   }
+
+  const parseNumber = (value, fallback = 0) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const sanitizeBuilding = (item, index) => {
+    const sourceId = typeof item?.buildingId === 'string' ? item.buildingId.trim() : '';
+    const buildingId = sourceId || createCityBuildingId(`building_${index + 1}`);
+    const sourceName = typeof item?.name === 'string' ? item.name.trim() : '';
+    const name = sourceName || `建筑${index + 1}`;
+    const x = Math.max(-1, Math.min(1, parseNumber(item?.x, 0)));
+    const y = Math.max(-1, Math.min(1, parseNumber(item?.y, 0)));
+    const radius = Math.max(
+      CITY_BUILDING_MIN_RADIUS,
+      Math.min(CITY_BUILDING_MAX_RADIUS, parseNumber(item?.radius, CITY_BUILDING_DEFAULT_RADIUS))
+    );
+    const level = Math.max(1, Math.floor(parseNumber(item?.level, 1)));
+    const nextUnitTypeId = typeof item?.nextUnitTypeId === 'string' ? item.nextUnitTypeId.trim() : '';
+    const upgradeCostRaw = item?.upgradeCostKP;
+    const upgradeCostNum = parseNumber(upgradeCostRaw, NaN);
+    const upgradeCostKP = Number.isFinite(upgradeCostNum) && upgradeCostNum >= 0
+      ? Number(upgradeCostNum.toFixed(2))
+      : null;
+    return {
+      buildingId,
+      name,
+      x,
+      y,
+      radius,
+      level,
+      nextUnitTypeId,
+      upgradeCostKP
+    };
+  };
+
+  const sourceLayout = this.cityDefenseLayout && typeof this.cityDefenseLayout === 'object'
+    ? this.cityDefenseLayout
+    : {};
+  const sourceBuildings = Array.isArray(sourceLayout.buildings) ? sourceLayout.buildings : [];
+  const dedupedBuildings = [];
+  const seenBuildingIds = new Set();
+
+  for (let i = 0; i < sourceBuildings.length; i += 1) {
+    const sanitized = sanitizeBuilding(sourceBuildings[i], i);
+    if (!sanitized.buildingId || seenBuildingIds.has(sanitized.buildingId)) continue;
+    seenBuildingIds.add(sanitized.buildingId);
+    dedupedBuildings.push(sanitized);
+    if (dedupedBuildings.length >= CITY_BUILDING_LIMIT) break;
+  }
+
+  let normalizedBuildings = dedupedBuildings;
+  if (normalizedBuildings.length === 0) {
+    normalizedBuildings = createDefaultCityDefenseLayout().buildings;
+  }
+
+  const validatePosition = (building, buildingList, selfIndex) => {
+    const centerDistance = Math.sqrt((building.x ** 2) + (building.y ** 2));
+    if (centerDistance > CITY_BUILDING_MAX_DISTANCE) return false;
+    for (let index = 0; index < buildingList.length; index += 1) {
+      if (index === selfIndex) continue;
+      const target = buildingList[index];
+      const dx = building.x - target.x;
+      const dy = building.y - target.y;
+      if (Math.sqrt((dx ** 2) + (dy ** 2)) < CITY_BUILDING_MIN_DISTANCE) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  if (normalizedBuildings.length > 1) {
+    normalizedBuildings = normalizedBuildings.map((building, index) => {
+      if (validatePosition(building, normalizedBuildings, index)) {
+        return building;
+      }
+      const fallbackPositions = [
+        { x: 0, y: 0 },
+        { x: -0.46, y: -0.12 },
+        { x: 0.46, y: -0.12 },
+        { x: -0.34, y: 0.36 },
+        { x: 0.34, y: 0.36 }
+      ];
+      const fallback = fallbackPositions[index] || { x: 0, y: 0 };
+      return {
+        ...building,
+        x: fallback.x,
+        y: fallback.y
+      };
+    });
+  }
+
+  const buildingIdSet = new Set(normalizedBuildings.map((item) => item.buildingId));
+  const sourceIntelBuildingId = typeof sourceLayout.intelBuildingId === 'string'
+    ? sourceLayout.intelBuildingId.trim()
+    : '';
+  const intelBuildingId = buildingIdSet.has(sourceIntelBuildingId)
+    ? sourceIntelBuildingId
+    : normalizedBuildings[0].buildingId;
+
+  this.cityDefenseLayout = {
+    buildings: normalizedBuildings,
+    intelBuildingId,
+    updatedAt: new Date()
+  };
 
   next();
 });

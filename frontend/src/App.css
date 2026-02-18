@@ -77,6 +77,10 @@ body {
     .knowledge-domain-active .knowledge-domain-container .domain-right-dock-toggle {
         top: 92px;
     }
+
+    .knowledge-domain-active .knowledge-domain-container .domain-return-top-btn {
+        top: 92px;
+    }
 }
 
 @keyframes slideDown {

@@ -44,7 +44,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         username: '',
         password: '',
         level: 0,
-        experience: 0
+        experience: 0,
+        knowledgeBalance: '0'
     });
     const [travelUnitSeconds, setTravelUnitSeconds] = useState(60);
     const [travelUnitInput, setTravelUnitInput] = useState('60');
@@ -197,16 +198,38 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             // 编辑时默认留空，避免把展示值误当作新密码提交
             password: '',
             level: user.level,
-            experience: user.experience
+            experience: user.experience,
+            knowledgeBalance: String(
+                Number.isFinite(Number(user.knowledgeBalance))
+                    ? Number(user.knowledgeBalance)
+                    : 0
+            )
         });
     };
 
     const saveUserEdit = async (userId) => {
         const token = localStorage.getItem('token');
+        const parsedLevel = Number(editForm.level);
+        const parsedExperience = Number(editForm.experience);
+        const parsedKnowledgeBalance = Number(editForm.knowledgeBalance);
+        if (!Number.isInteger(parsedLevel) || parsedLevel < 0) {
+            alert('等级必须是大于等于0的整数');
+            return;
+        }
+        if (!Number.isInteger(parsedExperience) || parsedExperience < 0) {
+            alert('经验值必须是大于等于0的整数');
+            return;
+        }
+        if (!Number.isFinite(parsedKnowledgeBalance) || parsedKnowledgeBalance < 0) {
+            alert('知识点余额必须是大于等于0的数字');
+            return;
+        }
+
         const payload = {
             username: editForm.username,
-            level: editForm.level,
-            experience: editForm.experience
+            level: parsedLevel,
+            experience: parsedExperience,
+            knowledgeBalance: Number(parsedKnowledgeBalance.toFixed(2))
         };
 
         if (editForm.password.trim() !== '') {
@@ -1658,7 +1681,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                     <th>密码（明文）</th>
                                     <th>等级</th>
                                     <th>经验值</th>
-                                    <th>拥有节点</th>
+                                    <th>知识点余额</th>
                                     <th>创建时间</th>
                                     <th>更新时间</th>
                                     <th>操作</th>
@@ -1732,7 +1755,25 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                 user.experience
                                             )}
                                         </td>
-                                        <td>{user.ownedNodes?.length || 0}</td>
+                                        <td>
+                                            {editingUser === user._id ? (
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.01"
+                                                    value={editForm.knowledgeBalance}
+                                                    onChange={(e) => setEditForm({
+                                                        ...editForm,
+                                                        knowledgeBalance: e.target.value
+                                                    })}
+                                                    className="edit-input-small"
+                                                />
+                                            ) : (
+                                                Number.isFinite(Number(user.knowledgeBalance))
+                                                    ? Number(user.knowledgeBalance).toFixed(2)
+                                                    : '0.00'
+                                            )}
+                                        </td>
                                         <td>{new Date(user.createdAt).toLocaleString('zh-CN')}</td>
                                         <td>{new Date(user.updatedAt).toLocaleString('zh-CN')}</td>
                                         <td className="action-cell">
