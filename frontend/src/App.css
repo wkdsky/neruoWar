@@ -81,6 +81,16 @@ body {
     .knowledge-domain-active .knowledge-domain-container .domain-return-top-btn {
         top: 92px;
     }
+
+    .knowledge-domain-active .knowledge-domain-container .intel-heist-hud {
+        top: 92px;
+    }
+}
+
+@media (max-width: 768px) {
+    .knowledge-domain-active .knowledge-domain-container .intel-heist-hud {
+        top: 80px;
+    }
 }
 
 @keyframes slideDown {
@@ -404,6 +414,66 @@ body {
     gap: 0.75rem;
     padding: 1.5rem;
     border-top: 1px solid #475569;
+}
+
+.intel-heist-modal {
+    max-width: 520px;
+}
+
+.intel-heist-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.intel-heist-tip {
+    color: #cbd5e1;
+    font-size: 0.86rem;
+}
+
+.intel-heist-error {
+    color: #fecaca;
+    background: rgba(127, 29, 29, 0.35);
+    border: 1px solid rgba(248, 113, 113, 0.5);
+    border-radius: 8px;
+    padding: 0.55rem 0.65rem;
+    font-size: 0.85rem;
+}
+
+.intel-heist-snapshot {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.intel-heist-gate-block {
+    border: 1px solid rgba(100, 116, 139, 0.45);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.55);
+    padding: 0.55rem 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.intel-heist-gate-block strong {
+    color: #e2e8f0;
+    font-size: 0.86rem;
+}
+
+.intel-heist-gate-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    color: #f8fafc;
+    font-size: 0.84rem;
+}
+
+.intel-heist-gate-row em {
+    font-style: normal;
+    color: #fde68a;
+    font-weight: 700;
 }
 
 /* 表单样式 */

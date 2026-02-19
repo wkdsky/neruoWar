@@ -173,6 +173,20 @@ class SceneManager {
       });
     }
 
+    if (buttonContext.showIntelStealButton) {
+      buttons.push({
+        id: 'intel-heist',
+        icon: buttonContext.intelStealHasSnapshot ? '◉' : '◌',
+        angle: Math.PI * 0.62,
+        action: 'intelSteal',
+        tooltip: buttonContext.intelStealTooltip || '情报窃取',
+        color: buttonContext.intelStealHasSnapshot
+          ? [0.96, 0.58, 0.24, 0.95]
+          : [0.56, 0.64, 0.78, 0.9],
+        disabled: !!buttonContext.intelStealDisabled
+      });
+    }
+
     this.renderer.setNodeButtons(centerNodeId, buttons);
   }
 

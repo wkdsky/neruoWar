@@ -231,6 +231,8 @@ const CITY_CAMERA_DEFAULT_ANGLE_DEG = 45;
 const CITY_CAMERA_BUILD_ANGLE_DEG = 90;
 const CITY_CAMERA_TRANSITION_MS = 460;
 const CITY_GATE_KEYS = ['cheng', 'qi'];
+const INTEL_HEIST_SCAN_MS = 8000;
+const INTEL_HEIST_TIMEOUT_BUFFER_MS = INTEL_HEIST_SCAN_MS*2/3;
 const CITY_GATE_LABELS = {
   cheng: '承口',
   qi: '启口'
@@ -490,6 +492,13 @@ const getGateDefenseEntries = (layout = {}, gateKey) => {
 const getGateDefenseTotal = (layout = {}, gateKey) => (
   getGateDefenseEntries(layout, gateKey).reduce((sum, entry) => sum + entry.count, 0)
 );
+
+const formatElapsedMinutesText = (value) => {
+  const timeMs = new Date(value || 0).getTime();
+  if (!Number.isFinite(timeMs) || timeMs <= 0) return '未知时刻';
+  const minutes = Math.max(0, Math.floor((Date.now() - timeMs) / 60000));
+  return `${minutes}分钟前`;
+};
 
 const getDeployedCountByUnitType = (layout = {}) => {
   const counter = new Map();
@@ -842,7 +851,9 @@ const KnowledgeDomainScene = ({
   node,
   isVisible,
   onExit,
-  transitionProgress = 1 // 0-1，用于过渡动画
+  transitionProgress = 1, // 0-1，用于过渡动画
+  mode = 'normal',
+  onIntelSnapshotCaptured
 }) => {
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
@@ -906,11 +917,32 @@ const KnowledgeDomainScene = ({
   const [sceneSize, setSceneSize] = useState({ width: 0, height: 0 });
   const [isScenePanning, setIsScenePanning] = useState(false);
   const [cameraAngleDeg, setCameraAngleDeg] = useState(CITY_CAMERA_DEFAULT_ANGLE_DEG);
+  const [intelHeistState, setIntelHeistState] = useState({
+    active: false,
+    totalMs: 0,
+    deadlineMs: 0,
+    activeBuildingId: '',
+    searchStartedAtMs: 0,
+    searchedBuildingIds: [],
+    submitting: false,
+    hintText: '',
+    hintVisible: false,
+    resultSnapshot: null,
+    resultOpen: false,
+    error: '',
+    timeoutTriggered: false
+  });
+  const [intelHeistClockMs, setIntelHeistClockMs] = useState(Date.now());
+  const [isIntelHeistExitConfirmOpen, setIsIntelHeistExitConfirmOpen] = useState(false);
   const buildingDragRef = useRef(null);
   const scenePanOffsetRef = useRef({ x: 0, y: 0 });
   const scenePanDragRef = useRef(null);
   const cameraAngleRef = useRef(CITY_CAMERA_DEFAULT_ANGLE_DEG);
   const cameraAngleAnimRef = useRef(null);
+  const intelHeistHintTimerRef = useRef(null);
+  const intelHeistScanRequestRef = useRef('');
+  const intelHeistPauseStartedAtRef = useRef(0);
+  const isIntelHeistMode = mode === 'intelHeist';
   const showManageTab = !!domainAdminState.canView;
   const hasParentEntrance = Array.isArray(node?.relatedParentDomains) && node.relatedParentDomains.length > 0;
   const hasChildEntrance = Array.isArray(node?.relatedChildDomains) && node.relatedChildDomains.length > 0;
@@ -944,6 +976,161 @@ const KnowledgeDomainScene = ({
       unitName: '',
       max: 1
     });
+  };
+
+  const clearIntelHeistHintTimer = () => {
+    if (intelHeistHintTimerRef.current) {
+      clearTimeout(intelHeistHintTimerRef.current);
+      intelHeistHintTimerRef.current = null;
+    }
+  };
+
+  const resetIntelHeistState = () => {
+    clearIntelHeistHintTimer();
+    intelHeistScanRequestRef.current = '';
+    intelHeistPauseStartedAtRef.current = 0;
+    setIntelHeistClockMs(Date.now());
+    setIsIntelHeistExitConfirmOpen(false);
+    setIntelHeistState({
+      active: false,
+      totalMs: 0,
+      deadlineMs: 0,
+      activeBuildingId: '',
+      searchStartedAtMs: 0,
+      searchedBuildingIds: [],
+      submitting: false,
+      hintText: '',
+      hintVisible: false,
+      resultSnapshot: null,
+      resultOpen: false,
+      error: '',
+      timeoutTriggered: false
+    });
+  };
+
+  const showIntelHeistHint = (text) => {
+    clearIntelHeistHintTimer();
+    setIntelHeistState((prev) => ({
+      ...prev,
+      hintText: text,
+      hintVisible: true
+    }));
+  };
+
+  const startIntelHeistSearch = (buildingId) => {
+    if (!isIntelHeistMode || !buildingId) return;
+    setIntelHeistState((prev) => {
+      if (!prev.active || prev.timeoutTriggered || prev.resultOpen) return prev;
+      if (prev.submitting || prev.activeBuildingId) return prev;
+      if ((prev.searchedBuildingIds || []).includes(buildingId)) return prev;
+      if (prev.deadlineMs > 0 && Date.now() >= prev.deadlineMs) return prev;
+      return {
+        ...prev,
+        activeBuildingId: buildingId,
+        searchStartedAtMs: Date.now(),
+        error: '',
+        hintVisible: false
+      };
+    });
+    clearIntelHeistHintTimer();
+    intelHeistHintTimerRef.current = setTimeout(() => {
+      setIntelHeistState((prev) => ({
+        ...prev,
+        hintText: ''
+      }));
+      intelHeistHintTimerRef.current = null;
+    }, 220);
+  };
+
+  const exitIntelHeistGame = (exitPayload = {}) => {
+    resetIntelHeistState();
+    if (typeof onExit === 'function') {
+      onExit(exitPayload);
+    }
+  };
+
+  const requestExitIntelHeistGame = () => {
+    if (!isIntelHeistMode) {
+      if (typeof onExit === 'function') onExit();
+      return;
+    }
+    if (intelHeistState.resultOpen || intelHeistState.timeoutTriggered || !intelHeistState.active) {
+      exitIntelHeistGame();
+      return;
+    }
+    setIsIntelHeistExitConfirmOpen(true);
+  };
+
+  const cancelExitIntelHeistGame = () => {
+    setIsIntelHeistExitConfirmOpen(false);
+  };
+
+  const resolveIntelHeistSearch = async (buildingId) => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id || !buildingId) return;
+    const requestId = `${buildingId}_${Date.now()}`;
+    intelHeistScanRequestRef.current = requestId;
+    setIntelHeistState((prev) => ({
+      ...prev,
+      submitting: true,
+      error: ''
+    }));
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/intel-heist/scan`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ buildingId })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (intelHeistScanRequestRef.current !== requestId) return;
+      if (!response.ok || !data) {
+        setIntelHeistState((prev) => ({
+          ...prev,
+          submitting: false,
+          error: getApiError(parsed, '建筑搜索失败')
+        }));
+        return;
+      }
+      if (data.found && data.snapshot) {
+        setIntelHeistState((prev) => ({
+          ...prev,
+          active: false,
+          submitting: false,
+          activeBuildingId: '',
+          searchStartedAtMs: 0,
+          resultSnapshot: data.snapshot,
+          resultOpen: true,
+          hintText: '',
+          hintVisible: false,
+          searchedBuildingIds: Array.from(new Set([...(prev.searchedBuildingIds || []), buildingId]))
+        }));
+        if (typeof onIntelSnapshotCaptured === 'function') {
+          onIntelSnapshotCaptured(data.snapshot, node);
+        }
+        return;
+      }
+      setIntelHeistState((prev) => ({
+        ...prev,
+        submitting: false,
+        searchedBuildingIds: Array.from(new Set([...(prev.searchedBuildingIds || []), buildingId]))
+      }));
+      showIntelHeistHint(data.message || '该建筑未发现情报文件');
+    } catch (error) {
+      if (intelHeistScanRequestRef.current !== requestId) return;
+      setIntelHeistState((prev) => ({
+        ...prev,
+        submitting: false,
+        error: `建筑搜索失败: ${error.message}`
+      }));
+    } finally {
+      if (intelHeistScanRequestRef.current === requestId) {
+        intelHeistScanRequestRef.current = '';
+      }
+    }
   };
 
   const applyCameraAngle = (angleDeg, syncState = true) => {
@@ -987,7 +1174,15 @@ const KnowledgeDomainScene = ({
       || target?.closest('.gate-deploy-panel')
       || target?.closest('.number-pad-dialog-overlay')
       || target?.closest('.distribution-rule-modal-overlay')
+      || target?.closest('.intel-heist-hud')
+      || target?.closest('.intel-heist-result-overlay')
+      || target?.closest('.intel-heist-hint')
+      || target?.closest('.intel-heist-exit-confirm-overlay')
+      || target?.closest('.intel-heist-exit-confirm-card')
+      || target?.closest('.intel-heist-timeout-overlay')
+      || target?.closest('.intel-heist-timeout-card')
       || target?.closest('.city-defense-building.editable')
+      || target?.closest('.city-defense-building.intel-heist-searchable')
     ) {
       return;
     }
@@ -2295,7 +2490,8 @@ const KnowledgeDomainScene = ({
     setDistributionAllianceResults([]);
     setIsDistributionRuleModalOpen(false);
     setNewDistributionRuleName('');
-    setActiveManageSidePanel('distribution');
+    setActiveManageSidePanel(isIntelHeistMode ? '' : 'distribution');
+    setIsDomainInfoDockExpanded(false);
     setDistributionState(createDefaultDistributionState());
     setHasUnsavedDistributionDraft(false);
     setDefenseLayoutState(createDefaultDefenseLayoutState());
@@ -2308,6 +2504,7 @@ const KnowledgeDomainScene = ({
       draggingUnitTypeId: ''
     });
     closeGateDeployDialog();
+    resetIntelHeistState();
     buildingDragRef.current = null;
     scenePanDragRef.current = null;
     setIsScenePanning(false);
@@ -2317,9 +2514,11 @@ const KnowledgeDomainScene = ({
     }
     applyCameraAngle(CITY_CAMERA_DEFAULT_ANGLE_DEG);
     applyScenePanOffset({ x: 0, y: 0 });
-    fetchDomainAdmins(false);
+    if (!isIntelHeistMode) {
+      fetchDomainAdmins(false);
+    }
     fetchDefenseLayout(false);
-  }, [isVisible, node?._id]);
+  }, [isVisible, node?._id, isIntelHeistMode]);
 
   useEffect(() => {
     if (!showManageTab && activeTab === 'manage') {
@@ -2635,6 +2834,143 @@ const KnowledgeDomainScene = ({
     };
   }, [defenseLayoutState.buildMode, isVisible]);
 
+  useEffect(() => {
+    return () => {
+      clearIntelHeistHintTimer();
+      intelHeistScanRequestRef.current = '';
+      intelHeistPauseStartedAtRef.current = 0;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isIntelHeistMode || !intelHeistState.active) {
+      intelHeistPauseStartedAtRef.current = 0;
+      return;
+    }
+
+    if (isIntelHeistExitConfirmOpen) {
+      if (!intelHeistPauseStartedAtRef.current) {
+        intelHeistPauseStartedAtRef.current = Date.now();
+      }
+      return;
+    }
+
+    if (!intelHeistPauseStartedAtRef.current) return;
+    const pauseDelta = Math.max(0, Date.now() - intelHeistPauseStartedAtRef.current);
+    intelHeistPauseStartedAtRef.current = 0;
+    if (pauseDelta <= 0) return;
+
+    setIntelHeistState((prev) => {
+      if (!prev.active) return prev;
+      return {
+        ...prev,
+        deadlineMs: prev.deadlineMs > 0 ? prev.deadlineMs + pauseDelta : prev.deadlineMs,
+        searchStartedAtMs: prev.searchStartedAtMs > 0 ? prev.searchStartedAtMs + pauseDelta : prev.searchStartedAtMs
+      };
+    });
+    setIntelHeistClockMs(Date.now());
+  }, [isIntelHeistMode, intelHeistState.active, isIntelHeistExitConfirmOpen]);
+
+  useEffect(() => {
+    if (!isVisible || !isIntelHeistMode) {
+      resetIntelHeistState();
+      return;
+    }
+    const buildings = Array.isArray(defenseLayoutState.savedLayout?.buildings)
+      ? defenseLayoutState.savedLayout.buildings
+      : [];
+    if (defenseLayoutState.loading || buildings.length === 0) return;
+    setIntelHeistState((prev) => {
+      if (prev.active && prev.totalMs > 0) return prev;
+      const buildingCount = Math.max(1, buildings.length);
+      const totalMs = buildingCount <= 1
+        ? (INTEL_HEIST_SCAN_MS + INTEL_HEIST_TIMEOUT_BUFFER_MS)
+        : (((buildingCount - 1) * INTEL_HEIST_SCAN_MS) + INTEL_HEIST_TIMEOUT_BUFFER_MS);
+      return {
+        ...prev,
+        active: true,
+        totalMs,
+        deadlineMs: Date.now() + totalMs,
+        activeBuildingId: '',
+        searchStartedAtMs: 0,
+        searchedBuildingIds: [],
+        submitting: false,
+        hintText: '',
+        hintVisible: false,
+        resultSnapshot: null,
+        resultOpen: false,
+        error: '',
+        timeoutTriggered: false
+      };
+    });
+    setIntelHeistClockMs(Date.now());
+    setIsDomainInfoDockExpanded(false);
+    setGateDeployState((prev) => ({
+      ...prev,
+      activeGateKey: '',
+      draggingUnitTypeId: ''
+    }));
+    setIsDistributionRuleModalOpen(false);
+    closeGateDeployDialog();
+  }, [isVisible, isIntelHeistMode, node?._id, defenseLayoutState.loading, defenseLayoutState.savedLayout]);
+
+  useEffect(() => {
+    if (!isVisible || !isIntelHeistMode || !intelHeistState.active || isIntelHeistExitConfirmOpen) return undefined;
+    const timerId = setInterval(() => {
+      setIntelHeistClockMs(Date.now());
+    }, 100);
+    return () => clearInterval(timerId);
+  }, [isVisible, isIntelHeistMode, intelHeistState.active, isIntelHeistExitConfirmOpen]);
+
+  useEffect(() => {
+    if (!isVisible || !isIntelHeistMode || !intelHeistState.activeBuildingId || isIntelHeistExitConfirmOpen) return;
+    if (!intelHeistState.searchStartedAtMs || intelHeistState.submitting) return;
+    const elapsed = intelHeistClockMs - intelHeistState.searchStartedAtMs;
+    if (elapsed < INTEL_HEIST_SCAN_MS) return;
+    const targetBuildingId = intelHeistState.activeBuildingId;
+    setIntelHeistState((prev) => ({
+      ...prev,
+      activeBuildingId: '',
+      searchStartedAtMs: 0
+    }));
+    resolveIntelHeistSearch(targetBuildingId);
+  }, [
+    isVisible,
+    isIntelHeistMode,
+    isIntelHeistExitConfirmOpen,
+    intelHeistClockMs,
+    intelHeistState.activeBuildingId,
+    intelHeistState.searchStartedAtMs,
+    intelHeistState.submitting
+  ]);
+
+  useEffect(() => {
+    if (!isVisible || !isIntelHeistMode || isIntelHeistExitConfirmOpen) return undefined;
+    if (!intelHeistState.active || !intelHeistState.deadlineMs) return undefined;
+    if (intelHeistState.resultOpen || intelHeistState.timeoutTriggered) return undefined;
+    if (intelHeistClockMs < intelHeistState.deadlineMs) return undefined;
+    setIntelHeistState((prev) => ({
+      ...prev,
+      active: false,
+      timeoutTriggered: true,
+      activeBuildingId: '',
+      searchStartedAtMs: 0,
+      submitting: false,
+      hintText: '',
+      hintVisible: false
+    }));
+    return undefined;
+  }, [
+    isVisible,
+    isIntelHeistMode,
+    isIntelHeistExitConfirmOpen,
+    intelHeistClockMs,
+    intelHeistState.active,
+    intelHeistState.deadlineMs,
+    intelHeistState.resultOpen,
+    intelHeistState.timeoutTriggered
+  ]);
+
   const normalizedDistributionProfiles = normalizeDistributionProfiles(
     distributionState.ruleProfiles,
     distributionState.activeRuleId,
@@ -2795,6 +3131,20 @@ const KnowledgeDomainScene = ({
   const activeGateEntries = activeGateKey
     ? getGateDefenseEntries(activeDefenseLayout, activeGateKey)
     : [];
+  const intelHeistRemainingMs = isIntelHeistMode && intelHeistState.deadlineMs > 0
+    ? Math.max(0, intelHeistState.deadlineMs - intelHeistClockMs)
+    : 0;
+  const intelHeistRemainingRatio = isIntelHeistMode && intelHeistState.totalMs > 0
+    ? Math.max(0, Math.min(1, intelHeistRemainingMs / intelHeistState.totalMs))
+    : 1;
+  const intelHeistActiveSearchRatio = isIntelHeistMode && intelHeistState.activeBuildingId && intelHeistState.searchStartedAtMs > 0
+    ? Math.max(0, Math.min(1, 1 - ((intelHeistClockMs - intelHeistState.searchStartedAtMs) / INTEL_HEIST_SCAN_MS)))
+    : 1;
+  const intelHeistRemainingSeconds = Math.max(0, Math.ceil(intelHeistRemainingMs / 1000));
+  const intelHeistCountdownText = formatCountdown(intelHeistRemainingSeconds);
+  const showGateLayer = !isIntelHeistMode;
+  const showRightDock = !isIntelHeistMode;
+  const showBottomExitButton = !isIntelHeistMode;
 
   if (!isVisible && transitionProgress <= 0) return null;
 
@@ -2809,16 +3159,39 @@ const KnowledgeDomainScene = ({
       onPointerDown={handleScenePointerDown}
     >
       <canvas ref={canvasRef} className="knowledge-domain-canvas" />
-      <button
-        type="button"
-        className="domain-return-top-btn"
-        onClick={onExit}
-        title="返回节点主视角"
-        aria-label="返回节点主视角"
-      >
-        <ArrowLeft size={14} />
-        <span>返回节点主视角</span>
-      </button>
+      {isIntelHeistMode ? (
+        <div className="intel-heist-hud">
+          <div className="intel-heist-hud-header">
+            <strong>情报窃取</strong>
+            <span>{`剩余 ${intelHeistCountdownText}`}</span>
+          </div>
+          <div className="intel-heist-timer-track">
+            <span
+              className="intel-heist-timer-fill"
+              style={{ width: `${Math.max(0, Math.min(100, intelHeistRemainingRatio * 100))}%` }}
+            />
+          </div>
+          <button
+            type="button"
+            className="intel-heist-exit-btn"
+            onClick={requestExitIntelHeistGame}
+          >
+            退出情报窃取
+          </button>
+          {intelHeistState.error && <div className="intel-heist-hud-error">{intelHeistState.error}</div>}
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="domain-return-top-btn"
+          onClick={onExit}
+          title="返回节点主视角"
+          aria-label="返回节点主视角"
+        >
+          <ArrowLeft size={14} />
+          <span>返回节点主视角</span>
+        </button>
+      )}
       <div
         ref={cityDefenseLayerRef}
         className={`city-defense-layer ${defenseLayoutState.buildMode ? 'build-mode' : ''}`}
@@ -2833,11 +3206,22 @@ const KnowledgeDomainScene = ({
           const totalHeightPx = bodyHeightPx + topHeightPx;
           const isSelected = defenseLayoutState.selectedBuildingId === building.buildingId;
           const isDragging = defenseLayoutState.draggingBuildingId === building.buildingId;
+          const canEditBuilding = defenseLayoutState.canEdit && defenseLayoutState.buildMode;
+          const isIntelSearched = (intelHeistState.searchedBuildingIds || []).includes(building.buildingId);
+          const isIntelActive = isIntelHeistMode && intelHeistState.activeBuildingId === building.buildingId;
+          const intelSearchLocked = isIntelHeistMode && (
+            !intelHeistState.active
+            || intelHeistState.resultOpen
+            || intelHeistState.timeoutTriggered
+            || intelHeistState.submitting
+            || (!!intelHeistState.activeBuildingId && intelHeistState.activeBuildingId !== building.buildingId)
+          );
+          const intelBuildingDisabled = isIntelHeistMode && (isIntelSearched || intelSearchLocked);
           return (
             <button
               key={building.buildingId}
               type="button"
-              className={`city-defense-building ${building.isIntel ? 'intel' : ''} ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${defenseLayoutState.canEdit && defenseLayoutState.buildMode ? 'editable' : ''}`}
+              className={`city-defense-building ${building.isIntel ? 'intel' : ''} ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${canEditBuilding ? 'editable' : ''} ${isIntelHeistMode ? 'intel-heist-searchable' : ''} ${isIntelSearched ? 'searched' : ''} ${isIntelActive ? 'is-searching' : ''}`}
               style={{
                 left: `${px - radiusPx}px`,
                 top: `${py - totalHeightPx}px`,
@@ -2846,62 +3230,81 @@ const KnowledgeDomainScene = ({
                 '--cylinder-top-height': `${topHeightPx}px`,
                 '--cylinder-body-height': `${bodyHeightPx}px`
               }}
-              onPointerDown={(event) => handleDefenseBuildingPointerDown(event, building.buildingId)}
-              onClick={() => {
-                if (!defenseLayoutState.canEdit || !defenseLayoutState.buildMode) return;
-                setDefenseLayoutState((prev) => ({
-                  ...prev,
-                  selectedBuildingId: building.buildingId
-                }));
+              onPointerDown={(event) => {
+                if (isIntelHeistMode) {
+                  event.stopPropagation();
+                  return;
+                }
+                handleDefenseBuildingPointerDown(event, building.buildingId);
               }}
+              onClick={() => {
+                if (isIntelHeistMode) {
+                  if (intelBuildingDisabled) return;
+                  startIntelHeistSearch(building.buildingId);
+                  return;
+                }
+                if (!canEditBuilding) return;
+                setDefenseLayoutState((prev) => ({ ...prev, selectedBuildingId: building.buildingId }));
+              }}
+              disabled={intelBuildingDisabled}
             >
               <span className="city-defense-building-top" />
               <span className="city-defense-building-body" />
               {building.isIntel && <span className="city-defense-intel-badge">情报文件</span>}
               <span className="city-defense-building-label">{building.name || `建筑${building.ordinal}`}</span>
+              {isIntelActive && (
+                <span className="intel-heist-building-progress">
+                  <span
+                    className="intel-heist-building-progress-fill"
+                    style={{ width: `${Math.max(0, Math.min(100, intelHeistActiveSearchRatio * 100))}%` }}
+                  />
+                </span>
+              )}
             </button>
           );
         })}
       </div>
-      <div ref={cityGateLayerRef} className="city-gate-layer">
-        {hasParentEntrance && (
-          <button
-            type="button"
-            className={`city-gate-trigger cheng ${canOpenGateDeployPanel ? 'editable' : ''}`}
-            style={{
-              left: `${gatePositions.cheng.x - 84}px`,
-              top: `${gatePositions.cheng.y - 34}px`
-            }}
-            title={`${CITY_GATE_LABELS.cheng}：${CITY_GATE_TOOLTIPS.cheng}`}
-            onClick={() => openGateDeployPanel('cheng')}
-            disabled={!canOpenGateDeployPanel}
-          >
-            <span className="city-gate-name">{CITY_GATE_LABELS.cheng}</span>
-            {canInspectGateDefense && (
-              <span className="city-gate-total">{`驻防 ${gateTotals.cheng}`}</span>
-            )}
-          </button>
-        )}
-        {hasChildEntrance && (
-          <button
-            type="button"
-            className={`city-gate-trigger qi ${canOpenGateDeployPanel ? 'editable' : ''}`}
-            style={{
-              left: `${gatePositions.qi.x - 84}px`,
-              top: `${gatePositions.qi.y - 34}px`
-            }}
-            title={`${CITY_GATE_LABELS.qi}：${CITY_GATE_TOOLTIPS.qi}`}
-            onClick={() => openGateDeployPanel('qi')}
-            disabled={!canOpenGateDeployPanel}
-          >
-            <span className="city-gate-name">{CITY_GATE_LABELS.qi}</span>
-            {canInspectGateDefense && (
-              <span className="city-gate-total">{`驻防 ${gateTotals.qi}`}</span>
-            )}
-          </button>
-        )}
-      </div>
-      {canOpenGateDeployPanel && canInspectGateDefense && activeGateKey && (
+      {showGateLayer && (
+        <div ref={cityGateLayerRef} className="city-gate-layer">
+          {hasParentEntrance && (
+            <button
+              type="button"
+              className={`city-gate-trigger cheng ${canOpenGateDeployPanel ? 'editable' : ''}`}
+              style={{
+                left: `${gatePositions.cheng.x - 84}px`,
+                top: `${gatePositions.cheng.y - 34}px`
+              }}
+              title={`${CITY_GATE_LABELS.cheng}：${CITY_GATE_TOOLTIPS.cheng}`}
+              onClick={() => openGateDeployPanel('cheng')}
+              disabled={!canOpenGateDeployPanel}
+            >
+              <span className="city-gate-name">{CITY_GATE_LABELS.cheng}</span>
+              {canInspectGateDefense && (
+                <span className="city-gate-total">{`驻防 ${gateTotals.cheng}`}</span>
+              )}
+            </button>
+          )}
+          {hasChildEntrance && (
+            <button
+              type="button"
+              className={`city-gate-trigger qi ${canOpenGateDeployPanel ? 'editable' : ''}`}
+              style={{
+                left: `${gatePositions.qi.x - 84}px`,
+                top: `${gatePositions.qi.y - 34}px`
+              }}
+              title={`${CITY_GATE_LABELS.qi}：${CITY_GATE_TOOLTIPS.qi}`}
+              onClick={() => openGateDeployPanel('qi')}
+              disabled={!canOpenGateDeployPanel}
+            >
+              <span className="city-gate-name">{CITY_GATE_LABELS.qi}</span>
+              {canInspectGateDefense && (
+                <span className="city-gate-total">{`驻防 ${gateTotals.qi}`}</span>
+              )}
+            </button>
+          )}
+        </div>
+      )}
+      {showGateLayer && canOpenGateDeployPanel && canInspectGateDefense && activeGateKey && (
         <div className="gate-deploy-panel">
           <div className="gate-deploy-header">
             <strong>{`${CITY_GATE_LABELS[activeGateKey]}布防`}</strong>
@@ -2995,6 +3398,7 @@ const KnowledgeDomainScene = ({
         </div>
       )}
 
+      {showRightDock && (
       <div className={`domain-right-dock ${isDomainInfoDockExpanded ? 'expanded' : 'collapsed'}`}>
         <div className="domain-info-panel">
         <div className="domain-tabs">
@@ -3493,7 +3897,9 @@ const KnowledgeDomainScene = ({
           {isDomainInfoDockExpanded ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>
       </div>
+      )}
 
+      {showGateLayer && (
       <NumberPadDialog
         open={gateDeployDialogState.open}
         title={gateDeployDialogState.unitName ? `派遣「${gateDeployDialogState.unitName}」` : '派遣兵力'}
@@ -3506,8 +3912,102 @@ const KnowledgeDomainScene = ({
         onCancel={closeGateDeployDialog}
         onConfirm={confirmGateDeployQuantity}
       />
+      )}
 
-      {isDistributionRuleModalOpen && distributionState.canEdit && createPortal(
+      {isIntelHeistMode && (
+        <>
+          {isIntelHeistExitConfirmOpen && (
+            <div
+              className="intel-heist-exit-confirm-overlay"
+              onClick={() => setIsIntelHeistExitConfirmOpen(false)}
+            >
+              <div
+                className="intel-heist-exit-confirm-card"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <h3>提前结束情报窃取？</h3>
+                <p>结束后将返回节点主视角，本次未完成搜索不会保留。</p>
+                <div className="intel-heist-exit-confirm-actions">
+                  <button
+                    type="button"
+                    className="btn btn-small btn-secondary"
+                    onClick={cancelExitIntelHeistGame}
+                  >
+                    继续窃取
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-danger"
+                    onClick={() => {
+                      setIsIntelHeistExitConfirmOpen(false);
+                      exitIntelHeistGame();
+                    }}
+                  >
+                    确认结束
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          {intelHeistState.timeoutTriggered && !intelHeistState.resultOpen && (
+            <div className="intel-heist-timeout-overlay">
+              <div className="intel-heist-timeout-card">
+                <h3>窃取行动失败</h3>
+                <p>时间耗尽，未获得情报文件。</p>
+                <div className="intel-heist-timeout-actions">
+                  <button type="button" className="btn btn-small btn-primary" onClick={() => exitIntelHeistGame()}>
+                    返回节点主视角
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className={`intel-heist-hint ${intelHeistState.hintVisible && intelHeistState.hintText ? 'visible' : ''}`}>
+            {intelHeistState.hintText || ''}
+          </div>
+          {intelHeistState.resultOpen && intelHeistState.resultSnapshot && (
+            <div className="intel-heist-result-overlay">
+              <div className="intel-heist-result-card">
+                <h3>{`已找到 ${node?.name || '该知识域'} 的情报文件`}</h3>
+                <p>{`布防情报：${formatElapsedMinutesText(intelHeistState.resultSnapshot.deploymentUpdatedAt)}执行的部署`}</p>
+                <div className="intel-heist-result-gates">
+                  <div className="intel-heist-result-gate">
+                    <strong>承口</strong>
+                    {(intelHeistState.resultSnapshot?.gateDefense?.cheng || []).length > 0 ? (
+                      (intelHeistState.resultSnapshot.gateDefense.cheng || []).map((entry) => (
+                        <span key={`intel-result-cheng-${entry.unitTypeId}`}>
+                          {`${entry.unitName || entry.unitTypeId} x ${entry.count}`}
+                        </span>
+                      ))
+                    ) : (
+                      <span>暂无驻防</span>
+                    )}
+                  </div>
+                  <div className="intel-heist-result-gate">
+                    <strong>启口</strong>
+                    {(intelHeistState.resultSnapshot?.gateDefense?.qi || []).length > 0 ? (
+                      (intelHeistState.resultSnapshot.gateDefense.qi || []).map((entry) => (
+                        <span key={`intel-result-qi-${entry.unitTypeId}`}>
+                          {`${entry.unitName || entry.unitTypeId} x ${entry.count}`}
+                        </span>
+                      ))
+                    ) : (
+                      <span>暂无驻防</span>
+                    )}
+                  </div>
+                </div>
+                <div className="intel-heist-result-actions">
+                  <button type="button" className="btn btn-small btn-primary" onClick={() => exitIntelHeistGame()}>
+                    返回节点主视角
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {showRightDock && isDistributionRuleModalOpen && distributionState.canEdit && createPortal(
           <div
             className="distribution-rule-modal-overlay"
             onClick={(event) => {
@@ -4001,9 +4501,11 @@ const KnowledgeDomainScene = ({
           document.body
         )}
 
-        <button className="exit-domain-btn" onClick={onExit}>
-          离开知识域
-        </button>
+        {showBottomExitButton && (
+          <button className="exit-domain-btn" onClick={onExit}>
+            离开知识域
+          </button>
+        )}
     </div>
   );
 };

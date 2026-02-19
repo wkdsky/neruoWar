@@ -452,10 +452,10 @@ class WebGLNodeRenderer {
 
   updateHoverState(x, y) {
     const prevHoveredButton = this.hoveredButton;
-    this.hoveredButton = this.hitTestButton(x, y);
+    this.hoveredButton = this.hitTestButton(x, y, { includeDisabled: true });
     if (this.hoveredButton) {
       this.hoveredNode = null;
-      this.canvas.style.cursor = 'pointer';
+      this.canvas.style.cursor = this.hoveredButton.button?.disabled ? 'not-allowed' : 'pointer';
     } else {
       this.hoveredNode = this.hitTest(x, y);
       this.canvas.style.cursor = this.hoveredNode ? 'pointer' : 'default';
@@ -540,9 +540,11 @@ class WebGLNodeRenderer {
       const pos = this.getCanvasPositionFromEvent(event);
 
       // 先检测按钮点击
-      const clickedButton = this.hitTestButton(pos.x, pos.y);
-      if (clickedButton && this.onButtonClick) {
-        this.onButtonClick(clickedButton.nodeId, clickedButton.button);
+      const clickedButton = this.hitTestButton(pos.x, pos.y, { includeDisabled: true });
+      if (clickedButton) {
+        if (!clickedButton.button?.disabled && this.onButtonClick) {
+          this.onButtonClick(clickedButton.nodeId, clickedButton.button);
+        }
         return;
       }
 
@@ -555,6 +557,8 @@ class WebGLNodeRenderer {
     canvas.addEventListener('dblclick', (event) => {
       if (this.dragState.suppressClick) return;
       const pos = this.getCanvasPositionFromEvent(event);
+      const clickedButton = this.hitTestButton(pos.x, pos.y, { includeDisabled: true });
+      if (clickedButton) return;
       const clickedNode = this.hitTest(pos.x, pos.y);
       if (clickedNode && this.onDoubleClick) {
         this.onDoubleClick(clickedNode);
@@ -562,7 +566,8 @@ class WebGLNodeRenderer {
     });
   }
 
-  hitTestButton(x, y) {
+  hitTestButton(x, y, options = {}) {
+    const includeDisabled = !!options.includeDisabled;
     const buttonRadius = 18; // 按钮半径
 
     for (const [nodeId, buttons] of this.nodeButtons) {
@@ -570,7 +575,7 @@ class WebGLNodeRenderer {
       if (!node || !node.visible || node.opacity < 0.5) continue;
 
       for (const button of buttons) {
-        if (button.disabled) continue;
+        if (button.disabled && !includeDisabled) continue;
         const btnPos = this.getButtonPosition(node, button.angle);
         const dx = x - btnPos.x;
         const dy = y - btnPos.y;
@@ -744,11 +749,14 @@ class WebGLNodeRenderer {
     } else {
       this.nodeButtons.delete(nodeId);
     }
+    this.render();
   }
 
   // 清除所有按钮
   clearNodeButtons() {
     this.nodeButtons.clear();
+    this.hoveredButton = null;
+    this.render();
   }
 
   // 动画节点到新位置

@@ -82,6 +82,60 @@ const createDefaultDistributionPanelState = () => ({
     feedback: '',
     data: null
 });
+const createEmptyIntelHeistStatus = () => ({
+    loading: false,
+    nodeId: '',
+    canSteal: false,
+    reason: '',
+    latestSnapshot: null
+});
+
+const getIntelSnapshotAgeMinutesText = (snapshot) => {
+    const capturedAtMs = new Date(snapshot?.capturedAt || 0).getTime();
+    if (!Number.isFinite(capturedAtMs) || capturedAtMs <= 0) return '';
+    const diffMs = Math.max(0, Date.now() - capturedAtMs);
+    const minutes = Math.floor(diffMs / 60000);
+    return `${minutes}分钟前`;
+};
+
+const formatDateTimeText = (value) => {
+    const ms = new Date(value || 0).getTime();
+    if (!Number.isFinite(ms) || ms <= 0) return '未知';
+    return new Date(ms).toLocaleString('zh-CN', { hour12: false });
+};
+
+const getElapsedMinutesText = (value) => {
+    const ms = new Date(value || 0).getTime();
+    if (!Number.isFinite(ms) || ms <= 0) return '';
+    const diffMs = Math.max(0, Date.now() - ms);
+    const minutes = Math.floor(diffMs / 60000);
+    return `${minutes}分钟前`;
+};
+
+const normalizeIntelSnapshotGateEntries = (entries = []) => (
+    (Array.isArray(entries) ? entries : [])
+        .map((entry) => ({
+            unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
+            unitName: typeof entry?.unitName === 'string' ? entry.unitName : '',
+            count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+        }))
+        .filter((entry) => entry.unitTypeId && entry.count > 0)
+);
+
+const normalizeIntelSnapshot = (snapshot = {}) => {
+    const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    return {
+        nodeId: typeof source.nodeId === 'string' ? source.nodeId : '',
+        nodeName: typeof source.nodeName === 'string' ? source.nodeName : '',
+        sourceBuildingId: typeof source.sourceBuildingId === 'string' ? source.sourceBuildingId : '',
+        deploymentUpdatedAt: source.deploymentUpdatedAt || null,
+        capturedAt: source.capturedAt || null,
+        gateDefense: {
+            cheng: normalizeIntelSnapshotGateEntries(source?.gateDefense?.cheng),
+            qi: normalizeIntelSnapshotGateEntries(source?.gateDefense?.qi)
+        }
+    };
+};
 const formatCountdownText = (seconds) => {
     const total = Math.max(0, Math.floor(Number(seconds) || 0));
     const day = Math.floor(total / 86400);
@@ -212,6 +266,14 @@ const App = () => {
     const [currentNodeDetail, setCurrentNodeDetail] = useState(null);
     const [showNodeInfoModal, setShowNodeInfoModal] = useState(false);
     const [isApplyingDomainMaster, setIsApplyingDomainMaster] = useState(false);
+    const [intelHeistStatus, setIntelHeistStatus] = useState(createEmptyIntelHeistStatus);
+    const [intelHeistDialog, setIntelHeistDialog] = useState({
+        open: false,
+        loading: false,
+        node: null,
+        snapshot: null,
+        error: ''
+    });
 
 
     // 导航路径相关状态
@@ -222,6 +284,7 @@ const App = () => {
     // 知识域场景相关状态
     const [showKnowledgeDomain, setShowKnowledgeDomain] = useState(false);
     const [knowledgeDomainNode, setKnowledgeDomainNode] = useState(null);
+    const [knowledgeDomainMode, setKnowledgeDomainMode] = useState('normal');
     const [domainTransitionProgress, setDomainTransitionProgress] = useState(0);
     const [isTransitioningToDomain, setIsTransitioningToDomain] = useState(false);
 
@@ -288,6 +351,8 @@ const App = () => {
                     if (currentNodeDetail) {
                         handleEnterKnowledgeDomain(currentNodeDetail);
                     }
+                } else if (button.action === 'intelSteal' && currentNodeDetail) {
+                    handleIntelHeistAction(currentNodeDetail);
                 } else if (button.action === 'joinDistribution' && currentNodeDetail) {
                     handleDistributionParticipationAction(currentNodeDetail);
                 } else if (button.action === 'moveToNode' && currentNodeDetail) {
@@ -328,6 +393,8 @@ const App = () => {
             sceneManagerRef.current.onButtonClick = (nodeId, button) => {
                 if (button.action === 'enterKnowledgeDomain' && currentNodeDetail) {
                     handleEnterKnowledgeDomain(currentNodeDetail);
+                } else if (button.action === 'intelSteal' && currentNodeDetail) {
+                    handleIntelHeistAction(currentNodeDetail);
                 } else if (button.action === 'joinDistribution' && currentNodeDetail) {
                     handleDistributionParticipationAction(currentNodeDetail);
                 } else if (button.action === 'moveToNode' && currentNodeDetail) {
@@ -337,7 +404,7 @@ const App = () => {
                 }
             };
         }
-    }, [currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus]);
+    }, [currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus, intelHeistStatus]);
 
     useEffect(() => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
@@ -1891,6 +1958,7 @@ const App = () => {
             setIsTransitioningToDomain(false);
             setDomainTransitionProgress(0);
             setKnowledgeDomainNode(null);
+            setKnowledgeDomainMode('normal');
             setClickedNodeForTransition(null);
         }
         if (showDistributionPanel) {
@@ -1910,6 +1978,135 @@ const App = () => {
         setNavigationPath([{ type: 'home', label: '首页' }]);
     };
 
+    const fetchIntelHeistStatus = async (targetNodeId, { silent = true } = {}) => {
+        const token = localStorage.getItem('token');
+        if (!token || !targetNodeId || !authenticated || isAdmin) {
+            if (!silent) {
+                setIntelHeistStatus(createEmptyIntelHeistStatus());
+            }
+            return null;
+        }
+
+        if (!silent) {
+            setIntelHeistStatus((prev) => ({
+                ...prev,
+                loading: true,
+                nodeId: targetNodeId
+            }));
+        }
+
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${targetNodeId}/intel-heist`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const data = await response.json();
+            if (!response.ok || !data) {
+                const next = {
+                    loading: false,
+                    nodeId: targetNodeId,
+                    canSteal: false,
+                    reason: data?.error || '无法获取情报窃取状态',
+                    latestSnapshot: null
+                };
+                setIntelHeistStatus(next);
+                return next;
+            }
+            const next = {
+                loading: false,
+                nodeId: targetNodeId,
+                canSteal: !!data.canSteal,
+                reason: data.reason || '',
+                latestSnapshot: data.latestSnapshot ? normalizeIntelSnapshot(data.latestSnapshot) : null
+            };
+            setIntelHeistStatus(next);
+            return next;
+        } catch (error) {
+            const next = {
+                loading: false,
+                nodeId: targetNodeId,
+                canSteal: false,
+                reason: `获取情报窃取状态失败: ${error.message}`,
+                latestSnapshot: null
+            };
+            setIntelHeistStatus(next);
+            return next;
+        }
+    };
+
+    const startIntelHeistMiniGame = (targetNode) => {
+        if (!targetNode?._id) return;
+        setIntelHeistDialog({
+            open: false,
+            loading: false,
+            node: null,
+            snapshot: null,
+            error: ''
+        });
+        handleEnterKnowledgeDomain(targetNode, { mode: 'intelHeist' });
+    };
+
+    const handleIntelHeistAction = async (targetNode) => {
+        if (!targetNode?._id || isAdmin) return;
+        const nodeId = normalizeObjectId(targetNode._id);
+        if (!nodeId) return;
+
+        setIntelHeistDialog({
+            open: true,
+            loading: true,
+            node: targetNode,
+            snapshot: null,
+            error: ''
+        });
+
+        const status = await fetchIntelHeistStatus(nodeId, { silent: false });
+        if (!status) {
+            setIntelHeistDialog((prev) => ({
+                ...prev,
+                loading: false,
+                error: '无法获取情报窃取状态'
+            }));
+            return;
+        }
+
+        if (!status.canSteal) {
+            setIntelHeistDialog((prev) => ({
+                ...prev,
+                loading: false,
+                snapshot: status.latestSnapshot || null,
+                error: status.reason || '当前不可执行情报窃取'
+            }));
+            return;
+        }
+
+        if (!status.latestSnapshot) {
+            startIntelHeistMiniGame(targetNode);
+            return;
+        }
+
+        setIntelHeistDialog((prev) => ({
+            ...prev,
+            loading: false,
+            error: '',
+            snapshot: status.latestSnapshot
+        }));
+    };
+
+    const handleIntelHeistSnapshotCaptured = (snapshot, nodeInfo) => {
+        const normalized = snapshot ? normalizeIntelSnapshot(snapshot) : null;
+        const targetNodeId = normalizeObjectId(nodeInfo?._id || snapshot?.nodeId);
+        if (!normalized || !targetNodeId) return;
+        setIntelHeistStatus((prev) => {
+            if (prev.nodeId && prev.nodeId !== targetNodeId) return prev;
+            return {
+                loading: false,
+                nodeId: targetNodeId,
+                canSteal: true,
+                reason: '',
+                latestSnapshot: normalized
+            };
+        });
+    };
+
     // 获取节点详情
     const fetchNodeDetail = async (nodeId, clickedNode = null) => {
         try {
@@ -1920,6 +2117,8 @@ const App = () => {
                 trackRecentDomain(data.node);
                 setCurrentNodeDetail(data.node);
                 setView('nodeDetail');
+                setIntelHeistStatus(createEmptyIntelHeistStatus());
+                fetchIntelHeistStatus(normalizeObjectId(data?.node?._id), { silent: false });
 
                 // 保存被点击的节点，用于WebGL过渡动画
                 if (clickedNode) {
@@ -2332,6 +2531,23 @@ const App = () => {
         const distributionDisabled = false;
         const distributionDisabledReason = '';
         const distributionButtonTooltip = '知识点分发';
+        const nodeId = normalizeObjectId(nodeDetail?._id);
+        const isDomainMasterUser = nodeDetail?.domainMaster?.username && nodeDetail.domainMaster.username === username;
+        const isDomainAdminUser = Array.isArray(nodeDetail?.domainAdmins)
+            && nodeDetail.domainAdmins.some((item) => item?.username && item.username === username);
+        const showIntelStealButton = !isAdmin && isAtCurrentNode && !isDomainMasterUser && !isDomainAdminUser;
+        const intelStatusMatched = intelHeistStatus.nodeId === nodeId
+            ? intelHeistStatus
+            : createEmptyIntelHeistStatus();
+        const intelSnapshotAgeText = intelStatusMatched.latestSnapshot
+            ? getIntelSnapshotAgeMinutesText(intelStatusMatched.latestSnapshot)
+            : '';
+        const intelStealTooltip = intelStatusMatched.loading
+            ? '情报窃取状态读取中...'
+            : (intelStatusMatched.latestSnapshot
+                ? `情报窃取（上次快照：${intelSnapshotAgeText || '刚刚'}）`
+                : '情报窃取');
+        const intelStealDisabled = showIntelStealButton && intelStatusMatched.loading;
 
         return {
             showMoveButton: !isAdmin,
@@ -2342,7 +2558,11 @@ const App = () => {
             distributionHighlighted,
             distributionDisabled,
             distributionDisabledReason,
-            distributionButtonTooltip
+            distributionButtonTooltip,
+            showIntelStealButton,
+            intelStealTooltip,
+            intelStealDisabled,
+            intelStealHasSnapshot: !!intelStatusMatched.latestSnapshot
         };
     };
 
@@ -2469,7 +2689,7 @@ const App = () => {
             currentNodeDetail,
             getNodeDetailButtonContext(currentNodeDetail)
         );
-    }, [view, currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus]);
+    }, [view, currentNodeDetail, isAdmin, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus]);
 
 
     // 新节点创建相关函数
@@ -2478,10 +2698,12 @@ const App = () => {
     };
 
     // 进入知识域
-    const handleEnterKnowledgeDomain = (node) => {
+    const handleEnterKnowledgeDomain = (node, options = {}) => {
         if (!sceneManagerRef.current || !node) return;
+        const mode = options?.mode === 'intelHeist' ? 'intelHeist' : 'normal';
 
         trackRecentDomain(node);
+        setKnowledgeDomainMode(mode);
         setKnowledgeDomainNode(node);
         setIsTransitioningToDomain(true);
         setShowNodeInfoModal(false); // 关闭节点信息弹窗
@@ -2502,11 +2724,19 @@ const App = () => {
     };
 
     // 退出知识域
-    const handleExitKnowledgeDomain = () => {
+    const handleExitKnowledgeDomain = (options = {}) => {
+        const exitReason = options?.reason || '';
+        const exitMessage = typeof options?.message === 'string' ? options.message : '';
         if (!sceneManagerRef.current) {
             setShowKnowledgeDomain(false);
             setDomainTransitionProgress(0);
             setKnowledgeDomainNode(null);
+            setKnowledgeDomainMode('normal');
+            if (exitMessage) {
+                window.alert(exitMessage);
+            } else if (exitReason === 'intel-timeout') {
+                window.alert('情报窃取时间耗尽');
+            }
             return;
         }
 
@@ -2527,6 +2757,12 @@ const App = () => {
                 setIsTransitioningToDomain(false);
                 setDomainTransitionProgress(0);
                 setKnowledgeDomainNode(null);
+                setKnowledgeDomainMode('normal');
+                if (exitMessage) {
+                    window.alert(exitMessage);
+                } else if (exitReason === 'intel-timeout') {
+                    window.alert('情报窃取时间耗尽');
+                }
             }
         );
     };
@@ -3465,6 +3701,110 @@ const App = () => {
                         </button>
                     </div>
                 )}
+
+                {intelHeistDialog.open && (
+                    <div
+                        className="modal-overlay"
+                        onClick={() => setIntelHeistDialog({
+                            open: false,
+                            loading: false,
+                            node: null,
+                            snapshot: null,
+                            error: ''
+                        })}
+                    >
+                        <div className="modal-content intel-heist-modal" onClick={(event) => event.stopPropagation()}>
+                            <div className="modal-header">
+                                <h3>{`情报窃取：${intelHeistDialog.node?.name || currentNodeDetail?.name || '知识域'}`}</h3>
+                                <button
+                                    type="button"
+                                    className="btn-close"
+                                    onClick={() => setIntelHeistDialog({
+                                        open: false,
+                                        loading: false,
+                                        node: null,
+                                        snapshot: null,
+                                        error: ''
+                                    })}
+                                >
+                                    ×
+                                </button>
+                            </div>
+                            <div className="modal-body intel-heist-modal-body">
+                                {intelHeistDialog.loading && (
+                                    <div className="intel-heist-tip">读取情报状态中...</div>
+                                )}
+                                {!intelHeistDialog.loading && intelHeistDialog.error && (
+                                    <div className="intel-heist-error">{intelHeistDialog.error}</div>
+                                )}
+                                {!intelHeistDialog.loading && intelHeistDialog.snapshot && (
+                                    <div className="intel-heist-snapshot">
+                                        <div className="intel-heist-tip">
+                                            上次快照时间：{formatDateTimeText(intelHeistDialog.snapshot.capturedAt)}
+                                        </div>
+                                        <div className="intel-heist-tip">
+                                            部署执行时间：{formatDateTimeText(intelHeistDialog.snapshot.deploymentUpdatedAt)}
+                                            {`（${getElapsedMinutesText(intelHeistDialog.snapshot.deploymentUpdatedAt) || '未知时刻'}）`}
+                                        </div>
+                                        <div className="intel-heist-gate-block">
+                                            <strong>承口驻防</strong>
+                                            {(intelHeistDialog.snapshot?.gateDefense?.cheng || []).length > 0 ? (
+                                                (intelHeistDialog.snapshot.gateDefense.cheng || []).map((entry) => (
+                                                    <div key={`cheng-${entry.unitTypeId}`} className="intel-heist-gate-row">
+                                                        <span>{entry.unitName || entry.unitTypeId}</span>
+                                                        <em>{entry.count}</em>
+                                                    </div>
+                                                ))
+                                            ) : (
+                                                <div className="intel-heist-tip">无驻防</div>
+                                            )}
+                                        </div>
+                                        <div className="intel-heist-gate-block">
+                                            <strong>启口驻防</strong>
+                                            {(intelHeistDialog.snapshot?.gateDefense?.qi || []).length > 0 ? (
+                                                (intelHeistDialog.snapshot.gateDefense.qi || []).map((entry) => (
+                                                    <div key={`qi-${entry.unitTypeId}`} className="intel-heist-gate-row">
+                                                        <span>{entry.unitName || entry.unitTypeId}</span>
+                                                        <em>{entry.count}</em>
+                                                    </div>
+                                                ))
+                                            ) : (
+                                                <div className="intel-heist-tip">无驻防</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                                {!intelHeistDialog.loading && !intelHeistDialog.snapshot && !intelHeistDialog.error && (
+                                    <div className="intel-heist-tip">当前没有该知识域的情报快照，可直接执行窃取。</div>
+                                )}
+                            </div>
+                            <div className="modal-footer">
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => setIntelHeistDialog({
+                                        open: false,
+                                        loading: false,
+                                        node: null,
+                                        snapshot: null,
+                                        error: ''
+                                    })}
+                                >
+                                    关闭
+                                </button>
+                                {!intelHeistDialog.loading && intelHeistStatus.canSteal && (
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        onClick={() => startIntelHeistMiniGame(intelHeistDialog.node || currentNodeDetail)}
+                                    >
+                                        {intelHeistDialog.snapshot ? '再次窃取' : '开始窃取'}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
                 
                 <AssociationModal 
                     isOpen={showAssociationModal}
@@ -3515,6 +3855,8 @@ const App = () => {
                     isVisible={showKnowledgeDomain || isTransitioningToDomain}
                     onExit={handleExitKnowledgeDomain}
                     transitionProgress={domainTransitionProgress}
+                    mode={knowledgeDomainMode}
+                    onIntelSnapshotCaptured={handleIntelHeistSnapshotCaptured}
                 />
             </div>
         </div>

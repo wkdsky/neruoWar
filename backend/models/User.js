@@ -136,6 +136,61 @@ const ArmyRosterEntrySchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const IntelGateDefenseEntrySchema = new mongoose.Schema({
+  unitTypeId: {
+    type: String,
+    required: true
+  },
+  unitName: {
+    type: String,
+    default: ''
+  },
+  count: {
+    type: Number,
+    default: 0,
+    min: 0
+  }
+}, { _id: false });
+
+const IntelGateDefenseSnapshotSchema = new mongoose.Schema({
+  cheng: {
+    type: [IntelGateDefenseEntrySchema],
+    default: []
+  },
+  qi: {
+    type: [IntelGateDefenseEntrySchema],
+    default: []
+  }
+}, { _id: false });
+
+const IntelDomainSnapshotSchema = new mongoose.Schema({
+  nodeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Node',
+    required: true
+  },
+  nodeName: {
+    type: String,
+    default: ''
+  },
+  sourceBuildingId: {
+    type: String,
+    default: ''
+  },
+  deploymentUpdatedAt: {
+    type: Date,
+    default: null
+  },
+  capturedAt: {
+    type: Date,
+    default: Date.now
+  },
+  gateDefense: {
+    type: IntelGateDefenseSnapshotSchema,
+    default: () => ({ cheng: [], qi: [] })
+  }
+}, { _id: false });
+
 const userSchema = new mongoose.Schema({
   username: {
     type: String,
@@ -271,6 +326,10 @@ const userSchema = new mongoose.Schema({
   },
   armyRoster: {
     type: [ArmyRosterEntrySchema],
+    default: []
+  },
+  intelDomainSnapshots: {
+    type: [IntelDomainSnapshotSchema],
     default: []
   }
 }, {

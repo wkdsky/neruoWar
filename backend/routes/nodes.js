@@ -5,6 +5,7 @@ const Node = require('../models/Node');
 const User = require('../models/User');
 const EntropyAlliance = require('../models/EntropyAlliance');
 const KnowledgeDistributionService = require('../services/KnowledgeDistributionService');
+const { fetchArmyUnitTypes } = require('../services/armyUnitTypeService');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
 
@@ -61,6 +62,84 @@ const round3 = (value, fallback = 0) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Number(parsed.toFixed(3));
+};
+
+const findUserIntelSnapshotByNodeId = (user, nodeId) => {
+  const targetNodeId = getIdString(nodeId);
+  if (!targetNodeId || !Array.isArray(user?.intelDomainSnapshots)) return null;
+  const snapshots = user.intelDomainSnapshots;
+  for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+    const item = snapshots[index];
+    if (getIdString(item?.nodeId) === targetNodeId) return item;
+  }
+  return null;
+};
+
+const serializeIntelSnapshot = (snapshot = {}) => {
+  const source = typeof snapshot?.toObject === 'function' ? snapshot.toObject() : snapshot;
+  const gateDefenseSource = source?.gateDefense && typeof source.gateDefense === 'object'
+    ? source.gateDefense
+    : {};
+  return {
+    nodeId: getIdString(source?.nodeId),
+    nodeName: source?.nodeName || '',
+    sourceBuildingId: source?.sourceBuildingId || '',
+    deploymentUpdatedAt: source?.deploymentUpdatedAt || null,
+    capturedAt: source?.capturedAt || null,
+    gateDefense: CITY_GATE_KEYS.reduce((acc, key) => {
+      const entries = Array.isArray(gateDefenseSource[key]) ? gateDefenseSource[key] : [];
+      acc[key] = entries
+        .map((entry) => ({
+          unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
+          unitName: typeof entry?.unitName === 'string' ? entry.unitName : '',
+          count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+        }))
+        .filter((entry) => entry.unitTypeId && entry.count > 0);
+      return acc;
+    }, { cheng: [], qi: [] })
+  };
+};
+
+const checkIntelHeistPermission = ({ node, user }) => {
+  if (!node || node.status !== 'approved') {
+    return { allowed: false, reason: '知识域不存在或不可操作' };
+  }
+  if (!user) {
+    return { allowed: false, reason: '用户不存在' };
+  }
+  if (user.role !== 'common') {
+    return { allowed: false, reason: '仅普通用户可进行情报窃取' };
+  }
+  const userId = getIdString(user._id);
+  if (isDomainMaster(node, userId) || isDomainAdmin(node, userId)) {
+    return { allowed: false, reason: '域主/域相不可进行情报窃取' };
+  }
+  const userLocation = typeof user.location === 'string' ? user.location.trim() : '';
+  if (!userLocation || userLocation !== (node.name || '')) {
+    return { allowed: false, reason: '必须到达该知识域后才能执行情报窃取' };
+  }
+  return { allowed: true, reason: '' };
+};
+
+const buildIntelGateDefenseSnapshot = (gateDefense = {}, unitTypeMap = new Map()) => {
+  const source = gateDefense && typeof gateDefense === 'object' ? gateDefense : {};
+  return CITY_GATE_KEYS.reduce((acc, key) => {
+    const entries = Array.isArray(source[key]) ? source[key] : [];
+    acc[key] = entries
+      .map((entry) => {
+        const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+        const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+        if (!unitTypeId || count <= 0) return null;
+        const unitName = unitTypeMap.get(unitTypeId)?.name || unitTypeId;
+        return {
+          unitTypeId,
+          unitName,
+          count
+        };
+      })
+      .filter(Boolean);
+    return acc;
+  }, { cheng: [], qi: [] });
 };
 
 const normalizeGateDefenseViewerAdminIds = (viewerIds = [], allowedAdminIds = null) => {
@@ -2433,6 +2512,134 @@ router.put('/:nodeId/domain-admins/gate-defense-viewers', authenticateToken, asy
     });
   } catch (error) {
     console.error('保存承口/启口可查看权限错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取情报窃取状态（是否可执行 + 最近快照）
+router.get('/:nodeId/intel-heist', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const [node, user] = await Promise.all([
+      Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout'),
+      User.findById(requestUserId).select('role location intelDomainSnapshots')
+    ]);
+
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const permission = checkIntelHeistPermission({ node, user });
+    const latestSnapshot = findUserIntelSnapshotByNodeId(user, node._id);
+
+    res.json({
+      success: true,
+      nodeId: getIdString(node._id),
+      nodeName: node.name,
+      canSteal: permission.allowed,
+      reason: permission.reason || '',
+      latestSnapshot: latestSnapshot ? serializeIntelSnapshot(latestSnapshot) : null
+    });
+  } catch (error) {
+    console.error('获取情报窃取状态错误:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 执行建筑搜索并判断是否找到情报文件
+router.post('/:nodeId/intel-heist/scan', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const buildingId = typeof req.body?.buildingId === 'string' ? req.body.buildingId.trim() : '';
+    if (!buildingId) {
+      return res.status(400).json({ error: '建筑ID不能为空' });
+    }
+
+    const [node, user] = await Promise.all([
+      Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout'),
+      User.findById(requestUserId).select('role location intelDomainSnapshots')
+    ]);
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const permission = checkIntelHeistPermission({ node, user });
+    if (!permission.allowed) {
+      return res.status(403).json({ error: permission.reason || '当前不可执行情报窃取' });
+    }
+
+    const serializedLayout = serializeDefenseLayout(node.cityDefenseLayout || {});
+    const buildings = Array.isArray(serializedLayout.buildings) ? serializedLayout.buildings : [];
+    const targetBuilding = buildings.find((item) => item.buildingId === buildingId);
+    if (!targetBuilding) {
+      return res.status(400).json({ error: '目标建筑不存在' });
+    }
+
+    const found = serializedLayout.intelBuildingId === buildingId;
+    if (!found) {
+      return res.json({
+        success: true,
+        found: false,
+        message: '该建筑未发现情报文件'
+      });
+    }
+
+    const unitTypes = await fetchArmyUnitTypes();
+    const unitTypeMap = new Map(
+      (Array.isArray(unitTypes) ? unitTypes : [])
+        .map((item) => [item?.id || item?.unitTypeId, item])
+        .filter(([id]) => !!id)
+    );
+    const snapshotData = {
+      nodeId: node._id,
+      nodeName: node.name,
+      sourceBuildingId: buildingId,
+      deploymentUpdatedAt: node?.cityDefenseLayout?.updatedAt || null,
+      capturedAt: new Date(),
+      gateDefense: buildIntelGateDefenseSnapshot(serializedLayout.gateDefense, unitTypeMap)
+    };
+
+    const snapshots = Array.isArray(user.intelDomainSnapshots) ? [...user.intelDomainSnapshots] : [];
+    const existingIndex = snapshots.findIndex((item) => getIdString(item?.nodeId) === getIdString(node._id));
+    if (existingIndex >= 0) {
+      snapshots[existingIndex] = snapshotData;
+    } else {
+      snapshots.push(snapshotData);
+    }
+    user.intelDomainSnapshots = snapshots.slice(-60);
+    await user.save();
+
+    const latestSnapshot = findUserIntelSnapshotByNodeId(user, node._id);
+    res.json({
+      success: true,
+      found: true,
+      message: `已找到知识域「${node.name}」的情报文件`,
+      snapshot: latestSnapshot ? serializeIntelSnapshot(latestSnapshot) : serializeIntelSnapshot(snapshotData)
+    });
+  } catch (error) {
+    console.error('执行情报窃取建筑搜索错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });
