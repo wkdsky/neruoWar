@@ -231,6 +231,19 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: ''  // 普通用户注册时为空，管理员为"任意"
   },
+  lastArrivedFromNodeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Node',
+    default: null
+  },
+  lastArrivedFromNodeName: {
+    type: String,
+    default: ''
+  },
+  lastArrivedAt: {
+    type: Date,
+    default: null
+  },
   allianceId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'EntropyAlliance',
@@ -329,8 +342,9 @@ const userSchema = new mongoose.Schema({
     default: []
   },
   intelDomainSnapshots: {
-    type: [IntelDomainSnapshotSchema],
-    default: []
+    type: Map,
+    of: IntelDomainSnapshotSchema,
+    default: () => ({})
   }
 }, {
   timestamps: true

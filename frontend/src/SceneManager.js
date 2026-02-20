@@ -187,6 +187,20 @@ class SceneManager {
       });
     }
 
+    if (buttonContext.showSiegeButton) {
+      buttons.push({
+        id: 'siege-domain',
+        icon: buttonContext.siegeActive ? '⚔' : '✦',
+        angle: -Math.PI * 0.86,
+        action: 'siegeDomain',
+        tooltip: buttonContext.siegeTooltip || '攻占知识域',
+        color: buttonContext.siegeActive
+          ? [0.96, 0.38, 0.28, 0.96]
+          : [0.78, 0.46, 0.26, 0.92],
+        disabled: !!buttonContext.siegeDisabled
+      });
+    }
+
     this.renderer.setNodeButtons(centerNodeId, buttons);
   }
 

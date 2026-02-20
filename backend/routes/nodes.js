@@ -42,6 +42,12 @@ const CITY_BUILDING_DEFAULT_RADIUS = 0.17;
 const CITY_BUILDING_MIN_DISTANCE = 0.34;
 const CITY_BUILDING_MAX_DISTANCE = 0.86;
 const CITY_GATE_KEYS = ['cheng', 'qi'];
+const USER_INTEL_SNAPSHOT_LIMIT = 5;
+const CITY_GATE_LABELS = {
+  cheng: '承门',
+  qi: '启门'
+};
+const SIEGE_SUPPORT_UNIT_DURATION_SECONDS = 60;
 
 const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -62,17 +68,6 @@ const round3 = (value, fallback = 0) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Number(parsed.toFixed(3));
-};
-
-const findUserIntelSnapshotByNodeId = (user, nodeId) => {
-  const targetNodeId = getIdString(nodeId);
-  if (!targetNodeId || !Array.isArray(user?.intelDomainSnapshots)) return null;
-  const snapshots = user.intelDomainSnapshots;
-  for (let index = snapshots.length - 1; index >= 0; index -= 1) {
-    const item = snapshots[index];
-    if (getIdString(item?.nodeId) === targetNodeId) return item;
-  }
-  return null;
 };
 
 const serializeIntelSnapshot = (snapshot = {}) => {
@@ -98,6 +93,69 @@ const serializeIntelSnapshot = (snapshot = {}) => {
       return acc;
     }, { cheng: [], qi: [] })
   };
+};
+
+const toIntelSnapshotTimestamp = (value) => {
+  const ms = new Date(value || 0).getTime();
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+};
+
+const listUserIntelSnapshotEntries = (rawSnapshots = null) => {
+  if (!rawSnapshots) return [];
+  if (rawSnapshots instanceof Map) {
+    return Array.from(rawSnapshots.entries());
+  }
+  if (Array.isArray(rawSnapshots)) {
+    return rawSnapshots
+      .map((item) => [getIdString(item?.nodeId), item])
+      .filter(([nodeId]) => !!nodeId);
+  }
+  if (typeof rawSnapshots === 'object') {
+    const asObject = typeof rawSnapshots.toObject === 'function'
+      ? rawSnapshots.toObject()
+      : rawSnapshots;
+    return Object.entries(asObject || {})
+      .filter(([nodeId, value]) => !!getIdString(nodeId) && !!value);
+  }
+  return [];
+};
+
+const normalizeUserIntelSnapshotStore = (rawSnapshots = null, limit = USER_INTEL_SNAPSHOT_LIMIT) => {
+  const byNodeId = new Map();
+  for (const [rawNodeId, rawSnapshot] of listUserIntelSnapshotEntries(rawSnapshots)) {
+    const serialized = serializeIntelSnapshot(rawSnapshot || {});
+    const nodeId = getIdString(serialized?.nodeId || rawNodeId);
+    if (!nodeId) continue;
+    const nextSnapshot = {
+      ...serialized,
+      nodeId
+    };
+    const existed = byNodeId.get(nodeId);
+    if (!existed) {
+      byNodeId.set(nodeId, nextSnapshot);
+      continue;
+    }
+    const existedTs = toIntelSnapshotTimestamp(existed.capturedAt);
+    const nextTs = toIntelSnapshotTimestamp(nextSnapshot.capturedAt);
+    if (nextTs >= existedTs) {
+      byNodeId.set(nodeId, nextSnapshot);
+    }
+  }
+
+  const sorted = Array.from(byNodeId.entries())
+    .sort((a, b) => toIntelSnapshotTimestamp(b[1]?.capturedAt) - toIntelSnapshotTimestamp(a[1]?.capturedAt));
+  const limited = Number.isFinite(limit) && limit > 0 ? sorted.slice(0, limit) : sorted;
+  return limited.reduce((acc, [nodeId, snapshot]) => {
+    acc[nodeId] = snapshot;
+    return acc;
+  }, {});
+};
+
+const findUserIntelSnapshotByNodeId = (user, nodeId) => {
+  const targetNodeId = getIdString(nodeId);
+  if (!targetNodeId) return null;
+  const store = normalizeUserIntelSnapshotStore(user?.intelDomainSnapshots, USER_INTEL_SNAPSHOT_LIMIT);
+  return store[targetNodeId] || null;
 };
 
 const checkIntelHeistPermission = ({ node, user }) => {
@@ -289,6 +347,713 @@ const serializeDefenseLayout = (layout = {}) => {
     }, { cheng: [], qi: [] }),
     gateDefenseViewAdminIds: normalizeGateDefenseViewerAdminIds(normalized.gateDefenseViewAdminIds)
   };
+};
+
+const getArmyUnitTypeId = (unit) => {
+  const id = typeof unit?.id === 'string' ? unit.id.trim() : '';
+  if (id) return id;
+  return typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : '';
+};
+
+const buildArmyUnitTypeMap = (unitTypes = []) => {
+  const map = new Map();
+  (Array.isArray(unitTypes) ? unitTypes : []).forEach((item) => {
+    const id = getArmyUnitTypeId(item);
+    if (!id) return;
+    map.set(id, item);
+  });
+  return map;
+};
+
+const normalizeUnitCountEntries = (entries = []) => {
+  const out = [];
+  const seen = new Set();
+  for (const entry of (Array.isArray(entries) ? entries : [])) {
+    const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+    const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+    if (!unitTypeId || count <= 0 || seen.has(unitTypeId)) continue;
+    seen.add(unitTypeId);
+    out.push({ unitTypeId, count });
+  }
+  return out;
+};
+
+const buildUnitCountMap = (entries = []) => {
+  const map = new Map();
+  normalizeUnitCountEntries(entries).forEach((entry) => {
+    map.set(entry.unitTypeId, (map.get(entry.unitTypeId) || 0) + entry.count);
+  });
+  return map;
+};
+
+const mergeUnitCountMaps = (...maps) => {
+  const merged = new Map();
+  maps.forEach((map) => {
+    if (!(map instanceof Map)) return;
+    for (const [unitTypeId, count] of map.entries()) {
+      const normalized = Math.max(0, Math.floor(Number(count) || 0));
+      if (!unitTypeId || normalized <= 0) continue;
+      merged.set(unitTypeId, (merged.get(unitTypeId) || 0) + normalized);
+    }
+  });
+  return merged;
+};
+
+const mapToUnitCountEntries = (countMap = new Map(), unitTypeMap = new Map()) => {
+  if (!(countMap instanceof Map)) return [];
+  return Array.from(countMap.entries())
+    .map(([unitTypeId, count]) => {
+      const normalizedCount = Math.max(0, Math.floor(Number(count) || 0));
+      if (!unitTypeId || normalizedCount <= 0) return null;
+      const unitType = unitTypeMap.get(unitTypeId);
+      return {
+        unitTypeId,
+        unitName: unitType?.name || unitTypeId,
+        count: normalizedCount
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.count - a.count);
+};
+
+const normalizeUserRoster = (rawRoster = [], unitTypes = []) => {
+  const rosterById = new Map();
+  for (const item of (Array.isArray(rawRoster) ? rawRoster : [])) {
+    const unitTypeId = typeof item?.unitTypeId === 'string' ? item.unitTypeId.trim() : '';
+    if (!unitTypeId || rosterById.has(unitTypeId)) continue;
+    rosterById.set(unitTypeId, {
+      unitTypeId,
+      count: Math.max(0, Math.floor(Number(item?.count) || 0)),
+      level: Math.max(1, Math.floor(Number(item?.level) || 1)),
+      nextUnitTypeId: typeof item?.nextUnitTypeId === 'string' && item.nextUnitTypeId.trim()
+        ? item.nextUnitTypeId.trim()
+        : null,
+      upgradeCostKP: Number.isFinite(Number(item?.upgradeCostKP))
+        ? Math.max(0, Number(item.upgradeCostKP))
+        : null
+    });
+  }
+  return (Array.isArray(unitTypes) ? unitTypes : []).map((unitType) => {
+    const unitTypeId = getArmyUnitTypeId(unitType);
+    const existed = rosterById.get(unitTypeId);
+    if (existed) {
+      return existed;
+    }
+    return {
+      unitTypeId,
+      count: 0,
+      level: Math.max(1, Math.floor(Number(unitType?.level) || 1)),
+      nextUnitTypeId: unitType?.nextUnitTypeId || null,
+      upgradeCostKP: Number.isFinite(Number(unitType?.upgradeCostKP))
+        ? Math.max(0, Number(unitType.upgradeCostKP))
+        : null
+    };
+  });
+};
+
+const getSnapshotGateDefenseByUnitMap = (snapshot = {}) => {
+  const source = snapshot?.gateDefense && typeof snapshot.gateDefense === 'object'
+    ? snapshot.gateDefense
+    : {};
+  return CITY_GATE_KEYS.reduce((acc, gateKey) => {
+    acc[gateKey] = buildUnitCountMap(source[gateKey] || []);
+    return acc;
+  }, { cheng: new Map(), qi: new Map() });
+};
+
+const isGateEnabledForNode = (node, gateKey) => {
+  if (gateKey === 'cheng') {
+    return Array.isArray(node?.relatedParentDomains) && node.relatedParentDomains.length > 0;
+  }
+  if (gateKey === 'qi') {
+    return Array.isArray(node?.relatedChildDomains) && node.relatedChildDomains.length > 0;
+  }
+  return false;
+};
+
+const getOrderedEnabledGateKeys = (node, preferredGate = '') => {
+  const enabledGateKeys = CITY_GATE_KEYS.filter((gateKey) => isGateEnabledForNode(node, gateKey));
+  if (enabledGateKeys.length <= 1) return enabledGateKeys;
+  if (preferredGate && enabledGateKeys.includes(preferredGate)) {
+    return [preferredGate, ...enabledGateKeys.filter((gateKey) => gateKey !== preferredGate)];
+  }
+  return enabledGateKeys;
+};
+
+const buildGateDefenseView = (node, gateDefenseByMap = {}, unitTypeMap = new Map(), preferredGate = '') => {
+  const orderedGateKeys = getOrderedEnabledGateKeys(node, preferredGate);
+  return orderedGateKeys.map((gateKey, index) => {
+    const map = gateDefenseByMap?.[gateKey] instanceof Map ? gateDefenseByMap[gateKey] : new Map();
+    const entries = mapToUnitCountEntries(map, unitTypeMap);
+    return {
+      gateKey,
+      gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
+      enabled: true,
+      highlight: index === 0,
+      totalCount: entries.reduce((sum, item) => sum + item.count, 0),
+      entries
+    };
+  });
+};
+
+const parseSupportStatusLabel = (status = '') => {
+  if (status === 'moving') return '支援中';
+  if (status === 'sieging') return '围城中';
+  return '已撤退';
+};
+
+const serializeSiegeAttacker = (attacker = {}, unitTypeMap = new Map(), now = Date.now()) => {
+  const units = mapToUnitCountEntries(buildUnitCountMap(attacker?.units || []), unitTypeMap);
+  const totalCount = units.reduce((sum, item) => sum + item.count, 0);
+  const arriveAtMs = new Date(attacker?.arriveAt || 0).getTime();
+  const remainingSeconds = attacker?.status === 'moving' && Number.isFinite(arriveAtMs) && arriveAtMs > now
+    ? Math.ceil((arriveAtMs - now) / 1000)
+    : 0;
+  return {
+    userId: getIdString(attacker?.userId),
+    username: typeof attacker?.username === 'string' ? attacker.username : '',
+    allianceId: getIdString(attacker?.allianceId),
+    status: attacker?.status === 'moving' || attacker?.status === 'retreated' ? attacker.status : 'sieging',
+    statusLabel: parseSupportStatusLabel(attacker?.status),
+    isInitiator: !!attacker?.isInitiator,
+    isReinforcement: !!attacker?.isReinforcement,
+    autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(attacker?.autoRetreatPercent) || 40))),
+    fromNodeId: getIdString(attacker?.fromNodeId),
+    fromNodeName: typeof attacker?.fromNodeName === 'string' ? attacker.fromNodeName : '',
+    requestedAt: attacker?.requestedAt || null,
+    arriveAt: attacker?.arriveAt || null,
+    joinedAt: attacker?.joinedAt || null,
+    updatedAt: attacker?.updatedAt || null,
+    totalCount,
+    remainingSeconds,
+    units
+  };
+};
+
+const resolveAttackGateByArrival = (node, user) => {
+  const fromNodeId = getIdString(user?.lastArrivedFromNodeId);
+  const fromNodeName = typeof user?.lastArrivedFromNodeName === 'string' ? user.lastArrivedFromNodeName.trim() : '';
+  const parentNames = new Set((Array.isArray(node?.relatedParentDomains) ? node.relatedParentDomains : []).map((name) => (typeof name === 'string' ? name.trim() : '')).filter(Boolean));
+  const childNames = new Set((Array.isArray(node?.relatedChildDomains) ? node.relatedChildDomains : []).map((name) => (typeof name === 'string' ? name.trim() : '')).filter(Boolean));
+
+  const arrivedFromParent = fromNodeName && parentNames.has(fromNodeName);
+  const arrivedFromChild = fromNodeName && childNames.has(fromNodeName);
+  if (arrivedFromParent) return 'cheng';
+  if (arrivedFromChild) return 'qi';
+
+  // 兜底：如果只有单门可用，则按唯一可用门判定
+  if (!fromNodeId && !fromNodeName) {
+    const hasCheng = isGateEnabledForNode(node, 'cheng');
+    const hasQi = isGateEnabledForNode(node, 'qi');
+    if (hasCheng && !hasQi) return 'cheng';
+    if (!hasCheng && hasQi) return 'qi';
+  }
+  return '';
+};
+
+const getNodeGateState = (node, gateKey) => {
+  const source = node?.citySiegeState && typeof node.citySiegeState === 'object'
+    ? node.citySiegeState
+    : {};
+  const gate = source?.[gateKey] && typeof source[gateKey] === 'object' ? source[gateKey] : {};
+  const attackers = Array.isArray(gate.attackers) ? gate.attackers : [];
+  return {
+    active: !!gate.active,
+    startedAt: gate.startedAt || null,
+    updatedAt: gate.updatedAt || null,
+    supportNotifiedAt: gate.supportNotifiedAt || null,
+    attackerAllianceId: gate.attackerAllianceId || null,
+    initiatorUserId: gate.initiatorUserId || null,
+    initiatorUsername: gate.initiatorUsername || '',
+    attackers
+  };
+};
+
+const settleNodeSiegeState = (node, nowDate = new Date()) => {
+  if (!node || !node.citySiegeState) return false;
+  let changed = false;
+  const nowMs = nowDate.getTime();
+
+  for (const gateKey of CITY_GATE_KEYS) {
+    const gate = node.citySiegeState?.[gateKey];
+    if (!gate || typeof gate !== 'object') continue;
+    const attackers = Array.isArray(gate.attackers) ? gate.attackers : [];
+    for (const attacker of attackers) {
+      if (!attacker || typeof attacker !== 'object') continue;
+      if (attacker.status !== 'moving') continue;
+      const arriveAtMs = new Date(attacker.arriveAt || 0).getTime();
+      if (!Number.isFinite(arriveAtMs) || arriveAtMs <= 0) continue;
+      if (arriveAtMs > nowMs) continue;
+      attacker.status = 'sieging';
+      attacker.joinedAt = attacker.joinedAt || nowDate;
+      attacker.updatedAt = nowDate;
+      changed = true;
+    }
+
+    const hasActive = attackers.some((item) => item?.status === 'moving' || item?.status === 'sieging');
+    if (!!gate.active !== hasActive) {
+      gate.active = hasActive;
+      changed = true;
+    }
+
+    if (!hasActive) {
+      if (gate.attackerAllianceId) {
+        gate.attackerAllianceId = null;
+        changed = true;
+      }
+      continue;
+    }
+
+    if (!gate.startedAt) {
+      gate.startedAt = nowDate;
+      changed = true;
+    }
+
+    const activeFirst = attackers.find((item) => item?.status === 'moving' || item?.status === 'sieging') || null;
+    const activeAllianceId = activeFirst?.allianceId || null;
+    if (getIdString(gate.attackerAllianceId) !== getIdString(activeAllianceId)) {
+      gate.attackerAllianceId = activeAllianceId;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    for (const gateKey of CITY_GATE_KEYS) {
+      const gate = node.citySiegeState?.[gateKey];
+      if (gate && typeof gate === 'object') {
+        gate.updatedAt = nowDate;
+      }
+    }
+  }
+  return changed;
+};
+
+const createEmptySiegeGateState = () => ({
+  active: false,
+  startedAt: null,
+  updatedAt: null,
+  supportNotifiedAt: null,
+  attackerAllianceId: null,
+  initiatorUserId: null,
+  initiatorUsername: '',
+  attackers: []
+});
+
+const buildAllianceNodeGraph = (nodes = []) => {
+  const nameToId = new Map();
+  const idToNode = new Map();
+  const adjacency = new Map();
+
+  (Array.isArray(nodes) ? nodes : []).forEach((node) => {
+    const nodeId = getIdString(node?._id);
+    const nodeName = typeof node?.name === 'string' ? node.name : '';
+    if (!nodeId || !nodeName) return;
+    nameToId.set(nodeName, nodeId);
+    idToNode.set(nodeId, node);
+    adjacency.set(nodeId, new Set());
+  });
+
+  const link = (idA, idB) => {
+    if (!idA || !idB || idA === idB) return;
+    adjacency.get(idA)?.add(idB);
+    adjacency.get(idB)?.add(idA);
+  };
+
+  (Array.isArray(nodes) ? nodes : []).forEach((node) => {
+    const nodeId = getIdString(node?._id);
+    if (!nodeId) return;
+    (Array.isArray(node?.relatedParentDomains) ? node.relatedParentDomains : []).forEach((name) => {
+      const targetId = nameToId.get(name);
+      if (targetId) link(nodeId, targetId);
+    });
+    (Array.isArray(node?.relatedChildDomains) ? node.relatedChildDomains : []).forEach((name) => {
+      const targetId = nameToId.get(name);
+      if (targetId) link(nodeId, targetId);
+    });
+  });
+
+  return { nameToId, idToNode, adjacency };
+};
+
+const bfsPath = (startId, targetId, adjacency = new Map()) => {
+  if (!startId || !targetId) return null;
+  if (startId === targetId) return [startId];
+  const queue = [startId];
+  const visited = new Set([startId]);
+  const prev = new Map();
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const neighbors = adjacency.get(current) || new Set();
+    for (const next of neighbors) {
+      if (visited.has(next)) continue;
+      visited.add(next);
+      prev.set(next, current);
+      if (next === targetId) {
+        const path = [targetId];
+        let walk = targetId;
+        while (prev.has(walk)) {
+          walk = prev.get(walk);
+          path.push(walk);
+        }
+        return path.reverse();
+      }
+      queue.push(next);
+    }
+  }
+  return null;
+};
+
+const isSameAlliance = (allianceA, allianceB) => {
+  const a = getIdString(allianceA);
+  const b = getIdString(allianceB);
+  return !!a && !!b && a === b;
+};
+
+const isSiegeAttackerActive = (attacker) => (
+  attacker?.status === 'moving' || attacker?.status === 'sieging'
+);
+
+const buildSiegeGateSummary = (node, gateKey, unitTypeMap = new Map()) => {
+  const gateState = getNodeGateState(node, gateKey);
+  const now = Date.now();
+  const attackers = (gateState.attackers || [])
+    .map((attacker) => serializeSiegeAttacker(attacker, unitTypeMap, now))
+    .filter((item) => !!item.userId);
+  const activeAttackers = attackers.filter((item) => item.status === 'moving' || item.status === 'sieging');
+  const aggregateMap = activeAttackers.reduce(
+    (acc, item) => mergeUnitCountMaps(acc, buildUnitCountMap(item.units || [])),
+    new Map()
+  );
+  const aggregateUnits = mapToUnitCountEntries(aggregateMap, unitTypeMap);
+  const totalCount = aggregateUnits.reduce((sum, item) => sum + item.count, 0);
+  const active = !!gateState.active && activeAttackers.length > 0;
+  return {
+    gateKey,
+    gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
+    enabled: isGateEnabledForNode(node, gateKey),
+    active,
+    startedAt: gateState.startedAt || null,
+    updatedAt: gateState.updatedAt || null,
+    supportNotifiedAt: gateState.supportNotifiedAt || null,
+    attackerAllianceId: getIdString(gateState.attackerAllianceId),
+    initiatorUserId: getIdString(gateState.initiatorUserId),
+    initiatorUsername: gateState.initiatorUsername || '',
+    attackers,
+    activeAttackers,
+    aggregateUnits,
+    totalCount
+  };
+};
+
+const SIEGE_VIEWER_ROLE_COMMON = 'common';
+const SIEGE_VIEWER_ROLE_DOMAIN_MASTER = 'domainMaster';
+const SIEGE_VIEWER_ROLE_DOMAIN_ADMIN = 'domainAdmin';
+
+const pickDomainAdminAttackerView = (attacker = {}) => ({
+  userId: getIdString(attacker?.userId),
+  username: typeof attacker?.username === 'string' ? attacker.username : '',
+  status: typeof attacker?.status === 'string' ? attacker.status : 'sieging',
+  statusLabel: typeof attacker?.statusLabel === 'string' ? attacker.statusLabel : '',
+  isInitiator: !!attacker?.isInitiator,
+  isReinforcement: !!attacker?.isReinforcement,
+  fromNodeName: typeof attacker?.fromNodeName === 'string' ? attacker.fromNodeName : '',
+  requestedAt: attacker?.requestedAt || null,
+  arriveAt: attacker?.arriveAt || null,
+  joinedAt: attacker?.joinedAt || null,
+  updatedAt: attacker?.updatedAt || null,
+  totalCount: 0,
+  remainingSeconds: Math.max(0, Math.floor(Number(attacker?.remainingSeconds) || 0)),
+  units: []
+});
+
+const maskSiegeGateStateForDomainAdmin = (gateState = {}) => {
+  const activeAttackersSource = Array.isArray(gateState?.activeAttackers)
+    ? gateState.activeAttackers
+    : (Array.isArray(gateState?.attackers) ? gateState.attackers : []).filter((item) => isSiegeAttackerActive(item));
+  const activeAttackers = activeAttackersSource
+    .map((item) => pickDomainAdminAttackerView(item))
+    .filter((item) => !!item.userId);
+  return {
+    gateKey: typeof gateState?.gateKey === 'string' ? gateState.gateKey : '',
+    gateLabel: typeof gateState?.gateLabel === 'string' ? gateState.gateLabel : '',
+    enabled: !!gateState?.enabled,
+    active: !!gateState?.active && activeAttackers.length > 0,
+    startedAt: gateState?.startedAt || null,
+    updatedAt: gateState?.updatedAt || null,
+    supportNotifiedAt: gateState?.supportNotifiedAt || null,
+    attackerAllianceId: getIdString(gateState?.attackerAllianceId),
+    initiatorUserId: getIdString(gateState?.initiatorUserId),
+    initiatorUsername: typeof gateState?.initiatorUsername === 'string' ? gateState.initiatorUsername : '',
+    attackers: activeAttackers,
+    activeAttackers,
+    aggregateUnits: [],
+    totalCount: 0
+  };
+};
+
+const maskSiegePayloadForDomainAdmin = (payload = {}) => {
+  const sourceGateStates = payload?.gateStates && typeof payload.gateStates === 'object'
+    ? payload.gateStates
+    : {};
+  const gateStates = CITY_GATE_KEYS.reduce((acc, gateKey) => {
+    acc[gateKey] = maskSiegeGateStateForDomainAdmin(sourceGateStates[gateKey] || {});
+    return acc;
+  }, { cheng: maskSiegeGateStateForDomainAdmin({ gateKey: 'cheng', gateLabel: CITY_GATE_LABELS.cheng }), qi: maskSiegeGateStateForDomainAdmin({ gateKey: 'qi', gateLabel: CITY_GATE_LABELS.qi }) });
+  const activeGateKeys = CITY_GATE_KEYS.filter((gateKey) => !!gateStates[gateKey]?.active);
+  const compareGate = (activeGateKeys.includes(payload?.compareGate) ? payload.compareGate : activeGateKeys[0]) || '';
+  const compareSupporters = (gateStates[compareGate]?.activeAttackers || []).map((item) => ({
+    userId: item.userId,
+    username: item.username || '未知成员',
+    status: item.status,
+    statusLabel: item.statusLabel,
+    totalCount: 0
+  }));
+
+  return {
+    ...payload,
+    viewerRole: SIEGE_VIEWER_ROLE_DOMAIN_ADMIN,
+    intelUsed: false,
+    intelCapturedAt: null,
+    intelDeploymentUpdatedAt: null,
+    hasActiveSiege: activeGateKeys.length > 0,
+    activeGateKeys,
+    preferredGate: compareGate,
+    compareGate,
+    canStartSiege: false,
+    startDisabledReason: '域相仅可查看攻方动态，无法发起攻占',
+    canRequestSupport: false,
+    canSupportSameBattlefield: false,
+    supportDisabledReason: '域相仅可查看攻方动态，无法派遣支援',
+    supportGate: '',
+    canRetreat: false,
+    retreatDisabledReason: '域相仅可查看攻方动态，无法执行撤退',
+    ownRoster: {
+      totalCount: 0,
+      units: []
+    },
+    gateStates,
+    compare: {
+      gateKey: compareGate,
+      gateLabel: CITY_GATE_LABELS[compareGate] || '',
+      attacker: {
+        totalCount: 0,
+        units: [],
+        supporters: compareSupporters
+      },
+      defender: {
+        source: 'hidden',
+        totalCount: null,
+        gates: []
+      }
+    }
+  };
+};
+
+const applySiegePayloadViewerRole = ({ payload, node, userId }) => {
+  const currentUserId = getIdString(userId);
+  if (isDomainMaster(node, currentUserId)) {
+    return {
+      ...payload,
+      viewerRole: SIEGE_VIEWER_ROLE_DOMAIN_MASTER
+    };
+  }
+  if (isDomainAdmin(node, currentUserId)) {
+    return maskSiegePayloadForDomainAdmin(payload);
+  }
+  return {
+    ...payload,
+    viewerRole: SIEGE_VIEWER_ROLE_COMMON
+  };
+};
+
+const buildSiegePayloadForUser = ({
+  node,
+  user,
+  unitTypes = [],
+  intelSnapshot = null
+}) => {
+  const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
+  const roster = normalizeUserRoster(user?.armyRoster, unitTypes);
+  const ownRosterMap = buildUnitCountMap(roster);
+  const ownUnits = mapToUnitCountEntries(ownRosterMap, unitTypeMap);
+  const ownTotalCount = ownUnits.reduce((sum, item) => sum + item.count, 0);
+  const userId = getIdString(user?._id);
+  const userAllianceId = getIdString(user?.allianceId);
+  const isNodeMaster = isDomainMaster(node, userId);
+  const isNodeAdmin = isDomainAdmin(node, userId);
+
+  const gateSummaryMap = CITY_GATE_KEYS.reduce((acc, gateKey) => {
+    acc[gateKey] = buildSiegeGateSummary(node, gateKey, unitTypeMap);
+    return acc;
+  }, { cheng: null, qi: null });
+  const activeGateKeys = CITY_GATE_KEYS.filter((gateKey) => gateSummaryMap[gateKey]?.active);
+
+  let userActiveGate = '';
+  let userActiveAttacker = null;
+  for (const gateKey of activeGateKeys) {
+    const matched = gateSummaryMap[gateKey].activeAttackers.find((item) => item.userId === userId) || null;
+    if (matched) {
+      userActiveGate = gateKey;
+      userActiveAttacker = matched;
+      break;
+    }
+  }
+
+  const inferredGate = resolveAttackGateByArrival(node, user);
+  const preferredGate = userActiveGate || inferredGate || '';
+
+  const serializedDefenseLayout = serializeDefenseLayout(node?.cityDefenseLayout || {});
+  const domainMasterDefenseSnapshot = isNodeMaster
+    ? {
+      nodeId: getIdString(node?._id),
+      nodeName: node?.name || '',
+      sourceBuildingId: '',
+      deploymentUpdatedAt: serializedDefenseLayout?.updatedAt || null,
+      capturedAt: null,
+      gateDefense: buildIntelGateDefenseSnapshot(serializedDefenseLayout.gateDefense, unitTypeMap)
+    }
+    : null;
+  const effectiveDefenderSnapshot = domainMasterDefenseSnapshot || intelSnapshot;
+  const intelNodeId = getIdString(effectiveDefenderSnapshot?.nodeId);
+  const defenderHasIntel = !!effectiveDefenderSnapshot && intelNodeId === getIdString(node?._id);
+  const defenderSource = defenderHasIntel ? 'intel' : 'unknown';
+  const defenderGateView = defenderHasIntel
+    ? buildGateDefenseView(node, getSnapshotGateDefenseByUnitMap(effectiveDefenderSnapshot), unitTypeMap, preferredGate)
+    : [];
+  const defenderTotalCount = defenderSource === 'intel'
+    ? defenderGateView.reduce((sum, gate) => sum + Math.max(0, Math.floor(Number(gate?.totalCount) || 0)), 0)
+    : null;
+
+  const atNode = (typeof user?.location === 'string' ? user.location.trim() : '') === (node?.name || '');
+  const canAttemptSiege = user?.role === 'common' && atNode && !isNodeMaster && !isNodeAdmin;
+  const selectedStartGate = inferredGate;
+  const selectedStartGateState = selectedStartGate ? gateSummaryMap[selectedStartGate] : null;
+  const selectedStartGateBlockedByOther = !!selectedStartGateState
+    && selectedStartGateState.active
+    && !isSameAlliance(selectedStartGateState.attackerAllianceId, userAllianceId)
+    && selectedStartGateState.activeAttackers.some((item) => item.userId !== userId);
+
+  let canStartSiege = canAttemptSiege
+    && ownTotalCount > 0
+    && !!selectedStartGate
+    && !!selectedStartGateState?.enabled
+    && !selectedStartGateBlockedByOther
+    && !selectedStartGateState?.active;
+  let startDisabledReason = '';
+  if (!canAttemptSiege) {
+    if (user?.role !== 'common') {
+      startDisabledReason = '仅普通用户可发起攻占';
+    } else if (!atNode) {
+      startDisabledReason = '需先抵达该知识域后才能攻占';
+    } else if (isNodeMaster || isNodeAdmin) {
+      startDisabledReason = '域主/域相不可发起攻占';
+    } else {
+      startDisabledReason = '当前不可攻占';
+    }
+    canStartSiege = false;
+  } else if (ownTotalCount <= 0) {
+    canStartSiege = false;
+    startDisabledReason = '至少需要拥有一名兵力';
+  } else if (!selectedStartGate) {
+    canStartSiege = false;
+    startDisabledReason = '无法判定围攻门向，请从相邻知识域移动后再试';
+  } else if (!selectedStartGateState?.enabled) {
+    canStartSiege = false;
+    startDisabledReason = '目标门不可用，无法发起围城';
+  } else if (selectedStartGateBlockedByOther) {
+    canStartSiege = false;
+    startDisabledReason = '该门已被其他势力围城';
+  } else if (selectedStartGateState?.active) {
+    canStartSiege = false;
+    startDisabledReason = isSameAlliance(selectedStartGateState.attackerAllianceId, userAllianceId)
+      ? '该门已在围城中，可通过支援加入'
+      : '该门已在围城中';
+  }
+
+  const sameAllianceActiveGates = activeGateKeys.filter((gateKey) => (
+    isSameAlliance(gateSummaryMap[gateKey]?.attackerAllianceId, userAllianceId)
+  ));
+  const supportGate = userActiveGate || (
+    preferredGate && sameAllianceActiveGates.includes(preferredGate)
+      ? preferredGate
+      : sameAllianceActiveGates[0]
+  ) || '';
+  const canSupportSameBattlefield = !!supportGate
+    && !!userAllianceId
+    && !userActiveAttacker
+    && user?.role === 'common';
+  const supportDisabledReason = canSupportSameBattlefield
+    ? ''
+    : (!userAllianceId
+        ? '未加入熵盟，无法支援'
+        : (userActiveAttacker ? '你已在该战场中' : '当前无可支援的同盟围城战场'));
+  const canRetreat = !!userActiveAttacker && !!userActiveAttacker.isInitiator;
+  const retreatDisabledReason = canRetreat
+    ? ''
+    : (userActiveAttacker ? '仅围城发起者可撤退并取消攻城' : '你未参与当前围城');
+
+  const compareGate = userActiveGate || supportGate || preferredGate || '';
+  const attackerCompareUnits = compareGate && gateSummaryMap[compareGate]?.active
+    ? gateSummaryMap[compareGate].aggregateUnits
+    : ownUnits;
+  const attackerCompareTotal = attackerCompareUnits.reduce((sum, item) => sum + item.count, 0);
+  const supporterRows = compareGate && gateSummaryMap[compareGate]?.active
+    ? gateSummaryMap[compareGate].activeAttackers.map((item) => ({
+        userId: item.userId,
+        username: item.username || '未知成员',
+        status: item.status,
+        statusLabel: item.statusLabel,
+        totalCount: item.totalCount
+      }))
+    : [];
+
+  const payload = {
+    nodeId: getIdString(node?._id),
+    nodeName: node?.name || '',
+    intelUsed: !domainMasterDefenseSnapshot && defenderHasIntel,
+    intelCapturedAt: !domainMasterDefenseSnapshot && defenderHasIntel ? (effectiveDefenderSnapshot?.capturedAt || null) : null,
+    intelDeploymentUpdatedAt: defenderHasIntel ? (effectiveDefenderSnapshot?.deploymentUpdatedAt || null) : null,
+    gateStates: {
+      cheng: gateSummaryMap.cheng,
+      qi: gateSummaryMap.qi
+    },
+    activeGateKeys,
+    hasActiveSiege: activeGateKeys.length > 0,
+    preferredGate,
+    inferredGate,
+    compareGate,
+    canStartSiege,
+    startDisabledReason,
+    canRequestSupport: !!userActiveAttacker && !!userActiveAttacker.isInitiator && !!userAllianceId,
+    canSupportSameBattlefield,
+    supportDisabledReason,
+    supportGate,
+    canRetreat,
+    retreatDisabledReason,
+    ownRoster: {
+      totalCount: ownTotalCount,
+      units: ownUnits
+    },
+    compare: {
+      gateKey: compareGate,
+      gateLabel: CITY_GATE_LABELS[compareGate] || '',
+      attacker: {
+        totalCount: attackerCompareTotal,
+        units: attackerCompareUnits,
+        supporters: supporterRows
+      },
+      defender: {
+        source: defenderSource,
+        totalCount: defenderTotalCount,
+        gates: defenderGateView
+      }
+    }
+  };
+  return applySiegePayloadViewerRole({
+    payload,
+    node,
+    userId
+  });
 };
 
 const toPlainObject = (value) => (
@@ -2621,17 +3386,13 @@ router.post('/:nodeId/intel-heist/scan', authenticateToken, async (req, res) => 
       gateDefense: buildIntelGateDefenseSnapshot(serializedLayout.gateDefense, unitTypeMap)
     };
 
-    const snapshots = Array.isArray(user.intelDomainSnapshots) ? [...user.intelDomainSnapshots] : [];
-    const existingIndex = snapshots.findIndex((item) => getIdString(item?.nodeId) === getIdString(node._id));
-    if (existingIndex >= 0) {
-      snapshots[existingIndex] = snapshotData;
-    } else {
-      snapshots.push(snapshotData);
-    }
-    user.intelDomainSnapshots = snapshots.slice(-60);
+    const targetNodeId = getIdString(node._id);
+    const snapshotStore = normalizeUserIntelSnapshotStore(user.intelDomainSnapshots, USER_INTEL_SNAPSHOT_LIMIT);
+    snapshotStore[targetNodeId] = serializeIntelSnapshot(snapshotData);
+    user.intelDomainSnapshots = normalizeUserIntelSnapshotStore(snapshotStore, USER_INTEL_SNAPSHOT_LIMIT);
     await user.save();
 
-    const latestSnapshot = findUserIntelSnapshotByNodeId(user, node._id);
+    const latestSnapshot = findUserIntelSnapshotByNodeId(user, targetNodeId);
     res.json({
       success: true,
       found: true,
@@ -2782,6 +3543,669 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
       return res.status(error.statusCode).json({ error: error.message || '请求参数错误' });
     }
     res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取知识域围城状态（攻占/围城/支援信息）
+router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const [node, user, unitTypes] = await Promise.all([
+      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains cityDefenseLayout citySiegeState'),
+      User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
+      fetchArmyUnitTypes()
+    ]);
+
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (user.role !== 'common') {
+      return res.status(403).json({ error: '仅普通用户可查看围城状态' });
+    }
+
+    const changed = settleNodeSiegeState(node, new Date());
+    if (changed) {
+      await node.save();
+    }
+
+    const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
+    const intelSnapshot = intelSnapshotRaw ? serializeIntelSnapshot(intelSnapshotRaw) : null;
+    const payload = buildSiegePayloadForUser({
+      node,
+      user,
+      unitTypes,
+      intelSnapshot
+    });
+
+    return res.json({
+      success: true,
+      ...payload
+    });
+  } catch (error) {
+    console.error('获取围城状态错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 发起围城（攻占知识域）
+router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const [node, user, unitTypes] = await Promise.all([
+      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains cityDefenseLayout citySiegeState'),
+      User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
+      fetchArmyUnitTypes()
+    ]);
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (user.role !== 'common') {
+      return res.status(403).json({ error: '仅普通用户可发起围城' });
+    }
+    if (isDomainMaster(node, requestUserId) || isDomainAdmin(node, requestUserId)) {
+      return res.status(403).json({ error: '域主/域相不可发起围城' });
+    }
+    if ((user.location || '').trim() !== (node.name || '')) {
+      return res.status(403).json({ error: '需先抵达该知识域后才能发起围城' });
+    }
+
+    settleNodeSiegeState(node, new Date());
+
+    const gateKey = resolveAttackGateByArrival(node, user);
+    if (!gateKey) {
+      return res.status(400).json({ error: '无法判定围攻门向，请从相邻知识域移动后再试' });
+    }
+    if (!isGateEnabledForNode(node, gateKey)) {
+      return res.status(400).json({ error: '该门当前不可用，无法发起围城' });
+    }
+
+    const roster = normalizeUserRoster(user.armyRoster, unitTypes);
+    const unitMap = buildArmyUnitTypeMap(unitTypes);
+    const ownUnitEntries = mapToUnitCountEntries(buildUnitCountMap(roster), unitMap);
+    const ownTotalCount = ownUnitEntries.reduce((sum, item) => sum + item.count, 0);
+    if (ownTotalCount <= 0) {
+      return res.status(400).json({ error: '至少需要拥有一名兵力' });
+    }
+
+    const gateState = getNodeGateState(node, gateKey);
+    const activeAttackers = (gateState.attackers || []).filter((item) => isSiegeAttackerActive(item));
+    if (activeAttackers.length > 0) {
+      const sameAlliance = isSameAlliance(gateState.attackerAllianceId, user.allianceId);
+      if (!sameAlliance) {
+        return res.status(409).json({ error: '该门已被其他势力围城' });
+      }
+      return res.status(409).json({ error: '该门已在围城中，可通过支援加入' });
+    }
+
+    const now = new Date();
+    const normalizedOwnUnits = normalizeUnitCountEntries(ownUnitEntries);
+    const fromNodeId = user.lastArrivedFromNodeId || null;
+    const fromNodeName = (user.lastArrivedFromNodeName || '').trim();
+
+    const nextAttackers = Array.isArray(node.citySiegeState?.[gateKey]?.attackers)
+      ? node.citySiegeState[gateKey].attackers.filter((item) => getIdString(item?.userId) !== requestUserId)
+      : [];
+    nextAttackers.push({
+      userId: user._id,
+      username: user.username || '',
+      allianceId: user.allianceId || null,
+      units: normalizedOwnUnits,
+      fromNodeId,
+      fromNodeName,
+      autoRetreatPercent: 40,
+      status: 'sieging',
+      isInitiator: true,
+      isReinforcement: false,
+      requestedAt: now,
+      arriveAt: now,
+      joinedAt: now,
+      updatedAt: now
+    });
+
+    node.citySiegeState[gateKey] = {
+      ...(node.citySiegeState?.[gateKey]?.toObject?.() || node.citySiegeState?.[gateKey] || {}),
+      active: true,
+      startedAt: node.citySiegeState?.[gateKey]?.startedAt || now,
+      updatedAt: now,
+      attackerAllianceId: user.allianceId || null,
+      initiatorUserId: user._id,
+      initiatorUsername: user.username || '',
+      attackers: nextAttackers
+    };
+    await node.save();
+
+    const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
+    const intelSnapshot = intelSnapshotRaw ? serializeIntelSnapshot(intelSnapshotRaw) : null;
+    const payload = buildSiegePayloadForUser({
+      node,
+      user,
+      unitTypes,
+      intelSnapshot
+    });
+
+    return res.json({
+      success: true,
+      message: `已在${CITY_GATE_LABELS[gateKey] || gateKey}发起围城`,
+      ...payload
+    });
+  } catch (error) {
+    console.error('发起围城错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 围城发起者呼叫熵盟支援
+router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const [node, user, unitTypes] = await Promise.all([
+      Node.findById(nodeId).select('name status citySiegeState'),
+      User.findById(requestUserId).select('username role allianceId armyRoster intelDomainSnapshots'),
+      fetchArmyUnitTypes()
+    ]);
+
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (user.role !== 'common') {
+      return res.status(403).json({ error: '仅普通用户可呼叫支援' });
+    }
+    const requestAllianceId = getIdString(user.allianceId);
+    if (!requestAllianceId) {
+      return res.status(400).json({ error: '未加入熵盟，无法呼叫支援' });
+    }
+
+    settleNodeSiegeState(node, new Date());
+
+    let targetGateKey = '';
+    for (const gateKey of CITY_GATE_KEYS) {
+      const gateSummary = buildSiegeGateSummary(node, gateKey, buildArmyUnitTypeMap(unitTypes));
+      if (!gateSummary.active) continue;
+      const matched = gateSummary.activeAttackers.find((item) => item.userId === requestUserId && item.isInitiator);
+      if (!matched) continue;
+      targetGateKey = gateKey;
+      break;
+    }
+    if (!targetGateKey) {
+      return res.status(403).json({ error: '仅围城发起者可呼叫熵盟支援' });
+    }
+
+    const now = new Date();
+    node.citySiegeState[targetGateKey].supportNotifiedAt = now;
+    node.citySiegeState[targetGateKey].updatedAt = now;
+    await node.save();
+
+    const members = await User.find({
+      _id: { $ne: user._id },
+      role: 'common',
+      allianceId: user.allianceId
+    }).select('_id notifications');
+
+    const notifyMessage = `熵盟成员 ${user.username} 在知识域「${node.name}」${CITY_GATE_LABELS[targetGateKey]}发起围城，点击可查看并支援`;
+    for (const member of members) {
+      member.notifications = Array.isArray(member.notifications) ? member.notifications : [];
+      member.notifications.unshift({
+        type: 'info',
+        title: `围城支援请求：${node.name}`,
+        message: notifyMessage,
+        read: false,
+        status: 'info',
+        nodeId: node._id,
+        nodeName: node.name,
+        allianceId: user.allianceId || null,
+        allianceName: '',
+        inviterId: user._id,
+        inviterUsername: user.username || '',
+        inviteeId: member._id,
+        inviteeUsername: '',
+        createdAt: now
+      });
+      await member.save();
+    }
+
+    const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
+    const intelSnapshot = intelSnapshotRaw ? serializeIntelSnapshot(intelSnapshotRaw) : null;
+    const payload = buildSiegePayloadForUser({
+      node,
+      user,
+      unitTypes,
+      intelSnapshot
+    });
+
+    return res.json({
+      success: true,
+      message: `已呼叫熵盟支援（通知 ${members.length} 人）`,
+      ...payload
+    });
+  } catch (error) {
+    console.error('呼叫围城支援错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 熵盟成员支援同一战场
+router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const gateKeyRaw = typeof req.body?.gateKey === 'string' ? req.body.gateKey.trim() : '';
+    const gateKey = CITY_GATE_KEYS.includes(gateKeyRaw) ? gateKeyRaw : '';
+    const autoRetreatPercentRaw = Number(req.body?.autoRetreatPercent);
+    const autoRetreatPercent = Math.max(1, Math.min(99, Math.floor(Number.isFinite(autoRetreatPercentRaw) ? autoRetreatPercentRaw : 40)));
+    const rawUnits = Array.isArray(req.body?.units)
+      ? req.body.units
+      : (Array.isArray(req.body?.items) ? req.body.items : []);
+
+    const normalizedUnits = normalizeUnitCountEntries(rawUnits.map((entry) => ({
+      unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
+      count: Number(entry?.count ?? entry?.qty)
+    })));
+    if (normalizedUnits.length === 0) {
+      return res.status(400).json({ error: '请至少选择一支兵种和数量' });
+    }
+
+    const [node, user, unitTypes, approvedNodes] = await Promise.all([
+      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains citySiegeState cityDefenseLayout'),
+      User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots'),
+      fetchArmyUnitTypes(),
+      Node.find({ status: 'approved' }).select('_id name relatedParentDomains relatedChildDomains citySiegeState').lean()
+    ]);
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (user.role !== 'common') {
+      return res.status(403).json({ error: '仅普通用户可派遣支援' });
+    }
+    if (isDomainMaster(node, requestUserId) || isDomainAdmin(node, requestUserId)) {
+      return res.status(403).json({ error: '域主/域相不可支援攻占自己管理的知识域' });
+    }
+
+    const userAllianceId = getIdString(user.allianceId);
+    if (!userAllianceId) {
+      return res.status(403).json({ error: '未加入熵盟，无法支援同盟战场' });
+    }
+
+    settleNodeSiegeState(node, new Date());
+
+    const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
+    for (const unitEntry of normalizedUnits) {
+      if (!unitTypeMap.has(unitEntry.unitTypeId)) {
+        return res.status(400).json({ error: `无效兵种：${unitEntry.unitTypeId}` });
+      }
+    }
+
+    const gateSummaries = CITY_GATE_KEYS.reduce((acc, itemGateKey) => {
+      acc[itemGateKey] = buildSiegeGateSummary(node, itemGateKey, unitTypeMap);
+      return acc;
+    }, { cheng: null, qi: null });
+    const sameAllianceActiveGates = CITY_GATE_KEYS.filter((itemGateKey) => (
+      gateSummaries[itemGateKey]?.active
+      && isSameAlliance(gateSummaries[itemGateKey]?.attackerAllianceId, userAllianceId)
+    ));
+
+    const targetGateKey = gateKey && sameAllianceActiveGates.includes(gateKey)
+      ? gateKey
+      : sameAllianceActiveGates[0];
+    if (!targetGateKey) {
+      return res.status(400).json({ error: '当前不存在可支援的同盟围城战场' });
+    }
+    if (gateSummaries[targetGateKey].activeAttackers.some((item) => item.userId === requestUserId)) {
+      return res.status(400).json({ error: '你已在该战场中，不能重复派遣' });
+    }
+
+    const roster = normalizeUserRoster(user.armyRoster, unitTypes);
+    const rosterMap = buildUnitCountMap(roster);
+    const committedNodes = await Node.find({
+      status: 'approved',
+      $or: [
+        { 'citySiegeState.cheng.attackers.userId': user._id },
+        { 'citySiegeState.qi.attackers.userId': user._id }
+      ]
+    }).select('citySiegeState');
+    let committedMap = new Map();
+    committedNodes.forEach((itemNode) => {
+      CITY_GATE_KEYS.forEach((itemGateKey) => {
+        const gateState = getNodeGateState(itemNode, itemGateKey);
+        (gateState.attackers || []).forEach((attacker) => {
+          if (getIdString(attacker?.userId) !== requestUserId) return;
+          if (!isSiegeAttackerActive(attacker)) return;
+          committedMap = mergeUnitCountMaps(committedMap, buildUnitCountMap(attacker?.units || []));
+        });
+      });
+    });
+    const dispatchMap = buildUnitCountMap(normalizedUnits);
+    for (const [unitTypeId, dispatchCount] of dispatchMap.entries()) {
+      const totalOwned = rosterMap.get(unitTypeId) || 0;
+      const committed = committedMap.get(unitTypeId) || 0;
+      const available = Math.max(0, totalOwned - committed);
+      if (dispatchCount > available) {
+        const unitName = unitTypeMap.get(unitTypeId)?.name || unitTypeId;
+        return res.status(400).json({
+          error: `${unitName} 可派遣数量不足：可用 ${available}，请求 ${dispatchCount}`
+        });
+      }
+    }
+
+    const graph = buildAllianceNodeGraph(approvedNodes);
+    const currentLocationName = (user.location || '').trim();
+    const startNodeId = graph.nameToId.get(currentLocationName) || '';
+    if (!startNodeId) {
+      return res.status(400).json({ error: '当前所在知识域无效，无法派遣支援' });
+    }
+
+    const sideNameSet = new Set(
+      (targetGateKey === 'cheng' ? node.relatedParentDomains : node.relatedChildDomains)
+        .filter((name) => typeof name === 'string' && !!name.trim())
+    );
+    const sideNodes = approvedNodes.filter((item) => sideNameSet.has(item.name));
+    if (sideNodes.length === 0) {
+      return res.status(400).json({ error: `当前知识域无可用${CITY_GATE_LABELS[targetGateKey]}入口路径` });
+    }
+
+    const isBlockedByOtherAllianceSiege = (sideNode) => {
+      if (!sideNode || typeof sideNode !== 'object') return true;
+      for (const sideGateKey of CITY_GATE_KEYS) {
+        const gateState = getNodeGateState(sideNode, sideGateKey);
+        if (!gateState.active) continue;
+        const siegeAllianceId = getIdString(gateState.attackerAllianceId);
+        if (!siegeAllianceId) return true;
+        if (siegeAllianceId !== userAllianceId) return true;
+      }
+      return false;
+    };
+
+    let selectedSupportPath = null;
+    for (const sideNode of sideNodes) {
+      if (isBlockedByOtherAllianceSiege(sideNode)) continue;
+      const sideNodeId = getIdString(sideNode._id);
+      const path = bfsPath(startNodeId, sideNodeId, graph.adjacency);
+      if (!Array.isArray(path) || path.length === 0) continue;
+      const distanceUnits = (path.length - 1) + 1; // 额外 +1 表示从同侧节点进入目标门
+      if (!selectedSupportPath || distanceUnits < selectedSupportPath.distanceUnits) {
+        selectedSupportPath = {
+          sideNodeId,
+          sideNodeName: sideNode.name,
+          path,
+          distanceUnits
+        };
+      }
+    }
+
+    if (!selectedSupportPath) {
+      return res.status(409).json({ error: `同侧路径已被封锁，当前无法支援${CITY_GATE_LABELS[targetGateKey]}` });
+    }
+
+    const now = new Date();
+    const arriveAt = new Date(now.getTime() + (selectedSupportPath.distanceUnits * SIEGE_SUPPORT_UNIT_DURATION_SECONDS * 1000));
+    const gateCurrent = getNodeGateState(node, targetGateKey);
+    const nextAttackers = Array.isArray(gateCurrent.attackers)
+      ? gateCurrent.attackers.filter((item) => getIdString(item?.userId) !== requestUserId)
+      : [];
+
+    nextAttackers.push({
+      userId: user._id,
+      username: user.username || '',
+      allianceId: user.allianceId || null,
+      units: normalizedUnits,
+      fromNodeId: graph.idToNode.get(startNodeId)?._id || null,
+      fromNodeName: currentLocationName,
+      autoRetreatPercent,
+      status: 'moving',
+      isInitiator: false,
+      isReinforcement: true,
+      requestedAt: now,
+      arriveAt,
+      joinedAt: null,
+      updatedAt: now
+    });
+
+    node.citySiegeState[targetGateKey] = {
+      ...(node.citySiegeState?.[targetGateKey]?.toObject?.() || node.citySiegeState?.[targetGateKey] || {}),
+      active: true,
+      startedAt: node.citySiegeState?.[targetGateKey]?.startedAt || now,
+      updatedAt: now,
+      attackerAllianceId: node.citySiegeState?.[targetGateKey]?.attackerAllianceId || user.allianceId || null,
+      attackers: nextAttackers
+    };
+    await node.save();
+
+    const initiatorUserId = getIdString(node.citySiegeState?.[targetGateKey]?.initiatorUserId);
+    if (isValidObjectId(initiatorUserId) && initiatorUserId !== requestUserId) {
+      const initiatorUser = await User.findById(initiatorUserId).select('notifications');
+      if (initiatorUser) {
+        initiatorUser.notifications = Array.isArray(initiatorUser.notifications) ? initiatorUser.notifications : [];
+        initiatorUser.notifications.unshift({
+          type: 'info',
+          title: `围城增援抵达路上：${node.name}`,
+          message: `${user.username} 已派遣支援部队前往${CITY_GATE_LABELS[targetGateKey]}，预计 ${selectedSupportPath.distanceUnits * SIEGE_SUPPORT_UNIT_DURATION_SECONDS} 秒后到达`,
+          read: false,
+          status: 'info',
+          nodeId: node._id,
+          nodeName: node.name,
+          allianceId: user.allianceId || null,
+          allianceName: '',
+          inviterId: user._id,
+          inviterUsername: user.username || '',
+          inviteeId: initiatorUser._id,
+          inviteeUsername: '',
+          createdAt: now
+        });
+        await initiatorUser.save();
+      }
+    }
+
+    const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
+    const intelSnapshot = intelSnapshotRaw ? serializeIntelSnapshot(intelSnapshotRaw) : null;
+    const payload = buildSiegePayloadForUser({
+      node,
+      user,
+      unitTypes,
+      intelSnapshot
+    });
+
+    return res.json({
+      success: true,
+      message: `已派遣支援前往${CITY_GATE_LABELS[targetGateKey]}`,
+      supportTravel: {
+        gateKey: targetGateKey,
+        gateLabel: CITY_GATE_LABELS[targetGateKey],
+        fromNodeName: currentLocationName,
+        sideNodeName: selectedSupportPath.sideNodeName,
+        distanceUnits: selectedSupportPath.distanceUnits,
+        unitDurationSeconds: SIEGE_SUPPORT_UNIT_DURATION_SECONDS,
+        arriveAt
+      },
+      ...payload
+    });
+  } catch (error) {
+    console.error('派遣围城支援错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 围城发起者撤退并取消本门攻城（所有支援同步撤回）
+router.post('/:nodeId/siege/retreat', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const [node, user, unitTypes] = await Promise.all([
+      Node.findById(nodeId).select('name status citySiegeState'),
+      User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
+      fetchArmyUnitTypes()
+    ]);
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (user.role !== 'common') {
+      return res.status(403).json({ error: '仅普通用户可执行撤退' });
+    }
+
+    settleNodeSiegeState(node, new Date());
+
+    let targetGateKey = '';
+    let retreatCount = 0;
+    for (const gateKey of CITY_GATE_KEYS) {
+      const gateState = getNodeGateState(node, gateKey);
+      if (!gateState.active) continue;
+      const initiator = (gateState.attackers || []).find((attacker) => (
+        getIdString(attacker?.userId) === requestUserId
+        && isSiegeAttackerActive(attacker)
+        && !!attacker?.isInitiator
+      ));
+      if (!initiator) continue;
+      targetGateKey = gateKey;
+      retreatCount = (gateState.attackers || []).filter((attacker) => isSiegeAttackerActive(attacker)).length;
+      break;
+    }
+
+    if (!targetGateKey) {
+      return res.status(403).json({ error: '仅围城发起者可撤退并取消攻城' });
+    }
+
+    const now = new Date();
+    node.citySiegeState[targetGateKey] = {
+      ...createEmptySiegeGateState(),
+      updatedAt: now
+    };
+    await node.save();
+
+    const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
+    const intelSnapshot = intelSnapshotRaw ? serializeIntelSnapshot(intelSnapshotRaw) : null;
+    const payload = buildSiegePayloadForUser({
+      node,
+      user,
+      unitTypes,
+      intelSnapshot
+    });
+
+    return res.json({
+      success: true,
+      message: `已在${CITY_GATE_LABELS[targetGateKey] || targetGateKey}撤退，攻城取消（撤回 ${retreatCount} 支部队）`,
+      ...payload
+    });
+  } catch (error) {
+    console.error('围城撤退错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 当前用户派遣中的围城支援状态
+router.get('/me/siege-supports', authenticateToken, async (req, res) => {
+  try {
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+
+    const nodes = await Node.find({
+      status: 'approved',
+      $or: [
+        { 'citySiegeState.cheng.attackers.userId': new mongoose.Types.ObjectId(requestUserId) },
+        { 'citySiegeState.qi.attackers.userId': new mongoose.Types.ObjectId(requestUserId) }
+      ]
+    }).select('name citySiegeState');
+    const unitTypes = await fetchArmyUnitTypes();
+    const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
+    const nowMs = Date.now();
+
+    const rows = [];
+    for (const node of nodes) {
+      const changed = settleNodeSiegeState(node, new Date(nowMs));
+      if (changed) {
+        await node.save();
+      }
+      for (const gateKey of CITY_GATE_KEYS) {
+        const gateState = getNodeGateState(node, gateKey);
+        for (const attacker of (gateState.attackers || [])) {
+          if (getIdString(attacker?.userId) !== requestUserId) continue;
+          if (!isSiegeAttackerActive(attacker)) continue;
+          const serialized = serializeSiegeAttacker(attacker, unitTypeMap, nowMs);
+          rows.push({
+            nodeId: getIdString(node._id),
+            nodeName: node.name || '',
+            gateKey,
+            gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
+            status: serialized.status,
+            statusLabel: serialized.statusLabel,
+            totalCount: serialized.totalCount,
+            units: serialized.units,
+            fromNodeName: serialized.fromNodeName,
+            autoRetreatPercent: serialized.autoRetreatPercent,
+            requestedAt: serialized.requestedAt,
+            arriveAt: serialized.arriveAt,
+            joinedAt: serialized.joinedAt,
+            remainingSeconds: serialized.remainingSeconds
+          });
+        }
+      }
+    }
+
+    rows.sort((a, b) => {
+      const aTime = new Date(a.requestedAt || 0).getTime();
+      const bTime = new Date(b.requestedAt || 0).getTime();
+      return bTime - aTime;
+    });
+
+    return res.json({
+      success: true,
+      supports: rows
+    });
+  } catch (error) {
+    console.error('获取围城支援状态错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
   }
 });
 

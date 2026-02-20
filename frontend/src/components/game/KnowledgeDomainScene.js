@@ -232,7 +232,7 @@ const CITY_CAMERA_BUILD_ANGLE_DEG = 90;
 const CITY_CAMERA_TRANSITION_MS = 460;
 const CITY_GATE_KEYS = ['cheng', 'qi'];
 const INTEL_HEIST_SCAN_MS = 8000;
-const INTEL_HEIST_TIMEOUT_BUFFER_MS = INTEL_HEIST_SCAN_MS*2/3;
+const INTEL_HEIST_TIMEOUT_BUFFER_MS = INTEL_HEIST_SCAN_MS;
 const CITY_GATE_LABELS = {
   cheng: '承口',
   qi: '启口'
@@ -496,8 +496,16 @@ const getGateDefenseTotal = (layout = {}, gateKey) => (
 const formatElapsedMinutesText = (value) => {
   const timeMs = new Date(value || 0).getTime();
   if (!Number.isFinite(timeMs) || timeMs <= 0) return '未知时刻';
-  const minutes = Math.max(0, Math.floor((Date.now() - timeMs) / 60000));
-  return `${minutes}分钟前`;
+  const diffMs = Math.max(0, Date.now() - timeMs);
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes <= 60) {
+    return `${minutes}分钟`;
+  }
+  const hours = diffMs / 3600000;
+  if (hours > 24) {
+    return '>1天前';
+  }
+  return `${hours.toFixed(1)}小时前`;
 };
 
 const getDeployedCountByUnitType = (layout = {}) => {

@@ -89,13 +89,170 @@ const createEmptyIntelHeistStatus = () => ({
     reason: '',
     latestSnapshot: null
 });
+const CITY_GATE_LABEL_MAP = {
+    cheng: '承门',
+    qi: '启门'
+};
+const normalizeSiegeUnitEntries = (entries = []) => (
+    (Array.isArray(entries) ? entries : [])
+        .map((entry) => ({
+            unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
+            unitName: typeof entry?.unitName === 'string' ? entry.unitName : '',
+            count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+        }))
+        .filter((entry) => entry.unitTypeId && entry.count > 0)
+);
+const normalizeSiegeGateState = (gateState = {}, gateKey = '') => {
+    const attackers = (Array.isArray(gateState?.attackers) ? gateState.attackers : [])
+        .map((attacker) => ({
+            userId: normalizeObjectId(attacker?.userId),
+            username: typeof attacker?.username === 'string' ? attacker.username : '',
+            status: typeof attacker?.status === 'string' ? attacker.status : 'sieging',
+            statusLabel: typeof attacker?.statusLabel === 'string' ? attacker.statusLabel : '',
+            isInitiator: !!attacker?.isInitiator,
+            isReinforcement: !!attacker?.isReinforcement,
+            fromNodeName: typeof attacker?.fromNodeName === 'string' ? attacker.fromNodeName : '',
+            autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(attacker?.autoRetreatPercent) || 40))),
+            totalCount: Math.max(0, Math.floor(Number(attacker?.totalCount) || 0)),
+            remainingSeconds: Math.max(0, Math.floor(Number(attacker?.remainingSeconds) || 0)),
+            units: normalizeSiegeUnitEntries(attacker?.units)
+        }))
+        .filter((attacker) => !!attacker.userId);
+    return {
+        gateKey: gateState?.gateKey || gateKey || '',
+        gateLabel: gateState?.gateLabel || CITY_GATE_LABEL_MAP[gateKey] || gateKey,
+        enabled: !!gateState?.enabled,
+        active: !!gateState?.active,
+        attackerAllianceId: normalizeObjectId(gateState?.attackerAllianceId),
+        initiatorUserId: normalizeObjectId(gateState?.initiatorUserId),
+        initiatorUsername: typeof gateState?.initiatorUsername === 'string' ? gateState.initiatorUsername : '',
+        supportNotifiedAt: gateState?.supportNotifiedAt || null,
+        totalCount: Math.max(0, Math.floor(Number(gateState?.totalCount) || 0)),
+        aggregateUnits: normalizeSiegeUnitEntries(gateState?.aggregateUnits),
+        attackers
+    };
+};
+const createEmptySiegeStatus = () => ({
+    loading: false,
+    viewerRole: 'common',
+    nodeId: '',
+    nodeName: '',
+    hasActiveSiege: false,
+    activeGateKeys: [],
+    preferredGate: '',
+    compareGate: '',
+    canStartSiege: false,
+    startDisabledReason: '',
+    canRequestSupport: false,
+    canSupportSameBattlefield: false,
+    supportDisabledReason: '',
+    supportGate: '',
+    canRetreat: false,
+    retreatDisabledReason: '',
+    ownRoster: { totalCount: 0, units: [] },
+    compare: {
+        gateKey: '',
+        gateLabel: '',
+        attacker: { totalCount: 0, units: [], supporters: [] },
+        defender: { source: 'unknown', totalCount: null, gates: [] }
+    },
+    intelUsed: false,
+    intelCapturedAt: null,
+    intelDeploymentUpdatedAt: null,
+    gateStates: {
+        cheng: normalizeSiegeGateState({}, 'cheng'),
+        qi: normalizeSiegeGateState({}, 'qi')
+    }
+});
+const normalizeSiegeStatus = (raw = {}, fallbackNodeId = '') => {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const gateStatesSource = source?.gateStates && typeof source.gateStates === 'object' ? source.gateStates : {};
+    const compareSource = source?.compare && typeof source.compare === 'object' ? source.compare : {};
+    const defenderSource = compareSource?.defender && typeof compareSource.defender === 'object' ? compareSource.defender : {};
+    const attackerSource = compareSource?.attacker && typeof compareSource.attacker === 'object' ? compareSource.attacker : {};
+    const viewerRole = source?.viewerRole === 'domainMaster' || source?.viewerRole === 'domainAdmin'
+        ? source.viewerRole
+        : 'common';
+    return {
+        loading: false,
+        viewerRole,
+        nodeId: normalizeObjectId(source.nodeId) || fallbackNodeId || '',
+        nodeName: typeof source.nodeName === 'string' ? source.nodeName : '',
+        hasActiveSiege: !!source.hasActiveSiege,
+        activeGateKeys: Array.isArray(source.activeGateKeys) ? source.activeGateKeys.filter((key) => key === 'cheng' || key === 'qi') : [],
+        preferredGate: typeof source.preferredGate === 'string' ? source.preferredGate : '',
+        compareGate: typeof source.compareGate === 'string' ? source.compareGate : '',
+        canStartSiege: !!source.canStartSiege,
+        startDisabledReason: typeof source.startDisabledReason === 'string' ? source.startDisabledReason : '',
+        canRequestSupport: !!source.canRequestSupport,
+        canSupportSameBattlefield: !!source.canSupportSameBattlefield,
+        supportDisabledReason: typeof source.supportDisabledReason === 'string' ? source.supportDisabledReason : '',
+        supportGate: typeof source.supportGate === 'string' ? source.supportGate : '',
+        canRetreat: !!source.canRetreat,
+        retreatDisabledReason: typeof source.retreatDisabledReason === 'string' ? source.retreatDisabledReason : '',
+        ownRoster: {
+            totalCount: Math.max(0, Math.floor(Number(source?.ownRoster?.totalCount) || 0)),
+            units: normalizeSiegeUnitEntries(source?.ownRoster?.units)
+        },
+        compare: {
+            gateKey: typeof compareSource.gateKey === 'string' ? compareSource.gateKey : '',
+            gateLabel: typeof compareSource.gateLabel === 'string' ? compareSource.gateLabel : '',
+            attacker: {
+                totalCount: Math.max(0, Math.floor(Number(attackerSource.totalCount) || 0)),
+                units: normalizeSiegeUnitEntries(attackerSource.units),
+                supporters: Array.isArray(attackerSource.supporters)
+                    ? attackerSource.supporters.map((item) => ({
+                        userId: normalizeObjectId(item?.userId),
+                        username: typeof item?.username === 'string' ? item.username : '',
+                        totalCount: Math.max(0, Math.floor(Number(item?.totalCount) || 0)),
+                        status: typeof item?.status === 'string' ? item.status : '',
+                        statusLabel: typeof item?.statusLabel === 'string' ? item.statusLabel : ''
+                    }))
+                    : []
+            },
+            defender: {
+                source: defenderSource?.source === 'intel' ? 'intel' : 'unknown',
+                totalCount: Number.isFinite(Number(defenderSource?.totalCount))
+                    ? Math.max(0, Math.floor(Number(defenderSource.totalCount)))
+                    : null,
+                gates: Array.isArray(defenderSource?.gates)
+                    ? defenderSource.gates.map((gate) => ({
+                        gateKey: typeof gate?.gateKey === 'string' ? gate.gateKey : '',
+                        gateLabel: typeof gate?.gateLabel === 'string' ? gate.gateLabel : '',
+                        highlight: !!gate?.highlight,
+                        unknown: !!gate?.unknown,
+                        enabled: !!gate?.enabled,
+                        totalCount: Number.isFinite(Number(gate?.totalCount))
+                            ? Math.max(0, Math.floor(Number(gate?.totalCount)))
+                            : null,
+                        entries: normalizeSiegeUnitEntries(gate?.entries)
+                    }))
+                    : []
+            }
+        },
+        intelUsed: !!source.intelUsed,
+        intelCapturedAt: source.intelCapturedAt || null,
+        intelDeploymentUpdatedAt: source.intelDeploymentUpdatedAt || null,
+        gateStates: {
+            cheng: normalizeSiegeGateState(gateStatesSource.cheng, 'cheng'),
+            qi: normalizeSiegeGateState(gateStatesSource.qi, 'qi')
+        }
+    };
+};
 
 const getIntelSnapshotAgeMinutesText = (snapshot) => {
     const capturedAtMs = new Date(snapshot?.capturedAt || 0).getTime();
     if (!Number.isFinite(capturedAtMs) || capturedAtMs <= 0) return '';
     const diffMs = Math.max(0, Date.now() - capturedAtMs);
     const minutes = Math.floor(diffMs / 60000);
-    return `${minutes}分钟前`;
+    if (minutes <= 60) {
+        return `${minutes}分钟`;
+    }
+    const hours = diffMs / 3600000;
+    if (hours > 24) {
+        return '>1天前';
+    }
+    return `${hours.toFixed(1)}小时前`;
 };
 
 const formatDateTimeText = (value) => {
@@ -109,7 +266,14 @@ const getElapsedMinutesText = (value) => {
     if (!Number.isFinite(ms) || ms <= 0) return '';
     const diffMs = Math.max(0, Date.now() - ms);
     const minutes = Math.floor(diffMs / 60000);
-    return `${minutes}分钟前`;
+    if (minutes <= 60) {
+        return `${minutes}分钟`;
+    }
+    const hours = diffMs / 3600000;
+    if (hours > 24) {
+        return '>1天前';
+    }
+    return `${hours.toFixed(1)}小时前`;
 };
 
 const normalizeIntelSnapshotGateEntries = (entries = []) => (
@@ -274,6 +438,22 @@ const App = () => {
         snapshot: null,
         error: ''
     });
+    const [siegeStatus, setSiegeStatus] = useState(createEmptySiegeStatus);
+    const [siegeDialog, setSiegeDialog] = useState({
+        open: false,
+        loading: false,
+        submitting: false,
+        supportSubmitting: false,
+        node: null,
+        error: '',
+        message: ''
+    });
+    const [siegeSupportDraft, setSiegeSupportDraft] = useState({
+        gateKey: '',
+        autoRetreatPercent: 40,
+        units: {}
+    });
+    const [siegeSupportStatuses, setSiegeSupportStatuses] = useState([]);
 
 
     // 导航路径相关状态
@@ -351,6 +531,8 @@ const App = () => {
                     if (currentNodeDetail) {
                         handleEnterKnowledgeDomain(currentNodeDetail);
                     }
+                } else if (button.action === 'siegeDomain' && currentNodeDetail) {
+                    handleSiegeAction(currentNodeDetail);
                 } else if (button.action === 'intelSteal' && currentNodeDetail) {
                     handleIntelHeistAction(currentNodeDetail);
                 } else if (button.action === 'joinDistribution' && currentNodeDetail) {
@@ -393,6 +575,8 @@ const App = () => {
             sceneManagerRef.current.onButtonClick = (nodeId, button) => {
                 if (button.action === 'enterKnowledgeDomain' && currentNodeDetail) {
                     handleEnterKnowledgeDomain(currentNodeDetail);
+                } else if (button.action === 'siegeDomain' && currentNodeDetail) {
+                    handleSiegeAction(currentNodeDetail);
                 } else if (button.action === 'intelSteal' && currentNodeDetail) {
                     handleIntelHeistAction(currentNodeDetail);
                 } else if (button.action === 'joinDistribution' && currentNodeDetail) {
@@ -404,7 +588,7 @@ const App = () => {
                 }
             };
         }
-    }, [currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus, intelHeistStatus]);
+    }, [currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
 
     useEffect(() => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
@@ -1004,6 +1188,53 @@ const App = () => {
     setView('admin');
   };
 
+  const fetchSiegeSupportStatuses = async (silent = true) => {
+    const token = localStorage.getItem('token');
+    if (!token || !authenticated || isAdmin) {
+      if (!silent) {
+        setSiegeSupportStatuses([]);
+      }
+      return null;
+    }
+
+    try {
+      const response = await fetch('http://localhost:5000/api/nodes/me/siege-supports', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok || !parsed.data) {
+        if (!silent) {
+          window.alert(getApiErrorMessage(parsed, '获取围城支援状态失败'));
+        }
+        return null;
+      }
+      const supports = Array.isArray(parsed.data.supports)
+        ? parsed.data.supports.map((item) => ({
+          nodeId: normalizeObjectId(item?.nodeId),
+          nodeName: typeof item?.nodeName === 'string' ? item.nodeName : '',
+          gateKey: typeof item?.gateKey === 'string' ? item.gateKey : '',
+          gateLabel: typeof item?.gateLabel === 'string' ? item.gateLabel : '',
+          status: typeof item?.status === 'string' ? item.status : '',
+          statusLabel: typeof item?.statusLabel === 'string' ? item.statusLabel : '',
+          totalCount: Math.max(0, Math.floor(Number(item?.totalCount) || 0)),
+          remainingSeconds: Math.max(0, Math.floor(Number(item?.remainingSeconds) || 0)),
+          fromNodeName: typeof item?.fromNodeName === 'string' ? item.fromNodeName : '',
+          autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(item?.autoRetreatPercent) || 40))),
+          units: normalizeSiegeUnitEntries(item?.units),
+          requestedAt: item?.requestedAt || null,
+          arriveAt: item?.arriveAt || null
+        }))
+        : [];
+      setSiegeSupportStatuses(supports);
+      return supports;
+    } catch (error) {
+      if (!silent) {
+        window.alert(`获取围城支援状态失败: ${error.message}`);
+      }
+      return null;
+    }
+  };
+
   const fetchTravelStatus = async (silent = true) => {
     const token = localStorage.getItem('token');
     if (!token) return null;
@@ -1318,6 +1549,19 @@ const App = () => {
   }, [authenticated, isAdmin]);
 
   useEffect(() => {
+    if (!authenticated || isAdmin) {
+      setSiegeSupportStatuses([]);
+      return;
+    }
+
+    fetchSiegeSupportStatuses(true);
+    const timer = setInterval(() => {
+      fetchSiegeSupportStatuses(true);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [authenticated, isAdmin]);
+
+  useEffect(() => {
     const targetNodeId = normalizeObjectId(currentNodeDetail?._id);
     if (!authenticated || isAdmin || view !== 'nodeDetail' || !targetNodeId) {
       setNodeDistributionStatus(createEmptyNodeDistributionStatus());
@@ -1345,6 +1589,20 @@ const App = () => {
     }, 1000);
     return () => clearInterval(timer);
   }, [showDistributionPanel, view, currentNodeDetail?._id]);
+
+  useEffect(() => {
+    const targetNodeId = normalizeObjectId(currentNodeDetail?._id);
+    if (!authenticated || isAdmin || view !== 'nodeDetail' || !targetNodeId) {
+      setSiegeStatus(createEmptySiegeStatus());
+      return undefined;
+    }
+
+    fetchSiegeStatus(targetNodeId, { silent: true });
+    const timer = setInterval(() => {
+      fetchSiegeStatus(targetNodeId, { silent: true });
+    }, siegeDialog.open ? 2000 : 4000);
+    return () => clearInterval(timer);
+  }, [authenticated, isAdmin, view, currentNodeDetail?._id, userLocation, travelStatus.isTraveling, siegeDialog.open]);
 
   useEffect(() => {
     if (!authenticated) {
@@ -1577,6 +1835,22 @@ const App = () => {
         setUserAvatar('default_male_1');
         setSelectedLocationNode(null);
         setShowLocationModal(false);
+        setSiegeStatus(createEmptySiegeStatus());
+        setSiegeSupportStatuses([]);
+        setSiegeSupportDraft({
+            gateKey: '',
+            autoRetreatPercent: 40,
+            units: {}
+        });
+        setSiegeDialog({
+            open: false,
+            loading: false,
+            submitting: false,
+            supportSubmitting: false,
+            node: null,
+            error: '',
+            message: ''
+        });
         
         // 清理socket连接和引用
         if (socket) {
@@ -1965,6 +2239,9 @@ const App = () => {
             setShowDistributionPanel(false);
             setDistributionPanelState(createDefaultDistributionPanelState());
         }
+        if (siegeDialog.open) {
+            resetSiegeDialog();
+        }
     };
 
     const prepareForPrimaryNavigation = async () => {
@@ -1976,6 +2253,82 @@ const App = () => {
         await prepareForPrimaryNavigation();
         setView('home');
         setNavigationPath([{ type: 'home', label: '首页' }]);
+    };
+
+    const resetSiegeDialog = () => {
+        setSiegeDialog({
+            open: false,
+            loading: false,
+            submitting: false,
+            supportSubmitting: false,
+            node: null,
+            error: '',
+            message: ''
+        });
+    };
+
+    const buildInitialSiegeSupportDraft = (status) => {
+        const units = {};
+        (status?.ownRoster?.units || []).forEach((entry) => {
+            if (!entry?.unitTypeId) return;
+            units[entry.unitTypeId] = 0;
+        });
+        return {
+            gateKey: status?.supportGate || status?.compareGate || status?.preferredGate || '',
+            autoRetreatPercent: 40,
+            units
+        };
+    };
+
+    const fetchSiegeStatus = async (targetNodeId, { silent = true } = {}) => {
+        const token = localStorage.getItem('token');
+        if (!token || !targetNodeId || !authenticated || isAdmin) {
+            if (!silent) {
+                setSiegeStatus(createEmptySiegeStatus());
+            }
+            return null;
+        }
+
+        if (!silent) {
+            setSiegeStatus((prev) => ({
+                ...prev,
+                loading: true,
+                nodeId: targetNodeId
+            }));
+        }
+
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${targetNodeId}/siege`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const parsed = await parseApiResponse(response);
+            if (!response.ok || !parsed.data) {
+                const fallback = createEmptySiegeStatus();
+                const next = {
+                    ...fallback,
+                    loading: false,
+                    nodeId: targetNodeId,
+                    startDisabledReason: getApiErrorMessage(parsed, '无法获取围城状态'),
+                    supportDisabledReason: getApiErrorMessage(parsed, '无法获取围城状态')
+                };
+                setSiegeStatus(next);
+                return next;
+            }
+            const normalized = normalizeSiegeStatus(parsed.data, targetNodeId);
+            setSiegeStatus(normalized);
+            return normalized;
+        } catch (error) {
+            const fallback = createEmptySiegeStatus();
+            const next = {
+                ...fallback,
+                loading: false,
+                nodeId: targetNodeId,
+                startDisabledReason: `获取围城状态失败: ${error.message}`,
+                supportDisabledReason: `获取围城状态失败: ${error.message}`
+            };
+            setSiegeStatus(next);
+            return next;
+        }
     };
 
     const fetchIntelHeistStatus = async (targetNodeId, { silent = true } = {}) => {
@@ -2107,6 +2460,254 @@ const App = () => {
         });
     };
 
+    const handleSiegeAction = async (targetNode) => {
+        if (!targetNode?._id || isAdmin) return;
+        const nodeId = normalizeObjectId(targetNode._id);
+        if (!nodeId) return;
+
+        setSiegeDialog({
+            open: true,
+            loading: true,
+            submitting: false,
+            supportSubmitting: false,
+            node: targetNode,
+            error: '',
+            message: ''
+        });
+
+        const status = await fetchSiegeStatus(nodeId, { silent: false });
+        if (!status) {
+            setSiegeDialog((prev) => ({
+                ...prev,
+                loading: false,
+                error: '无法获取围城状态'
+            }));
+            return;
+        }
+
+        setSiegeSupportDraft(buildInitialSiegeSupportDraft(status));
+        setSiegeDialog((prev) => ({
+            ...prev,
+            loading: false,
+            error: '',
+            message: ''
+        }));
+    };
+
+    const startSiege = async () => {
+        const token = localStorage.getItem('token');
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        if (!token || !nodeId || siegeDialog.submitting) return;
+
+        setSiegeDialog((prev) => ({
+            ...prev,
+            submitting: true,
+            error: '',
+            message: ''
+        }));
+
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/start`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                }
+            });
+            const parsed = await parseApiResponse(response);
+            if (!response.ok || !parsed.data) {
+                setSiegeDialog((prev) => ({
+                    ...prev,
+                    submitting: false,
+                    error: getApiErrorMessage(parsed, '发起围城失败')
+                }));
+                return;
+            }
+
+            const normalized = normalizeSiegeStatus(parsed.data, nodeId);
+            setSiegeStatus(normalized);
+            setSiegeSupportDraft(buildInitialSiegeSupportDraft(normalized));
+            setSiegeDialog((prev) => ({
+                ...prev,
+                submitting: false,
+                error: '',
+                message: parsed.data.message || '已发起围城'
+            }));
+            await fetchSiegeSupportStatuses(true);
+        } catch (error) {
+            setSiegeDialog((prev) => ({
+                ...prev,
+                submitting: false,
+                error: `发起围城失败: ${error.message}`
+            }));
+        }
+    };
+
+    const requestSiegeSupport = async () => {
+        const token = localStorage.getItem('token');
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        if (!token || !nodeId || siegeDialog.submitting) return;
+
+        setSiegeDialog((prev) => ({
+            ...prev,
+            submitting: true,
+            error: '',
+            message: ''
+        }));
+
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/request-support`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                }
+            });
+            const parsed = await parseApiResponse(response);
+            if (!response.ok || !parsed.data) {
+                setSiegeDialog((prev) => ({
+                    ...prev,
+                    submitting: false,
+                    error: getApiErrorMessage(parsed, '呼叫支援失败')
+                }));
+                return;
+            }
+
+            const normalized = normalizeSiegeStatus(parsed.data, nodeId);
+            setSiegeStatus(normalized);
+            setSiegeDialog((prev) => ({
+                ...prev,
+                submitting: false,
+                error: '',
+                message: parsed.data.message || '已呼叫熵盟支援'
+            }));
+            await fetchNotifications(true);
+        } catch (error) {
+            setSiegeDialog((prev) => ({
+                ...prev,
+                submitting: false,
+                error: `呼叫支援失败: ${error.message}`
+            }));
+        }
+    };
+
+    const retreatSiege = async () => {
+        const token = localStorage.getItem('token');
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        if (!token || !nodeId || siegeDialog.submitting) return;
+
+        setSiegeDialog((prev) => ({
+            ...prev,
+            submitting: true,
+            error: '',
+            message: ''
+        }));
+
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/retreat`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                }
+            });
+            const parsed = await parseApiResponse(response);
+            if (!response.ok || !parsed.data) {
+                setSiegeDialog((prev) => ({
+                    ...prev,
+                    submitting: false,
+                    error: getApiErrorMessage(parsed, '撤退失败')
+                }));
+                return;
+            }
+
+            const normalized = normalizeSiegeStatus(parsed.data, nodeId);
+            setSiegeStatus(normalized);
+            setSiegeSupportDraft(buildInitialSiegeSupportDraft(normalized));
+            setSiegeDialog((prev) => ({
+                ...prev,
+                submitting: false,
+                error: '',
+                message: parsed.data.message || '已撤退并取消攻城'
+            }));
+            await fetchSiegeSupportStatuses(true);
+        } catch (error) {
+            setSiegeDialog((prev) => ({
+                ...prev,
+                submitting: false,
+                error: `撤退失败: ${error.message}`
+            }));
+        }
+    };
+
+    const submitSiegeSupport = async () => {
+        const token = localStorage.getItem('token');
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        if (!token || !nodeId || siegeDialog.supportSubmitting) return;
+
+        const units = Object.entries(siegeSupportDraft.units || {})
+            .map(([unitTypeId, count]) => ({
+                unitTypeId,
+                count: Math.max(0, Math.floor(Number(count) || 0))
+            }))
+            .filter((item) => item.unitTypeId && item.count > 0);
+        if (units.length === 0) {
+            setSiegeDialog((prev) => ({
+                ...prev,
+                error: '请至少选择一支兵种和数量'
+            }));
+            return;
+        }
+
+        setSiegeDialog((prev) => ({
+            ...prev,
+            supportSubmitting: true,
+            error: '',
+            message: ''
+        }));
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/support`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    gateKey: siegeSupportDraft.gateKey || siegeStatus.supportGate || siegeStatus.compareGate || '',
+                    autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(siegeSupportDraft.autoRetreatPercent) || 40))),
+                    units
+                })
+            });
+            const parsed = await parseApiResponse(response);
+            if (!response.ok || !parsed.data) {
+                setSiegeDialog((prev) => ({
+                    ...prev,
+                    supportSubmitting: false,
+                    error: getApiErrorMessage(parsed, '派遣支援失败')
+                }));
+                return;
+            }
+
+            const normalized = normalizeSiegeStatus(parsed.data, nodeId);
+            setSiegeStatus(normalized);
+            setSiegeSupportDraft(buildInitialSiegeSupportDraft(normalized));
+            setSiegeDialog((prev) => ({
+                ...prev,
+                supportSubmitting: false,
+                error: '',
+                message: parsed.data.message || '已派遣支援'
+            }));
+            await fetchNotifications(true);
+            await fetchSiegeSupportStatuses(true);
+        } catch (error) {
+            setSiegeDialog((prev) => ({
+                ...prev,
+                supportSubmitting: false,
+                error: `派遣支援失败: ${error.message}`
+            }));
+        }
+    };
+
     // 获取节点详情
     const fetchNodeDetail = async (nodeId, clickedNode = null) => {
         try {
@@ -2118,7 +2719,9 @@ const App = () => {
                 setCurrentNodeDetail(data.node);
                 setView('nodeDetail');
                 setIntelHeistStatus(createEmptyIntelHeistStatus());
+                setSiegeStatus(createEmptySiegeStatus());
                 fetchIntelHeistStatus(normalizeObjectId(data?.node?._id), { silent: false });
+                fetchSiegeStatus(normalizeObjectId(data?.node?._id), { silent: false });
 
                 // 保存被点击的节点，用于WebGL过渡动画
                 if (clickedNode) {
@@ -2431,6 +3034,20 @@ const App = () => {
         !currentNodeMasterId &&
         (currentNodeOwnerRole === 'admin' || currentNodeOwnerRole === '')
     );
+    const isSiegeDomainMasterViewer = siegeStatus.viewerRole === 'domainMaster';
+    const isSiegeDomainAdminViewer = siegeStatus.viewerRole === 'domainAdmin';
+    const isSiegeReadonlyViewer = isSiegeDomainMasterViewer || isSiegeDomainAdminViewer;
+    const siegeActiveGateRows = (siegeStatus.activeGateKeys || [])
+        .map((gateKey) => {
+            const gateState = siegeStatus.gateStates?.[gateKey] || {};
+            const attackers = (gateState.attackers || []).filter((item) => item && (item.status === 'moving' || item.status === 'sieging'));
+            return {
+                gateKey,
+                gateLabel: gateState.gateLabel || CITY_GATE_LABEL_MAP[gateKey] || gateKey,
+                attackers
+            };
+        })
+        .filter((item) => !!item.gateKey);
 
     const handleOpenRelatedDomain = async (node) => {
         const nodeId = normalizeObjectId(node?._id);
@@ -2535,6 +3152,7 @@ const App = () => {
         const isDomainMasterUser = nodeDetail?.domainMaster?.username && nodeDetail.domainMaster.username === username;
         const isDomainAdminUser = Array.isArray(nodeDetail?.domainAdmins)
             && nodeDetail.domainAdmins.some((item) => item?.username && item.username === username);
+        const isManagedNodeByUser = isDomainMasterUser || isDomainAdminUser;
         const showIntelStealButton = !isAdmin && isAtCurrentNode && !isDomainMasterUser && !isDomainAdminUser;
         const intelStatusMatched = intelHeistStatus.nodeId === nodeId
             ? intelHeistStatus
@@ -2548,6 +3166,29 @@ const App = () => {
                 ? `情报窃取（上次快照：${intelSnapshotAgeText || '刚刚'}）`
                 : '情报窃取');
         const intelStealDisabled = showIntelStealButton && intelStatusMatched.loading;
+        const siegeStatusMatched = siegeStatus.nodeId === nodeId
+            ? siegeStatus
+            : createEmptySiegeStatus();
+        const activeSiegeGateText = (siegeStatusMatched.activeGateKeys || [])
+            .map((gateKey) => CITY_GATE_LABEL_MAP[gateKey] || gateKey)
+            .filter(Boolean)
+            .join('、');
+        const siegeGateLabel = siegeStatusMatched.compare?.gateLabel
+            || CITY_GATE_LABEL_MAP[siegeStatusMatched.compareGate]
+            || '';
+        const siegeTooltip = siegeStatusMatched.loading
+            ? '围城状态读取中...'
+            : (isManagedNodeByUser
+                ? (siegeStatusMatched.hasActiveSiege
+                    ? `${isDomainAdminUser ? '围城预警（仅可查看攻击用户与攻打门位）' : '围城预警（可查看攻守信息）'}${activeSiegeGateText ? `：${activeSiegeGateText}` : ''}`
+                    : '暂无围城')
+                : (siegeStatusMatched.hasActiveSiege
+                    ? `攻占知识域（围城进行中${siegeGateLabel ? `：${siegeGateLabel}` : ''}）`
+                    : (siegeStatusMatched.canStartSiege
+                        ? '攻占知识域'
+                        : `攻占知识域（${siegeStatusMatched.startDisabledReason || '当前不可发起'}）`)));
+        const siegeDisabled = false;
+        const showSiegeButton = !isAdmin && (!isManagedNodeByUser || siegeStatusMatched.hasActiveSiege);
 
         return {
             showMoveButton: !isAdmin,
@@ -2562,7 +3203,11 @@ const App = () => {
             showIntelStealButton,
             intelStealTooltip,
             intelStealDisabled,
-            intelStealHasSnapshot: !!intelStatusMatched.latestSnapshot
+            intelStealHasSnapshot: !!intelStatusMatched.latestSnapshot,
+            showSiegeButton,
+            siegeTooltip,
+            siegeDisabled,
+            siegeActive: !!siegeStatusMatched.hasActiveSiege
         };
     };
 
@@ -2689,7 +3334,7 @@ const App = () => {
             currentNodeDetail,
             getNodeDetailButtonContext(currentNodeDetail)
         );
-    }, [view, currentNodeDetail, isAdmin, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus]);
+    }, [view, currentNodeDetail, isAdmin, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
 
 
     // 新节点创建相关函数
@@ -2932,6 +3577,31 @@ const App = () => {
                                     >
                                         {(isStoppingTravel || travelStatus?.isStopping) ? '停止进行中...' : '停止移动'}
                                     </button>
+
+                                    {siegeSupportStatuses.length > 0 && (
+                                        <div className="location-siege-support-section">
+                                            <div className="section-label">派遣兵力状态</div>
+                                            <div className="location-siege-support-list">
+                                                {siegeSupportStatuses.map((item) => (
+                                                    <button
+                                                        type="button"
+                                                        key={`moving-support-${item.nodeId}-${item.gateKey}-${item.requestedAt || ''}`}
+                                                        className="location-siege-support-row"
+                                                        onClick={() => handleOpenTravelNode(item)}
+                                                        disabled={!item.nodeId}
+                                                    >
+                                                        <span>{item.nodeName || '未知知识域'}</span>
+                                                        <span>{item.gateLabel || CITY_GATE_LABEL_MAP[item.gateKey] || item.gateKey}</span>
+                                                        <span>{item.statusLabel || item.status || '-'}</span>
+                                                        <em>{item.totalCount || 0}</em>
+                                                        {item.status === 'moving' && (
+                                                            <small>剩余 {formatTravelSeconds(item.remainingSeconds)}</small>
+                                                        )}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             ) : currentLocationNodeDetail ? (
                                 <div
@@ -2978,6 +3648,34 @@ const App = () => {
                                             <div className="section-label">知识内容</div>
                                             <div className="section-content knowledge-content">
                                                 {currentLocationNodeDetail.knowledge}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {siegeSupportStatuses.length > 0 && (
+                                        <div className="location-node-section location-siege-support-section">
+                                            <div className="section-label">派遣兵力状态</div>
+                                            <div className="location-siege-support-list">
+                                                {siegeSupportStatuses.map((item) => (
+                                                    <button
+                                                        type="button"
+                                                        key={`idle-support-${item.nodeId}-${item.gateKey}-${item.requestedAt || ''}`}
+                                                        className="location-siege-support-row"
+                                                        onClick={(event) => {
+                                                            event.stopPropagation();
+                                                            handleOpenTravelNode(item);
+                                                        }}
+                                                        disabled={!item.nodeId}
+                                                    >
+                                                        <span>{item.nodeName || '未知知识域'}</span>
+                                                        <span>{item.gateLabel || CITY_GATE_LABEL_MAP[item.gateKey] || item.gateKey}</span>
+                                                        <span>{item.statusLabel || item.status || '-'}</span>
+                                                        <em>{item.totalCount || 0}</em>
+                                                        {item.status === 'moving' && (
+                                                            <small>剩余 {formatTravelSeconds(item.remainingSeconds)}</small>
+                                                        )}
+                                                    </button>
+                                                ))}
                                             </div>
                                         </div>
                                     )}
@@ -3800,6 +4498,280 @@ const App = () => {
                                     >
                                         {intelHeistDialog.snapshot ? '再次窃取' : '开始窃取'}
                                     </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {siegeDialog.open && (
+                    <div className="modal-overlay" onClick={resetSiegeDialog}>
+                        <div className="modal-content siege-modal" onClick={(event) => event.stopPropagation()}>
+                            <div className="modal-header">
+                                <h3>
+                                    {isSiegeDomainMasterViewer
+                                        ? `你的知识域 ${siegeDialog.node?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'} 正在被攻打`
+                                        : (isSiegeDomainAdminViewer
+                                            ? `你管理的知识域 ${siegeDialog.node?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'} 正在被攻打`
+                                            : `攻占知识域：${siegeDialog.node?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'}`)}
+                                </h3>
+                                <button
+                                    type="button"
+                                    className="btn-close"
+                                    onClick={resetSiegeDialog}
+                                >
+                                    ×
+                                </button>
+                            </div>
+                            <div className="modal-body siege-modal-body">
+                                {siegeDialog.loading ? (
+                                    <div className="intel-heist-tip">读取围城状态中...</div>
+                                ) : (
+                                    <>
+                                        {siegeDialog.error && <div className="siege-error">{siegeDialog.error}</div>}
+                                        {siegeDialog.message && <div className="siege-message">{siegeDialog.message}</div>}
+
+                                        {isSiegeDomainAdminViewer ? (
+                                            <div className="siege-support-panel">
+                                                <strong>围城预警</strong>
+                                                {siegeActiveGateRows.length > 0 ? (
+                                                    siegeActiveGateRows.map((gate) => (
+                                                        <div key={`siege-warning-${gate.gateKey}`} className="siege-defender-gate">
+                                                            <div className="siege-defender-gate-title">
+                                                                <span>{gate.gateLabel || CITY_GATE_LABEL_MAP[gate.gateKey] || gate.gateKey}</span>
+                                                                <em>{`${gate.attackers.length}人`}</em>
+                                                            </div>
+                                                            {gate.attackers.length > 0 ? (
+                                                                gate.attackers.map((attacker) => (
+                                                                    <div key={`siege-warning-${gate.gateKey}-${attacker.userId || attacker.username}`} className="siege-force-row">
+                                                                        <span>{attacker.username || '未知成员'}</span>
+                                                                        <em>{attacker.statusLabel || attacker.status || '-'}</em>
+                                                                    </div>
+                                                                ))
+                                                            ) : (
+                                                                <div className="intel-heist-tip">暂无可见攻击用户</div>
+                                                            )}
+                                                        </div>
+                                                    ))
+                                                ) : (
+                                                    <div className="intel-heist-tip">当前没有进行中的围城</div>
+                                                )}
+                                                <div className="intel-heist-tip">域相仅可查看攻击用户与攻打门位，兵力与守备信息已隐藏。</div>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <div className="siege-vs-block">
+                                                    <div className="siege-force-card attacker">
+                                                        <strong>我方兵力</strong>
+                                                        <div className="siege-force-total">{siegeStatus.compare?.attacker?.totalCount || 0}</div>
+                                                        {(siegeStatus.compare?.attacker?.units || []).length > 0 ? (
+                                                            <div className="siege-force-list">
+                                                                {(siegeStatus.compare.attacker.units || []).map((entry) => (
+                                                                    <div key={`attacker-${entry.unitTypeId}`} className="siege-force-row">
+                                                                        <span>{entry.unitName || entry.unitTypeId}</span>
+                                                                        <em>{entry.count}</em>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        ) : (
+                                                            <div className="intel-heist-tip">无兵力</div>
+                                                        )}
+                                                        {siegeStatus.hasActiveSiege && siegeStatus.canRequestSupport && (
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-warning siege-request-support-btn"
+                                                                onClick={requestSiegeSupport}
+                                                                disabled={siegeDialog.submitting}
+                                                            >
+                                                                {siegeDialog.submitting ? '呼叫中...' : '呼叫熵盟支援'}
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="siege-vs-label">VS</div>
+                                                    <div className="siege-force-card defender">
+                                                        <strong>守方兵力</strong>
+                                                        <div className="siege-force-total">
+                                                            {siegeStatus.compare?.defender?.source === 'intel'
+                                                                ? (siegeStatus.compare?.defender?.totalCount || 0)
+                                                                : '未知'}
+                                                        </div>
+                                                        <div className="siege-force-source">
+                                                            {siegeStatus.compare?.defender?.source === 'intel'
+                                                                ? (isSiegeDomainMasterViewer ? '守备视图' : '情报视图')
+                                                                : '无情报'}
+                                                        </div>
+                                                        {siegeStatus.compare?.defender?.source === 'intel' && siegeStatus.intelDeploymentUpdatedAt && (
+                                                            <div className="siege-force-source">
+                                                                部署时间：{formatDateTimeText(siegeStatus.intelDeploymentUpdatedAt)}
+                                                                {`（${getElapsedMinutesText(siegeStatus.intelDeploymentUpdatedAt) || '未知时刻'}）`}
+                                                            </div>
+                                                        )}
+                                                        {siegeStatus.compare?.defender?.source === 'intel' ? (
+                                                            <details className="siege-force-gates" open>
+                                                                <summary className="siege-force-source">展开驻防信息</summary>
+                                                                {(siegeStatus.compare?.defender?.gates || []).length > 0 ? (
+                                                                    (siegeStatus.compare?.defender?.gates || []).map((gate) => (
+                                                                        <div key={`defender-gate-${gate.gateKey}`} className={`siege-defender-gate ${gate.highlight ? 'highlight' : ''}`}>
+                                                                            <div className="siege-defender-gate-title">
+                                                                                <span>{gate.gateLabel || CITY_GATE_LABEL_MAP[gate.gateKey] || gate.gateKey}</span>
+                                                                                <em>{gate.totalCount || 0}</em>
+                                                                            </div>
+                                                                            {(gate.entries || []).length > 0 ? (
+                                                                                (gate.entries || []).map((entry) => (
+                                                                                    <div key={`defender-${gate.gateKey}-${entry.unitTypeId}`} className="siege-force-row">
+                                                                                        <span>{entry.unitName || entry.unitTypeId}</span>
+                                                                                        <em>{entry.count}</em>
+                                                                                    </div>
+                                                                                ))
+                                                                            ) : (
+                                                                                <div className="intel-heist-tip">无驻防</div>
+                                                                            )}
+                                                                        </div>
+                                                                    ))
+                                                                ) : (
+                                                                    <div className="intel-heist-tip">当前门位无驻防信息</div>
+                                                                )}
+                                                            </details>
+                                                        ) : (
+                                                            <div className="intel-heist-tip">暂无情报文件，无法查看守方驻防信息</div>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {siegeStatus.hasActiveSiege && (siegeStatus.compare?.attacker?.supporters || []).length > 0 && (
+                                                    <div className="siege-supporter-list">
+                                                        <strong>攻方参战成员</strong>
+                                                        {(siegeStatus.compare.attacker.supporters || []).map((item) => (
+                                                            <div key={`supporter-${item.userId || item.username}`} className="siege-supporter-row">
+                                                                <span>{item.username || '未知成员'}</span>
+                                                                <span>{item.statusLabel || item.status || '-'}</span>
+                                                                <em>{item.totalCount || 0}</em>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+
+                                                {siegeStatus.hasActiveSiege && (
+                                                    <div className="siege-support-panel">
+                                                        <strong>同战场支援</strong>
+                                                        {siegeStatus.canSupportSameBattlefield ? (
+                                                            <>
+                                                                <div className="siege-support-meta">
+                                                                    <label>目标战场</label>
+                                                                    <select
+                                                                        value={siegeSupportDraft.gateKey || siegeStatus.supportGate || ''}
+                                                                        onChange={(event) => setSiegeSupportDraft((prev) => ({
+                                                                            ...prev,
+                                                                            gateKey: event.target.value
+                                                                        }))}
+                                                                    >
+                                                                        {(siegeStatus.activeGateKeys || []).map((gateKey) => (
+                                                                            <option key={`support-gate-${gateKey}`} value={gateKey}>
+                                                                                {CITY_GATE_LABEL_MAP[gateKey] || gateKey}
+                                                                            </option>
+                                                                        ))}
+                                                                    </select>
+                                                                </div>
+                                                                <div className="siege-support-meta">
+                                                                    <label>自动撤出阈值</label>
+                                                                    <div className="siege-support-retreat">
+                                                                        <input
+                                                                            type="range"
+                                                                            min="1"
+                                                                            max="99"
+                                                                            value={Math.max(1, Math.min(99, Number(siegeSupportDraft.autoRetreatPercent) || 40))}
+                                                                            onChange={(event) => setSiegeSupportDraft((prev) => ({
+                                                                                ...prev,
+                                                                                autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(event.target.value) || 40)))
+                                                                            }))}
+                                                                        />
+                                                                        <input
+                                                                            type="number"
+                                                                            min="1"
+                                                                            max="99"
+                                                                            value={Math.max(1, Math.min(99, Number(siegeSupportDraft.autoRetreatPercent) || 40))}
+                                                                            onChange={(event) => setSiegeSupportDraft((prev) => ({
+                                                                                ...prev,
+                                                                                autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(event.target.value) || 40)))
+                                                                            }))}
+                                                                        />
+                                                                        <span>%</span>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="siege-support-unit-list">
+                                                                    {(siegeStatus.ownRoster?.units || []).map((entry) => (
+                                                                        <div key={`support-unit-${entry.unitTypeId}`} className="siege-support-unit-row">
+                                                                            <span>{entry.unitName || entry.unitTypeId}</span>
+                                                                            <small>可用 {entry.count}</small>
+                                                                            <input
+                                                                                type="number"
+                                                                                min="0"
+                                                                                max={entry.count}
+                                                                                value={Math.max(0, Math.floor(Number(siegeSupportDraft.units?.[entry.unitTypeId]) || 0))}
+                                                                                onChange={(event) => {
+                                                                                    const nextQty = Math.max(0, Math.min(entry.count, Math.floor(Number(event.target.value) || 0)));
+                                                                                    setSiegeSupportDraft((prev) => ({
+                                                                                        ...prev,
+                                                                                        units: {
+                                                                                            ...(prev.units || {}),
+                                                                                            [entry.unitTypeId]: nextQty
+                                                                                        }
+                                                                                    }));
+                                                                                }}
+                                                                            />
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    className="btn btn-primary"
+                                                                    onClick={submitSiegeSupport}
+                                                                    disabled={siegeDialog.supportSubmitting}
+                                                                >
+                                                                    {siegeDialog.supportSubmitting ? '派遣中...' : '派遣支援'}
+                                                                </button>
+                                                            </>
+                                                        ) : (
+                                                            <div className="intel-heist-tip">
+                                                                {siegeStatus.supportDisabledReason || '当前不可支援该战场'}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" onClick={resetSiegeDialog}>
+                                    {siegeStatus.hasActiveSiege ? '关闭' : '取消'}
+                                </button>
+                                {!siegeDialog.loading && !siegeStatus.hasActiveSiege && !isSiegeReadonlyViewer && (
+                                    <button
+                                        type="button"
+                                        className="btn btn-danger"
+                                        onClick={startSiege}
+                                        disabled={!siegeStatus.canStartSiege || siegeDialog.submitting}
+                                    >
+                                        {siegeDialog.submitting ? '开始中...' : '开始围城'}
+                                    </button>
+                                )}
+                                {!siegeDialog.loading && siegeStatus.hasActiveSiege && !isSiegeReadonlyViewer && (
+                                    <>
+                                        <button type="button" className="btn btn-warning" disabled>
+                                            进攻
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-danger"
+                                            onClick={retreatSiege}
+                                            disabled={!siegeStatus.canRetreat || siegeDialog.submitting}
+                                            title={siegeStatus.canRetreat ? '' : (siegeStatus.retreatDisabledReason || '当前不可撤退')}
+                                        >
+                                            {siegeDialog.submitting ? '撤退中...' : '撤退'}
+                                        </button>
+                                    </>
                                 )}
                             </div>
                         </div>

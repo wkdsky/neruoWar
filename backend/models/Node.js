@@ -335,6 +335,132 @@ const CityGateDefenseSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const CitySiegeUnitEntrySchema = new mongoose.Schema({
+  unitTypeId: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  count: {
+    type: Number,
+    default: 0,
+    min: 0
+  }
+}, { _id: false });
+
+const CitySiegeAttackerSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  username: {
+    type: String,
+    default: ''
+  },
+  allianceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'EntropyAlliance',
+    default: null
+  },
+  units: {
+    type: [CitySiegeUnitEntrySchema],
+    default: []
+  },
+  fromNodeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Node',
+    default: null
+  },
+  fromNodeName: {
+    type: String,
+    default: ''
+  },
+  autoRetreatPercent: {
+    type: Number,
+    default: 40,
+    min: 1,
+    max: 99
+  },
+  status: {
+    type: String,
+    enum: ['moving', 'sieging', 'retreated'],
+    default: 'sieging'
+  },
+  isInitiator: {
+    type: Boolean,
+    default: false
+  },
+  isReinforcement: {
+    type: Boolean,
+    default: false
+  },
+  requestedAt: {
+    type: Date,
+    default: Date.now
+  },
+  arriveAt: {
+    type: Date,
+    default: null
+  },
+  joinedAt: {
+    type: Date,
+    default: null
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
+const CitySiegeGateStateSchema = new mongoose.Schema({
+  active: {
+    type: Boolean,
+    default: false
+  },
+  startedAt: {
+    type: Date,
+    default: null
+  },
+  updatedAt: {
+    type: Date,
+    default: null
+  },
+  supportNotifiedAt: {
+    type: Date,
+    default: null
+  },
+  attackerAllianceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'EntropyAlliance',
+    default: null
+  },
+  initiatorUserId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  initiatorUsername: {
+    type: String,
+    default: ''
+  },
+  attackers: {
+    type: [CitySiegeAttackerSchema],
+    default: []
+  }
+}, { _id: false });
+
+const CitySiegeStateSchema = new mongoose.Schema({
+  cheng: {
+    type: CitySiegeGateStateSchema,
+    default: () => ({})
+  },
+  qi: {
+    type: CitySiegeGateStateSchema,
+    default: () => ({})
+  }
+}, { _id: false });
+
 const CityDefenseLayoutSchema = new mongoose.Schema({
   buildings: {
     type: [CityBuildingSchema],
@@ -387,6 +513,29 @@ const createDefaultCityDefenseLayout = () => {
     updatedAt: new Date()
   };
 };
+
+const createDefaultCitySiegeState = () => ({
+  cheng: {
+    active: false,
+    startedAt: null,
+    updatedAt: null,
+    supportNotifiedAt: null,
+    attackerAllianceId: null,
+    initiatorUserId: null,
+    initiatorUsername: '',
+    attackers: []
+  },
+  qi: {
+    active: false,
+    startedAt: null,
+    updatedAt: null,
+    supportNotifiedAt: null,
+    attackerAllianceId: null,
+    initiatorUserId: null,
+    initiatorUsername: '',
+    attackers: []
+  }
+});
 
 const NodeSchema = new mongoose.Schema({
   nodeId: { 
@@ -497,6 +646,10 @@ const NodeSchema = new mongoose.Schema({
   cityDefenseLayout: {
     type: CityDefenseLayoutSchema,
     default: () => createDefaultCityDefenseLayout()
+  },
+  citySiegeState: {
+    type: CitySiegeStateSchema,
+    default: () => createDefaultCitySiegeState()
   },
   associations: [AssociationSchema],
   relatedParentDomains: {
@@ -858,6 +1011,60 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
     gateDefense,
     gateDefenseViewAdminIds,
     updatedAt: new Date()
+  };
+
+  const sourceSiegeState = this.citySiegeState && typeof this.citySiegeState === 'object'
+    ? this.citySiegeState
+    : createDefaultCitySiegeState();
+  const normalizeSiegeUnits = (entries = []) => {
+    const out = [];
+    const seen = new Set();
+    for (const entry of (Array.isArray(entries) ? entries : [])) {
+      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+      const count = Math.max(0, Math.floor(parseNumber(entry?.count, 0)));
+      if (!unitTypeId || count <= 0) continue;
+      if (seen.has(unitTypeId)) continue;
+      seen.add(unitTypeId);
+      out.push({ unitTypeId, count });
+    }
+    return out;
+  };
+  const normalizeGateState = (gateState = {}) => {
+    const sourceAttackers = Array.isArray(gateState?.attackers) ? gateState.attackers : [];
+    const attackers = sourceAttackers.map((item) => {
+      const userId = item?.userId || null;
+      return {
+        userId,
+        username: typeof item?.username === 'string' ? item.username : '',
+        allianceId: item?.allianceId || null,
+        units: normalizeSiegeUnits(item?.units),
+        fromNodeId: item?.fromNodeId || null,
+        fromNodeName: typeof item?.fromNodeName === 'string' ? item.fromNodeName : '',
+        autoRetreatPercent: Math.max(1, Math.min(99, parseNumber(item?.autoRetreatPercent, 40))),
+        status: item?.status === 'moving' || item?.status === 'retreated' ? item.status : 'sieging',
+        isInitiator: !!item?.isInitiator,
+        isReinforcement: !!item?.isReinforcement,
+        requestedAt: item?.requestedAt || null,
+        arriveAt: item?.arriveAt || null,
+        joinedAt: item?.joinedAt || null,
+        updatedAt: item?.updatedAt || null
+      };
+    }).filter((item) => !!getIdString(item.userId));
+    const hasActiveAttacker = attackers.some((item) => item.status === 'moving' || item.status === 'sieging');
+    return {
+      active: !!gateState?.active && hasActiveAttacker,
+      startedAt: gateState?.startedAt || null,
+      updatedAt: gateState?.updatedAt || null,
+      supportNotifiedAt: gateState?.supportNotifiedAt || null,
+      attackerAllianceId: gateState?.attackerAllianceId || null,
+      initiatorUserId: gateState?.initiatorUserId || null,
+      initiatorUsername: typeof gateState?.initiatorUsername === 'string' ? gateState.initiatorUsername : '',
+      attackers
+    };
+  };
+  this.citySiegeState = {
+    cheng: normalizeGateState(sourceSiegeState.cheng),
+    qi: normalizeGateState(sourceSiegeState.qi)
   };
 
   next();

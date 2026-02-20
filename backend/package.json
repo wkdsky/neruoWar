@@ -8,6 +8,7 @@
         "dev": "nodemon server.js",
         "create-admin": "node scripts/createAdmin.js",
         "init-user-domain-preferences": "node scripts/initUserDomainPreferences.js",
+        "sync-user-intel-snapshots": "node scripts/syncUserIntelSnapshots.js",
         "init-user-levels": "node scripts/initUserLevels.js",
         "test": "echo \"Error: no test specified\" && exit 1"
     },

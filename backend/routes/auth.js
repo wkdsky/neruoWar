@@ -917,7 +917,12 @@ const settleTravelState = async (user) => {
   if (currentStatus === TRAVEL_STATUS.MOVING && progress.arrived) {
     const unitDurationSeconds = Math.max(1, parseInt(travel.unitDurationSeconds, 10) || 60);
     const arrivedNodeName = progress.arrivedNode?.nodeName || user.location || '';
+    const path = Array.isArray(progress.path) ? progress.path : [];
+    const fromNode = path.length >= 2 ? path[path.length - 2] : null;
     user.location = arrivedNodeName;
+    user.lastArrivedFromNodeId = fromNode?.nodeId || null;
+    user.lastArrivedFromNodeName = fromNode?.nodeName || '';
+    user.lastArrivedAt = new Date();
     appendArrivalNotification(user, arrivedNodeName, progress.elapsedSeconds || 0);
     resetTravelState(user, unitDurationSeconds);
     await user.save();
@@ -933,6 +938,9 @@ const settleTravelState = async (user) => {
     if (nearestNodeName) {
       user.location = nearestNodeName;
     }
+    user.lastArrivedFromNodeId = progress?.stopFromNode?.nodeId || null;
+    user.lastArrivedFromNodeName = progress?.stopFromNode?.nodeName || '';
+    user.lastArrivedAt = new Date();
 
     resetTravelState(user, unitDurationSeconds);
 
