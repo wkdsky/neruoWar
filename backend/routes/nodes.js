@@ -34,7 +34,899 @@ const isDomainAdmin = (node, userId) => {
   return node.domainAdmins.some((adminId) => getIdString(adminId) === currentUserId);
 };
 
-const DOMAIN_CARD_SELECT = '_id name description knowledgePoint contentScore';
+const DOMAIN_CARD_SELECT = '_id name description synonymSenses knowledgePoint contentScore';
+
+const normalizeNodeSenseList = (node = {}) => {
+  const source = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+  const deduped = [];
+  const seen = new Set();
+  const seenTitleKeys = new Set();
+  for (let i = 0; i < source.length; i += 1) {
+    const item = source[i] || {};
+    const senseId = typeof item.senseId === 'string' && item.senseId.trim()
+      ? item.senseId.trim()
+      : `sense_${i + 1}`;
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    const content = typeof item.content === 'string' ? item.content.trim() : '';
+    const titleKey = title.toLowerCase();
+    if (!title || !content || seen.has(senseId) || seenTitleKeys.has(titleKey)) continue;
+    seen.add(senseId);
+    seenTitleKeys.add(titleKey);
+    deduped.push({ senseId, title, content });
+  }
+  if (deduped.length > 0) return deduped;
+  const fallbackContent = typeof node?.description === 'string' && node.description.trim()
+    ? node.description.trim()
+    : '暂无释义内容';
+  return [{
+    senseId: 'sense_1',
+    title: '基础释义',
+    content: fallbackContent
+  }];
+};
+
+const buildNodeSenseDisplayName = (nodeName = '', senseTitle = '') => {
+  const safeName = typeof nodeName === 'string' ? nodeName.trim() : '';
+  const safeTitle = typeof senseTitle === 'string' ? senseTitle.trim() : '';
+  return safeTitle ? `${safeName}-${safeTitle}` : safeName;
+};
+
+const normalizeAssociationRelationType = (value) => (
+  value === 'contains' || value === 'extends' || value === 'insert' ? value : ''
+);
+
+const normalizeAssociationInsertSide = (value, relationType = '') => {
+  if (relationType !== 'insert') return '';
+  return value === 'left' || value === 'right' ? value : '';
+};
+
+const pickNodeSenseById = (node = {}, senseId = '') => {
+  const senses = normalizeNodeSenseList(node);
+  const targetSenseId = typeof senseId === 'string' ? senseId.trim() : '';
+  if (!targetSenseId) return senses[0];
+  return senses.find((item) => item.senseId === targetSenseId) || senses[0];
+};
+
+const buildNodeSenseSearchEntries = (node = {}, keywords = []) => {
+  const normalizedKeywords = (Array.isArray(keywords) ? keywords : [])
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean);
+  const senses = normalizeNodeSenseList(node);
+  const baseName = typeof node?.name === 'string' ? node.name : '';
+  const nodeId = getIdString(node?._id);
+  return senses
+    .map((sense) => {
+      const displayName = buildNodeSenseDisplayName(baseName, sense.title);
+      const searchText = `${baseName} ${sense.title}`.toLowerCase();
+      let matchCount = 0;
+      normalizedKeywords.forEach((keyword) => {
+        if (searchText.includes(keyword)) matchCount += 1;
+      });
+      return {
+        _id: nodeId,
+        nodeId,
+        searchKey: `${nodeId}:${sense.senseId}`,
+        name: displayName,
+        displayName,
+        domainName: baseName,
+        description: sense.content || node?.description || '',
+        senseId: sense.senseId,
+        senseTitle: sense.title,
+        senseContent: sense.content || '',
+        knowledgePoint: node?.knowledgePoint,
+        contentScore: node?.contentScore,
+        matchCount
+      };
+    })
+    .filter((item) => normalizedKeywords.length === 0 || item.matchCount > 0);
+};
+
+const normalizeAssociationDraftList = (rawAssociations = [], localSenseIdSet = null) => (
+  (Array.isArray(rawAssociations) ? rawAssociations : [])
+    .map((assoc) => {
+      const targetNodeId = getIdString(assoc?.targetNode);
+      const relationType = normalizeAssociationRelationType(assoc?.relationType);
+      const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+      const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+      const insertSide = normalizeAssociationInsertSide(assoc?.insertSide, relationType);
+      const insertGroupId = typeof assoc?.insertGroupId === 'string' ? assoc.insertGroupId.trim().slice(0, 80) : '';
+      if (!targetNodeId || !relationType) return null;
+      if (!sourceSenseId || (localSenseIdSet instanceof Set && !localSenseIdSet.has(sourceSenseId))) return null;
+      if (!targetSenseId) return null;
+      return {
+        targetNode: targetNodeId,
+        relationType,
+        sourceSenseId,
+        targetSenseId,
+        insertSide,
+        insertGroupId
+      };
+    })
+    .filter(Boolean)
+);
+
+const dedupeAssociationList = (associations = []) => {
+  const seen = new Set();
+  return (Array.isArray(associations) ? associations : []).filter((assoc) => {
+    const key = [
+      assoc.sourceSenseId || '',
+      assoc.targetNode || '',
+      assoc.targetSenseId || '',
+      assoc.relationType || ''
+    ].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const normalizeAssociationRemovalStrategy = (value = '') => (
+  value === 'reconnect' ? 'reconnect' : 'disconnect'
+);
+
+const normalizeBridgeDecisionAction = (value = '') => (
+  value === 'reconnect' ? 'reconnect' : (value === 'disconnect' ? 'disconnect' : '')
+);
+
+const toAssociationEdgeKey = (assoc = {}) => (
+  [
+    assoc.sourceSenseId || '',
+    assoc.targetNode || '',
+    assoc.targetSenseId || '',
+    assoc.relationType || ''
+  ].join('|')
+);
+
+const normalizeRelationAssociationList = (associations = []) => (
+  (Array.isArray(associations) ? associations : [])
+    .map((assoc) => ({
+      targetNode: getIdString(assoc?.targetNode),
+      relationType: normalizeAssociationRelationType(assoc?.relationType),
+      sourceSenseId: typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '',
+      targetSenseId: typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '',
+      insertSide: '',
+      insertGroupId: ''
+    }))
+    .filter((assoc) => (
+      assoc.targetNode
+      && (assoc.relationType === 'contains' || assoc.relationType === 'extends')
+      && assoc.sourceSenseId
+      && assoc.targetSenseId
+    ))
+);
+
+const toNodeSensePairKey = (nodeId = '', senseId = '') => `${getIdString(nodeId)}:${String(senseId || '').trim()}`;
+const toBridgePairDecisionKey = (pair = {}) => (
+  [
+    String(pair?.sourceSenseId || '').trim(),
+    getIdString(pair?.upperNodeId),
+    String(pair?.upperSenseId || '').trim(),
+    getIdString(pair?.lowerNodeId),
+    String(pair?.lowerSenseId || '').trim()
+  ].join('|')
+);
+
+const normalizeBridgeDecisionList = (rawDecisionList = []) => (
+  (Array.isArray(rawDecisionList) ? rawDecisionList : [])
+    .map((item) => {
+      const pairKey = typeof item?.pairKey === 'string' ? item.pairKey.trim() : '';
+      const action = normalizeBridgeDecisionAction(item?.action);
+      if (!pairKey || !action) return null;
+      return { pairKey, action };
+    })
+    .filter(Boolean)
+);
+
+const buildBridgeBucketsBySourceSense = (associations = []) => {
+  const map = new Map();
+  (Array.isArray(associations) ? associations : []).forEach((assoc) => {
+    const relationType = normalizeAssociationRelationType(assoc?.relationType);
+    if (relationType !== 'contains' && relationType !== 'extends') return;
+    const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+    const targetNode = getIdString(assoc?.targetNode);
+    const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+    if (!sourceSenseId || !targetNode || !targetSenseId) return;
+
+    const current = map.get(sourceSenseId) || { uppers: new Map(), lowers: new Map() };
+    const target = {
+      nodeId: targetNode,
+      senseId: targetSenseId,
+      key: toNodeSensePairKey(targetNode, targetSenseId)
+    };
+    if (relationType === 'extends') {
+      current.uppers.set(target.key, target);
+    } else {
+      current.lowers.set(target.key, target);
+    }
+    map.set(sourceSenseId, current);
+  });
+  return map;
+};
+
+const buildBridgePairMapFromBucket = (bucket = null) => {
+  const pairMap = new Map();
+  if (!bucket || !(bucket.uppers instanceof Map) || !(bucket.lowers instanceof Map)) return pairMap;
+  for (const upper of bucket.uppers.values()) {
+    for (const lower of bucket.lowers.values()) {
+      const pairKey = `${upper.key}|${lower.key}`;
+      pairMap.set(pairKey, { upper, lower });
+    }
+  }
+  return pairMap;
+};
+
+const computeLostBridgePairs = (oldAssociations = [], nextAssociations = []) => {
+  const oldBuckets = buildBridgeBucketsBySourceSense(oldAssociations);
+  const nextBuckets = buildBridgeBucketsBySourceSense(nextAssociations);
+  const sourceSenseIds = new Set([...oldBuckets.keys(), ...nextBuckets.keys()]);
+  const lostPairs = [];
+  const seen = new Set();
+
+  sourceSenseIds.forEach((sourceSenseId) => {
+    const oldPairMap = buildBridgePairMapFromBucket(oldBuckets.get(sourceSenseId));
+    const nextPairMap = buildBridgePairMapFromBucket(nextBuckets.get(sourceSenseId));
+    for (const [pairKey, pair] of oldPairMap.entries()) {
+      if (nextPairMap.has(pairKey)) continue;
+      const key = `${sourceSenseId}|${pair.upper.key}|${pair.lower.key}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      lostPairs.push({
+        sourceSenseId,
+        upperNodeId: pair.upper.nodeId,
+        upperSenseId: pair.upper.senseId,
+        lowerNodeId: pair.lower.nodeId,
+        lowerSenseId: pair.lower.senseId
+      });
+    }
+  });
+
+  return lostPairs;
+};
+
+const resolveReconnectPairsByDecisions = ({
+  lostBridgePairs = [],
+  onRemovalStrategy = 'disconnect',
+  bridgeDecisions = []
+}) => {
+  const defaultAction = normalizeAssociationRemovalStrategy(onRemovalStrategy) === 'reconnect'
+    ? 'reconnect'
+    : 'disconnect';
+  const decisionMap = new Map(
+    normalizeBridgeDecisionList(bridgeDecisions).map((item) => [item.pairKey, item.action])
+  );
+  const decisionItems = (Array.isArray(lostBridgePairs) ? lostBridgePairs : []).map((pair) => {
+    const pairKey = toBridgePairDecisionKey(pair);
+    const explicitAction = decisionMap.get(pairKey) || '';
+    const action = explicitAction || defaultAction;
+    return {
+      pairKey,
+      action,
+      explicitAction,
+      hasExplicitDecision: !!explicitAction,
+      sourceSenseId: pair.sourceSenseId,
+      upperNodeId: pair.upperNodeId,
+      upperSenseId: pair.upperSenseId,
+      lowerNodeId: pair.lowerNodeId,
+      lowerSenseId: pair.lowerSenseId
+    };
+  });
+  return {
+    decisionItems,
+    unresolvedCount: decisionItems.filter((item) => !item.hasExplicitDecision).length,
+    reconnectPairs: decisionItems
+      .filter((item) => item.action === 'reconnect')
+      .map((item) => ({
+        sourceSenseId: item.sourceSenseId,
+        upperNodeId: item.upperNodeId,
+        upperSenseId: item.upperSenseId,
+        lowerNodeId: item.lowerNodeId,
+        lowerSenseId: item.lowerSenseId
+      }))
+  };
+};
+
+const applyReconnectPairs = async (pairs = []) => {
+  const pairList = Array.isArray(pairs) ? pairs : [];
+  if (pairList.length === 0) return;
+
+  const targetIds = Array.from(new Set(pairList
+    .flatMap((pair) => [pair?.upperNodeId, pair?.lowerNodeId])
+    .map((id) => getIdString(id))
+    .filter((id) => isValidObjectId(id))));
+  if (targetIds.length === 0) return;
+
+  const targetNodes = await Node.find({ _id: { $in: targetIds }, status: 'approved' });
+  const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+  const dirtyMap = new Map();
+
+  pairList.forEach((pair) => {
+    const upperNode = targetNodeMap.get(getIdString(pair?.upperNodeId));
+    const lowerNode = targetNodeMap.get(getIdString(pair?.lowerNodeId));
+    if (!upperNode || !lowerNode) return;
+
+    const addedUpper = addAssociationIfMissing(upperNode, {
+      targetNode: lowerNode._id,
+      relationType: 'contains',
+      sourceSenseId: pair?.upperSenseId,
+      targetSenseId: pair?.lowerSenseId
+    });
+    const addedLower = addAssociationIfMissing(lowerNode, {
+      targetNode: upperNode._id,
+      relationType: 'extends',
+      sourceSenseId: pair?.lowerSenseId,
+      targetSenseId: pair?.upperSenseId
+    });
+
+    if (addedUpper) {
+      upperNode.relatedChildDomains = addRelatedDomainName(upperNode.relatedChildDomains, lowerNode.name);
+      dirtyMap.set(getIdString(upperNode._id), upperNode);
+    }
+    if (addedLower) {
+      lowerNode.relatedParentDomains = addRelatedDomainName(lowerNode.relatedParentDomains, upperNode.name);
+      dirtyMap.set(getIdString(lowerNode._id), lowerNode);
+    }
+  });
+
+  for (const node of dirtyMap.values()) {
+    await node.save();
+  }
+};
+
+const buildAssociationMutationSummary = ({
+  node,
+  oldAssociations = [],
+  nextAssociations = [],
+  lostBridgePairs = [],
+  reconnectPairs = [],
+  targetNodeMap = new Map()
+}) => {
+  const currentNodeName = typeof node?.name === 'string' ? node.name : '';
+  const getSenseTitle = (nodeDoc = null, senseId = '') => {
+    const senses = normalizeNodeSenseList(nodeDoc || {});
+    const key = typeof senseId === 'string' ? senseId.trim() : '';
+    if (!key) return '';
+    return senses.find((item) => item.senseId === key)?.title || '';
+  };
+  const toRef = (nodeId = '', senseId = '') => {
+    const id = getIdString(nodeId);
+    const nodeDoc = id === getIdString(node?._id) ? node : targetNodeMap.get(id);
+    const nodeName = nodeDoc?.name || currentNodeName || '未知节点';
+    const senseTitle = getSenseTitle(nodeDoc, senseId);
+    return {
+      nodeId: id,
+      senseId,
+      nodeName,
+      senseTitle,
+      displayName: senseTitle ? `${nodeName}-${senseTitle}` : nodeName
+    };
+  };
+  const toLine = (source, relationType, target) => ({
+    source,
+    relationType,
+    target,
+    relationLabel: relationType === 'contains' ? '包含' : '扩展'
+  });
+
+  const oldMap = new Map(oldAssociations.map((assoc) => [toAssociationEdgeKey(assoc), assoc]));
+  const nextMap = new Map(nextAssociations.map((assoc) => [toAssociationEdgeKey(assoc), assoc]));
+  const beforeRelations = oldAssociations.map((assoc) => toLine(
+    toRef(node?._id, assoc.sourceSenseId),
+    assoc.relationType,
+    toRef(assoc.targetNode, assoc.targetSenseId)
+  ));
+  const afterRelations = nextAssociations.map((assoc) => toLine(
+    toRef(node?._id, assoc.sourceSenseId),
+    assoc.relationType,
+    toRef(assoc.targetNode, assoc.targetSenseId)
+  ));
+  const removed = [];
+  const added = [];
+  for (const [key, assoc] of oldMap.entries()) {
+    if (nextMap.has(key)) continue;
+    removed.push(toLine(
+      toRef(node?._id, assoc.sourceSenseId),
+      assoc.relationType,
+      toRef(assoc.targetNode, assoc.targetSenseId)
+    ));
+  }
+  for (const [key, assoc] of nextMap.entries()) {
+    if (oldMap.has(key)) continue;
+    added.push(toLine(
+      toRef(node?._id, assoc.sourceSenseId),
+      assoc.relationType,
+      toRef(assoc.targetNode, assoc.targetSenseId)
+    ));
+  }
+
+  const bridgePairs = (Array.isArray(lostBridgePairs) ? lostBridgePairs : []).map((pair) => ({
+    pairKey: toBridgePairDecisionKey(pair),
+    sourceSenseId: pair.sourceSenseId,
+    upper: toRef(pair.upperNodeId, pair.upperSenseId),
+    lower: toRef(pair.lowerNodeId, pair.lowerSenseId)
+  }));
+  const reconnectLines = (Array.isArray(reconnectPairs) ? reconnectPairs : []).map((pair) => ({
+    sourceSenseId: pair.sourceSenseId,
+    line: toLine(
+      toRef(pair.upperNodeId, pair.upperSenseId),
+      'contains',
+      toRef(pair.lowerNodeId, pair.lowerSenseId)
+    )
+  }));
+
+  return {
+    beforeRelations,
+    afterRelations,
+    removed,
+    added,
+    lostBridgePairs: bridgePairs,
+    reconnectLines
+  };
+};
+
+const validateAssociationMutationPermission = async ({ node, requestUserId = '' }) => {
+  const requesterId = getIdString(requestUserId);
+  if (!isValidObjectId(requesterId)) {
+    return { allowed: false, status: 401, error: '无效的用户身份' };
+  }
+  const requester = await User.findById(requesterId).select('role');
+  if (!requester) {
+    return { allowed: false, status: 404, error: '用户不存在' };
+  }
+
+  const isSystemAdmin = requester.role === 'admin';
+  const canEdit = isSystemAdmin || isDomainMaster(node, requesterId);
+  if (!canEdit) {
+    return { allowed: false, status: 403, error: '仅系统管理员或该知识域域主可编辑关联关系' };
+  }
+  return { allowed: true, isSystemAdmin };
+};
+
+const parseAssociationMutationPayload = async ({ node, rawAssociations = [] }) => {
+  const rawAssociationList = Array.isArray(rawAssociations) ? rawAssociations : [];
+  const localSenseList = normalizeNodeSenseList(node);
+  const localSenseIdSet = new Set(localSenseList.map((item) => item.senseId));
+  const defaultSourceSenseId = localSenseList[0]?.senseId || '';
+  const normalizedAssociations = rawAssociationList
+    .map((assoc) => {
+      const targetNode = getIdString(assoc?.targetNode);
+      const relationType = normalizeAssociationRelationType(assoc?.relationType);
+      const sourceSenseIdRaw = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+      const sourceSenseId = sourceSenseIdRaw || defaultSourceSenseId;
+      const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+      const insertSide = normalizeAssociationInsertSide(assoc?.insertSide, relationType);
+      const insertGroupId = typeof assoc?.insertGroupId === 'string' ? assoc.insertGroupId.trim().slice(0, 80) : '';
+      if (!targetNode || !relationType) return null;
+      if (!sourceSenseId || !localSenseIdSet.has(sourceSenseId)) return null;
+      return {
+        targetNode,
+        relationType,
+        sourceSenseId,
+        targetSenseId,
+        insertSide,
+        insertGroupId
+      };
+    })
+    .filter(Boolean);
+
+  if (rawAssociationList.length > 0 && normalizedAssociations.length === 0) {
+    return { error: '未识别到有效关联关系，请检查释义与目标节点配置' };
+  }
+
+  const targetNodeIds = Array.from(new Set(normalizedAssociations.map((assoc) => assoc.targetNode)));
+  const targetNodesForValidation = targetNodeIds.length > 0
+    ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
+        .select('_id name synonymSenses description')
+        .lean()
+    : [];
+  const targetNodeMapForValidation = new Map(targetNodesForValidation.map((item) => [getIdString(item._id), item]));
+  if (targetNodesForValidation.length !== targetNodeIds.length) {
+    return { error: '存在无效的关联目标知识域' };
+  }
+
+  for (const assoc of normalizedAssociations) {
+    const targetNode = targetNodeMapForValidation.get(assoc.targetNode);
+    if (!targetNode) {
+      return { error: '存在无效的关联目标知识域' };
+    }
+    const targetSenseList = normalizeNodeSenseList(targetNode);
+    if (!assoc.targetSenseId) {
+      assoc.targetSenseId = targetSenseList[0]?.senseId || '';
+    }
+    const matched = targetSenseList.some((sense) => sense.senseId === assoc.targetSenseId);
+    if (!matched) {
+      return { error: `目标知识域「${targetNode.name}」不存在指定释义` };
+    }
+  }
+
+  const relationSeen = new Set();
+  for (const assoc of normalizedAssociations) {
+    const key = [
+      assoc.sourceSenseId || '',
+      assoc.targetNode,
+      assoc.targetSenseId || '',
+      assoc.relationType || '',
+      assoc.insertSide || '',
+      assoc.insertGroupId || ''
+    ].join('|');
+    if (relationSeen.has(key)) {
+      return { error: '关联关系错误：同一个释义到同一目标释义只能存在一种关系' };
+    }
+    relationSeen.add(key);
+  }
+
+  const {
+    error: associationResolveError,
+    effectiveAssociations,
+    insertPlans
+  } = resolveAssociationsWithInsertPlans(normalizedAssociations);
+  if (associationResolveError) {
+    return { error: associationResolveError };
+  }
+
+  return {
+    error: '',
+    normalizedAssociations,
+    effectiveAssociations,
+    insertPlans
+  };
+};
+
+const buildAssociationMutationPreviewData = async ({
+  node,
+  effectiveAssociations = [],
+  onRemovalStrategy = 'disconnect',
+  bridgeDecisions = []
+}) => {
+  const oldRelationAssociations = normalizeRelationAssociationList(node?.associations || []);
+  const nextRelationAssociations = normalizeRelationAssociationList(effectiveAssociations);
+  const lostBridgePairs = computeLostBridgePairs(oldRelationAssociations, nextRelationAssociations);
+  const strategy = normalizeAssociationRemovalStrategy(onRemovalStrategy);
+  const reconnectResolveResult = resolveReconnectPairsByDecisions({
+    lostBridgePairs,
+    onRemovalStrategy: strategy,
+    bridgeDecisions
+  });
+  const reconnectPairs = reconnectResolveResult.reconnectPairs;
+
+  const summaryTargetNodeIds = new Set();
+  oldRelationAssociations.forEach((assoc) => {
+    if (isValidObjectId(assoc.targetNode)) summaryTargetNodeIds.add(assoc.targetNode);
+  });
+  nextRelationAssociations.forEach((assoc) => {
+    if (isValidObjectId(assoc.targetNode)) summaryTargetNodeIds.add(assoc.targetNode);
+  });
+  lostBridgePairs.forEach((pair) => {
+    if (isValidObjectId(pair?.upperNodeId)) summaryTargetNodeIds.add(pair.upperNodeId);
+    if (isValidObjectId(pair?.lowerNodeId)) summaryTargetNodeIds.add(pair.lowerNodeId);
+  });
+
+  const targetNodeIds = Array.from(summaryTargetNodeIds);
+  const targetNodes = targetNodeIds.length > 0
+    ? await Node.find({ _id: { $in: targetNodeIds } }).select('_id name synonymSenses description').lean()
+    : [];
+  const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+  const mutationSummary = buildAssociationMutationSummary({
+    node,
+    oldAssociations: oldRelationAssociations,
+    nextAssociations: nextRelationAssociations,
+    lostBridgePairs,
+    reconnectPairs,
+    targetNodeMap
+  });
+
+  return {
+    strategy,
+    oldRelationAssociations,
+    nextRelationAssociations,
+    lostBridgePairs,
+    bridgeDecisionItems: reconnectResolveResult.decisionItems,
+    unresolvedBridgeDecisionCount: reconnectResolveResult.unresolvedCount,
+    reconnectPairs,
+    mutationSummary
+  };
+};
+
+const resolveAssociationsWithInsertPlans = (normalizedAssociations = []) => {
+  const list = Array.isArray(normalizedAssociations) ? normalizedAssociations : [];
+  const insertGroupMap = new Map();
+  const effectiveAssociations = [];
+
+  for (const assoc of list) {
+    if (assoc.relationType !== 'insert') {
+      effectiveAssociations.push({
+        targetNode: assoc.targetNode,
+        relationType: assoc.relationType,
+        sourceSenseId: assoc.sourceSenseId,
+        targetSenseId: assoc.targetSenseId,
+        insertSide: '',
+        insertGroupId: ''
+      });
+      continue;
+    }
+
+    if (!assoc.insertGroupId) {
+      return { error: '插入关系缺少分组标识，请重新选择插入关系目标' };
+    }
+    if (assoc.insertSide !== 'left' && assoc.insertSide !== 'right') {
+      return { error: '插入关系必须明确左侧（上级）和右侧（下级）' };
+    }
+
+    const groupKey = `${assoc.sourceSenseId}|${assoc.insertGroupId}`;
+    const group = insertGroupMap.get(groupKey) || {
+      sourceSenseId: assoc.sourceSenseId,
+      left: null,
+      right: null
+    };
+    if (group[assoc.insertSide]) {
+      return { error: '同一插入关系中，左侧或右侧目标不能重复选择' };
+    }
+    group[assoc.insertSide] = assoc;
+    insertGroupMap.set(groupKey, group);
+  }
+
+  const insertPlans = [];
+  for (const group of insertGroupMap.values()) {
+    if (!group.left || !group.right) {
+      return { error: '每条插入关系都必须同时选择上级释义和下级释义' };
+    }
+
+    const leftKey = `${group.left.targetNode}:${group.left.targetSenseId}`;
+    const rightKey = `${group.right.targetNode}:${group.right.targetSenseId}`;
+    if (leftKey === rightKey) {
+      return { error: '插入关系中，上级与下级不能是同一个释义' };
+    }
+
+    insertPlans.push({
+      sourceSenseId: group.sourceSenseId,
+      upperNodeId: group.left.targetNode,
+      upperSenseId: group.left.targetSenseId,
+      lowerNodeId: group.right.targetNode,
+      lowerSenseId: group.right.targetSenseId
+    });
+
+    effectiveAssociations.push({
+      targetNode: group.left.targetNode,
+      relationType: 'extends',
+      sourceSenseId: group.sourceSenseId,
+      targetSenseId: group.left.targetSenseId,
+      insertSide: '',
+      insertGroupId: ''
+    });
+    effectiveAssociations.push({
+      targetNode: group.right.targetNode,
+      relationType: 'contains',
+      sourceSenseId: group.sourceSenseId,
+      targetSenseId: group.right.targetSenseId,
+      insertSide: '',
+      insertGroupId: ''
+    });
+  }
+
+  return {
+    error: '',
+    insertPlans,
+    effectiveAssociations: dedupeAssociationList(effectiveAssociations)
+  };
+};
+
+const rebuildRelatedDomainNamesForNodes = async (nodeDocs = []) => {
+  const docs = (Array.isArray(nodeDocs) ? nodeDocs : []).filter(Boolean);
+  if (docs.length === 0) return;
+
+  const targetIdSet = new Set();
+  docs.forEach((doc) => {
+    (Array.isArray(doc?.associations) ? doc.associations : []).forEach((assoc) => {
+      const relationType = normalizeAssociationRelationType(assoc?.relationType);
+      if (relationType !== 'contains' && relationType !== 'extends') return;
+      const targetId = getIdString(assoc?.targetNode);
+      if (isValidObjectId(targetId)) targetIdSet.add(targetId);
+    });
+  });
+
+  const targetIds = Array.from(targetIdSet);
+  const targetNodes = targetIds.length > 0
+    ? await Node.find({ _id: { $in: targetIds } }).select('_id name').lean()
+    : [];
+  const targetNameMap = new Map(targetNodes.map((item) => [getIdString(item._id), item.name || '']));
+
+  docs.forEach((doc) => {
+    const parentSet = new Set();
+    const childSet = new Set();
+    (Array.isArray(doc?.associations) ? doc.associations : []).forEach((assoc) => {
+      const relationType = normalizeAssociationRelationType(assoc?.relationType);
+      if (relationType !== 'contains' && relationType !== 'extends') return;
+      const targetId = getIdString(assoc?.targetNode);
+      const targetName = targetNameMap.get(targetId) || '';
+      if (!targetName) return;
+      if (relationType === 'extends') {
+        parentSet.add(targetName);
+      } else if (relationType === 'contains') {
+        childSet.add(targetName);
+      }
+    });
+    doc.relatedParentDomains = Array.from(parentSet);
+    doc.relatedChildDomains = Array.from(childSet);
+  });
+};
+
+const isAssociationSenseCompatible = (storedSenseId = '', expectedSenseId = '') => {
+  const stored = typeof storedSenseId === 'string' ? storedSenseId.trim() : '';
+  const expected = typeof expectedSenseId === 'string' ? expectedSenseId.trim() : '';
+  if (!expected) return true;
+  return !stored || stored === expected;
+};
+
+const removeDirectedContainsOrExtendsAssociation = (
+  nodeDoc,
+  targetNodeId,
+  expectedSourceSenseId,
+  expectedTargetSenseId
+) => {
+  const targetId = getIdString(targetNodeId);
+  if (!targetId || !Array.isArray(nodeDoc?.associations)) return false;
+
+  let changed = false;
+  nodeDoc.associations = nodeDoc.associations.filter((assoc) => {
+    const assocTargetNodeId = getIdString(assoc?.targetNode);
+    if (assocTargetNodeId !== targetId) return true;
+    const relationType = normalizeAssociationRelationType(assoc?.relationType);
+    if (relationType !== 'contains' && relationType !== 'extends') return true;
+
+    const sourceMatches = isAssociationSenseCompatible(assoc?.sourceSenseId, expectedSourceSenseId);
+    const targetMatches = isAssociationSenseCompatible(assoc?.targetSenseId, expectedTargetSenseId);
+    if (!sourceMatches || !targetMatches) return true;
+
+    changed = true;
+    return false;
+  });
+
+  return changed;
+};
+
+const addAssociationIfMissing = (nodeDoc, association) => {
+  const nextAssoc = {
+    targetNode: getIdString(association?.targetNode),
+    relationType: normalizeAssociationRelationType(association?.relationType),
+    sourceSenseId: typeof association?.sourceSenseId === 'string' ? association.sourceSenseId.trim() : '',
+    targetSenseId: typeof association?.targetSenseId === 'string' ? association.targetSenseId.trim() : '',
+    insertSide: '',
+    insertGroupId: ''
+  };
+  if (!nextAssoc.targetNode || !nextAssoc.relationType || !nextAssoc.sourceSenseId || !nextAssoc.targetSenseId) {
+    return false;
+  }
+
+  const exists = (Array.isArray(nodeDoc?.associations) ? nodeDoc.associations : []).some((assoc) => (
+    getIdString(assoc?.targetNode) === nextAssoc.targetNode
+    && normalizeAssociationRelationType(assoc?.relationType) === nextAssoc.relationType
+    && (typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '') === nextAssoc.sourceSenseId
+    && (typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '') === nextAssoc.targetSenseId
+  ));
+  if (exists) return false;
+
+  if (!Array.isArray(nodeDoc.associations)) nodeDoc.associations = [];
+  nodeDoc.associations.push(nextAssoc);
+  return true;
+};
+
+const hasDirectedAssociationToTargetNode = (nodeDoc, targetNodeId, relationType = '') => {
+  const targetId = getIdString(targetNodeId);
+  if (!targetId || !Array.isArray(nodeDoc?.associations)) return false;
+  return nodeDoc.associations.some((assoc) => {
+    const assocTargetId = getIdString(assoc?.targetNode);
+    if (assocTargetId !== targetId) return false;
+    const assocRelationType = normalizeAssociationRelationType(assoc?.relationType);
+    if (assocRelationType !== 'contains' && assocRelationType !== 'extends') return false;
+    if (!relationType) return true;
+    return assocRelationType === relationType;
+  });
+};
+
+const ensureRelatedDomainList = (value) => (
+  Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item.trim()) : []
+);
+
+const addRelatedDomainName = (list, name) => {
+  const safeName = typeof name === 'string' ? name.trim() : '';
+  if (!safeName) return list;
+  const source = ensureRelatedDomainList(list);
+  if (source.includes(safeName)) return source;
+  return [...source, safeName];
+};
+
+const removeRelatedDomainName = (list, name) => {
+  const safeName = typeof name === 'string' ? name.trim() : '';
+  if (!safeName) return ensureRelatedDomainList(list);
+  return ensureRelatedDomainList(list).filter((item) => item !== safeName);
+};
+
+const applyInsertAssociationRewire = async ({ insertPlans = [], newNodeId = '', newNodeName = '' }) => {
+  const plans = Array.isArray(insertPlans) ? insertPlans : [];
+  const currentNodeId = getIdString(newNodeId);
+  if (!currentNodeId || !newNodeName || plans.length === 0) return;
+
+  const touchedTargetIdSet = new Set();
+  plans.forEach((plan) => {
+    if (isValidObjectId(plan?.upperNodeId)) touchedTargetIdSet.add(plan.upperNodeId);
+    if (isValidObjectId(plan?.lowerNodeId)) touchedTargetIdSet.add(plan.lowerNodeId);
+  });
+  const touchedTargetIds = Array.from(touchedTargetIdSet);
+  if (touchedTargetIds.length === 0) return;
+
+  const targetNodes = await Node.find({ _id: { $in: touchedTargetIds }, status: 'approved' });
+  const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+  const dirtyTargetNodeMap = new Map();
+
+  plans.forEach((plan) => {
+    const upperNode = targetNodeMap.get(plan.upperNodeId);
+    const lowerNode = targetNodeMap.get(plan.lowerNodeId);
+    if (!upperNode || !lowerNode) return;
+    const upperNodeName = typeof upperNode?.name === 'string' ? upperNode.name.trim() : '';
+    const lowerNodeName = typeof lowerNode?.name === 'string' ? lowerNode.name.trim() : '';
+
+    const removedUpperToLower = removeDirectedContainsOrExtendsAssociation(
+      upperNode,
+      lowerNode._id,
+      plan.upperSenseId,
+      plan.lowerSenseId
+    );
+    const removedLowerToUpper = removeDirectedContainsOrExtendsAssociation(
+      lowerNode,
+      upperNode._id,
+      plan.lowerSenseId,
+      plan.upperSenseId
+    );
+
+    const addedUpperToNew = addAssociationIfMissing(upperNode, {
+      targetNode: currentNodeId,
+      relationType: 'contains',
+      sourceSenseId: plan.upperSenseId,
+      targetSenseId: plan.sourceSenseId
+    });
+    const addedLowerToNew = addAssociationIfMissing(lowerNode, {
+      targetNode: currentNodeId,
+      relationType: 'extends',
+      sourceSenseId: plan.lowerSenseId,
+      targetSenseId: plan.sourceSenseId
+    });
+
+    if (removedUpperToLower) {
+      if (!hasDirectedAssociationToTargetNode(upperNode, lowerNode._id, 'contains') && lowerNodeName) {
+        upperNode.relatedChildDomains = removeRelatedDomainName(upperNode.relatedChildDomains, lowerNodeName);
+      }
+      if (!hasDirectedAssociationToTargetNode(upperNode, lowerNode._id, 'extends') && lowerNodeName) {
+        upperNode.relatedParentDomains = removeRelatedDomainName(upperNode.relatedParentDomains, lowerNodeName);
+      }
+    }
+    if (removedLowerToUpper) {
+      if (!hasDirectedAssociationToTargetNode(lowerNode, upperNode._id, 'contains') && upperNodeName) {
+        lowerNode.relatedChildDomains = removeRelatedDomainName(lowerNode.relatedChildDomains, upperNodeName);
+      }
+      if (!hasDirectedAssociationToTargetNode(lowerNode, upperNode._id, 'extends') && upperNodeName) {
+        lowerNode.relatedParentDomains = removeRelatedDomainName(lowerNode.relatedParentDomains, upperNodeName);
+      }
+    }
+    if (addedUpperToNew) {
+      upperNode.relatedChildDomains = addRelatedDomainName(upperNode.relatedChildDomains, newNodeName);
+    }
+    if (addedLowerToNew) {
+      lowerNode.relatedParentDomains = addRelatedDomainName(lowerNode.relatedParentDomains, newNodeName);
+    }
+
+    if (removedUpperToLower || addedUpperToNew) {
+      dirtyTargetNodeMap.set(getIdString(upperNode._id), upperNode);
+    }
+    if (removedLowerToUpper || addedLowerToNew) {
+      dirtyTargetNodeMap.set(getIdString(lowerNode._id), lowerNode);
+    }
+  });
+
+  const dirtyNodes = Array.from(dirtyTargetNodeMap.values());
+  if (dirtyNodes.length === 0) return;
+  for (const targetNode of dirtyNodes) {
+    await targetNode.save();
+  }
+};
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 const CITY_BUILDING_LIMIT = 3;
@@ -1554,19 +2446,23 @@ const isUserIdleAtNode = (user, nodeName) => (
 router.get('/search', authenticateToken, async (req, res) => {
   try {
     const { keyword } = req.query;
-    if (!keyword) {
+    const normalizedKeyword = typeof keyword === 'string' ? keyword.trim() : '';
+    if (!normalizedKeyword) {
       return res.status(400).json({ error: '搜索关键词不能为空' });
     }
 
-    const nodes = await Node.find({
-      $or: [
-        { name: { $regex: keyword, $options: 'i' } },
-        { description: { $regex: keyword, $options: 'i' } }
-      ],
-      status: 'approved'
-    }).select('name description _id');
+    const keywords = normalizedKeyword.split(/\s+/).filter(Boolean);
+    const nodes = await Node.find({ status: 'approved' })
+      .select('_id name description synonymSenses knowledgePoint contentScore')
+      .lean();
 
-    res.json(nodes);
+    const results = nodes
+      .flatMap((node) => buildNodeSenseSearchEntries(node, keywords))
+      .sort((a, b) => b.matchCount - a.matchCount || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN'))
+      .slice(0, 200)
+      .map(({ matchCount, ...item }) => item);
+
+    res.json(results);
   } catch (error) {
     console.error('搜索节点错误:', error);
     res.status(500).json({ error: '服务器错误' });
@@ -1576,7 +2472,14 @@ router.get('/search', authenticateToken, async (req, res) => {
 // 创建节点（普通用户需要申请，管理员直接创建）
 router.post('/create', authenticateToken, async (req, res) => {
   try {
-    const { name, description, position, associations, forceCreate } = req.body;
+    const {
+      name,
+      description,
+      position,
+      associations,
+      synonymSenses,
+      forceCreate
+    } = req.body;
 
     // 验证必填字段
     if (!name || !description) {
@@ -1609,49 +2512,128 @@ router.post('/create', authenticateToken, async (req, res) => {
       }
     }
 
-    // 验证关联关系（普通用户必须至少有一个关联关系）
-    if (!isUserAdmin && (!associations || associations.length === 0)) {
-      return res.status(400).json({ error: '普通用户创建节点必须至少有一个关联关系' });
+    const rawSenseList = (Array.isArray(synonymSenses) ? synonymSenses : [])
+      .map((item) => ({
+        title: typeof item?.title === 'string' ? item.title.trim() : '',
+        content: typeof item?.content === 'string' ? item.content.trim() : ''
+      }))
+      .filter((item) => item.title && item.content);
+
+    if (rawSenseList.length === 0) {
+      return res.status(400).json({ error: '创建知识域时至少需要一个同义词释义（题目 + 内容）' });
     }
 
-    // 验证：检查是否有重复的目标节点（一个节点不能既被包含又被拓展）
-    if (associations && associations.length > 0) {
-      const targetNodeIds = associations.map(a => a.targetNode.toString());
-      const uniqueTargetNodes = new Set(targetNodeIds);
-      if (targetNodeIds.length !== uniqueTargetNodes.size) {
-        return res.status(400).json({
-          error: '关联关系错误：同一个节点只能有一种关联关系（拓展或包含），不能同时存在两种关系。'
-        });
+    const seenSenseTitleKeys = new Set();
+    for (const sense of rawSenseList) {
+      const key = sense.title.toLowerCase();
+      if (seenSenseTitleKeys.has(key)) {
+        return res.status(400).json({ error: '同一知识域下多个释义题目不能重名' });
+      }
+      seenSenseTitleKeys.add(key);
+    }
+
+    const uniqueSenses = rawSenseList.map((item, index) => ({
+      senseId: `sense_${index + 1}`,
+      title: item.title,
+      content: item.content
+    }));
+
+    const rawAssociations = Array.isArray(associations) ? associations : [];
+    if (rawAssociations.length === 0) {
+      return res.status(400).json({ error: '每个释义至少需要一个关联关系' });
+    }
+
+    const localSenseIdSet = new Set(uniqueSenses.map((item) => item.senseId));
+    const normalizedAssociations = normalizeAssociationDraftList(rawAssociations, localSenseIdSet);
+
+    if (normalizedAssociations.length === 0) {
+      return res.status(400).json({ error: '创建知识域必须至少有一个有效关联关系' });
+    }
+
+    // 验证关联关系目标节点和目标释义
+    const targetNodeIds = Array.from(new Set(normalizedAssociations.map((item) => item.targetNode)));
+    const targetNodes = targetNodeIds.length > 0
+      ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
+          .select('_id name synonymSenses description')
+          .lean()
+      : [];
+    const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+    if (targetNodes.length !== targetNodeIds.length) {
+      return res.status(400).json({ error: '存在无效的关联目标知识域' });
+    }
+
+    for (const assoc of normalizedAssociations) {
+      const targetNode = targetNodeMap.get(assoc.targetNode);
+      if (!targetNode) {
+        return res.status(400).json({ error: '存在无效的关联目标知识域' });
+      }
+      if (assoc.targetSenseId) {
+        const senseList = normalizeNodeSenseList(targetNode);
+        const matched = senseList.some((sense) => sense.senseId === assoc.targetSenseId);
+        if (!matched) {
+          return res.status(400).json({ error: `目标知识域「${targetNode.name}」不存在指定释义` });
+        }
       }
     }
+
+    // 验证：同一 sourceSense + targetNode + targetSense 只能出现一种关系
+    const relationSeen = new Set();
+    for (const assoc of normalizedAssociations) {
+      const relationKey = [
+        assoc.sourceSenseId || '',
+        assoc.targetNode,
+        assoc.targetSenseId || '',
+        assoc.relationType || '',
+        assoc.insertSide || '',
+        assoc.insertGroupId || ''
+      ].join('|');
+      if (relationSeen.has(relationKey)) {
+        return res.status(400).json({
+          error: '关联关系错误：同一个释义到同一目标释义只能存在一种关系'
+        });
+      }
+      relationSeen.add(relationKey);
+    }
+
+    // 验证：每个释义至少有一个关联关系
+    const coveredSourceSenseSet = new Set(normalizedAssociations.map((item) => item.sourceSenseId).filter(Boolean));
+    const missingRelationSenses = uniqueSenses.filter((item) => !coveredSourceSenseSet.has(item.senseId));
+    if (missingRelationSenses.length > 0) {
+      return res.status(400).json({
+        error: `每个释义至少需要一个关联关系，未满足：${missingRelationSenses.map((item) => item.title).join('、')}`
+      });
+    }
+
+    const {
+      error: associationResolveError,
+      effectiveAssociations,
+      insertPlans
+    } = resolveAssociationsWithInsertPlans(normalizedAssociations);
+    if (associationResolveError) {
+      return res.status(400).json({ error: associationResolveError });
+    }
+
+    const associationsForStorage = isUserAdmin ? effectiveAssociations : normalizedAssociations;
+    const relationAssociationsForSummary = associationsForStorage.filter((association) => (
+      association.relationType === 'contains' || association.relationType === 'extends'
+    ));
 
     // 填充关联母域和关联子域
     let relatedParentDomains = [];
     let relatedChildDomains = [];
 
-    if (associations && associations.length > 0) {
-      // 获取所有关联节点的详细信息
-      const targetNodeIds = associations.map(a => a.targetNode);
-      const targetNodes = await Node.find({ _id: { $in: targetNodeIds } });
-
-      // 创建节点ID到节点名称的映射
-      const nodeMap = {};
-      targetNodes.forEach(node => {
-        nodeMap[node._id.toString()] = node.name;
-      });
-
-      // 根据关联类型分类
-      associations.forEach(association => {
-        const targetNodeName = nodeMap[association.targetNode.toString()];
-        if (targetNodeName) {
-          if (association.relationType === 'extends') {
-            relatedParentDomains.push(targetNodeName);
-          } else if (association.relationType === 'contains') {
-            relatedChildDomains.push(targetNodeName);
-          }
-        }
-      });
-    }
+    relationAssociationsForSummary.forEach((association) => {
+      const targetNode = targetNodeMap.get(association.targetNode);
+      const targetNodeName = targetNode?.name || '';
+      if (!targetNodeName) return;
+      if (association.relationType === 'extends') {
+        relatedParentDomains.push(targetNodeName);
+      } else if (association.relationType === 'contains') {
+        relatedChildDomains.push(targetNodeName);
+      }
+    });
+    relatedParentDomains = Array.from(new Set(relatedParentDomains));
+    relatedChildDomains = Array.from(new Set(relatedChildDomains));
 
     const nodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
     const node = new Node({
@@ -1661,8 +2643,9 @@ router.post('/create', authenticateToken, async (req, res) => {
       allianceId: isUserAdmin ? null : (user.allianceId || null),
       name,
       description,
+      synonymSenses: uniqueSenses,
       position,
-      associations: associations || [],
+      associations: associationsForStorage,
       relatedParentDomains,
       relatedChildDomains,
       status: isUserAdmin ? 'approved' : 'pending',
@@ -1672,12 +2655,23 @@ router.post('/create', authenticateToken, async (req, res) => {
     await node.save();
 
     // 双向同步：更新被关联节点的relatedParentDomains和relatedChildDomains
-    if (associations && associations.length > 0 && (isUserAdmin || node.status === 'approved')) {
-      const targetNodeIds = associations.map(a => a.targetNode);
-      const targetNodes = await Node.find({ _id: { $in: targetNodeIds } });
+    if (node.status === 'approved') {
+      if (insertPlans.length > 0) {
+        await applyInsertAssociationRewire({
+          insertPlans,
+          newNodeId: node._id,
+          newNodeName: node.name
+        });
+      }
 
-      for (const association of associations) {
-        const targetNode = targetNodes.find(n => n._id.toString() === association.targetNode.toString());
+      const approvedTargetNodeIds = Array.from(new Set(
+        effectiveAssociations.map((item) => item.targetNode).filter((item) => isValidObjectId(item))
+      ));
+      const writableTargetNodes = approvedTargetNodeIds.length > 0
+        ? await Node.find({ _id: { $in: approvedTargetNodeIds } })
+        : [];
+      for (const association of effectiveAssociations) {
+        const targetNode = writableTargetNodes.find((n) => getIdString(n._id) === association.targetNode);
         if (targetNode) {
           if (association.relationType === 'contains') {
             // 当前节点包含目标节点 -> 目标节点的relatedParentDomains应加入当前节点
@@ -1739,23 +2733,85 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
       return res.status(400).json({ error: '已存在同名的审核通过节点，无法批准此申请' });
     }
 
-    // 填充关联母域和关联子域
-    let relatedParentDomains = [];
-    let relatedChildDomains = [];
+    const localSenseIdSet = new Set(normalizeNodeSenseList(node).map((item) => item.senseId));
+    const normalizedAssociations = normalizeAssociationDraftList(node.associations, localSenseIdSet);
+    if (normalizedAssociations.length === 0) {
+      return res.status(400).json({ error: '该节点缺少有效关联关系，无法审批通过' });
+    }
 
-    if (node.associations && node.associations.length > 0) {
-      node.associations.forEach(association => {
-        if (association.targetNode && association.targetNode.name) {
-          if (association.relationType === 'extends') {
-            relatedParentDomains.push(association.targetNode.name);
-          } else if (association.relationType === 'contains') {
-            relatedChildDomains.push(association.targetNode.name);
-          }
-        }
+    const targetNodeIds = Array.from(new Set(normalizedAssociations.map((item) => item.targetNode)));
+    const targetNodes = targetNodeIds.length > 0
+      ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
+          .select('_id name synonymSenses description')
+          .lean()
+      : [];
+    const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+    if (targetNodes.length !== targetNodeIds.length) {
+      return res.status(400).json({ error: '存在无效的关联目标知识域，无法审批通过' });
+    }
+    for (const assoc of normalizedAssociations) {
+      const targetNode = targetNodeMap.get(assoc.targetNode);
+      if (!targetNode) {
+        return res.status(400).json({ error: '存在无效的关联目标知识域，无法审批通过' });
+      }
+      const matched = normalizeNodeSenseList(targetNode).some((sense) => sense.senseId === assoc.targetSenseId);
+      if (!matched) {
+        return res.status(400).json({ error: `目标知识域「${targetNode.name}」不存在指定释义` });
+      }
+    }
+
+    const relationSeen = new Set();
+    for (const assoc of normalizedAssociations) {
+      const relationKey = [
+        assoc.sourceSenseId || '',
+        assoc.targetNode,
+        assoc.targetSenseId || '',
+        assoc.relationType || '',
+        assoc.insertSide || '',
+        assoc.insertGroupId || ''
+      ].join('|');
+      if (relationSeen.has(relationKey)) {
+        return res.status(400).json({
+          error: '关联关系错误：同一个释义到同一目标释义只能存在一种关系'
+        });
+      }
+      relationSeen.add(relationKey);
+    }
+
+    const coveredSourceSenseSet = new Set(normalizedAssociations.map((item) => item.sourceSenseId).filter(Boolean));
+    const missingRelationSenses = normalizeNodeSenseList(node).filter((item) => !coveredSourceSenseSet.has(item.senseId));
+    if (missingRelationSenses.length > 0) {
+      return res.status(400).json({
+        error: `每个释义至少需要一个关联关系，未满足：${missingRelationSenses.map((item) => item.title).join('、')}`
       });
     }
 
+    const {
+      error: associationResolveError,
+      effectiveAssociations,
+      insertPlans
+    } = resolveAssociationsWithInsertPlans(normalizedAssociations);
+    if (associationResolveError) {
+      return res.status(400).json({ error: associationResolveError });
+    }
+
+    let relatedParentDomains = [];
+    let relatedChildDomains = [];
+    effectiveAssociations.forEach((association) => {
+      const targetNode = targetNodeMap.get(association.targetNode);
+      const targetNodeName = targetNode?.name || '';
+      if (!targetNodeName) return;
+      if (association.relationType === 'extends') {
+        relatedParentDomains.push(targetNodeName);
+      } else if (association.relationType === 'contains') {
+        relatedChildDomains.push(targetNodeName);
+      }
+    });
+    relatedParentDomains = Array.from(new Set(relatedParentDomains));
+    relatedChildDomains = Array.from(new Set(relatedChildDomains));
+
     node.status = 'approved';
+    node.associations = effectiveAssociations;
     node.relatedParentDomains = relatedParentDomains;
     node.relatedChildDomains = relatedChildDomains;
     const owner = await User.findById(node.owner).select('role allianceId');
@@ -1795,9 +2851,24 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     }
 
     // 双向同步：更新被关联节点的relatedParentDomains和relatedChildDomains
-    if (node.associations && node.associations.length > 0) {
-      for (const association of node.associations) {
-        const targetNode = await Node.findById(association.targetNode._id || association.targetNode);
+    if (insertPlans.length > 0) {
+      await applyInsertAssociationRewire({
+        insertPlans,
+        newNodeId: node._id,
+        newNodeName: node.name
+      });
+    }
+
+    if (effectiveAssociations.length > 0) {
+      const writableTargetNodeIds = Array.from(new Set(
+        effectiveAssociations.map((assoc) => assoc.targetNode).filter((item) => isValidObjectId(item))
+      ));
+      const writableTargetNodes = writableTargetNodeIds.length > 0
+        ? await Node.find({ _id: { $in: writableTargetNodeIds } })
+        : [];
+
+      for (const association of effectiveAssociations) {
+        const targetNode = writableTargetNodes.find((n) => getIdString(n._id) === association.targetNode);
         if (targetNode) {
           if (association.relationType === 'contains') {
             // 当前节点包含目标节点 -> 目标节点的relatedParentDomains应加入当前节点
@@ -1925,7 +2996,7 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
     const nodes = await Node.find()
       .populate('owner', 'username profession')
       .populate('domainMaster', 'username profession')
-      .populate('associations.targetNode', 'name description')
+      .populate('associations.targetNode', 'name description synonymSenses')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -1994,9 +3065,57 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
 });
 
 // 删除节点（管理员专用）
+router.post('/:nodeId/delete-preview', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const { onRemovalStrategy, bridgeDecisions } = req.body || {};
+
+    const node = await Node.findById(nodeId).select('name synonymSenses associations');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+
+    const oldRelationAssociations = normalizeRelationAssociationList(node.associations || []);
+    const lostBridgePairs = computeLostBridgePairs(oldRelationAssociations, []);
+    const reconnectResolve = resolveReconnectPairsByDecisions({
+      lostBridgePairs,
+      onRemovalStrategy,
+      bridgeDecisions
+    });
+
+    const summaryTargetIds = Array.from(new Set(
+      oldRelationAssociations.map((assoc) => assoc.targetNode).filter((item) => isValidObjectId(item))
+    ));
+    const targetNodes = summaryTargetIds.length > 0
+      ? await Node.find({ _id: { $in: summaryTargetIds } }).select('_id name synonymSenses description').lean()
+      : [];
+    const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+    const mutationSummary = buildAssociationMutationSummary({
+      node,
+      oldAssociations: oldRelationAssociations,
+      nextAssociations: [],
+      lostBridgePairs,
+      reconnectPairs: reconnectResolve.reconnectPairs,
+      targetNodeMap
+    });
+
+    return res.json({
+      success: true,
+      strategy: normalizeAssociationRemovalStrategy(onRemovalStrategy),
+      bridgeDecisionItems: reconnectResolve.decisionItems,
+      unresolvedBridgeDecisionCount: reconnectResolve.unresolvedCount,
+      summary: mutationSummary
+    });
+  } catch (error) {
+    console.error('删除节点预览错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { nodeId } = req.params;
+    const { onRemovalStrategy, bridgeDecisions } = req.body || {};
 
     // 先获取节点信息（删除前需要知道节点名称）
     const node = await Node.findById(nodeId);
@@ -2005,6 +3124,20 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
     }
 
     const nodeName = node.name;
+    const oldRelationAssociations = normalizeRelationAssociationList(node.associations || []);
+    const lostBridgePairs = computeLostBridgePairs(oldRelationAssociations, []);
+    const reconnectResolve = resolveReconnectPairsByDecisions({
+      lostBridgePairs,
+      onRemovalStrategy,
+      bridgeDecisions
+    });
+    if (lostBridgePairs.length > 0 && reconnectResolve.unresolvedCount > 0) {
+      return res.status(400).json({
+        error: '删除前需要逐条确认上下级承接关系（保留承接或断开）',
+        bridgeDecisionItems: reconnectResolve.decisionItems,
+        unresolvedBridgeDecisionCount: reconnectResolve.unresolvedCount
+      });
+    }
 
     // 清理所有关联：从所有引用了这个节点的节点中移除
     // 1. 移除所有relatedParentDomains中包含此节点名称的记录
@@ -2025,6 +3158,10 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
       { $pull: { associations: { targetNode: nodeId } } }
     );
 
+    if (reconnectResolve.reconnectPairs.length > 0) {
+      await applyReconnectPairs(reconnectResolve.reconnectPairs);
+    }
+
     // 删除节点
     await Node.findByIdAndDelete(nodeId);
 
@@ -2036,7 +3173,8 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
     res.json({
       success: true,
       message: '节点已删除，所有关联已清理',
-      deletedNode: nodeName
+      deletedNode: nodeName,
+      reconnectCount: reconnectResolve.reconnectPairs.length
     });
   } catch (error) {
     console.error('删除节点错误:', error);
@@ -2069,28 +3207,109 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// 编辑节点关联关系（管理员专用）
-router.put('/:nodeId/associations', authenticateToken, isAdmin, async (req, res) => {
+// 预览编辑节点关联关系（系统管理员或该知识域域主）
+router.post('/:nodeId/associations/preview', authenticateToken, async (req, res) => {
   try {
     const { nodeId } = req.params;
-    const { associations } = req.body; // 新的关联关系数组
+    const { associations, onRemovalStrategy, bridgeDecisions } = req.body;
+
+    const node = await Node.findById(nodeId).select('name synonymSenses associations domainMaster status');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+    if (node.status !== 'approved') {
+      return res.status(400).json({ error: '仅已审批知识域可编辑关联关系' });
+    }
+
+    const permission = await validateAssociationMutationPermission({
+      node,
+      requestUserId: req?.user?.userId
+    });
+    if (!permission.allowed) {
+      return res.status(permission.status).json({ error: permission.error });
+    }
+
+    const parseResult = await parseAssociationMutationPayload({
+      node,
+      rawAssociations: associations
+    });
+    if (parseResult.error) {
+      return res.status(400).json({ error: parseResult.error });
+    }
+
+    const previewData = await buildAssociationMutationPreviewData({
+      node,
+      effectiveAssociations: parseResult.effectiveAssociations,
+      onRemovalStrategy,
+      bridgeDecisions
+    });
+
+    return res.json({
+      success: true,
+      strategy: previewData.strategy,
+      bridgeDecisionItems: previewData.bridgeDecisionItems,
+      unresolvedBridgeDecisionCount: previewData.unresolvedBridgeDecisionCount,
+      summary: previewData.mutationSummary,
+      stats: {
+        removedCount: previewData.mutationSummary.removed.length,
+        addedCount: previewData.mutationSummary.added.length,
+        lostBridgePairCount: previewData.mutationSummary.lostBridgePairs.length,
+        reconnectCount: previewData.mutationSummary.reconnectLines.length
+      }
+    });
+  } catch (error) {
+    console.error('预览节点关联编辑错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 编辑节点关联关系（系统管理员或该知识域域主）
+router.put('/:nodeId/associations', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const { associations, onRemovalStrategy, bridgeDecisions } = req.body; // 新的关联关系数组（支持 sourceSenseId/targetSenseId）
 
     const node = await Node.findById(nodeId);
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
-
-    // 验证：检查是否有重复的目标节点（一个节点不能既被包含又被拓展）
-    if (associations && associations.length > 0) {
-      const targetNodeIds = associations.map(a => a.targetNode.toString());
-      const uniqueTargetNodes = new Set(targetNodeIds);
-      if (targetNodeIds.length !== uniqueTargetNodes.size) {
-        return res.status(400).json({
-          error: '关联关系错误：同一个节点只能有一种关联关系（拓展或包含），不能同时存在两种关系。'
-        });
-      }
+    if (node.status !== 'approved') {
+      return res.status(400).json({ error: '仅已审批知识域可编辑关联关系' });
     }
 
+    const permission = await validateAssociationMutationPermission({
+      node,
+      requestUserId: req?.user?.userId
+    });
+    if (!permission.allowed) {
+      return res.status(permission.status).json({ error: permission.error });
+    }
+
+    const parseResult = await parseAssociationMutationPayload({
+      node,
+      rawAssociations: associations
+    });
+    if (parseResult.error) {
+      return res.status(400).json({ error: parseResult.error });
+    }
+
+    const { effectiveAssociations, insertPlans } = parseResult;
+    const previewData = await buildAssociationMutationPreviewData({
+      node,
+      effectiveAssociations,
+      onRemovalStrategy,
+      bridgeDecisions
+    });
+
+    const reconnectPairs = previewData.reconnectPairs;
+    if (previewData.mutationSummary.lostBridgePairs.length > 0 && previewData.unresolvedBridgeDecisionCount > 0) {
+      return res.status(400).json({
+        error: '请先逐条确认删除后的上下级承接关系（保留承接或断开）',
+        bridgeDecisionItems: previewData.bridgeDecisionItems,
+        unresolvedBridgeDecisionCount: previewData.unresolvedBridgeDecisionCount,
+        summary: previewData.mutationSummary
+      });
+    }
     const nodeName = node.name;
     const oldAssociations = node.associations || [];
 
@@ -2117,18 +3336,22 @@ router.put('/:nodeId/associations', authenticateToken, isAdmin, async (req, res)
     // 第二步：更新当前节点的关联关系和域列表
     let relatedParentDomains = [];
     let relatedChildDomains = [];
+    const effectiveTargetNodeIds = Array.from(new Set(
+      effectiveAssociations.map((assoc) => assoc.targetNode).filter((item) => isValidObjectId(item))
+    ));
 
-    if (associations && associations.length > 0) {
-      const targetNodeIds = associations.map(a => a.targetNode);
-      const targetNodes = await Node.find({ _id: { $in: targetNodeIds } });
+    if (effectiveAssociations.length > 0) {
+      const targetNodes = effectiveTargetNodeIds.length > 0
+        ? await Node.find({ _id: { $in: effectiveTargetNodeIds } })
+        : [];
 
       const nodeMap = {};
       targetNodes.forEach(n => {
         nodeMap[n._id.toString()] = n.name;
       });
 
-      associations.forEach(association => {
-        const targetNodeName = nodeMap[association.targetNode.toString()];
+      effectiveAssociations.forEach((association) => {
+        const targetNodeName = nodeMap[association.targetNode];
         if (targetNodeName) {
           if (association.relationType === 'extends') {
             relatedParentDomains.push(targetNodeName);
@@ -2139,15 +3362,34 @@ router.put('/:nodeId/associations', authenticateToken, isAdmin, async (req, res)
       });
     }
 
-    node.associations = associations || [];
-    node.relatedParentDomains = relatedParentDomains;
-    node.relatedChildDomains = relatedChildDomains;
+    node.associations = effectiveAssociations;
+    node.relatedParentDomains = Array.from(new Set(relatedParentDomains));
+    node.relatedChildDomains = Array.from(new Set(relatedChildDomains));
     await node.save();
 
     // 第三步：建立新的双向关联
-    if (associations && associations.length > 0) {
-      for (const association of associations) {
-        const targetNode = await Node.findById(association.targetNode);
+    if (insertPlans.length > 0) {
+      await applyInsertAssociationRewire({
+        insertPlans,
+        newNodeId: node._id,
+        newNodeName: node.name
+      });
+    }
+
+    if (reconnectPairs.length > 0) {
+      await applyReconnectPairs(reconnectPairs);
+    }
+
+    if (effectiveAssociations.length > 0) {
+      const writableTargetNodeIds = Array.from(new Set(
+        effectiveAssociations.map((assoc) => assoc.targetNode).filter((item) => isValidObjectId(item))
+      ));
+      const writableTargetNodes = writableTargetNodeIds.length > 0
+        ? await Node.find({ _id: { $in: writableTargetNodeIds } })
+        : [];
+
+      for (const association of effectiveAssociations) {
+        const targetNode = writableTargetNodes.find((n) => getIdString(n._id) === association.targetNode);
         if (targetNode) {
           if (association.relationType === 'contains') {
             // 当前节点包含目标节点 -> 目标节点的relatedParentDomains应加入当前节点
@@ -2169,6 +3411,8 @@ router.put('/:nodeId/associations', authenticateToken, isAdmin, async (req, res)
     res.json({
       success: true,
       message: '关联关系已更新',
+      strategy: previewData.strategy,
+      summary: previewData.mutationSummary,
       node: node
     });
   } catch (error) {
@@ -2212,18 +3456,30 @@ router.get('/public/root-nodes', async (req, res) => {
     // 查找所有已批准的节点
     const nodes = await Node.find({ status: 'approved' })
       .populate('owner', 'username profession')
-      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId');
+      .select('name description synonymSenses relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId');
 
     // 过滤出根节点（没有母节点的节点）
     const rootNodes = nodes.filter(node =>
       !node.relatedParentDomains || node.relatedParentDomains.length === 0
     );
     const styledRootNodes = await attachVisualStyleToNodeList(rootNodes);
+    const normalizedRootNodes = styledRootNodes.map((item) => {
+      const senses = normalizeNodeSenseList(item);
+      const activeSense = senses[0];
+      return {
+        ...item,
+        synonymSenses: senses,
+        activeSenseId: activeSense?.senseId || '',
+        activeSenseTitle: activeSense?.title || '',
+        activeSenseContent: activeSense?.content || '',
+        displayName: buildNodeSenseDisplayName(item?.name || '', activeSense?.title || '')
+      };
+    });
 
     res.json({
       success: true,
-      count: styledRootNodes.length,
-      nodes: styledRootNodes
+      count: normalizedRootNodes.length,
+      nodes: normalizedRootNodes
     });
   } catch (error) {
     console.error('获取根节点错误:', error);
@@ -2240,13 +3496,25 @@ router.get('/public/featured-nodes', async (req, res) => {
     })
       .populate('owner', 'username profession')
       .sort({ featuredOrder: 1, createdAt: -1 })
-      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder domainMaster allianceId');
+      .select('name description synonymSenses relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder domainMaster allianceId');
     const styledFeaturedNodes = await attachVisualStyleToNodeList(featuredNodes);
+    const normalizedFeaturedNodes = styledFeaturedNodes.map((item) => {
+      const senses = normalizeNodeSenseList(item);
+      const activeSense = senses[0];
+      return {
+        ...item,
+        synonymSenses: senses,
+        activeSenseId: activeSense?.senseId || '',
+        activeSenseTitle: activeSense?.title || '',
+        activeSenseContent: activeSense?.content || '',
+        displayName: buildNodeSenseDisplayName(item?.name || '', activeSense?.title || '')
+      };
+    });
 
     res.json({
       success: true,
-      count: styledFeaturedNodes.length,
-      nodes: styledFeaturedNodes
+      count: normalizedFeaturedNodes.length,
+      nodes: normalizedFeaturedNodes
     });
   } catch (error) {
     console.error('获取热门节点错误:', error);
@@ -2258,8 +3526,8 @@ router.get('/public/featured-nodes', async (req, res) => {
 router.get('/public/search', async (req, res) => {
   try {
     const { query } = req.query;
-
-    if (!query || query.trim() === '') {
+    const normalizedQuery = typeof query === 'string' ? query.trim() : '';
+    if (!normalizedQuery) {
       return res.json({
         success: true,
         results: []
@@ -2267,32 +3535,17 @@ router.get('/public/search', async (req, res) => {
     }
 
     // 分割关键词（按空格）
-    const keywords = query.trim().split(/\s+/);
+    const keywords = normalizedQuery.split(/\s+/).filter(Boolean);
 
-    // 查找所有已批准的节点
     const allNodes = await Node.find({ status: 'approved' })
       .populate('owner', 'username profession')
-      .select('name description relatedParentDomains relatedChildDomains knowledgePoint contentScore');
+      .select('name description synonymSenses relatedParentDomains relatedChildDomains knowledgePoint contentScore');
 
-    // 计算匹配度
-    const searchResults = allNodes.map(node => {
-      let matchCount = 0;
-      const searchText = `${node.name} ${node.description}`.toLowerCase();
-
-      keywords.forEach(keyword => {
-        const lowerKeyword = keyword.toLowerCase();
-        if (searchText.includes(lowerKeyword)) {
-          matchCount++;
-        }
-      });
-
-      return {
-        node,
-        matchCount
-      };
-    }).filter(item => item.matchCount > 0)
-      .sort((a, b) => b.matchCount - a.matchCount)
-      .map(item => item.node);
+    const searchResults = allNodes
+      .flatMap((node) => buildNodeSenseSearchEntries(node, keywords))
+      .sort((a, b) => b.matchCount - a.matchCount || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN'))
+      .slice(0, 300)
+      .map(({ matchCount, ...item }) => item);
 
     res.json({
       success: true,
@@ -2309,6 +3562,7 @@ router.get('/public/search', async (req, res) => {
 router.get('/public/node-detail/:nodeId', async (req, res) => {
   try {
     const { nodeId } = req.params;
+    const requestedSenseId = typeof req.query?.senseId === 'string' ? req.query.senseId.trim() : '';
 
     const node = await Node.findById(nodeId)
       .populate({
@@ -2326,7 +3580,7 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
         select: 'username profession avatar level allianceId',
         populate: { path: 'allianceId', select: 'name flag visualStyles activeVisualStyleId' }
       })
-      .select('name description owner domainMaster domainAdmins allianceId relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
+      .select('name description synonymSenses owner domainMaster domainAdmins allianceId associations relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
 
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
@@ -2336,17 +3590,74 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
       return res.status(403).json({ error: '该节点未审批' });
     }
 
-    // 获取关联的母域节点信息（ID和名称）
-    const parentNodes = await Node.find({
-      name: { $in: node.relatedParentDomains },
-      status: 'approved'
-    }).select('_id name description knowledgePoint contentScore domainMaster allianceId');
+    const nodeSenses = normalizeNodeSenseList(node);
+    const activeSense = pickNodeSenseById(node, requestedSenseId);
+    const activeSenseId = activeSense?.senseId || '';
+    const relationAssociations = (Array.isArray(node.associations) ? node.associations : [])
+      .filter((assoc) => {
+        const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+        if (!sourceSenseId) return true;
+        return sourceSenseId === activeSenseId;
+      });
 
-    // 获取关联的子域节点信息（ID和名称）
-    const childNodes = await Node.find({
-      name: { $in: node.relatedChildDomains },
-      status: 'approved'
-    }).select('_id name description knowledgePoint contentScore domainMaster allianceId');
+    const parentTargetIds = Array.from(new Set(
+      relationAssociations
+        .filter((assoc) => assoc?.relationType === 'extends')
+        .map((assoc) => getIdString(assoc?.targetNode))
+        .filter((id) => isValidObjectId(id))
+    ));
+    const childTargetIds = Array.from(new Set(
+      relationAssociations
+        .filter((assoc) => assoc?.relationType === 'contains')
+        .map((assoc) => getIdString(assoc?.targetNode))
+        .filter((id) => isValidObjectId(id))
+    ));
+
+    const nodeNameFallbackParents = (Array.isArray(node.relatedParentDomains) ? node.relatedParentDomains : []).filter(Boolean);
+    const nodeNameFallbackChildren = (Array.isArray(node.relatedChildDomains) ? node.relatedChildDomains : []).filter(Boolean);
+
+    const parentNodes = parentTargetIds.length > 0
+      ? await Node.find({
+          _id: { $in: parentTargetIds },
+          status: 'approved'
+        }).select('_id name description synonymSenses knowledgePoint contentScore domainMaster allianceId')
+      : await Node.find({
+          name: { $in: nodeNameFallbackParents },
+          status: 'approved'
+        }).select('_id name description synonymSenses knowledgePoint contentScore domainMaster allianceId');
+
+    const childNodes = childTargetIds.length > 0
+      ? await Node.find({
+          _id: { $in: childTargetIds },
+          status: 'approved'
+        }).select('_id name description synonymSenses knowledgePoint contentScore domainMaster allianceId')
+      : await Node.find({
+          name: { $in: nodeNameFallbackChildren },
+          status: 'approved'
+        }).select('_id name description synonymSenses knowledgePoint contentScore domainMaster allianceId');
+
+    const relationByTargetNodeId = relationAssociations.reduce((acc, assoc) => {
+      const key = getIdString(assoc?.targetNode);
+      if (!key || acc.has(key)) return acc;
+      acc.set(key, assoc);
+      return acc;
+    }, new Map());
+
+    const decorateNodeWithSense = (rawNode) => {
+      const source = rawNode && typeof rawNode.toObject === 'function' ? rawNode.toObject() : rawNode;
+      const targetNodeId = getIdString(source?._id);
+      const assoc = relationByTargetNodeId.get(targetNodeId);
+      const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+      const pickedSense = pickNodeSenseById(source, targetSenseId);
+      return {
+        ...source,
+        synonymSenses: normalizeNodeSenseList(source),
+        activeSenseId: pickedSense?.senseId || '',
+        activeSenseTitle: pickedSense?.title || '',
+        activeSenseContent: pickedSense?.content || '',
+        displayName: buildNodeSenseDisplayName(source?.name || '', pickedSense?.title || '')
+      };
+    };
 
     const normalizeUserForNodeDetail = (user) => {
       if (!user) return null;
@@ -2370,14 +3681,19 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     };
 
     const nodeObj = node.toObject();
+    nodeObj.synonymSenses = nodeSenses;
+    nodeObj.activeSenseId = activeSenseId;
+    nodeObj.activeSenseTitle = activeSense?.title || '';
+    nodeObj.activeSenseContent = activeSense?.content || '';
+    nodeObj.displayName = buildNodeSenseDisplayName(nodeObj.name || '', nodeObj.activeSenseTitle || '');
     nodeObj.owner = normalizeUserForNodeDetail(node.owner);
     nodeObj.domainMaster = normalizeUserForNodeDetail(node.domainMaster);
     nodeObj.domainAdmins = Array.isArray(node.domainAdmins)
       ? node.domainAdmins.map(normalizeUserForNodeDetail).filter(Boolean)
       : [];
     const [styledNode] = await attachVisualStyleToNodeList([nodeObj]);
-    const styledParentNodes = await attachVisualStyleToNodeList(parentNodes);
-    const styledChildNodes = await attachVisualStyleToNodeList(childNodes);
+    const styledParentNodes = await attachVisualStyleToNodeList(parentNodes.map(decorateNodeWithSense));
+    const styledChildNodes = await attachVisualStyleToNodeList(childNodes.map(decorateNodeWithSense));
 
     res.json({
       success: true,

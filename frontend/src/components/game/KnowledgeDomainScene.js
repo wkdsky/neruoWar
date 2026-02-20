@@ -24,6 +24,38 @@ const avatarMap = {
   female3: defaultFemale3
 };
 
+const getNodePrimarySense = (node) => {
+  const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+  if (typeof node?.activeSenseId === 'string' && node.activeSenseId.trim()) {
+    const matched = senses.find((item) => item?.senseId === node.activeSenseId.trim());
+    if (matched) return matched;
+  }
+  return senses[0] || null;
+};
+
+const getNodeDisplayName = (node) => {
+  if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
+  const name = typeof node?.name === 'string' ? node.name.trim() : '';
+  const senseTitle = typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()
+    ? node.activeSenseTitle.trim()
+    : (typeof getNodePrimarySense(node)?.title === 'string' ? getNodePrimarySense(node).title.trim() : '');
+  return senseTitle ? `${name}-${senseTitle}` : (name || '知识域');
+};
+
+const getNodeSenseTitle = (node) => {
+  if (typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()) return node.activeSenseTitle.trim();
+  const sense = getNodePrimarySense(node);
+  return typeof sense?.title === 'string' ? sense.title.trim() : '';
+};
+
+const getNodeSenseContent = (node) => {
+  if (typeof node?.activeSenseContent === 'string' && node.activeSenseContent.trim()) return node.activeSenseContent.trim();
+  const sense = getNodePrimarySense(node);
+  if (typeof sense?.content === 'string' && sense.content.trim()) return sense.content.trim();
+  if (typeof node?.knowledge === 'string' && node.knowledge.trim()) return node.knowledge.trim();
+  return '';
+};
+
 const DISTRIBUTION_SCOPE_OPTIONS = [
   { value: 'all', label: '全部分发（100%）' },
   { value: 'partial', label: '部分分发（按比例）' }
@@ -3434,8 +3466,14 @@ const KnowledgeDomainScene = ({
 
         {activeTab === 'info' || !showManageTab ? (
           <div className="domain-tab-content">
-            <h2 className="domain-title">{node?.name || '知识域'}</h2>
-            <p className="domain-description">{node?.description || ''}</p>
+            <h2 className="domain-title">{getNodeDisplayName(node)}</h2>
+            {node?.description && <p className="domain-description">{`概述：${node.description}`}</p>}
+            {getNodeSenseTitle(node) && (
+              <p className="domain-description">{`当前释义：${getNodeSenseTitle(node)}`}</p>
+            )}
+            {getNodeSenseContent(node) && (
+              <p className="domain-description">{`释义内容：${getNodeSenseContent(node)}`}</p>
+            )}
             <div className="domain-stats">
               <div className="stat-item">
                 <span className="stat-label">知识点</span>
@@ -3976,7 +4014,7 @@ const KnowledgeDomainScene = ({
           {intelHeistState.resultOpen && intelHeistState.resultSnapshot && (
             <div className="intel-heist-result-overlay">
               <div className="intel-heist-result-card">
-                <h3>{`已找到 ${node?.name || '该知识域'} 的情报文件`}</h3>
+                <h3>{`已找到 ${getNodeDisplayName(node) || '该知识域'} 的情报文件`}</h3>
                 <p>{`布防情报：${formatElapsedMinutesText(intelHeistState.resultSnapshot.deploymentUpdatedAt)}执行的部署`}</p>
                 <div className="intel-heist-result-gates">
                   <div className="intel-heist-result-gate">

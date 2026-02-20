@@ -2,6 +2,61 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Search, Plus, X, MapPin, Bell, ChevronLeft, ChevronRight } from 'lucide-react';
 import './Home.css';
 
+const getNodePrimarySense = (node) => {
+    const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+    if (typeof node?.activeSenseId === 'string' && node.activeSenseId.trim()) {
+        const matched = senses.find((item) => item?.senseId === node.activeSenseId.trim());
+        if (matched) return matched;
+    }
+    return senses[0] || null;
+};
+
+const getNodeDisplayName = (node) => {
+    if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
+    const name = typeof node?.name === 'string' ? node.name.trim() : '';
+    const senseTitle = typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()
+        ? node.activeSenseTitle.trim()
+        : (typeof getNodePrimarySense(node)?.title === 'string' ? getNodePrimarySense(node).title.trim() : '');
+    return senseTitle ? `${name}-${senseTitle}` : (name || '未命名知识域');
+};
+
+const getNodeSenseTitle = (node) => {
+    if (typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()) return node.activeSenseTitle.trim();
+    const sense = getNodePrimarySense(node);
+    return typeof sense?.title === 'string' ? sense.title.trim() : '';
+};
+
+const getNodeSenseContent = (node) => {
+    if (typeof node?.activeSenseContent === 'string' && node.activeSenseContent.trim()) return node.activeSenseContent.trim();
+    const sense = getNodePrimarySense(node);
+    if (typeof sense?.content === 'string' && sense.content.trim()) return sense.content.trim();
+    if (typeof node?.knowledge === 'string' && node.knowledge.trim()) return node.knowledge.trim();
+    return '';
+};
+
+const escapeRegExp = (text = '') => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const renderKeywordHighlight = (text, rawQuery) => {
+    const content = typeof text === 'string' ? text : '';
+    const keywords = String(rawQuery || '')
+        .trim()
+        .split(/\s+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    if (!content || keywords.length === 0) return content;
+    const uniqueKeywords = Array.from(new Set(keywords.map((item) => item.toLowerCase())));
+    const pattern = uniqueKeywords.map((item) => escapeRegExp(item)).join('|');
+    if (!pattern) return content;
+    const matcher = new RegExp(`(${pattern})`, 'ig');
+    const parts = content.split(matcher);
+    return parts.map((part, index) => {
+        const lowered = part.toLowerCase();
+        const matched = uniqueKeywords.some((keyword) => keyword === lowered);
+        if (!matched) return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
+        return <mark key={`mark-${index}`} className="subtle-keyword-highlight">{part}</mark>;
+    });
+};
+
 const Home = ({
     webglCanvasRef,
     searchQuery,
@@ -41,6 +96,36 @@ const Home = ({
     const activeAnnouncements = activeAnnouncementTab === 'alliance'
         ? allianceAnnouncements
         : systemAnnouncements;
+    const locationParentLabels = (() => {
+        const parentNodes = Array.isArray(currentLocationNodeDetail?.parentNodesInfo)
+            ? currentLocationNodeDetail.parentNodesInfo
+            : [];
+        const labelsFromNodes = parentNodes
+            .map((item) => getNodeDisplayName(item))
+            .filter(Boolean);
+        if (labelsFromNodes.length > 0) return labelsFromNodes;
+        return (Array.isArray(currentLocationNodeDetail?.relatedParentDomains)
+            ? currentLocationNodeDetail.relatedParentDomains
+            : [])
+            .map((name) => (typeof name === 'string' ? name.trim() : ''))
+            .filter(Boolean);
+    })();
+    const locationChildLabels = (() => {
+        const childNodes = Array.isArray(currentLocationNodeDetail?.childNodesInfo)
+            ? currentLocationNodeDetail.childNodesInfo
+            : [];
+        const labelsFromNodes = childNodes
+            .map((item) => getNodeDisplayName(item))
+            .filter(Boolean);
+        if (labelsFromNodes.length > 0) return labelsFromNodes;
+        return (Array.isArray(currentLocationNodeDetail?.relatedChildDomains)
+            ? currentLocationNodeDetail.relatedChildDomains
+            : [])
+            .map((name) => (typeof name === 'string' ? name.trim() : ''))
+            .filter(Boolean);
+    })();
+    const locationSenseTitle = getNodeSenseTitle(currentLocationNodeDetail);
+    const locationSenseContent = getNodeSenseContent(currentLocationNodeDetail);
     const formatSeconds = (seconds) => {
         if (!Number.isFinite(seconds) || seconds <= 0) return '0 秒';
         const rounded = Math.round(seconds);
@@ -132,12 +217,12 @@ const Home = ({
                             <div className="search-results-scroll">
                                 {searchResults.map((node) => (
                                     <div
-                                        key={node._id}
+                                        key={node.searchKey || `${node._id || ''}-${node.senseId || ''}`}
                                         className="search-result-card"
                                         onClick={() => onSearchResultClick(node)}
                                     >
-                                        <div className="search-card-title">{node.name}</div>
-                                        <div className="search-card-desc">{node.description}</div>
+                                        <div className="search-card-title">{renderKeywordHighlight(getNodeDisplayName(node), searchQuery)}</div>
+                                        <div className="search-card-desc">{getNodeSenseContent(node) || node.description}</div>
                                     </div>
                                 ))}
                             </div>
@@ -313,42 +398,49 @@ const Home = ({
                                             }
                                         }}
                                     >
-                                        <div className="location-node-title">{currentLocationNodeDetail.name}</div>
+                                        <div className="location-node-title">{getNodeDisplayName(currentLocationNodeDetail)}</div>
 
                                         {currentLocationNodeDetail.description && (
                                             <div className="location-node-section">
-                                                <div className="section-label">描述</div>
+                                                <div className="section-label">概述</div>
                                                 <div className="section-content">{currentLocationNodeDetail.description}</div>
                                             </div>
                                         )}
 
-                                        {currentLocationNodeDetail.relatedParentDomains && currentLocationNodeDetail.relatedParentDomains.length > 0 && (
+                                        {locationSenseTitle && (
+                                            <div className="location-node-section">
+                                                <div className="section-label">当前释义</div>
+                                                <div className="section-content">{locationSenseTitle}</div>
+                                            </div>
+                                        )}
+
+                                        {locationParentLabels.length > 0 && (
                                             <div className="location-node-section">
                                                 <div className="section-label">父域</div>
                                                 <div className="section-tags">
-                                                    {currentLocationNodeDetail.relatedParentDomains.map((parent, idx) => (
+                                                    {locationParentLabels.map((parent, idx) => (
                                                         <span key={idx} className="node-tag parent-tag">{parent}</span>
                                                     ))}
                                                 </div>
                                             </div>
                                         )}
 
-                                        {currentLocationNodeDetail.relatedChildDomains && currentLocationNodeDetail.relatedChildDomains.length > 0 && (
+                                        {locationChildLabels.length > 0 && (
                                             <div className="location-node-section">
                                                 <div className="section-label">子域</div>
                                                 <div className="section-tags">
-                                                    {currentLocationNodeDetail.relatedChildDomains.map((child, idx) => (
+                                                    {locationChildLabels.map((child, idx) => (
                                                         <span key={idx} className="node-tag child-tag">{child}</span>
                                                     ))}
                                                 </div>
                                             </div>
                                         )}
 
-                                        {currentLocationNodeDetail.knowledge && (
+                                        {locationSenseContent && (
                                             <div className="location-node-section">
-                                                <div className="section-label">知识内容</div>
+                                                <div className="section-label">释义内容</div>
                                                 <div className="section-content knowledge-content">
-                                                    {currentLocationNodeDetail.knowledge}
+                                                    {locationSenseContent}
                                                 </div>
                                             </div>
                                         )}

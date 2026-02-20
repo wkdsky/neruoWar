@@ -2,12 +2,44 @@ import React, { useEffect, useRef } from 'react';
 import { Search, Plus, X } from 'lucide-react';
 import './NodeDetail.css';
 
+const getSearchNodeDisplayName = (node) => {
+    if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
+    const name = typeof node?.name === 'string' ? node.name.trim() : '';
+    const senseTitle = typeof node?.senseTitle === 'string' && node.senseTitle.trim()
+        ? node.senseTitle.trim()
+        : (typeof node?.activeSenseTitle === 'string' ? node.activeSenseTitle.trim() : '');
+    return senseTitle ? `${name}-${senseTitle}` : name;
+};
+
+const escapeRegExp = (text = '') => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const renderKeywordHighlight = (text, rawQuery) => {
+    const content = typeof text === 'string' ? text : '';
+    const keywords = String(rawQuery || '')
+        .trim()
+        .split(/\s+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    if (!content || keywords.length === 0) return content;
+    const uniqueKeywords = Array.from(new Set(keywords.map((item) => item.toLowerCase())));
+    const pattern = uniqueKeywords.map((item) => escapeRegExp(item)).join('|');
+    if (!pattern) return content;
+    const matcher = new RegExp(`(${pattern})`, 'ig');
+    const parts = content.split(matcher);
+    return parts.map((part, index) => {
+        const lowered = part.toLowerCase();
+        const matched = uniqueKeywords.some((keyword) => keyword === lowered);
+        if (!matched) return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
+        return <mark key={`mark-${index}`} className="subtle-keyword-highlight">{part}</mark>;
+    });
+};
+
 const NodeDetail = ({ 
     node, 
     navigationPath, 
     onNavigate, 
+    onNavigateHistory,
     onHome, 
-    onShowNavigationTree,
     onSearch,
     onSearchFocus,
     searchQuery,
@@ -23,6 +55,12 @@ const NodeDetail = ({
 }) => {
     const detailCanvasRef = useRef(null);
     const searchBarRef = useRef(null);
+    const currentNodeId = String(node?._id || '');
+    const getRelationText = (relation) => {
+        if (relation === 'parent') return '上级知识域';
+        if (relation === 'child') return '下级知识域';
+        return '跳转';
+    };
 
     // Canvas drawing effect for node details
     useEffect(() => {
@@ -230,7 +268,10 @@ const NodeDetail = ({
             const nodeY = centerY + Math.sin(angle) * parentDistance;
             const distance = Math.sqrt((x - nodeX) ** 2 + (y - nodeY) ** 2);
             if (distance <= parentRadius) {
-                onNavigate(parentNodes[i]._id);
+                onNavigate(parentNodes[i]._id, {
+                    relationHint: 'parent',
+                    activeSenseId: parentNodes[i]?.activeSenseId || ''
+                });
                 return;
             }
         }
@@ -245,7 +286,10 @@ const NodeDetail = ({
             const nodeY = centerY + Math.sin(angle) * childDistance;
             const distance = Math.sqrt((x - nodeX) ** 2 + (y - nodeY) ** 2);
             if (distance <= childRadius) {
-                onNavigate(childNodes[i]._id);
+                onNavigate(childNodes[i]._id, {
+                    relationHint: 'child',
+                    activeSenseId: childNodes[i]?.activeSenseId || ''
+                });
                 return;
             }
         }
@@ -261,35 +305,32 @@ const NodeDetail = ({
                 </div>
 
                 {navigationPath.map((item, index) => (
-                    <div key={index}>
-                        {item.type === 'branch' ? (
-                            <div className="nav-branch">
-                                {item.nodes.map((branchNode, branchIndex) => (
-                                    <div
-                                        key={branchIndex}
-                                        className={`nav-item branch-item clickable ${branchNode.nodeId === node._id ? 'active' : ''}`}
-                                        onClick={() => onNavigate(branchNode.nodeId)}
-                                    >
-                                        <span className="nav-label">{branchNode.label}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div
-                                className={`nav-item ${item.type === 'node' && item.nodeId === node._id ? 'active' : ''} ${item.type === 'omit-paths' ? 'clickable omit-item' : item.type !== 'home' ? 'clickable' : ''}`}
-                                onClick={() => {
-                                    if (item.type === 'home') {
-                                        onHome();
-                                    } else if (item.type === 'node') {
-                                        onNavigate(item.nodeId);
-                                    } else if (item.type === 'omit-paths') {
-                                        onShowNavigationTree();
+                    <div key={`${item?.type || 'node'}-${item?.nodeId || 'home'}-${index}`}>
+                        <div
+                            className={`nav-item ${item?.type === 'node' && String(item?.nodeId || '') === currentNodeId ? 'active' : ''} clickable`}
+                            onClick={() => {
+                                if (item?.type === 'home') {
+                                    onHome();
+                                } else if (item?.type === 'node' && item?.nodeId) {
+                                    if (String(item.nodeId) === currentNodeId) return;
+                                    if (typeof onNavigateHistory === 'function') {
+                                        onNavigateHistory(item, index);
+                                        return;
                                     }
-                                }}
-                            >
-                                <span className="nav-label">{item.label}</span>
-                            </div>
-                        )}
+                                    onNavigate(item.nodeId, {
+                                        relationHint: item?.relation || 'jump',
+                                        activeSenseId: item?.senseId || ''
+                                    });
+                                }
+                            }}
+                        >
+                            <span className="nav-label">{item?.label || '未命名知识域'}</span>
+                            {item?.type === 'node' && (
+                                <span className={`nav-relation nav-relation-${item?.relation || 'jump'}`}>
+                                    {getRelationText(item?.relation)}
+                                </span>
+                            )}
+                        </div>
                         {index < navigationPath.length - 1 && (
                             <div className="nav-arrow">↓</div>
                         )}
@@ -384,12 +425,12 @@ const NodeDetail = ({
                             <div className="search-results-scroll">
                                 {searchResults.map((node) => (
                                     <div
-                                        key={node._id}
+                                        key={node.searchKey || `${node._id || ''}-${node.senseId || ''}`}
                                         className="search-result-card"
                                         onClick={() => onSearchResultClick(node)}
                                     >
-                                        <div className="search-card-title">{node.name}</div>
-                                        <div className="search-card-desc">{node.description}</div>
+                                        <div className="search-card-title">{renderKeywordHighlight(getSearchNodeDisplayName(node), searchQuery)}</div>
+                                        <div className="search-card-desc">{node.senseContent || node.description}</div>
                                     </div>
                                 ))}
                             </div>

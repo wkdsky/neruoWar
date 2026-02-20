@@ -68,6 +68,12 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         productionRates: { food: 0, metal: 0, energy: 0 },
         contentScore: 1
     });
+    const [showDeleteNodeConfirmModal, setShowDeleteNodeConfirmModal] = useState(false);
+    const [deletingNodeTarget, setDeletingNodeTarget] = useState(null);
+    const [isDeletingNode, setIsDeletingNode] = useState(false);
+    const [deletePreviewData, setDeletePreviewData] = useState(null);
+    const [deletePreviewLoading, setDeletePreviewLoading] = useState(false);
+    const [deleteBridgeDecisions, setDeleteBridgeDecisions] = useState({});
     const [pendingNodes, setPendingNodes] = useState([]);
     const [pendingNodeActionId, setPendingNodeActionId] = useState('');
     const [pendingNodeActionGroupName, setPendingNodeActionGroupName] = useState('');
@@ -161,6 +167,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [assocNodeBCandidates, setAssocNodeBCandidates] = useState({ parents: [], children: [] });
     const [assocNodeBSearchKeyword, setAssocNodeBSearchKeyword] = useState('');
     const [assocEditingIndex, setAssocEditingIndex] = useState(null);
+    const [assocRemovalStrategy, setAssocRemovalStrategy] = useState('disconnect');
+    const [assocMutationPreview, setAssocMutationPreview] = useState(null);
+    const [assocPreviewLoading, setAssocPreviewLoading] = useState(false);
+    const [assocApplyLoading, setAssocApplyLoading] = useState(false);
+    const [assocBridgeDecisions, setAssocBridgeDecisions] = useState({});
 
     const assocPreviewCanvasRef = useRef(null);
     const assocPreviewRendererRef = useRef(null);
@@ -668,6 +679,158 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }
     };
 
+    const normalizeNodeSenses = useCallback((node) => {
+        const source = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+        const deduped = [];
+        const seen = new Set();
+        source.forEach((item, index) => {
+            const senseId = (typeof item?.senseId === 'string' && item.senseId.trim()) ? item.senseId.trim() : `sense_${index + 1}`;
+            const title = typeof item?.title === 'string' ? item.title.trim() : '';
+            const content = typeof item?.content === 'string' ? item.content.trim() : '';
+            if (!senseId || !title || seen.has(senseId)) return;
+            seen.add(senseId);
+            deduped.push({ senseId, title, content });
+        });
+        if (deduped.length > 0) return deduped;
+        return [{
+            senseId: 'sense_1',
+            title: '基础释义',
+            content: typeof node?.description === 'string' ? node.description : ''
+        }];
+    }, []);
+
+    const relationTypeText = useCallback((relationType) => {
+        if (relationType === ASSOC_RELATION_TYPES.CONTAINS) return '包含';
+        if (relationType === ASSOC_RELATION_TYPES.EXTENDS) return '扩展';
+        if (relationType === ASSOC_RELATION_TYPES.INSERT) return '插入';
+        return '关联';
+    }, []);
+
+    const getSenseTitleById = useCallback((node, senseId) => {
+        const key = typeof senseId === 'string' ? senseId.trim() : '';
+        if (!key) return '';
+        const matched = normalizeNodeSenses(node).find((sense) => sense.senseId === key);
+        return matched?.title || key;
+    }, [normalizeNodeSenses]);
+
+    const nodeByIdMap = useMemo(() => {
+        const map = new Map();
+        allNodes.forEach((item) => {
+            if (!item?._id) return;
+            map.set(String(item._id), item);
+        });
+        return map;
+    }, [allNodes]);
+
+    const incomingAssociationMap = useMemo(() => {
+        const map = new Map();
+        allNodes.forEach((sourceNode) => {
+            const sourceSenses = normalizeNodeSenses(sourceNode);
+            const sourceSenseById = new Map(sourceSenses.map((sense) => [sense.senseId, sense]));
+            const sourceAssociations = Array.isArray(sourceNode?.associations) ? sourceNode.associations : [];
+            sourceAssociations.forEach((assoc) => {
+                const targetId = assoc?.targetNode?._id || assoc?.targetNode;
+                if (!targetId) return;
+                const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+                const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+                const sourceSenseTitle = sourceSenseById.get(sourceSenseId)?.title || sourceSenseId || '';
+                const sourceDisplayName = sourceSenseTitle ? `${sourceNode.name}-${sourceSenseTitle}` : sourceNode.name;
+                const item = {
+                    sourceNodeId: sourceNode._id,
+                    sourceNodeName: sourceNode.name,
+                    sourceSenseId,
+                    sourceSenseTitle,
+                    sourceDisplayName,
+                    relationType: assoc?.relationType || ''
+                };
+
+                const primaryKey = `${targetId}:${targetSenseId}`;
+                const fallbackKey = `${targetId}:`;
+                if (!map.has(primaryKey)) map.set(primaryKey, []);
+                map.get(primaryKey).push(item);
+                if (targetSenseId && !map.has(fallbackKey)) {
+                    map.set(fallbackKey, []);
+                }
+            });
+        });
+        return map;
+    }, [allNodes, normalizeNodeSenses]);
+
+    const resolveAssociationTargetDisplay = useCallback((assoc) => {
+        const targetNodeRaw = assoc?.targetNode;
+        const targetNode = (targetNodeRaw && typeof targetNodeRaw === 'object')
+            ? targetNodeRaw
+            : nodeByIdMap.get(String(targetNodeRaw || ''));
+        if (!targetNode) return '未知释义';
+        const targetNodeName = targetNode?.name || '未知节点';
+        const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+        const targetSenseTitle = getSenseTitleById(targetNode, targetSenseId);
+        return targetSenseTitle ? `${targetNodeName}-${targetSenseTitle}` : targetNodeName;
+    }, [getSenseTitleById, nodeByIdMap]);
+
+    const getNodeSenseAssociationSummary = useCallback((node, senseId) => {
+        const localSenseId = typeof senseId === 'string' ? senseId.trim() : '';
+        const allAssociations = Array.isArray(node?.associations) ? node.associations : [];
+        const outgoing = allAssociations
+            .filter((assoc) => {
+                const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+                return sourceSenseId === localSenseId;
+            })
+            .map((assoc, index) => ({
+                id: `out_${index}_${assoc?.targetNode?._id || assoc?.targetNode || 'unknown'}`,
+                direction: 'outgoing',
+                relationType: assoc?.relationType || '',
+                displayText: `${relationTypeText(assoc?.relationType)} → ${resolveAssociationTargetDisplay(assoc)}`
+            }));
+
+        const incomingKey = `${node?._id}:${localSenseId}`;
+        const incomingFallbackKey = `${node?._id}:`;
+        const incoming = [
+            ...(incomingAssociationMap.get(incomingKey) || []),
+            ...(incomingAssociationMap.get(incomingFallbackKey) || [])
+        ].map((item, index) => ({
+            id: `in_${index}_${item.sourceNodeId || 'unknown'}_${item.sourceSenseId || 'sense'}`,
+            direction: 'incoming',
+            relationType: item.relationType,
+            displayText: `${item.sourceDisplayName} → ${relationTypeText(item.relationType)}`
+        }));
+
+        return {
+            outgoing,
+            incoming,
+            all: [...outgoing, ...incoming]
+        };
+    }, [incomingAssociationMap, relationTypeText, resolveAssociationTargetDisplay]);
+
+    const buildNodeDeletePreview = useCallback((node) => {
+        if (!node?._id) {
+            return {
+                senses: [],
+                totalBeforeCount: 0,
+                totalAfterCount: 0
+            };
+        }
+        const senses = normalizeNodeSenses(node).map((sense) => {
+            const summary = getNodeSenseAssociationSummary(node, sense.senseId);
+            return {
+                ...sense,
+                beforeRelations: summary.all
+            };
+        });
+        const totalBeforeCount = senses.reduce((sum, sense) => sum + (sense.beforeRelations?.length || 0), 0);
+        return {
+            senses,
+            totalBeforeCount,
+            totalAfterCount: 0
+        };
+    }, [getNodeSenseAssociationSummary, normalizeNodeSenses]);
+
+    const toBridgeDecisionPayload = useCallback((decisionMap = {}) => (
+        Object.entries(decisionMap || {})
+            .map(([pairKey, action]) => ({ pairKey, action }))
+            .filter((item) => item.pairKey && (item.action === 'reconnect' || item.action === 'disconnect'))
+    ), []);
+
     const startEditNode = (node) => {
         setEditingNode(node._id);
         setEditNodeForm({
@@ -713,24 +876,102 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }
     };
 
-    const deleteNode = async (nodeId, nodeName) => {
-        if (!window.confirm(`确定要删除节点 "${nodeName}" 吗？此操作不可撤销！`)) return;
+    const fetchDeleteNodePreview = useCallback(async (node, decisions = {}) => {
+        if (!node?._id) return;
         const token = localStorage.getItem('token');
+        setDeletePreviewLoading(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}`, {
-                method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${token}` }
+            const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/delete-preview`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    onRemovalStrategy: 'disconnect',
+                    bridgeDecisions: toBridgeDecisionPayload(decisions)
+                })
             });
+            const data = await response.json();
+            if (response.ok) {
+                setDeletePreviewData(data);
+            } else {
+                alert(data.error || '删除预览失败');
+            }
+        } catch (error) {
+            console.error('删除预览失败:', error);
+            alert('删除预览失败');
+        } finally {
+            setDeletePreviewLoading(false);
+        }
+    }, [toBridgeDecisionPayload]);
+
+    const openDeleteNodeConfirmModal = (node) => {
+        const nextNode = node || null;
+        setDeletingNodeTarget(nextNode);
+        setDeleteBridgeDecisions({});
+        setDeletePreviewData(null);
+        setShowDeleteNodeConfirmModal(true);
+        if (nextNode) {
+            fetchDeleteNodePreview(nextNode, {});
+        }
+    };
+
+    const closeDeleteNodeConfirmModal = () => {
+        if (isDeletingNode) return;
+        setShowDeleteNodeConfirmModal(false);
+        setDeletingNodeTarget(null);
+        setDeletePreviewData(null);
+        setDeleteBridgeDecisions({});
+        setDeletePreviewLoading(false);
+    };
+
+    const deleteNode = async () => {
+        if (!deletingNodeTarget?._id) return;
+        if ((deletePreviewData?.unresolvedBridgeDecisionCount || 0) > 0) {
+            alert('请先逐条确认删除后的上下级承接关系（保留承接或断开）');
+            return;
+        }
+        const token = localStorage.getItem('token');
+        setIsDeletingNode(true);
+        let isSuccess = false;
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${deletingNodeTarget._id}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    onRemovalStrategy: 'disconnect',
+                    bridgeDecisions: toBridgeDecisionPayload(deleteBridgeDecisions)
+                })
+            });
+            const data = await response.json();
             if (response.ok) {
                 alert('节点已删除');
+                isSuccess = true;
                 fetchAllNodes();
             } else {
-                const data = await response.json();
+                if (data?.bridgeDecisionItems) {
+                    setDeletePreviewData((prev) => ({
+                        ...(prev || {}),
+                        ...data
+                    }));
+                }
                 alert(data.error || '删除失败');
             }
         } catch (error) {
             console.error('删除节点失败:', error);
             alert('删除失败');
+        } finally {
+            setIsDeletingNode(false);
+            if (isSuccess) {
+                setShowDeleteNodeConfirmModal(false);
+                setDeletingNodeTarget(null);
+                setDeletePreviewData(null);
+                setDeleteBridgeDecisions({});
+            }
         }
     };
 
@@ -772,6 +1013,39 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }
     };
 
+    const hierarchicalNodeList = useMemo(() => (
+        allNodes.map((node) => {
+            const senses = normalizeNodeSenses(node).map((sense) => {
+                const summary = getNodeSenseAssociationSummary(node, sense.senseId);
+                return {
+                    ...sense,
+                    associationSummary: summary
+                };
+            });
+            return {
+                ...node,
+                senses
+            };
+        })
+    ), [allNodes, getNodeSenseAssociationSummary, normalizeNodeSenses]);
+
+    const deletingNodePreview = useMemo(
+        () => buildNodeDeletePreview(deletingNodeTarget),
+        [buildNodeDeletePreview, deletingNodeTarget]
+    );
+    const deletePreviewSummary = deletePreviewData?.summary || null;
+    const deleteBeforeRelations = Array.isArray(deletePreviewSummary?.beforeRelations)
+        ? deletePreviewSummary.beforeRelations
+        : [];
+    const deleteAfterRelations = Array.isArray(deletePreviewSummary?.reconnectLines)
+        ? deletePreviewSummary.reconnectLines
+            .map((item) => item?.line)
+            .filter(Boolean)
+        : [];
+    const deleteBridgeDecisionItems = Array.isArray(deletePreviewData?.bridgeDecisionItems)
+        ? deletePreviewData.bridgeDecisionItems
+        : [];
+
     // --- Association Management Functions ---
     const openAssociationModal = (node) => {
         setViewingAssociationNode(node);
@@ -805,6 +1079,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setAssocSearchKeyword('');
         setAssocSearchResults([]);
         setAssocSearchLoading(false);
+        setAssocPreviewLoading(false);
+        setAssocBridgeDecisions({});
 
         if (assocPreviewRendererRef.current) {
             assocPreviewRendererRef.current.destroy();
@@ -816,6 +1092,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setShowEditAssociationModal(false);
         setEditingAssociationNode(null);
         setEditAssociations([]);
+        setAssocMutationPreview(null);
+        setAssocRemovalStrategy('disconnect');
+        setAssocApplyLoading(false);
+        setAssocBridgeDecisions({});
         resetAssociationEditor();
     }, [resetAssociationEditor]);
 
@@ -891,6 +1171,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setEditingAssociationNode(node);
         setShowEditAssociationModal(true);
         setIsEditAssociationListExpanded(true);
+        setAssocMutationPreview(null);
+        setAssocRemovalStrategy('disconnect');
+        setAssocApplyLoading(false);
+        setAssocBridgeDecisions({});
         resetAssociationEditor();
 
         const rebuiltAssociations = [];
@@ -989,6 +1273,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     }, [assocSearchKeyword, assocCurrentStep, searchAssociationNodes]);
 
     const startAddEditAssociation = () => {
+        setAssocMutationPreview(null);
+        setAssocBridgeDecisions({});
         resetAssociationEditor();
         setAssocCurrentStep(ASSOC_STEPS.SELECT_NODE_A);
     };
@@ -1138,10 +1424,14 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             setEditAssociations(prev => [...prev, associationData]);
         }
 
+        setAssocMutationPreview(null);
+        setAssocBridgeDecisions({});
         resetAssociationEditor();
     };
 
     const removeEditAssociation = (index) => {
+        setAssocMutationPreview(null);
+        setAssocBridgeDecisions({});
         setEditAssociations(prev => prev.filter((_, i) => i !== index));
     };
 
@@ -1191,15 +1481,114 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }
     };
 
-    const saveAssociationEdit = async () => {
-        const token = localStorage.getItem('token');
-        const associationsPayload = editAssociations.flatMap((assoc) =>
-            assoc.actualAssociations.map((actual) => ({
-                targetNode: actual.targetNode,
-                relationType: actual.relationType
-            }))
-        );
+    const resolveNodeDefaultSenseId = useCallback((nodeLike, fallbackNodeId = '') => {
+        const directSenseId = nodeLike?.activeSenseId
+            || (Array.isArray(nodeLike?.synonymSenses) ? nodeLike.synonymSenses[0]?.senseId : '')
+            || '';
+        if (directSenseId) return directSenseId;
+        const matched = allNodes.find((item) => item?._id === (fallbackNodeId || nodeLike?._id));
+        return matched?.activeSenseId
+            || (Array.isArray(matched?.synonymSenses) ? matched.synonymSenses[0]?.senseId : '')
+            || 'sense_1';
+    }, [allNodes]);
 
+    const resolveEditingSenseTitle = useCallback((senseId) => {
+        const sourceList = Array.isArray(editingAssociationNode?.synonymSenses) ? editingAssociationNode.synonymSenses : [];
+        const key = (senseId || '').trim();
+        if (!key) return '';
+        const matched = sourceList.find((sense) => (sense?.senseId || '').trim() === key);
+        return matched?.title || key;
+    }, [editingAssociationNode]);
+
+    const buildAssociationPayloadForMutation = useCallback(() => {
+        const sourceSenseId = resolveNodeDefaultSenseId(editingAssociationNode, editingAssociationNode?._id);
+        return editAssociations.flatMap((assoc, index) => {
+            if (assoc.type === ASSOC_RELATION_TYPES.INSERT) {
+                const direction = assoc.direction === 'bToA' ? 'bToA' : 'aToB';
+                const upperNode = direction === 'aToB' ? assoc.nodeA : assoc.nodeB;
+                const lowerNode = direction === 'aToB' ? assoc.nodeB : assoc.nodeA;
+                const upperNodeId = upperNode?._id;
+                const lowerNodeId = lowerNode?._id;
+                if (!upperNodeId || !lowerNodeId) return [];
+                const insertGroupId = `admin_insert_${index}_${upperNodeId}_${lowerNodeId}_${direction}`;
+                return [
+                    {
+                        targetNode: upperNodeId,
+                        relationType: ASSOC_RELATION_TYPES.INSERT,
+                        sourceSenseId,
+                        targetSenseId: resolveNodeDefaultSenseId(upperNode, upperNodeId),
+                        insertSide: 'left',
+                        insertGroupId
+                    },
+                    {
+                        targetNode: lowerNodeId,
+                        relationType: ASSOC_RELATION_TYPES.INSERT,
+                        sourceSenseId,
+                        targetSenseId: resolveNodeDefaultSenseId(lowerNode, lowerNodeId),
+                        insertSide: 'right',
+                        insertGroupId
+                    }
+                ];
+            }
+
+            return assoc.actualAssociations.map((actual) => {
+                const fallbackNode = assoc.nodeA?._id === actual.targetNode ? assoc.nodeA : assoc.nodeB;
+                return {
+                    targetNode: actual.targetNode,
+                    relationType: actual.relationType,
+                    sourceSenseId,
+                    targetSenseId: resolveNodeDefaultSenseId(fallbackNode, actual.targetNode)
+                };
+            });
+        });
+    }, [editAssociations, editingAssociationNode, resolveNodeDefaultSenseId]);
+
+    const previewAssociationEdit = async (decisionMap = assocBridgeDecisions) => {
+        if (!editingAssociationNode?._id) return;
+        const token = localStorage.getItem('token');
+        const associationsPayload = buildAssociationPayloadForMutation();
+        setAssocPreviewLoading(true);
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${editingAssociationNode._id}/associations/preview`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    associations: associationsPayload,
+                    onRemovalStrategy: assocRemovalStrategy,
+                    bridgeDecisions: toBridgeDecisionPayload(decisionMap)
+                })
+            });
+            const data = await response.json();
+            if (response.ok) {
+                setAssocMutationPreview(data);
+            } else {
+                alert(data.error || '预览失败');
+            }
+        } catch (error) {
+            console.error('预览关联变更失败:', error);
+            alert('预览失败');
+        } finally {
+            setAssocPreviewLoading(false);
+        }
+    };
+
+    const saveAssociationEdit = async () => {
+        if (!editingAssociationNode?._id) return;
+        if (!assocMutationPreview) {
+            alert('请先预览变更，再确认保存');
+            return;
+        }
+        if ((assocMutationPreview?.unresolvedBridgeDecisionCount || 0) > 0) {
+            alert('请先逐条确认删除后的上下级承接关系（保留承接或断开）');
+            return;
+        }
+
+        const token = localStorage.getItem('token');
+        const associationsPayload = buildAssociationPayloadForMutation();
+        setAssocApplyLoading(true);
         try {
             const response = await fetch(`http://localhost:5000/api/nodes/${editingAssociationNode._id}/associations`, {
                 method: 'PUT',
@@ -1208,22 +1597,196 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                     'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({
-                    associations: associationsPayload
+                    associations: associationsPayload,
+                    onRemovalStrategy: assocRemovalStrategy,
+                    bridgeDecisions: toBridgeDecisionPayload(assocBridgeDecisions)
                 })
             });
+            const data = await response.json();
             if (response.ok) {
-                const data = await response.json();
                 alert(data.message);
                 closeEditAssociationModal();
                 fetchAllNodes();
             } else {
-                const data = await response.json();
+                if (data?.bridgeDecisionItems) {
+                    setAssocMutationPreview((prev) => ({
+                        ...(prev || {}),
+                        ...data
+                    }));
+                }
                 alert(data.error || '保存失败');
             }
         } catch (error) {
             console.error('保存关联失败:', error);
             alert('保存失败');
+        } finally {
+            setAssocApplyLoading(false);
         }
+    };
+
+    const formatRelationArrowText = (relationType) => (
+        relationType === ASSOC_RELATION_TYPES.CONTAINS ? '→包含→' : '←拓展←'
+    );
+
+    const renderMutationLine = (line, key, tone = 'neutral') => (
+        <div key={key} className={`admin-assoc-mutation-line ${tone}`}>
+            <span className="endpoint">{line.source?.displayName || '未知释义'}</span>
+            <span className="arrow">{formatRelationArrowText(line.relationType)}</span>
+            <span className="endpoint">{line.target?.displayName || '未知释义'}</span>
+        </div>
+    );
+
+    const renderBridgeDecisionItem = (item, index) => {
+        const selectedAction = assocBridgeDecisions[item.pairKey] || item.explicitAction || '';
+        const displayUpper = item?.upper?.displayName || '未知上级释义';
+        const displayLower = item?.lower?.displayName || '未知下级释义';
+        return (
+            <div key={item.pairKey || `bridge_decision_${index}`} className="admin-bridge-decision-item">
+                <div className="admin-bridge-decision-line">
+                    <span>{displayUpper}</span>
+                    <span className="arrow">⇢ {resolveEditingSenseTitle(item.sourceSenseId)} ⇢</span>
+                    <span>{displayLower}</span>
+                </div>
+                <div className="admin-bridge-decision-actions">
+                    <button
+                        className={`admin-bridge-decision-btn ${selectedAction === 'reconnect' ? 'active reconnect' : ''}`}
+                        onClick={() => {
+                            const next = {
+                                ...assocBridgeDecisions,
+                                [item.pairKey]: 'reconnect'
+                            };
+                            setAssocBridgeDecisions(next);
+                            previewAssociationEdit(next);
+                        }}
+                        disabled={assocPreviewLoading || assocApplyLoading}
+                    >
+                        保留承接
+                    </button>
+                    <button
+                        className={`admin-bridge-decision-btn ${selectedAction === 'disconnect' ? 'active disconnect' : ''}`}
+                        onClick={() => {
+                            const next = {
+                                ...assocBridgeDecisions,
+                                [item.pairKey]: 'disconnect'
+                            };
+                            setAssocBridgeDecisions(next);
+                            previewAssociationEdit(next);
+                        }}
+                        disabled={assocPreviewLoading || assocApplyLoading}
+                    >
+                        断开独立
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    const renderAssocMutationPreview = () => {
+        if (!assocMutationPreview?.summary) return null;
+        const summary = assocMutationPreview.summary;
+        const bridgeDecisionItems = Array.isArray(assocMutationPreview?.bridgeDecisionItems)
+            ? assocMutationPreview.bridgeDecisionItems
+            : [];
+        const beforeRelations = Array.isArray(summary.beforeRelations) ? summary.beforeRelations : [];
+        const afterRelations = Array.isArray(summary.afterRelations) ? summary.afterRelations : [];
+        const hasChanges = (summary.removed?.length || 0) > 0
+            || (summary.added?.length || 0) > 0
+            || (summary.lostBridgePairs?.length || 0) > 0
+            || (summary.reconnectLines?.length || 0) > 0;
+
+        return (
+            <div className="admin-assoc-mutation-preview">
+                <div className="admin-assoc-mutation-header">
+                    <h5>关联变更预览</h5>
+                    <span className={`strategy-badge ${assocMutationPreview?.strategy || 'disconnect'}`}>
+                        {assocMutationPreview?.strategy === 'reconnect' ? '断开后自动重连' : '断开后不重连'}
+                    </span>
+                </div>
+
+                <div className="admin-assoc-before-after-grid">
+                    <div className="admin-assoc-before-after-block before">
+                        <h6>编辑前</h6>
+                        {beforeRelations.length > 0 ? (
+                            beforeRelations.map((line, index) => renderMutationLine(line, `before_${index}`, 'neutral'))
+                        ) : (
+                            <div className="admin-assoc-empty-change">编辑前无关联</div>
+                        )}
+                    </div>
+                    <div className="admin-assoc-before-after-block after">
+                        <h6>编辑后</h6>
+                        {afterRelations.length > 0 ? (
+                            afterRelations.map((line, index) => renderMutationLine(line, `after_${index}`, 'neutral'))
+                        ) : (
+                            <div className="admin-assoc-empty-change">编辑后无关联</div>
+                        )}
+                    </div>
+                </div>
+
+                {!hasChanges && (
+                    <div className="admin-assoc-empty-change">本次操作不会改变任何关联关系。</div>
+                )}
+
+                {summary.removed?.length > 0 && (
+                    <div className="admin-assoc-mutation-block">
+                        <h6>将移除</h6>
+                        {summary.removed.map((line, index) => renderMutationLine(line, `removed_${index}`, 'removed'))}
+                    </div>
+                )}
+
+                {summary.added?.length > 0 && (
+                    <div className="admin-assoc-mutation-block">
+                        <h6>将新增</h6>
+                        {summary.added.map((line, index) => renderMutationLine(line, `added_${index}`, 'added'))}
+                    </div>
+                )}
+
+                {summary.lostBridgePairs?.length > 0 && (
+                    <div className="admin-assoc-mutation-block">
+                        <h6>受影响的上级/下级对</h6>
+                        {summary.lostBridgePairs.map((pair, index) => (
+                            <div key={`bridge_${index}`} className="admin-assoc-mutation-line warning">
+                                <span className="endpoint">{pair.upper?.displayName || '未知释义'}</span>
+                                <span className="arrow">⇢ {resolveEditingSenseTitle(pair.sourceSenseId)} ⇢</span>
+                                <span className="endpoint">{pair.lower?.displayName || '未知释义'}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {summary.reconnectLines?.length > 0 && (
+                    <div className="admin-assoc-mutation-block">
+                        <h6>将自动重连</h6>
+                        {summary.reconnectLines.map((item, index) => renderMutationLine(item.line, `reconnect_${index}`, 'reconnect'))}
+                    </div>
+                )}
+
+                {bridgeDecisionItems.length > 0 && (
+                    <div className="admin-assoc-mutation-block">
+                        <h6>承接关系逐条确认</h6>
+                        <p className="admin-assoc-step-description" style={{ marginBottom: '0.45rem' }}>
+                            对每组“上级-当前释义-下级”选择删除后是保留承接还是断开独立。
+                        </p>
+                        {(assocMutationPreview?.unresolvedBridgeDecisionCount || 0) > 0 && (
+                            <p className="admin-assoc-step-description" style={{ marginBottom: '0.45rem', color: '#fca5a5' }}>
+                                尚有 {assocMutationPreview.unresolvedBridgeDecisionCount} 组未确认，不能保存。
+                            </p>
+                        )}
+                        <div className="admin-bridge-decision-list">
+                            {summary.lostBridgePairs.map((pair, index) => {
+                                const decision = bridgeDecisionItems.find((item) => item.pairKey === pair.pairKey) || {};
+                                return renderBridgeDecisionItem({
+                                    ...decision,
+                                    pairKey: pair.pairKey,
+                                    sourceSenseId: pair.sourceSenseId,
+                                    upper: pair.upper,
+                                    lower: pair.lower
+                                }, index);
+                            })}
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
     };
 
     const renderAssocStepIndicator = () => {
@@ -1271,7 +1834,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                     value={assocSearchKeyword}
                     onChange={(e) => setAssocSearchKeyword(e.target.value)}
                     onKeyPress={(e) => e.key === 'Enter' && searchAssociationNodes(assocSearchKeyword)}
-                    placeholder="搜索节点标题或简介..."
+                    placeholder="搜索标题或释义题目..."
                     className="form-input"
                 />
                 <button onClick={() => searchAssociationNodes(assocSearchKeyword)} disabled={assocSearchLoading} className="btn btn-primary">
@@ -1283,7 +1846,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             {assocSearchResults.length > 0 && (
                 <div className="search-results">
                     {assocSearchResults.map(node => (
-                        <div key={node._id} className="search-result-item clickable" onClick={() => selectAssocNodeA(node)}>
+                        <div
+                            key={node.searchKey || `${node._id}_${node.senseId || 'sense'}`}
+                            className="search-result-item clickable"
+                            onClick={() => selectAssocNodeA(node)}
+                        >
                             <div className="node-info">
                                 <strong>{node.name}</strong>
                                 <span className="node-description">{node.description}</span>
@@ -2319,32 +2886,14 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                             刷新数据
                         </button>
                     </div>
-                    
-                    <div className="table-responsive">
-                        <table className="nodes-table">
-                            <thead>
-                                <tr>
-                                    <th>数据库ID</th>
-                                    <th>节点名称</th>
-                                    <th>描述</th>
-                                    <th>繁荣度</th>
-                                    <th>知识点</th>
-                                    <th>内容分数</th>
-                                    <th>状态</th>
-                                    <th>创建者</th>
-                                    <th>域主</th>
-                                    <th>创建时间</th>
-                                    <th>热门</th>
-                                    <th>查看关联</th>
-                                    <th>操作</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {allNodes.map((node) => (
-                                    <tr key={node._id}>
-                                        <td className="id-cell">{node._id}</td>
-                                        <td>
-                                            {editingNode === node._id ? (
+
+                    <div className="admin-domain-list">
+                        {hierarchicalNodeList.map((node) => (
+                            <div key={node._id} className="admin-domain-card">
+                                <div className="admin-domain-title-row">
+                                    <div className="admin-domain-title-main">
+                                        {editingNode === node._id ? (
+                                            <>
                                                 <input
                                                     type="text"
                                                     value={editNodeForm.name}
@@ -2353,13 +2902,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                         name: e.target.value
                                                     })}
                                                     className="edit-input"
+                                                    placeholder="标题"
                                                 />
-                                            ) : (
-                                                <span className="node-name-cell">{node.name}</span>
-                                            )}
-                                        </td>
-                                        <td>
-                                            {editingNode === node._id ? (
                                                 <textarea
                                                     value={editNodeForm.description}
                                                     onChange={(e) => setEditNodeForm({
@@ -2368,151 +2912,161 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                     })}
                                                     className="edit-textarea"
                                                     rows="2"
+                                                    placeholder="概述"
                                                 />
-                                            ) : (
-                                                <span className="node-description-cell">{node.description}</span>
-                                            )}
-                                        </td>
-                                        <td>
-                                            {editingNode === node._id ? (
-                                                <input
-                                                    type="number"
-                                                    value={editNodeForm.prosperity}
-                                                    onChange={(e) => setEditNodeForm({
-                                                        ...editNodeForm,
-                                                        prosperity: parseInt(e.target.value)
-                                                    })}
-                                                    className="edit-input-small"
-                                                />
-                                            ) : (
-                                                Math.round(node.prosperity || 0)
-                                            )}
-                                        </td>
-                                        <td>
-                                            {editingNode === node._id ? (
-                                                <div className="resource-inputs">
+                                            </>
+                                        ) : (
+                                            <>
+                                                <h3 className="admin-domain-title">{node.name}</h3>
+                                                <p className="admin-domain-description">{node.description || '暂无概述'}</p>
+                                            </>
+                                        )}
+                                    </div>
+
+                                    <div className="admin-domain-title-meta">
+                                        <span className={`status-badge status-${node.status}`}>
+                                            {node.status === 'pending' ? '待审批' :
+                                                node.status === 'approved' ? '已通过' : '已拒绝'}
+                                        </span>
+                                        <span className="admin-domain-meta-item">创建者：{node.owner?.username || '系统'}</span>
+                                        <span className="admin-domain-meta-item">域主：{node.domainMaster?.username || '(未设置)'}</span>
+                                        <span className="admin-domain-meta-item">创建时间：{new Date(node.createdAt).toLocaleString('zh-CN')}</span>
+                                        <span className="admin-domain-meta-item">知识点：{(node.knowledgePoint?.value || 0).toFixed(2)}</span>
+                                        <span className="admin-domain-meta-item">释义数：{node.senses.length}</span>
+                                        {editingNode === node._id ? (
+                                            <>
+                                                <label className="admin-domain-meta-edit">
+                                                    繁荣度
                                                     <input
-                                                        type="text"
-                                                        value={(node.knowledgePoint?.value || 0).toFixed(2)}
-                                                        readOnly
-                                                        className="edit-input-tiny"
-                                                        placeholder="知识点"
+                                                        type="number"
+                                                        value={editNodeForm.prosperity}
+                                                        onChange={(e) => setEditNodeForm({
+                                                            ...editNodeForm,
+                                                            prosperity: parseInt(e.target.value, 10)
+                                                        })}
+                                                        className="edit-input-small"
                                                     />
-                                                </div>
-                                            ) : (
-                                                <div className="resource-display">
-                                                    <span>{(node.knowledgePoint?.value || 0).toFixed(2)}</span>
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td>
-                                            {editingNode === node._id ? (
-                                                <div className="production-inputs">
+                                                </label>
+                                                <label className="admin-domain-meta-edit">
+                                                    内容分数
                                                     <input
                                                         type="number"
                                                         value={editNodeForm.contentScore}
                                                         onChange={(e) => setEditNodeForm({
                                                             ...editNodeForm,
-                                                            contentScore: parseInt(e.target.value)
+                                                            contentScore: parseInt(e.target.value, 10)
                                                         })}
-                                                        className="edit-input-tiny"
-                                                        placeholder="内容分数"
+                                                        className="edit-input-small"
                                                     />
-                                                </div>
-                                            ) : (
-                                                <div className="production-display">
-                                                    <span>{node.contentScore || 1}</span>
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td>
-                                            <span className={`status-badge status-${node.status}`}>
-                                                {node.status === 'pending' ? '待审批' : 
-                                                 node.status === 'approved' ? '已通过' : '已拒绝'}
-                                            </span>
-                                        </td>
-                                        <td>{node.owner?.username || '系统'}</td>
-                                        <td>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                <span>{node.domainMaster?.username || '(未设置)'}</span>
-                                                <button
-                                                    onClick={() => openChangeMasterModal(node)}
-                                                    className="btn-action btn-primary-small"
-                                                    title="更换域主"
-                                                >
-                                                    更换
-                                                </button>
-                                            </div>
-                                        </td>
-                                        <td>{new Date(node.createdAt).toLocaleString('zh-CN')}</td>
-                                        <td>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                {node.isFeatured && (
-                                                    <span className="featured-badge-small">
-                                                        热门 (排序: {node.featuredOrder || 0})
+                                                </label>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <span className="admin-domain-meta-item">繁荣度：{Math.round(node.prosperity || 0)}</span>
+                                                <span className="admin-domain-meta-item">内容分数：{node.contentScore || 1}</span>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="admin-domain-title-actions">
+                                    <button
+                                        onClick={() => openChangeMasterModal(node)}
+                                        className="btn-action btn-primary-small"
+                                        title="更换域主"
+                                    >
+                                        更换域主
+                                    </button>
+                                    <button
+                                        onClick={() => toggleFeaturedNode(node._id, node.isFeatured)}
+                                        className={`btn-action ${node.isFeatured ? 'btn-featured-active' : 'btn-featured'}`}
+                                    >
+                                        {node.isFeatured ? '取消热门' : '设为热门'}
+                                    </button>
+                                    {node.isFeatured && (
+                                        <span className="featured-badge-small">热门排序：{node.featuredOrder || 0}</span>
+                                    )}
+                                    {editingNode === node._id ? (
+                                        <>
+                                            <button
+                                                onClick={() => saveNodeEdit(node._id)}
+                                                className="btn-action btn-save"
+                                            >
+                                                保存标题
+                                            </button>
+                                            <button
+                                                onClick={() => setEditingNode(null)}
+                                                className="btn-action btn-cancel"
+                                            >
+                                                取消
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button
+                                                onClick={() => startEditNode(node)}
+                                                className="btn-action btn-edit"
+                                            >
+                                                编辑标题
+                                            </button>
+                                            <button
+                                                onClick={() => openDeleteNodeConfirmModal(node)}
+                                                className="btn-action btn-delete"
+                                            >
+                                                删除标题
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+
+                                <div className="admin-domain-sense-list">
+                                    {node.senses.map((sense) => (
+                                        <div key={`${node._id}_${sense.senseId}`} className="admin-domain-sense-item">
+                                            <div className="admin-domain-sense-main">
+                                                <div className="admin-domain-sense-title-row">
+                                                    <h4 className="admin-domain-sense-title">{sense.title}</h4>
+                                                    <span className="admin-domain-sense-count">
+                                                        关联 {sense.associationSummary.all.length}
                                                     </span>
-                                                )}
-                                                <button
-                                                    onClick={() => toggleFeaturedNode(node._id, node.isFeatured)}
-                                                    className={`btn-action ${node.isFeatured ? 'btn-featured-active' : 'btn-featured'}`}
-                                                >
-                                                    {node.isFeatured ? '取消热门' : '设为热门'}
-                                                </button>
+                                                </div>
+                                                <p className="admin-domain-sense-content">{sense.content || '暂无释义内容'}</p>
+
+                                                <div className="admin-domain-sense-relations">
+                                                    {sense.associationSummary.all.length > 0 ? (
+                                                        sense.associationSummary.all.map((item) => (
+                                                            <span
+                                                                key={item.id}
+                                                                className={`admin-domain-relation-chip ${item.direction}`}
+                                                                title={item.displayText}
+                                                            >
+                                                                {item.displayText}
+                                                            </span>
+                                                        ))
+                                                    ) : (
+                                                        <span className="admin-domain-relation-empty">暂无关联</span>
+                                                    )}
+                                                </div>
                                             </div>
-                                        </td>
-                                        <td>
-                                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+
+                                            <div className="admin-domain-sense-actions">
                                                 <button
                                                     onClick={() => openAssociationModal(node)}
                                                     className="btn-action btn-view"
                                                 >
-                                                    查看
+                                                    查看关联
                                                 </button>
                                                 <button
                                                     onClick={() => openEditAssociationModal(node)}
                                                     className="btn-action btn-edit"
                                                 >
-                                                    编辑
+                                                    编辑关联
                                                 </button>
                                             </div>
-                                        </td>
-                                        <td className="action-cell">
-                                            {editingNode === node._id ? (
-                                                <>
-                                                    <button
-                                                        onClick={() => saveNodeEdit(node._id)}
-                                                        className="btn-action btn-save"
-                                                    >
-                                                        保存
-                                                    </button>
-                                                    <button
-                                                        onClick={() => setEditingNode(null)}
-                                                        className="btn-action btn-cancel"
-                                                    >
-                                                        取消
-                                                    </button>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <button
-                                                        onClick={() => startEditNode(node)}
-                                                        className="btn-action btn-edit"
-                                                    >
-                                                        编辑
-                                                    </button>
-                                                    <button
-                                                        onClick={() => deleteNode(node._id, node.name)}
-                                                        className="btn-action btn-delete"
-                                                    >
-                                                        删除
-                                                    </button>
-                                                </>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 </div>
             )}
@@ -2646,6 +3200,130 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                 <p>暂无熵盟</p>
                             </div>
                         )}
+                    </div>
+                </div>
+            )}
+
+            {showDeleteNodeConfirmModal && deletingNodeTarget && (
+                <div className="modal-backdrop" onClick={closeDeleteNodeConfirmModal}>
+                    <div className="modal-content admin-delete-domain-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>删除标题确认：{deletingNodeTarget.name}</h3>
+                            <button className="btn-close" onClick={closeDeleteNodeConfirmModal}>
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <p className="admin-delete-domain-hint">
+                                删除标题会同时删除该标题下全部释义，并清理它们的关联关系。下面是删除前/删除后关联预览。
+                            </p>
+
+                            <div className="admin-delete-domain-total-preview">
+                                <span>删除前关联总数：{deletePreviewSummary ? deleteBeforeRelations.length : deletingNodePreview.totalBeforeCount}</span>
+                                <span>删除后关联总数：{deletePreviewSummary ? deleteAfterRelations.length : deletingNodePreview.totalAfterCount}</span>
+                            </div>
+
+                            {deletePreviewLoading && (
+                                <div className="admin-delete-domain-loading">正在计算删除前后关联预览...</div>
+                            )}
+
+                            <div className="admin-delete-domain-before-after-grid global">
+                                <div className="admin-delete-domain-before-after-block before">
+                                    <h6>删除前</h6>
+                                    <div className="admin-delete-domain-assoc-list">
+                                        {(deletePreviewSummary ? deleteBeforeRelations : []).length > 0 ? (
+                                            (deletePreviewSummary ? deleteBeforeRelations : []).map((line, index) => (
+                                                <span key={`del_before_${index}`} className="admin-delete-domain-assoc-chip outgoing">
+                                                    {`${line.source?.displayName || '未知释义'} ${formatRelationArrowText(line.relationType)} ${line.target?.displayName || '未知释义'}`}
+                                                </span>
+                                            ))
+                                        ) : (
+                                            <span className="admin-delete-domain-assoc-empty">删除前无关联</span>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="admin-delete-domain-before-after-block after">
+                                    <h6>删除后</h6>
+                                    <div className="admin-delete-domain-assoc-list">
+                                        {(deletePreviewSummary ? deleteAfterRelations : []).length > 0 ? (
+                                            (deletePreviewSummary ? deleteAfterRelations : []).map((line, index) => (
+                                                <span key={`del_after_${index}`} className="admin-delete-domain-assoc-chip incoming">
+                                                    {`${line.source?.displayName || '未知释义'} ${formatRelationArrowText(line.relationType)} ${line.target?.displayName || '未知释义'}`}
+                                                </span>
+                                            ))
+                                        ) : (
+                                            <span className="admin-delete-domain-assoc-empty">删除后该标题释义已移除，未保留关联</span>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {deleteBridgeDecisionItems.length > 0 && (
+                                <div className="admin-delete-bridge-decision-section">
+                                    <h6>承接关系逐条确认</h6>
+                                    <p className="admin-assoc-step-description" style={{ marginBottom: '0.45rem' }}>
+                                        对每组“上级-将删除释义-下级”选择删除后是保留承接还是断开独立。
+                                    </p>
+                                    {(deletePreviewData?.unresolvedBridgeDecisionCount || 0) > 0 && (
+                                        <p className="admin-assoc-step-description" style={{ marginBottom: '0.45rem', color: '#fca5a5' }}>
+                                            尚有 {deletePreviewData.unresolvedBridgeDecisionCount} 组未确认，不能删除。
+                                        </p>
+                                    )}
+                                    <div className="admin-bridge-decision-list">
+                                        {(deletePreviewSummary?.lostBridgePairs || []).map((pair, index) => {
+                                            const pairKey = pair.pairKey;
+                                            const selectedAction = deleteBridgeDecisions[pairKey] || '';
+                                            return (
+                                                <div key={pairKey || `del_bridge_${index}`} className="admin-bridge-decision-item">
+                                                    <div className="admin-bridge-decision-line">
+                                                        <span>{pair.upper?.displayName || '未知上级释义'}</span>
+                                                        <span className="arrow">⇢ {getSenseTitleById(deletingNodeTarget, pair.sourceSenseId) || '当前释义'} ⇢</span>
+                                                        <span>{pair.lower?.displayName || '未知下级释义'}</span>
+                                                    </div>
+                                                    <div className="admin-bridge-decision-actions">
+                                                        <button
+                                                            className={`admin-bridge-decision-btn ${selectedAction === 'reconnect' ? 'active reconnect' : ''}`}
+                                                            onClick={() => {
+                                                                const next = { ...deleteBridgeDecisions, [pairKey]: 'reconnect' };
+                                                                setDeleteBridgeDecisions(next);
+                                                                fetchDeleteNodePreview(deletingNodeTarget, next);
+                                                            }}
+                                                            disabled={deletePreviewLoading || isDeletingNode}
+                                                        >
+                                                            保留承接
+                                                        </button>
+                                                        <button
+                                                            className={`admin-bridge-decision-btn ${selectedAction === 'disconnect' ? 'active disconnect' : ''}`}
+                                                            onClick={() => {
+                                                                const next = { ...deleteBridgeDecisions, [pairKey]: 'disconnect' };
+                                                                setDeleteBridgeDecisions(next);
+                                                                fetchDeleteNodePreview(deletingNodeTarget, next);
+                                                            }}
+                                                            disabled={deletePreviewLoading || isDeletingNode}
+                                                        >
+                                                            断开独立
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn btn-secondary" onClick={closeDeleteNodeConfirmModal} disabled={isDeletingNode}>
+                                取消
+                            </button>
+                            <button
+                                className="btn btn-danger"
+                                onClick={deleteNode}
+                                disabled={isDeletingNode || deletePreviewLoading || (deletePreviewData?.unresolvedBridgeDecisionCount || 0) > 0}
+                            >
+                                {isDeletingNode ? '删除中...' : '确认删除标题'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -2838,10 +3516,64 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                     </button>
                                 )}
                             </div>
+
+                            <div className="admin-assoc-strategy-panel">
+                                <div className="admin-assoc-strategy-header">
+                                    <h4>删除关联处理策略</h4>
+                                    <span className="admin-assoc-strategy-tip">先预览再确认保存</span>
+                                </div>
+                                <div className="admin-assoc-strategy-options">
+                                    <button
+                                        className={`admin-assoc-strategy-option ${assocRemovalStrategy === 'disconnect' ? 'active' : ''}`}
+                                        onClick={() => {
+                                            setAssocRemovalStrategy('disconnect');
+                                            setAssocMutationPreview(null);
+                                            setAssocBridgeDecisions({});
+                                        }}
+                                        disabled={assocPreviewLoading || assocApplyLoading}
+                                    >
+                                        直接断开
+                                        <small>删除后不自动连接受影响的上级/下级</small>
+                                    </button>
+                                    <button
+                                        className={`admin-assoc-strategy-option ${assocRemovalStrategy === 'reconnect' ? 'active' : ''}`}
+                                        onClick={() => {
+                                            setAssocRemovalStrategy('reconnect');
+                                            setAssocMutationPreview(null);
+                                            setAssocBridgeDecisions({});
+                                        }}
+                                        disabled={assocPreviewLoading || assocApplyLoading}
+                                    >
+                                        自动重连
+                                        <small>删除后将受影响的上级/下级直接重新连接</small>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {renderAssocMutationPreview()}
                         </div>
                         <div className="modal-footer">
                             <button className="btn btn-secondary" onClick={closeEditAssociationModal}>取消</button>
-                            <button className="btn btn-primary" onClick={saveAssociationEdit}>保存更改</button>
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => previewAssociationEdit()}
+                                disabled={assocCurrentStep !== null || assocPreviewLoading || assocApplyLoading}
+                            >
+                                {assocPreviewLoading ? '预览中...' : '预览变更'}
+                            </button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={saveAssociationEdit}
+                                disabled={
+                                    !assocMutationPreview
+                                    || (assocMutationPreview?.unresolvedBridgeDecisionCount || 0) > 0
+                                    || assocCurrentStep !== null
+                                    || assocPreviewLoading
+                                    || assocApplyLoading
+                                }
+                            >
+                                {assocApplyLoading ? '保存中...' : '确认保存'}
+                            </button>
                         </div>
                     </div>
                 </div>

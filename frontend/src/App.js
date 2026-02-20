@@ -14,7 +14,6 @@ import SceneManager from './SceneManager';
 import LocationSelectionModal from './LocationSelectionModal';
 import AssociationModal from './components/modals/AssociationModal';
 import NodeInfoModal from './components/modals/NodeInfoModal';
-import NavigationTreeModal from './components/modals/NavigationTreeModal';
 import CreateNodeModal from './components/modals/CreateNodeModal';
 
 // 导入头像
@@ -57,6 +56,67 @@ const normalizeObjectId = (value) => {
     if (typeof value === 'object' && value._id) return normalizeObjectId(value._id);
     if (typeof value.toString === 'function') return value.toString();
     return '';
+};
+const createHomeNavigationPath = () => ([
+    { type: 'home', label: '首页' }
+]);
+const normalizeNavigationRelation = (relation) => (
+    relation === 'parent' || relation === 'child' ? relation : 'jump'
+);
+const buildNavigationTrailItem = (node, relation = 'jump') => {
+    const nodeId = normalizeObjectId(node?._id);
+    if (!nodeId) return null;
+    const nodeTitle = typeof node?.name === 'string' ? node.name.trim() : '';
+    const senseTitle = typeof node?.activeSenseTitle === 'string' ? node.activeSenseTitle.trim() : '';
+    const displayLabel = senseTitle ? `${nodeTitle}-${senseTitle}` : nodeTitle;
+    return {
+        type: 'node',
+        label: displayLabel || '未命名知识域',
+        nodeId,
+        senseId: typeof node?.activeSenseId === 'string' ? node.activeSenseId : '',
+        relation: normalizeNavigationRelation(relation)
+    };
+};
+const getNavigationRelationFromSceneNode = (sceneNode) => {
+    if (sceneNode?.type === 'parent') return 'parent';
+    if (sceneNode?.type === 'child') return 'child';
+    return 'jump';
+};
+const getNodePrimarySense = (node) => {
+    const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+    if (typeof node?.activeSenseId === 'string' && node.activeSenseId.trim()) {
+        const matched = senses.find((item) => item?.senseId === node.activeSenseId.trim());
+        if (matched) return matched;
+    }
+    return senses[0] || null;
+};
+const getNodeDisplayName = (node) => {
+    if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
+    const name = typeof node?.name === 'string' ? node.name.trim() : '';
+    const senseTitle = typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()
+        ? node.activeSenseTitle.trim()
+        : (typeof getNodePrimarySense(node)?.title === 'string' ? getNodePrimarySense(node).title.trim() : '');
+    return senseTitle ? `${name}-${senseTitle}` : (name || '未命名知识域');
+};
+const getNodeSenseTitle = (node) => {
+    if (typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()) return node.activeSenseTitle.trim();
+    const sense = getNodePrimarySense(node);
+    return typeof sense?.title === 'string' ? sense.title.trim() : '';
+};
+const getNodeSenseContent = (node) => {
+    if (typeof node?.activeSenseContent === 'string' && node.activeSenseContent.trim()) return node.activeSenseContent.trim();
+    const sense = getNodePrimarySense(node);
+    if (typeof sense?.content === 'string' && sense.content.trim()) return sense.content.trim();
+    if (typeof node?.knowledge === 'string' && node.knowledge.trim()) return node.knowledge.trim();
+    return '';
+};
+const hexToRgba = (hex, alpha = 1) => {
+    const safeHex = typeof hex === 'string' ? hex.trim() : '';
+    if (!/^#[0-9a-fA-F]{6}$/.test(safeHex)) return `rgba(30, 41, 59, ${alpha})`;
+    const r = Number.parseInt(safeHex.slice(1, 3), 16);
+    const g = Number.parseInt(safeHex.slice(3, 5), 16);
+    const b = Number.parseInt(safeHex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
 const ANNOUNCEMENT_NOTIFICATION_TYPES = ['domain_distribution_announcement', 'alliance_announcement'];
@@ -428,6 +488,8 @@ const App = () => {
 
     // 节点详情页面相关状态
     const [currentNodeDetail, setCurrentNodeDetail] = useState(null);
+    const [senseSelectorAnchor, setSenseSelectorAnchor] = useState({ x: 0, y: 0, visible: false });
+    const [isSenseSelectorVisible, setIsSenseSelectorVisible] = useState(false);
     const [showNodeInfoModal, setShowNodeInfoModal] = useState(false);
     const [isApplyingDomainMaster, setIsApplyingDomainMaster] = useState(false);
     const [intelHeistStatus, setIntelHeistStatus] = useState(createEmptyIntelHeistStatus);
@@ -457,9 +519,7 @@ const App = () => {
 
 
     // 导航路径相关状态
-    const [navigationPath, setNavigationPath] = useState([{ type: 'home', label: '首页' }]);
-    const [showNavigationTree, setShowNavigationTree] = useState(false);
-    const [fullNavigationPaths, setFullNavigationPaths] = useState([]);
+    const [navigationPath, setNavigationPath] = useState(() => createHomeNavigationPath());
 
     // 知识域场景相关状态
     const [showKnowledgeDomain, setShowKnowledgeDomain] = useState(false);
@@ -479,6 +539,7 @@ const App = () => {
     const searchBarRef = useRef(null);
     const notificationsWrapperRef = useRef(null);
     const relatedDomainsWrapperRef = useRef(null);
+    const senseSelectorAnchorRef = useRef({ x: 0, y: 0, visible: false });
 
     // 初始化WebGL场景
     useEffect(() => {
@@ -515,12 +576,15 @@ const App = () => {
             sceneManager.onNodeClick = (node) => {
                 if (!node.data || !node.data._id) return;
 
-                // 如果在节点详情页，且点击的是中央节点，显示详情弹窗
+                // 节点详情页再次点击中心节点：切换释义浮层
                 if (view === 'nodeDetail' && node.type === 'center') {
-                    setShowNodeInfoModal(true);
+                    setIsSenseSelectorVisible((prev) => !prev);
                 } else {
                     // 其他情况：导航到节点详情页
-                    fetchNodeDetail(node.data._id, node);
+                    fetchNodeDetail(node.data._id, node, {
+                        relationHint: getNavigationRelationFromSceneNode(node),
+                        activeSenseId: typeof node?.data?.activeSenseId === 'string' ? node.data.activeSenseId : ''
+                    });
                 }
             };
 
@@ -754,10 +818,14 @@ const App = () => {
       if (response.ok) {
         const data = await response.json();
         // 精确匹配节点名称
-        const exactMatch = data.results.find(node => node.name === locationName);
+        const exactMatch = (Array.isArray(data?.results) ? data.results : []).find((item) => (
+            (typeof item?.domainName === 'string' && item.domainName === locationName)
+            || (typeof item?.name === 'string' && item.name === locationName)
+        ));
         if (exactMatch) {
           // 获取完整的节点详情
-          const detailResponse = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${exactMatch._id}`);
+          const detailNodeId = normalizeObjectId(exactMatch.nodeId || exactMatch._id);
+          const detailResponse = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${detailNodeId}`);
           if (detailResponse.ok) {
             const detailData = await detailResponse.json();
             setCurrentLocationNodeDetail(detailData.node);
@@ -2026,184 +2094,22 @@ const App = () => {
         }
     };
 
-    // 构建从当前节点到根节点的所有路径
-    const buildPathsToRoot = async (nodeId) => {
-        try {
-            // 使用公开API端点，所有用户都可以访问
-            const response = await fetch('http://localhost:5000/api/nodes/public/all-nodes');
+    const resolveNavigationRelationAgainstCurrent = (targetNodeId, currentNode, relationHint) => {
+        const normalizedHint = normalizeNavigationRelation(relationHint);
+        if (normalizedHint !== 'jump') return normalizedHint;
 
-            if (!response.ok) return [];
+        const normalizedTargetId = normalizeObjectId(targetNodeId);
+        if (!normalizedTargetId || !currentNode) return 'jump';
 
-            const data = await response.json();
-            const allNodes = data.nodes || [];
+        const isParentNode = Array.isArray(currentNode?.parentNodesInfo)
+            && currentNode.parentNodesInfo.some((item) => normalizeObjectId(item?._id) === normalizedTargetId);
+        if (isParentNode) return 'parent';
 
-            // 创建节点映射
-            const nodeMap = new Map();
-            allNodes.forEach(node => {
-                nodeMap.set(node._id, node);
-            });
+        const isChildNode = Array.isArray(currentNode?.childNodesInfo)
+            && currentNode.childNodesInfo.some((item) => normalizeObjectId(item?._id) === normalizedTargetId);
+        if (isChildNode) return 'child';
 
-            // 递归查找所有到根节点的路径
-            const findPaths = (currentNodeId, visited = new Set()) => {
-                if (visited.has(currentNodeId)) return []; // 避免循环
-
-                const currentNode = nodeMap.get(currentNodeId);
-                if (!currentNode) return [];
-
-                visited.add(currentNodeId);
-
-                // 获取关联母域（被谁包含）
-                const parentDomains = currentNode.relatedParentDomains || [];
-
-                // 如果没有关联母域，说明是根节点
-                if (parentDomains.length === 0) {
-                    return [[currentNode]];
-                }
-
-                // 查找所有父节点的路径
-                const allPaths = [];
-                for (const parentName of parentDomains) {
-                    const parentNode = Array.from(nodeMap.values()).find(n => n.name === parentName);
-                    if (parentNode) {
-                        const parentPaths = findPaths(parentNode._id, new Set(visited));
-                        parentPaths.forEach(path => {
-                            allPaths.push([...path, currentNode]);
-                        });
-                    }
-                }
-
-                return allPaths;
-            };
-
-            return findPaths(nodeId);
-        } catch (error) {
-            console.error('构建路径失败:', error);
-            return [];
-        }
-    };
-
-    // 应用省略规则并生成导航路径
-    const generateNavigationPath = (paths) => {
-        if (paths.length === 0) return [{ type: 'home', label: '首页' }];
-
-        const nav = [{ type: 'home', label: '首页' }];
-
-        // 如果只有一条路径，直接显示
-        if (paths.length === 1) {
-            paths[0].forEach(node => {
-                nav.push({
-                    type: 'node',
-                    label: node.name,
-                    nodeId: node._id,
-                    node: node
-                });
-            });
-            return nav;
-        }
-
-        // 两条路径：按二叉树结构显示
-        if (paths.length === 2) {
-            const maxDepth = Math.max(...paths.map(p => p.length));
-
-            for (let depth = 0; depth < maxDepth; depth++) {
-                const nodesAtDepth = paths
-                    .filter(p => p.length > depth)
-                    .map(p => p[depth]);
-
-                const uniqueNodes = Array.from(new Map(nodesAtDepth.map(n => [n._id, n])).values());
-
-                if (uniqueNodes.length === 1) {
-                    // 只有一个节点，正常显示
-                    nav.push({
-                        type: 'node',
-                        label: uniqueNodes[0].name,
-                        nodeId: uniqueNodes[0]._id,
-                        node: uniqueNodes[0]
-                    });
-                } else if (uniqueNodes.length === 2) {
-                    // 两个节点，并列显示（二叉树分叉）
-                    nav.push({
-                        type: 'branch',
-                        nodes: uniqueNodes.map(node => ({
-                            label: node.name,
-                            nodeId: node._id,
-                            node: node
-                        }))
-                    });
-                }
-            }
-
-            return nav;
-        }
-
-        // 三条及以上路径：从根节点层开始检查，找到第一个有>=3个节点的层就省略
-        const maxDepth = Math.max(...paths.map(p => p.length));
-        let omitStartDepth = -1;
-
-        // 从第0层开始检查
-        for (let depth = 0; depth < maxDepth; depth++) {
-            const nodesAtDepth = paths
-                .filter(p => p.length > depth)
-                .map(p => p[depth]);
-
-            const uniqueNodes = Array.from(new Map(nodesAtDepth.map(n => [n._id, n])).values());
-
-            if (uniqueNodes.length >= 3) {
-                omitStartDepth = depth;
-                break;
-            }
-        }
-
-        if (omitStartDepth === -1) {
-            // 没有找到需要省略的层，全部显示（理论上不会到这里，因为>=3条路径）
-            omitStartDepth = maxDepth - 1;
-        }
-
-        // 显示省略之前的层
-        for (let depth = 0; depth < omitStartDepth; depth++) {
-            const nodesAtDepth = paths
-                .filter(p => p.length > depth)
-                .map(p => p[depth]);
-
-            const uniqueNodes = Array.from(new Map(nodesAtDepth.map(n => [n._id, n])).values());
-
-            if (uniqueNodes.length === 1) {
-                nav.push({
-                    type: 'node',
-                    label: uniqueNodes[0].name,
-                    nodeId: uniqueNodes[0]._id,
-                    node: uniqueNodes[0]
-                });
-            } else if (uniqueNodes.length === 2) {
-                nav.push({
-                    type: 'branch',
-                    nodes: uniqueNodes.map(node => ({
-                        label: node.name,
-                        nodeId: node._id,
-                        node: node
-                    }))
-                });
-            }
-        }
-
-        // 添加省略项
-        nav.push({
-            type: 'omit-paths',
-            label: `省略路径:${paths.length}`,
-            count: paths.length,
-            paths: paths
-        });
-
-        // 添加目标节点
-        const targetNode = paths[0][paths[0].length - 1];
-        nav.push({
-            type: 'node',
-            label: targetNode.name,
-            nodeId: targetNode._id,
-            node: targetNode
-        });
-
-        return nav;
+        return 'jump';
     };
 
     const formatTravelSeconds = (seconds) => {
@@ -2252,7 +2158,7 @@ const App = () => {
     const navigateToHomeWithDockCollapse = async () => {
         await prepareForPrimaryNavigation();
         setView('home');
-        setNavigationPath([{ type: 'home', label: '首页' }]);
+        setNavigationPath(createHomeNavigationPath());
     };
 
     const resetSiegeDialog = () => {
@@ -2709,12 +2615,29 @@ const App = () => {
     };
 
     // 获取节点详情
-    const fetchNodeDetail = async (nodeId, clickedNode = null) => {
+    const fetchNodeDetail = async (nodeId, clickedNode = null, navOptions = {}) => {
         try {
             await prepareForPrimaryNavigation();
-            const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}`);
+            const requestedSenseId = typeof navOptions?.activeSenseId === 'string' ? navOptions.activeSenseId.trim() : '';
+            const detailUrl = requestedSenseId
+                ? `http://localhost:5000/api/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
+                : `http://localhost:5000/api/nodes/public/node-detail/${nodeId}`;
+            const response = await fetch(detailUrl);
             if (response.ok) {
                 const data = await response.json();
+                const targetNodeId = normalizeObjectId(data?.node?._id);
+                const currentNodeBeforeNavigate = currentNodeDetail;
+                const shouldResetTrail = navOptions?.resetTrail === true || view !== 'nodeDetail';
+                const relation = resolveNavigationRelationAgainstCurrent(
+                    targetNodeId,
+                    currentNodeBeforeNavigate,
+                    navOptions?.relationHint
+                );
+                const previousNodeId = normalizeObjectId(currentNodeBeforeNavigate?._id);
+                const isSenseOnlySwitch = !!requestedSenseId && !!targetNodeId && targetNodeId === previousNodeId;
+                if (!isSenseOnlySwitch) {
+                    setIsSenseSelectorVisible(false);
+                }
                 trackRecentDomain(data.node);
                 setCurrentNodeDetail(data.node);
                 setView('nodeDetail');
@@ -2730,11 +2653,50 @@ const App = () => {
                     setClickedNodeForTransition(null);
                 }
 
-                // 构建导航路径
-                const paths = await buildPathsToRoot(nodeId);
-                setFullNavigationPaths(paths); // 保存完整路径用于浮窗显示
-                const navPath = generateNavigationPath(paths);
-                setNavigationPath(navPath);
+                setNavigationPath((prevPath) => {
+                    const safePath = Array.isArray(prevPath) && prevPath.length > 0
+                        ? prevPath
+                        : createHomeNavigationPath();
+                    const historyIndex = Number.isInteger(navOptions?.historyIndex)
+                        ? Math.max(0, Math.min(navOptions.historyIndex, safePath.length - 1))
+                        : -1;
+                    if (historyIndex >= 0) {
+                        const nextPath = safePath.slice(0, historyIndex + 1);
+                        const lastHistory = nextPath[nextPath.length - 1];
+                        if (lastHistory?.type === 'node') {
+                            return [
+                                ...nextPath.slice(0, -1),
+                                {
+                                    ...lastHistory,
+                                    senseId: typeof data?.node?.activeSenseId === 'string' ? data.node.activeSenseId : (lastHistory.senseId || ''),
+                                    label: buildNavigationTrailItem(data?.node || {}, lastHistory.relation)?.label || lastHistory.label
+                                }
+                            ];
+                        }
+                        return nextPath;
+                    }
+
+                    const targetNavItem = buildNavigationTrailItem(data.node, relation);
+                    if (!targetNavItem) return safePath;
+
+                    if (shouldResetTrail) {
+                        return [...createHomeNavigationPath(), targetNavItem];
+                    }
+
+                    const duplicateIndex = safePath.findIndex((item, index) => (
+                        index > 0
+                        && item?.type === 'node'
+                        && normalizeObjectId(item?.nodeId) === targetNavItem.nodeId
+                    ));
+                    if (duplicateIndex >= 0) {
+                        return [
+                            ...safePath.slice(0, duplicateIndex),
+                            targetNavItem
+                        ];
+                    }
+
+                    return [...safePath, targetNavItem];
+                });
                 // WebGL场景更新由useEffect自动处理
                 return data.node;
             } else {
@@ -2818,9 +2780,12 @@ const App = () => {
                 if (response.ok) {
                     const data = await response.json();
                     const exactMatch = Array.isArray(data?.results)
-                        ? data.results.find((node) => node?.name === notification.nodeName.trim())
+                        ? data.results.find((item) => (
+                            item?.domainName === notification.nodeName.trim()
+                            || item?.name === notification.nodeName.trim()
+                        ))
                         : null;
-                    targetNodeId = normalizeObjectId(exactMatch?._id);
+                    targetNodeId = normalizeObjectId(exactMatch?.nodeId || exactMatch?._id);
                 }
             } catch (error) {
                 targetNodeId = '';
@@ -3085,7 +3050,7 @@ const App = () => {
                                     className="related-domain-link"
                                     onClick={() => handleOpenRelatedDomain(domain)}
                                 >
-                                    <span className="related-domain-name">{domain.name}</span>
+                                    <span className="related-domain-name">{getNodeDisplayName(domain)}</span>
                                     <span className="related-domain-meta">{formatDomainKnowledgePoint(domain)}</span>
                                 </button>
                                 <button
@@ -3218,11 +3183,14 @@ const App = () => {
             if (!node?.data?._id) return;
 
             if (view === 'nodeDetail' && node.type === 'center') {
-                setShowNodeInfoModal(true);
+                setIsSenseSelectorVisible((prev) => !prev);
                 return;
             }
 
-            fetchNodeDetail(node.data._id, node);
+            fetchNodeDetail(node.data._id, node, {
+                relationHint: getNavigationRelationFromSceneNode(node),
+                activeSenseId: typeof node?.data?.activeSenseId === 'string' ? node.data.activeSenseId : ''
+            });
         };
     }, [view]);
 
@@ -3290,7 +3258,7 @@ const App = () => {
         if (authenticated && view === 'home') {
             fetchRootNodes();
             fetchFeaturedNodes();
-            setNavigationPath([{ type: 'home', label: '首页' }]);
+            setNavigationPath(createHomeNavigationPath());
         }
     }, [authenticated, view]);
 
@@ -3335,6 +3303,65 @@ const App = () => {
             getNodeDetailButtonContext(currentNodeDetail)
         );
     }, [view, currentNodeDetail, isAdmin, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
+
+    useEffect(() => {
+        if (view !== 'nodeDetail' || !currentNodeDetail || !isWebGLReady) {
+            setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
+            senseSelectorAnchorRef.current = { x: 0, y: 0, visible: false };
+            setIsSenseSelectorVisible(false);
+            return undefined;
+        }
+
+        let rafId = 0;
+        const updateAnchor = () => {
+            const sceneManager = sceneManagerRef.current;
+            const renderer = sceneManager?.renderer;
+            const centerNode = sceneManager?.currentLayout?.nodes?.find((item) => item?.type === 'center');
+            const canvas = webglCanvasRef.current;
+            if (renderer && centerNode && canvas) {
+                const screenPos = renderer.worldToScreen(centerNode.x, centerNode.y);
+                const rect = canvas.getBoundingClientRect();
+                const next = {
+                    x: rect.left + screenPos.x,
+                    y: rect.top + screenPos.y,
+                    visible: true
+                };
+                const prev = senseSelectorAnchorRef.current || { x: 0, y: 0, visible: false };
+                const moved = Math.abs(prev.x - next.x) > 0.5 || Math.abs(prev.y - next.y) > 0.5 || prev.visible !== next.visible;
+                if (moved) {
+                    senseSelectorAnchorRef.current = next;
+                    setSenseSelectorAnchor(next);
+                }
+            }
+            rafId = window.requestAnimationFrame(updateAnchor);
+        };
+
+        rafId = window.requestAnimationFrame(updateAnchor);
+        return () => {
+            window.cancelAnimationFrame(rafId);
+        };
+    }, [view, currentNodeDetail?._id, currentNodeDetail?.activeSenseId, isWebGLReady]);
+
+    useEffect(() => {
+        if (!isSenseSelectorVisible) return undefined;
+        if (view !== 'nodeDetail') return undefined;
+        const canvas = webglCanvasRef.current;
+        const renderer = sceneManagerRef.current?.renderer;
+        if (!canvas || !renderer) return undefined;
+
+        const handleMapClick = (event) => {
+            const pos = renderer.getCanvasPositionFromEvent(event);
+            const clickedNode = renderer.hitTest(pos.x, pos.y);
+            if (!clickedNode || clickedNode.type !== 'center') {
+                setIsSenseSelectorVisible(false);
+            }
+        };
+
+        canvas.addEventListener('click', handleMapClick);
+        return () => {
+            canvas.removeEventListener('click', handleMapClick);
+        };
+    }, [isSenseSelectorVisible, view, currentNodeDetail?._id]);
 
 
     // 新节点创建相关函数
@@ -3426,6 +3453,36 @@ const App = () => {
         const activeAnnouncements = announcementDockTab === 'alliance'
             ? allianceAnnouncements
             : systemAnnouncements;
+        const locationParentLabels = (() => {
+            const parentNodes = Array.isArray(currentLocationNodeDetail?.parentNodesInfo)
+                ? currentLocationNodeDetail.parentNodesInfo
+                : [];
+            const labelsFromNodes = parentNodes
+                .map((item) => getNodeDisplayName(item))
+                .filter(Boolean);
+            if (labelsFromNodes.length > 0) return labelsFromNodes;
+            return (Array.isArray(currentLocationNodeDetail?.relatedParentDomains)
+                ? currentLocationNodeDetail.relatedParentDomains
+                : [])
+                .map((name) => (typeof name === 'string' ? name.trim() : ''))
+                .filter(Boolean);
+        })();
+        const locationChildLabels = (() => {
+            const childNodes = Array.isArray(currentLocationNodeDetail?.childNodesInfo)
+                ? currentLocationNodeDetail.childNodesInfo
+                : [];
+            const labelsFromNodes = childNodes
+                .map((item) => getNodeDisplayName(item))
+                .filter(Boolean);
+            if (labelsFromNodes.length > 0) return labelsFromNodes;
+            return (Array.isArray(currentLocationNodeDetail?.relatedChildDomains)
+                ? currentLocationNodeDetail.relatedChildDomains
+                : [])
+                .map((name) => (typeof name === 'string' ? name.trim() : ''))
+                .filter(Boolean);
+        })();
+        const locationSenseTitle = getNodeSenseTitle(currentLocationNodeDetail);
+        const locationSenseContent = getNodeSenseContent(currentLocationNodeDetail);
 
         return (
             <>
@@ -3612,42 +3669,49 @@ const App = () => {
                                         }
                                     }}
                                 >
-                                    <div className="location-node-title">{currentLocationNodeDetail.name}</div>
+                                    <div className="location-node-title">{getNodeDisplayName(currentLocationNodeDetail)}</div>
 
                                     {currentLocationNodeDetail.description && (
                                         <div className="location-node-section">
-                                            <div className="section-label">描述</div>
+                                            <div className="section-label">概述</div>
                                             <div className="section-content">{currentLocationNodeDetail.description}</div>
                                         </div>
                                     )}
 
-                                    {currentLocationNodeDetail.relatedParentDomains && currentLocationNodeDetail.relatedParentDomains.length > 0 && (
+                                    {locationSenseTitle && (
+                                        <div className="location-node-section">
+                                            <div className="section-label">当前释义</div>
+                                            <div className="section-content">{locationSenseTitle}</div>
+                                        </div>
+                                    )}
+
+                                    {locationParentLabels.length > 0 && (
                                         <div className="location-node-section">
                                             <div className="section-label">父域</div>
                                             <div className="section-tags">
-                                                {currentLocationNodeDetail.relatedParentDomains.map((parent, idx) => (
+                                                {locationParentLabels.map((parent, idx) => (
                                                     <span key={idx} className="node-tag parent-tag">{parent}</span>
                                                 ))}
                                             </div>
                                         </div>
                                     )}
 
-                                    {currentLocationNodeDetail.relatedChildDomains && currentLocationNodeDetail.relatedChildDomains.length > 0 && (
+                                    {locationChildLabels.length > 0 && (
                                         <div className="location-node-section">
                                             <div className="section-label">子域</div>
                                             <div className="section-tags">
-                                                {currentLocationNodeDetail.relatedChildDomains.map((child, idx) => (
+                                                {locationChildLabels.map((child, idx) => (
                                                     <span key={idx} className="node-tag child-tag">{child}</span>
                                                 ))}
                                             </div>
                                         </div>
                                     )}
 
-                                    {currentLocationNodeDetail.knowledge && (
+                                    {locationSenseContent && (
                                         <div className="location-node-section">
-                                            <div className="section-label">知识内容</div>
+                                            <div className="section-label">释义内容</div>
                                             <div className="section-content knowledge-content">
-                                                {currentLocationNodeDetail.knowledge}
+                                                {locationSenseContent}
                                             </div>
                                         </div>
                                     )}
@@ -3741,7 +3805,7 @@ const App = () => {
                 <div className="distribution-panel-modal">
                     <button type="button" className="distribution-panel-close" onClick={closeDistributionPanel}>×</button>
                     <div className="distribution-panel-title-row">
-                        <h3>{`分发活动：${currentNodeDetail.name}`}</h3>
+                        <h3>{`分发活动：${getNodeDisplayName(currentNodeDetail)}`}</h3>
                         <div className="distribution-panel-title-tags">
                             <span className={`distribution-panel-phase phase-${data.phase}`}>{phaseLabel}</span>
                             <span className={`distribution-panel-participation-status ${participationStatusClass}`}>{participationStatusText}</span>
@@ -4121,6 +4185,60 @@ const App = () => {
         );
     };
 
+    const handleSwitchSenseView = async (senseId) => {
+        const nodeId = normalizeObjectId(currentNodeDetail?._id);
+        const nextSenseId = typeof senseId === 'string' ? senseId.trim() : '';
+        if (!nodeId || !nextSenseId) return;
+        if (currentNodeDetail?.activeSenseId === nextSenseId) return;
+        const clickedNode = buildClickedNodeFromScene(nodeId);
+        await fetchNodeDetail(nodeId, clickedNode, {
+            relationHint: 'jump',
+            activeSenseId: nextSenseId
+        });
+    };
+
+    const renderSenseSelectorPanel = () => {
+        if (view !== 'nodeDetail' || !currentNodeDetail) return null;
+        if (!isSenseSelectorVisible || !senseSelectorAnchor.visible) return null;
+        const senses = Array.isArray(currentNodeDetail?.synonymSenses) && currentNodeDetail.synonymSenses.length > 0
+            ? currentNodeDetail.synonymSenses
+            : [{
+                senseId: currentNodeDetail?.activeSenseId || 'sense_1',
+                title: currentNodeDetail?.activeSenseTitle || '基础释义',
+                content: currentNodeDetail?.activeSenseContent || currentNodeDetail?.description || ''
+            }];
+        const style = currentNodeDetail?.visualStyle || {};
+        const panelStyle = {
+            left: `${senseSelectorAnchor.x}px`,
+            top: `${senseSelectorAnchor.y}px`,
+            background: `linear-gradient(120deg, ${hexToRgba(style.primaryColor || '#1e293b', 0.76)} 0%, ${hexToRgba(style.secondaryColor || '#334155', 0.68)} 100%)`,
+            borderColor: hexToRgba(style.rimColor || style.primaryColor || '#a855f7', 0.74),
+            color: style.textColor || '#f8fafc'
+        };
+
+        return (
+            <div className="sense-selector-panel" style={panelStyle}>
+                <div className="sense-selector-title">{currentNodeDetail?.name || '未命名知识域'}</div>
+                <div className="sense-selector-list">
+                    {senses.map((sense) => {
+                        const isActive = sense?.senseId === currentNodeDetail?.activeSenseId;
+                        return (
+                            <button
+                                key={sense?.senseId || sense?.title}
+                                type="button"
+                                className={`sense-selector-item ${isActive ? 'active' : ''}`}
+                                onClick={() => handleSwitchSenseView(sense?.senseId)}
+                                title={sense?.content || ''}
+                            >
+                                {sense?.title || '未命名释义'}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+        );
+    };
+
     if (view === 'login') {
         return <Login onLogin={handleLoginSuccess} />;
     }
@@ -4140,7 +4258,7 @@ const App = () => {
     const isKnowledgeDomainActive = showKnowledgeDomain || isTransitioningToDomain;
 
     return (
-        <div className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''}`}>
+        <div className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''}`}>
             <div className="game-content">
                 {/* 头部 */}
                 <div className={`header ${isKnowledgeDomainActive ? 'header-knowledge-domain-active' : ''}`}>
@@ -4287,10 +4405,16 @@ const App = () => {
                         showSearchResults={showSearchResults}
                         isSearching={isSearching}
                         onSearchResultClick={(node) => {
-                            fetchNodeDetail(node._id, {
-                                id: `search-${node._id}`,
+                            const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
+                            if (!targetNodeId) return;
+                            fetchNodeDetail(targetNodeId, {
+                                id: `search-${targetNodeId || node?._id}`,
                                 data: node,
                                 type: "search"
+                            }, {
+                                resetTrail: true,
+                                relationHint: 'jump',
+                                activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
                             });
                             setShowSearchResults(false);
                         }}
@@ -4321,11 +4445,18 @@ const App = () => {
                         <NodeDetail
                             node={currentNodeDetail}
                             navigationPath={navigationPath}
-                            onNavigate={(nodeId) => fetchNodeDetail(nodeId)}
+                            onNavigate={(nodeId, navOptions = {}) => fetchNodeDetail(nodeId, null, navOptions)}
+                            onNavigateHistory={(item, index) => {
+                                if (!item?.nodeId) return;
+                                fetchNodeDetail(item.nodeId, null, {
+                                    historyIndex: index,
+                                    relationHint: item.relation,
+                                    activeSenseId: item.senseId || ''
+                                });
+                            }}
                             onHome={async () => {
                                 await navigateToHomeWithDockCollapse();
                             }}
-                            onShowNavigationTree={() => setShowNavigationTree(true)}
                             searchQuery={homeSearchQuery}
                             onSearchChange={(e) => setHomeSearchQuery(e.target.value)}
                             onSearchFocus={() => setShowSearchResults(true)}
@@ -4338,10 +4469,15 @@ const App = () => {
                             showSearchResults={showSearchResults}
                             isSearching={isSearching}
                             onSearchResultClick={(node) => {
-                                fetchNodeDetail(node._id, {
-                                    id: `search-${node._id}`,
+                                const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
+                                if (!targetNodeId) return;
+                                fetchNodeDetail(targetNodeId, {
+                                    id: `search-${targetNodeId || node?._id}`,
                                     data: node,
                                     type: "search"
+                                }, {
+                                    relationHint: 'jump',
+                                    activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
                                 });
                                 setShowSearchResults(false);
                             }}
@@ -4349,6 +4485,7 @@ const App = () => {
                             onNodeInfoClick={() => setShowNodeInfoModal(true)}
                             webglCanvasRef={webglCanvasRef}
                         />
+                        {renderSenseSelectorPanel()}
                     </>
                 )}
                 {renderUnifiedRightDock()}
@@ -4809,17 +4946,6 @@ const App = () => {
                         }}
                     />
                 )}
-
-                <NavigationTreeModal
-                    isOpen={showNavigationTree}
-                    onClose={() => setShowNavigationTree(false)}
-                    navigationPaths={fullNavigationPaths}
-                    currentNode={currentNodeDetail}
-                    onNavigate={(nodeId) => fetchNodeDetail(nodeId)}
-                    onHome={async () => {
-                        await navigateToHomeWithDockCollapse();
-                    }}
-                />
 
                 {/* 知识域场景 */}
                 <KnowledgeDomainScene

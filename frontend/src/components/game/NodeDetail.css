@@ -64,23 +64,6 @@
     transform: translateX(4px);
 }
 
-/* 省略项特殊样式 */
-.nav-item.omit-item {
-    background: linear-gradient(135deg, rgba(251, 191, 36, 0.2) 0%, rgba(245, 158, 11, 0.2) 100%);
-    border-color: rgba(251, 191, 36, 0.5);
-}
-
-.nav-item.omit-item:hover {
-    background: linear-gradient(135deg, rgba(251, 191, 36, 0.3) 0%, rgba(245, 158, 11, 0.3) 100%);
-    border-color: rgba(251, 191, 36, 0.7);
-    transform: translateX(4px);
-}
-
-.nav-item.omit-item .nav-label {
-    color: #fbbf24;
-    font-weight: 600;
-}
-
 .nav-item.active {
     background: rgba(168, 85, 247, 0.3);
     border-color: #a855f7;
@@ -96,30 +79,40 @@
     line-height: 1.4;
 }
 
+.nav-relation {
+    display: inline-flex;
+    margin-top: 0.45rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+
+.nav-relation-parent {
+    color: #bbf7d0;
+    border-color: rgba(74, 222, 128, 0.45);
+    background: rgba(34, 197, 94, 0.2);
+}
+
+.nav-relation-child {
+    color: #fef08a;
+    border-color: rgba(250, 204, 21, 0.45);
+    background: rgba(234, 179, 8, 0.2);
+}
+
+.nav-relation-jump {
+    color: #cbd5e1;
+    border-color: rgba(148, 163, 184, 0.45);
+    background: rgba(71, 85, 105, 0.3);
+}
+
 .nav-arrow {
     text-align: center;
     color: #a855f7;
     font-size: 1.2rem;
     margin: 0.25rem 0;
     font-weight: bold;
-}
-
-/* 二叉树分支样式 */
-.nav-branch {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-}
-
-.nav-item.branch-item {
-    flex: 1;
-    padding: 0.5rem;
-    font-size: 0.85rem;
-    margin-bottom: 0;
-}
-
-.nav-item.branch-item .nav-label {
-    font-size: 0.8rem;
 }
 
 .navigation-sidebar::-webkit-scrollbar {

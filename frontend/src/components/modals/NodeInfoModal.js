@@ -38,6 +38,38 @@ const getUserAlliance = (user) => {
     return { name, flag };
 };
 
+const getNodePrimarySense = (node) => {
+    const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+    if (typeof node?.activeSenseId === 'string' && node.activeSenseId.trim()) {
+        const matched = senses.find((item) => item?.senseId === node.activeSenseId.trim());
+        if (matched) return matched;
+    }
+    return senses[0] || null;
+};
+
+const getNodeDisplayName = (node) => {
+    if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
+    const name = typeof node?.name === 'string' ? node.name.trim() : '';
+    const senseTitle = typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()
+        ? node.activeSenseTitle.trim()
+        : (typeof getNodePrimarySense(node)?.title === 'string' ? getNodePrimarySense(node).title.trim() : '');
+    return senseTitle ? `${name}-${senseTitle}` : (name || '未命名知识域');
+};
+
+const getNodeSenseTitle = (node) => {
+    if (typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()) return node.activeSenseTitle.trim();
+    const sense = getNodePrimarySense(node);
+    return typeof sense?.title === 'string' ? sense.title.trim() : '';
+};
+
+const getNodeSenseContent = (node) => {
+    if (typeof node?.activeSenseContent === 'string' && node.activeSenseContent.trim()) return node.activeSenseContent.trim();
+    const sense = getNodePrimarySense(node);
+    if (typeof sense?.content === 'string' && sense.content.trim()) return sense.content.trim();
+    if (typeof node?.knowledge === 'string' && node.knowledge.trim()) return node.knowledge.trim();
+    return '';
+};
+
 const UserAvatar = ({ user, isMaster = false, fallbackKey = '' }) => {
     const username = user?.username || '未知用户';
     const alliance = getUserAlliance(user);
@@ -87,6 +119,8 @@ const NodeInfoModal = ({
     if (!isOpen || !nodeDetail) return null;
 
     const creator = nodeDetail.owner || null;
+    const nodeSenseTitle = getNodeSenseTitle(nodeDetail);
+    const nodeSenseContent = getNodeSenseContent(nodeDetail);
     const domainMaster = nodeDetail.domainMaster ? [nodeDetail.domainMaster] : [];
     const domainMasterId = getUserId(nodeDetail.domainMaster);
     const admins = Array.isArray(nodeDetail.domainAdmins)
@@ -130,8 +164,16 @@ const NodeInfoModal = ({
 
                 <div className="modal-body">
                     <div className="node-info-section">
-                        <h3 className="info-section-title">{nodeDetail.name}</h3>
-                        <p className="info-section-desc">{nodeDetail.description}</p>
+                        <h3 className="info-section-title">{getNodeDisplayName(nodeDetail)}</h3>
+                        {nodeDetail.description && (
+                            <p className="info-section-desc">概述：{nodeDetail.description}</p>
+                        )}
+                        {nodeSenseTitle && (
+                            <p className="info-section-desc">当前释义：{nodeSenseTitle}</p>
+                        )}
+                        {nodeSenseContent && (
+                            <p className="info-section-desc">释义内容：{nodeSenseContent}</p>
+                        )}
                     </div>
 
                     <div className="node-user-sections">

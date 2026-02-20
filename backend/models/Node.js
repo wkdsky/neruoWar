@@ -6,16 +6,55 @@ const AssociationSchema = new mongoose.Schema({
     ref: 'Node',
     required: true
   },
+  sourceSenseId: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  targetSenseId: {
+    type: String,
+    default: '',
+    trim: true
+  },
   relationType: {
     type: String,
-    enum: ['contains', 'extends'],
+    enum: ['contains', 'extends', 'insert'],
     required: true
+  },
+  insertSide: {
+    type: String,
+    enum: ['', 'left', 'right'],
+    default: '',
+    trim: true
+  },
+  insertGroupId: {
+    type: String,
+    default: '',
+    trim: true
   },
   createdAt: {
     type: Date,
     default: Date.now
   }
 });
+
+const SynonymSenseSchema = new mongoose.Schema({
+  senseId: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  title: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  content: {
+    type: String,
+    required: true,
+    trim: true
+  }
+}, { _id: false });
 
 const PercentUserRuleSchema = new mongoose.Schema({
   userId: {
@@ -574,6 +613,10 @@ const NodeSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  synonymSenses: {
+    type: [SynonymSenseSchema],
+    default: []
+  },
   prosperity: { 
     type: Number, 
     default: 100,
@@ -709,6 +752,79 @@ const getIdString = (value) => {
 
 // 约束：同一知识域内，域主与域相身份互斥；域相去重
 NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
+  const normalizeSenseId = (value, fallbackIndex = 0) => {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+    return `sense_${fallbackIndex + 1}`;
+  };
+
+  const senseSeen = new Set();
+  const senseTitleSeen = new Set();
+  const normalizedSenses = [];
+  const sourceSenses = Array.isArray(this.synonymSenses) ? this.synonymSenses : [];
+  for (let i = 0; i < sourceSenses.length; i += 1) {
+    const item = sourceSenses[i] || {};
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    const content = typeof item.content === 'string' ? item.content.trim() : '';
+    if (!title || !content) continue;
+    const titleKey = title.toLowerCase();
+    if (senseTitleSeen.has(titleKey)) continue;
+    senseTitleSeen.add(titleKey);
+
+    const senseId = normalizeSenseId(item.senseId, normalizedSenses.length);
+    if (senseSeen.has(senseId)) continue;
+    senseSeen.add(senseId);
+    normalizedSenses.push({
+      senseId,
+      title,
+      content
+    });
+  }
+  this.synonymSenses = normalizedSenses;
+  const validSenseIds = new Set(normalizedSenses.map((item) => item.senseId));
+
+  const normalizedAssociations = [];
+  const associationSeen = new Set();
+  const associationList = Array.isArray(this.associations) ? this.associations : [];
+  for (const assoc of associationList) {
+    const targetNodeId = getIdString(assoc?.targetNode);
+    const relationType = assoc?.relationType === 'contains'
+      ? 'contains'
+      : (assoc?.relationType === 'extends' ? 'extends' : (assoc?.relationType === 'insert' ? 'insert' : ''));
+    if (!targetNodeId || !relationType) continue;
+
+    let sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+    if (sourceSenseId && !validSenseIds.has(sourceSenseId)) {
+      sourceSenseId = '';
+    }
+
+    let targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+    if (targetSenseId.length > 80) {
+      targetSenseId = targetSenseId.slice(0, 80);
+    }
+
+    const insertSideRaw = typeof assoc?.insertSide === 'string' ? assoc.insertSide.trim() : '';
+    const insertSide = relationType === 'insert' && (insertSideRaw === 'left' || insertSideRaw === 'right')
+      ? insertSideRaw
+      : '';
+    const insertGroupId = typeof assoc?.insertGroupId === 'string' ? assoc.insertGroupId.trim().slice(0, 80) : '';
+
+    const dedupeKey = `${targetNodeId}|${sourceSenseId}|${targetSenseId}|${relationType}|${insertSide}`;
+    if (associationSeen.has(dedupeKey)) continue;
+    associationSeen.add(dedupeKey);
+    normalizedAssociations.push({
+      targetNode: assoc.targetNode,
+      sourceSenseId,
+      targetSenseId,
+      relationType,
+      insertSide,
+      insertGroupId,
+      createdAt: assoc?.createdAt || new Date()
+    });
+  }
+  this.associations = normalizedAssociations;
+
   const domainMasterId = getIdString(this.domainMaster);
   if (!domainMasterId) {
     this.allianceId = null;
@@ -1077,6 +1193,7 @@ NodeSchema.index({ isFeatured: 1, featuredOrder: 1 });
 NodeSchema.index({ status: 1 });
 NodeSchema.index({ allianceId: 1, status: 1 });
 NodeSchema.index({ name: 'text', description: 'text' });
+NodeSchema.index({ 'synonymSenses.title': 1 });
 
 // 更新知识点的静态方法
 NodeSchema.statics.updateKnowledgePoint = async function(nodeId) {

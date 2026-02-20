@@ -1,1041 +1,1066 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Search, Check, ArrowRight, ArrowLeft, RotateCcw, Plus, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
-import MiniPreviewRenderer from './MiniPreviewRenderer';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { X, Plus, Search, Trash2, Link2 } from 'lucide-react';
 import './CreateNodeModal.css';
 
-// 关联关系编辑步骤
-const STEPS = {
-  SELECT_NODE_A: 'select_node_a',
-  SELECT_RELATION: 'select_relation',
-  SELECT_NODE_B: 'select_node_b',
-  PREVIEW: 'preview'
+const RELATION_OPTIONS = [
+  { value: 'contains', label: '包含', hint: '当前释义在上，目标释义在下（下级）' },
+  { value: 'extends', label: '扩展', hint: '目标释义在上，当前释义在下（上级）' },
+  { value: 'insert', label: '插入', hint: '左右可切换方向；若原有上下级关系则自动锁定方向并按该方向重连' }
+];
+
+const RELATION_LABEL_MAP = {
+  contains: '包含（下级）',
+  extends: '扩展（上级）',
+  insert: '插入（左右连接）'
 };
 
-// 关系类型
-const RELATION_TYPES = {
-  EXTENDS: 'extends',
-  CONTAINS: 'contains',
-  INSERT: 'insert'
+const makeLocalId = (prefix = 'id') => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+const createSenseDraft = () => ({
+  localId: makeLocalId('sense'),
+  title: '',
+  content: '',
+  relationType: 'contains',
+  selectedTarget: null,
+  insertLeftTarget: null,
+  insertRightTarget: null,
+  insertDirection: 'contains',
+  insertDirectionLocked: false,
+  insertDirectionHint: '',
+  relations: []
+});
+
+const normalizeSearchResult = (item) => ({
+  nodeId: item?.nodeId || item?._id || '',
+  senseId: typeof item?.senseId === 'string' ? item.senseId : '',
+  displayName: item?.displayName || item?.name || '',
+  domainName: item?.domainName || item?.name || '',
+  senseTitle: item?.senseTitle || item?.activeSenseTitle || '',
+  description: item?.senseContent || item?.description || '',
+  searchKey: item?.searchKey || `${item?.nodeId || item?._id || ''}:${item?.senseId || ''}`,
+  relationToAnchor: item?.relationToAnchor || ''
+});
+
+const escapeRegExp = (text = '') => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const renderKeywordHighlight = (text, rawQuery) => {
+  const content = typeof text === 'string' ? text : '';
+  const keywords = String(rawQuery || '')
+    .trim()
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!content || keywords.length === 0) return content;
+  const uniqueKeywords = Array.from(new Set(keywords.map((item) => item.toLowerCase())));
+  const pattern = uniqueKeywords.map((item) => escapeRegExp(item)).join('|');
+  if (!pattern) return content;
+  const matcher = new RegExp(`(${pattern})`, 'ig');
+  const parts = content.split(matcher);
+  return parts.map((part, index) => {
+    const lowered = part.toLowerCase();
+    const matched = uniqueKeywords.some((keyword) => keyword === lowered);
+    if (!matched) return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
+    return <mark key={`mark-${index}`} className="subtle-keyword-highlight">{part}</mark>;
+  });
+};
+
+const createTargetSelectorState = () => ({
+  isOpen: false,
+  senseLocalId: '',
+  side: 'single',
+  keyword: '',
+  loading: false,
+  results: [],
+  selected: null
+});
+
+const parseSelectorKeyword = (rawKeyword = '') => {
+  const tokens = String(rawKeyword || '')
+    .trim()
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  let mode = '';
+  const textTokens = [];
+  tokens.forEach((token) => {
+    const lowered = token.toLowerCase().replace(/[，,;；。！!？?]+$/g, '');
+    if (lowered === '#include' || lowered.startsWith('#include')) {
+      mode = 'include';
+      return;
+    }
+    if (lowered === '#expand' || lowered.startsWith('#expand')) {
+      mode = 'expand';
+      return;
+    }
+    textTokens.push(token);
+  });
+  return {
+    mode,
+    textKeyword: textTokens.join(' ').trim()
+  };
+};
+
+const matchesKeywordByTitleAndSense = (item = {}, textKeyword = '') => {
+  const normalizedKeyword = String(textKeyword || '').trim().toLowerCase();
+  if (!normalizedKeyword) return true;
+  const keywords = normalizedKeyword.split(/\s+/).filter(Boolean);
+  if (keywords.length === 0) return true;
+  const searchText = `${item?.domainName || ''} ${item?.senseTitle || ''}`.toLowerCase();
+  return keywords.every((keyword) => searchText.includes(keyword));
 };
 
 const CreateNodeModal = ({
-    isOpen,
-    onClose,
-    username,
-    isAdmin,
-    existingNodes,
-    onSuccess
+  isOpen,
+  onClose,
+  username,
+  existingNodes,
+  onSuccess
 }) => {
-    // 基本信息状态
-    const [newNodeData, setNewNodeData] = useState({
-        title: '',
-        description: ''
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [senses, setSenses] = useState([createSenseDraft()]);
+  const [targetSelector, setTargetSelector] = useState(createTargetSelectorState());
+  const [isRelationHelpOpen, setIsRelationHelpOpen] = useState(false);
+  const relationContextCacheRef = useRef(new Map());
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setTitle('');
+    setDescription('');
+    setSenses([createSenseDraft()]);
+    setTargetSelector(createTargetSelectorState());
+    setIsRelationHelpOpen(false);
+    relationContextCacheRef.current = new Map();
+  }, [isOpen]);
+
+  const approvedNameSet = useMemo(() => (
+    new Set((Array.isArray(existingNodes) ? existingNodes : [])
+      .filter((node) => node?.status === 'approved' && typeof node?.name === 'string')
+      .map((node) => node.name.trim())
+      .filter(Boolean))
+  ), [existingNodes]);
+
+  const isTitleDuplicated = useMemo(() => approvedNameSet.has(title.trim()), [approvedNameSet, title]);
+
+  const updateSense = useCallback((localId, updater) => {
+    setSenses((prev) => prev.map((item) => (
+      item.localId === localId
+        ? (typeof updater === 'function' ? updater(item) : { ...item, ...updater })
+        : item
+    )));
+  }, []);
+
+  const findSenseByLocalId = useCallback((localId) => (
+    senses.find((item) => item.localId === localId) || null
+  ), [senses]);
+
+  const getAnchorTargetFromSense = useCallback((sense, side = 'single') => {
+    if (!sense || side === 'single') return null;
+    return side === 'left' ? (sense.insertRightTarget || null) : (sense.insertLeftTarget || null);
+  }, []);
+
+  const fetchSenseRelationContext = useCallback(async (target) => {
+    const nodeId = target?.nodeId;
+    const senseId = target?.senseId;
+    if (!nodeId || !senseId) {
+      return {
+        parentTargets: [],
+        childTargets: [],
+        parentKeySet: new Set(),
+        childKeySet: new Set()
+      };
+    }
+    const cacheKey = `${nodeId}:${senseId}`;
+    const cache = relationContextCacheRef.current;
+    if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(senseId)}`);
+      if (!response.ok) {
+        const emptyData = {
+          parentTargets: [],
+          childTargets: [],
+          parentKeySet: new Set(),
+          childKeySet: new Set()
+        };
+        cache.set(cacheKey, emptyData);
+        return emptyData;
+      }
+      const data = await response.json();
+      const detailNode = data?.node || {};
+      const activeSenseId = detailNode?.activeSenseId || senseId;
+      const getTargetNodeId = (targetNode) => {
+        if (!targetNode) return '';
+        if (typeof targetNode === 'string') return targetNode;
+        return targetNode?._id || '';
+      };
+      const normalizeNodeList = (list) => (
+        (Array.isArray(list) ? list : [])
+          .map((item) => normalizeSearchResult({
+            _id: item?._id,
+            nodeId: item?._id,
+            senseId: item?.activeSenseId,
+            displayName: item?.displayName || `${item?.name || ''}${item?.activeSenseTitle ? `-${item.activeSenseTitle}` : ''}`,
+            name: item?.name || '',
+            domainName: item?.name || '',
+            senseTitle: item?.activeSenseTitle || '',
+            senseContent: item?.activeSenseContent || '',
+            description: item?.activeSenseContent || item?.description || ''
+          }))
+          .filter((item) => item.nodeId && item.senseId && item.searchKey)
+      );
+      const parentTargets = normalizeNodeList(detailNode?.parentNodesInfo || data?.parentNodes || []);
+      const childTargets = normalizeNodeList(detailNode?.childNodesInfo || data?.childNodes || []);
+      const parentKeySet = new Set(parentTargets.map((item) => item.searchKey));
+      const childKeySet = new Set(childTargets.map((item) => item.searchKey));
+
+      (Array.isArray(detailNode?.associations) ? detailNode.associations : []).forEach((assoc) => {
+        const relationType = assoc?.relationType;
+        if (relationType !== 'extends' && relationType !== 'contains') return;
+        const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+        if (sourceSenseId && sourceSenseId !== activeSenseId) return;
+        const targetNodeId = getTargetNodeId(assoc?.targetNode);
+        const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+        if (!targetNodeId || !targetSenseId) return;
+        const relationKey = `${targetNodeId}:${targetSenseId}`;
+        if (relationType === 'extends') {
+          parentKeySet.add(relationKey);
+        } else if (relationType === 'contains') {
+          childKeySet.add(relationKey);
+        }
+      });
+
+      const relationData = {
+        parentTargets,
+        childTargets,
+        parentKeySet,
+        childKeySet
+      };
+      cache.set(cacheKey, relationData);
+      return relationData;
+    } catch (error) {
+      console.error('获取释义关系上下文失败:', error);
+      return {
+        parentTargets: [],
+        childTargets: [],
+        parentKeySet: new Set(),
+        childKeySet: new Set()
+      };
+    }
+  }, []);
+
+  const syncInsertDirectionByTargets = useCallback(async (senseLocalId, leftTarget, rightTarget) => {
+    if (!leftTarget?.searchKey || !rightTarget?.searchKey) {
+      updateSense(senseLocalId, (sense) => ({
+        ...sense,
+        insertDirectionLocked: false,
+        insertDirectionHint: '先选定左右释义；若两者无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。'
+      }));
+      return;
+    }
+
+    const [leftContext, rightContext] = await Promise.all([
+      fetchSenseRelationContext(leftTarget),
+      fetchSenseRelationContext(rightTarget)
+    ]);
+    const rightKey = rightTarget.searchKey;
+    const leftKey = leftTarget.searchKey;
+    const rightIsChild = leftContext.childKeySet.has(rightKey) || rightContext.parentKeySet.has(leftKey);
+    const rightIsParent = leftContext.parentKeySet.has(rightKey) || rightContext.childKeySet.has(leftKey);
+
+    if (rightIsChild || rightIsParent) {
+      updateSense(senseLocalId, (sense) => ({
+        ...sense,
+        insertDirection: rightIsChild ? 'contains' : 'extends',
+        insertDirectionLocked: true,
+        insertDirectionHint: rightIsChild
+          ? '已识别：左侧与右侧原本是“上级→下级”，方向已锁定为“→包含→包含”。'
+          : '已识别：左侧与右侧原本是“下级←上级”，方向已锁定为“←拓展←拓展”。'
+      }));
+      return;
+    }
+
+    updateSense(senseLocalId, (sense) => ({
+      ...sense,
+      insertDirectionLocked: false,
+      insertDirectionHint: '左右释义当前无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。'
+    }));
+  }, [fetchSenseRelationContext, updateSense]);
+
+  const addSense = () => {
+    setSenses((prev) => [...prev, createSenseDraft()]);
+  };
+
+  const removeSense = (localId) => {
+    setSenses((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((item) => item.localId !== localId);
+    });
+    setTargetSelector((prev) => (prev.senseLocalId === localId ? createTargetSelectorState() : prev));
+  };
+
+  const updateSenseField = (localId, field, value) => {
+    updateSense(localId, { [field]: value });
+  };
+
+  const closeTargetSelector = () => {
+    setTargetSelector(createTargetSelectorState());
+  };
+
+  const openTargetSelector = (senseLocalId, side = 'single') => {
+    const sense = findSenseByLocalId(senseLocalId);
+    if (!sense) return;
+
+    let selected = null;
+    if (side === 'left') selected = sense.insertLeftTarget || null;
+    if (side === 'right') selected = sense.insertRightTarget || null;
+    if (side === 'single') selected = sense.selectedTarget || null;
+
+    setTargetSelector({
+      isOpen: true,
+      senseLocalId,
+      side,
+      keyword: '',
+      loading: false,
+      results: [],
+      selected
+    });
+  };
+
+  useEffect(() => {
+    if (!targetSelector.isOpen) return undefined;
+    const keywordMeta = parseSelectorKeyword(targetSelector.keyword);
+    if (!keywordMeta.textKeyword && !keywordMeta.mode) {
+      setTargetSelector((prev) => ({ ...prev, loading: false, results: [] }));
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setTargetSelector((prev) => ({ ...prev, loading: true }));
+      const token = localStorage.getItem('token');
+      try {
+        const currentSense = senses.find((item) => item.localId === targetSelector.senseLocalId) || null;
+        const anchorTarget = getAnchorTargetFromSense(currentSense, targetSelector.side);
+        const anchorContext = anchorTarget ? await fetchSenseRelationContext(anchorTarget) : null;
+        let results = [];
+
+        if (keywordMeta.mode === 'include' || keywordMeta.mode === 'expand') {
+          if (anchorContext) {
+            results = keywordMeta.mode === 'include'
+              ? anchorContext.parentTargets
+              : anchorContext.childTargets;
+          }
+        } else if (keywordMeta.textKeyword) {
+          const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(keywordMeta.textKeyword)}`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            results = (Array.isArray(data) ? data : [])
+              .map(normalizeSearchResult)
+              .filter((item) => item.nodeId && item.senseId && item.displayName);
+          }
+        }
+
+        if (keywordMeta.textKeyword) {
+          results = results.filter((item) => matchesKeywordByTitleAndSense(item, keywordMeta.textKeyword));
+        }
+
+        const excludedSearchKey = targetSelector.side === 'left'
+          ? (currentSense?.insertRightTarget?.searchKey || '')
+          : (targetSelector.side === 'right' ? (currentSense?.insertLeftTarget?.searchKey || '') : '');
+        let filteredResults = excludedSearchKey
+          ? results.filter((item) => item.searchKey !== excludedSearchKey)
+          : results;
+
+        if (anchorContext) {
+          filteredResults = filteredResults.map((item) => {
+            let relationToAnchor = '无关';
+            if (anchorContext.parentKeySet.has(item.searchKey)) relationToAnchor = '上级';
+            if (anchorContext.childKeySet.has(item.searchKey)) relationToAnchor = '下级';
+            return { ...item, relationToAnchor };
+          });
+        }
+
+        if (!cancelled) {
+          setTargetSelector((prev) => ({ ...prev, loading: false, results: filteredResults }));
+        }
+      } catch (error) {
+        console.error('搜索节点失败:', error);
+        if (!cancelled) {
+          setTargetSelector((prev) => ({ ...prev, loading: false, results: [] }));
+        }
+      }
+    }, 260);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    targetSelector.isOpen,
+    targetSelector.keyword,
+    targetSelector.side,
+    targetSelector.senseLocalId,
+    senses,
+    getAnchorTargetFromSense,
+    fetchSenseRelationContext
+  ]);
+
+  const confirmTargetSelection = () => {
+    if (!targetSelector.selected?.nodeId || !targetSelector.selected?.senseId) {
+      window.alert('请先选择一个目标释义');
+      return;
+    }
+
+    const selected = targetSelector.selected;
+    const side = targetSelector.side;
+    const senseLocalId = targetSelector.senseLocalId;
+    const currentSense = findSenseByLocalId(senseLocalId);
+    const nextLeftTarget = side === 'left' ? selected : (currentSense?.insertLeftTarget || null);
+    const nextRightTarget = side === 'right' ? selected : (currentSense?.insertRightTarget || null);
+    updateSense(senseLocalId, (sense) => {
+      if (side === 'left') return { ...sense, insertLeftTarget: selected };
+      if (side === 'right') return { ...sense, insertRightTarget: selected };
+      return { ...sense, selectedTarget: selected };
+    });
+    if (side === 'left' || side === 'right') {
+      syncInsertDirectionByTargets(senseLocalId, nextLeftTarget, nextRightTarget);
+    }
+    closeTargetSelector();
+  };
+
+  const toggleInsertDirection = (senseLocalId) => {
+    updateSense(senseLocalId, (sense) => {
+      if (sense.insertDirectionLocked) return sense;
+      return {
+        ...sense,
+        insertDirection: sense.insertDirection === 'extends' ? 'contains' : 'extends'
+      };
+    });
+  };
+
+  const addRelationToSense = (senseLocalId) => {
+    updateSense(senseLocalId, (sense) => {
+      if (sense.relationType === 'insert') {
+        if (!sense.insertLeftTarget?.nodeId || !sense.insertRightTarget?.nodeId) {
+          window.alert('请先分别选择左侧和右侧目标释义');
+          return sense;
+        }
+        if (sense.insertLeftTarget.searchKey === sense.insertRightTarget.searchKey) {
+          window.alert('左右两侧不能选择同一个目标释义');
+          return sense;
+        }
+
+        const exists = sense.relations.some((item) => (
+          item.kind === 'insert'
+          && item.direction === (sense.insertDirection === 'extends' ? 'extends' : 'contains')
+          && item.leftTarget?.searchKey === sense.insertLeftTarget.searchKey
+          && item.rightTarget?.searchKey === sense.insertRightTarget.searchKey
+        ));
+        if (exists) {
+          window.alert('该插入关系已存在');
+          return sense;
+        }
+
+        return {
+          ...sense,
+          relations: [
+            ...sense.relations,
+            {
+              id: makeLocalId('rel'),
+              kind: 'insert',
+              relationType: 'insert',
+              direction: sense.insertDirection === 'extends' ? 'extends' : 'contains',
+              leftTarget: sense.insertLeftTarget,
+              rightTarget: sense.insertRightTarget
+            }
+          ],
+          insertLeftTarget: null,
+          insertRightTarget: null,
+          insertDirectionLocked: false,
+          insertDirectionHint: '先选定左右释义；若两者无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。'
+        };
+      }
+
+      if (!sense.selectedTarget?.nodeId || !sense.selectedTarget?.senseId) {
+        window.alert('请先选择目标释义');
+        return sense;
+      }
+
+      const exists = sense.relations.some((item) => (
+        item.kind === 'single'
+        && item.relationType === sense.relationType
+        && item.target?.searchKey === sense.selectedTarget.searchKey
+      ));
+      if (exists) {
+        window.alert('该关联关系已存在');
+        return sense;
+      }
+
+      return {
+        ...sense,
+        relations: [
+          ...sense.relations,
+          {
+            id: makeLocalId('rel'),
+            kind: 'single',
+            relationType: sense.relationType,
+            target: sense.selectedTarget
+          }
+        ],
+        selectedTarget: null
+      };
+    });
+  };
+
+  const removeRelationFromSense = (senseLocalId, relationId) => {
+    updateSense(senseLocalId, (sense) => ({
+      ...sense,
+      relations: sense.relations.filter((item) => item.id !== relationId)
+    }));
+  };
+
+  const validation = useMemo(() => {
+    const normalized = senses.map((sense, index) => {
+      const senseTitle = typeof sense?.title === 'string' ? sense.title.trim() : '';
+      const senseContent = typeof sense?.content === 'string' ? sense.content.trim() : '';
+      return {
+        index,
+        localId: sense.localId,
+        title: senseTitle,
+        content: senseContent,
+        relations: Array.isArray(sense.relations) ? sense.relations : []
+      };
     });
 
-    // 搜索状态
-    const [searchKeyword, setSearchKeyword] = useState('');
-    const [searchResults, setSearchResults] = useState([]);
-    const [searchLoading, setSearchLoading] = useState(false);
+    const duplicateTitleMessageByLocalId = {};
+    const titleOwnerMap = new Map();
+    normalized.forEach((item) => {
+      if (!item.title) return;
+      const key = item.title.toLowerCase();
+      if (!titleOwnerMap.has(key)) {
+        titleOwnerMap.set(key, item);
+        return;
+      }
+      const owner = titleOwnerMap.get(key);
+      duplicateTitleMessageByLocalId[item.localId] = `与释义${owner.index + 1}重复`;
+      if (!duplicateTitleMessageByLocalId[owner.localId]) {
+        duplicateTitleMessageByLocalId[owner.localId] = `与释义${item.index + 1}重复`;
+      }
+    });
 
-    // 关联关系编辑状态机
-    const [currentStep, setCurrentStep] = useState(null);
-    const [selectedNodeA, setSelectedNodeA] = useState(null);
-    const [selectedRelationType, setSelectedRelationType] = useState(null);
-    const [selectedNodeB, setSelectedNodeB] = useState(null);
-    const [insertDirection, setInsertDirection] = useState(null);
+    const fieldErrorsByLocalId = {};
+    let hasIncompleteSense = false;
+    let hasMissingRelation = false;
+    const readySenses = [];
 
-    // Node B 候选节点
-    const [nodeBCandidates, setNodeBCandidates] = useState({ parents: [], children: [] });
-    const [nodeBSearchKeyword, setNodeBSearchKeyword] = useState('');
+    normalized.forEach((item) => {
+      const titleError = !item.title
+        ? '释义题目不能为空'
+        : (duplicateTitleMessageByLocalId[item.localId] || '');
+      const contentError = !item.content ? '释义内容不能为空' : '';
+      const relationError = (item.title && item.content && item.relations.length === 0)
+        ? '每个释义至少需要 1 条关联关系'
+        : '';
 
-    // 已确认的关联关系列表
-    const [associations, setAssociations] = useState([]);
+      if (!item.title || !item.content) hasIncompleteSense = true;
+      if (item.title && item.content && item.relations.length === 0) hasMissingRelation = true;
+      fieldErrorsByLocalId[item.localId] = {
+        title: titleError,
+        content: contentError,
+        relation: relationError
+      };
+      if (!titleError && !contentError && !relationError) readySenses.push(item);
+    });
 
-    // 展开/折叠关联关系列表
-    const [isAssociationListExpanded, setIsAssociationListExpanded] = useState(true);
+    return {
+      fieldErrorsByLocalId,
+      hasDuplicateSenseTitle: Object.keys(duplicateTitleMessageByLocalId).length > 0,
+      hasIncompleteSense,
+      hasMissingRelation,
+      readySenses
+    };
+  }, [senses]);
 
-    // 当前正在编辑的关联索引
-    const [editingAssociationIndex, setEditingAssociationIndex] = useState(null);
+  const canSubmit = useMemo(() => {
+    if (isTitleDuplicated) return false;
+    if (!title.trim() || !description.trim()) return false;
+    if (senses.length === 0) return false;
+    if (validation.hasDuplicateSenseTitle || validation.hasIncompleteSense || validation.hasMissingRelation) return false;
+    return validation.readySenses.length === senses.length;
+  }, [isTitleDuplicated, title, description, senses.length, validation]);
 
-    // 预览画布引用
-    const previewCanvasRef = useRef(null);
-    const previewRendererRef = useRef(null);
+  const submitNodeCreation = async () => {
+    if (!canSubmit) {
+      window.alert('请完成所有必填信息后再提交');
+      return;
+    }
 
-    // 管理员同名申请冲突状态
-    const [showPendingConflict, setShowPendingConflict] = useState(false);
-    const [conflictingPendingNodes, setConflictingPendingNodes] = useState([]);
-    const [pendingApprovalLoading, setPendingApprovalLoading] = useState(false);
+    const token = localStorage.getItem('token');
+    const x = Math.random() * 700 + 50;
+    const y = Math.random() * 400 + 50;
 
-    // 重置关联关系编辑状态
-    const resetAssociationEdit = useCallback(() => {
-        setCurrentStep(null);
-        setSelectedNodeA(null);
-        setSelectedRelationType(null);
-        setSelectedNodeB(null);
-        setInsertDirection(null);
-        setNodeBCandidates({ parents: [], children: [] });
-        setNodeBSearchKeyword('');
-        setEditingAssociationIndex(null);
-        setSearchKeyword('');
-        setSearchResults([]);
+    const synonymSenses = validation.readySenses.map((sense, index) => ({
+      senseId: `sense_${index + 1}`,
+      title: sense.title,
+      content: sense.content
+    }));
+    const senseIdByLocalId = validation.readySenses.reduce((acc, sense, index) => {
+      acc[sense.localId] = `sense_${index + 1}`;
+      return acc;
+    }, {});
 
-        // 销毁预览渲染器
-        if (previewRendererRef.current) {
-            previewRendererRef.current.destroy();
-            previewRendererRef.current = null;
+    const associations = [];
+    validation.readySenses.forEach((sense) => {
+      const sourceSenseId = senseIdByLocalId[sense.localId] || '';
+      sense.relations.forEach((relation) => {
+        if (relation.kind === 'single' && relation.target?.nodeId && relation.target?.senseId) {
+          associations.push({
+            targetNode: relation.target.nodeId,
+            relationType: relation.relationType,
+            sourceSenseId,
+            targetSenseId: relation.target.senseId
+          });
         }
-    }, []);
-
-    // 模态框打开时重置所有状态（确保每次打开都是干净的状态）
-    useEffect(() => {
-        if (isOpen) {
-            // 打开时重置，确保不同的新节点创建会话互不干扰
-            setNewNodeData({ title: '', description: '' });
-            setAssociations([]);
-            resetAssociationEdit();
-            // 重置冲突状态
-            setShowPendingConflict(false);
-            setConflictingPendingNodes([]);
+        if (relation.kind === 'insert' && relation.leftTarget?.nodeId && relation.rightTarget?.nodeId) {
+          const upperTarget = relation.direction === 'extends' ? relation.rightTarget : relation.leftTarget;
+          const lowerTarget = relation.direction === 'extends' ? relation.leftTarget : relation.rightTarget;
+          associations.push({
+            targetNode: upperTarget.nodeId,
+            relationType: 'insert',
+            sourceSenseId,
+            targetSenseId: upperTarget.senseId,
+            insertSide: 'left',
+            insertGroupId: relation.id
+          });
+          associations.push({
+            targetNode: lowerTarget.nodeId,
+            relationType: 'insert',
+            sourceSenseId,
+            targetSenseId: lowerTarget.senseId,
+            insertSide: 'right',
+            insertGroupId: relation.id
+          });
         }
-    }, [isOpen, resetAssociationEdit]);
+      });
+    });
 
-    // 初始化/更新预览渲染器
-    useEffect(() => {
-        if (currentStep === STEPS.PREVIEW && previewCanvasRef.current) {
-            // 创建或重用渲染器
-            if (!previewRendererRef.current) {
-                previewRendererRef.current = new MiniPreviewRenderer(previewCanvasRef.current);
-            }
-
-            // 设置预览场景
-            previewRendererRef.current.setPreviewScene({
-                nodeA: selectedNodeA,
-                nodeB: selectedNodeB,
-                relationType: selectedRelationType,
-                newNodeName: newNodeData.title || '新节点',
-                insertDirection: insertDirection
-            });
-        }
-
-        return () => {
-            // 当离开预览步骤时停止动画
-            if (currentStep !== STEPS.PREVIEW && previewRendererRef.current) {
-                previewRendererRef.current.stopAnimation();
-            }
-        };
-    }, [currentStep, selectedNodeA, selectedNodeB, selectedRelationType, newNodeData.title, insertDirection]);
-
-    // 搜索节点
-    const searchNodes = useCallback(async (keyword) => {
-        const normalizedKeyword = (keyword || '').trim();
-        if (!normalizedKeyword) {
-            setSearchResults([]);
-            return;
-        }
-
-        setSearchLoading(true);
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(normalizedKeyword)}`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                setSearchResults(data);
-            } else {
-                setSearchResults([]);
-            }
-        } catch (error) {
-            console.error('搜索节点失败:', error);
-            setSearchResults([]);
-        } finally {
-            setSearchLoading(false);
-        }
-    }, []);
-
-    // 选择节点步骤中，输入时自动搜索
-    useEffect(() => {
-        if (currentStep !== STEPS.SELECT_NODE_A) {
-            return;
-        }
-
-        if (!searchKeyword.trim()) {
-            setSearchResults([]);
-            setSearchLoading(false);
-            return;
-        }
-
-        const timer = setTimeout(() => {
-            searchNodes(searchKeyword);
-        }, 220);
-
-        return () => clearTimeout(timer);
-    }, [searchKeyword, currentStep, searchNodes]);
-
-    // 获取节点详情
-    const fetchNodeDetail = async (nodeId) => {
-        try {
-            const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}`);
-            if (response.ok) {
-                const data = await response.json();
-                return data.node;
-            }
-        } catch (error) {
-            console.error('获取节点详情失败:', error);
-        }
-        return null;
+    const payload = {
+      name: title.trim(),
+      description: description.trim(),
+      position: { x, y },
+      synonymSenses,
+      associations
     };
 
-    // 开始添加新的关联关系
-    const startAddAssociation = () => {
-        resetAssociationEdit();
-        setCurrentStep(STEPS.SELECT_NODE_A);
-    };
+    try {
+      const response = await fetch('http://localhost:5000/api/nodes/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        window.alert(data?.error || '创建失败');
+        return;
+      }
 
-    // 选择 Node A
-    const selectNodeA = async (node) => {
-        const nodeDetail = await fetchNodeDetail(node._id);
-        if (nodeDetail) {
-            setSelectedNodeA(nodeDetail);
-            setCurrentStep(STEPS.SELECT_RELATION);
-            setSearchResults([]);
-            setSearchKeyword('');
-        } else {
-            alert('获取节点详情失败');
-        }
-    };
+      window.alert(data?.status === 'pending' ? '知识域申请已提交，等待管理员审批' : '知识域创建成功');
+      onSuccess(data || null);
+      onClose();
+    } catch (error) {
+      console.error('创建节点失败:', error);
+      window.alert('创建失败');
+    }
+  };
 
-    // 选择关系类型
-    const selectRelationType = (type) => {
-        setSelectedRelationType(type);
+  if (!isOpen) return null;
 
-        if (type === RELATION_TYPES.INSERT) {
-            const candidates = {
-                parents: selectedNodeA.parentNodesInfo || [],
-                children: selectedNodeA.childNodesInfo || []
-            };
-            setNodeBCandidates(candidates);
+  const parsedSelectorKeyword = parseSelectorKeyword(targetSelector.keyword);
+  const selectorSearchHighlightKeyword = parsedSelectorKeyword.textKeyword || '';
+  const selectorTitle = targetSelector.side === 'left'
+    ? '选择左侧释义'
+    : (targetSelector.side === 'right' ? '选择右侧释义' : '选择目标释义');
 
-            if (candidates.parents.length === 0 && candidates.children.length === 0) {
-                alert('该节点没有母域或子域节点，无法使用插入模式。');
-                return;
-            }
-            setCurrentStep(STEPS.SELECT_NODE_B);
-        } else {
-            setCurrentStep(STEPS.PREVIEW);
-        }
-    };
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-content create-node-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>创建知识域</h3>
+          <button onClick={onClose} className="btn btn-danger btn-small">
+            <X className="icon-small" />
+          </button>
+        </div>
 
-    // 选择 Node B
-    const selectNodeB = (node, fromParents) => {
-        setSelectedNodeB(node);
-        const direction = fromParents ? 'bToA' : 'aToB';
-        setInsertDirection(direction);
-        setCurrentStep(STEPS.PREVIEW);
-    };
+        <div className="modal-body">
+          <div className="form-group">
+            <label>创建者</label>
+            <div className="form-input read-only">{username}</div>
+          </div>
 
-    // 重播预览动画
-    const replayPreview = () => {
-        if (previewRendererRef.current) {
-            previewRendererRef.current.setPreviewScene({
-                nodeA: selectedNodeA,
-                nodeB: selectedNodeB,
-                relationType: selectedRelationType,
-                newNodeName: newNodeData.title || '新节点',
-                insertDirection: insertDirection
-            });
-        }
-    };
+          <div className="form-group">
+            <label>标题 *</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="form-input"
+              placeholder="输入知识域总标题"
+              maxLength={50}
+            />
+            {title.trim() === '' && <span className="error-text">标题不能为空</span>}
+            {isTitleDuplicated && <span className="error-text">该标题已存在（审核通过）</span>}
+          </div>
 
-    // 确认当前关联关系
-    const confirmAssociation = () => {
-        let associationData;
+          <div className="form-group">
+            <label>概述 *</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="form-textarea"
+              rows={3}
+              placeholder="输入该知识域总体概述"
+              maxLength={300}
+            />
+            {description.trim() === '' && <span className="error-text">概述不能为空</span>}
+          </div>
 
-        if (selectedRelationType === RELATION_TYPES.INSERT) {
-            associationData = {
-                type: 'insert',
-                nodeA: selectedNodeA,
-                nodeB: selectedNodeB,
-                direction: insertDirection,
-                actualAssociations: insertDirection === 'aToB'
-                    ? [
-                        { targetNode: selectedNodeA._id, relationType: 'extends', nodeName: selectedNodeA.name },
-                        { targetNode: selectedNodeB._id, relationType: 'contains', nodeName: selectedNodeB.name }
-                    ]
-                    : [
-                        { targetNode: selectedNodeB._id, relationType: 'extends', nodeName: selectedNodeB.name },
-                        { targetNode: selectedNodeA._id, relationType: 'contains', nodeName: selectedNodeA.name }
-                    ],
-                displayText: `插入到 ${selectedNodeA.name} 和 ${selectedNodeB.name} 之间`
-            };
-        } else {
-            // UI 中的“作为母域/子域”是从新节点相对目标节点的角色描述，
-            // 后端 relationType 则是“当前节点相对目标节点”的关系：
-            // 作为目标母域 => 当前节点包含目标 => contains
-            // 作为目标子域 => 当前节点拓展目标 => extends
-            const backendRelationType = selectedRelationType === RELATION_TYPES.EXTENDS
-                ? RELATION_TYPES.CONTAINS
-                : RELATION_TYPES.EXTENDS;
+          <div className="associations-section">
+            <div className="associations-header">
+              <h4>同义词释义（每个释义必须有至少 1 条关系）</h4>
+              <button type="button" className="btn btn-secondary btn-small" onClick={addSense}>
+                <Plus className="icon-small" /> 新增释义
+              </button>
+            </div>
 
-            associationData = {
-                type: selectedRelationType,
-                nodeA: selectedNodeA,
-                nodeB: null,
-                direction: null,
-                actualAssociations: [{
-                    targetNode: selectedNodeA._id,
-                    relationType: backendRelationType,
-                    nodeName: selectedNodeA.name
-                }],
-                displayText: selectedRelationType === 'extends'
-                    ? `作为 ${selectedNodeA.name} 的母域`
-                    : `作为 ${selectedNodeA.name} 的子域`
-            };
-        }
+            <div className="sense-list-scroll">
+              {senses.map((sense, index) => {
+                const fieldErrors = validation.fieldErrorsByLocalId[sense.localId] || { title: '', content: '', relation: '' };
+                const insertDirection = sense.insertDirection === 'extends' ? 'extends' : 'contains';
+                const insertSegmentText = insertDirection === 'contains' ? '→包含→' : '←拓展←';
+                const insertDirectionHint = sense.insertDirectionHint
+                  || '先选定左右释义；若两者无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。';
+                const relationHint = sense.relationType === 'insert'
+                  ? `${insertSegmentText}${insertDirection === 'contains' ? '包含' : '拓展'}；${insertDirectionHint}`
+                  : (RELATION_OPTIONS.find((option) => option.value === sense.relationType)?.hint || '');
 
-        // 检查重复（仅在同一个新节点的创建会话内检测）
-        let duplicateReason = null;
-        const isDuplicate = associations.some(assoc => {
-            // 两个都是 insert 类型：检查是否是同一对节点（无论顺序）
-            if (assoc.type === 'insert' && associationData.type === 'insert') {
-                const existingPair = [assoc.nodeA._id, assoc.nodeB._id].sort();
-                const newPair = [associationData.nodeA._id, associationData.nodeB._id].sort();
-                if (existingPair[0] === newPair[0] && existingPair[1] === newPair[1]) {
-                    duplicateReason = `已经存在插入到 ${assoc.nodeA.name} 和 ${assoc.nodeB.name} 之间的关联`;
-                    return true;
-                }
-                return false;
-            }
+                return (
+                  <div key={sense.localId} className="sense-card">
+                    <div className="sense-card-header">
+                      <strong className="node-name">{`释义 ${index + 1}`}</strong>
+                      <span className="sense-relation-count">{`已添加 ${sense.relations.length} 条`}</span>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-small"
+                        onClick={() => removeSense(sense.localId)}
+                        disabled={senses.length <= 1}
+                      >
+                        <Trash2 className="icon-small" />
+                      </button>
+                    </div>
 
-            // 非 insert 类型之间的重复检查：同一目标节点不能有相同类型的关系
-            if (assoc.type !== 'insert' && associationData.type !== 'insert') {
-                const found = assoc.actualAssociations.some(aa =>
-                    associationData.actualAssociations.some(ba =>
-                        aa.targetNode === ba.targetNode && aa.relationType === ba.relationType
-                    )
-                );
-                if (found) {
-                    duplicateReason = `已经存在与 ${assoc.nodeA.name} 的${assoc.type === 'extends' ? '母域' : '子域'}关系`;
-                    return true;
-                }
-                return false;
-            }
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="释义题目（同一标题下不可重名）"
+                      value={sense.title}
+                      onChange={(e) => updateSenseField(sense.localId, 'title', e.target.value)}
+                    />
+                    {fieldErrors.title && <span className="error-text inline-field-error">{fieldErrors.title}</span>}
+                    <textarea
+                      className="form-textarea"
+                      rows={3}
+                      placeholder="该释义下的知识内容"
+                      value={sense.content}
+                      onChange={(e) => updateSenseField(sense.localId, 'content', e.target.value)}
+                    />
+                    {fieldErrors.content && <span className="error-text inline-field-error">{fieldErrors.content}</span>}
 
-            // insert 与非 insert 之间的冲突检查：
-            // 检查是否会对同一个目标节点产生冲突的关系类型
-            const insertAssoc = assoc.type === 'insert' ? assoc : associationData;
-            const simpleAssoc = assoc.type === 'insert' ? associationData : assoc;
-
-            const conflict = insertAssoc.actualAssociations.find(ia =>
-                simpleAssoc.actualAssociations.some(sa =>
-                    ia.targetNode === sa.targetNode && ia.relationType === sa.relationType
-                )
-            );
-            if (conflict) {
-                duplicateReason = `与现有关联冲突：新节点对 ${conflict.nodeName} 已经有${conflict.relationType === 'extends' ? '母域' : '子域'}关系`;
-                return true;
-            }
-            return false;
-        });
-
-        if (isDuplicate) {
-            alert(duplicateReason || '该关联关系已存在');
-            return;
-        }
-
-        if (editingAssociationIndex !== null) {
-            setAssociations(prev => {
-                const newAssocs = [...prev];
-                newAssocs[editingAssociationIndex] = associationData;
-                return newAssocs;
-            });
-        } else {
-            setAssociations(prev => [...prev, associationData]);
-        }
-
-        resetAssociationEdit();
-    };
-
-    // 取消当前编辑
-    const cancelAssociationEdit = () => {
-        resetAssociationEdit();
-    };
-
-    // 返回上一步
-    const goBack = () => {
-        if (previewRendererRef.current) {
-            previewRendererRef.current.stopAnimation();
-        }
-
-        switch (currentStep) {
-            case STEPS.SELECT_RELATION:
-                setSelectedRelationType(null);
-                setCurrentStep(STEPS.SELECT_NODE_A);
-                break;
-            case STEPS.SELECT_NODE_B:
-                setSelectedNodeB(null);
-                setInsertDirection(null);
-                setCurrentStep(STEPS.SELECT_RELATION);
-                break;
-            case STEPS.PREVIEW:
-                if (selectedRelationType === RELATION_TYPES.INSERT) {
-                    setCurrentStep(STEPS.SELECT_NODE_B);
-                } else {
-                    setCurrentStep(STEPS.SELECT_RELATION);
-                }
-                break;
-            default:
-                cancelAssociationEdit();
-        }
-    };
-
-    // 删除关联关系
-    const removeAssociation = (index) => {
-        setAssociations(prev => prev.filter((_, i) => i !== index));
-    };
-
-    // 编辑已有关联关系
-    const editAssociation = (index) => {
-        const assoc = associations[index];
-        setEditingAssociationIndex(index);
-        setSelectedNodeA(assoc.nodeA);
-        setSelectedRelationType(assoc.type);
-        setSelectedNodeB(assoc.nodeB);
-        setInsertDirection(assoc.direction);
-        setCurrentStep(STEPS.PREVIEW);
-    };
-
-    // 检查是否可以提交
-    const canSubmitNode = () => {
-        const hasTitle = newNodeData.title.trim() !== '';
-        const hasDescription = newNodeData.description.trim() !== '';
-        const hasAssociations = associations.length > 0 || isAdmin;
-        // 只检查已审核通过的节点名称是否重复
-        const isTitleUnique = !existingNodes.some(node =>
-            node.status === 'approved' && node.name === newNodeData.title
-        );
-        return hasTitle && hasDescription && hasAssociations && isTitleUnique;
-    };
-
-    // 提交节点创建
-    const submitNodeCreation = async () => {
-        if (!canSubmitNode()) {
-            alert('请填写所有必填字段');
-            return;
-        }
-
-        const token = localStorage.getItem('token');
-        try {
-            const x = Math.random() * 700 + 50;
-            const y = Math.random() * 400 + 50;
-            const allAssociations = associations.flatMap(assoc => assoc.actualAssociations);
-
-            const response = await fetch('http://localhost:5000/api/nodes/create', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    name: newNodeData.title,
-                    description: newNodeData.description,
-                    position: { x, y },
-                    associations: allAssociations
-                })
-            });
-
-            const data = await response.json();
-            if (response.ok) {
-                if (isAdmin) {
-                    alert('节点创建成功！');
-                    onSuccess(data);
-                } else {
-                    alert('节点创建申请已提交，等待管理员审批');
-                    onSuccess(null);
-                }
-                onClose();
-            } else if (response.status === 409 && data.error === 'PENDING_NODES_EXIST') {
-                // 管理员遇到同名待审核节点，显示冲突处理界面
-                setConflictingPendingNodes(data.pendingNodes);
-                setShowPendingConflict(true);
-            } else {
-                alert(data.error || '创建失败');
-            }
-        } catch (error) {
-            console.error('创建节点失败:', error);
-            alert('创建失败');
-        }
-    };
-
-    // 管理员审批待审核节点（在冲突界面中）
-    const approvePendingNode = async (nodeId) => {
-        setPendingApprovalLoading(true);
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch('http://localhost:5000/api/nodes/approve', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ nodeId })
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                let message = '已批准该申请';
-                if (data.autoRejectedCount > 0) {
-                    message += `，其他 ${data.autoRejectedCount} 个同名申请已自动拒绝`;
-                }
-                alert(message);
-                onSuccess(data);
-                onClose();
-            } else {
-                const data = await response.json();
-                alert(data.error || '审批失败');
-            }
-        } catch (error) {
-            console.error('审批失败:', error);
-            alert('审批失败');
-        } finally {
-            setPendingApprovalLoading(false);
-        }
-    };
-
-    // 管理员拒绝待审核节点
-    const rejectPendingNode = async (nodeId) => {
-        setPendingApprovalLoading(true);
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch('http://localhost:5000/api/nodes/reject', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ nodeId })
-            });
-
-            if (response.ok) {
-                // 从列表中移除已拒绝的节点
-                setConflictingPendingNodes(prev => prev.filter(n => n._id !== nodeId));
-                // 如果没有剩余的待审核节点，关闭冲突界面
-                if (conflictingPendingNodes.length <= 1) {
-                    setShowPendingConflict(false);
-                    alert('所有同名申请已处理，您现在可以继续创建节点');
-                }
-            } else {
-                const data = await response.json();
-                alert(data.error || '拒绝失败');
-            }
-        } catch (error) {
-            console.error('拒绝失败:', error);
-            alert('拒绝失败');
-        } finally {
-            setPendingApprovalLoading(false);
-        }
-    };
-
-    // 管理员放弃创建，关闭冲突界面
-    const abandonCreation = () => {
-        setShowPendingConflict(false);
-        setConflictingPendingNodes([]);
-    };
-
-    // 过滤 Node B 候选
-    const filteredNodeBCandidates = {
-        parents: nodeBCandidates.parents.filter(n =>
-            nodeBSearchKeyword.trim() === '' ||
-            n.name.toLowerCase().includes(nodeBSearchKeyword.toLowerCase())
-        ),
-        children: nodeBCandidates.children.filter(n =>
-            nodeBSearchKeyword.trim() === '' ||
-            n.name.toLowerCase().includes(nodeBSearchKeyword.toLowerCase())
-        )
-    };
-
-    // 渲染步骤指示器
-    const renderStepIndicator = () => {
-        if (!currentStep) return null;
-
-        const steps = [
-            { key: STEPS.SELECT_NODE_A, label: '选择节点' },
-            { key: STEPS.SELECT_RELATION, label: '选择关系' },
-            ...(selectedRelationType === RELATION_TYPES.INSERT ? [{ key: STEPS.SELECT_NODE_B, label: '第二节点' }] : []),
-            { key: STEPS.PREVIEW, label: '预览确认' }
-        ];
-
-        const currentIndex = steps.findIndex(s => s.key === currentStep);
-
-        return (
-            <div className="step-indicator">
-                {steps.map((step, index) => (
-                    <React.Fragment key={step.key}>
-                        <div className={`step-dot ${index <= currentIndex ? 'active' : ''} ${step.key === currentStep ? 'current' : ''}`}>
-                            {index + 1}
+                    <div className="sense-relations-editor">
+                      <div className="relation-type-row">
+                        <div className="relation-type-switcher">
+                          {RELATION_OPTIONS.map((option) => (
+                            <button
+                              key={`${sense.localId}-${option.value}`}
+                              type="button"
+                              className={`relation-type-btn ${sense.relationType === option.value ? 'active' : ''}`}
+                              onClick={() => updateSense(sense.localId, {
+                                relationType: option.value,
+                                selectedTarget: null,
+                                insertLeftTarget: null,
+                                insertRightTarget: null,
+                                insertDirection: 'contains',
+                                insertDirectionLocked: false,
+                                insertDirectionHint: '先选定左右释义；若两者无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。'
+                              })}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
                         </div>
-                        {index < steps.length - 1 && (
-                            <div className={`step-line ${index < currentIndex ? 'active' : ''}`} />
-                        )}
-                    </React.Fragment>
-                ))}
-                <div className="step-labels">
-                    {steps.map((step) => (
-                        <span key={step.key} className={`step-label ${step.key === currentStep ? 'current' : ''}`}>
-                            {step.label}
-                        </span>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    // 渲染 Step 1: 选择 Node A
-    const renderSelectNodeA = () => (
-        <div className="association-step">
-            <h5>步骤 1：选择关联节点</h5>
-            <p className="step-description">搜索并选择一个现有节点作为关联目标</p>
-
-            <div className="search-input-group">
-                <input
-                    type="text"
-                    value={searchKeyword}
-                    onChange={(e) => setSearchKeyword(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && searchNodes(searchKeyword)}
-                    placeholder="搜索节点标题或简介..."
-                    className="form-input"
-                />
-                <button onClick={() => searchNodes(searchKeyword)} disabled={searchLoading} className="btn btn-primary">
-                    <Search className="icon-small" />
-                    {searchLoading ? '...' : '搜索'}
-                </button>
-            </div>
-
-            {searchResults.length > 0 && (
-                <div className="search-results">
-                    <h6>搜索结果</h6>
-                    {searchResults.map(node => (
-                        <div key={node._id} className="search-result-item clickable" onClick={() => selectNodeA(node)}>
-                            <div className="node-info">
-                                <strong>{node.name}</strong>
-                                <span className="node-description">{node.description}</span>
-                            </div>
-                            <ArrowRight className="icon-small" />
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {!searchLoading && searchKeyword.trim() !== '' && searchResults.length === 0 && (
-                <div className="search-status"><p>未找到匹配的节点</p></div>
-            )}
-        </div>
-    );
-
-    // 渲染 Step 2: 选择关系类型
-    const renderSelectRelation = () => (
-        <div className="association-step">
-            <h5>步骤 2：选择关系类型</h5>
-            <p className="step-description">
-                选择新节点与 <strong>{selectedNodeA?.name}</strong> 的关系
-            </p>
-
-            <div className="relation-type-cards">
-                <div className="relation-card" onClick={() => selectRelationType(RELATION_TYPES.EXTENDS)}>
-                    <div className="relation-card-icon extends-icon">↑</div>
-                    <div className="relation-card-content">
-                        <h6>作为母域节点</h6>
-                        <p>新节点将成为 {selectedNodeA?.name} 的母域（上级概念）</p>
-                    </div>
-                </div>
-
-                <div className="relation-card" onClick={() => selectRelationType(RELATION_TYPES.CONTAINS)}>
-                    <div className="relation-card-icon contains-icon">↓</div>
-                    <div className="relation-card-content">
-                        <h6>作为子域节点</h6>
-                        <p>新节点将成为 {selectedNodeA?.name} 的子域（下级概念）</p>
-                    </div>
-                </div>
-
-                <div
-                    className={`relation-card ${(!selectedNodeA?.parentNodesInfo?.length && !selectedNodeA?.childNodesInfo?.length) ? 'disabled' : ''}`}
-                    onClick={() => {
-                        if (selectedNodeA?.parentNodesInfo?.length || selectedNodeA?.childNodesInfo?.length) {
-                            selectRelationType(RELATION_TYPES.INSERT);
-                        }
-                    }}
-                >
-                    <div className="relation-card-icon insert-icon">⇄</div>
-                    <div className="relation-card-content">
-                        <h6>插入到两节点之间</h6>
-                        <p>将新节点插入到 {selectedNodeA?.name} 与另一个节点之间</p>
-                        {(!selectedNodeA?.parentNodesInfo?.length && !selectedNodeA?.childNodesInfo?.length) && (
-                            <span className="disabled-hint">该节点没有母域或子域节点</span>
-                        )}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-
-    // 渲染 Step 3: 选择 Node B（插入模式）
-    const renderSelectNodeB = () => (
-        <div className="association-step">
-            <h5>步骤 3：选择第二个节点</h5>
-            <p className="step-description">
-                选择要与 <strong>{selectedNodeA?.name}</strong> 之间插入新节点的目标节点
-            </p>
-
-            <div className="node-b-search">
-                <input
-                    type="text"
-                    value={nodeBSearchKeyword}
-                    onChange={(e) => setNodeBSearchKeyword(e.target.value)}
-                    placeholder="搜索候选节点..."
-                    className="form-input"
-                />
-            </div>
-
-            {filteredNodeBCandidates.parents.length > 0 && (
-                <div className="candidate-section">
-                    <h6 className="candidate-header parent-header">
-                        <span className="candidate-icon">↑</span> 母域节点（上级）
-                    </h6>
-                    <div className="candidate-list">
-                        {filteredNodeBCandidates.parents.map(node => (
-                            <div key={node._id} className="candidate-item" onClick={() => selectNodeB(node, true)}>
-                                <span className="candidate-name">{node.name}</span>
-                                <span className="candidate-hint">插入到 {node.name} 和 {selectedNodeA?.name} 之间</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {filteredNodeBCandidates.children.length > 0 && (
-                <div className="candidate-section">
-                    <h6 className="candidate-header child-header">
-                        <span className="candidate-icon">↓</span> 子域节点（下级）
-                    </h6>
-                    <div className="candidate-list">
-                        {filteredNodeBCandidates.children.map(node => (
-                            <div key={node._id} className="candidate-item" onClick={() => selectNodeB(node, false)}>
-                                <span className="candidate-name">{node.name}</span>
-                                <span className="candidate-hint">插入到 {selectedNodeA?.name} 和 {node.name} 之间</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {filteredNodeBCandidates.parents.length === 0 && filteredNodeBCandidates.children.length === 0 && (
-                <div className="no-candidates"><p>没有找到匹配的候选节点</p></div>
-            )}
-        </div>
-    );
-
-    // 渲染 Step 4: 预览（带动画画布）
-    const renderPreview = () => (
-        <div className="association-step preview-step">
-            <h5>步骤 {selectedRelationType === RELATION_TYPES.INSERT ? '4' : '3'}：预览确认</h5>
-            <p className="step-description">查看关联关系生效后的结构变化</p>
-
-            {/* 预览画布 */}
-            <div className="preview-canvas-container">
-                <canvas
-                    ref={previewCanvasRef}
-                    width={320}
-                    height={200}
-                    className="preview-canvas"
-                />
-                <div className="preview-legend">
-                    <div className="legend-item">
-                        <span className="legend-dot existing"></span>
-                        <span>现有节点</span>
-                    </div>
-                    <div className="legend-item">
-                        <span className="legend-dot preview"></span>
-                        <span>新节点（待审核）</span>
-                    </div>
-                    <div className="legend-item">
-                        <span className="legend-line dashed"></span>
-                        <span>新关联</span>
-                    </div>
-                </div>
-            </div>
-
-            {/* 关系说明 */}
-            <div className="preview-info-box">
-                <div className="preview-info-row">
-                    <span className="info-icon">📍</span>
-                    <span>
-                        {selectedRelationType === RELATION_TYPES.EXTENDS && (
-                            <><strong>{newNodeData.title || '新节点'}</strong> 将成为 <strong>{selectedNodeA?.name}</strong> 的母域</>
-                        )}
-                        {selectedRelationType === RELATION_TYPES.CONTAINS && (
-                            <><strong>{newNodeData.title || '新节点'}</strong> 将成为 <strong>{selectedNodeA?.name}</strong> 的子域</>
-                        )}
-                        {selectedRelationType === RELATION_TYPES.INSERT && (
-                            <><strong>{newNodeData.title || '新节点'}</strong> 将插入到 <strong>{selectedNodeA?.name}</strong> 和 <strong>{selectedNodeB?.name}</strong> 之间</>
-                        )}
-                    </span>
-                </div>
-            </div>
-
-            <div className="preview-actions">
-                <button onClick={replayPreview} className="btn btn-secondary">
-                    <RotateCcw className="icon-small" /> 重播
-                </button>
-                <button onClick={confirmAssociation} className="btn btn-success">
-                    <Check className="icon-small" /> 确认关联
-                </button>
-            </div>
-        </div>
-    );
-
-    // 渲染当前步骤内容
-    const renderCurrentStepContent = () => {
-        switch (currentStep) {
-            case STEPS.SELECT_NODE_A: return renderSelectNodeA();
-            case STEPS.SELECT_RELATION: return renderSelectRelation();
-            case STEPS.SELECT_NODE_B: return renderSelectNodeB();
-            case STEPS.PREVIEW: return renderPreview();
-            default: return null;
-        }
-    };
-
-    if (!isOpen) return null;
-
-    return (
-        <div className="modal-overlay">
-            <div className="modal-content create-node-modal" onClick={(e) => e.stopPropagation()}>
-                <div className="modal-header">
-                    <h3>{showPendingConflict ? '处理同名节点申请' : '创建新节点'}</h3>
-                    <button onClick={showPendingConflict ? abandonCreation : onClose} className="btn-close">
-                        <X className="icon-small" />
-                    </button>
-                </div>
-
-                <div className="modal-body">
-                    {/* 同名待审核节点冲突处理界面 */}
-                    {showPendingConflict ? (
-                        <div className="pending-conflict-panel">
-                            <div className="conflict-alert">
-                                <AlertTriangle className="icon-medium" />
-                                <div className="conflict-alert-content">
-                                    <h4>发现同名节点申请</h4>
-                                    <p>您要创建的节点 "<strong>{newNodeData.title}</strong>" 已有 {conflictingPendingNodes.length} 个用户提交了申请。</p>
-                                    <p>请选择一个申请批准，或拒绝所有申请后继续创建。</p>
-                                </div>
-                            </div>
-
-                            <div className="conflict-pending-list">
-                                {conflictingPendingNodes.map((node, index) => (
-                                    <div key={node._id} className="conflict-pending-card">
-                                        <div className="conflict-pending-header">
-                                            <span className="conflict-index">申请 #{index + 1}</span>
-                                            <span className="conflict-owner">
-                                                申请人: {node.owner?.username || '未知'}
-                                                {node.owner?.profession && (
-                                                    <span className="owner-profession">【{node.owner.profession}】</span>
-                                                )}
-                                            </span>
-                                        </div>
-
-                                        <div className="conflict-pending-body">
-                                            <div className="conflict-field">
-                                                <label>节点标题:</label>
-                                                <span>{node.name}</span>
-                                            </div>
-                                            <div className="conflict-field">
-                                                <label>节点简介:</label>
-                                                <p className="conflict-description">{node.description}</p>
-                                            </div>
-                                            <div className="conflict-field">
-                                                <label>提交时间:</label>
-                                                <span>{new Date(node.createdAt).toLocaleString('zh-CN')}</span>
-                                            </div>
-
-                                            {node.associations && node.associations.length > 0 && (
-                                                <div className="conflict-field">
-                                                    <label>关联关系:</label>
-                                                    <div className="conflict-associations">
-                                                        {node.associations.map((assoc, idx) => (
-                                                            <span key={idx} className={`conflict-assoc-tag ${assoc.relationType}`}>
-                                                                {assoc.relationType === 'extends' ? '母域' : '子域'}: {assoc.targetNode?.name || '未知'}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        <div className="conflict-pending-actions">
-                                            <button
-                                                onClick={() => approvePendingNode(node._id)}
-                                                disabled={pendingApprovalLoading}
-                                                className="btn btn-success"
-                                            >
-                                                <Check className="icon-small" />
-                                                批准此申请
-                                            </button>
-                                            <button
-                                                onClick={() => rejectPendingNode(node._id)}
-                                                disabled={pendingApprovalLoading}
-                                                className="btn btn-danger"
-                                            >
-                                                <X className="icon-small" />
-                                                拒绝
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-
-                            <div className="conflict-footer-actions">
-                                <button onClick={abandonCreation} className="btn btn-secondary">
-                                    放弃创建
-                                </button>
-                            </div>
-                        </div>
-                    ) : (
-                        <>
-                            {/* 节点信息 */}
-                            <div className="node-creation-info">
-                                <div className="info-row">
-                                    <span className="info-label-display">创建者:</span>
-                                    <span className="info-value-display">{username}</span>
-                                </div>
-                                <div className="info-row">
-                                    <span className="info-label-display">当前域主:</span>
-                                    <span className="info-value-display">{username}</span>
-                                </div>
-                            </div>
-
-                            {/* 基本信息 */}
-                            <div className="form-group">
-                                <label>节点标题 *</label>
-                                <input
-                                    type="text"
-                                    value={newNodeData.title}
-                                    onChange={(e) => setNewNodeData({ ...newNodeData, title: e.target.value })}
-                                    placeholder="输入节点标题"
-                                    className="form-input"
-                                />
-                                {newNodeData.title.trim() === '' && <span className="error-text">标题不能为空</span>}
-                                {newNodeData.title.trim() !== '' && existingNodes.some(node =>
-                                    node.status === 'approved' && node.name === newNodeData.title
-                                ) && (
-                                    <span className="error-text">该标题已有审核通过的节点</span>
-                                )}
-                            </div>
-
-                            <div className="form-group">
-                                <label>节点简介 *</label>
-                                <textarea
-                                    value={newNodeData.description}
-                                    onChange={(e) => setNewNodeData({ ...newNodeData, description: e.target.value })}
-                                    placeholder="输入节点简介"
-                                    rows="3"
-                                    className="form-textarea"
-                                />
-                                {newNodeData.description.trim() === '' && <span className="error-text">简介不能为空</span>}
-                            </div>
-
-                            {/* 关联关系部分 */}
-                            <div className="associations-section">
-                                <div className="associations-header" onClick={() => setIsAssociationListExpanded(!isAssociationListExpanded)}>
-                                    <h4>
-                                        关联关系 {!isAdmin && <span className="required-star">*</span>}
-                                        <span className="association-count">({associations.length})</span>
-                                    </h4>
-                                    {isAssociationListExpanded ? <ChevronUp className="icon-small" /> : <ChevronDown className="icon-small" />}
-                                </div>
-
-                                {/* 已添加的关联关系列表 */}
-                                {isAssociationListExpanded && associations.length > 0 && (
-                                    <div className="associations-list">
-                                        {associations.map((association, index) => (
-                                            <div
-                                                key={index}
-                                                className={`association-item ${currentStep === null ? 'clickable' : ''}`}
-                                                onClick={() => {
-                                                    if (currentStep === null) {
-                                                        editAssociation(index);
-                                                    }
-                                                }}
-                                            >
-                                                <div className="association-info">
-                                                    <span className="association-display-text">{association.displayText}</span>
-                                                    <span className={`relation-type-badge ${association.type}`}>
-                                                        {association.type === 'extends' && '母域'}
-                                                        {association.type === 'contains' && '子域'}
-                                                        {association.type === 'insert' && '插入'}
-                                                    </span>
-                                                </div>
-                                                <div className="association-actions">
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            removeAssociation(index);
-                                                        }}
-                                                        className="btn btn-danger btn-small"
-                                                        disabled={currentStep !== null}
-                                                    >
-                                                        <X className="icon-small" />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {!isAdmin && associations.length === 0 && !currentStep && (
-                                    <span className="error-text">至少需要一个关联关系</span>
-                                )}
-
-                                {/* 关联关系编辑区域 */}
-                                {currentStep ? (
-                                    <div className="association-editor">
-                                        {renderStepIndicator()}
-                                        {renderCurrentStepContent()}
-
-                                        <div className="editor-navigation">
-                                            <button onClick={goBack} className="btn btn-secondary">
-                                                <ArrowLeft className="icon-small" /> 返回
-                                            </button>
-                                            <button onClick={cancelAssociationEdit} className="btn btn-danger">
-                                                取消
-                                            </button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <button onClick={startAddAssociation} className="btn btn-primary add-association-btn">
-                                        <Plus className="icon-small" /> 添加关联关系
-                                    </button>
-                                )}
-                            </div>
-                        </>
-                    )}
-                </div>
-
-                {/* Modal Footer - 只在非冲突模式下显示 */}
-                {!showPendingConflict && (
-                    <div className="modal-footer">
-                        <button onClick={onClose} className="btn btn-secondary">取消</button>
                         <button
-                            onClick={submitNodeCreation}
-                            disabled={!canSubmitNode() || currentStep !== null}
-                            className={`btn ${canSubmitNode() && currentStep === null ? 'btn-success' : 'btn-disabled'}`}
+                          type="button"
+                          className="relation-help-btn"
+                          onClick={() => setIsRelationHelpOpen(true)}
                         >
-                            {isAdmin ? '创建节点' : '申请创建'}
+                          关系说明
                         </button>
+                      </div>
+
+                      <div className="relation-hint-text">{relationHint}</div>
+
+                      {sense.relationType === 'insert' ? (
+                        <>
+                          <div className="relation-visual relation-visual-insert">
+                            <button
+                              type="button"
+                              className="relation-node target clickable"
+                              onClick={() => openTargetSelector(sense.localId, 'left')}
+                            >
+                              {sense.insertLeftTarget?.displayName || '点此选择左侧释义'}
+                            </button>
+                            <button
+                              type="button"
+                              className={`insert-segment-btn ${sense.insertDirectionLocked ? 'locked' : ''}`}
+                              onClick={() => toggleInsertDirection(sense.localId)}
+                              disabled={sense.insertDirectionLocked}
+                              title={sense.insertDirectionLocked ? '该方向已由左右节点现有关联锁定，不能切换' : '点击可切换插入方向'}
+                            >
+                              {insertSegmentText}
+                            </button>
+                            <div className="relation-node current">
+                              {sense.title?.trim() || `当前释义${index + 1}`}
+                            </div>
+                            <button
+                              type="button"
+                              className={`insert-segment-btn ${sense.insertDirectionLocked ? 'locked' : ''}`}
+                              onClick={() => toggleInsertDirection(sense.localId)}
+                              disabled={sense.insertDirectionLocked}
+                              title={sense.insertDirectionLocked ? '该方向已由左右节点现有关联锁定，不能切换' : '点击可切换插入方向'}
+                            >
+                              {insertSegmentText}
+                            </button>
+                            <button
+                              type="button"
+                              className="relation-node target clickable"
+                              onClick={() => openTargetSelector(sense.localId, 'right')}
+                            >
+                              {sense.insertRightTarget?.displayName || '点此选择右侧释义'}
+                            </button>
+                          </div>
+                          <div className={`insert-direction-state ${sense.insertDirectionLocked ? 'locked' : ''}`}>
+                            {sense.insertDirectionLocked
+                              ? '当前方向已锁定（由左右释义原有上下级关系决定）'
+                              : '当前方向可切换（点击任一线段即可切换）'}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="relation-visual relation-visual-single">
+                          {sense.relationType === 'contains' ? (
+                            <>
+                              <div className="relation-node current">{sense.title?.trim() || `当前释义${index + 1}`}</div>
+                              <div className="relation-arrow">下级 ↓</div>
+                              <button
+                                type="button"
+                                className="relation-node target clickable"
+                                onClick={() => openTargetSelector(sense.localId, 'single')}
+                              >
+                                {sense.selectedTarget?.displayName || '点此选择目标释义'}
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="relation-node target clickable"
+                                onClick={() => openTargetSelector(sense.localId, 'single')}
+                              >
+                                {sense.selectedTarget?.displayName || '点此选择目标释义'}
+                              </button>
+                              <div className="relation-arrow">上级 ↑</div>
+                              <div className="relation-node current">{sense.title?.trim() || `当前释义${index + 1}`}</div>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        className="btn btn-success add-relation-btn"
+                        onClick={() => addRelationToSense(sense.localId)}
+                      >
+                        <Link2 className="icon-small" />
+                        确认添加当前关系
+                      </button>
+                      {fieldErrors.relation && <span className="error-text inline-field-error">{fieldErrors.relation}</span>}
+
+                      <div className="sense-relations-list relation-inner-scroll">
+                        {sense.relations.length === 0 ? (
+                          <div className="empty-relation-hint">当前释义还没有关联关系</div>
+                        ) : (
+                          sense.relations.map((relation) => (
+                            <div key={relation.id} className="relation-card">
+                              <div className="relation-card-top">
+                                <span className="relation-type-pill">{RELATION_LABEL_MAP[relation.relationType] || relation.relationType}</span>
+                                <button
+                                  type="button"
+                                  className="btn btn-danger btn-small"
+                                  onClick={() => removeRelationFromSense(sense.localId, relation.id)}
+                                >
+                                  删除
+                                </button>
+                              </div>
+
+                              {relation.kind === 'insert' ? (
+                                <div className="relation-visual relation-visual-insert compact">
+                                  <div className="relation-node target">{relation.leftTarget?.displayName || '-'}</div>
+                                  <div className="insert-segment-static">
+                                    {relation.direction === 'extends' ? '←拓展←' : '→包含→'}
+                                  </div>
+                                  <div className="relation-node current">{sense.title?.trim() || `当前释义${index + 1}`}</div>
+                                  <div className="insert-segment-static">
+                                    {relation.direction === 'extends' ? '←拓展←' : '→包含→'}
+                                  </div>
+                                  <div className="relation-node target">{relation.rightTarget?.displayName || '-'}</div>
+                                </div>
+                              ) : (
+                                <div className="relation-visual relation-visual-single compact">
+                                  {relation.relationType === 'contains' ? (
+                                    <>
+                                      <div className="relation-node current">{sense.title?.trim() || `当前释义${index + 1}`}</div>
+                                      <div className="relation-arrow">下级 ↓</div>
+                                      <div className="relation-node target">{relation.target?.displayName || '-'}</div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div className="relation-node target">{relation.target?.displayName || '-'}</div>
+                                      <div className="relation-arrow">上级 ↑</div>
+                                      <div className="relation-node current">{sense.title?.trim() || `当前释义${index + 1}`}</div>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+
                     </div>
-                )}
+                  </div>
+                );
+              })}
             </div>
+          </div>
         </div>
-    );
+
+        <div className="modal-footer">
+          <button onClick={onClose} className="btn btn-secondary">取消</button>
+          <button onClick={submitNodeCreation} className="btn btn-primary" disabled={!canSubmit}>确认创建</button>
+        </div>
+
+        {targetSelector.isOpen && (
+          <div className="target-selector-overlay" onClick={closeTargetSelector}>
+            <div className="target-selector-panel" onClick={(event) => event.stopPropagation()}>
+              <div className="target-selector-header">
+                <strong>{selectorTitle}</strong>
+                <button type="button" className="btn btn-danger btn-small" onClick={closeTargetSelector}>
+                  <X className="icon-small" />
+                </button>
+              </div>
+
+              <div className="target-selector-search-row">
+                <Search className="target-selector-search-icon" size={16} />
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="搜索：标题-释义题目（支持 #include / #expand）"
+                  value={targetSelector.keyword}
+                  onChange={(e) => setTargetSelector((prev) => ({ ...prev, keyword: e.target.value }))}
+                />
+              </div>
+              <div className="target-selector-command-hint">
+                <code>#include</code> 显示另一侧释义的上级，<code>#expand</code> 显示另一侧释义的下级
+              </div>
+
+              <div className="target-selector-results relation-inner-scroll">
+                {targetSelector.loading && (
+                  <div className="target-selector-empty">搜索中...</div>
+                )}
+                {!targetSelector.loading && !parsedSelectorKeyword.textKeyword && !parsedSelectorKeyword.mode && (
+                  <div className="target-selector-empty">输入关键字开始搜索</div>
+                )}
+                {!targetSelector.loading && (parsedSelectorKeyword.textKeyword || parsedSelectorKeyword.mode) && targetSelector.results.length === 0 && (
+                  <div className="target-selector-empty">没有匹配结果</div>
+                )}
+                {!targetSelector.loading && targetSelector.results.map((item) => (
+                  <button
+                    key={item.searchKey}
+                    type="button"
+                    className={`search-result-item selectable ${targetSelector.selected?.searchKey === item.searchKey ? 'selected' : ''}`}
+                    onClick={() => setTargetSelector((prev) => ({ ...prev, selected: item }))}
+                  >
+                    <div className="node-info">
+                      <div className="node-title-row">
+                        {targetSelector.side !== 'single' && !!item.relationToAnchor && (
+                          <span className={`relation-prefix relation-${item.relationToAnchor || 'none'}`}>
+                            {item.relationToAnchor || '无关'}
+                          </span>
+                        )}
+                        <strong>{renderKeywordHighlight(item.displayName, selectorSearchHighlightKeyword)}</strong>
+                      </div>
+                      <span className="node-description">{item.description}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="target-selector-footer">
+                <button type="button" className="btn btn-secondary" onClick={closeTargetSelector}>取消</button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={confirmTargetSelection}
+                  disabled={!targetSelector.selected}
+                >
+                  确认选择
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isRelationHelpOpen && (
+          <div className="target-selector-overlay" onClick={() => setIsRelationHelpOpen(false)}>
+            <div className="target-selector-panel relation-help-panel" onClick={(event) => event.stopPropagation()}>
+              <div className="target-selector-header">
+                <strong>关联关系说明与示例</strong>
+                <button type="button" className="btn btn-danger btn-small" onClick={() => setIsRelationHelpOpen(false)}>
+                  <X className="icon-small" />
+                </button>
+              </div>
+              <div className="relation-help-content relation-inner-scroll">
+                <p><strong>包含</strong>：当前释义为上级，目标释义为下级。</p>
+                <p><strong>扩展</strong>：目标释义为上级，当前释义为下级。</p>
+                <p><strong>插入（可切换）</strong>：左右释义若原本无直接关系，可点击任一线段在“→包含→包含”和“←拓展←拓展”之间切换。</p>
+                <p><strong>插入（锁定）</strong>：若左右释义原本已有上下级，方向将自动锁定且不可切换，并与原上下级方向保持一致。</p>
+                <p><strong>重连语义</strong>：当左右释义原本有直接关联时，保存后会断开该直连，改为“上级 -> 当前 -> 下级”。</p>
+                <p>例如：A 直接包含 B，插入 C 后变为 A 只包含 C，B 只扩展到 C。</p>
+                <p>搜索时可用 <code>#include</code> 查看另一侧释义全部上级，用 <code>#expand</code> 查看全部下级；结果前会标注“上级/下级/无关”。</p>
+              </div>
+              <div className="target-selector-footer">
+                <button type="button" className="btn btn-primary" onClick={() => setIsRelationHelpOpen(false)}>我知道了</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 export default CreateNodeModal;

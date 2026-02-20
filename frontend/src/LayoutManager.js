@@ -11,6 +11,17 @@ class LayoutManager {
     this.centerY = height / 2;
   }
 
+  resolveNodeLabel(node = {}) {
+    const title = typeof node?.name === 'string' ? node.name.trim() : '';
+    const senseTitle = typeof node?.activeSenseTitle === 'string'
+      ? node.activeSenseTitle.trim()
+      : '';
+    if (title && senseTitle) {
+      return `${title}\n${senseTitle}`;
+    }
+    return title || '未命名知识域';
+  }
+
   resize(width, height) {
     this.width = width;
     this.height = height;
@@ -62,7 +73,7 @@ class LayoutManager {
         scale: 1,
         opacity: 1,
         type: 'root',
-        label: node.name,
+        label: this.resolveNodeLabel(node),
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
@@ -84,7 +95,7 @@ class LayoutManager {
         scale: 1,
         opacity: 1,
         type: 'featured',
-        label: node.name,
+        label: this.resolveNodeLabel(node),
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
@@ -117,7 +128,7 @@ class LayoutManager {
       scale: 1,
       opacity: 1,
       type: 'center',
-      label: centerNode.name,
+      label: this.resolveNodeLabel(centerNode),
       visualStyle: centerNode.visualStyle || null,
       labelColor: centerNode.visualStyle?.textColor || '',
       data: centerNode,
@@ -143,7 +154,7 @@ class LayoutManager {
         scale: 1,
         opacity: 1,
         type: 'parent',
-        label: node.name,
+        label: this.resolveNodeLabel(node),
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
@@ -177,7 +188,7 @@ class LayoutManager {
         scale: 1,
         opacity: 1,
         type: 'child',
-        label: node.name,
+        label: this.resolveNodeLabel(node),
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
