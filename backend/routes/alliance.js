@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const EntropyAlliance = require('../models/EntropyAlliance');
 const User = require('../models/User');
 const Node = require('../models/Node');
 const { authenticateToken } = require('../middleware/auth');
+const { writeNotificationsToCollection } = require('../services/notificationStore');
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -15,6 +17,31 @@ const getIdString = (value) => {
     return text === '[object Object]' ? '' : text;
   }
   return '';
+};
+
+const buildNotificationPayload = (payload = {}) => ({
+  ...payload,
+  _id: payload?._id && mongoose.Types.ObjectId.isValid(String(payload._id))
+    ? new mongoose.Types.ObjectId(String(payload._id))
+    : new mongoose.Types.ObjectId(),
+  createdAt: payload?.createdAt ? new Date(payload.createdAt) : new Date()
+});
+
+const pushNotificationToUser = (user, payload = {}) => {
+  if (!user) return null;
+  const notification = buildNotificationPayload(payload);
+  user.notifications = Array.isArray(user.notifications) ? user.notifications : [];
+  user.notifications.unshift(notification);
+  return notification;
+};
+
+const toCollectionNotificationDoc = (userId, notification = {}) => {
+  const source = typeof notification?.toObject === 'function' ? notification.toObject() : notification;
+  return {
+    ...source,
+    _id: source?._id,
+    userId
+  };
 };
 
 const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
@@ -143,24 +170,39 @@ const broadcastAllianceAnnouncement = async ({
   }
 
   const changedMembers = [];
+  const collectionNotificationDocs = [];
   for (const member of members) {
     if (actorId && getIdString(member._id) === actorId) {
       continue;
     }
-    member.notifications.unshift({
+    const memberNotification = pushNotificationToUser(member, {
       type: 'alliance_announcement',
       title: `熵盟「${normalizedAllianceName}」发布了新公告`,
       message: normalizedAnnouncement,
       read: false,
       status: 'info',
       allianceId: targetAllianceId,
-      allianceName: normalizedAllianceName
+      allianceName: normalizedAllianceName,
+      createdAt: new Date()
     });
     changedMembers.push(member);
+    collectionNotificationDocs.push({
+      _id: memberNotification?._id,
+      userId: member._id,
+      type: 'alliance_announcement',
+      title: `熵盟「${normalizedAllianceName}」发布了新公告`,
+      message: normalizedAnnouncement,
+      read: false,
+      status: 'info',
+      allianceId: targetAllianceId,
+      allianceName: normalizedAllianceName,
+      createdAt: new Date()
+    });
   }
 
   if (changedMembers.length > 0) {
     await Promise.all(changedMembers.map((member) => member.save()));
+    await writeNotificationsToCollection(collectionNotificationDocs);
   }
   return changedMembers.length;
 };
@@ -388,7 +430,7 @@ router.post('/join/:allianceId', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '你已提交过该熵盟的加入申请，请等待盟主审核' });
     }
 
-    founderUser.notifications.unshift({
+    const joinApplyNotification = pushNotificationToUser(founderUser, {
       type: 'alliance_join_apply',
       title: `有人申请加入熵盟「${alliance.name}」`,
       message: `${user.username} 申请加入熵盟「${alliance.name}」，请审核。`,
@@ -402,6 +444,9 @@ router.post('/join/:allianceId', authenticateToken, async (req, res) => {
       inviteeUsername: user.username
     });
     await founderUser.save();
+    await writeNotificationsToCollection([
+      toCollectionNotificationDoc(founderUser._id, joinApplyNotification)
+    ]);
 
     res.json({
       message: '申请已提交，等待盟主审核',
@@ -818,7 +863,7 @@ router.post('/leader/:allianceId/transfer', authenticateToken, async (req, res) 
     );
 
     // 给新盟主一条明确通知
-    nextLeader.notifications.unshift({
+    const transferLeaderNotification = pushNotificationToUser(nextLeader, {
       type: 'info',
       title: `你已成为熵盟「${alliance.name}」盟主`,
       message: `${previousLeader.username}已将盟主转交给你`,
@@ -833,6 +878,9 @@ router.post('/leader/:allianceId/transfer', authenticateToken, async (req, res) 
       respondedAt: transferAt
     });
     await nextLeader.save();
+    await writeNotificationsToCollection([
+      toCollectionNotificationDoc(nextLeader._id, transferLeaderNotification)
+    ]);
 
     // 自动发布并广播熵盟公告（所有盟内成员可见）
     await broadcastAllianceAnnouncement({

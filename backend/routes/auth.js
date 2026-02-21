@@ -5,8 +5,24 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const Node = require('../models/Node');
+const DistributionParticipant = require('../models/DistributionParticipant');
 const EntropyAlliance = require('../models/EntropyAlliance');
 const GameSetting = require('../models/GameSetting');
+const {
+  countUnreadNotificationsFromCollection,
+  clearUserNotificationsFromCollection,
+  isNotificationCollectionReadEnabled,
+  listUserNotificationsFromCollection,
+  markAllNotificationsReadFromCollection,
+  markNotificationReadFromCollection,
+  serializeNotificationForResponse,
+  upsertNotificationsToCollection,
+  writeNotificationsToCollection
+} = require('../services/notificationStore');
+const {
+  findShortestApprovedPathByNames,
+  listApprovedNodesByNames
+} = require('../services/domainGraphTraversalService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -37,6 +53,45 @@ const getIdString = (value) => {
   return '';
 };
 
+const buildNotificationPayload = (payload = {}) => {
+  const notificationId = payload?._id && isValidObjectId(String(payload._id))
+    ? new mongoose.Types.ObjectId(String(payload._id))
+    : new mongoose.Types.ObjectId();
+  const createdAt = payload?.createdAt ? new Date(payload.createdAt) : new Date();
+  return {
+    ...payload,
+    _id: notificationId,
+    createdAt
+  };
+};
+
+const pushNotificationToUser = (user, payload = {}) => {
+  if (!user) return null;
+  const notification = buildNotificationPayload(payload);
+  user.notifications = Array.isArray(user.notifications) ? user.notifications : [];
+  user.notifications.unshift(notification);
+  return notification;
+};
+
+const toCollectionNotificationDoc = (userId, notification = {}) => {
+  const source = typeof notification?.toObject === 'function' ? notification.toObject() : notification;
+  return {
+    ...source,
+    _id: source?._id,
+    userId
+  };
+};
+
+const writeNotificationToCollectionForUser = async (userId, notification) => {
+  if (!notification) return;
+  await writeNotificationsToCollection([toCollectionNotificationDoc(userId, notification)]);
+};
+
+const upsertNotificationToCollectionForUser = async (userId, notification) => {
+  if (!notification) return;
+  await upsertNotificationsToCollection([toCollectionNotificationDoc(userId, notification)]);
+};
+
 const resolveDistributionLockTimeline = (lock = {}) => {
   const executeAtMs = new Date(lock?.executeAt || 0).getTime();
   if (!Number.isFinite(executeAtMs) || executeAtMs <= 0) {
@@ -64,10 +119,9 @@ const formatDurationCN = (secondsRaw = 0) => {
 };
 
 const appendArrivalNotification = (user, targetNodeName, spentSeconds = 0) => {
-  if (!user || !targetNodeName) return;
+  if (!user || !targetNodeName) return null;
   const message = `您已到达了${targetNodeName}，花费${formatDurationCN(spentSeconds)}。`;
-  user.notifications = Array.isArray(user.notifications) ? user.notifications : [];
-  user.notifications.unshift({
+  return pushNotificationToUser(user, {
     type: 'info',
     title: `已到达：${targetNodeName}`,
     message,
@@ -81,16 +135,60 @@ const appendArrivalNotification = (user, targetNodeName, spentSeconds = 0) => {
 const findActiveManualDistributionLockForUser = async (userId, now = new Date()) => {
   if (!isValidObjectId(userId)) return null;
   const currentTimeMs = now.getTime();
-  const nodes = await Node.find({
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+  const participantRows = await DistributionParticipant.find({
+    userId: userObjectId,
+    exitedAt: null
+  })
+    .sort({ joinedAt: -1 })
+    .limit(100)
+    .select('nodeId executeAt joinedAt exitedAt')
+    .lean();
+
+  if (participantRows.length > 0) {
+    const nodeIds = Array.from(new Set(
+      participantRows
+        .map((item) => getIdString(item?.nodeId))
+        .filter((id) => isValidObjectId(id))
+    )).map((id) => new mongoose.Types.ObjectId(id));
+
+    const nodes = nodeIds.length > 0
+      ? await Node.find({
+        status: 'approved',
+        _id: { $in: nodeIds },
+        knowledgeDistributionLocked: { $ne: null }
+      }).select('name knowledgeDistributionLocked')
+      : [];
+    const nodeMap = new Map(nodes.map((item) => [getIdString(item?._id), item]));
+
+    for (const row of participantRows) {
+      const node = nodeMap.get(getIdString(row?.nodeId));
+      if (!node) continue;
+      const lock = node?.knowledgeDistributionLocked;
+      if (!lock) continue;
+      const lockExecuteAtMs = new Date(lock?.executeAt || 0).getTime();
+      const rowExecuteAtMs = new Date(row?.executeAt || 0).getTime();
+      if (!lockExecuteAtMs || !rowExecuteAtMs || lockExecuteAtMs !== rowExecuteAtMs) continue;
+      const timeline = resolveDistributionLockTimeline(lock);
+      if (!timeline.endAtMs || currentTimeMs >= timeline.endAtMs) continue;
+      return {
+        node,
+        lock,
+        timeline
+      };
+    }
+  }
+
+  const legacyNodes = await Node.find({
     status: 'approved',
     'knowledgeDistributionLocked.participants': {
       $elemMatch: {
-        userId: new mongoose.Types.ObjectId(userId),
+        userId: userObjectId,
         exitedAt: null
       }
     }
   }).select('name knowledgeDistributionLocked');
-  for (const node of nodes) {
+  for (const node of legacyNodes) {
     const lock = node?.knowledgeDistributionLocked;
     if (!lock) continue;
     const timeline = resolveDistributionLockTimeline(lock);
@@ -163,7 +261,7 @@ const handleResignRequestDecision = async ({
   notification.respondedAt = nowDate;
 
   if (requester) {
-    requester.notifications.unshift({
+    const resultNotification = pushNotificationToUser(requester, {
       type: 'domain_admin_resign_result',
       title: `卸任申请结果：${notification.nodeName || node?.name || '知识域'}`,
       message: decision === 'accepted'
@@ -180,6 +278,7 @@ const handleResignRequestDecision = async ({
       respondedAt: nowDate
     });
     await requester.save();
+    await writeNotificationToCollectionForUser(requester._id, resultNotification);
   }
 
   return {
@@ -195,9 +294,9 @@ const pushDomainMasterApplyResult = ({
   processorUser,
   nowDate
 }) => {
-  if (!applicant || applicant.role !== 'common') return;
+  if (!applicant || applicant.role !== 'common') return null;
 
-  applicant.notifications.unshift({
+  return pushNotificationToUser(applicant, {
     type: 'domain_master_apply_result',
     title: `域主申请结果：${node?.name || '知识域'}`,
     message: decision === 'accepted'
@@ -253,6 +352,7 @@ const handleDomainMasterApplyDecision = async ({
     }).select('_id notifications');
 
     const saveAdminUsers = [];
+    const changedAdminNotificationDocs = [];
     for (const adminUser of adminUsers) {
       let changed = false;
       for (const adminNotification of adminUser.notifications || []) {
@@ -267,6 +367,7 @@ const handleDomainMasterApplyDecision = async ({
         adminNotification.status = 'rejected';
         adminNotification.read = true;
         adminNotification.respondedAt = nowDate;
+        changedAdminNotificationDocs.push(toCollectionNotificationDoc(adminUser._id, adminNotification));
         changed = true;
       }
       if (changed) {
@@ -276,6 +377,9 @@ const handleDomainMasterApplyDecision = async ({
 
     if (saveAdminUsers.length > 0) {
       await Promise.all(saveAdminUsers);
+      if (changedAdminNotificationDocs.length > 0) {
+        await upsertNotificationsToCollection(changedAdminNotificationDocs);
+      }
     } else {
       notification.status = 'rejected';
       notification.read = true;
@@ -283,7 +387,7 @@ const handleDomainMasterApplyDecision = async ({
     }
 
     if (applicant) {
-      pushDomainMasterApplyResult({
+      const applyResultNotification = pushDomainMasterApplyResult({
         applicant,
         node,
         decision: 'rejected',
@@ -291,6 +395,7 @@ const handleDomainMasterApplyDecision = async ({
         nowDate
       });
       await applicant.save();
+      await writeNotificationToCollectionForUser(applicant._id, applyResultNotification);
     }
     return {
       decision: 'rejected',
@@ -365,6 +470,7 @@ const handleDomainMasterApplyDecision = async ({
 
   const applicantDecisionMap = new Map();
   const updatedAdminUsers = [];
+  const updatedAdminNotificationDocs = [];
 
   for (const adminUser of adminUsers) {
     let changed = false;
@@ -382,6 +488,7 @@ const handleDomainMasterApplyDecision = async ({
       adminNotification.status = decision;
       adminNotification.read = true;
       adminNotification.respondedAt = nowDate;
+      updatedAdminNotificationDocs.push(toCollectionNotificationDoc(adminUser._id, adminNotification));
       applicantDecisionMap.set(candidateId, decision);
       changed = true;
     }
@@ -392,11 +499,14 @@ const handleDomainMasterApplyDecision = async ({
 
   if (updatedAdminUsers.length > 0) {
     await Promise.all(updatedAdminUsers);
+    if (updatedAdminNotificationDocs.length > 0) {
+      await upsertNotificationsToCollection(updatedAdminNotificationDocs);
+    }
   } else {
     notification.status = 'accepted';
     notification.read = true;
     notification.respondedAt = nowDate;
-    pushDomainMasterApplyResult({
+    const acceptedResultNotification = pushDomainMasterApplyResult({
       applicant,
       node,
       decision: 'accepted',
@@ -404,6 +514,7 @@ const handleDomainMasterApplyDecision = async ({
       nowDate
     });
     await applicant.save();
+    await writeNotificationToCollectionForUser(applicant._id, acceptedResultNotification);
     return {
       decision: 'accepted',
       message: '已同意该用户成为域主',
@@ -418,20 +529,27 @@ const handleDomainMasterApplyDecision = async ({
     const applicantMap = new Map(applicants.map((userItem) => [getIdString(userItem._id), userItem]));
 
     const saveApplicants = [];
+    const applicantNotificationDocs = [];
     for (const [candidateId, decision] of applicantDecisionMap.entries()) {
       const candidate = applicantMap.get(candidateId);
       if (!candidate || candidate.role !== 'common') continue;
-      pushDomainMasterApplyResult({
+      const candidateNotification = pushDomainMasterApplyResult({
         applicant: candidate,
         node,
         decision,
         processorUser,
         nowDate
       });
+      if (candidateNotification) {
+        applicantNotificationDocs.push(toCollectionNotificationDoc(candidate._id, candidateNotification));
+      }
       saveApplicants.push(candidate.save());
     }
     if (saveApplicants.length > 0) {
       await Promise.all(saveApplicants);
+      if (applicantNotificationDocs.length > 0) {
+        await writeNotificationsToCollection(applicantNotificationDocs);
+      }
     }
   }
 
@@ -512,7 +630,7 @@ const handleAllianceJoinApplyDecision = async ({
 
   if (applicant) {
     const allianceName = alliance.name || notification.allianceName || '熵盟';
-    applicant.notifications.unshift({
+    const applyResultNotification = pushNotificationToUser(applicant, {
       type: 'alliance_join_apply_result',
       title: `入盟申请结果：${allianceName}`,
       message: decision === 'accepted'
@@ -529,6 +647,7 @@ const handleAllianceJoinApplyDecision = async ({
       respondedAt: nowDate
     });
     await applicant.save();
+    await writeNotificationToCollectionForUser(applicant._id, applyResultNotification);
   }
 
   return {
@@ -542,6 +661,7 @@ const settleExpiredResignRequestsForUser = async (user) => {
   if (!user || !Array.isArray(user.notifications) || user.notifications.length === 0) return false;
 
   let changed = false;
+  const changedNotifications = [];
   const now = Date.now();
   for (const notification of user.notifications) {
     if (
@@ -556,11 +676,17 @@ const settleExpiredResignRequestsForUser = async (user) => {
         isAuto: true
       });
       changed = true;
+      changedNotifications.push(notification);
     }
   }
 
   if (changed) {
     await user.save();
+    if (changedNotifications.length > 0) {
+      await upsertNotificationsToCollection(
+        changedNotifications.map((item) => toCollectionNotificationDoc(user._id, item))
+      );
+    }
   }
   return changed;
 };
@@ -777,69 +903,6 @@ const toTravelResponse = (progress) => {
   };
 };
 
-const buildNodeGraph = (nodes) => {
-  const nameToId = new Map();
-  const idToNode = new Map();
-  const adjacency = new Map();
-
-  nodes.forEach((node) => {
-    const id = node._id.toString();
-    nameToId.set(node.name, id);
-    idToNode.set(id, node);
-    adjacency.set(id, new Set());
-  });
-
-  const link = (a, b) => {
-    if (!a || !b || a === b) return;
-    adjacency.get(a)?.add(b);
-    adjacency.get(b)?.add(a);
-  };
-
-  nodes.forEach((node) => {
-    const nodeId = node._id.toString();
-    (node.relatedParentDomains || []).forEach((parentName) => {
-      link(nodeId, nameToId.get(parentName));
-    });
-    (node.relatedChildDomains || []).forEach((childName) => {
-      link(nodeId, nameToId.get(childName));
-    });
-  });
-
-  return { nameToId, idToNode, adjacency };
-};
-
-const bfsShortestPath = (startId, targetId, adjacency) => {
-  if (startId === targetId) return [startId];
-  const queue = [startId];
-  const visited = new Set([startId]);
-  const prev = new Map();
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    const neighbors = adjacency.get(current) || new Set();
-
-    for (const next of neighbors) {
-      if (visited.has(next)) continue;
-      visited.add(next);
-      prev.set(next, current);
-
-      if (next === targetId) {
-        const path = [targetId];
-        let step = targetId;
-        while (prev.has(step)) {
-          step = prev.get(step);
-          path.push(step);
-        }
-        return path.reverse();
-      }
-
-      queue.push(next);
-    }
-  }
-
-  return null;
-};
-
 const assignMovingTravelState = (user, path, targetNodeId, unitDurationSeconds, startedAt = new Date()) => {
   user.travelState = {
     status: TRAVEL_STATUS.MOVING,
@@ -859,33 +922,50 @@ const assignMovingTravelState = (user, path, targetNodeId, unitDurationSeconds, 
 };
 
 const startTravelFromCurrentLocation = async (user, targetNodeId, options = {}) => {
-  if (!user.location || user.location.trim() === '') {
+  const currentLocationName = typeof user.location === 'string' ? user.location.trim() : '';
+  if (!currentLocationName) {
     return { ok: false, statusCode: 400, error: '请先设置当前位置后再移动' };
   }
 
-  const approvedNodes = await Node.find({ status: 'approved' })
-    .select('_id name relatedParentDomains relatedChildDomains')
-    .lean();
-  const { nameToId, idToNode, adjacency } = buildNodeGraph(approvedNodes);
-
-  const startNodeId = nameToId.get(user.location);
-  if (!startNodeId) {
-    return { ok: false, statusCode: 400, error: '当前位置节点不存在或未审批通过' };
-  }
-
-  const targetId = targetNodeId.toString();
-  const targetNode = idToNode.get(targetId);
+  const targetNode = await Node.findOne({
+    _id: targetNodeId,
+    status: 'approved'
+  }).select('_id name').lean();
   if (!targetNode) {
     return { ok: false, statusCode: 404, error: '目标节点不存在或未审批通过' };
   }
 
-  if (startNodeId === targetId) {
+  if (currentLocationName === targetNode.name) {
     return { ok: false, statusCode: 400, error: '目标节点与当前位置相同，无需移动' };
   }
 
-  const shortestPathIds = bfsShortestPath(startNodeId, targetId, adjacency);
-  if (!shortestPathIds || shortestPathIds.length < 2) {
+  const startRows = await listApprovedNodesByNames([currentLocationName], { select: '_id name' });
+  if (!Array.isArray(startRows) || startRows.length === 0) {
+    return { ok: false, statusCode: 400, error: '当前位置节点不存在或未审批通过' };
+  }
+
+  const shortestPathResult = await findShortestApprovedPathByNames({
+    startName: currentLocationName,
+    targetName: targetNode.name,
+    maxDepth: 120,
+    maxVisited: 300000
+  });
+  if (!shortestPathResult.found || !Array.isArray(shortestPathResult.pathNames) || shortestPathResult.pathNames.length < 2) {
     return { ok: false, statusCode: 400, error: '当前位置与目标节点之间不存在可达路径' };
+  }
+
+  const pathRows = await listApprovedNodesByNames(shortestPathResult.pathNames, { select: '_id name' });
+  const nodeByName = new Map(pathRows.map((item) => [item?.name || '', item]));
+  const path = [];
+  for (const nodeName of shortestPathResult.pathNames) {
+    const nodeRow = nodeByName.get(nodeName);
+    if (!nodeRow?._id || !nodeRow?.name) {
+      return { ok: false, statusCode: 409, error: '路径计算结果失效，请重试' };
+    }
+    path.push({
+      nodeId: nodeRow._id,
+      nodeName: nodeRow.name
+    });
   }
 
   const settings = await getOrCreateSettings();
@@ -893,10 +973,6 @@ const startTravelFromCurrentLocation = async (user, targetNodeId, options = {}) 
     1,
     parseInt(options.unitDurationSeconds, 10) || settings.travelUnitSeconds
   );
-  const path = shortestPathIds.map((id) => ({
-    nodeId: idToNode.get(id)._id,
-    nodeName: idToNode.get(id).name
-  }));
 
   assignMovingTravelState(user, path, targetNode._id, safeUnitDuration, options.startedAt || new Date());
 
@@ -904,7 +980,7 @@ const startTravelFromCurrentLocation = async (user, targetNodeId, options = {}) 
     ok: true,
     path,
     targetNode,
-    shortestDistance: shortestPathIds.length - 1,
+    shortestDistance: path.length - 1,
     unitDurationSeconds: safeUnitDuration
   };
 };
@@ -923,9 +999,10 @@ const settleTravelState = async (user) => {
     user.lastArrivedFromNodeId = fromNode?.nodeId || null;
     user.lastArrivedFromNodeName = fromNode?.nodeName || '';
     user.lastArrivedAt = new Date();
-    appendArrivalNotification(user, arrivedNodeName, progress.elapsedSeconds || 0);
+    const arrivalNotification = appendArrivalNotification(user, arrivedNodeName, progress.elapsedSeconds || 0);
     resetTravelState(user, unitDurationSeconds);
     await user.save();
+    await writeNotificationToCollectionForUser(user._id, arrivalNotification);
     return calculateTravelProgress(user);
   }
 
@@ -1312,6 +1389,19 @@ router.get('/notifications', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+    if (isNotificationCollectionReadEnabled()) {
+      const [notifications, unreadCount] = await Promise.all([
+        listUserNotificationsFromCollection(decoded.userId),
+        countUnreadNotificationsFromCollection(decoded.userId)
+      ]);
+
+      return res.json({
+        success: true,
+        unreadCount,
+        notifications: notifications.map((item) => serializeNotificationForResponse(item))
+      });
+    }
+
     const user = await User.findById(decoded.userId).select('notifications');
     if (!user) {
       return res.status(404).json({ error: '用户不存在' });
@@ -1321,25 +1411,7 @@ router.get('/notifications', async (req, res) => {
 
     const notifications = [...(user.notifications || [])]
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .map((notification) => ({
-        _id: notification._id,
-        type: notification.type,
-        title: notification.title,
-        message: notification.message,
-        read: notification.read,
-        status: notification.status,
-        nodeId: notification.nodeId,
-        nodeName: notification.nodeName,
-        allianceId: notification.allianceId,
-        allianceName: notification.allianceName,
-        inviterId: notification.inviterId,
-        inviterUsername: notification.inviterUsername,
-        inviteeId: notification.inviteeId,
-        inviteeUsername: notification.inviteeUsername,
-        applicationReason: notification.applicationReason,
-        createdAt: notification.createdAt,
-        respondedAt: notification.respondedAt
-      }));
+      .map((notification) => serializeNotificationForResponse(notification));
 
     const unreadCount = notifications.filter((notification) => !notification.read).length;
 
@@ -1363,6 +1435,15 @@ router.post('/notifications/clear', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+    if (isNotificationCollectionReadEnabled()) {
+      const clearedCount = await clearUserNotificationsFromCollection(decoded.userId);
+      return res.json({
+        success: true,
+        clearedCount,
+        message: '通知已清空'
+      });
+    }
+
     const user = await User.findById(decoded.userId).select('notifications');
     if (!user) {
       return res.status(404).json({ error: '用户不存在' });
@@ -1371,6 +1452,7 @@ router.post('/notifications/clear', async (req, res) => {
     const clearedCount = Array.isArray(user.notifications) ? user.notifications.length : 0;
     user.notifications = [];
     await user.save();
+    await clearUserNotificationsFromCollection(decoded.userId);
 
     res.json({
       success: true,
@@ -1392,6 +1474,15 @@ router.post('/notifications/read-all', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+    if (isNotificationCollectionReadEnabled()) {
+      const updatedCount = await markAllNotificationsReadFromCollection(decoded.userId);
+      return res.json({
+        success: true,
+        updatedCount,
+        message: '通知已全部标记为已读'
+      });
+    }
+
     const user = await User.findById(decoded.userId).select('notifications');
     if (!user) {
       return res.status(404).json({ error: '用户不存在' });
@@ -1407,6 +1498,7 @@ router.post('/notifications/read-all', async (req, res) => {
 
     if (updatedCount > 0) {
       await user.save();
+      await markAllNotificationsReadFromCollection(decoded.userId);
     }
 
     res.json({
@@ -1429,6 +1521,20 @@ router.post('/notifications/:notificationId/read', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+    if (isNotificationCollectionReadEnabled()) {
+      const marked = await markNotificationReadFromCollection({
+        userId: decoded.userId,
+        notificationId: req.params.notificationId
+      });
+      if (!marked) {
+        return res.status(404).json({ error: '通知不存在' });
+      }
+      return res.json({
+        success: true,
+        message: '通知已标记为已读'
+      });
+    }
+
     const user = await User.findById(decoded.userId);
     if (!user) {
       return res.status(404).json({ error: '用户不存在' });
@@ -1441,6 +1547,7 @@ router.post('/notifications/:notificationId/read', async (req, res) => {
 
     notification.read = true;
     await user.save();
+    await upsertNotificationToCollectionForUser(user._id, notification);
 
     res.json({
       success: true,
@@ -1523,11 +1630,12 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       notification.read = true;
       notification.respondedAt = new Date();
       await user.save();
+      await upsertNotificationToCollectionForUser(user._id, notification);
 
       if (notification.inviterId) {
         const inviter = await User.findById(notification.inviterId);
         if (inviter) {
-          inviter.notifications.unshift({
+          const inviteResultNotification = pushNotificationToUser(inviter, {
             type: 'domain_admin_invite_result',
             title: `邀请结果：${notification.nodeName || '知识域'}`,
             message: `${user.username} ${decision === 'accepted' ? '已接受' : '已拒绝'}你的域相邀请`,
@@ -1542,6 +1650,7 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
             respondedAt: notification.respondedAt
           });
           await inviter.save();
+          await writeNotificationToCollectionForUser(inviter._id, inviteResultNotification);
         }
       }
     } else if (notification.type === 'domain_admin_resign_request') {
@@ -1555,6 +1664,7 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       decision = result.decision;
       decisionMessage = result.message;
       await user.save();
+      await upsertNotificationToCollectionForUser(user._id, notification);
     } else if (notification.type === 'domain_master_apply') {
       if (user.role !== 'admin') {
         return res.status(403).json({ error: '只有管理员可以处理域主申请' });
@@ -1569,6 +1679,7 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       decisionMessage = result.message;
       if (result.saveCurrentUser) {
         await user.save();
+        await upsertNotificationToCollectionForUser(user._id, notification);
       }
     } else if (notification.type === 'alliance_join_apply') {
       const result = await handleAllianceJoinApplyDecision({
@@ -1583,6 +1694,7 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       decisionMessage = result.message;
       if (result.saveLeader) {
         await user.save();
+        await upsertNotificationToCollectionForUser(user._id, notification);
       }
     } else {
       return res.status(400).json({ error: '该通知类型不支持响应操作' });

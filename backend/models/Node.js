@@ -305,6 +305,7 @@ const CITY_BUILDING_MAX_RADIUS = 0.24;
 const CITY_BUILDING_MIN_DISTANCE = 0.34;
 const CITY_BUILDING_MAX_DISTANCE = 0.86;
 const CITY_GATE_KEYS = ['cheng', 'qi'];
+const LEGACY_TITLE_STATE_EMBED_WRITE_ENABLED = process.env.NODE_LEGACY_TITLE_STATE_EMBED_WRITE === 'true';
 
 const CityBuildingSchema = new mongoose.Schema({
   buildingId: {
@@ -576,6 +577,29 @@ const createDefaultCitySiegeState = () => ({
   }
 });
 
+const computeKnowledgePointSnapshot = ({
+  knowledgePoint = {},
+  contentScore = 0
+} = {}, now = new Date()) => {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const nowMs = nowDate.getTime();
+  const lastUpdatedMsRaw = new Date(knowledgePoint?.lastUpdated || 0).getTime();
+  const lastUpdatedMs = Number.isFinite(lastUpdatedMsRaw) && lastUpdatedMsRaw > 0
+    ? lastUpdatedMsRaw
+    : nowMs;
+  const minutesElapsed = Math.max(0, (nowMs - lastUpdatedMs) / (1000 * 60));
+  const baseValue = Number(knowledgePoint?.value) || 0;
+  const score = Number(contentScore) || 0;
+  const increment = minutesElapsed * score;
+  const nextValue = parseFloat((baseValue + increment).toFixed(2));
+  return {
+    value: nextValue,
+    lastUpdated: nowDate,
+    increment: parseFloat(increment.toFixed(4)),
+    minutesElapsed
+  };
+};
+
 const NodeSchema = new mongoose.Schema({
   nodeId: { 
     type: String, 
@@ -783,6 +807,7 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
   }
   this.synonymSenses = normalizedSenses;
   const validSenseIds = new Set(normalizedSenses.map((item) => item.senseId));
+  const hasEmbeddedSenseCatalog = normalizedSenses.length > 0;
 
   const normalizedAssociations = [];
   const associationSeen = new Set();
@@ -795,7 +820,7 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
     if (!targetNodeId || !relationType) continue;
 
     let sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
-    if (sourceSenseId && !validSenseIds.has(sourceSenseId)) {
+    if (sourceSenseId && hasEmbeddedSenseCatalog && !validSenseIds.has(sourceSenseId)) {
       sourceSenseId = '';
     }
 
@@ -1036,177 +1061,195 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
     return list;
   };
 
-  const sourceLayout = this.cityDefenseLayout && typeof this.cityDefenseLayout === 'object'
-    ? this.cityDefenseLayout
-    : {};
-  const sourceBuildings = Array.isArray(sourceLayout.buildings) ? sourceLayout.buildings : [];
-  const dedupedBuildings = [];
-  const seenBuildingIds = new Set();
+  if (this.isNew || LEGACY_TITLE_STATE_EMBED_WRITE_ENABLED) {
+    const sourceLayout = this.cityDefenseLayout && typeof this.cityDefenseLayout === 'object'
+      ? this.cityDefenseLayout
+      : {};
+    const sourceBuildings = Array.isArray(sourceLayout.buildings) ? sourceLayout.buildings : [];
+    const dedupedBuildings = [];
+    const seenBuildingIds = new Set();
 
-  for (let i = 0; i < sourceBuildings.length; i += 1) {
-    const sanitized = sanitizeBuilding(sourceBuildings[i], i);
-    if (!sanitized.buildingId || seenBuildingIds.has(sanitized.buildingId)) continue;
-    seenBuildingIds.add(sanitized.buildingId);
-    dedupedBuildings.push(sanitized);
-    if (dedupedBuildings.length >= CITY_BUILDING_LIMIT) break;
-  }
-
-  let normalizedBuildings = dedupedBuildings;
-  if (normalizedBuildings.length === 0) {
-    normalizedBuildings = createDefaultCityDefenseLayout().buildings;
-  }
-
-  const validatePosition = (building, buildingList, selfIndex) => {
-    const centerDistance = Math.sqrt((building.x ** 2) + (building.y ** 2));
-    if (centerDistance > CITY_BUILDING_MAX_DISTANCE) return false;
-    for (let index = 0; index < buildingList.length; index += 1) {
-      if (index === selfIndex) continue;
-      const target = buildingList[index];
-      const dx = building.x - target.x;
-      const dy = building.y - target.y;
-      if (Math.sqrt((dx ** 2) + (dy ** 2)) < CITY_BUILDING_MIN_DISTANCE) {
-        return false;
-      }
+    for (let i = 0; i < sourceBuildings.length; i += 1) {
+      const sanitized = sanitizeBuilding(sourceBuildings[i], i);
+      if (!sanitized.buildingId || seenBuildingIds.has(sanitized.buildingId)) continue;
+      seenBuildingIds.add(sanitized.buildingId);
+      dedupedBuildings.push(sanitized);
+      if (dedupedBuildings.length >= CITY_BUILDING_LIMIT) break;
     }
-    return true;
-  };
 
-  if (normalizedBuildings.length > 1) {
-    normalizedBuildings = normalizedBuildings.map((building, index) => {
-      if (validatePosition(building, normalizedBuildings, index)) {
-        return building;
-      }
-      const fallbackPositions = [
-        { x: 0, y: 0 },
-        { x: -0.46, y: -0.12 },
-        { x: 0.46, y: -0.12 },
-        { x: -0.34, y: 0.36 },
-        { x: 0.34, y: 0.36 }
-      ];
-      const fallback = fallbackPositions[index] || { x: 0, y: 0 };
-      return {
-        ...building,
-        x: fallback.x,
-        y: fallback.y
-      };
-    });
-  }
-
-  const buildingIdSet = new Set(normalizedBuildings.map((item) => item.buildingId));
-  const sourceIntelBuildingId = typeof sourceLayout.intelBuildingId === 'string'
-    ? sourceLayout.intelBuildingId.trim()
-    : '';
-  const intelBuildingId = buildingIdSet.has(sourceIntelBuildingId)
-    ? sourceIntelBuildingId
-    : normalizedBuildings[0].buildingId;
-
-  const sourceGateDefense = sourceLayout.gateDefense && typeof sourceLayout.gateDefense === 'object'
-    ? sourceLayout.gateDefense
-    : {};
-  const gateDefense = CITY_GATE_KEYS.reduce((acc, key) => {
-    acc[key] = sanitizeGateDefenseEntries(sourceGateDefense[key]);
-    return acc;
-  }, { cheng: [], qi: [] });
-  const sourceGateDefenseViewAdminIds = Array.isArray(sourceLayout.gateDefenseViewAdminIds)
-    ? sourceLayout.gateDefenseViewAdminIds
-    : [];
-  const gateDefenseViewAdminIds = [];
-  const gateDefenseViewerSeen = new Set();
-  for (const userId of sourceGateDefenseViewAdminIds) {
-    const userIdStr = getIdString(userId);
-    if (!userIdStr) continue;
-    if (!domainAdminSet.has(userIdStr)) continue;
-    if (gateDefenseViewerSeen.has(userIdStr)) continue;
-    gateDefenseViewerSeen.add(userIdStr);
-    gateDefenseViewAdminIds.push(userId);
-  }
-
-  this.cityDefenseLayout = {
-    buildings: normalizedBuildings,
-    intelBuildingId,
-    gateDefense,
-    gateDefenseViewAdminIds,
-    updatedAt: new Date()
-  };
-
-  const sourceSiegeState = this.citySiegeState && typeof this.citySiegeState === 'object'
-    ? this.citySiegeState
-    : createDefaultCitySiegeState();
-  const normalizeSiegeUnits = (entries = []) => {
-    const out = [];
-    const seen = new Set();
-    for (const entry of (Array.isArray(entries) ? entries : [])) {
-      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
-      const count = Math.max(0, Math.floor(parseNumber(entry?.count, 0)));
-      if (!unitTypeId || count <= 0) continue;
-      if (seen.has(unitTypeId)) continue;
-      seen.add(unitTypeId);
-      out.push({ unitTypeId, count });
+    let normalizedBuildings = dedupedBuildings;
+    if (normalizedBuildings.length === 0) {
+      normalizedBuildings = createDefaultCityDefenseLayout().buildings;
     }
-    return out;
-  };
-  const normalizeGateState = (gateState = {}) => {
-    const sourceAttackers = Array.isArray(gateState?.attackers) ? gateState.attackers : [];
-    const attackers = sourceAttackers.map((item) => {
-      const userId = item?.userId || null;
-      return {
-        userId,
-        username: typeof item?.username === 'string' ? item.username : '',
-        allianceId: item?.allianceId || null,
-        units: normalizeSiegeUnits(item?.units),
-        fromNodeId: item?.fromNodeId || null,
-        fromNodeName: typeof item?.fromNodeName === 'string' ? item.fromNodeName : '',
-        autoRetreatPercent: Math.max(1, Math.min(99, parseNumber(item?.autoRetreatPercent, 40))),
-        status: item?.status === 'moving' || item?.status === 'retreated' ? item.status : 'sieging',
-        isInitiator: !!item?.isInitiator,
-        isReinforcement: !!item?.isReinforcement,
-        requestedAt: item?.requestedAt || null,
-        arriveAt: item?.arriveAt || null,
-        joinedAt: item?.joinedAt || null,
-        updatedAt: item?.updatedAt || null
-      };
-    }).filter((item) => !!getIdString(item.userId));
-    const hasActiveAttacker = attackers.some((item) => item.status === 'moving' || item.status === 'sieging');
-    return {
-      active: !!gateState?.active && hasActiveAttacker,
-      startedAt: gateState?.startedAt || null,
-      updatedAt: gateState?.updatedAt || null,
-      supportNotifiedAt: gateState?.supportNotifiedAt || null,
-      attackerAllianceId: gateState?.attackerAllianceId || null,
-      initiatorUserId: gateState?.initiatorUserId || null,
-      initiatorUsername: typeof gateState?.initiatorUsername === 'string' ? gateState.initiatorUsername : '',
-      attackers
+
+    const validatePosition = (building, buildingList, selfIndex) => {
+      const centerDistance = Math.sqrt((building.x ** 2) + (building.y ** 2));
+      if (centerDistance > CITY_BUILDING_MAX_DISTANCE) return false;
+      for (let index = 0; index < buildingList.length; index += 1) {
+        if (index === selfIndex) continue;
+        const target = buildingList[index];
+        const dx = building.x - target.x;
+        const dy = building.y - target.y;
+        if (Math.sqrt((dx ** 2) + (dy ** 2)) < CITY_BUILDING_MIN_DISTANCE) {
+          return false;
+        }
+      }
+      return true;
     };
-  };
-  this.citySiegeState = {
-    cheng: normalizeGateState(sourceSiegeState.cheng),
-    qi: normalizeGateState(sourceSiegeState.qi)
-  };
+
+    if (normalizedBuildings.length > 1) {
+      normalizedBuildings = normalizedBuildings.map((building, index) => {
+        if (validatePosition(building, normalizedBuildings, index)) {
+          return building;
+        }
+        const fallbackPositions = [
+          { x: 0, y: 0 },
+          { x: -0.46, y: -0.12 },
+          { x: 0.46, y: -0.12 },
+          { x: -0.34, y: 0.36 },
+          { x: 0.34, y: 0.36 }
+        ];
+        const fallback = fallbackPositions[index] || { x: 0, y: 0 };
+        return {
+          ...building,
+          x: fallback.x,
+          y: fallback.y
+        };
+      });
+    }
+
+    const buildingIdSet = new Set(normalizedBuildings.map((item) => item.buildingId));
+    const sourceIntelBuildingId = typeof sourceLayout.intelBuildingId === 'string'
+      ? sourceLayout.intelBuildingId.trim()
+      : '';
+    const intelBuildingId = buildingIdSet.has(sourceIntelBuildingId)
+      ? sourceIntelBuildingId
+      : normalizedBuildings[0].buildingId;
+
+    const sourceGateDefense = sourceLayout.gateDefense && typeof sourceLayout.gateDefense === 'object'
+      ? sourceLayout.gateDefense
+      : {};
+    const gateDefense = CITY_GATE_KEYS.reduce((acc, key) => {
+      acc[key] = sanitizeGateDefenseEntries(sourceGateDefense[key]);
+      return acc;
+    }, { cheng: [], qi: [] });
+    const sourceGateDefenseViewAdminIds = Array.isArray(sourceLayout.gateDefenseViewAdminIds)
+      ? sourceLayout.gateDefenseViewAdminIds
+      : [];
+    const gateDefenseViewAdminIds = [];
+    const gateDefenseViewerSeen = new Set();
+    for (const userId of sourceGateDefenseViewAdminIds) {
+      const userIdStr = getIdString(userId);
+      if (!userIdStr) continue;
+      if (!domainAdminSet.has(userIdStr)) continue;
+      if (gateDefenseViewerSeen.has(userIdStr)) continue;
+      gateDefenseViewerSeen.add(userIdStr);
+      gateDefenseViewAdminIds.push(userId);
+    }
+
+    this.cityDefenseLayout = {
+      buildings: normalizedBuildings,
+      intelBuildingId,
+      gateDefense,
+      gateDefenseViewAdminIds,
+      updatedAt: new Date()
+    };
+
+    const sourceSiegeState = this.citySiegeState && typeof this.citySiegeState === 'object'
+      ? this.citySiegeState
+      : createDefaultCitySiegeState();
+    const normalizeSiegeUnits = (entries = []) => {
+      const out = [];
+      const seen = new Set();
+      for (const entry of (Array.isArray(entries) ? entries : [])) {
+        const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+        const count = Math.max(0, Math.floor(parseNumber(entry?.count, 0)));
+        if (!unitTypeId || count <= 0) continue;
+        if (seen.has(unitTypeId)) continue;
+        seen.add(unitTypeId);
+        out.push({ unitTypeId, count });
+      }
+      return out;
+    };
+    const normalizeGateState = (gateState = {}) => {
+      const sourceAttackers = Array.isArray(gateState?.attackers) ? gateState.attackers : [];
+      const attackers = sourceAttackers.map((item) => {
+        const userId = item?.userId || null;
+        return {
+          userId,
+          username: typeof item?.username === 'string' ? item.username : '',
+          allianceId: item?.allianceId || null,
+          units: normalizeSiegeUnits(item?.units),
+          fromNodeId: item?.fromNodeId || null,
+          fromNodeName: typeof item?.fromNodeName === 'string' ? item.fromNodeName : '',
+          autoRetreatPercent: Math.max(1, Math.min(99, parseNumber(item?.autoRetreatPercent, 40))),
+          status: item?.status === 'moving' || item?.status === 'retreated' ? item.status : 'sieging',
+          isInitiator: !!item?.isInitiator,
+          isReinforcement: !!item?.isReinforcement,
+          requestedAt: item?.requestedAt || null,
+          arriveAt: item?.arriveAt || null,
+          joinedAt: item?.joinedAt || null,
+          updatedAt: item?.updatedAt || null
+        };
+      }).filter((item) => !!getIdString(item.userId));
+      const hasActiveAttacker = attackers.some((item) => item.status === 'moving' || item.status === 'sieging');
+      return {
+        active: !!gateState?.active && hasActiveAttacker,
+        startedAt: gateState?.startedAt || null,
+        updatedAt: gateState?.updatedAt || null,
+        supportNotifiedAt: gateState?.supportNotifiedAt || null,
+        attackerAllianceId: gateState?.attackerAllianceId || null,
+        initiatorUserId: gateState?.initiatorUserId || null,
+        initiatorUsername: typeof gateState?.initiatorUsername === 'string' ? gateState.initiatorUsername : '',
+        attackers
+      };
+    };
+    this.citySiegeState = {
+      cheng: normalizeGateState(sourceSiegeState.cheng),
+      qi: normalizeGateState(sourceSiegeState.qi)
+    };
+  }
 
   next();
 });
 
 // 索引优化
 NodeSchema.index({ owner: 1 });
-NodeSchema.index({ nodeId: 1 });
 NodeSchema.index({ isFeatured: 1, featuredOrder: 1 });
 NodeSchema.index({ status: 1 });
 NodeSchema.index({ allianceId: 1, status: 1 });
+NodeSchema.index({ status: 1, domainMaster: 1 });
+NodeSchema.index({ status: 1, domainAdmins: 1 });
+NodeSchema.index({ status: 1, name: 1 });
+NodeSchema.index({ status: 1, 'knowledgeDistributionLocked.executeAt': 1 });
+NodeSchema.index({ status: 1, 'associations.targetNode': 1 });
 NodeSchema.index({ name: 'text', description: 'text' });
 NodeSchema.index({ 'synonymSenses.title': 1 });
+
+NodeSchema.statics.computeKnowledgePointSnapshot = function(nodeLike = {}, now = new Date()) {
+  return computeKnowledgePointSnapshot({
+    knowledgePoint: nodeLike?.knowledgePoint || {},
+    contentScore: nodeLike?.contentScore || 0
+  }, now);
+};
+
+NodeSchema.statics.applyKnowledgePointProjection = function(nodeLike, now = new Date()) {
+  if (!nodeLike || typeof nodeLike !== 'object') return null;
+  const snapshot = this.computeKnowledgePointSnapshot(nodeLike, now);
+  nodeLike.knowledgePoint = nodeLike.knowledgePoint && typeof nodeLike.knowledgePoint === 'object'
+    ? nodeLike.knowledgePoint
+    : {};
+  nodeLike.knowledgePoint.value = snapshot.value;
+  nodeLike.knowledgePoint.lastUpdated = snapshot.lastUpdated;
+  return snapshot;
+};
 
 // 更新知识点的静态方法
 NodeSchema.statics.updateKnowledgePoint = async function(nodeId) {
   const node = await this.findById(nodeId);
   if (!node) return null;
-  
-  const now = new Date();
-  const minutesElapsed = Math.max(0, (now - node.knowledgePoint.lastUpdated) / (1000 * 60));
-  const increment = minutesElapsed * node.contentScore;
-  
-  node.knowledgePoint.value = parseFloat((node.knowledgePoint.value + increment).toFixed(2));
-  node.knowledgePoint.lastUpdated = now;
-  
+  const snapshot = this.applyKnowledgePointProjection(node, new Date());
+  if (!snapshot || snapshot.increment <= 0) return node;
   return node.save();
 };
 

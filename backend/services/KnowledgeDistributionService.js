@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
 const Node = require('../models/Node');
 const User = require('../models/User');
+const DistributionParticipant = require('../models/DistributionParticipant');
 const EntropyAlliance = require('../models/EntropyAlliance');
+const { writeNotificationsToCollection } = require('./notificationStore');
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -156,15 +158,54 @@ class KnowledgeDistributionService {
     return Array.from(getActiveManualParticipantIdSet(lock, atMs));
   }
 
+  static async loadActiveManualParticipantIds({ nodeId, lock = {}, atMs = Date.now() } = {}) {
+    const targetMs = Number.isFinite(Number(atMs)) ? Number(atMs) : Date.now();
+    const targetDate = new Date(targetMs);
+    const executeAt = lock?.executeAt ? new Date(lock.executeAt) : null;
+    const safeNodeId = getIdString(nodeId);
+
+    if (
+      executeAt instanceof Date &&
+      Number.isFinite(executeAt.getTime()) &&
+      executeAt.getTime() > 0 &&
+      isValidObjectId(safeNodeId)
+    ) {
+      const rows = await DistributionParticipant.find({
+        nodeId: new mongoose.Types.ObjectId(safeNodeId),
+        executeAt,
+        joinedAt: { $lte: targetDate },
+        $or: [
+          { exitedAt: null },
+          { exitedAt: { $gt: targetDate } }
+        ]
+      }).select('userId').lean();
+
+      if (rows.length > 0) {
+        return Array.from(new Set(
+          rows
+            .map((item) => getIdString(item?.userId))
+            .filter((id) => isValidObjectId(id))
+        ));
+      }
+    }
+
+    return this.getActiveManualParticipantIds(lock, targetMs);
+  }
+
   static async processTick() {
     if (isProcessing) return;
     isProcessing = true;
 
     try {
       const now = new Date();
+      const nearFuture = new Date(now.getTime() + 60 * 1000);
       const nodes = await Node.find({
         status: 'approved',
-        knowledgeDistributionLocked: { $ne: null }
+        knowledgeDistributionLocked: { $ne: null },
+        $or: [
+          { 'knowledgeDistributionLocked.executeAt': { $lte: nearFuture } },
+          { 'knowledgeDistributionLocked.endAt': { $lte: now } }
+        ]
       }).select(
         '_id name status contentScore knowledgePoint knowledgeDistributionLocked knowledgeDistributionCarryover domainMaster'
       );
@@ -351,6 +392,7 @@ class KnowledgeDistributionService {
     const rules = this.getCommonRuleSets(lock?.ruleSnapshot || {}, lock);
 
     const ops = [];
+    const collectionNotificationDocs = [];
     for (const user of users) {
       const userId = getIdString(user?._id);
       const isFixedRecipient = userId === masterId || rules.adminPercentMap.has(userId);
@@ -360,6 +402,7 @@ class KnowledgeDistributionService {
       const message = isFixedRecipient
         ? `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。`
         : `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。请前往知识域「${node.name}」参与分发，点击前往${entryCloseText ? `（入场截止 ${entryCloseText}）` : ''}。`;
+      const notificationId = new mongoose.Types.ObjectId();
 
       ops.push({
         updateOne: {
@@ -368,6 +411,7 @@ class KnowledgeDistributionService {
             $push: {
               notifications: {
                 $each: [{
+                  _id: notificationId,
                   type: 'domain_distribution_announcement',
                   title: `知识点分发预告：${node.name}`,
                   message,
@@ -388,16 +432,36 @@ class KnowledgeDistributionService {
           }
         }
       });
+
+      collectionNotificationDocs.push({
+        _id: notificationId,
+        userId: user._id,
+        type: 'domain_distribution_announcement',
+        title: `知识点分发预告：${node.name}`,
+        message,
+        read: false,
+        status: 'info',
+        nodeId: node._id,
+        nodeName: node.name,
+        requiresArrival: !isFixedRecipient,
+        allianceId: lock.masterAllianceId || null,
+        allianceName: lock.masterAllianceName || '',
+        inviterId: masterUser._id,
+        inviterUsername: masterUser.username,
+        createdAt: nowDate
+      });
     }
 
     if (ops.length > 0) {
       await User.bulkWrite(ops, { ordered: false });
+      await writeNotificationsToCollection(collectionNotificationDocs);
     }
   }
 
   static async executeLockedDistribution(nodeId, now = new Date()) {
-    const node = await Node.updateKnowledgePoint(nodeId);
+    const node = await Node.findById(nodeId);
     if (!node || !node.knowledgeDistributionLocked) return;
+    Node.applyKnowledgePointProjection(node, now);
 
     const lock = node.knowledgeDistributionLocked;
     const timeline = resolveLockTimeline(lock);
@@ -407,7 +471,11 @@ class KnowledgeDistributionService {
     const masterId = getIdString(node.domainMaster);
     const masterAllianceId = getIdString(lock.masterAllianceId);
     const rules = this.getCommonRuleSets(lock.ruleSnapshot || {}, lock);
-    const activeManualParticipantSet = getActiveManualParticipantIdSet(lock, timeline.executeAtMs || now.getTime());
+    const activeManualParticipantSet = new Set(await this.loadActiveManualParticipantIds({
+      nodeId: node?._id,
+      lock,
+      atMs: timeline.executeAtMs || now.getTime()
+    }));
     const totalPoolCents = toCents((Number(node.knowledgePoint?.value) || 0) + (Number(node.knowledgeDistributionCarryover) || 0));
     const distributionPercent = getDistributionScopePercent(lock.ruleSnapshot || lock);
     const distributionPoolCents = Math.floor(totalPoolCents * (distributionPercent / 100));
@@ -657,9 +725,11 @@ class KnowledgeDistributionService {
 
     const notificationTime = new Date();
     const userOps = [];
+    const collectionNotificationDocs = [];
     for (const [userId, cents] of userRewardCents.entries()) {
       if (!isValidObjectId(userId) || cents <= 0) continue;
       const amount = fromCents(cents);
+      const notificationId = new mongoose.Types.ObjectId();
       userOps.push({
         updateOne: {
           filter: { _id: new mongoose.Types.ObjectId(userId) },
@@ -668,6 +738,7 @@ class KnowledgeDistributionService {
             $push: {
               notifications: {
                 $each: [{
+                  _id: notificationId,
                   type: 'domain_distribution_result',
                   title: `知识点到账：${node.name}`,
                   message: `你从知识域「${node.name}」获得了 ${amount.toFixed(2)} 知识点，已存入个人账户。`,
@@ -687,9 +758,27 @@ class KnowledgeDistributionService {
           }
         }
       });
+
+      collectionNotificationDocs.push({
+        _id: notificationId,
+        userId: new mongoose.Types.ObjectId(userId),
+        type: 'domain_distribution_result',
+        title: `知识点到账：${node.name}`,
+        message: `你从知识域「${node.name}」获得了 ${amount.toFixed(2)} 知识点，已存入个人账户。`,
+        read: false,
+        status: 'info',
+        nodeId: node._id,
+        nodeName: node.name,
+        allianceId: masterAllianceId || null,
+        allianceName: lock.masterAllianceName || '',
+        inviterId: masterUser._id,
+        inviterUsername: masterUser.username,
+        createdAt: notificationTime
+      });
     }
     if (userOps.length > 0) {
       await User.bulkWrite(userOps, { ordered: false });
+      await writeNotificationsToCollection(collectionNotificationDocs);
     }
 
     const resultUserRewards = Array.from(userRewardCents.entries())

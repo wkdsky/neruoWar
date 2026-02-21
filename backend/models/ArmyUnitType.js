@@ -69,7 +69,6 @@ const ArmyUnitTypeSchema = new mongoose.Schema({
   timestamps: true
 });
 
-ArmyUnitTypeSchema.index({ unitTypeId: 1 }, { unique: true });
 ArmyUnitTypeSchema.index({ sortOrder: 1, createdAt: 1 });
 
 module.exports = mongoose.model('ArmyUnitType', ArmyUnitTypeSchema);

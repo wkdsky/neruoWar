@@ -38,6 +38,9 @@ class GameService {
   // 每秒更新所有节点知识点
   static async updateAllNodesPerSecond() {
     try {
+      if (process.env.ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS !== 'true') {
+        return [];
+      }
       const now = new Date();
       const nodes = await Node.find({});
       const updatedNodes = [];
@@ -180,6 +183,9 @@ class GameService {
   // 更新所有节点的知识点值
   static async updateKnowledgePoints() {
     try {
+      if (process.env.ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS !== 'true') {
+        return;
+      }
       const nodes = await Node.find({});
       for (const node of nodes) {
         await Node.updateKnowledgePoint(node._id);

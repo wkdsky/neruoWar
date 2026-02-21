@@ -350,4 +350,9 @@ const userSchema = new mongoose.Schema({
   timestamps: true
 });
 
+userSchema.index({ role: 1 });
+userSchema.index({ allianceId: 1, role: 1 });
+userSchema.index({ location: 1, role: 1 });
+userSchema.index({ 'travelState.status': 1, role: 1 });
+
 module.exports = mongoose.model('User', userSchema);

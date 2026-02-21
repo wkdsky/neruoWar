@@ -2,10 +2,41 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const Node = require('../models/Node');
+const NodeSense = require('../models/NodeSense');
 const User = require('../models/User');
+const DistributionParticipant = require('../models/DistributionParticipant');
 const EntropyAlliance = require('../models/EntropyAlliance');
 const KnowledgeDistributionService = require('../services/KnowledgeDistributionService');
 const { fetchArmyUnitTypes } = require('../services/armyUnitTypeService');
+const { upsertNotificationsToCollection, writeNotificationsToCollection } = require('../services/notificationStore');
+const {
+  findShortestApprovedPathToAnyTargets,
+  listApprovedNodesByNames
+} = require('../services/domainGraphTraversalService');
+const {
+  isNodeSenseCollectionReadEnabled,
+  normalizeSenseList,
+  hydrateNodeSensesForNodes,
+  upsertNodeSensesReplace
+} = require('../services/nodeSenseStore');
+const DomainTitleProjection = require('../models/DomainTitleProjection');
+const {
+  isDomainTitleStateCollectionReadEnabled,
+  hydrateNodeTitleStatesForNodes,
+  resolveNodeDefenseLayout,
+  resolveNodeSiegeState,
+  upsertNodeDefenseLayout,
+  upsertNodeSiegeState,
+  deleteNodeTitleStatesByNodeIds,
+  listSiegeStatesByAttackerUserId
+} = require('../services/domainTitleStateStore');
+const {
+  isDomainTitleProjectionReadEnabled,
+  syncDomainTitleProjectionFromNode,
+  deleteDomainTitleProjectionByNodeIds,
+  listActiveTitleRelationsBySourceNodeIds,
+  listActiveTitleRelationsByTargetNodeIds
+} = require('../services/domainTitleProjectionStore');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
 
@@ -20,6 +51,31 @@ const getIdString = (value) => {
     return text === '[object Object]' ? '' : text;
   }
   return '';
+};
+
+const buildNotificationPayload = (payload = {}) => ({
+  ...payload,
+  _id: payload?._id && mongoose.Types.ObjectId.isValid(String(payload._id))
+    ? new mongoose.Types.ObjectId(String(payload._id))
+    : new mongoose.Types.ObjectId(),
+  createdAt: payload?.createdAt ? new Date(payload.createdAt) : new Date()
+});
+
+const pushNotificationToUser = (user, payload = {}) => {
+  if (!user) return null;
+  const notification = buildNotificationPayload(payload);
+  user.notifications = Array.isArray(user.notifications) ? user.notifications : [];
+  user.notifications.unshift(notification);
+  return notification;
+};
+
+const toCollectionNotificationDoc = (userId, notification = {}) => {
+  const source = typeof notification?.toObject === 'function' ? notification.toObject() : notification;
+  return {
+    ...source,
+    _id: source?._id,
+    userId
+  };
 };
 
 const isDomainMaster = (node, userId) => {
@@ -37,32 +93,13 @@ const isDomainAdmin = (node, userId) => {
 const DOMAIN_CARD_SELECT = '_id name description synonymSenses knowledgePoint contentScore';
 
 const normalizeNodeSenseList = (node = {}) => {
-  const source = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
-  const deduped = [];
-  const seen = new Set();
-  const seenTitleKeys = new Set();
-  for (let i = 0; i < source.length; i += 1) {
-    const item = source[i] || {};
-    const senseId = typeof item.senseId === 'string' && item.senseId.trim()
-      ? item.senseId.trim()
-      : `sense_${i + 1}`;
-    const title = typeof item.title === 'string' ? item.title.trim() : '';
-    const content = typeof item.content === 'string' ? item.content.trim() : '';
-    const titleKey = title.toLowerCase();
-    if (!title || !content || seen.has(senseId) || seenTitleKeys.has(titleKey)) continue;
-    seen.add(senseId);
-    seenTitleKeys.add(titleKey);
-    deduped.push({ senseId, title, content });
-  }
-  if (deduped.length > 0) return deduped;
+  const source = Array.isArray(node?.__senseCollectionRows) && node.__senseCollectionRows.length > 0
+    ? node.__senseCollectionRows
+    : (Array.isArray(node?.synonymSenses) ? node.synonymSenses : []);
   const fallbackContent = typeof node?.description === 'string' && node.description.trim()
     ? node.description.trim()
     : '暂无释义内容';
-  return [{
-    senseId: 'sense_1',
-    title: '基础释义',
-    content: fallbackContent
-  }];
+  return normalizeSenseList(source, fallbackContent);
 };
 
 const buildNodeSenseDisplayName = (nodeName = '', senseTitle = '') => {
@@ -141,190 +178,242 @@ const toSafeInteger = (value, fallback, { min = Number.MIN_SAFE_INTEGER, max = N
   return Math.min(max, Math.max(min, parsed));
 };
 
-const buildTitleGraphFromNodes = ({
-  nodeDocs = [],
-  centerNodeId = '',
-  maxDepth = 3,
-  maxNodes = 160
+const encodeNameCursor = ({ name = '', id = '' } = {}) => {
+  const payload = JSON.stringify({ name: String(name || ''), id: String(id || '') });
+  return Buffer.from(payload).toString('base64');
+};
+
+const decodeNameCursor = (cursor = '') => {
+  if (typeof cursor !== 'string' || !cursor.trim()) {
+    return { name: '', id: '' };
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8'));
+    const name = typeof parsed?.name === 'string' ? parsed.name : '';
+    const id = typeof parsed?.id === 'string' ? parsed.id : '';
+    return { name, id };
+  } catch (error) {
+    return { name: '', id: '' };
+  }
+};
+
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const loadNodeSearchCandidates = async ({
+  normalizedKeyword = '',
+  limit = 800
 }) => {
-  const centerId = getIdString(centerNodeId);
-  const sourceNodes = Array.isArray(nodeDocs) ? nodeDocs : [];
-  const nodeMap = new Map();
+  const safeKeyword = typeof normalizedKeyword === 'string' ? normalizedKeyword.trim() : '';
+  if (!safeKeyword) return [];
+  const safeLimit = Math.max(100, Math.min(3000, parseInt(limit, 10) || 800));
+  const selectFields = '_id name description synonymSenses knowledgePoint contentScore';
 
-  sourceNodes.forEach((item) => {
-    const nodeId = getIdString(item?._id);
-    if (!nodeId) return;
-    nodeMap.set(nodeId, item);
-  });
-
-  if (!centerId || !nodeMap.has(centerId)) {
-    return {
-      centerNodeId: centerId,
-      levelByNodeId: {},
-      orderedNodeIds: [],
-      edgeList: []
-    };
-  }
-
-  const adjacency = new Map();
-  const edgeMap = new Map();
-  const nodeSenseTitleMap = new Map();
-  const getSenseTitleByNode = (nodeId, senseId) => {
-    const safeNodeId = getIdString(nodeId);
-    const safeSenseId = typeof senseId === 'string' ? senseId.trim() : '';
-    if (!safeNodeId || !safeSenseId) return '';
-    let map = nodeSenseTitleMap.get(safeNodeId);
-    if (!map) {
-      const nodeDoc = nodeMap.get(safeNodeId);
-      map = new Map(normalizeNodeSenseList(nodeDoc).map((sense) => [sense.senseId, sense.title]));
-      nodeSenseTitleMap.set(safeNodeId, map);
-    }
-    return map.get(safeSenseId) || '';
-  };
-  const getEdgeFromMap = (edgeId, nodeAId, nodeBId) => {
-    const existing = edgeMap.get(edgeId);
-    if (existing) return existing;
-    const created = {
-      edgeId,
-      nodeAId,
-      nodeBId,
-      pairs: [],
-      senseTitleMapByNodeId: new Map()
-    };
-    edgeMap.set(edgeId, created);
-    return created;
-  };
-  const upsertEdgeSense = (edge, nodeId, senseId, senseTitle) => {
-    const safeNodeId = getIdString(nodeId);
-    const safeSenseId = typeof senseId === 'string' ? senseId.trim() : '';
-    const safeSenseTitle = typeof senseTitle === 'string' ? senseTitle.trim() : '';
-    if (!safeNodeId || !safeSenseId || !safeSenseTitle) return;
-    let bySenseId = edge.senseTitleMapByNodeId.get(safeNodeId);
-    if (!bySenseId) {
-      bySenseId = new Map();
-      edge.senseTitleMapByNodeId.set(safeNodeId, bySenseId);
-    }
-    if (!bySenseId.has(safeSenseId)) {
-      bySenseId.set(safeSenseId, safeSenseTitle);
+  const merged = new Map();
+  const pushDocs = (docs = []) => {
+    for (const item of (Array.isArray(docs) ? docs : [])) {
+      const itemId = getIdString(item?._id);
+      if (!itemId || merged.has(itemId)) continue;
+      merged.set(itemId, item);
+      if (merged.size >= safeLimit) break;
     }
   };
-  const appendAdjacency = (fromNodeId, toNodeId) => {
-    const fromId = getIdString(fromNodeId);
-    const toId = getIdString(toNodeId);
-    if (!fromId || !toId || fromId === toId) return;
-    const existed = adjacency.get(fromId) || new Set();
-    existed.add(toId);
-    adjacency.set(fromId, existed);
-  };
 
-  for (const nodeDoc of sourceNodes) {
-    const sourceNodeId = getIdString(nodeDoc?._id);
-    if (!sourceNodeId) continue;
-    const assocList = normalizeRelationAssociationList(nodeDoc?.associations || []);
-    for (const assoc of assocList) {
-      const targetNodeId = getIdString(assoc?.targetNode);
-      if (!targetNodeId || targetNodeId === sourceNodeId || !nodeMap.has(targetNodeId)) continue;
-
-      const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
-      const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
-      const sourceSenseTitle = getSenseTitleByNode(sourceNodeId, sourceSenseId);
-      const targetSenseTitle = getSenseTitleByNode(targetNodeId, targetSenseId);
-      if (!sourceSenseId || !targetSenseId || !sourceSenseTitle || !targetSenseTitle) continue;
-
-      const nodeAId = sourceNodeId < targetNodeId ? sourceNodeId : targetNodeId;
-      const nodeBId = sourceNodeId < targetNodeId ? targetNodeId : sourceNodeId;
-      const edgeId = `${nodeAId}|${nodeBId}`;
-      const edge = getEdgeFromMap(edgeId, nodeAId, nodeBId);
-      const pairKey = [
-        sourceNodeId,
-        sourceSenseId,
-        assoc.relationType,
-        targetNodeId,
-        targetSenseId
-      ].join('|');
-      if (!edge.pairs.some((item) => item.pairKey === pairKey)) {
-        edge.pairs.push({
-          pairKey,
-          sourceNodeId,
-          sourceSenseId,
-          sourceSenseTitle,
-          targetNodeId,
-          targetSenseId,
-          targetSenseTitle,
-          relationType: assoc.relationType
-        });
-      }
-
-      upsertEdgeSense(edge, sourceNodeId, sourceSenseId, sourceSenseTitle);
-      upsertEdgeSense(edge, targetNodeId, targetSenseId, targetSenseTitle);
-      appendAdjacency(sourceNodeId, targetNodeId);
-      appendAdjacency(targetNodeId, sourceNodeId);
-    }
-  }
-
-  const levelByNodeId = { [centerId]: 0 };
-  const orderedNodeIds = [centerId];
-  const visited = new Set([centerId]);
-  const queue = [{ nodeId: centerId, level: 0 }];
-  const maxDepthLimit = toSafeInteger(maxDepth, 3, { min: 1, max: 7 });
-  const maxNodeLimit = toSafeInteger(maxNodes, 160, { min: 20, max: 500 });
-
-  while (queue.length > 0 && orderedNodeIds.length < maxNodeLimit) {
-    const current = queue.shift();
-    if (!current) break;
-    if (current.level >= maxDepthLimit) continue;
-
-    const neighbors = Array.from(adjacency.get(current.nodeId) || []);
-    neighbors.sort((a, b) => {
-      const nameA = nodeMap.get(a)?.name || '';
-      const nameB = nodeMap.get(b)?.name || '';
-      return nameA.localeCompare(nameB, 'zh-Hans-CN');
-    });
-    for (const neighborId of neighbors) {
-      if (visited.has(neighborId)) continue;
-      visited.add(neighborId);
-      const nextLevel = current.level + 1;
-      levelByNodeId[neighborId] = nextLevel;
-      orderedNodeIds.push(neighborId);
-      queue.push({ nodeId: neighborId, level: nextLevel });
-      if (orderedNodeIds.length >= maxNodeLimit) break;
-    }
-  }
-
-  const selectedSet = new Set(orderedNodeIds);
-  const edgeList = Array.from(edgeMap.values())
-    .filter((edge) => selectedSet.has(edge.nodeAId) && selectedSet.has(edge.nodeBId))
-    .map((edge) => {
-      const nodeASenseMap = edge.senseTitleMapByNodeId.get(edge.nodeAId) || new Map();
-      const nodeBSenseMap = edge.senseTitleMapByNodeId.get(edge.nodeBId) || new Map();
-      const containsCount = edge.pairs.filter((item) => item.relationType === 'contains').length;
-      const extendsCount = edge.pairs.filter((item) => item.relationType === 'extends').length;
-      return {
-        edgeId: edge.edgeId,
-        nodeAId: edge.nodeAId,
-        nodeBId: edge.nodeBId,
-        pairCount: edge.pairs.length,
-        containsCount,
-        extendsCount,
-        nodeASenseTitles: Array.from(nodeASenseMap.values()),
-        nodeBSenseTitles: Array.from(nodeBSenseMap.values()),
-        pairs: edge.pairs.map(({ pairKey, ...item }) => item)
-      };
+  // 1) 优先走文本索引，避免全表扫描。
+  let textDocs = [];
+  try {
+    textDocs = await Node.find({
+      status: 'approved',
+      $text: { $search: safeKeyword }
     })
-    .sort((a, b) => {
-      const levelA = Math.min(levelByNodeId[a.nodeAId] ?? 99, levelByNodeId[a.nodeBId] ?? 99);
-      const levelB = Math.min(levelByNodeId[b.nodeAId] ?? 99, levelByNodeId[b.nodeBId] ?? 99);
-      if (levelA !== levelB) return levelA - levelB;
-      if (a.pairCount !== b.pairCount) return b.pairCount - a.pairCount;
-      return a.edgeId.localeCompare(b.edgeId, 'en');
-    });
+      .select(`${selectFields} score`)
+      .sort({ score: { $meta: 'textScore' } })
+      .limit(safeLimit)
+      .lean();
+  } catch (error) {
+    textDocs = [];
+  }
+  pushDocs(textDocs);
+
+  // 2) 文本索引召回不足时，用 name/title 的 regex 补足。
+  if (merged.size < safeLimit) {
+    const keywordRegex = new RegExp(escapeRegex(safeKeyword), 'i');
+    let regexDocs = await Node.find({
+      status: 'approved',
+      $or: [
+        { name: keywordRegex },
+        { 'synonymSenses.title': keywordRegex }
+      ]
+    })
+      .select(selectFields)
+      .limit(safeLimit - merged.size)
+      .lean();
+
+    if (isNodeSenseCollectionReadEnabled() && regexDocs.length < (safeLimit - merged.size)) {
+      const extraNeed = safeLimit - merged.size - regexDocs.length;
+      const senseRows = await NodeSense.find({
+        status: 'active',
+        $or: [
+          { title: keywordRegex },
+          { content: keywordRegex }
+        ]
+      })
+        .select('nodeId')
+        .limit(Math.max(extraNeed * 2, 200))
+        .lean();
+
+      const senseNodeIds = Array.from(new Set(
+        senseRows
+          .map((item) => getIdString(item?.nodeId))
+          .filter((id) => isValidObjectId(id))
+      ));
+      if (senseNodeIds.length > 0) {
+        const extraDocs = await Node.find({
+          status: 'approved',
+          _id: { $in: senseNodeIds.slice(0, extraNeed * 2) }
+        })
+          .select(selectFields)
+          .limit(extraNeed)
+          .lean();
+        regexDocs = regexDocs.concat(extraDocs);
+      }
+    }
+    pushDocs(regexDocs);
+  }
+
+  const rows = Array.from(merged.values());
+  await hydrateNodeSensesForNodes(rows);
+  return rows;
+};
+
+const toDistributionSessionExecuteAt = (lock = {}) => {
+  const ms = new Date(lock?.executeAt || 0).getTime();
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return new Date(ms);
+};
+
+const DISTRIBUTION_LOCK_PARTICIPANT_PREVIEW_LIMIT = 50;
+const DISTRIBUTION_JOIN_ORDER_SCAN_LIMIT = 5000;
+const DISTRIBUTION_LEGACY_PARTICIPANT_MIRROR_LIMIT = 2000;
+const DISTRIBUTION_POOL_USER_LIST_LIMIT = 200;
+
+const buildManualJoinOrderMapFromLegacyLock = (lock = {}, limit = DISTRIBUTION_JOIN_ORDER_SCAN_LIMIT) => {
+  const map = new Map();
+  const rows = Array.isArray(lock?.participants) ? lock.participants : [];
+  const maxScan = Math.max(100, Math.min(20000, parseInt(limit, 10) || DISTRIBUTION_JOIN_ORDER_SCAN_LIMIT));
+  for (let i = 0; i < rows.length && i < maxScan; i += 1) {
+    const item = rows[i] || {};
+    const userId = getIdString(item?.userId);
+    if (!isValidObjectId(userId)) continue;
+    const joinedAtMs = new Date(item?.joinedAt || 0).getTime();
+    const orderMs = Number.isFinite(joinedAtMs) && joinedAtMs > 0 ? joinedAtMs : Number.MAX_SAFE_INTEGER;
+    map.set(userId, orderMs);
+  }
+  return map;
+};
+
+const getActiveManualParticipantSet = async ({ nodeId = '', lock = {}, atMs = Date.now() } = {}) => {
+  const ids = await KnowledgeDistributionService.loadActiveManualParticipantIds({
+    nodeId,
+    lock,
+    atMs
+  });
+  return new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map((id) => getIdString(id))
+      .filter((id) => isValidObjectId(id))
+  );
+};
+
+const listDistributionParticipantsBySession = async ({
+  nodeId,
+  executeAt,
+  page = 1,
+  pageSize = 50,
+  activeOnly = false
+} = {}) => {
+  if (!isValidObjectId(nodeId) || !(executeAt instanceof Date)) {
+    return {
+      total: 0,
+      page: 1,
+      pageSize: 50,
+      rows: []
+    };
+  }
+
+  const safePage = Math.max(1, parseInt(page, 10) || 1);
+  const safePageSize = Math.max(1, Math.min(200, parseInt(pageSize, 10) || 50));
+  const filter = {
+    nodeId: new mongoose.Types.ObjectId(String(nodeId)),
+    executeAt
+  };
+  if (activeOnly) {
+    filter.exitedAt = null;
+  }
+
+  const [total, rows] = await Promise.all([
+    DistributionParticipant.countDocuments(filter),
+    DistributionParticipant.find(filter)
+      .sort({ joinedAt: 1, _id: 1 })
+      .skip((safePage - 1) * safePageSize)
+      .limit(safePageSize)
+      .select('userId joinedAt exitedAt')
+      .lean()
+  ]);
 
   return {
-    centerNodeId: centerId,
-    levelByNodeId,
-    orderedNodeIds,
-    edgeList
+    total,
+    page: safePage,
+    pageSize: safePageSize,
+    rows
   };
+};
+
+const syncDistributionParticipantJoinRecord = async ({
+  nodeId,
+  executeAt,
+  userId,
+  joinedAt
+}) => {
+  if (!isValidObjectId(nodeId) || !isValidObjectId(userId) || !(executeAt instanceof Date)) return;
+  await DistributionParticipant.updateOne(
+    {
+      nodeId: new mongoose.Types.ObjectId(String(nodeId)),
+      executeAt,
+      userId: new mongoose.Types.ObjectId(String(userId))
+    },
+    {
+      $set: {
+        joinedAt: joinedAt instanceof Date ? joinedAt : new Date(),
+        exitedAt: null
+      }
+    },
+    { upsert: true }
+  );
+};
+
+const syncDistributionParticipantExitRecord = async ({
+  nodeId,
+  executeAt,
+  userId,
+  exitedAt
+}) => {
+  if (!isValidObjectId(nodeId) || !isValidObjectId(userId) || !(executeAt instanceof Date)) return;
+  await DistributionParticipant.updateOne(
+    {
+      nodeId: new mongoose.Types.ObjectId(String(nodeId)),
+      executeAt,
+      userId: new mongoose.Types.ObjectId(String(userId))
+    },
+    {
+      $set: {
+        exitedAt: exitedAt instanceof Date ? exitedAt : new Date()
+      },
+      $setOnInsert: {
+        joinedAt: exitedAt instanceof Date ? exitedAt : new Date()
+      }
+    },
+    { upsert: true }
+  );
 };
 
 const normalizeAssociationDraftList = (rawAssociations = [], localSenseIdSet = null) => (
@@ -468,6 +557,41 @@ const normalizeRelationAssociationList = (associations = []) => (
       && assoc.targetSenseId
     ))
 );
+
+const normalizeTitleRelationAssociationList = (associations = []) => (
+  (Array.isArray(associations) ? associations : [])
+    .map((assoc) => ({
+      targetNode: getIdString(assoc?.targetNode || assoc?.targetNodeId),
+      relationType: normalizeAssociationRelationType(assoc?.relationType),
+      sourceSenseId: typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '',
+      targetSenseId: typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '',
+      insertSide: typeof assoc?.insertSide === 'string' ? assoc.insertSide.trim() : '',
+      insertGroupId: typeof assoc?.insertGroupId === 'string' ? assoc.insertGroupId.trim() : ''
+    }))
+    .filter((assoc) => (
+      assoc.targetNode
+      && (assoc.relationType === 'contains' || assoc.relationType === 'extends')
+    ))
+);
+
+const mapProjectionRowToNodeLike = (row = {}) => ({
+  _id: row?.nodeId || row?._id || null,
+  owner: row?.owner || null,
+  domainMaster: row?.domainMaster || null,
+  domainAdmins: Array.isArray(row?.domainAdmins) ? row.domainAdmins : [],
+  allianceId: row?.allianceId || null,
+  name: row?.name || '',
+  description: row?.description || '',
+  relatedParentDomains: Array.isArray(row?.relatedParentDomains) ? row.relatedParentDomains : [],
+  relatedChildDomains: Array.isArray(row?.relatedChildDomains) ? row.relatedChildDomains : [],
+  contentScore: row?.contentScore,
+  knowledgePoint: row?.knowledgePoint || null,
+  status: row?.status || 'approved',
+  isFeatured: !!row?.isFeatured,
+  featuredOrder: Number.isFinite(Number(row?.featuredOrder)) ? Number(row.featuredOrder) : 0,
+  createdAt: row?.createdAt || null,
+  lastUpdate: row?.lastUpdate || null
+});
 
 const toNodeSensePairKey = (nodeId = '', senseId = '') => `${getIdString(nodeId)}:${String(senseId || '').trim()}`;
 const toBridgePairDecisionKey = (pair = {}) => (
@@ -643,6 +767,7 @@ const applyReconnectPairs = async (pairs = []) => {
 
   for (const node of dirtyMap.values()) {
     await node.save();
+    await syncDomainTitleProjectionFromNode(node);
   }
 };
 
@@ -758,6 +883,7 @@ const validateAssociationMutationPermission = async ({ node, requestUserId = '' 
 const parseAssociationMutationPayload = async ({ node, rawAssociations = [] }) => {
   const rawAssociationList = Array.isArray(rawAssociations) ? rawAssociations : [];
   const currentNodeId = getIdString(node?._id);
+  await hydrateNodeSensesForNodes([node]);
   const localSenseList = normalizeNodeSenseList(node);
   const localSenseIdSet = new Set(localSenseList.map((item) => item.senseId));
   const defaultSourceSenseId = localSenseList[0]?.senseId || '';
@@ -793,6 +919,7 @@ const parseAssociationMutationPayload = async ({ node, rawAssociations = [] }) =
         .select('_id name synonymSenses description')
         .lean()
     : [];
+  await hydrateNodeSensesForNodes(targetNodesForValidation);
   const targetNodeMapForValidation = new Map(targetNodesForValidation.map((item) => [getIdString(item._id), item]));
   if (targetNodesForValidation.length !== targetNodeIds.length) {
     return { error: '存在无效的关联目标知识域' };
@@ -878,6 +1005,7 @@ const buildAssociationMutationPreviewData = async ({
   const targetNodes = targetNodeIds.length > 0
     ? await Node.find({ _id: { $in: targetNodeIds } }).select('_id name synonymSenses description').lean()
     : [];
+  await hydrateNodeSensesForNodes(targetNodes);
   const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
   const mutationSummary = buildAssociationMutationSummary({
     node,
@@ -1819,9 +1947,9 @@ const resolveAttackGateByArrival = (node, user) => {
 };
 
 const getNodeGateState = (node, gateKey) => {
-  const source = node?.citySiegeState && typeof node.citySiegeState === 'object'
-    ? node.citySiegeState
-    : {};
+  const source = (node?.__workingCitySiegeState && typeof node.__workingCitySiegeState === 'object')
+    ? node.__workingCitySiegeState
+    : resolveNodeSiegeState(node, {});
   const gate = source?.[gateKey] && typeof source[gateKey] === 'object' ? source[gateKey] : {};
   const attackers = Array.isArray(gate.attackers) ? gate.attackers : [];
   return {
@@ -1836,13 +1964,50 @@ const getNodeGateState = (node, gateKey) => {
   };
 };
 
+const createEmptySiegeGateState = () => ({
+  active: false,
+  startedAt: null,
+  updatedAt: null,
+  supportNotifiedAt: null,
+  attackerAllianceId: null,
+  initiatorUserId: null,
+  initiatorUsername: '',
+  attackers: []
+});
+
+const createDefaultNodeSiegeState = () => ({
+  cheng: createEmptySiegeGateState(),
+  qi: createEmptySiegeGateState()
+});
+
+const clonePlainObject = (input = {}) => JSON.parse(JSON.stringify(input || {}));
+
+const getMutableNodeSiegeState = (node) => {
+  if (!node || typeof node !== 'object') {
+    return createDefaultNodeSiegeState();
+  }
+  if (!node.__workingCitySiegeState || typeof node.__workingCitySiegeState !== 'object') {
+    const source = resolveNodeSiegeState(node, {});
+    const cloned = clonePlainObject(source && typeof source === 'object' ? source : {});
+    node.__workingCitySiegeState = {
+      cheng: cloned?.cheng && typeof cloned.cheng === 'object'
+        ? cloned.cheng
+        : createEmptySiegeGateState(),
+      qi: cloned?.qi && typeof cloned.qi === 'object'
+        ? cloned.qi
+        : createEmptySiegeGateState()
+    };
+  }
+  return node.__workingCitySiegeState;
+};
+
 const settleNodeSiegeState = (node, nowDate = new Date()) => {
-  if (!node || !node.citySiegeState) return false;
+  const siegeState = getMutableNodeSiegeState(node);
   let changed = false;
   const nowMs = nowDate.getTime();
 
   for (const gateKey of CITY_GATE_KEYS) {
-    const gate = node.citySiegeState?.[gateKey];
+    const gate = siegeState?.[gateKey];
     if (!gate || typeof gate !== 'object') continue;
     const attackers = Array.isArray(gate.attackers) ? gate.attackers : [];
     for (const attacker of attackers) {
@@ -1886,88 +2051,16 @@ const settleNodeSiegeState = (node, nowDate = new Date()) => {
 
   if (changed) {
     for (const gateKey of CITY_GATE_KEYS) {
-      const gate = node.citySiegeState?.[gateKey];
+      const gate = siegeState?.[gateKey];
       if (gate && typeof gate === 'object') {
         gate.updatedAt = nowDate;
       }
     }
   }
-  return changed;
-};
-
-const createEmptySiegeGateState = () => ({
-  active: false,
-  startedAt: null,
-  updatedAt: null,
-  supportNotifiedAt: null,
-  attackerAllianceId: null,
-  initiatorUserId: null,
-  initiatorUsername: '',
-  attackers: []
-});
-
-const buildAllianceNodeGraph = (nodes = []) => {
-  const nameToId = new Map();
-  const idToNode = new Map();
-  const adjacency = new Map();
-
-  (Array.isArray(nodes) ? nodes : []).forEach((node) => {
-    const nodeId = getIdString(node?._id);
-    const nodeName = typeof node?.name === 'string' ? node.name : '';
-    if (!nodeId || !nodeName) return;
-    nameToId.set(nodeName, nodeId);
-    idToNode.set(nodeId, node);
-    adjacency.set(nodeId, new Set());
-  });
-
-  const link = (idA, idB) => {
-    if (!idA || !idB || idA === idB) return;
-    adjacency.get(idA)?.add(idB);
-    adjacency.get(idB)?.add(idA);
+  return {
+    changed,
+    siegeState
   };
-
-  (Array.isArray(nodes) ? nodes : []).forEach((node) => {
-    const nodeId = getIdString(node?._id);
-    if (!nodeId) return;
-    (Array.isArray(node?.relatedParentDomains) ? node.relatedParentDomains : []).forEach((name) => {
-      const targetId = nameToId.get(name);
-      if (targetId) link(nodeId, targetId);
-    });
-    (Array.isArray(node?.relatedChildDomains) ? node.relatedChildDomains : []).forEach((name) => {
-      const targetId = nameToId.get(name);
-      if (targetId) link(nodeId, targetId);
-    });
-  });
-
-  return { nameToId, idToNode, adjacency };
-};
-
-const bfsPath = (startId, targetId, adjacency = new Map()) => {
-  if (!startId || !targetId) return null;
-  if (startId === targetId) return [startId];
-  const queue = [startId];
-  const visited = new Set([startId]);
-  const prev = new Map();
-  while (queue.length > 0) {
-    const current = queue.shift();
-    const neighbors = adjacency.get(current) || new Set();
-    for (const next of neighbors) {
-      if (visited.has(next)) continue;
-      visited.add(next);
-      prev.set(next, current);
-      if (next === targetId) {
-        const path = [targetId];
-        let walk = targetId;
-        while (prev.has(walk)) {
-          walk = prev.get(walk);
-          path.push(walk);
-        }
-        return path.reverse();
-      }
-      queue.push(next);
-    }
-  }
-  return null;
 };
 
 const isSameAlliance = (allianceA, allianceB) => {
@@ -2169,7 +2262,7 @@ const buildSiegePayloadForUser = ({
   const inferredGate = resolveAttackGateByArrival(node, user);
   const preferredGate = userActiveGate || inferredGate || '';
 
-  const serializedDefenseLayout = serializeDefenseLayout(node?.cityDefenseLayout || {});
+  const serializedDefenseLayout = serializeDefenseLayout(resolveNodeDefenseLayout(node, {}));
   const domainMasterDefenseSnapshot = isNodeMaster
     ? {
       nodeId: getIdString(node?._id),
@@ -2688,8 +2781,12 @@ const serializeDistributionRuleProfile = (profile = {}) => ({
   rule: serializeDistributionRule(profile?.rule || {})
 });
 
-const serializeDistributionLock = (locked = null) => {
+const serializeDistributionLock = (locked = null, options = {}) => {
   if (!locked) return null;
+  const participantPreviewLimit = Math.max(
+    0,
+    Math.min(500, parseInt(options?.participantPreviewLimit, 10) || DISTRIBUTION_LOCK_PARTICIPANT_PREVIEW_LIMIT)
+  );
   const executeAtMs = new Date(locked.executeAt || 0).getTime();
   const entryCloseAtMsRaw = new Date(locked.entryCloseAt || 0).getTime();
   const endAtMsRaw = new Date(locked.endAt || 0).getTime();
@@ -2699,16 +2796,27 @@ const serializeDistributionLock = (locked = null) => {
   const endAt = Number.isFinite(endAtMsRaw) && endAtMsRaw > 0
     ? new Date(endAtMsRaw)
     : (Number.isFinite(executeAtMs) && executeAtMs > 0 ? new Date(executeAtMs + 60 * 1000) : null);
-  const participants = (Array.isArray(locked.participants) ? locked.participants : []).map((item) => ({
-    userId: getIdString(item?.userId),
-    joinedAt: item?.joinedAt || null,
-    exitedAt: item?.exitedAt || null
-  })).filter((item) => isValidObjectId(item.userId));
+  const participants = [];
+  let participantTotal = 0;
+  let activeParticipantCount = 0;
+  for (const item of (Array.isArray(locked.participants) ? locked.participants : [])) {
+    const userId = getIdString(item?.userId);
+    if (!isValidObjectId(userId)) continue;
+    participantTotal += 1;
+    const exitedAt = item?.exitedAt || null;
+    if (!exitedAt) activeParticipantCount += 1;
+    if (participants.length < participantPreviewLimit) {
+      participants.push({
+        userId,
+        joinedAt: item?.joinedAt || null,
+        exitedAt
+      });
+    }
+  }
   const resultUserRewards = (Array.isArray(locked.resultUserRewards) ? locked.resultUserRewards : []).map((item) => ({
     userId: getIdString(item?.userId),
     amount: round2(Math.max(0, Number(item?.amount) || 0))
   })).filter((item) => isValidObjectId(item.userId));
-  const activeParticipantCount = participants.filter((item) => !item.exitedAt).length;
   return {
     executeAt: locked.executeAt || null,
     entryCloseAt: entryCloseAt || null,
@@ -2725,6 +2833,8 @@ const serializeDistributionLock = (locked = null) => {
     ruleProfileId: typeof locked.ruleProfileId === 'string' ? locked.ruleProfileId : '',
     ruleProfileName: typeof locked.ruleProfileName === 'string' ? locked.ruleProfileName : '',
     activeParticipantCount,
+    participantTotal,
+    participantsTruncated: participantTotal > participants.length,
     participants,
     resultUserRewards,
     enemyAllianceIds: (Array.isArray(locked.enemyAllianceIds) ? locked.enemyAllianceIds : []).map((item) => getIdString(item)).filter(Boolean),
@@ -2796,15 +2906,6 @@ const getDistributionLockPhase = (lock = {}, now = new Date()) => {
   return 'settling';
 };
 
-const getActiveManualParticipantSet = (lock = {}, atMs = Date.now()) => (
-  new Set(
-    KnowledgeDistributionService
-      .getActiveManualParticipantIds(lock || {}, atMs)
-      .map((id) => getIdString(id))
-      .filter((id) => isValidObjectId(id))
-  )
-);
-
 const getTravelStatus = (travelState) => {
   if (!travelState) return 'idle';
   if (typeof travelState.status === 'string' && travelState.status) return travelState.status;
@@ -2827,9 +2928,10 @@ router.get('/search', authenticateToken, async (req, res) => {
     }
 
     const keywords = normalizedKeyword.split(/\s+/).filter(Boolean);
-    const nodes = await Node.find({ status: 'approved' })
-      .select('_id name description synonymSenses knowledgePoint contentScore')
-      .lean();
+    const nodes = await loadNodeSearchCandidates({
+      normalizedKeyword,
+      limit: 1200
+    });
 
     const results = nodes
       .flatMap((node) => buildNodeSenseSearchEntries(node, keywords))
@@ -2932,6 +3034,7 @@ router.post('/create', authenticateToken, async (req, res) => {
           .select('_id name synonymSenses description')
           .lean()
       : [];
+    await hydrateNodeSensesForNodes(targetNodes);
     const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
     if (targetNodes.length !== targetNodeIds.length) {
       return res.status(400).json({ error: '存在无效的关联目标知识域' });
@@ -3024,6 +3127,22 @@ router.post('/create', authenticateToken, async (req, res) => {
     });
 
     await node.save();
+    await upsertNodeSensesReplace({
+      nodeId: node._id,
+      senses: uniqueSenses,
+      actorUserId: req.user.userId
+    });
+    await upsertNodeDefenseLayout({
+      nodeId: node._id,
+      layout: resolveNodeDefenseLayout(node, {}),
+      actorUserId: req.user.userId
+    });
+    await upsertNodeSiegeState({
+      nodeId: node._id,
+      siegeState: resolveNodeSiegeState(node, {}),
+      actorUserId: req.user.userId
+    });
+    await syncDomainTitleProjectionFromNode(node);
 
     // 双向同步：更新被关联节点的relatedParentDomains和relatedChildDomains
     if (node.status === 'approved') {
@@ -3061,6 +3180,7 @@ router.get('/pending', authenticateToken, isAdmin, async (req, res) => {
     const nodes = await Node.find({ status: 'pending' })
       .populate('owner', 'username profession')
       .populate('associations.targetNode', 'name description');
+    await hydrateNodeSensesForNodes(nodes);
     res.json(nodes);
   } catch (error) {
     console.error('获取待审批节点错误:', error);
@@ -3084,6 +3204,7 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
       return res.status(400).json({ error: '已存在同名的审核通过节点，无法批准此申请' });
     }
 
+    await hydrateNodeSensesForNodes([node]);
     const localSenseIdSet = new Set(normalizeNodeSenseList(node).map((item) => item.senseId));
     const normalizedAssociations = normalizeAssociationDraftList(node.associations, localSenseIdSet);
     if (normalizedAssociations.length === 0) {
@@ -3096,6 +3217,7 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
           .select('_id name synonymSenses description')
           .lean()
       : [];
+    await hydrateNodeSensesForNodes(targetNodes);
     const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
     if (targetNodes.length !== targetNodeIds.length) {
       return res.status(400).json({ error: '存在无效的关联目标知识域，无法审批通过' });
@@ -3180,6 +3302,22 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     // 设置默认内容分数为1
     node.contentScore = 1;
     await node.save();
+    await upsertNodeSensesReplace({
+      nodeId: node._id,
+      senses: normalizeNodeSenseList(node),
+      actorUserId: req.user.userId
+    });
+    await upsertNodeDefenseLayout({
+      nodeId: node._id,
+      layout: resolveNodeDefenseLayout(node, {}),
+      actorUserId: req.user.userId
+    });
+    await upsertNodeSiegeState({
+      nodeId: node._id,
+      siegeState: resolveNodeSiegeState(node, {}),
+      actorUserId: req.user.userId
+    });
+    await syncDomainTitleProjectionFromNode(node);
 
     // 自动拒绝其他同名的待审核节点
     const rejectedNodes = await Node.find({
@@ -3196,6 +3334,9 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
       });
       // 删除被拒绝的节点
       await Node.findByIdAndDelete(rejectedNode._id);
+      await NodeSense.deleteMany({ nodeId: rejectedNode._id });
+      await deleteNodeTitleStatesByNodeIds([rejectedNode._id]);
+      await deleteDomainTitleProjectionByNodeIds([rejectedNode._id]);
     }
 
     // 双向同步：更新被关联节点的relatedParentDomains和relatedChildDomains
@@ -3238,6 +3379,9 @@ router.post('/reject', authenticateToken, isAdmin, async (req, res) => {
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
+    await NodeSense.deleteMany({ nodeId: node._id });
+    await deleteNodeTitleStatesByNodeIds([node._id]);
+    await deleteDomainTitleProjectionByNodeIds([node._id]);
 
     // 从用户拥有的节点列表中移除（如果已添加）
     await User.findByIdAndUpdate(node.owner, {
@@ -3270,6 +3414,7 @@ router.post('/associate', authenticateToken, async (req, res) => {
     // 重置内容分数为1（关联节点视为新节点）
     node.contentScore = 1;
     await node.save();
+    await syncDomainTitleProjectionFromNode(node);
     res.status(200).json(node);
   } catch (error) {
     console.error('关联节点错误:', error);
@@ -3292,6 +3437,7 @@ router.post('/approve-association', authenticateToken, async (req, res) => {
     }
     node.status = 'approved';
     await node.save();
+    await syncDomainTitleProjectionFromNode(node);
     res.status(200).json(node);
   } catch (error) {
     console.error('审批节点关联错误:', error);
@@ -3309,6 +3455,7 @@ router.post('/reject-association', authenticateToken, async (req, res) => {
     }
     node.status = 'rejected';
     await node.save();
+    await syncDomainTitleProjectionFromNode(node);
     res.status(200).json(node);
   } catch (error) {
     console.error('拒绝节点关联错误:', error);
@@ -3319,15 +3466,33 @@ router.post('/reject-association', authenticateToken, async (req, res) => {
 // 获取所有节点（管理员专用）
 router.get('/', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const nodes = await Node.find()
+    const page = toSafeInteger(req.query?.page, 1, { min: 1, max: 1000000 });
+    const pageSize = toSafeInteger(req.query?.pageSize, 50, { min: 1, max: 200 });
+    const statusFilter = typeof req.query?.status === 'string' ? req.query.status.trim() : '';
+    const query = {};
+    if (statusFilter === 'approved' || statusFilter === 'pending' || statusFilter === 'rejected') {
+      query.status = statusFilter;
+    }
+
+    const [nodes, total] = await Promise.all([
+      Node.find(query)
       .populate('owner', 'username profession')
       .populate('domainMaster', 'username profession')
       .populate('associations.targetNode', 'name description synonymSenses')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * pageSize)
+      .limit(pageSize),
+      Node.countDocuments(query)
+    ]);
+    await hydrateNodeSensesForNodes(nodes);
     
     res.json({
       success: true,
       count: nodes.length,
+      total,
+      page,
+      pageSize,
+      hasMore: page * pageSize < total,
       nodes: nodes
     });
   } catch (error) {
@@ -3378,6 +3543,7 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
     }
 
     await node.save();
+    await syncDomainTitleProjectionFromNode(node);
 
     res.json({
       success: true,
@@ -3400,6 +3566,7 @@ router.post('/:nodeId/delete-preview', authenticateToken, isAdmin, async (req, r
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
+    await hydrateNodeSensesForNodes([node]);
 
     const oldRelationAssociations = normalizeRelationAssociationList(node.associations || []);
     const lostBridgePairs = computeLostBridgePairs(oldRelationAssociations, []);
@@ -3415,6 +3582,7 @@ router.post('/:nodeId/delete-preview', authenticateToken, isAdmin, async (req, r
     const targetNodes = summaryTargetIds.length > 0
       ? await Node.find({ _id: { $in: summaryTargetIds } }).select('_id name synonymSenses description').lean()
       : [];
+    await hydrateNodeSensesForNodes(targetNodes);
     const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
     const mutationSummary = buildAssociationMutationSummary({
       node,
@@ -3490,6 +3658,9 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
 
     // 删除节点
     await Node.findByIdAndDelete(nodeId);
+    await NodeSense.deleteMany({ nodeId: node._id });
+    await deleteNodeTitleStatesByNodeIds([node._id]);
+    await deleteDomainTitleProjectionByNodeIds([node._id]);
 
     // 从用户拥有的节点列表中移除
     await User.findByIdAndUpdate(node.owner, {
@@ -3511,10 +3682,13 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
 // 获取单个节点（需要身份验证）
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
-    const node = await Node.updateKnowledgePoint(req.params.id);
+    const node = await Node.findById(req.params.id);
     if (!node) {
       return res.status(404).json({ message: '节点不存在' });
     }
+    await hydrateNodeSensesForNodes([node]);
+    node.synonymSenses = normalizeNodeSenseList(node);
+    Node.applyKnowledgePointProjection(node, new Date());
     
     // 检查用户是否有权访问此节点
     const user = await User.findById(req.user.userId);
@@ -3671,6 +3845,7 @@ router.put('/:nodeId/associations', authenticateToken, async (req, res) => {
     node.relatedParentDomains = Array.from(new Set(relatedParentDomains));
     node.relatedChildDomains = Array.from(new Set(relatedChildDomains));
     await node.save();
+    await syncDomainTitleProjectionFromNode(node);
 
     // 第二步：处理插入重连与断开后承接关系
     if (insertPlans.length > 0) {
@@ -3722,6 +3897,7 @@ router.put('/:nodeId/featured', authenticateToken, isAdmin, async (req, res) => 
     }
 
     await node.save();
+    await syncDomainTitleProjectionFromNode(node);
 
     res.json({
       success: true,
@@ -3737,16 +3913,72 @@ router.put('/:nodeId/featured', authenticateToken, isAdmin, async (req, res) => 
 // 获取根节点（所有用户可访问）
 router.get('/public/root-nodes', async (req, res) => {
   try {
-    // 查找所有已批准的节点
-    const nodes = await Node.find({ status: 'approved' })
-      .populate('owner', 'username profession')
-      .select('name description synonymSenses relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId');
+    const pageSize = toSafeInteger(req.query?.pageSize, 120, { min: 1, max: 500 });
+    const cursor = decodeNameCursor(typeof req.query?.cursor === 'string' ? req.query.cursor : '');
+    const rootPredicate = [{ relatedParentDomains: { $size: 0 } }];
+    let fetchedRootNodes = [];
 
-    // 过滤出根节点（没有母节点的节点）
-    const rootNodes = nodes.filter(node =>
-      !node.relatedParentDomains || node.relatedParentDomains.length === 0
-    );
+    if (isDomainTitleProjectionReadEnabled()) {
+      const query = {
+        status: 'approved',
+        $or: rootPredicate
+      };
+      if (cursor.name) {
+        const cursorNameClause = isValidObjectId(cursor.id)
+          ? {
+            $or: [
+              { name: { $gt: cursor.name } },
+              { name: cursor.name, nodeId: { $gt: new mongoose.Types.ObjectId(cursor.id) } }
+            ]
+          }
+          : { name: { $gt: cursor.name } };
+        query.$and = [
+          { $or: rootPredicate },
+          cursorNameClause
+        ];
+        delete query.$or;
+      }
+      const projectionRows = await DomainTitleProjection.find(query)
+        .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId status')
+        .sort({ name: 1, nodeId: 1 })
+        .limit(pageSize + 1)
+        .lean();
+      fetchedRootNodes = projectionRows.map((row) => mapProjectionRowToNodeLike(row));
+    } else {
+      const query = {
+        status: 'approved',
+        $or: [
+          { relatedParentDomains: { $exists: false } },
+          { relatedParentDomains: { $size: 0 } }
+        ]
+      };
+      if (cursor.name) {
+        const cursorNameClause = isValidObjectId(cursor.id)
+          ? {
+            $or: [
+              { name: { $gt: cursor.name } },
+              { name: cursor.name, _id: { $gt: new mongoose.Types.ObjectId(cursor.id) } }
+            ]
+          }
+          : { name: { $gt: cursor.name } };
+        query.$and = [
+          { $or: [{ relatedParentDomains: { $exists: false } }, { relatedParentDomains: { $size: 0 } }] },
+          cursorNameClause
+        ];
+        delete query.$or;
+      }
+      fetchedRootNodes = await Node.find(query)
+        .populate('owner', 'username profession')
+        .select('name description synonymSenses relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId')
+        .sort({ name: 1, _id: 1 })
+        .limit(pageSize + 1);
+    }
+    const hasMore = fetchedRootNodes.length > pageSize;
+    const rootNodes = hasMore ? fetchedRootNodes.slice(0, pageSize) : fetchedRootNodes;
+    await hydrateNodeSensesForNodes(rootNodes);
+
     const styledRootNodes = await attachVisualStyleToNodeList(rootNodes);
+    await hydrateNodeSensesForNodes(styledRootNodes);
     const normalizedRootNodes = styledRootNodes.map((item) => {
       const senses = normalizeNodeSenseList(item);
       const activeSense = senses[0];
@@ -3763,7 +3995,14 @@ router.get('/public/root-nodes', async (req, res) => {
     res.json({
       success: true,
       count: normalizedRootNodes.length,
-      nodes: normalizedRootNodes
+      nodes: normalizedRootNodes,
+      hasMore,
+      nextCursor: hasMore
+        ? encodeNameCursor({
+          name: rootNodes[rootNodes.length - 1]?.name || '',
+          id: getIdString(rootNodes[rootNodes.length - 1]?._id)
+        })
+        : ''
     });
   } catch (error) {
     console.error('获取根节点错误:', error);
@@ -3774,14 +4013,35 @@ router.get('/public/root-nodes', async (req, res) => {
 // 获取热门节点（所有用户可访问）
 router.get('/public/featured-nodes', async (req, res) => {
   try {
-    const featuredNodes = await Node.find({
+    const page = toSafeInteger(req.query?.page, 1, { min: 1, max: 1000000 });
+    const pageSize = toSafeInteger(req.query?.pageSize, 80, { min: 1, max: 200 });
+    const query = {
       status: 'approved',
       isFeatured: true
-    })
-      .populate('owner', 'username profession')
-      .sort({ featuredOrder: 1, createdAt: -1 })
-      .select('name description synonymSenses relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder domainMaster allianceId');
+    };
+    const [featuredNodes, total] = isDomainTitleProjectionReadEnabled()
+      ? await Promise.all([
+        DomainTitleProjection.find(query)
+          .sort({ featuredOrder: 1, createdAt: -1 })
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder domainMaster allianceId status')
+          .lean()
+          .then((rows) => rows.map((row) => mapProjectionRowToNodeLike(row))),
+        DomainTitleProjection.countDocuments(query)
+      ])
+      : await Promise.all([
+        Node.find(query)
+          .populate('owner', 'username profession')
+          .sort({ featuredOrder: 1, createdAt: -1 })
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .select('name description synonymSenses relatedParentDomains relatedChildDomains knowledgePoint contentScore isFeatured featuredOrder domainMaster allianceId'),
+        Node.countDocuments(query)
+      ]);
+    await hydrateNodeSensesForNodes(featuredNodes);
     const styledFeaturedNodes = await attachVisualStyleToNodeList(featuredNodes);
+    await hydrateNodeSensesForNodes(styledFeaturedNodes);
     const normalizedFeaturedNodes = styledFeaturedNodes.map((item) => {
       const senses = normalizeNodeSenseList(item);
       const activeSense = senses[0];
@@ -3798,6 +4058,10 @@ router.get('/public/featured-nodes', async (req, res) => {
     res.json({
       success: true,
       count: normalizedFeaturedNodes.length,
+      total,
+      page,
+      pageSize,
+      hasMore: page * pageSize < total,
       nodes: normalizedFeaturedNodes
     });
   } catch (error) {
@@ -3821,9 +4085,10 @@ router.get('/public/search', async (req, res) => {
     // 分割关键词（按空格）
     const keywords = normalizedQuery.split(/\s+/).filter(Boolean);
 
-    const allNodes = await Node.find({ status: 'approved' })
-      .populate('owner', 'username profession')
-      .select('name description synonymSenses relatedParentDomains relatedChildDomains knowledgePoint contentScore');
+    const allNodes = await loadNodeSearchCandidates({
+      normalizedKeyword: normalizedQuery,
+      limit: 1500
+    });
 
     const searchResults = allNodes
       .flatMap((node) => buildNodeSenseSearchEntries(node, keywords))
@@ -3846,71 +4111,266 @@ router.get('/public/search', async (req, res) => {
 router.get('/public/title-detail/:nodeId', async (req, res) => {
   try {
     const { nodeId } = req.params;
-    const maxDepth = toSafeInteger(req.query?.depth, 1, { min: 1, max: 7 });
     const maxNodes = toSafeInteger(req.query?.limit, 160, { min: 20, max: 500 });
 
     if (!isValidObjectId(nodeId)) {
       return res.status(400).json({ error: '无效的节点ID' });
     }
 
-    const center = await Node.findById(nodeId)
-      .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId status');
+    const center = isDomainTitleProjectionReadEnabled()
+      ? await DomainTitleProjection.findOne({
+        nodeId: new mongoose.Types.ObjectId(nodeId),
+        status: 'approved'
+      })
+        .select('nodeId name description knowledgePoint contentScore domainMaster allianceId status')
+        .lean()
+        .then((row) => (row ? mapProjectionRowToNodeLike(row) : null))
+      : await Node.findById(nodeId)
+        .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId status associations')
+        .lean();
     if (!center) {
       return res.status(404).json({ error: '节点不存在' });
     }
     if (center.status !== 'approved') {
       return res.status(403).json({ error: '该节点未审批' });
     }
+    await hydrateNodeSensesForNodes([center]);
 
-    const approvedNodes = await Node.find({ status: 'approved' })
-      .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId associations status')
-      .lean();
-    const graph = buildTitleGraphFromNodes({
-      nodeDocs: approvedNodes,
-      centerNodeId: nodeId,
-      maxDepth,
-      maxNodes
-    });
-    const centerNodeId = getIdString(nodeId);
-    const nodeById = new Map(approvedNodes.map((item) => [getIdString(item._id), item]));
-
-    if (!graph.orderedNodeIds.includes(centerNodeId)) {
-      graph.orderedNodeIds = [centerNodeId];
-      graph.levelByNodeId = { [centerNodeId]: 0 };
-      graph.edgeList = [];
-    } else {
-      const directEdges = (Array.isArray(graph.edgeList) ? graph.edgeList : [])
-        .filter((edge) => edge?.nodeAId === centerNodeId || edge?.nodeBId === centerNodeId);
-      const directNeighborSet = new Set();
-      directEdges.forEach((edge) => {
-        const peerId = edge.nodeAId === centerNodeId ? edge.nodeBId : edge.nodeAId;
-        if (peerId) directNeighborSet.add(peerId);
-      });
-      const directNeighborIds = Array.from(directNeighborSet)
-        .filter((item) => item && item !== centerNodeId)
-        .sort((a, b) => {
-          const nameA = nodeById.get(a)?.name || '';
-          const nameB = nodeById.get(b)?.name || '';
-          return nameA.localeCompare(nameB, 'zh-Hans-CN');
-        });
-
-      graph.orderedNodeIds = [centerNodeId, ...directNeighborIds];
-      graph.levelByNodeId = { [centerNodeId]: 0 };
-      directNeighborIds.forEach((id) => {
-        graph.levelByNodeId[id] = 1;
-      });
-      graph.edgeList = directEdges;
+    const centerNodeId = getIdString(center?._id || nodeId);
+    const [centerRelationRows, incomingRelationRows] = isDomainTitleProjectionReadEnabled()
+      ? await Promise.all([
+        listActiveTitleRelationsBySourceNodeIds([centerNodeId]),
+        listActiveTitleRelationsByTargetNodeIds([centerNodeId])
+      ])
+      : [[], []];
+    const centerAssociations = isDomainTitleProjectionReadEnabled()
+      ? normalizeTitleRelationAssociationList(centerRelationRows)
+      : normalizeTitleRelationAssociationList(center?.associations || []);
+    const directNeighborIdSet = new Set();
+    for (const assoc of centerAssociations) {
+      const targetNodeId = getIdString(assoc?.targetNode);
+      if (!isValidObjectId(targetNodeId) || targetNodeId === centerNodeId) continue;
+      directNeighborIdSet.add(targetNodeId);
+    }
+    if (isDomainTitleProjectionReadEnabled()) {
+      for (const row of incomingRelationRows) {
+        const sourceNodeId = getIdString(row?.sourceNodeId);
+        if (!isValidObjectId(sourceNodeId) || sourceNodeId === centerNodeId) continue;
+        directNeighborIdSet.add(sourceNodeId);
+      }
     }
 
-    const selectedNodes = graph.orderedNodeIds
+    const directNeighborObjectIds = Array.from(directNeighborIdSet)
+      .slice(0, Math.max(50, maxNodes * 5))
+      .map((id) => new mongoose.Types.ObjectId(id));
+    const directNeighborDocs = directNeighborObjectIds.length > 0
+      ? (isDomainTitleProjectionReadEnabled()
+        ? await DomainTitleProjection.find({
+          status: 'approved',
+          nodeId: { $in: directNeighborObjectIds }
+        })
+          .select('nodeId name description knowledgePoint contentScore domainMaster allianceId status')
+          .lean()
+          .then((rows) => rows.map((row) => mapProjectionRowToNodeLike(row)))
+        : await Node.find({
+          status: 'approved',
+          _id: { $in: directNeighborObjectIds }
+        })
+          .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId associations')
+          .lean())
+      : [];
+    await hydrateNodeSensesForNodes(directNeighborDocs);
+
+    const sortedNeighborDocs = directNeighborDocs
+      .sort((a, b) => (a?.name || '').localeCompare((b?.name || ''), 'zh-Hans-CN'))
+      .slice(0, Math.max(0, maxNodes - 1));
+    const incomingBySourceNodeId = incomingRelationRows.reduce((acc, row) => {
+      const sourceNodeId = getIdString(row?.sourceNodeId);
+      if (!sourceNodeId) return acc;
+      if (!acc.has(sourceNodeId)) {
+        acc.set(sourceNodeId, []);
+      }
+      acc.get(sourceNodeId).push(row);
+      return acc;
+    }, new Map());
+    const nodeById = new Map([
+      [centerNodeId, center],
+      ...sortedNeighborDocs.map((item) => [getIdString(item?._id), item])
+    ]);
+
+    const orderedNodeIds = [centerNodeId, ...sortedNeighborDocs.map((item) => getIdString(item?._id)).filter(Boolean)];
+    const levelByNodeId = { [centerNodeId]: 0 };
+    orderedNodeIds.slice(1).forEach((id) => {
+      levelByNodeId[id] = 1;
+    });
+
+    const senseMetaByNodeId = new Map();
+    const getNodeSenseMeta = (nodeId) => {
+      const safeNodeId = getIdString(nodeId);
+      if (!safeNodeId) return { firstSenseId: '', titleMap: new Map() };
+      let meta = senseMetaByNodeId.get(safeNodeId);
+      if (!meta) {
+        const nodeDoc = nodeById.get(safeNodeId) || {};
+        const senses = normalizeNodeSenseList(nodeDoc).filter((sense) => (
+          typeof sense?.senseId === 'string'
+          && sense.senseId.trim()
+          && typeof sense?.title === 'string'
+          && sense.title.trim()
+        ));
+        const titleMap = new Map(senses.map((sense) => [sense.senseId, sense.title]));
+        meta = {
+          firstSenseId: senses[0]?.senseId || '',
+          titleMap
+        };
+        senseMetaByNodeId.set(safeNodeId, meta);
+      }
+      return meta;
+    };
+    const resolveAssociationSenseId = (nodeId, senseId) => {
+      const safeSenseId = typeof senseId === 'string' ? senseId.trim() : '';
+      const meta = getNodeSenseMeta(nodeId);
+      if (!meta?.titleMap || meta.titleMap.size === 0) return '';
+      if (safeSenseId && meta.titleMap.has(safeSenseId)) return safeSenseId;
+      return meta.firstSenseId || '';
+    };
+    const getSenseTitle = (nodeId, senseId) => {
+      const safeSenseId = typeof senseId === 'string' ? senseId.trim() : '';
+      if (!safeSenseId) return '';
+      const meta = getNodeSenseMeta(nodeId);
+      return meta.titleMap.get(safeSenseId) || '';
+    };
+    const edgeMap = new Map();
+    const getOrCreateEdge = (nodeAId, nodeBId) => {
+      const edgeId = `${nodeAId}|${nodeBId}`;
+      const existing = edgeMap.get(edgeId);
+      if (existing) return existing;
+      const created = {
+        edgeId,
+        nodeAId,
+        nodeBId,
+        pairs: [],
+        senseTitleMapByNodeId: new Map()
+      };
+      edgeMap.set(edgeId, created);
+      return created;
+    };
+    const upsertEdgeSense = (edge, nodeId, senseId, senseTitle) => {
+      if (!senseId || !senseTitle) return;
+      let titleMap = edge.senseTitleMapByNodeId.get(nodeId);
+      if (!titleMap) {
+        titleMap = new Map();
+        edge.senseTitleMapByNodeId.set(nodeId, titleMap);
+      }
+      if (!titleMap.has(senseId)) {
+        titleMap.set(senseId, senseTitle);
+      }
+    };
+    const appendPairToEdge = (sourceNodeId, targetNodeId, relationType, sourceSenseId, targetSenseId) => {
+      const safeSourceNodeId = getIdString(sourceNodeId);
+      const safeTargetNodeId = getIdString(targetNodeId);
+      const safeRelationType = typeof relationType === 'string' ? relationType : '';
+      const safeSourceSenseId = resolveAssociationSenseId(safeSourceNodeId, sourceSenseId);
+      const safeTargetSenseId = resolveAssociationSenseId(safeTargetNodeId, targetSenseId);
+      if (!safeSourceNodeId || !safeTargetNodeId || safeSourceNodeId === safeTargetNodeId) return;
+      if (!nodeById.has(safeSourceNodeId) || !nodeById.has(safeTargetNodeId)) return;
+      if (!safeSourceSenseId || !safeTargetSenseId || !safeRelationType) return;
+
+      const sourceSenseTitle = getSenseTitle(safeSourceNodeId, safeSourceSenseId);
+      const targetSenseTitle = getSenseTitle(safeTargetNodeId, safeTargetSenseId);
+      if (!sourceSenseTitle || !targetSenseTitle) return;
+
+      const nodeAId = safeSourceNodeId < safeTargetNodeId ? safeSourceNodeId : safeTargetNodeId;
+      const nodeBId = safeSourceNodeId < safeTargetNodeId ? safeTargetNodeId : safeSourceNodeId;
+      const edge = getOrCreateEdge(nodeAId, nodeBId);
+      const pairKey = [
+        safeSourceNodeId,
+        safeSourceSenseId,
+        safeRelationType,
+        safeTargetNodeId,
+        safeTargetSenseId
+      ].join('|');
+      if (!edge.pairs.some((item) => item.pairKey === pairKey)) {
+        edge.pairs.push({
+          pairKey,
+          sourceNodeId: safeSourceNodeId,
+          sourceSenseId: safeSourceSenseId,
+          sourceSenseTitle,
+          targetNodeId: safeTargetNodeId,
+          targetSenseId: safeTargetSenseId,
+          targetSenseTitle,
+          relationType: safeRelationType
+        });
+      }
+      upsertEdgeSense(edge, safeSourceNodeId, safeSourceSenseId, sourceSenseTitle);
+      upsertEdgeSense(edge, safeTargetNodeId, safeTargetSenseId, targetSenseTitle);
+    };
+
+    centerAssociations.forEach((assoc) => {
+      appendPairToEdge(
+        centerNodeId,
+        assoc?.targetNode,
+        assoc?.relationType,
+        assoc?.sourceSenseId,
+        assoc?.targetSenseId
+      );
+    });
+    sortedNeighborDocs.forEach((neighbor) => {
+      const neighborId = getIdString(neighbor?._id);
+      const neighborAssociations = isDomainTitleProjectionReadEnabled()
+        ? normalizeTitleRelationAssociationList(incomingBySourceNodeId.get(neighborId) || [])
+        : normalizeTitleRelationAssociationList(neighbor?.associations || []);
+      neighborAssociations.forEach((assoc) => {
+        if (getIdString(assoc?.targetNode) !== centerNodeId) return;
+        appendPairToEdge(
+          neighborId,
+          centerNodeId,
+          assoc?.relationType,
+          assoc?.sourceSenseId,
+          assoc?.targetSenseId
+        );
+      });
+    });
+
+    const edgeList = Array.from(edgeMap.values())
+      .map((edge) => {
+        const nodeASenseMap = edge.senseTitleMapByNodeId.get(edge.nodeAId) || new Map();
+        const nodeBSenseMap = edge.senseTitleMapByNodeId.get(edge.nodeBId) || new Map();
+        const containsCount = edge.pairs.filter((item) => item.relationType === 'contains').length;
+        const extendsCount = edge.pairs.filter((item) => item.relationType === 'extends').length;
+        return {
+          edgeId: edge.edgeId,
+          nodeAId: edge.nodeAId,
+          nodeBId: edge.nodeBId,
+          pairCount: edge.pairs.length,
+          containsCount,
+          extendsCount,
+          nodeASenseTitles: Array.from(nodeASenseMap.values()),
+          nodeBSenseTitles: Array.from(nodeBSenseMap.values()),
+          pairs: edge.pairs.map(({ pairKey, ...item }) => item)
+        };
+      })
+      .sort((a, b) => b.pairCount - a.pairCount || a.edgeId.localeCompare(b.edgeId, 'en'));
+
+    const toTitleCardSource = (nodeDoc = {}) => ({
+      _id: nodeDoc?._id || null,
+      name: nodeDoc?.name || '',
+      description: nodeDoc?.description || '',
+      synonymSenses: normalizeNodeSenseList(nodeDoc),
+      knowledgePoint: nodeDoc?.knowledgePoint || null,
+      contentScore: nodeDoc?.contentScore,
+      domainMaster: nodeDoc?.domainMaster || null,
+      allianceId: nodeDoc?.allianceId || null
+    });
+
+    const selectedNodes = orderedNodeIds
       .map((id) => nodeById.get(id))
       .filter(Boolean)
-      .map((item) => buildNodeTitleCard(item));
+      .map((item) => buildNodeTitleCard(toTitleCardSource(item)));
     const styledSelectedNodes = await attachVisualStyleToNodeList(selectedNodes);
 
     const styledNodeById = new Map(styledSelectedNodes.map((item) => [getIdString(item?._id), item]));
-    const centerNode = styledNodeById.get(getIdString(nodeId)) || buildNodeTitleCard(center);
-    const edgeList = graph.edgeList.map((edge) => {
+    const centerNode = styledNodeById.get(getIdString(nodeId)) || buildNodeTitleCard(toTitleCardSource(center));
+    const edgesWithNames = edgeList.map((edge) => {
       const nodeA = styledNodeById.get(edge.nodeAId) || nodeById.get(edge.nodeAId) || null;
       const nodeB = styledNodeById.get(edge.nodeBId) || nodeById.get(edge.nodeBId) || null;
       return {
@@ -3926,11 +4386,11 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
         centerNodeId: getIdString(nodeId),
         centerNode,
         nodes: styledSelectedNodes,
-        edges: edgeList,
-        levelByNodeId: graph.levelByNodeId,
-        maxLevel: Math.max(0, ...Object.values(graph.levelByNodeId || {}).map((value) => Number(value) || 0)),
+        edges: edgesWithNames,
+        levelByNodeId,
+        maxLevel: Math.max(0, ...Object.values(levelByNodeId || {}).map((value) => Number(value) || 0)),
         nodeCount: styledSelectedNodes.length,
-        edgeCount: edgeList.length
+        edgeCount: edgesWithNames.length
       }
     });
   } catch (error) {
@@ -3970,6 +4430,7 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     if (node.status !== 'approved') {
       return res.status(403).json({ error: '该节点未审批' });
     }
+    await hydrateNodeSensesForNodes([node]);
 
     const nodeSenses = normalizeNodeSenseList(node);
     const activeSense = pickNodeSenseById(node, requestedSenseId);
@@ -4016,6 +4477,8 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
           name: { $in: nodeNameFallbackChildren },
           status: 'approved'
         }).select('_id name description synonymSenses knowledgePoint contentScore domainMaster allianceId');
+    await hydrateNodeSensesForNodes(parentNodes);
+    await hydrateNodeSensesForNodes(childNodes);
 
     const relationByTargetNodeId = relationAssociations.reduce((acc, assoc) => {
       const key = getIdString(assoc?.targetNode);
@@ -4026,13 +4489,14 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
 
     const decorateNodeWithSense = (rawNode) => {
       const source = rawNode && typeof rawNode.toObject === 'function' ? rawNode.toObject() : rawNode;
+      const normalizedSenses = normalizeNodeSenseList(rawNode);
       const targetNodeId = getIdString(source?._id);
       const assoc = relationByTargetNodeId.get(targetNodeId);
       const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
-      const pickedSense = pickNodeSenseById(source, targetSenseId);
+      const pickedSense = pickNodeSenseById({ ...source, synonymSenses: normalizedSenses }, targetSenseId);
       return {
         ...source,
-        synonymSenses: normalizeNodeSenseList(source),
+        synonymSenses: normalizedSenses,
         activeSenseId: pickedSense?.senseId || '',
         activeSenseTitle: pickedSense?.title || '',
         activeSenseContent: pickedSense?.content || '',
@@ -4093,13 +4557,55 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
 // 公开接口：获取所有已批准的节点（用于构建导航路径）
 router.get('/public/all-nodes', async (req, res) => {
   try {
-    const nodes = await Node.find({ status: 'approved' })
-      .select('_id name description relatedParentDomains relatedChildDomains')
-      .lean();
+    const pageSize = toSafeInteger(req.query?.pageSize, 200, { min: 1, max: 1000 });
+    const cursor = decodeNameCursor(typeof req.query?.cursor === 'string' ? req.query.cursor : '');
+    const query = { status: 'approved' };
+    if (cursor.name) {
+      if (isValidObjectId(cursor.id)) {
+        query.$or = [
+          { name: { $gt: cursor.name } },
+          {
+            name: cursor.name,
+            [isDomainTitleProjectionReadEnabled() ? 'nodeId' : '_id']: {
+              $gt: new mongoose.Types.ObjectId(cursor.id)
+            }
+          }
+        ];
+      } else {
+        query.name = { $gt: cursor.name };
+      }
+    }
+    const fetchedNodes = isDomainTitleProjectionReadEnabled()
+      ? await DomainTitleProjection.find(query)
+        .select('nodeId name description relatedParentDomains relatedChildDomains')
+        .sort({ name: 1, nodeId: 1 })
+        .limit(pageSize + 1)
+        .lean()
+        .then((rows) => rows.map((row) => ({
+          _id: row.nodeId,
+          name: row.name,
+          description: row.description,
+          relatedParentDomains: Array.isArray(row.relatedParentDomains) ? row.relatedParentDomains : [],
+          relatedChildDomains: Array.isArray(row.relatedChildDomains) ? row.relatedChildDomains : []
+        })))
+      : await Node.find(query)
+        .select('_id name description relatedParentDomains relatedChildDomains')
+        .sort({ name: 1, _id: 1 })
+        .limit(pageSize + 1)
+        .lean();
+    const hasMore = fetchedNodes.length > pageSize;
+    const nodes = hasMore ? fetchedNodes.slice(0, pageSize) : fetchedNodes;
 
     res.json({
       success: true,
-      nodes: nodes
+      nodes,
+      hasMore,
+      nextCursor: hasMore
+        ? encodeNameCursor({
+          name: nodes[nodes.length - 1]?.name || '',
+          id: getIdString(nodes[nodes.length - 1]?._id)
+        })
+        : ''
     });
   } catch (error) {
     console.error('获取所有节点错误:', error);
@@ -4156,6 +4662,7 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
         resetDistributionOwnerBoundState();
       }
       await node.save();
+      await syncDomainTitleProjectionFromNode(node);
       return res.json({
         success: true,
         message: '域主已清除',
@@ -4182,6 +4689,7 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
       resetDistributionOwnerBoundState();
     }
     await node.save();
+    await syncDomainTitleProjectionFromNode(node);
 
     const updatedNode = await Node.findById(nodeId)
       .populate('domainMaster', 'username profession');
@@ -4420,6 +4928,7 @@ router.post('/:nodeId/domain-master/apply', authenticateToken, async (req, res) 
         node.domainMaster = null;
         node.allianceId = null;
         await node.save();
+        await syncDomainTitleProjectionFromNode(node);
       } else {
         return res.status(400).json({ error: '该知识域已有域主，无法申请' });
       }
@@ -4446,8 +4955,9 @@ router.post('/:nodeId/domain-master/apply', authenticateToken, async (req, res) 
       return res.status(409).json({ error: '你已提交过该知识域域主申请，请等待管理员处理' });
     }
 
+    const applyNotificationDocs = [];
     for (const adminUser of adminUsers) {
-      adminUser.notifications.unshift({
+      const applyNotification = pushNotificationToUser(adminUser, {
         type: 'domain_master_apply',
         title: `域主申请：${node.name}`,
         message: `${requester.username} 申请成为知识域「${node.name}」的域主`,
@@ -4463,6 +4973,12 @@ router.post('/:nodeId/domain-master/apply', authenticateToken, async (req, res) 
         createdAt: new Date()
       });
       await adminUser.save();
+      if (applyNotification) {
+        applyNotificationDocs.push(toCollectionNotificationDoc(adminUser._id, applyNotification));
+      }
+    }
+    if (applyNotificationDocs.length > 0) {
+      await writeNotificationsToCollection(applyNotificationDocs);
     }
 
     res.json({
@@ -4513,6 +5029,7 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
     if (!isValidObjectId(domainMasterId)) {
       node.domainAdmins = (node.domainAdmins || []).filter((adminId) => getIdString(adminId) !== requestUserId);
       await node.save();
+      await syncDomainTitleProjectionFromNode(node);
       return res.json({
         success: true,
         message: '该知识域当前无域主，已自动卸任域相'
@@ -4523,6 +5040,7 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
     if (!domainMaster) {
       node.domainAdmins = (node.domainAdmins || []).filter((adminId) => getIdString(adminId) !== requestUserId);
       await node.save();
+      await syncDomainTitleProjectionFromNode(node);
       return res.json({
         success: true,
         message: '域主信息缺失，已自动卸任域相'
@@ -4540,7 +5058,7 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
       return res.status(409).json({ error: '你已提交过卸任申请，请等待域主处理' });
     }
 
-    domainMaster.notifications.unshift({
+    const resignRequestNotification = pushNotificationToUser(domainMaster, {
       type: 'domain_admin_resign_request',
       title: `域相卸任申请：${node.name}`,
       message: `${requester.username} 申请卸任知识域「${node.name}」域相`,
@@ -4553,6 +5071,9 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
       createdAt: new Date()
     });
     await domainMaster.save();
+    await writeNotificationsToCollection([
+      toCollectionNotificationDoc(domainMaster._id, resignRequestNotification)
+    ]);
 
     res.json({
       success: true,
@@ -4576,11 +5097,16 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '无效的知识域ID' });
     }
 
-    const node = await Node.findById(nodeId).select('name domainMaster domainAdmins cityDefenseLayout');
+    const node = await Node.findById(nodeId).select('name domainMaster domainAdmins');
 
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
+
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeSiegeState: false
+    });
 
     const currentUser = await User.findById(requestUserId).select('role');
     if (!currentUser) {
@@ -4620,8 +5146,9 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
         };
       })
       .filter(Boolean);
+    const defenseLayout = resolveNodeDefenseLayout(node, {});
     const gateDefenseViewerAdminIds = normalizeGateDefenseViewerAdminIds(
-      node?.cityDefenseLayout?.gateDefenseViewAdminIds,
+      defenseLayout?.gateDefenseViewAdminIds,
       domainAdminIds
     );
 
@@ -4813,7 +5340,7 @@ router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res)
       return res.status(409).json({ error: '该用户已有待处理邀请' });
     }
 
-    invitee.notifications.unshift({
+    const inviteNotificationDoc = pushNotificationToUser(invitee, {
       type: 'domain_admin_invite',
       title: `域相邀请：${node.name}`,
       message: `${inviter.username} 邀请你成为知识域「${node.name}」的域相`,
@@ -4825,6 +5352,9 @@ router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res)
       inviterUsername: inviter.username
     });
     await invitee.save();
+    await writeNotificationsToCollection([
+      toCollectionNotificationDoc(invitee._id, inviteNotificationDoc)
+    ]);
 
     res.json({
       success: true,
@@ -4885,6 +5415,9 @@ router.post('/:nodeId/domain-admins/invite/:notificationId/revoke', authenticate
     inviteNotification.message = `${inviter.username} 已撤销你在知识域「${node.name}」的域相邀请`;
     inviteNotification.respondedAt = new Date();
     await invitee.save();
+    await upsertNotificationsToCollection([
+      toCollectionNotificationDoc(invitee._id, inviteNotification)
+    ]);
 
     res.json({
       success: true,
@@ -4923,6 +5456,7 @@ router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (r
 
     node.domainAdmins = (node.domainAdmins || []).filter((id) => id.toString() !== adminUserId);
     await node.save();
+    await syncDomainTitleProjectionFromNode(node);
 
     res.json({
       success: true,
@@ -4946,10 +5480,14 @@ router.put('/:nodeId/domain-admins/gate-defense-viewers', authenticateToken, asy
       return res.status(400).json({ error: '无效的知识域ID' });
     }
 
-    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout');
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeSiegeState: false
+    });
     if (!isDomainMaster(node, requestUserId)) {
       return res.status(403).json({ error: '只有域主可以配置承口/启口可查看权限' });
     }
@@ -4959,13 +5497,17 @@ router.put('/:nodeId/domain-admins/gate-defense-viewers', authenticateToken, asy
       (node.domainAdmins || []).map((id) => getIdString(id))
     );
 
-    const currentLayout = serializeDefenseLayout(node.cityDefenseLayout || {});
-    node.cityDefenseLayout = {
+    const currentLayout = serializeDefenseLayout(resolveNodeDefenseLayout(node, {}));
+    const nextLayout = {
       ...currentLayout,
       gateDefenseViewAdminIds: viewerAdminIds,
       updatedAt: new Date()
     };
-    await node.save();
+    await upsertNodeDefenseLayout({
+      nodeId: node._id,
+      layout: nextLayout,
+      actorUserId: requestUserId
+    });
 
     res.json({
       success: true,
@@ -4991,13 +5533,17 @@ router.get('/:nodeId/intel-heist', authenticateToken, async (req, res) => {
     }
 
     const [node, user] = await Promise.all([
-      Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout'),
+      Node.findById(nodeId).select('name status domainMaster domainAdmins'),
       User.findById(requestUserId).select('role location intelDomainSnapshots')
     ]);
 
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeSiegeState: false
+    });
     if (!user) {
       return res.status(404).json({ error: '用户不存在' });
     }
@@ -5037,12 +5583,16 @@ router.post('/:nodeId/intel-heist/scan', authenticateToken, async (req, res) => 
     }
 
     const [node, user] = await Promise.all([
-      Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout'),
+      Node.findById(nodeId).select('name status domainMaster domainAdmins'),
       User.findById(requestUserId).select('role location intelDomainSnapshots')
     ]);
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeSiegeState: false
+    });
     if (!user) {
       return res.status(404).json({ error: '用户不存在' });
     }
@@ -5052,7 +5602,8 @@ router.post('/:nodeId/intel-heist/scan', authenticateToken, async (req, res) => 
       return res.status(403).json({ error: permission.reason || '当前不可执行情报窃取' });
     }
 
-    const serializedLayout = serializeDefenseLayout(node.cityDefenseLayout || {});
+    const defenseLayout = resolveNodeDefenseLayout(node, {});
+    const serializedLayout = serializeDefenseLayout(defenseLayout);
     const buildings = Array.isArray(serializedLayout.buildings) ? serializedLayout.buildings : [];
     const targetBuilding = buildings.find((item) => item.buildingId === buildingId);
     if (!targetBuilding) {
@@ -5078,7 +5629,7 @@ router.post('/:nodeId/intel-heist/scan', authenticateToken, async (req, res) => 
       nodeId: node._id,
       nodeName: node.name,
       sourceBuildingId: buildingId,
-      deploymentUpdatedAt: node?.cityDefenseLayout?.updatedAt || null,
+      deploymentUpdatedAt: defenseLayout?.updatedAt || null,
       capturedAt: new Date(),
       gateDefense: buildIntelGateDefenseSnapshot(serializedLayout.gateDefense, unitTypeMap)
     };
@@ -5110,10 +5661,14 @@ router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '无效的知识域ID' });
     }
 
-    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout');
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeSiegeState: false
+    });
 
     const requestUserId = getIdString(req?.user?.userId);
     if (!isValidObjectId(requestUserId)) {
@@ -5121,12 +5676,13 @@ router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
     }
 
     const canEdit = isDomainMaster(node, requestUserId);
+    const defenseLayout = resolveNodeDefenseLayout(node, {});
     const gateDefenseViewerAdminIds = normalizeGateDefenseViewerAdminIds(
-      node?.cityDefenseLayout?.gateDefenseViewAdminIds,
+      defenseLayout?.gateDefenseViewAdminIds,
       (node.domainAdmins || []).map((id) => getIdString(id))
     );
     const canViewGateDefense = canEdit || gateDefenseViewerAdminIds.includes(requestUserId);
-    const serializedLayout = serializeDefenseLayout(node.cityDefenseLayout || {});
+    const serializedLayout = serializeDefenseLayout(defenseLayout);
     const layout = {
       ...serializedLayout,
       intelBuildingId: canEdit ? serializedLayout.intelBuildingId : '',
@@ -5161,10 +5717,14 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '无效的知识域ID' });
     }
 
-    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins cityDefenseLayout');
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeSiegeState: false
+    });
 
     const requestUserId = getIdString(req?.user?.userId);
     if (!isValidObjectId(requestUserId)) {
@@ -5211,26 +5771,31 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
     }
 
     const payloadHasViewerIds = Array.isArray(payload?.gateDefenseViewAdminIds);
+    const defenseLayout = resolveNodeDefenseLayout(node, {});
     const existingViewerAdminIds = normalizeGateDefenseViewerAdminIds(
-      node?.cityDefenseLayout?.gateDefenseViewAdminIds,
+      defenseLayout?.gateDefenseViewAdminIds,
       (node.domainAdmins || []).map((id) => getIdString(id))
     );
     const nextViewerAdminIds = payloadHasViewerIds
       ? normalizeGateDefenseViewerAdminIds(normalizedLayout.gateDefenseViewAdminIds, (node.domainAdmins || []).map((id) => getIdString(id)))
       : existingViewerAdminIds;
 
-    node.cityDefenseLayout = {
+    const nextLayout = {
       ...normalizedLayout,
       gateDefenseViewAdminIds: nextViewerAdminIds,
       updatedAt: new Date()
     };
-    await node.save();
+    await upsertNodeDefenseLayout({
+      nodeId: node._id,
+      layout: nextLayout,
+      actorUserId: requestUserId
+    });
 
     res.json({
       success: true,
       message: '城防配置已保存',
       nodeId: getIdString(node._id),
-      layout: serializeDefenseLayout(node.cityDefenseLayout || normalizedLayout),
+      layout: serializeDefenseLayout(nextLayout),
       maxBuildings: CITY_BUILDING_LIMIT,
       minBuildings: 1
     });
@@ -5256,7 +5821,7 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
     }
 
     const [node, user, unitTypes] = await Promise.all([
-      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains cityDefenseLayout citySiegeState'),
+      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
       User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
       fetchArmyUnitTypes()
     ]);
@@ -5270,10 +5835,18 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
     if (user.role !== 'common') {
       return res.status(403).json({ error: '仅普通用户可查看围城状态' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeSiegeState: true
+    });
 
-    const changed = settleNodeSiegeState(node, new Date());
-    if (changed) {
-      await node.save();
+    const settled = settleNodeSiegeState(node, new Date());
+    if (settled.changed) {
+      await upsertNodeSiegeState({
+        nodeId: node._id,
+        siegeState: settled.siegeState,
+        actorUserId: requestUserId
+      });
     }
 
     const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
@@ -5308,7 +5881,7 @@ router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
     }
 
     const [node, user, unitTypes] = await Promise.all([
-      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains cityDefenseLayout citySiegeState'),
+      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
       User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
       fetchArmyUnitTypes()
     ]);
@@ -5327,8 +5900,19 @@ router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
     if ((user.location || '').trim() !== (node.name || '')) {
       return res.status(403).json({ error: '需先抵达该知识域后才能发起围城' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeSiegeState: true
+    });
 
-    settleNodeSiegeState(node, new Date());
+    const settled = settleNodeSiegeState(node, new Date());
+    if (settled.changed) {
+      await upsertNodeSiegeState({
+        nodeId: node._id,
+        siegeState: settled.siegeState,
+        actorUserId: requestUserId
+      });
+    }
 
     const gateKey = resolveAttackGateByArrival(node, user);
     if (!gateKey) {
@@ -5360,9 +5944,10 @@ router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
     const normalizedOwnUnits = normalizeUnitCountEntries(ownUnitEntries);
     const fromNodeId = user.lastArrivedFromNodeId || null;
     const fromNodeName = (user.lastArrivedFromNodeName || '').trim();
+    const workingSiegeState = getMutableNodeSiegeState(node);
 
-    const nextAttackers = Array.isArray(node.citySiegeState?.[gateKey]?.attackers)
-      ? node.citySiegeState[gateKey].attackers.filter((item) => getIdString(item?.userId) !== requestUserId)
+    const nextAttackers = Array.isArray(workingSiegeState?.[gateKey]?.attackers)
+      ? workingSiegeState[gateKey].attackers.filter((item) => getIdString(item?.userId) !== requestUserId)
       : [];
     nextAttackers.push({
       userId: user._id,
@@ -5381,17 +5966,21 @@ router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
       updatedAt: now
     });
 
-    node.citySiegeState[gateKey] = {
-      ...(node.citySiegeState?.[gateKey]?.toObject?.() || node.citySiegeState?.[gateKey] || {}),
+    workingSiegeState[gateKey] = {
+      ...(workingSiegeState?.[gateKey] || {}),
       active: true,
-      startedAt: node.citySiegeState?.[gateKey]?.startedAt || now,
+      startedAt: workingSiegeState?.[gateKey]?.startedAt || now,
       updatedAt: now,
       attackerAllianceId: user.allianceId || null,
       initiatorUserId: user._id,
       initiatorUsername: user.username || '',
       attackers: nextAttackers
     };
-    await node.save();
+    await upsertNodeSiegeState({
+      nodeId: node._id,
+      siegeState: workingSiegeState,
+      actorUserId: requestUserId
+    });
 
     const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
     const intelSnapshot = intelSnapshotRaw ? serializeIntelSnapshot(intelSnapshotRaw) : null;
@@ -5426,7 +6015,7 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
     }
 
     const [node, user, unitTypes] = await Promise.all([
-      Node.findById(nodeId).select('name status citySiegeState'),
+      Node.findById(nodeId).select('name status'),
       User.findById(requestUserId).select('username role allianceId armyRoster intelDomainSnapshots'),
       fetchArmyUnitTypes()
     ]);
@@ -5444,8 +6033,19 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
     if (!requestAllianceId) {
       return res.status(400).json({ error: '未加入熵盟，无法呼叫支援' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: false,
+      includeSiegeState: true
+    });
 
-    settleNodeSiegeState(node, new Date());
+    const settled = settleNodeSiegeState(node, new Date());
+    if (settled.changed) {
+      await upsertNodeSiegeState({
+        nodeId: node._id,
+        siegeState: settled.siegeState,
+        actorUserId: requestUserId
+      });
+    }
 
     let targetGateKey = '';
     for (const gateKey of CITY_GATE_KEYS) {
@@ -5461,9 +6061,17 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
     }
 
     const now = new Date();
-    node.citySiegeState[targetGateKey].supportNotifiedAt = now;
-    node.citySiegeState[targetGateKey].updatedAt = now;
-    await node.save();
+    const workingSiegeState = getMutableNodeSiegeState(node);
+    workingSiegeState[targetGateKey] = {
+      ...(workingSiegeState[targetGateKey] || createEmptySiegeGateState()),
+      supportNotifiedAt: now,
+      updatedAt: now
+    };
+    await upsertNodeSiegeState({
+      nodeId: node._id,
+      siegeState: workingSiegeState,
+      actorUserId: requestUserId
+    });
 
     const members = await User.find({
       _id: { $ne: user._id },
@@ -5472,9 +6080,10 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
     }).select('_id notifications');
 
     const notifyMessage = `熵盟成员 ${user.username} 在知识域「${node.name}」${CITY_GATE_LABELS[targetGateKey]}发起围城，点击可查看并支援`;
+    const supportNotificationDocs = [];
     for (const member of members) {
       member.notifications = Array.isArray(member.notifications) ? member.notifications : [];
-      member.notifications.unshift({
+      const supportNotification = pushNotificationToUser(member, {
         type: 'info',
         title: `围城支援请求：${node.name}`,
         message: notifyMessage,
@@ -5491,6 +6100,12 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
         createdAt: now
       });
       await member.save();
+      if (supportNotification) {
+        supportNotificationDocs.push(toCollectionNotificationDoc(member._id, supportNotification));
+      }
+    }
+    if (supportNotificationDocs.length > 0) {
+      await writeNotificationsToCollection(supportNotificationDocs);
     }
 
     const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
@@ -5541,11 +6156,10 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '请至少选择一支兵种和数量' });
     }
 
-    const [node, user, unitTypes, approvedNodes] = await Promise.all([
-      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains citySiegeState cityDefenseLayout'),
+    const [node, user, unitTypes] = await Promise.all([
+      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
       User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots'),
-      fetchArmyUnitTypes(),
-      Node.find({ status: 'approved' }).select('_id name relatedParentDomains relatedChildDomains citySiegeState').lean()
+      fetchArmyUnitTypes()
     ]);
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
@@ -5564,8 +6178,19 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
     if (!userAllianceId) {
       return res.status(403).json({ error: '未加入熵盟，无法支援同盟战场' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeSiegeState: true
+    });
 
-    settleNodeSiegeState(node, new Date());
+    const settled = settleNodeSiegeState(node, new Date());
+    if (settled.changed) {
+      await upsertNodeSiegeState({
+        nodeId: node._id,
+        siegeState: settled.siegeState,
+        actorUserId: requestUserId
+      });
+    }
 
     const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
     for (const unitEntry of normalizedUnits) {
@@ -5595,13 +6220,24 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
 
     const roster = normalizeUserRoster(user.armyRoster, unitTypes);
     const rosterMap = buildUnitCountMap(roster);
-    const committedNodes = await Node.find({
-      status: 'approved',
-      $or: [
-        { 'citySiegeState.cheng.attackers.userId': user._id },
-        { 'citySiegeState.qi.attackers.userId': user._id }
-      ]
-    }).select('citySiegeState');
+    const committedNodes = isDomainTitleStateCollectionReadEnabled()
+      ? (await listSiegeStatesByAttackerUserId(user._id, { select: 'nodeId cheng qi' }))
+        .map((row) => ({
+          _id: row?.nodeId || null,
+          __titleStateCollection: {
+            citySiegeState: {
+              cheng: row?.cheng || createEmptySiegeGateState(),
+              qi: row?.qi || createEmptySiegeGateState()
+            }
+          }
+        }))
+      : await Node.find({
+        status: 'approved',
+        $or: [
+          { 'citySiegeState.cheng.attackers.userId': user._id },
+          { 'citySiegeState.qi.attackers.userId': user._id }
+        ]
+      }).select('citySiegeState');
     let committedMap = new Map();
     committedNodes.forEach((itemNode) => {
       CITY_GATE_KEYS.forEach((itemGateKey) => {
@@ -5626,10 +6262,9 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
       }
     }
 
-    const graph = buildAllianceNodeGraph(approvedNodes);
     const currentLocationName = (user.location || '').trim();
-    const startNodeId = graph.nameToId.get(currentLocationName) || '';
-    if (!startNodeId) {
+    const startNodes = await listApprovedNodesByNames([currentLocationName], { select: '_id name' });
+    if (startNodes.length === 0) {
       return res.status(400).json({ error: '当前所在知识域无效，无法派遣支援' });
     }
 
@@ -5637,7 +6272,23 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
       (targetGateKey === 'cheng' ? node.relatedParentDomains : node.relatedChildDomains)
         .filter((name) => typeof name === 'string' && !!name.trim())
     );
-    const sideNodes = approvedNodes.filter((item) => sideNameSet.has(item.name));
+    const sideNames = Array.from(sideNameSet);
+    const sideNodes = sideNames.length > 0
+      ? await Node.find({
+        status: 'approved',
+        name: { $in: sideNames }
+      }).select(
+        isDomainTitleStateCollectionReadEnabled()
+          ? '_id name'
+          : '_id name citySiegeState'
+      ).lean()
+      : [];
+    if (isDomainTitleStateCollectionReadEnabled()) {
+      await hydrateNodeTitleStatesForNodes(sideNodes, {
+        includeDefenseLayout: false,
+        includeSiegeState: true
+      });
+    }
     if (sideNodes.length === 0) {
       return res.status(400).json({ error: `当前知识域无可用${CITY_GATE_LABELS[targetGateKey]}入口路径` });
     }
@@ -5654,26 +6305,43 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
       return false;
     };
 
-    let selectedSupportPath = null;
-    for (const sideNode of sideNodes) {
-      if (isBlockedByOtherAllianceSiege(sideNode)) continue;
-      const sideNodeId = getIdString(sideNode._id);
-      const path = bfsPath(startNodeId, sideNodeId, graph.adjacency);
-      if (!Array.isArray(path) || path.length === 0) continue;
-      const distanceUnits = (path.length - 1) + 1; // 额外 +1 表示从同侧节点进入目标门
-      if (!selectedSupportPath || distanceUnits < selectedSupportPath.distanceUnits) {
-        selectedSupportPath = {
-          sideNodeId,
-          sideNodeName: sideNode.name,
-          path,
-          distanceUnits
-        };
-      }
-    }
-
-    if (!selectedSupportPath) {
+    const availableSideNodes = sideNodes.filter((sideNode) => !isBlockedByOtherAllianceSiege(sideNode));
+    if (availableSideNodes.length === 0) {
       return res.status(409).json({ error: `同侧路径已被封锁，当前无法支援${CITY_GATE_LABELS[targetGateKey]}` });
     }
+    const shortestSupportPath = await findShortestApprovedPathToAnyTargets({
+      startName: currentLocationName,
+      targetNames: availableSideNodes.map((item) => item.name),
+      maxDepth: 120,
+      maxVisited: 300000
+    });
+    if (!shortestSupportPath.found || !Array.isArray(shortestSupportPath.pathNames) || shortestSupportPath.pathNames.length === 0) {
+      return res.status(409).json({ error: `同侧路径已被封锁，当前无法支援${CITY_GATE_LABELS[targetGateKey]}` });
+    }
+
+    const pathNodes = await listApprovedNodesByNames(shortestSupportPath.pathNames, { select: '_id name' });
+    const pathNodeByName = new Map(pathNodes.map((item) => [item?.name || '', item]));
+    const normalizedPath = [];
+    for (const nodeName of shortestSupportPath.pathNames) {
+      const nodeRow = pathNodeByName.get(nodeName);
+      if (!nodeRow?._id || !nodeRow?.name) {
+        return res.status(409).json({ error: '路径计算结果失效，请重试' });
+      }
+      normalizedPath.push({
+        nodeId: nodeRow._id,
+        nodeName: nodeRow.name
+      });
+    }
+    const matchedSideNode = availableSideNodes.find((item) => item.name === shortestSupportPath.targetName);
+    if (!matchedSideNode) {
+      return res.status(409).json({ error: '支援路径目标失效，请重试' });
+    }
+    const selectedSupportPath = {
+      sideNodeId: getIdString(matchedSideNode._id),
+      sideNodeName: matchedSideNode.name,
+      path: normalizedPath,
+      distanceUnits: (normalizedPath.length - 1) + 1
+    };
 
     const now = new Date();
     const arriveAt = new Date(now.getTime() + (selectedSupportPath.distanceUnits * SIEGE_SUPPORT_UNIT_DURATION_SECONDS * 1000));
@@ -5687,7 +6355,7 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
       username: user.username || '',
       allianceId: user.allianceId || null,
       units: normalizedUnits,
-      fromNodeId: graph.idToNode.get(startNodeId)?._id || null,
+      fromNodeId: selectedSupportPath.path[0]?.nodeId || null,
       fromNodeName: currentLocationName,
       autoRetreatPercent,
       status: 'moving',
@@ -5699,22 +6367,27 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
       updatedAt: now
     });
 
-    node.citySiegeState[targetGateKey] = {
-      ...(node.citySiegeState?.[targetGateKey]?.toObject?.() || node.citySiegeState?.[targetGateKey] || {}),
+    const workingSiegeState = getMutableNodeSiegeState(node);
+    workingSiegeState[targetGateKey] = {
+      ...(workingSiegeState?.[targetGateKey] || {}),
       active: true,
-      startedAt: node.citySiegeState?.[targetGateKey]?.startedAt || now,
+      startedAt: workingSiegeState?.[targetGateKey]?.startedAt || now,
       updatedAt: now,
-      attackerAllianceId: node.citySiegeState?.[targetGateKey]?.attackerAllianceId || user.allianceId || null,
+      attackerAllianceId: workingSiegeState?.[targetGateKey]?.attackerAllianceId || user.allianceId || null,
       attackers: nextAttackers
     };
-    await node.save();
+    await upsertNodeSiegeState({
+      nodeId: node._id,
+      siegeState: workingSiegeState,
+      actorUserId: requestUserId
+    });
 
-    const initiatorUserId = getIdString(node.citySiegeState?.[targetGateKey]?.initiatorUserId);
+    const initiatorUserId = getIdString(workingSiegeState?.[targetGateKey]?.initiatorUserId);
     if (isValidObjectId(initiatorUserId) && initiatorUserId !== requestUserId) {
       const initiatorUser = await User.findById(initiatorUserId).select('notifications');
       if (initiatorUser) {
         initiatorUser.notifications = Array.isArray(initiatorUser.notifications) ? initiatorUser.notifications : [];
-        initiatorUser.notifications.unshift({
+        const initiatorNotification = pushNotificationToUser(initiatorUser, {
           type: 'info',
           title: `围城增援抵达路上：${node.name}`,
           message: `${user.username} 已派遣支援部队前往${CITY_GATE_LABELS[targetGateKey]}，预计 ${selectedSupportPath.distanceUnits * SIEGE_SUPPORT_UNIT_DURATION_SECONDS} 秒后到达`,
@@ -5731,6 +6404,9 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
           createdAt: now
         });
         await initiatorUser.save();
+        await writeNotificationsToCollection([
+          toCollectionNotificationDoc(initiatorUser._id, initiatorNotification)
+        ]);
       }
     }
 
@@ -5776,7 +6452,7 @@ router.post('/:nodeId/siege/retreat', authenticateToken, async (req, res) => {
     }
 
     const [node, user, unitTypes] = await Promise.all([
-      Node.findById(nodeId).select('name status citySiegeState'),
+      Node.findById(nodeId).select('name status'),
       User.findById(requestUserId).select('username role location allianceId armyRoster intelDomainSnapshots lastArrivedFromNodeId lastArrivedFromNodeName'),
       fetchArmyUnitTypes()
     ]);
@@ -5789,8 +6465,19 @@ router.post('/:nodeId/siege/retreat', authenticateToken, async (req, res) => {
     if (user.role !== 'common') {
       return res.status(403).json({ error: '仅普通用户可执行撤退' });
     }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: false,
+      includeSiegeState: true
+    });
 
-    settleNodeSiegeState(node, new Date());
+    const settled = settleNodeSiegeState(node, new Date());
+    if (settled.changed) {
+      await upsertNodeSiegeState({
+        nodeId: node._id,
+        siegeState: settled.siegeState,
+        actorUserId: requestUserId
+      });
+    }
 
     let targetGateKey = '';
     let retreatCount = 0;
@@ -5813,11 +6500,16 @@ router.post('/:nodeId/siege/retreat', authenticateToken, async (req, res) => {
     }
 
     const now = new Date();
-    node.citySiegeState[targetGateKey] = {
+    const workingSiegeState = getMutableNodeSiegeState(node);
+    workingSiegeState[targetGateKey] = {
       ...createEmptySiegeGateState(),
       updatedAt: now
     };
-    await node.save();
+    await upsertNodeSiegeState({
+      nodeId: node._id,
+      siegeState: workingSiegeState,
+      actorUserId: requestUserId
+    });
 
     const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
     const intelSnapshot = intelSnapshotRaw ? serializeIntelSnapshot(intelSnapshotRaw) : null;
@@ -5847,22 +6539,55 @@ router.get('/me/siege-supports', authenticateToken, async (req, res) => {
       return res.status(401).json({ error: '无效的用户身份' });
     }
 
-    const nodes = await Node.find({
-      status: 'approved',
-      $or: [
-        { 'citySiegeState.cheng.attackers.userId': new mongoose.Types.ObjectId(requestUserId) },
-        { 'citySiegeState.qi.attackers.userId': new mongoose.Types.ObjectId(requestUserId) }
-      ]
-    }).select('name citySiegeState');
+    let nodes = [];
+    if (isDomainTitleStateCollectionReadEnabled()) {
+      const siegeRows = await listSiegeStatesByAttackerUserId(requestUserId, {
+        select: 'nodeId cheng qi'
+      });
+      const nodeIds = siegeRows
+        .map((item) => item?.nodeId)
+        .filter((item) => !!item);
+      const nodeRows = nodeIds.length > 0
+        ? await Node.find({
+          _id: { $in: nodeIds },
+          status: 'approved'
+        }).select('_id name').lean()
+        : [];
+      const nodeNameMap = new Map(nodeRows.map((item) => [getIdString(item?._id), item?.name || '']));
+      nodes = siegeRows
+        .filter((item) => nodeNameMap.has(getIdString(item?.nodeId)))
+        .map((item) => ({
+          _id: item.nodeId,
+          name: nodeNameMap.get(getIdString(item.nodeId)) || '',
+          __titleStateCollection: {
+            citySiegeState: {
+              cheng: item?.cheng || createEmptySiegeGateState(),
+              qi: item?.qi || createEmptySiegeGateState()
+            }
+          }
+        }));
+    } else {
+      nodes = await Node.find({
+        status: 'approved',
+        $or: [
+          { 'citySiegeState.cheng.attackers.userId': new mongoose.Types.ObjectId(requestUserId) },
+          { 'citySiegeState.qi.attackers.userId': new mongoose.Types.ObjectId(requestUserId) }
+        ]
+      }).select('name citySiegeState');
+    }
     const unitTypes = await fetchArmyUnitTypes();
     const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
     const nowMs = Date.now();
 
     const rows = [];
     for (const node of nodes) {
-      const changed = settleNodeSiegeState(node, new Date(nowMs));
-      if (changed) {
-        await node.save();
+      const settledLocal = settleNodeSiegeState(node, new Date(nowMs));
+      if (settledLocal.changed) {
+        await upsertNodeSiegeState({
+          nodeId: node._id,
+          siegeState: settledLocal.siegeState,
+          actorUserId: requestUserId
+        });
       }
       for (const gateKey of CITY_GATE_KEYS) {
         const gateState = getNodeGateState(node, gateKey);
@@ -6453,16 +7178,13 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
       });
     }
 
-    const refreshedNode = await Node.updateKnowledgePoint(node._id);
-    if (!refreshedNode) {
-      return res.status(404).json({ error: '知识域不存在或不可操作' });
-    }
+    Node.applyKnowledgePointProjection(node, now);
 
     const minutesToExecute = Math.max(0, (executeAt.getTime() - now.getTime()) / (1000 * 60));
     const projectedTotal = round2(
-      (Number(refreshedNode.knowledgePoint?.value) || 0) +
-      (Number(refreshedNode.knowledgeDistributionCarryover) || 0) +
-      minutesToExecute * (Number(refreshedNode.contentScore) || 0)
+      (Number(node.knowledgePoint?.value) || 0) +
+      (Number(node.knowledgeDistributionCarryover) || 0) +
+      minutesToExecute * (Number(node.contentScore) || 0)
     );
     const distributionPercent = selectedRule?.distributionScope === 'partial'
       ? round2(clampPercent(selectedRule?.distributionPercent, 100))
@@ -6471,7 +7193,7 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
     const entryCloseAt = new Date(executeAt.getTime() - 60 * 1000);
     const endAt = new Date(executeAt.getTime() + 60 * 1000);
 
-    refreshedNode.knowledgeDistributionLocked = {
+    node.knowledgeDistributionLocked = {
       executeAt,
       entryCloseAt,
       endAt,
@@ -6491,25 +7213,26 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
       resultUserRewards: [],
       ruleSnapshot: selectedRule
     };
-    refreshedNode.knowledgeDistributionLastAnnouncedAt = now;
-    await refreshedNode.save();
+    node.knowledgeDistributionLastAnnouncedAt = now;
+    await node.save();
+    await syncDomainTitleProjectionFromNode(node);
 
     await KnowledgeDistributionService.publishAnnouncementNotifications({
-      node: refreshedNode,
+      node,
       masterUser,
-      lock: refreshedNode.knowledgeDistributionLocked
+      lock: node.knowledgeDistributionLocked
     });
 
     return res.json({
       success: true,
       message: '分发计划已发布并锁定，不可撤回',
-      nodeId: refreshedNode._id,
-      nodeName: refreshedNode.name,
+      nodeId: node._id,
+      nodeName: node.name,
       activeRuleId: selectedProfile.profileId,
       activeRuleName: selectedProfile.name,
-      knowledgePointValue: round2(Number(refreshedNode?.knowledgePoint?.value) || 0),
-      carryoverValue: round2(Number(refreshedNode?.knowledgeDistributionCarryover) || 0),
-      locked: serializeDistributionLock(refreshedNode.knowledgeDistributionLocked || null),
+      knowledgePointValue: round2(Number(node?.knowledgePoint?.value) || 0),
+      carryoverValue: round2(Number(node?.knowledgeDistributionCarryover) || 0),
+      locked: serializeDistributionLock(node.knowledgeDistributionLocked || null),
       isRuleLocked: true
     });
   } catch (error) {
@@ -6595,20 +7318,17 @@ router.get('/:nodeId/distribution-participation', authenticateToken, async (req,
       enemyAllianceIds: rules.enemyAllianceIds
     });
 
-    const manualParticipantSet = getActiveManualParticipantSet(lock, nowMs);
+    const manualParticipantSet = await getActiveManualParticipantSet({
+      nodeId: node._id,
+      lock,
+      atMs: nowMs
+    });
     const isJoinedManual = manualParticipantSet.has(currentUserId);
     const joined = autoEntry || isJoinedManual;
     const requiresManualEntry = !autoEntry && !isSystemAdminRole;
     const autoJoinOrderMsRaw = new Date(lock.announcedAt || lock.executeAt || 0).getTime();
     const autoJoinOrderMs = Number.isFinite(autoJoinOrderMsRaw) && autoJoinOrderMsRaw > 0 ? autoJoinOrderMsRaw : 0;
-    const manualJoinOrderMap = new Map();
-    for (const item of (Array.isArray(lock.participants) ? lock.participants : [])) {
-      const userId = getIdString(item?.userId);
-      if (!isValidObjectId(userId)) continue;
-      const joinedAtMs = new Date(item?.joinedAt || 0).getTime();
-      const orderMs = Number.isFinite(joinedAtMs) && joinedAtMs > 0 ? joinedAtMs : Number.MAX_SAFE_INTEGER;
-      manualJoinOrderMap.set(userId, orderMs);
-    }
+    const manualJoinOrderMap = buildManualJoinOrderMapFromLegacyLock(lock);
     const getParticipantJoinOrderMs = (userId = '') => {
       if (!isValidObjectId(userId)) return Number.MAX_SAFE_INTEGER;
       if (userId === masterId || domainAdminSet.has(userId)) {
@@ -6810,7 +7530,7 @@ router.get('/:nodeId/distribution-participation', authenticateToken, async (req,
         ? round2(rewardSnapshotMap.get(currentUserId) || 0)
         : estimatedReward;
     }
-    const poolUsers = selectedPool
+    const poolUsersAll = selectedPool
       ? displayPoolMemberIds
           .map((id) => userMap.get(id))
           .filter(Boolean)
@@ -6843,6 +7563,8 @@ router.get('/:nodeId/distribution-participation', authenticateToken, async (req,
             displayName: item.displayName
           }))
       : [];
+    const poolUsers = poolUsersAll.slice(0, DISTRIBUTION_POOL_USER_LIST_LIMIT);
+    const poolUsersTruncated = poolUsersAll.length > poolUsers.length;
 
     let joinTip = '';
     if (isSystemAdminRole) {
@@ -6897,7 +7619,8 @@ router.get('/:nodeId/distribution-participation', authenticateToken, async (req,
         estimatedReward,
         rewardValue,
         rewardFrozen,
-        users: poolUsers
+        users: poolUsers,
+        usersTruncated: poolUsersTruncated
       } : {
         key: '',
         label: '',
@@ -6907,11 +7630,125 @@ router.get('/:nodeId/distribution-participation', authenticateToken, async (req,
         estimatedReward: 0,
         rewardValue,
         rewardFrozen,
-        users: []
+        users: [],
+        usersTruncated: false
       }
     });
   } catch (error) {
     console.error('获取分发参与状态错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 分页获取分发参与者（按会话）
+router.get('/:nodeId/distribution-participants', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    let node = await Node.findById(nodeId).select(
+      'name status knowledgeDistributionLocked'
+    );
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (node.knowledgeDistributionLocked) {
+      await KnowledgeDistributionService.processNode(node, new Date());
+      node = await Node.findById(nodeId).select(
+        'name status knowledgeDistributionLocked'
+      );
+      if (!node || node.status !== 'approved') {
+        return res.status(404).json({ error: '知识域不存在或不可操作' });
+      }
+    }
+
+    const lock = node.knowledgeDistributionLocked || null;
+    if (!lock) {
+      return res.json({
+        success: true,
+        active: false,
+        nodeId: node._id,
+        nodeName: node.name,
+        executeAt: null,
+        total: 0,
+        page: 1,
+        pageSize: 50,
+        rows: []
+      });
+    }
+
+    const executeAt = toDistributionSessionExecuteAt(lock);
+    if (!(executeAt instanceof Date)) {
+      return res.status(409).json({ error: '当前分发会话无效' });
+    }
+
+    const page = toSafeInteger(req.query?.page, 1, { min: 1, max: 1000000 });
+    const pageSize = toSafeInteger(req.query?.pageSize, 50, { min: 1, max: 200 });
+    const activeOnly = String(req.query?.activeOnly || '').toLowerCase() === 'true';
+
+    const participantPage = await listDistributionParticipantsBySession({
+      nodeId: node._id,
+      executeAt,
+      page,
+      pageSize,
+      activeOnly
+    });
+
+    const userIds = Array.from(new Set(
+      participantPage.rows
+        .map((item) => getIdString(item?.userId))
+        .filter((id) => isValidObjectId(id))
+    )).map((id) => new mongoose.Types.ObjectId(id));
+    const users = userIds.length > 0
+      ? await User.find({ _id: { $in: userIds } })
+          .select('_id username avatar profession allianceId')
+          .lean()
+      : [];
+    const userMap = new Map(users.map((item) => [getIdString(item?._id), item]));
+
+    const allianceIds = Array.from(new Set(
+      users
+        .map((item) => getIdString(item?.allianceId))
+        .filter((id) => isValidObjectId(id))
+    )).map((id) => new mongoose.Types.ObjectId(id));
+    const alliances = allianceIds.length > 0
+      ? await EntropyAlliance.find({ _id: { $in: allianceIds } }).select('_id name').lean()
+      : [];
+    const allianceNameMap = new Map(alliances.map((item) => [getIdString(item?._id), item?.name || '']));
+
+    const rows = participantPage.rows.map((item) => {
+      const userId = getIdString(item?.userId);
+      const user = userMap.get(userId) || null;
+      const allianceId = getIdString(user?.allianceId);
+      return {
+        userId,
+        username: user?.username || '',
+        avatar: user?.avatar || 'default_male_1',
+        profession: user?.profession || '',
+        allianceId: allianceId || '',
+        allianceName: allianceNameMap.get(allianceId) || '',
+        joinedAt: item?.joinedAt || null,
+        exitedAt: item?.exitedAt || null,
+        active: !item?.exitedAt
+      };
+    });
+
+    return res.json({
+      success: true,
+      active: true,
+      nodeId: node._id,
+      nodeName: node.name,
+      executeAt,
+      total: participantPage.total,
+      page: participantPage.page,
+      pageSize: participantPage.pageSize,
+      activeOnly,
+      rows
+    });
+  } catch (error) {
+    console.error('获取分发参与者列表错误:', error);
     return res.status(500).json({ error: '服务器错误' });
   }
 });
@@ -6943,6 +7780,10 @@ router.post('/:nodeId/distribution-participation/join', authenticateToken, async
     const lock = node.knowledgeDistributionLocked;
     if (!lock) {
       return res.status(409).json({ error: '当前知识域没有进行中的分发活动' });
+    }
+    const executeAt = toDistributionSessionExecuteAt(lock);
+    if (!(executeAt instanceof Date)) {
+      return res.status(409).json({ error: '当前分发会话无效，请等待域主重新发布分发计划' });
     }
 
     const currentUser = await User.findById(requestUserId)
@@ -6992,9 +7833,25 @@ router.post('/:nodeId/distribution-participation/join', authenticateToken, async
       return res.status(403).json({ error: '你当前命中禁止规则，无法参与本次分发' });
     }
 
+    const existingCollectionActive = await DistributionParticipant.findOne({
+      nodeId: node._id,
+      executeAt,
+      userId: currentUser._id,
+      exitedAt: null
+    }).select('_id').lean();
+    if (existingCollectionActive) {
+      return res.json({
+        success: true,
+        joined: true,
+        message: '你已参与本次分发'
+      });
+    }
+
     const nextParticipants = Array.isArray(lock.participants) ? [...lock.participants] : [];
     const existingIndex = nextParticipants.findIndex((item) => getIdString(item?.userId) === currentUserId);
     const now = new Date();
+    let legacyMirrorChanged = false;
+    let legacyMirrorDropped = false;
     if (existingIndex >= 0) {
       if (!nextParticipants[existingIndex].exitedAt) {
         return res.json({
@@ -7008,21 +7865,37 @@ router.post('/:nodeId/distribution-participation/join', authenticateToken, async
         joinedAt: now,
         exitedAt: null
       };
+      legacyMirrorChanged = true;
     } else {
-      nextParticipants.push({
-        userId: new mongoose.Types.ObjectId(currentUserId),
-        joinedAt: now,
-        exitedAt: null
-      });
+      if (nextParticipants.length < DISTRIBUTION_LEGACY_PARTICIPANT_MIRROR_LIMIT) {
+        nextParticipants.push({
+          userId: new mongoose.Types.ObjectId(currentUserId),
+          joinedAt: now,
+          exitedAt: null
+        });
+        legacyMirrorChanged = true;
+      } else {
+        legacyMirrorDropped = true;
+      }
     }
 
-    node.knowledgeDistributionLocked.participants = nextParticipants;
-    await node.save();
+    if (legacyMirrorChanged) {
+      node.knowledgeDistributionLocked.participants = nextParticipants;
+      await node.save();
+    }
+    await syncDistributionParticipantJoinRecord({
+      nodeId: node._id,
+      executeAt,
+      userId: currentUserId,
+      joinedAt: now
+    });
 
     return res.json({
       success: true,
       joined: true,
-      message: `你已参与知识域「${node.name}」的分发活动`
+      message: legacyMirrorDropped
+        ? `你已参与知识域「${node.name}」的分发活动（兼容参与列表已达上限）`
+        : `你已参与知识域「${node.name}」的分发活动`
     });
   } catch (error) {
     console.error('参与分发错误:', error);
@@ -7062,6 +7935,14 @@ router.post('/:nodeId/distribution-participation/exit', authenticateToken, async
         message: '当前分发活动已结束'
       });
     }
+    const executeAt = toDistributionSessionExecuteAt(lock);
+    if (!(executeAt instanceof Date)) {
+      return res.json({
+        success: true,
+        exited: true,
+        message: '当前分发会话已失效'
+      });
+    }
 
     const currentUser = await User.findById(requestUserId).select('_id role').lean();
     if (!currentUser) {
@@ -7080,11 +7961,18 @@ router.post('/:nodeId/distribution-participation/exit', authenticateToken, async
       return res.status(400).json({ error: '域主/域相为自动入场，不支持手动退出' });
     }
 
+    const existingCollectionActive = await DistributionParticipant.findOne({
+      nodeId: node._id,
+      executeAt,
+      userId: currentUser._id,
+      exitedAt: null
+    }).select('_id').lean();
+
     const nextParticipants = Array.isArray(lock.participants) ? [...lock.participants] : [];
-    const existingIndex = nextParticipants.findIndex((item) => (
+    const legacyActiveIndex = nextParticipants.findIndex((item) => (
       getIdString(item?.userId) === currentUserId && !item?.exitedAt
     ));
-    if (existingIndex < 0) {
+    if (!existingCollectionActive && legacyActiveIndex < 0) {
       return res.json({
         success: true,
         exited: true,
@@ -7092,12 +7980,21 @@ router.post('/:nodeId/distribution-participation/exit', authenticateToken, async
       });
     }
 
-    nextParticipants[existingIndex] = {
-      ...nextParticipants[existingIndex],
-      exitedAt: new Date()
-    };
-    node.knowledgeDistributionLocked.participants = nextParticipants;
-    await node.save();
+    const exitAt = new Date();
+    if (legacyActiveIndex >= 0) {
+      nextParticipants[legacyActiveIndex] = {
+        ...nextParticipants[legacyActiveIndex],
+        exitedAt: exitAt
+      };
+      node.knowledgeDistributionLocked.participants = nextParticipants;
+      await node.save();
+    }
+    await syncDistributionParticipantExitRecord({
+      nodeId: node._id,
+      executeAt,
+      userId: currentUserId,
+      exitedAt: exitAt
+    });
 
     return res.json({
       success: true,
