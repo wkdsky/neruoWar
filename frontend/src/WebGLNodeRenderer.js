@@ -262,6 +262,7 @@ class WebGLNodeRenderer {
     this.lines = [];
     this.animations = [];
     this.currentLayout = 'home'; // 'home' | 'nodeDetail'
+    this.sceneType = 'home'; // 'home' | 'nodeDetail' | 'titleDetail'
     this.animating = false;
     this.renderingLoop = false; // 标记是否已经在持续渲染循环中
     this.lastTime = 0;
@@ -273,6 +274,8 @@ class WebGLNodeRenderer {
     this.onClick = null;
     this.onDoubleClick = null;
     this.onButtonClick = null; // 按钮点击回调
+    this.onLineClick = null; // 连线点击回调
+    this.hoveredLine = null;
 
     // 相机状态（仅平移 + 缩放，禁用旋转）
     this.camera = {
@@ -444,6 +447,21 @@ class WebGLNodeRenderer {
     }
   }
 
+  setSceneType(sceneType = 'home') {
+    const normalized = sceneType === 'titleDetail'
+      ? 'titleDetail'
+      : (sceneType === 'nodeDetail' ? 'nodeDetail' : 'home');
+    if (this.sceneType === normalized) return;
+    this.sceneType = normalized;
+    if (!this.previewMode) {
+      this.render();
+    }
+  }
+
+  shouldRenderUserMarkerOverlay() {
+    return this.sceneType === 'titleDetail';
+  }
+
   setCameraOffset(offsetX, offsetY) {
     this.camera.offsetX = offsetX;
     this.camera.offsetY = offsetY;
@@ -455,10 +473,17 @@ class WebGLNodeRenderer {
     this.hoveredButton = this.hitTestButton(x, y, { includeDisabled: true });
     if (this.hoveredButton) {
       this.hoveredNode = null;
+      this.hoveredLine = null;
       this.canvas.style.cursor = this.hoveredButton.button?.disabled ? 'not-allowed' : 'pointer';
     } else {
       this.hoveredNode = this.hitTest(x, y);
-      this.canvas.style.cursor = this.hoveredNode ? 'pointer' : 'default';
+      if (this.hoveredNode) {
+        this.hoveredLine = null;
+        this.canvas.style.cursor = 'pointer';
+      } else {
+        this.hoveredLine = this.hitTestLine(x, y);
+        this.canvas.style.cursor = this.hoveredLine ? 'pointer' : 'default';
+      }
     }
 
     const buttonHoverChanged = (prevHoveredButton !== this.hoveredButton) ||
@@ -551,6 +576,12 @@ class WebGLNodeRenderer {
       const clickedNode = this.hitTest(pos.x, pos.y);
       if (clickedNode && this.onClick) {
         this.onClick(clickedNode);
+        return;
+      }
+
+      const clickedLine = this.hitTestLine(pos.x, pos.y);
+      if (clickedLine && this.onLineClick) {
+        this.onLineClick(clickedLine);
       }
     });
 
@@ -618,6 +649,114 @@ class WebGLNodeRenderer {
       }
     }
     return null;
+  }
+
+  distancePointToSegment(point, segmentStart, segmentEnd) {
+    const px = point.x;
+    const py = point.y;
+    const x1 = segmentStart.x;
+    const y1 = segmentStart.y;
+    const x2 = segmentEnd.x;
+    const y2 = segmentEnd.y;
+
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared <= 0) {
+      const ddx = px - x1;
+      const ddy = py - y1;
+      return Math.sqrt(ddx * ddx + ddy * ddy);
+    }
+
+    const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared));
+    const projX = x1 + t * dx;
+    const projY = y1 + t * dy;
+    const distX = px - projX;
+    const distY = py - projY;
+    return Math.sqrt(distX * distX + distY * distY);
+  }
+
+  getNodeScreenRadius(node) {
+    const radius = Number(node?.radius) || 0;
+    const scale = Number(node?.scale) || 1;
+    return Math.max(0, radius * scale * this.camera.zoom);
+  }
+
+  getVisibleLineSegment(fromNode, toNode, options = {}) {
+    const insetPx = Number.isFinite(options.insetPx) ? options.insetPx : 2;
+    const minLengthPx = Number.isFinite(options.minLengthPx) ? options.minLengthPx : 1;
+    const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
+    const toPos = this.worldToScreen(toNode.x, toNode.y);
+    const dx = toPos.x - fromPos.x;
+    const dy = toPos.y - fromPos.y;
+    const centerDistance = Math.sqrt(dx * dx + dy * dy);
+    if (centerDistance <= 0.001) return null;
+
+    const dirX = dx / centerDistance;
+    const dirY = dy / centerDistance;
+    const fromRadius = this.getNodeScreenRadius(fromNode);
+    const toRadius = this.getNodeScreenRadius(toNode);
+    const fromOffset = Math.max(0, Math.min(Math.max(0, fromRadius - insetPx), centerDistance * 0.45));
+    const toOffset = Math.max(0, Math.min(Math.max(0, toRadius - insetPx), centerDistance * 0.45));
+
+    const start = {
+      x: fromPos.x + dirX * fromOffset,
+      y: fromPos.y + dirY * fromOffset
+    };
+    const end = {
+      x: toPos.x - dirX * toOffset,
+      y: toPos.y - dirY * toOffset
+    };
+
+    const visibleDx = end.x - start.x;
+    const visibleDy = end.y - start.y;
+    const visibleLength = Math.sqrt(visibleDx * visibleDx + visibleDy * visibleDy);
+    if (visibleLength <= minLengthPx) return null;
+
+    return {
+      start,
+      end,
+      fromPos,
+      toPos,
+      length: visibleLength
+    };
+  }
+
+  toCssRgba(color = [1, 1, 1, 1], alphaScale = 1) {
+    const r = Math.round(Math.max(0, Math.min(1, Number(color?.[0]) || 0)) * 255);
+    const g = Math.round(Math.max(0, Math.min(1, Number(color?.[1]) || 0)) * 255);
+    const b = Math.round(Math.max(0, Math.min(1, Number(color?.[2]) || 0)) * 255);
+    const a = Math.max(0, Math.min(1, (Number(color?.[3]) || 1) * alphaScale));
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+
+  hitTestLine(x, y) {
+    if (!Array.isArray(this.lines) || this.lines.length === 0) return null;
+    const threshold = 10;
+    let best = null;
+
+    for (const line of this.lines) {
+      if (!line?.clickable) continue;
+      const fromNode = this.nodes.get(line.from);
+      const toNode = this.nodes.get(line.to);
+      if (!fromNode || !toNode || !fromNode.visible || !toNode.visible) continue;
+
+      const segment = this.getVisibleLineSegment(fromNode, toNode, { insetPx: 2, minLengthPx: 1 });
+      if (!segment) continue;
+      const distance = this.distancePointToSegment({ x, y }, segment.start, segment.end);
+      if (distance > threshold) continue;
+
+      if (!best || distance < best.distance) {
+        best = {
+          line,
+          fromNode,
+          toNode,
+          distance
+        };
+      }
+    }
+
+    return best;
   }
 
   // 创建或更新节点
@@ -688,7 +827,7 @@ class WebGLNodeRenderer {
       };
     }
 
-    const isKnowledgeDomainNode = ['root', 'featured', 'center', 'parent', 'child', 'search'].includes(node?.type);
+    const isKnowledgeDomainNode = ['root', 'featured', 'center', 'parent', 'child', 'search', 'title'].includes(node?.type);
     if (isKnowledgeDomainNode) {
       return {
         base: hexToVec4(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.primaryColor, 1),
@@ -945,12 +1084,12 @@ class WebGLNodeRenderer {
       const toNode = this.nodes.get(line.to);
 
       if (!fromNode || !toNode || !fromNode.visible || !toNode.visible) continue;
-      const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
-      const toPos = this.worldToScreen(toNode.x, toNode.y);
+      const segment = this.getVisibleLineSegment(fromNode, toNode, { insetPx: 2, minLengthPx: 1 });
+      if (!segment) continue;
 
       const vertices = new Float32Array([
-        fromPos.x, fromPos.y,
-        toPos.x, toPos.y
+        segment.start.x, segment.start.y,
+        segment.end.x, segment.end.y
       ]);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
@@ -1120,6 +1259,37 @@ class WebGLNodeRenderer {
 
     const labelOverlay = this.ensureLabelOverlay();
     const liveKeys = new Set();
+    const applyLabelContent = (labelEl, label) => {
+      const normalized = String(label || '').trim();
+      if (labelEl.dataset.rawLabel === normalized) return;
+      labelEl.dataset.rawLabel = normalized;
+      labelEl.replaceChildren();
+
+      const [titlePart = '', ...senseParts] = normalized.split('\n');
+      const title = titlePart.trim();
+      const senseTitle = senseParts.join('\n').trim();
+
+      if (title) {
+        const titleEl = document.createElement('span');
+        titleEl.className = 'node-label-title';
+        titleEl.textContent = title;
+        labelEl.appendChild(titleEl);
+      }
+
+      if (senseTitle) {
+        const senseEl = document.createElement('span');
+        senseEl.className = 'node-label-sense';
+        senseEl.textContent = senseTitle;
+        labelEl.appendChild(senseEl);
+      }
+
+      if (!title && !senseTitle) {
+        const fallbackEl = document.createElement('span');
+        fallbackEl.className = 'node-label-title';
+        fallbackEl.textContent = '未命名知识域';
+        labelEl.appendChild(fallbackEl);
+      }
+    };
 
     const syncLabel = (node, isPreview) => {
       const key = `${isPreview ? 'preview:' : 'node:'}${node.id}`;
@@ -1139,7 +1309,7 @@ class WebGLNodeRenderer {
       const fitByLength = (screenRadius * 1.7) / (labelLength * 0.56);
       const fontSize = Math.max(8, Math.min(baseFontSize, fitByLength));
 
-      labelEl.textContent = node.label;
+      applyLabelContent(labelEl, node.label);
       labelEl.style.left = `${nodePos.x}px`;
       labelEl.style.top = `${nodePos.y}px`;
       labelEl.style.fontSize = `${fontSize}px`;
@@ -1165,9 +1335,12 @@ class WebGLNodeRenderer {
     const ctx = overlayCanvas.getContext('2d');
     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
+    this.renderLineConnectionCaps(ctx);
     this.renderButtonIcons(ctx);
-    this.renderUserTravelDot(ctx);
-    this.renderUserConeMarker(ctx);
+    if (this.shouldRenderUserMarkerOverlay()) {
+      this.renderUserTravelDot(ctx);
+      this.renderUserConeMarker(ctx);
+    }
 
     ctx.globalAlpha = 1;
   }
@@ -1221,6 +1394,50 @@ class WebGLNodeRenderer {
           ctx.fillText(button.tooltip, tooltipX, tooltipY);
         }
       }
+    }
+  }
+
+  renderLineConnectionCaps(ctx) {
+    if (!Array.isArray(this.lines) || this.lines.length === 0) return;
+
+    let capCount = 0;
+    const capLimit = 700;
+
+    for (const line of this.lines) {
+      if (capCount >= capLimit) break;
+      const fromNode = this.nodes.get(line?.from);
+      const toNode = this.nodes.get(line?.to);
+      if (!fromNode || !toNode || !fromNode.visible || !toNode.visible) continue;
+
+      const segment = this.getVisibleLineSegment(fromNode, toNode, { insetPx: 2, minLengthPx: 1 });
+      if (!segment) continue;
+      const minOpacity = Math.max(0, Math.min(1, Math.min(fromNode.opacity, toNode.opacity)));
+      if (minOpacity <= 0.08) continue;
+
+      const color = line?.color || [0.66, 0.33, 0.97, 0.6];
+      const capRadius = Math.max(2, Math.min(5.5, Math.min(
+        this.getNodeScreenRadius(fromNode),
+        this.getNodeScreenRadius(toNode)
+      ) * 0.1));
+
+      const drawCap = (point) => {
+        const glow = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, capRadius * 2.6);
+        glow.addColorStop(0, this.toCssRgba(color, minOpacity * 0.78));
+        glow.addColorStop(1, this.toCssRgba(color, 0));
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, capRadius * 2.6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = this.toCssRgba([1, 1, 1, 1], minOpacity * 0.28);
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, capRadius * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+      };
+
+      drawCap(segment.start);
+      drawCap(segment.end);
+      capCount += 2;
     }
   }
 
@@ -1282,6 +1499,7 @@ class WebGLNodeRenderer {
   }
 
   renderUserTravelDot(ctx) {
+    if (!this.shouldRenderUserMarkerOverlay()) return false;
     const segment = this.resolveTravelSegment(performance.now());
     if (!segment) return false;
 
@@ -1327,6 +1545,7 @@ class WebGLNodeRenderer {
   }
 
   renderUserConeMarker(ctx) {
+    if (!this.shouldRenderUserMarkerOverlay()) return;
     if (this.userState?.travelStatus?.isTraveling) return;
 
     const node = this.findVisibleNodeByName(this.userState.locationName);
@@ -1576,12 +1795,12 @@ class WebGLNodeRenderer {
       const isBeingRemoved = this.previewLines.some(
         pl => pl.isRemoved && pl.from === line.from && pl.to === line.to
       );
-      const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
-      const toPos = this.worldToScreen(toNode.x, toNode.y);
+      const segment = this.getVisibleLineSegment(fromNode, toNode, { insetPx: 2, minLengthPx: 1 });
+      if (!segment) continue;
 
       const vertices = new Float32Array([
-        fromPos.x, fromPos.y,
-        toPos.x, toPos.y
+        segment.start.x, segment.start.y,
+        segment.end.x, segment.end.y
       ]);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
@@ -1630,11 +1849,11 @@ class WebGLNodeRenderer {
       if (line.isDashed || line.isNew) {
         this.renderDashedLine(fromNode, toNode, line);
       } else {
-        const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
-        const toPos = this.worldToScreen(toNode.x, toNode.y);
+        const segment = this.getVisibleLineSegment(fromNode, toNode, { insetPx: 2, minLengthPx: 1 });
+        if (!segment) continue;
         const vertices = new Float32Array([
-          fromPos.x, fromPos.y,
-          toPos.x, toPos.y
+          segment.start.x, segment.start.y,
+          segment.end.x, segment.end.y
         ]);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
@@ -1662,11 +1881,14 @@ class WebGLNodeRenderer {
     const gapLength = 8;
     const totalLength = dashLength + gapLength;
 
-    const fromPos = this.worldToScreen(fromNode.x, fromNode.y);
-    const toPos = this.worldToScreen(toNode.x, toNode.y);
+    const segment = this.getVisibleLineSegment(fromNode, toNode, { insetPx: 2, minLengthPx: 1 });
+    if (!segment) return;
+    const fromPos = segment.start;
+    const toPos = segment.end;
     const dx = toPos.x - fromPos.x;
     const dy = toPos.y - fromPos.y;
     const length = Math.sqrt(dx * dx + dy * dy);
+    if (length <= 0.001) return;
     const segments = Math.ceil(length / totalLength);
 
     const dirX = dx / length;

@@ -11,12 +11,13 @@ class LayoutManager {
     this.centerY = height / 2;
   }
 
-  resolveNodeLabel(node = {}) {
+  resolveNodeLabel(node = {}, options = {}) {
+    const includeSense = options?.includeSense !== false;
     const title = typeof node?.name === 'string' ? node.name.trim() : '';
     const senseTitle = typeof node?.activeSenseTitle === 'string'
       ? node.activeSenseTitle.trim()
       : '';
-    if (title && senseTitle) {
+    if (includeSense && title && senseTitle) {
       return `${title}\n${senseTitle}`;
     }
     return title || '未命名知识域';
@@ -73,7 +74,7 @@ class LayoutManager {
         scale: 1,
         opacity: 1,
         type: 'root',
-        label: this.resolveNodeLabel(node),
+        label: this.resolveNodeLabel(node, { includeSense: false }),
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
@@ -95,7 +96,7 @@ class LayoutManager {
         scale: 1,
         opacity: 1,
         type: 'featured',
-        label: this.resolveNodeLabel(node),
+        label: this.resolveNodeLabel(node, { includeSense: false }),
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
@@ -200,6 +201,134 @@ class LayoutManager {
         from: `center-${centerNode._id}`,
         to: nodeId,
         color: [0.98, 0.75, 0.14, 0.6] // 黄色
+      });
+    });
+
+    return layout;
+  }
+
+  /**
+   * 标题主视角布局
+   * 中央标题 + 多层同心环标题节点 + 标题并集关系连线
+   */
+  calculateTitleDetailLayout(centerNode, graphNodes = [], graphEdges = [], levelByNodeId = {}) {
+    const layout = {
+      nodes: [],
+      lines: []
+    };
+    if (!centerNode?._id) return layout;
+
+    const yOffset = 60;
+    const centerId = String(centerNode._id);
+    const centerLayoutId = `center-${centerId}`;
+    const ringNodes = (Array.isArray(graphNodes) ? graphNodes : [])
+      .filter((item) => String(item?._id || '') !== centerId);
+    const nodeIdToLayoutId = new Map([[centerId, centerLayoutId]]);
+
+    layout.nodes.push({
+      id: centerLayoutId,
+      x: this.centerX,
+      y: this.centerY + yOffset,
+      radius: 82,
+      scale: 1,
+      opacity: 1,
+      type: 'center',
+      label: this.resolveNodeLabel(centerNode, { includeSense: false }),
+      visualStyle: centerNode.visualStyle || null,
+      labelColor: centerNode.visualStyle?.textColor || '',
+      data: {
+        ...centerNode,
+        graphLevel: 0
+      },
+      visible: true
+    });
+
+    const groups = new Map();
+    ringNodes.forEach((node) => {
+      const nodeId = String(node?._id || '');
+      if (!nodeId) return;
+      const rawLevel = Number(levelByNodeId?.[nodeId]);
+      const level = Number.isFinite(rawLevel) && rawLevel > 0 ? Math.floor(rawLevel) : 1;
+      const group = groups.get(level) || [];
+      group.push(node);
+      groups.set(level, group);
+    });
+
+    const levels = Array.from(groups.keys()).sort((a, b) => a - b);
+    const minSide = Math.min(this.width, this.height);
+    const baseDistance = Math.max(190, Math.min(minSide * 0.28, 320));
+    const ringGap = Math.max(130, Math.min(minSide * 0.18, 210));
+    const minNodeGap = Math.max(26, Math.min(minSide * 0.045, 44));
+    const centerRadius = 82;
+    let previousRingDistance = 0;
+    let previousRingNodeRadius = centerRadius;
+
+    levels.forEach((level) => {
+      const nodes = (groups.get(level) || []).slice();
+      nodes.sort((a, b) => (a?.name || '').localeCompare((b?.name || ''), 'zh-Hans-CN'));
+      const count = Math.max(1, nodes.length);
+      const startAngle = -Math.PI / 2;
+      const baseNodeRadius = Math.max(30, 54 - Math.min(3, level - 1) * 6);
+      const preferredDistance = baseDistance + (level - 1) * ringGap;
+      const maxRadiusByPreferredDistance = count > 1
+        ? ((Math.PI * 2 * preferredDistance) / count - minNodeGap) / 2
+        : baseNodeRadius;
+      const nodeRadius = Math.max(22, Math.min(baseNodeRadius, maxRadiusByPreferredDistance));
+      const distanceByArc = count > 1
+        ? (count * ((nodeRadius * 2) + minNodeGap)) / (Math.PI * 2)
+        : 0;
+      const distanceByRingGap = previousRingDistance > 0
+        ? previousRingDistance + previousRingNodeRadius + nodeRadius + minNodeGap
+        : centerRadius + nodeRadius + minNodeGap;
+      const distance = Math.max(
+        preferredDistance,
+        distanceByArc,
+        distanceByRingGap
+      );
+      previousRingDistance = distance;
+      previousRingNodeRadius = nodeRadius;
+
+      nodes.forEach((node, index) => {
+        const angle = startAngle + ((Math.PI * 2) * index) / count;
+        const nodeId = String(node?._id || '');
+        const layoutId = `title-${nodeId}`;
+        nodeIdToLayoutId.set(nodeId, layoutId);
+        layout.nodes.push({
+          id: layoutId,
+          x: this.centerX + Math.cos(angle) * distance,
+          y: this.centerY + yOffset + Math.sin(angle) * distance,
+          radius: nodeRadius,
+          scale: 1,
+          opacity: 1,
+          type: 'title',
+          label: this.resolveNodeLabel(node, { includeSense: false }),
+          visualStyle: node.visualStyle || null,
+          labelColor: node.visualStyle?.textColor || '',
+          data: {
+            ...node,
+            graphLevel: level
+          },
+          visible: true
+        });
+      });
+    });
+
+    (Array.isArray(graphEdges) ? graphEdges : []).forEach((edge) => {
+      const nodeAId = String(edge?.nodeAId || '');
+      const nodeBId = String(edge?.nodeBId || '');
+      const isCenterEdge = nodeAId === centerId || nodeBId === centerId;
+      if (!isCenterEdge) return;
+      const from = nodeIdToLayoutId.get(nodeAId);
+      const to = nodeIdToLayoutId.get(nodeBId);
+      if (!from || !to) return;
+
+      layout.lines.push({
+        id: edge?.edgeId || `${nodeAId}|${nodeBId}`,
+        from,
+        to,
+        color: isCenterEdge ? [0.72, 0.86, 0.99, 0.74] : [0.55, 0.72, 0.92, 0.54],
+        clickable: true,
+        edgeMeta: edge
       });
     });
 

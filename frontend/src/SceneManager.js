@@ -12,7 +12,7 @@ class SceneManager {
     this.renderer = new WebGLNodeRenderer(canvas);
     this.layout = new LayoutManager(canvas.width, canvas.height);
 
-    this.currentScene = null;  // 'home' | 'nodeDetail'
+    this.currentScene = null;  // 'home' | 'nodeDetail' | 'titleDetail'
     this.currentLayout = { nodes: [], lines: [] };
 
     // 回调函数
@@ -20,6 +20,7 @@ class SceneManager {
     this.onNodeDoubleClick = null;
     this.onSceneChange = null;
     this.onButtonClick = null; // 按钮点击回调
+    this.onLineClick = null; // 连线点击回调
 
     // 预览模式状态
     this.isInPreviewMode = false;
@@ -45,12 +46,19 @@ class SceneManager {
         this.onButtonClick(nodeId, button);
       }
     };
+    this.renderer.onLineClick = (lineHit) => {
+      if (this.onLineClick) {
+        this.onLineClick(lineHit);
+      }
+    };
   }
 
   /**
    * 显示首页场景
    */
   async showHome(rootNodes, featuredNodes, searchResults = []) {
+    this.renderer.setSceneType('home');
+
     // 清除节点按钮（首页不需要）
     this.renderer.clearNodeButtons();
 
@@ -78,6 +86,7 @@ class SceneManager {
    * 显示节点详情场景
    */
   async showNodeDetail(centerNode, parentNodes, childNodes, clickedNode = null, buttonContext = {}) {
+    this.renderer.setSceneType('nodeDetail');
     this.centerNodeButtonContext = buttonContext || {};
 
     // 清除之前的按钮
@@ -118,12 +127,63 @@ class SceneManager {
   }
 
   /**
+   * 显示标题主视角场景
+   */
+  async showTitleDetail(centerNode, graphNodes = [], graphEdges = [], levelByNodeId = {}, clickedNode = null, buttonContext = {}) {
+    this.renderer.setSceneType('titleDetail');
+    this.centerNodeButtonContext = buttonContext || {};
+    this.renderer.clearNodeButtons();
+
+    const newLayout = this.layout.calculateTitleDetailLayout(centerNode, graphNodes, graphEdges, levelByNodeId);
+
+    if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
+      this.setLayout(newLayout);
+      this.setupCenterNodeButtons(centerNode, buttonContext);
+      this.currentScene = 'titleDetail';
+      if (this.onSceneChange) {
+        this.onSceneChange('titleDetail', centerNode);
+      }
+      return;
+    }
+
+    if (this.currentScene === 'home' && clickedNode) {
+      await this.clickTransition(clickedNode, newLayout);
+    } else if (this.currentScene === 'titleDetail') {
+      await this.nodeToNodeTransition(clickedNode, newLayout);
+    } else {
+      await this.fadeTransition(newLayout);
+    }
+
+    this.setupCenterNodeButtons(centerNode, buttonContext);
+    this.currentScene = 'titleDetail';
+
+    if (this.onSceneChange) {
+      this.onSceneChange('titleDetail', centerNode);
+    }
+  }
+
+  /**
    * 设置中心节点的操作按钮
    */
   setupCenterNodeButtons(centerNode, buttonContext = this.centerNodeButtonContext || {}) {
     if (!centerNode) return;
 
     const centerNodeId = `center-${centerNode._id}`;
+    if (buttonContext?.senseDetailOnly) {
+      this.renderer.setNodeButtons(centerNodeId, [{
+        id: 'sense-entry',
+        icon: 'i',
+        angle: -Math.PI / 7,
+        action: 'showSenseEntry',
+        tooltip: '查看释义词条详情',
+        color: [0.36, 0.74, 0.96, 0.92]
+      }]);
+      return;
+    }
+    if (buttonContext?.disableDefault) {
+      this.renderer.setNodeButtons(centerNodeId, []);
+      return;
+    }
     const isFavorite = !!buttonContext.isFavorite;
 
     const buttons = [
@@ -202,6 +262,23 @@ class SceneManager {
     }
 
     this.renderer.setNodeButtons(centerNodeId, buttons);
+  }
+
+  setupSenseDetailButton(centerNode) {
+    if (!centerNode?._id) return;
+    const centerNodeId = `center-${centerNode._id}`;
+    this.renderer.setNodeButtons(centerNodeId, [{
+      id: 'sense-entry',
+      icon: 'i',
+      angle: -Math.PI / 7,
+      action: 'showSenseEntry',
+      tooltip: '查看释义词条详情',
+      color: [0.36, 0.74, 0.96, 0.92]
+    }]);
+  }
+
+  clearNodeButtons() {
+    this.renderer.clearNodeButtons();
   }
 
   /**
@@ -556,6 +633,28 @@ class SceneManager {
         const newLayout = this.layout.calculateNodeDetailLayout(centerNode, parentNodes, childNodes);
         this.setLayout(newLayout);
       }
+    } else if (this.currentScene === 'titleDetail' && this.currentLayout.nodes.length > 0) {
+      const centerNode = this.currentLayout.nodes.find((n) => n.type === 'center')?.data;
+      if (!centerNode) return;
+
+      const graphNodes = this.currentLayout.nodes
+        .filter((n) => n.type === 'title')
+        .map((n) => n.data)
+        .filter(Boolean);
+      const levelByNodeId = {};
+      graphNodes.forEach((node) => {
+        const nodeId = String(node?._id || '');
+        if (!nodeId) return;
+        const level = Number(node?.graphLevel);
+        levelByNodeId[nodeId] = Number.isFinite(level) && level > 0 ? level : 1;
+      });
+      levelByNodeId[String(centerNode._id)] = 0;
+
+      const graphEdges = (Array.isArray(this.currentLayout.lines) ? this.currentLayout.lines : [])
+        .map((line) => line?.edgeMeta)
+        .filter(Boolean);
+      const newLayout = this.layout.calculateTitleDetailLayout(centerNode, graphNodes, graphEdges, levelByNodeId);
+      this.setLayout(newLayout);
     }
   }
 

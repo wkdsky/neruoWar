@@ -391,7 +391,7 @@ const NodeDetail = ({
                                 <Search className="search-icon" size={24} />
                                 <input
                                     type="text"
-                                    placeholder="搜索节点...（支持多关键词，用空格分隔）"
+                                    placeholder="搜索标题或释义题目...（支持多关键词）"
                                     value={searchQuery}
                                     onChange={onSearchChange}
                                     className="search-input-floating"

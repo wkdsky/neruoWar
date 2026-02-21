@@ -102,6 +102,7 @@ const NodeInfoModal = ({
     onClose,
     nodeDetail,
     onEnterKnowledgeDomain,
+    simpleOnly = false,
     canApplyDomainMaster = false,
     isApplyingDomainMaster = false,
     onApplyDomainMaster
@@ -118,9 +119,38 @@ const NodeInfoModal = ({
 
     if (!isOpen || !nodeDetail) return null;
 
-    const creator = nodeDetail.owner || null;
     const nodeSenseTitle = getNodeSenseTitle(nodeDetail);
     const nodeSenseContent = getNodeSenseContent(nodeDetail);
+    if (simpleOnly) {
+        return (
+            <div className="modal-backdrop" onClick={onClose}>
+                <div className="modal-content node-info-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="modal-header">
+                        <h2>词条详情</h2>
+                        <button className="btn-close" onClick={onClose}>
+                            <X size={24} />
+                        </button>
+                    </div>
+                    <div className="modal-body">
+                        <div className="node-info-section">
+                            <h3 className="info-section-title">{getNodeDisplayName(nodeDetail)}</h3>
+                            {nodeSenseTitle && (
+                                <p className="info-section-desc">释义题目：{nodeSenseTitle}</p>
+                            )}
+                            {nodeSenseContent && (
+                                <p className="info-section-desc">释义内容：{nodeSenseContent}</p>
+                            )}
+                        </div>
+                    </div>
+                    <div className="modal-footer">
+                        <button className="btn btn-secondary" onClick={onClose}>关闭</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    const creator = nodeDetail.owner || null;
     const domainMaster = nodeDetail.domainMaster ? [nodeDetail.domainMaster] : [];
     const domainMasterId = getUserId(nodeDetail.domainMaster);
     const admins = Array.isArray(nodeDetail.domainAdmins)

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Home, Shield, Bell, Layers, Star, MapPin, ChevronLeft, ChevronRight, Users } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
@@ -63,18 +63,20 @@ const createHomeNavigationPath = () => ([
 const normalizeNavigationRelation = (relation) => (
     relation === 'parent' || relation === 'child' ? relation : 'jump'
 );
-const buildNavigationTrailItem = (node, relation = 'jump') => {
+const buildNavigationTrailItem = (node, relation = 'jump', options = {}) => {
     const nodeId = normalizeObjectId(node?._id);
     if (!nodeId) return null;
     const nodeTitle = typeof node?.name === 'string' ? node.name.trim() : '';
     const senseTitle = typeof node?.activeSenseTitle === 'string' ? node.activeSenseTitle.trim() : '';
     const displayLabel = senseTitle ? `${nodeTitle}-${senseTitle}` : nodeTitle;
+    const mode = options?.mode === 'title' ? 'title' : 'sense';
     return {
         type: 'node',
-        label: displayLabel || '未命名知识域',
+        label: (mode === 'title' ? nodeTitle : displayLabel) || '未命名知识域',
         nodeId,
-        senseId: typeof node?.activeSenseId === 'string' ? node.activeSenseId : '',
-        relation: normalizeNavigationRelation(relation)
+        senseId: mode === 'sense' && typeof node?.activeSenseId === 'string' ? node.activeSenseId : '',
+        relation: normalizeNavigationRelation(relation),
+        mode
     };
 };
 const getNavigationRelationFromSceneNode = (sceneNode) => {
@@ -124,6 +126,8 @@ const isAnnouncementNotification = (notification) => (
     ANNOUNCEMENT_NOTIFICATION_TYPES.includes(notification?.type)
 );
 const RIGHT_DOCK_COLLAPSE_MS = 220;
+const isKnowledgeDetailView = (value) => value === 'nodeDetail' || value === 'titleDetail';
+const isTitleBattleView = (value) => value === 'titleDetail';
 const createEmptyNodeDistributionStatus = () => ({
     nodeId: '',
     active: false,
@@ -488,6 +492,11 @@ const App = () => {
 
     // 节点详情页面相关状态
     const [currentNodeDetail, setCurrentNodeDetail] = useState(null);
+    const [currentTitleDetail, setCurrentTitleDetail] = useState(null);
+    const [titleGraphData, setTitleGraphData] = useState(null);
+    const [nodeInfoModalTarget, setNodeInfoModalTarget] = useState(null);
+    const [titleRelationInfo, setTitleRelationInfo] = useState(null);
+    const [senseSelectorSourceNode, setSenseSelectorSourceNode] = useState(null);
     const [senseSelectorAnchor, setSenseSelectorAnchor] = useState({ x: 0, y: 0, visible: false });
     const [isSenseSelectorVisible, setIsSenseSelectorVisible] = useState(false);
     const [showNodeInfoModal, setShowNodeInfoModal] = useState(false);
@@ -537,9 +546,57 @@ const App = () => {
 
     // 搜索栏相关引用
     const searchBarRef = useRef(null);
+    const headerRef = useRef(null);
     const notificationsWrapperRef = useRef(null);
     const relatedDomainsWrapperRef = useRef(null);
     const senseSelectorAnchorRef = useRef({ x: 0, y: 0, visible: false });
+    const [knowledgeHeaderOffset, setKnowledgeHeaderOffset] = useState(92);
+
+    useLayoutEffect(() => {
+        const headerEl = headerRef.current;
+        if (!headerEl) return undefined;
+
+        let frameId = null;
+        const syncHeaderOffset = () => {
+            const rect = headerEl.getBoundingClientRect();
+            const computedStyle = window.getComputedStyle(headerEl);
+            const marginBottom = Number.parseFloat(computedStyle?.marginBottom || '0') || 0;
+            const nextOffset = Math.max(0, Math.ceil(rect.height + marginBottom));
+            setKnowledgeHeaderOffset((prev) => (
+                Math.abs(prev - nextOffset) >= 1 ? nextOffset : prev
+            ));
+        };
+        const scheduleSync = () => {
+            if (frameId !== null) {
+                cancelAnimationFrame(frameId);
+            }
+            frameId = requestAnimationFrame(() => {
+                frameId = null;
+                syncHeaderOffset();
+            });
+        };
+
+        scheduleSync();
+        window.addEventListener('resize', scheduleSync);
+
+        let resizeObserver = null;
+        if (typeof ResizeObserver === 'function') {
+            resizeObserver = new ResizeObserver(() => {
+                scheduleSync();
+            });
+            resizeObserver.observe(headerEl);
+        }
+
+        return () => {
+            window.removeEventListener('resize', scheduleSync);
+            if (frameId !== null) {
+                cancelAnimationFrame(frameId);
+            }
+            if (resizeObserver) {
+                resizeObserver.disconnect();
+            }
+        };
+    }, [showKnowledgeDomain, isTransitioningToDomain, view]);
 
     // 初始化WebGL场景
     useEffect(() => {
@@ -575,36 +632,72 @@ const App = () => {
             // 设置点击回调
             sceneManager.onNodeClick = (node) => {
                 if (!node.data || !node.data._id) return;
+                if (view === 'home') {
+                    setTitleRelationInfo(null);
+                    setSenseSelectorSourceNode(node.data);
+                    updateSenseSelectorAnchorBySceneNode(node);
+                    setIsSenseSelectorVisible(true);
+                    return;
+                }
 
-                // 节点详情页再次点击中心节点：切换释义浮层
-                if (view === 'nodeDetail' && node.type === 'center') {
-                    setIsSenseSelectorVisible((prev) => !prev);
-                } else {
-                    // 其他情况：导航到节点详情页
+                if (view === 'titleDetail') {
+                    setTitleRelationInfo(null);
+                    if (node.type === 'center') {
+                        setSenseSelectorSourceNode(currentTitleDetail || node.data);
+                        updateSenseSelectorAnchorBySceneNode(node);
+                        setIsSenseSelectorVisible((prev) => !prev);
+                        return;
+                    }
+                    fetchTitleDetail(node.data._id, node, {
+                        relationHint: getNavigationRelationFromSceneNode(node)
+                    });
+                    return;
+                }
+
+                if (view === 'nodeDetail') {
+                    setTitleRelationInfo(null);
+                    if (node.type === 'center') {
+                        setSenseSelectorSourceNode(currentNodeDetail || node.data);
+                        updateSenseSelectorAnchorBySceneNode(node);
+                        setIsSenseSelectorVisible((prev) => !prev);
+                        return;
+                    }
                     fetchNodeDetail(node.data._id, node, {
                         relationHint: getNavigationRelationFromSceneNode(node),
                         activeSenseId: typeof node?.data?.activeSenseId === 'string' ? node.data.activeSenseId : ''
                     });
+                    return;
                 }
+            };
+
+            sceneManager.onLineClick = (lineHit) => {
+                if (view !== 'titleDetail') return;
+                const meta = lineHit?.line?.edgeMeta;
+                if (!meta) return;
+                setIsSenseSelectorVisible(false);
+                setTitleRelationInfo(meta);
             };
 
             // 设置按钮点击回调
             sceneManager.onButtonClick = (nodeId, button) => {
+                const actionNode = isTitleBattleView(view) ? currentTitleDetail : currentNodeDetail;
                 if (button.action === 'enterKnowledgeDomain') {
-                    // 获取当前节点详情并进入知识域
-                    if (currentNodeDetail) {
-                        handleEnterKnowledgeDomain(currentNodeDetail);
+                    if (actionNode) {
+                        handleEnterKnowledgeDomain(actionNode);
                     }
-                } else if (button.action === 'siegeDomain' && currentNodeDetail) {
-                    handleSiegeAction(currentNodeDetail);
-                } else if (button.action === 'intelSteal' && currentNodeDetail) {
-                    handleIntelHeistAction(currentNodeDetail);
-                } else if (button.action === 'joinDistribution' && currentNodeDetail) {
-                    handleDistributionParticipationAction(currentNodeDetail);
-                } else if (button.action === 'moveToNode' && currentNodeDetail) {
-                    handleMoveToNode(currentNodeDetail);
-                } else if (button.action === 'toggleFavoriteNode' && currentNodeDetail?._id) {
-                    toggleFavoriteDomain(currentNodeDetail._id);
+                } else if (button.action === 'siegeDomain' && actionNode) {
+                    handleSiegeAction(actionNode);
+                } else if (button.action === 'intelSteal' && actionNode) {
+                    handleIntelHeistAction(actionNode);
+                } else if (button.action === 'joinDistribution' && actionNode) {
+                    handleDistributionParticipationAction(actionNode);
+                } else if (button.action === 'moveToNode' && actionNode) {
+                    handleMoveToNode(actionNode);
+                } else if (button.action === 'toggleFavoriteNode' && actionNode?._id) {
+                    toggleFavoriteDomain(actionNode._id);
+                } else if (button.action === 'showSenseEntry' && view === 'nodeDetail' && currentNodeDetail) {
+                    setNodeInfoModalTarget(currentNodeDetail);
+                    setShowNodeInfoModal(true);
                 }
             };
 
@@ -633,26 +726,30 @@ const App = () => {
         }
     }, [view, canvasKey]); // 添加canvasKey作为依赖，用于强制重新初始化
 
-    // 更新按钮点击回调（确保获取最新的 currentNodeDetail）
+    // 更新按钮点击回调（确保获取最新的当前主视角节点）
     useEffect(() => {
         if (sceneManagerRef.current) {
             sceneManagerRef.current.onButtonClick = (nodeId, button) => {
-                if (button.action === 'enterKnowledgeDomain' && currentNodeDetail) {
-                    handleEnterKnowledgeDomain(currentNodeDetail);
-                } else if (button.action === 'siegeDomain' && currentNodeDetail) {
-                    handleSiegeAction(currentNodeDetail);
-                } else if (button.action === 'intelSteal' && currentNodeDetail) {
-                    handleIntelHeistAction(currentNodeDetail);
-                } else if (button.action === 'joinDistribution' && currentNodeDetail) {
-                    handleDistributionParticipationAction(currentNodeDetail);
-                } else if (button.action === 'moveToNode' && currentNodeDetail) {
-                    handleMoveToNode(currentNodeDetail);
-                } else if (button.action === 'toggleFavoriteNode' && currentNodeDetail?._id) {
-                    toggleFavoriteDomain(currentNodeDetail._id);
+                const actionNode = isTitleBattleView(view) ? currentTitleDetail : currentNodeDetail;
+                if (button.action === 'enterKnowledgeDomain' && actionNode) {
+                    handleEnterKnowledgeDomain(actionNode);
+                } else if (button.action === 'siegeDomain' && actionNode) {
+                    handleSiegeAction(actionNode);
+                } else if (button.action === 'intelSteal' && actionNode) {
+                    handleIntelHeistAction(actionNode);
+                } else if (button.action === 'joinDistribution' && actionNode) {
+                    handleDistributionParticipationAction(actionNode);
+                } else if (button.action === 'moveToNode' && actionNode) {
+                    handleMoveToNode(actionNode);
+                } else if (button.action === 'toggleFavoriteNode' && actionNode?._id) {
+                    toggleFavoriteDomain(actionNode._id);
+                } else if (button.action === 'showSenseEntry' && view === 'nodeDetail' && currentNodeDetail) {
+                    setNodeInfoModalTarget(currentNodeDetail);
+                    setShowNodeInfoModal(true);
                 }
             };
         }
-    }, [currentNodeDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
+    }, [view, currentNodeDetail, currentTitleDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
 
     useEffect(() => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
@@ -1233,7 +1330,7 @@ const App = () => {
   };
 
   const handleApplyDomainMaster = async (reason) => {
-    const targetNodeId = normalizeObjectId(currentNodeDetail?._id);
+    const targetNodeId = normalizeObjectId(nodeInfoModalTarget?._id);
     if (!targetNodeId) return false;
     setIsApplyingDomainMaster(true);
     try {
@@ -1630,8 +1727,8 @@ const App = () => {
   }, [authenticated, isAdmin]);
 
   useEffect(() => {
-    const targetNodeId = normalizeObjectId(currentNodeDetail?._id);
-    if (!authenticated || isAdmin || view !== 'nodeDetail' || !targetNodeId) {
+    const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
+    if (!authenticated || isAdmin || !isTitleBattleView(view) || !targetNodeId) {
       setNodeDistributionStatus(createEmptyNodeDistributionStatus());
       return undefined;
     }
@@ -1642,12 +1739,12 @@ const App = () => {
     }, 4000);
 
     return () => clearInterval(timer);
-  }, [authenticated, isAdmin, view, currentNodeDetail?._id, userLocation, travelStatus.isTraveling]);
+  }, [authenticated, isAdmin, view, currentTitleDetail?._id, userLocation, travelStatus.isTraveling]);
 
   useEffect(() => {
     if (!showDistributionPanel) return undefined;
-    const targetNodeId = normalizeObjectId(currentNodeDetail?._id);
-    if (!targetNodeId || view !== 'nodeDetail') {
+    const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
+    if (!targetNodeId || !isTitleBattleView(view)) {
       setShowDistributionPanel(false);
       return undefined;
     }
@@ -1656,11 +1753,11 @@ const App = () => {
       fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
     }, 1000);
     return () => clearInterval(timer);
-  }, [showDistributionPanel, view, currentNodeDetail?._id]);
+  }, [showDistributionPanel, view, currentTitleDetail?._id]);
 
   useEffect(() => {
-    const targetNodeId = normalizeObjectId(currentNodeDetail?._id);
-    if (!authenticated || isAdmin || view !== 'nodeDetail' || !targetNodeId) {
+    const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
+    if (!authenticated || isAdmin || !isTitleBattleView(view) || !targetNodeId) {
       setSiegeStatus(createEmptySiegeStatus());
       return undefined;
     }
@@ -1670,7 +1767,7 @@ const App = () => {
       fetchSiegeStatus(targetNodeId, { silent: true });
     }, siegeDialog.open ? 2000 : 4000);
     return () => clearInterval(timer);
-  }, [authenticated, isAdmin, view, currentNodeDetail?._id, userLocation, travelStatus.isTraveling, siegeDialog.open]);
+  }, [authenticated, isAdmin, view, currentTitleDetail?._id, userLocation, travelStatus.isTraveling, siegeDialog.open]);
 
   useEffect(() => {
     if (!authenticated) {
@@ -1744,8 +1841,10 @@ const App = () => {
       const targetView = saved.view;
       const targetNodeId = normalizeObjectId(saved.nodeId);
 
-      if ((targetView === 'nodeDetail' || targetView === 'knowledgeDomain') && targetNodeId) {
-        const restoredNode = await fetchNodeDetail(targetNodeId);
+      if ((targetView === 'nodeDetail' || targetView === 'knowledgeDomain' || targetView === 'titleDetail') && targetNodeId) {
+        const restoredNode = targetView === 'titleDetail'
+          ? await fetchTitleDetail(targetNodeId)
+          : await fetchNodeDetail(targetNodeId);
         if (!restoredNode) {
           setView('home');
           return;
@@ -1791,8 +1890,12 @@ const App = () => {
     const currentView = (showKnowledgeDomain || isTransitioningToDomain) ? 'knowledgeDomain' : view;
     const nodeId = normalizeObjectId(
       currentView === 'knowledgeDomain'
-        ? (knowledgeDomainNode?._id || currentNodeDetail?._id)
-        : (currentView === 'nodeDetail' ? currentNodeDetail?._id : '')
+        ? (knowledgeDomainNode?._id || currentTitleDetail?._id || currentNodeDetail?._id)
+        : (
+            currentView === 'titleDetail'
+              ? currentTitleDetail?._id
+              : (currentView === 'nodeDetail' ? currentNodeDetail?._id : '')
+          )
     );
 
     localStorage.setItem(PAGE_STATE_STORAGE_KEY, JSON.stringify({
@@ -1807,13 +1910,14 @@ const App = () => {
     showKnowledgeDomain,
     isTransitioningToDomain,
     currentNodeDetail,
+    currentTitleDetail,
     knowledgeDomainNode
   ]);
 
   useEffect(() => {
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
 
-    const isKnownView = ['home', 'nodeDetail', 'alliance', 'admin', 'profile', 'army'].includes(view);
+    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army'].includes(view);
     if (!isKnownView) {
       setView('home');
       return;
@@ -1832,7 +1936,10 @@ const App = () => {
     if (view === 'nodeDetail' && !currentNodeDetail && hasRestoredPageRef.current) {
       setView('home');
     }
-  }, [authenticated, showLocationModal, view, isAdmin, currentNodeDetail]);
+    if (view === 'titleDetail' && !currentTitleDetail && hasRestoredPageRef.current) {
+      setView('home');
+    }
+  }, [authenticated, showLocationModal, view, isAdmin, currentNodeDetail, currentTitleDetail]);
 
   useEffect(() => {
     if (!showNotificationsPanel) return undefined;
@@ -2152,12 +2259,20 @@ const App = () => {
 
     const prepareForPrimaryNavigation = async () => {
         closeKnowledgeDomainBeforeNavigation();
+        setTitleRelationInfo(null);
+        setIsSenseSelectorVisible(false);
         await collapseRightDocksBeforeNavigation();
     };
 
     const navigateToHomeWithDockCollapse = async () => {
         await prepareForPrimaryNavigation();
         setView('home');
+        setCurrentTitleDetail(null);
+        setTitleGraphData(null);
+        setTitleRelationInfo(null);
+        setNodeInfoModalTarget(null);
+        setIsSenseSelectorVisible(false);
+        setSenseSelectorSourceNode(null);
         setNavigationPath(createHomeNavigationPath());
     };
 
@@ -2402,7 +2517,7 @@ const App = () => {
 
     const startSiege = async () => {
         const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
         if (!token || !nodeId || siegeDialog.submitting) return;
 
         setSiegeDialog((prev) => ({
@@ -2451,7 +2566,7 @@ const App = () => {
 
     const requestSiegeSupport = async () => {
         const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
         if (!token || !nodeId || siegeDialog.submitting) return;
 
         setSiegeDialog((prev) => ({
@@ -2499,7 +2614,7 @@ const App = () => {
 
     const retreatSiege = async () => {
         const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
         if (!token || !nodeId || siegeDialog.submitting) return;
 
         setSiegeDialog((prev) => ({
@@ -2548,7 +2663,7 @@ const App = () => {
 
     const submitSiegeSupport = async () => {
         const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
         if (!token || !nodeId || siegeDialog.supportSubmitting) return;
 
         const units = Object.entries(siegeSupportDraft.units || {})
@@ -2614,7 +2729,100 @@ const App = () => {
         }
     };
 
-    // 获取节点详情
+    // 获取标题主视角详情
+    const fetchTitleDetail = async (nodeId, clickedNode = null, navOptions = {}) => {
+        try {
+            await prepareForPrimaryNavigation();
+            const response = await fetch(`http://localhost:5000/api/nodes/public/title-detail/${nodeId}?depth=1`);
+            if (!response.ok) {
+                alert('获取标题主视角失败');
+                return null;
+            }
+
+            const data = await response.json();
+            const graph = data?.graph || {};
+            const centerNode = graph?.centerNode || null;
+            const targetNodeId = normalizeObjectId(centerNode?._id);
+            if (!targetNodeId || !centerNode) {
+                alert('标题主视角数据无效');
+                return null;
+            }
+
+            const shouldResetTrail = navOptions?.resetTrail === true || !isKnowledgeDetailView(view);
+            const relation = normalizeNavigationRelation(navOptions?.relationHint);
+            trackRecentDomain(centerNode);
+            setCurrentTitleDetail(centerNode);
+            setTitleGraphData(graph);
+            setCurrentNodeDetail(null);
+            setNodeInfoModalTarget(null);
+            setTitleRelationInfo(null);
+            setView('titleDetail');
+            setIsSenseSelectorVisible(false);
+            setSenseSelectorSourceNode(centerNode);
+            setIntelHeistStatus(createEmptyIntelHeistStatus());
+            setSiegeStatus(createEmptySiegeStatus());
+            fetchIntelHeistStatus(targetNodeId, { silent: false });
+            fetchSiegeStatus(targetNodeId, { silent: false });
+
+            if (clickedNode) {
+                setClickedNodeForTransition(clickedNode);
+            } else {
+                setClickedNodeForTransition(null);
+            }
+
+            setNavigationPath((prevPath) => {
+                const safePath = Array.isArray(prevPath) && prevPath.length > 0
+                    ? prevPath
+                    : createHomeNavigationPath();
+                const historyIndex = Number.isInteger(navOptions?.historyIndex)
+                    ? Math.max(0, Math.min(navOptions.historyIndex, safePath.length - 1))
+                    : -1;
+                if (historyIndex >= 0) {
+                    const nextPath = safePath.slice(0, historyIndex + 1);
+                    const lastHistory = nextPath[nextPath.length - 1];
+                    if (lastHistory?.type === 'node') {
+                        const nextItem = buildNavigationTrailItem(centerNode, lastHistory.relation, { mode: 'title' });
+                        return [...nextPath.slice(0, -1), {
+                            ...lastHistory,
+                            mode: 'title',
+                            senseId: '',
+                            label: nextItem?.label || lastHistory.label
+                        }];
+                    }
+                    return nextPath;
+                }
+
+                const targetNavItem = buildNavigationTrailItem(centerNode, relation, { mode: 'title' });
+                if (!targetNavItem) return safePath;
+
+                if (shouldResetTrail) {
+                    return [...createHomeNavigationPath(), targetNavItem];
+                }
+
+                const duplicateIndex = safePath.findIndex((item, index) => (
+                    index > 0
+                    && item?.type === 'node'
+                    && normalizeObjectId(item?.nodeId) === targetNavItem.nodeId
+                ));
+                if (duplicateIndex >= 0) {
+                    return [
+                        ...safePath.slice(0, duplicateIndex),
+                        targetNavItem
+                    ];
+                }
+
+                return [...safePath, targetNavItem];
+            });
+
+            return centerNode;
+        } catch (error) {
+            console.error('获取标题主视角失败:', error);
+            alert('获取标题主视角失败');
+            return null;
+        }
+    };
+
+    // 获取释义主视角详情
     const fetchNodeDetail = async (nodeId, clickedNode = null, navOptions = {}) => {
         try {
             await prepareForPrimaryNavigation();
@@ -2627,7 +2835,7 @@ const App = () => {
                 const data = await response.json();
                 const targetNodeId = normalizeObjectId(data?.node?._id);
                 const currentNodeBeforeNavigate = currentNodeDetail;
-                const shouldResetTrail = navOptions?.resetTrail === true || view !== 'nodeDetail';
+                const shouldResetTrail = navOptions?.resetTrail === true || !isKnowledgeDetailView(view);
                 const relation = resolveNavigationRelationAgainstCurrent(
                     targetNodeId,
                     currentNodeBeforeNavigate,
@@ -2640,6 +2848,9 @@ const App = () => {
                 }
                 trackRecentDomain(data.node);
                 setCurrentNodeDetail(data.node);
+                setCurrentTitleDetail(null);
+                setTitleGraphData(null);
+                setTitleRelationInfo(null);
                 setView('nodeDetail');
                 setIntelHeistStatus(createEmptyIntelHeistStatus());
                 setSiegeStatus(createEmptySiegeStatus());
@@ -2664,19 +2875,25 @@ const App = () => {
                         const nextPath = safePath.slice(0, historyIndex + 1);
                         const lastHistory = nextPath[nextPath.length - 1];
                         if (lastHistory?.type === 'node') {
+                            const nextItem = buildNavigationTrailItem(
+                                data?.node || {},
+                                lastHistory.relation,
+                                { mode: 'sense' }
+                            );
                             return [
                                 ...nextPath.slice(0, -1),
                                 {
                                     ...lastHistory,
+                                    mode: 'sense',
                                     senseId: typeof data?.node?.activeSenseId === 'string' ? data.node.activeSenseId : (lastHistory.senseId || ''),
-                                    label: buildNavigationTrailItem(data?.node || {}, lastHistory.relation)?.label || lastHistory.label
+                                    label: nextItem?.label || lastHistory.label
                                 }
                             ];
                         }
                         return nextPath;
                     }
 
-                    const targetNavItem = buildNavigationTrailItem(data.node, relation);
+                    const targetNavItem = buildNavigationTrailItem(data.node, relation, { mode: 'sense' });
                     if (!targetNavItem) return safePath;
 
                     if (shouldResetTrail) {
@@ -2721,17 +2938,33 @@ const App = () => {
         };
     };
 
+    const updateSenseSelectorAnchorBySceneNode = (sceneNode) => {
+        const renderer = sceneManagerRef.current?.renderer;
+        const canvas = webglCanvasRef.current;
+        if (!renderer || !canvas || !sceneNode) return;
+        const rect = canvas.getBoundingClientRect();
+        const screenPos = renderer.worldToScreen(sceneNode.x, sceneNode.y);
+        const next = {
+            x: rect.left + screenPos.x,
+            y: rect.top + screenPos.y,
+            visible: true
+        };
+        senseSelectorAnchorRef.current = next;
+        setSenseSelectorAnchor(next);
+    };
+
     const handleJumpToCurrentLocationView = async () => {
         if (!currentLocationNodeDetail?._id) {
             return;
         }
 
-        if (view === 'nodeDetail' && currentNodeDetail?.name === userLocation) {
+        const activeDetailNode = isTitleBattleView(view) ? currentTitleDetail : currentNodeDetail;
+        if (isKnowledgeDetailView(view) && activeDetailNode?.name === userLocation) {
             return;
         }
 
         const clickedNode = buildClickedNodeFromScene(currentLocationNodeDetail._id);
-        await fetchNodeDetail(currentLocationNodeDetail._id, clickedNode);
+        await fetchTitleDetail(currentLocationNodeDetail._id, clickedNode);
     };
 
     const openDistributionPanel = (participationData) => {
@@ -2794,7 +3027,7 @@ const App = () => {
         if (!targetNodeId) return;
 
         const clickedNode = buildClickedNodeFromScene(targetNodeId);
-        await fetchNodeDetail(targetNodeId, clickedNode);
+        await fetchTitleDetail(targetNodeId, clickedNode);
         setShowSearchResults(false);
     };
 
@@ -2822,7 +3055,7 @@ const App = () => {
 
     const joinDistributionFromPanel = async () => {
         const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(currentNodeDetail?._id);
+        const nodeId = normalizeObjectId(currentTitleDetail?._id);
         const panelData = distributionPanelState.data;
         if (!token || !nodeId || !panelData) return;
 
@@ -2834,7 +3067,7 @@ const App = () => {
             return;
         }
         if (!panelData.canJoin) {
-            const currentNodeName = (currentNodeDetail?.name || '').trim();
+            const currentNodeName = (currentTitleDetail?.name || '').trim();
             const currentLocationName = (userLocation || '').trim();
             const shouldPromptMove = (
                 panelData.requiresManualEntry &&
@@ -2843,8 +3076,8 @@ const App = () => {
                 !!currentNodeName &&
                 currentLocationName !== currentNodeName
             );
-            if (shouldPromptMove && currentNodeDetail?._id) {
-                await handleMoveToNode(currentNodeDetail, { promptMode: 'distribution' });
+            if (shouldPromptMove && currentTitleDetail?._id) {
+                await handleMoveToNode(currentTitleDetail, { promptMode: 'distribution' });
             }
             setDistributionPanelState((prev) => ({
                 ...prev,
@@ -2854,7 +3087,7 @@ const App = () => {
         }
 
         const confirmed = window.confirm(
-            `确认参与知识域「${currentNodeDetail?.name || ''}」分发活动？确认后在本次分发结束前不可移动。`
+            `确认参与知识域「${currentTitleDetail?.name || ''}」分发活动？确认后在本次分发结束前不可移动。`
         );
         if (!confirmed) return;
 
@@ -2897,12 +3130,12 @@ const App = () => {
 
     const exitDistributionFromPanel = async () => {
         const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(currentNodeDetail?._id);
+        const nodeId = normalizeObjectId(currentTitleDetail?._id);
         const panelData = distributionPanelState.data;
         if (!token || !nodeId || !panelData?.canExit) return;
 
         if (!panelData.canExitWithoutConfirm) {
-            const confirmed = window.confirm(`确认退出知识域「${currentNodeDetail?.name || ''}」分发活动？`);
+            const confirmed = window.confirm(`确认退出知识域「${currentTitleDetail?.name || ''}」分发活动？`);
             if (!confirmed) return;
         }
 
@@ -2982,20 +3215,24 @@ const App = () => {
         }
     }, [announcementDockTab, systemAnnouncements.length, allianceAnnouncements.length]);
     useEffect(() => {
-        const canRenderDock = !isAdmin && (view === 'home' || (view === 'nodeDetail' && currentNodeDetail));
+        const canRenderDock = !isAdmin && (
+            view === 'home'
+            || (view === 'nodeDetail' && currentNodeDetail)
+            || (view === 'titleDetail' && currentTitleDetail)
+        );
         if (!canRenderDock) {
             setIsLocationDockExpanded(false);
             setIsAnnouncementDockExpanded(false);
         }
-    }, [view, currentNodeDetail, isAdmin]);
+    }, [view, currentNodeDetail, currentTitleDetail, isAdmin]);
     const adminPendingApprovalCount = pendingMasterApplyCount + adminPendingNodes.length;
     const notificationBadgeCount = isAdmin ? adminPendingApprovalCount : notificationUnreadCount;
-    const currentNodeMasterId = normalizeObjectId(currentNodeDetail?.domainMaster);
-    const currentNodeOwnerRole = currentNodeDetail?.owner?.role || '';
+    const currentNodeMasterId = normalizeObjectId(nodeInfoModalTarget?.domainMaster);
+    const currentNodeOwnerRole = nodeInfoModalTarget?.owner?.role || '';
     const canApplyDomainMaster = Boolean(
         authenticated &&
         !isAdmin &&
-        normalizeObjectId(currentNodeDetail?._id) &&
+        normalizeObjectId(nodeInfoModalTarget?._id) &&
         !currentNodeMasterId &&
         (currentNodeOwnerRole === 'admin' || currentNodeOwnerRole === '')
     );
@@ -3019,14 +3256,14 @@ const App = () => {
         if (!nodeId) return;
         setShowRelatedDomainsPanel(false);
         const clickedNode = buildClickedNodeFromScene(nodeId);
-        await fetchNodeDetail(nodeId, clickedNode);
+        await fetchTitleDetail(nodeId, clickedNode);
     };
 
     const handleOpenTravelNode = async (travelNode) => {
         const nodeId = normalizeObjectId(travelNode?.nodeId);
         if (!nodeId) return;
         const clickedNode = buildClickedNodeFromScene(nodeId);
-        await fetchNodeDetail(nodeId, clickedNode);
+        await fetchTitleDetail(nodeId, clickedNode);
     };
 
     const renderRelatedDomainSection = (title, domainList, emptyText) => (
@@ -3182,17 +3419,43 @@ const App = () => {
         sceneManagerRef.current.onNodeClick = (node) => {
             if (!node?.data?._id) return;
 
-            if (view === 'nodeDetail' && node.type === 'center') {
-                setIsSenseSelectorVisible((prev) => !prev);
+            if (view === 'home') {
+                setTitleRelationInfo(null);
+                setSenseSelectorSourceNode(node.data);
+                updateSenseSelectorAnchorBySceneNode(node);
+                setIsSenseSelectorVisible(true);
                 return;
             }
 
-            fetchNodeDetail(node.data._id, node, {
-                relationHint: getNavigationRelationFromSceneNode(node),
-                activeSenseId: typeof node?.data?.activeSenseId === 'string' ? node.data.activeSenseId : ''
-            });
+            if (view === 'titleDetail') {
+                setTitleRelationInfo(null);
+                if (node.type === 'center') {
+                    setSenseSelectorSourceNode(currentTitleDetail || node.data);
+                    updateSenseSelectorAnchorBySceneNode(node);
+                    setIsSenseSelectorVisible((prev) => !prev);
+                    return;
+                }
+                fetchTitleDetail(node.data._id, node, {
+                    relationHint: getNavigationRelationFromSceneNode(node)
+                });
+                return;
+            }
+
+            if (view === 'nodeDetail') {
+                setTitleRelationInfo(null);
+                if (node.type === 'center') {
+                    setSenseSelectorSourceNode(currentNodeDetail || node.data);
+                    updateSenseSelectorAnchorBySceneNode(node);
+                    setIsSenseSelectorVisible((prev) => !prev);
+                    return;
+                }
+                fetchNodeDetail(node.data._id, node, {
+                    relationHint: getNavigationRelationFromSceneNode(node),
+                    activeSenseId: typeof node?.data?.activeSenseId === 'string' ? node.data.activeSenseId : ''
+                });
+            }
         };
-    }, [view]);
+    }, [view, currentNodeDetail, currentTitleDetail]);
 
     // 实时搜索
     const performHomeSearch = async (query) => {
@@ -3219,7 +3482,7 @@ const App = () => {
     // 监听搜索输入变化
     useEffect(() => {
         const timeoutId = setTimeout(() => {
-            if (view === 'home' || view === 'nodeDetail') {
+            if (view === 'home' || view === 'nodeDetail' || view === 'titleDetail') {
                 performHomeSearch(homeSearchQuery);
                 // 只有在用户主动输入时才显示搜索结果，而不是在view变化时
                 if (homeSearchQuery.trim() !== '') {
@@ -3235,7 +3498,7 @@ const App = () => {
     useEffect(() => {
         const handleClickOutside = (event) => {
             // 只在首页和节点详情页监听点击事件
-            if (view !== 'home' && view !== 'nodeDetail') return;
+            if (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail') return;
 
             // 检查点击是否在搜索栏区域内
             if (searchBarRef.current && !searchBarRef.current.contains(event.target)) {
@@ -3273,7 +3536,7 @@ const App = () => {
         }
     }, [isWebGLReady, view, rootNodes, featuredNodes]);
 
-    // 更新WebGL节点详情场景
+    // 更新WebGL释义主视角场景
     useEffect(() => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
         if (view !== 'nodeDetail' || !currentNodeDetail) return;
@@ -3287,39 +3550,77 @@ const App = () => {
             parentNodes,
             childNodes,
             clickedNodeForTransition,
-            getNodeDetailButtonContext(currentNodeDetail)
+            { senseDetailOnly: true }
         );
 
         // 动画完成后清除clickedNode状态
         setClickedNodeForTransition(null);
-    }, [isWebGLReady, view, currentNodeDetail]);
+    }, [isWebGLReady, view, currentNodeDetail, clickedNodeForTransition]);
+
+    // 更新WebGL标题主视角场景
+    useEffect(() => {
+        if (!sceneManagerRef.current || !isWebGLReady) return;
+        if (view !== 'titleDetail' || !currentTitleDetail || !titleGraphData) return;
+
+        const graphNodes = Array.isArray(titleGraphData?.nodes) ? titleGraphData.nodes : [];
+        const graphEdges = Array.isArray(titleGraphData?.edges) ? titleGraphData.edges : [];
+        const levelByNodeId = titleGraphData?.levelByNodeId || {};
+        sceneManagerRef.current.showTitleDetail(
+            currentTitleDetail,
+            graphNodes,
+            graphEdges,
+            levelByNodeId,
+            clickedNodeForTransition,
+            getNodeDetailButtonContext(currentTitleDetail)
+        );
+        setClickedNodeForTransition(null);
+    }, [isWebGLReady, view, currentTitleDetail, titleGraphData, clickedNodeForTransition]);
 
     useEffect(() => {
         if (!sceneManagerRef.current) return;
-        if (view !== 'nodeDetail' || !currentNodeDetail) return;
-
-        sceneManagerRef.current.setupCenterNodeButtons(
-            currentNodeDetail,
-            getNodeDetailButtonContext(currentNodeDetail)
-        );
-    }, [view, currentNodeDetail, isAdmin, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
+        if (view === 'titleDetail' && currentTitleDetail) {
+            sceneManagerRef.current.setupCenterNodeButtons(
+                currentTitleDetail,
+                getNodeDetailButtonContext(currentTitleDetail)
+            );
+            return;
+        }
+        if (view === 'nodeDetail' && currentNodeDetail) {
+            sceneManagerRef.current.setupSenseDetailButton(currentNodeDetail);
+            return;
+        }
+        if (view !== 'titleDetail' && view !== 'nodeDetail') {
+            sceneManagerRef.current.clearNodeButtons();
+        }
+    }, [view, currentNodeDetail, currentTitleDetail, isAdmin, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
 
     useEffect(() => {
-        if (view !== 'nodeDetail' || !currentNodeDetail || !isWebGLReady) {
+        if (!isWebGLReady) {
             setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
             senseSelectorAnchorRef.current = { x: 0, y: 0, visible: false };
             setIsSenseSelectorVisible(false);
             return undefined;
         }
+        if (!isKnowledgeDetailView(view) && view !== 'home') {
+            setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
+            senseSelectorAnchorRef.current = { x: 0, y: 0, visible: false };
+            setIsSenseSelectorVisible(false);
+            return undefined;
+        }
+        if (view === 'home' && !isSenseSelectorVisible) return undefined;
 
         let rafId = 0;
         const updateAnchor = () => {
             const sceneManager = sceneManagerRef.current;
             const renderer = sceneManager?.renderer;
-            const centerNode = sceneManager?.currentLayout?.nodes?.find((item) => item?.type === 'center');
+            const targetNode = view === 'home'
+                ? sceneManager?.currentLayout?.nodes?.find((item) => (
+                    normalizeObjectId(item?.data?._id) === normalizeObjectId(senseSelectorSourceNode?._id)
+                ))
+                : sceneManager?.currentLayout?.nodes?.find((item) => item?.type === 'center');
             const canvas = webglCanvasRef.current;
-            if (renderer && centerNode && canvas) {
-                const screenPos = renderer.worldToScreen(centerNode.x, centerNode.y);
+            if (renderer && targetNode && canvas) {
+                const screenPos = renderer.worldToScreen(targetNode.x, targetNode.y);
                 const rect = canvas.getBoundingClientRect();
                 const next = {
                     x: rect.left + screenPos.x,
@@ -3340,11 +3641,19 @@ const App = () => {
         return () => {
             window.cancelAnimationFrame(rafId);
         };
-    }, [view, currentNodeDetail?._id, currentNodeDetail?.activeSenseId, isWebGLReady]);
+    }, [
+        view,
+        currentNodeDetail?._id,
+        currentNodeDetail?.activeSenseId,
+        currentTitleDetail?._id,
+        senseSelectorSourceNode?._id,
+        isSenseSelectorVisible,
+        isWebGLReady
+    ]);
 
     useEffect(() => {
         if (!isSenseSelectorVisible) return undefined;
-        if (view !== 'nodeDetail') return undefined;
+        if (view !== 'nodeDetail' && view !== 'titleDetail' && view !== 'home') return undefined;
         const canvas = webglCanvasRef.current;
         const renderer = sceneManagerRef.current?.renderer;
         if (!canvas || !renderer) return undefined;
@@ -3352,6 +3661,11 @@ const App = () => {
         const handleMapClick = (event) => {
             const pos = renderer.getCanvasPositionFromEvent(event);
             const clickedNode = renderer.hitTest(pos.x, pos.y);
+            if (view === 'home') {
+                const anyNode = renderer.hitTest(pos.x, pos.y);
+                if (!anyNode) setIsSenseSelectorVisible(false);
+                return;
+            }
             if (!clickedNode || clickedNode.type !== 'center') {
                 setIsSenseSelectorVisible(false);
             }
@@ -3361,7 +3675,7 @@ const App = () => {
         return () => {
             canvas.removeEventListener('click', handleMapClick);
         };
-    }, [isSenseSelectorVisible, view, currentNodeDetail?._id]);
+    }, [isSenseSelectorVisible, view, currentNodeDetail?._id, currentTitleDetail?._id]);
 
 
     // 新节点创建相关函数
@@ -3379,6 +3693,8 @@ const App = () => {
         setKnowledgeDomainNode(node);
         setIsTransitioningToDomain(true);
         setShowNodeInfoModal(false); // 关闭节点信息弹窗
+        setTitleRelationInfo(null);
+        setIsSenseSelectorVisible(false);
 
         // 开始过渡动画
         sceneManagerRef.current.enterKnowledgeDomain(
@@ -3441,14 +3757,15 @@ const App = () => {
 
     const renderUnifiedRightDock = () => {
         if (isAdmin) return null;
-        const canRenderDock = view === 'home' || (view === 'nodeDetail' && currentNodeDetail);
+        const activeDetailNode = isTitleBattleView(view) ? currentTitleDetail : currentNodeDetail;
+        const canRenderDock = view === 'home' || (isKnowledgeDetailView(view) && activeDetailNode);
         if (!canRenderDock) return null;
 
         const canJumpToLocationView = Boolean(
             !travelStatus.isTraveling &&
             currentLocationNodeDetail &&
             userLocation &&
-            !(view === 'nodeDetail' && currentNodeDetail?.name === userLocation)
+            !(isKnowledgeDetailView(view) && activeDetailNode?.name === userLocation)
         );
         const activeAnnouncements = announcementDockTab === 'alliance'
             ? allianceAnnouncements
@@ -3770,9 +4087,10 @@ const App = () => {
     };
 
     const renderDistributionParticipationPanel = () => {
-        if (view !== 'nodeDetail' || !showDistributionPanel || !currentNodeDetail) return null;
+        if (view !== 'titleDetail' || !showDistributionPanel || !currentTitleDetail) return null;
         const data = distributionPanelState.data;
         if (!data) return null;
+        const activeNode = currentTitleDetail;
         const pool = data.pool || {};
         const phaseLabelMap = {
             entry_open: '可入场',
@@ -3797,7 +4115,7 @@ const App = () => {
             !!data.requiresManualEntry &&
             !data.joined &&
             data.phase === 'entry_open' &&
-            ((userLocation || '').trim() !== (currentNodeDetail?.name || '').trim())
+            ((userLocation || '').trim() !== (activeNode?.name || '').trim())
         );
         const joinButtonDisabled = (!data.canJoin && !canPromptMoveThenJoin) || distributionPanelState.joining;
         return (
@@ -3805,7 +4123,7 @@ const App = () => {
                 <div className="distribution-panel-modal">
                     <button type="button" className="distribution-panel-close" onClick={closeDistributionPanel}>×</button>
                     <div className="distribution-panel-title-row">
-                        <h3>{`分发活动：${getNodeDisplayName(currentNodeDetail)}`}</h3>
+                        <h3>{`分发活动：${getNodeDisplayName(activeNode)}`}</h3>
                         <div className="distribution-panel-title-tags">
                             <span className={`distribution-panel-phase phase-${data.phase}`}>{phaseLabel}</span>
                             <span className={`distribution-panel-participation-status ${participationStatusClass}`}>{participationStatusText}</span>
@@ -4185,29 +4503,68 @@ const App = () => {
         );
     };
 
+    const resolveSenseSelectorNode = () => {
+        if (view === 'titleDetail' && currentTitleDetail) return currentTitleDetail;
+        if (view === 'nodeDetail' && currentNodeDetail) return currentNodeDetail;
+        if (senseSelectorSourceNode) return senseSelectorSourceNode;
+        return null;
+    };
+
+    const handleSwitchTitleView = async () => {
+        const selectorNode = resolveSenseSelectorNode();
+        const nodeId = normalizeObjectId(selectorNode?._id);
+        if (!nodeId) return;
+        if (view === 'titleDetail' && normalizeObjectId(currentTitleDetail?._id) === nodeId) {
+            setIsSenseSelectorVisible(false);
+            return;
+        }
+        const clickedNode = buildClickedNodeFromScene(nodeId);
+        await fetchTitleDetail(nodeId, clickedNode, {
+            relationHint: 'jump'
+        });
+        setIsSenseSelectorVisible(false);
+    };
+
     const handleSwitchSenseView = async (senseId) => {
-        const nodeId = normalizeObjectId(currentNodeDetail?._id);
+        const selectorNode = resolveSenseSelectorNode();
+        const nodeId = normalizeObjectId(selectorNode?._id);
         const nextSenseId = typeof senseId === 'string' ? senseId.trim() : '';
         if (!nodeId || !nextSenseId) return;
-        if (currentNodeDetail?.activeSenseId === nextSenseId) return;
+        if (
+            view === 'nodeDetail'
+            && normalizeObjectId(currentNodeDetail?._id) === nodeId
+            && currentNodeDetail?.activeSenseId === nextSenseId
+        ) {
+            setIsSenseSelectorVisible(false);
+            return;
+        }
         const clickedNode = buildClickedNodeFromScene(nodeId);
         await fetchNodeDetail(nodeId, clickedNode, {
             relationHint: 'jump',
             activeSenseId: nextSenseId
         });
+        setIsSenseSelectorVisible(false);
     };
 
     const renderSenseSelectorPanel = () => {
-        if (view !== 'nodeDetail' || !currentNodeDetail) return null;
+        if (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail') return null;
+        const selectorNode = resolveSenseSelectorNode();
+        if (!selectorNode) return null;
         if (!isSenseSelectorVisible || !senseSelectorAnchor.visible) return null;
-        const senses = Array.isArray(currentNodeDetail?.synonymSenses) && currentNodeDetail.synonymSenses.length > 0
-            ? currentNodeDetail.synonymSenses
+        const senses = Array.isArray(selectorNode?.synonymSenses) && selectorNode.synonymSenses.length > 0
+            ? selectorNode.synonymSenses
             : [{
-                senseId: currentNodeDetail?.activeSenseId || 'sense_1',
-                title: currentNodeDetail?.activeSenseTitle || '基础释义',
-                content: currentNodeDetail?.activeSenseContent || currentNodeDetail?.description || ''
+                senseId: selectorNode?.activeSenseId || 'sense_1',
+                title: selectorNode?.activeSenseTitle || '基础释义',
+                content: selectorNode?.activeSenseContent || selectorNode?.description || ''
             }];
-        const style = currentNodeDetail?.visualStyle || {};
+        const activeSenseId = (
+            view === 'nodeDetail'
+            && normalizeObjectId(currentNodeDetail?._id) === normalizeObjectId(selectorNode?._id)
+        )
+            ? (currentNodeDetail?.activeSenseId || '')
+            : '';
+        const style = selectorNode?.visualStyle || {};
         const panelStyle = {
             left: `${senseSelectorAnchor.x}px`,
             top: `${senseSelectorAnchor.y}px`,
@@ -4218,22 +4575,173 @@ const App = () => {
 
         return (
             <div className="sense-selector-panel" style={panelStyle}>
-                <div className="sense-selector-title">{currentNodeDetail?.name || '未命名知识域'}</div>
+                <button
+                    type="button"
+                    className="sense-selector-title sense-selector-title-btn"
+                    onClick={handleSwitchTitleView}
+                >
+                    {selectorNode?.name || '未命名知识域'}
+                </button>
                 <div className="sense-selector-list">
                     {senses.map((sense) => {
-                        const isActive = sense?.senseId === currentNodeDetail?.activeSenseId;
+                        const isActive = !!activeSenseId && sense?.senseId === activeSenseId;
                         return (
                             <button
                                 key={sense?.senseId || sense?.title}
                                 type="button"
                                 className={`sense-selector-item ${isActive ? 'active' : ''}`}
                                 onClick={() => handleSwitchSenseView(sense?.senseId)}
-                                title={sense?.content || ''}
                             >
                                 {sense?.title || '未命名释义'}
                             </button>
                         );
                     })}
+                </div>
+            </div>
+        );
+    };
+
+    const renderTitleRelationInfoPanel = () => {
+        if (view !== 'titleDetail' || !titleRelationInfo) return null;
+        const edge = titleRelationInfo;
+        const leftName = edge?.nodeAName || '未命名标题';
+        const rightName = edge?.nodeBName || '未命名标题';
+        const pairRows = Array.isArray(edge?.pairs) ? edge.pairs : [];
+        const nodeAId = normalizeObjectId(edge?.nodeAId);
+        const nodeBId = normalizeObjectId(edge?.nodeBId);
+        const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+        const estimateSenseComplexity = (text = '') => (
+            Array.from(typeof text === 'string' ? text.trim() : '')
+                .reduce((sum, ch) => {
+                    if (/\s/.test(ch)) return sum + 0.2;
+                    if (/[A-Za-z0-9]/.test(ch)) return sum + 0.55;
+                    return sum + 1;
+                }, 0)
+        );
+        const resolveTitleByNodeId = (nodeId) => {
+            const normalized = normalizeObjectId(nodeId);
+            if (normalized && normalized === nodeAId) return leftName;
+            if (normalized && normalized === nodeBId) return rightName;
+            return '未命名标题';
+        };
+        const diagramMap = new Map();
+        pairRows.forEach((item) => {
+            const relationType = item?.relationType === 'contains' || item?.relationType === 'extends'
+                ? item.relationType
+                : '';
+            if (!relationType) return;
+
+            const sourceNodeId = normalizeObjectId(item?.sourceNodeId);
+            const targetNodeId = normalizeObjectId(item?.targetNodeId);
+            const sourceSenseId = typeof item?.sourceSenseId === 'string' ? item.sourceSenseId.trim() : '';
+            const targetSenseId = typeof item?.targetSenseId === 'string' ? item.targetSenseId.trim() : '';
+            const sourceTitleName = resolveTitleByNodeId(sourceNodeId);
+            const targetTitleName = resolveTitleByNodeId(targetNodeId);
+            const sourceSenseTitle = typeof item?.sourceSenseTitle === 'string' ? item.sourceSenseTitle.trim() : '';
+            const targetSenseTitle = typeof item?.targetSenseTitle === 'string' ? item.targetSenseTitle.trim() : '';
+
+            // 统一语义：大椭圆 = 包含方；小椭圆 = 被包含方（互反 contains/extends 合并为同一图）
+            const upper = relationType === 'contains'
+                ? {
+                    nodeId: sourceNodeId,
+                    senseId: sourceSenseId,
+                    titleName: sourceTitleName,
+                    senseTitle: sourceSenseTitle || '未命名释义'
+                }
+                : {
+                    nodeId: targetNodeId,
+                    senseId: targetSenseId,
+                    titleName: targetTitleName,
+                    senseTitle: targetSenseTitle || '未命名释义'
+                };
+            const lower = relationType === 'contains'
+                ? {
+                    nodeId: targetNodeId,
+                    senseId: targetSenseId,
+                    titleName: targetTitleName,
+                    senseTitle: targetSenseTitle || '未命名释义'
+                }
+                : {
+                    nodeId: sourceNodeId,
+                    senseId: sourceSenseId,
+                    titleName: sourceTitleName,
+                    senseTitle: sourceSenseTitle || '未命名释义'
+                };
+
+            const mergeKey = `${upper.nodeId || 'u'}|${upper.senseId || 'us'}|${lower.nodeId || 'l'}|${lower.senseId || 'ls'}`;
+            if (!diagramMap.has(mergeKey)) {
+                diagramMap.set(mergeKey, {
+                    key: mergeKey,
+                    bigTitle: upper.titleName || '未命名标题',
+                    bigSense: upper.senseTitle || '未命名释义',
+                    smallTitle: lower.titleName || '未命名标题',
+                    smallSense: lower.senseTitle || '未命名释义'
+                });
+            }
+        });
+        const diagrams = Array.from(diagramMap.values()).map((item) => {
+            const complexity = estimateSenseComplexity(item.bigSense);
+            const overlapRatio = 0.8;
+            const bigWidthPct = clamp(30 + complexity * 1.15, 30, 54);
+            const smallWidthPct = clamp(bigWidthPct * 0.72, 24, 32);
+            // 基于相对坐标先构建，再整体平移到容器中心，保证组合图在弹窗中居中
+            const bigLeftBase = 0;
+            const smallLeftBase = bigWidthPct - smallWidthPct * overlapRatio;
+            const groupLeftBase = Math.min(bigLeftBase, smallLeftBase);
+            const groupRightBase = Math.max(bigLeftBase + bigWidthPct, smallLeftBase + smallWidthPct);
+            const groupWidthPct = groupRightBase - groupLeftBase;
+            const idealGroupLeftPct = 50 - groupWidthPct / 2;
+            const minGroupLeftPct = 2 - groupLeftBase;
+            const maxGroupLeftPct = 98 - groupRightBase;
+            const groupLeftShiftPct = clamp(idealGroupLeftPct, minGroupLeftPct, maxGroupLeftPct);
+            const bigLeftPct = groupLeftShiftPct + bigLeftBase;
+            const smallLeftPct = groupLeftShiftPct + smallLeftBase;
+            const overlapPct = smallWidthPct * overlapRatio;
+            const bigTextSafePct = clamp(((bigWidthPct - overlapPct - 1.5) / bigWidthPct) * 100, 30, 58);
+            return {
+                ...item,
+                bigWidthPct,
+                bigLeftPct,
+                smallWidthPct,
+                smallLeftPct,
+                bigTextSafePct
+            };
+        });
+        return (
+            <div className="title-relation-popup">
+                <button
+                    type="button"
+                    className="title-relation-close"
+                    onClick={() => setTitleRelationInfo(null)}
+                >
+                    ×
+                </button>
+                <div className="title-relation-diagram-list">
+                    {diagrams.length > 0 ? diagrams.map((item) => (
+                        <div key={item.key} className="title-relation-diagram-item">
+                            <div
+                                className="title-relation-venn"
+                                style={{
+                                    '--big-width': `${item.bigWidthPct}%`,
+                                    '--big-left': `${item.bigLeftPct}%`,
+                                    '--small-width': `${item.smallWidthPct}%`,
+                                    '--small-left': `${item.smallLeftPct}%`,
+                                    '--big-safe-width': `${item.bigTextSafePct}%`
+                                }}
+                            >
+                                <div className="title-relation-ellipse-title large-title">{item.bigTitle}</div>
+                                <div className="title-relation-ellipse-title small-title">{item.smallTitle}</div>
+                                <div className="title-relation-ellipse large left">
+                                    <span className="title-relation-ellipse-text">{item.bigSense}</span>
+                                </div>
+                                <div className="title-relation-ellipse small right">
+                                    <span className="title-relation-ellipse-text">{item.smallSense}</span>
+                                </div>
+                            </div>
+                        </div>
+                    )) : (
+                        <div className="title-relation-empty">暂无可展示的释义关联图</div>
+                    )}
                 </div>
             </div>
         );
@@ -4258,10 +4766,13 @@ const App = () => {
     const isKnowledgeDomainActive = showKnowledgeDomain || isTransitioningToDomain;
 
     return (
-        <div className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''}`}>
+        <div
+            className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''}`}
+            style={{ '--knowledge-header-offset': `${knowledgeHeaderOffset}px` }}
+        >
             <div className="game-content">
                 {/* 头部 */}
-                <div className={`header ${isKnowledgeDomainActive ? 'header-knowledge-domain-active' : ''}`}>
+                <div ref={headerRef} className={`header ${isKnowledgeDomainActive ? 'header-knowledge-domain-active' : ''}`}>
                     <div className="header-content">
                         <h1 className="header-title">
                             <Home className="icon" />
@@ -4439,15 +4950,21 @@ const App = () => {
                         showRightDocks={false}
                     />
                 )}
-                {/* 节点详情视图 */}
-                {view === "nodeDetail" && currentNodeDetail && (
+                {view === "titleDetail" && currentTitleDetail && (
                     <>
                         <NodeDetail
-                            node={currentNodeDetail}
+                            node={currentTitleDetail}
                             navigationPath={navigationPath}
-                            onNavigate={(nodeId, navOptions = {}) => fetchNodeDetail(nodeId, null, navOptions)}
+                            onNavigate={(nodeId, navOptions = {}) => fetchTitleDetail(nodeId, null, navOptions)}
                             onNavigateHistory={(item, index) => {
                                 if (!item?.nodeId) return;
+                                if (item?.mode === 'title') {
+                                    fetchTitleDetail(item.nodeId, null, {
+                                        historyIndex: index,
+                                        relationHint: item.relation
+                                    });
+                                    return;
+                                }
                                 fetchNodeDetail(item.nodeId, null, {
                                     historyIndex: index,
                                     relationHint: item.relation,
@@ -4482,12 +4999,71 @@ const App = () => {
                                 setShowSearchResults(false);
                             }}
                             onCreateNode={openCreateNodeModal}
-                            onNodeInfoClick={() => setShowNodeInfoModal(true)}
+                            onNodeInfoClick={() => {}}
                             webglCanvasRef={webglCanvasRef}
                         />
-                        {renderSenseSelectorPanel()}
+                        {renderTitleRelationInfoPanel()}
                     </>
                 )}
+                {/* 节点详情视图 */}
+                {view === "nodeDetail" && currentNodeDetail && (
+                    <>
+                        <NodeDetail
+                            node={currentNodeDetail}
+                            navigationPath={navigationPath}
+                            onNavigate={(nodeId, navOptions = {}) => fetchNodeDetail(nodeId, null, navOptions)}
+                            onNavigateHistory={(item, index) => {
+                                if (!item?.nodeId) return;
+                                if (item?.mode === 'title') {
+                                    fetchTitleDetail(item.nodeId, null, {
+                                        historyIndex: index,
+                                        relationHint: item.relation
+                                    });
+                                    return;
+                                }
+                                fetchNodeDetail(item.nodeId, null, {
+                                    historyIndex: index,
+                                    relationHint: item.relation,
+                                    activeSenseId: item.senseId || ''
+                                });
+                            }}
+                            onHome={async () => {
+                                await navigateToHomeWithDockCollapse();
+                            }}
+                            searchQuery={homeSearchQuery}
+                            onSearchChange={(e) => setHomeSearchQuery(e.target.value)}
+                            onSearchFocus={() => setShowSearchResults(true)}
+                            onSearchClear={() => {
+                                setHomeSearchQuery("");
+                                setHomeSearchResults([]);
+                                setShowSearchResults(true);
+                            }}
+                            searchResults={homeSearchResults}
+                            showSearchResults={showSearchResults}
+                            isSearching={isSearching}
+                            onSearchResultClick={(node) => {
+                                const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
+                                if (!targetNodeId) return;
+                                fetchNodeDetail(targetNodeId, {
+                                    id: `search-${targetNodeId || node?._id}`,
+                                    data: node,
+                                    type: "search"
+                                }, {
+                                    relationHint: 'jump',
+                                    activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
+                                });
+                                setShowSearchResults(false);
+                            }}
+                            onCreateNode={openCreateNodeModal}
+                            onNodeInfoClick={() => {
+                                setNodeInfoModalTarget(currentNodeDetail);
+                                setShowNodeInfoModal(true);
+                            }}
+                            webglCanvasRef={webglCanvasRef}
+                        />
+                    </>
+                )}
+                {renderSenseSelectorPanel()}
                 {renderUnifiedRightDock()}
                 {renderDistributionParticipationPanel()}
                 {view === "alliance" && (
@@ -4519,6 +5095,7 @@ const App = () => {
 
                 {view !== "home" &&
                  !(view === "nodeDetail" && currentNodeDetail) &&
+                 !(view === "titleDetail" && currentTitleDetail) &&
                  view !== "alliance" &&
                  !(view === "admin" && isAdmin) &&
                  view !== "profile" &&
@@ -4550,7 +5127,7 @@ const App = () => {
                     >
                         <div className="modal-content intel-heist-modal" onClick={(event) => event.stopPropagation()}>
                             <div className="modal-header">
-                                <h3>{`情报窃取：${intelHeistDialog.node?.name || currentNodeDetail?.name || '知识域'}`}</h3>
+                                <h3>{`情报窃取：${intelHeistDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || '知识域'}`}</h3>
                                 <button
                                     type="button"
                                     className="btn-close"
@@ -4631,7 +5208,7 @@ const App = () => {
                                     <button
                                         type="button"
                                         className="btn btn-primary"
-                                        onClick={() => startIntelHeistMiniGame(intelHeistDialog.node || currentNodeDetail)}
+                                        onClick={() => startIntelHeistMiniGame(intelHeistDialog.node || currentTitleDetail || currentNodeDetail)}
                                     >
                                         {intelHeistDialog.snapshot ? '再次窃取' : '开始窃取'}
                                     </button>
@@ -4647,10 +5224,10 @@ const App = () => {
                             <div className="modal-header">
                                 <h3>
                                     {isSiegeDomainMasterViewer
-                                        ? `你的知识域 ${siegeDialog.node?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'} 正在被攻打`
+                                        ? `你的知识域 ${siegeDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'} 正在被攻打`
                                         : (isSiegeDomainAdminViewer
-                                            ? `你管理的知识域 ${siegeDialog.node?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'} 正在被攻打`
-                                            : `攻占知识域：${siegeDialog.node?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'}`)}
+                                            ? `你管理的知识域 ${siegeDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'} 正在被攻打`
+                                            : `攻占知识域：${siegeDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'}`)}
                                 </h3>
                                 <button
                                     type="button"
@@ -4923,9 +5500,13 @@ const App = () => {
 
                 <NodeInfoModal
                     isOpen={showNodeInfoModal}
-                    onClose={() => setShowNodeInfoModal(false)}
-                    nodeDetail={currentNodeDetail}
+                    onClose={() => {
+                        setShowNodeInfoModal(false);
+                        setNodeInfoModalTarget(null);
+                    }}
+                    nodeDetail={nodeInfoModalTarget}
                     onEnterKnowledgeDomain={handleEnterKnowledgeDomain}
+                    simpleOnly
                     canApplyDomainMaster={canApplyDomainMaster}
                     isApplyingDomainMaster={isApplyingDomainMaster}
                     onApplyDomainMaster={handleApplyDomainMaster}

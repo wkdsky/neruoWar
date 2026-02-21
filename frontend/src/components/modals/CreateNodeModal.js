@@ -489,6 +489,17 @@ const CreateNodeModal = ({
         return sense;
       }
 
+      const oppositeType = sense.relationType === 'contains' ? 'extends' : 'contains';
+      const hasOpposite = sense.relations.some((item) => (
+        item.kind === 'single'
+        && item.relationType === oppositeType
+        && item.target?.searchKey === sense.selectedTarget.searchKey
+      ));
+      if (hasOpposite) {
+        window.alert('同一个释义不能同时包含并拓展同一个目标释义');
+        return sense;
+      }
+
       const exists = sense.relations.some((item) => (
         item.kind === 'single'
         && item.relationType === sense.relationType
