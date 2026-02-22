@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const EntropyAlliance = require('../models/EntropyAlliance');
+const Notification = require('../models/Notification');
 const User = require('../models/User');
 const Node = require('../models/Node');
 const { authenticateToken } = require('../middleware/auth');
@@ -42,6 +43,81 @@ const toCollectionNotificationDoc = (userId, notification = {}) => {
     _id: source?._id,
     userId
   };
+};
+
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
+const DEFAULT_MEMBER_PAGE_SIZE = 30;
+const DEFAULT_DOMAIN_PAGE_SIZE = 30;
+const NOTIFICATION_BATCH_SIZE = 1000;
+
+const parsePositiveInt = (value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) => {
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < min) return fallback;
+  return Math.min(max, parsed);
+};
+
+const parsePagination = (query = {}, {
+  pageKey = 'page',
+  pageSizeKey = 'pageSize',
+  defaultPageSize = DEFAULT_PAGE_SIZE,
+  maxPageSize = MAX_PAGE_SIZE
+} = {}) => {
+  const page = parsePositiveInt(query?.[pageKey], 1, { min: 1 });
+  const pageSize = parsePositiveInt(query?.[pageSizeKey], defaultPageSize, { min: 1, max: maxPageSize });
+  const skip = (page - 1) * pageSize;
+  return { page, pageSize, skip };
+};
+
+const buildPaginationPayload = ({ page, pageSize, total = 0 }) => ({
+  page,
+  pageSize,
+  total,
+  totalPages: total > 0 ? Math.ceil(total / pageSize) : 0
+});
+
+const countByAllianceIds = async ({ model, allianceIds = [], extraMatch = {} }) => {
+  const ids = (Array.isArray(allianceIds) ? allianceIds : []).filter(Boolean);
+  if (ids.length === 0) return new Map();
+
+  const rows = await model.aggregate([
+    {
+      $match: {
+        ...extraMatch,
+        allianceId: { $in: ids }
+      }
+    },
+    {
+      $group: {
+        _id: '$allianceId',
+        count: { $sum: 1 }
+      }
+    }
+  ]);
+
+  return new Map(rows.map((item) => [getIdString(item?._id), Number(item?.count) || 0]));
+};
+
+const buildAllianceRowsWithStats = async (alliances = []) => {
+  const allianceIds = alliances.map((item) => item?._id).filter(Boolean);
+  if (allianceIds.length === 0) return [];
+
+  const [memberCountMap, domainCountMap] = await Promise.all([
+    countByAllianceIds({ model: User, allianceIds }),
+    countByAllianceIds({
+      model: Node,
+      allianceIds,
+      extraMatch: { status: 'approved' }
+    })
+  ]);
+
+  return alliances.map((alliance) => {
+    const allianceId = getIdString(alliance?._id);
+    return buildAlliancePayload(alliance, {
+      memberCount: memberCountMap.get(allianceId) || 0,
+      domainCount: domainCountMap.get(allianceId) || 0
+    });
+  });
 };
 
 const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
@@ -164,18 +240,16 @@ const broadcastAllianceAnnouncement = async ({
     return 0;
   }
 
-  const members = await User.find({ allianceId: targetAllianceId }).select('_id notifications');
-  if (!Array.isArray(members) || members.length === 0) {
-    return 0;
+  const query = { allianceId: targetAllianceId };
+  if (actorId && mongoose.Types.ObjectId.isValid(actorId)) {
+    query._id = { $ne: new mongoose.Types.ObjectId(actorId) };
   }
+  const cursor = User.find(query).select('_id').lean().cursor();
 
-  const changedMembers = [];
-  const collectionNotificationDocs = [];
-  for (const member of members) {
-    if (actorId && getIdString(member._id) === actorId) {
-      continue;
-    }
-    const memberNotification = pushNotificationToUser(member, {
+  let notifiedCount = 0;
+  let pendingDocs = [];
+  for await (const member of cursor) {
+    const notification = buildNotificationPayload({
       type: 'alliance_announcement',
       title: `熵盟「${normalizedAllianceName}」发布了新公告`,
       message: normalizedAnnouncement,
@@ -185,9 +259,8 @@ const broadcastAllianceAnnouncement = async ({
       allianceName: normalizedAllianceName,
       createdAt: new Date()
     });
-    changedMembers.push(member);
-    collectionNotificationDocs.push({
-      _id: memberNotification?._id,
+    pendingDocs.push({
+      _id: notification._id,
       userId: member._id,
       type: 'alliance_announcement',
       title: `熵盟「${normalizedAllianceName}」发布了新公告`,
@@ -196,45 +269,48 @@ const broadcastAllianceAnnouncement = async ({
       status: 'info',
       allianceId: targetAllianceId,
       allianceName: normalizedAllianceName,
-      createdAt: new Date()
+      createdAt: notification.createdAt
     });
+
+    if (pendingDocs.length >= NOTIFICATION_BATCH_SIZE) {
+      await writeNotificationsToCollection(pendingDocs);
+      notifiedCount += pendingDocs.length;
+      pendingDocs = [];
+    }
   }
 
-  if (changedMembers.length > 0) {
-    await Promise.all(changedMembers.map((member) => member.save()));
-    await writeNotificationsToCollection(collectionNotificationDocs);
+  if (pendingDocs.length > 0) {
+    await writeNotificationsToCollection(pendingDocs);
+    notifiedCount += pendingDocs.length;
   }
-  return changedMembers.length;
+
+  return notifiedCount;
 };
 
 // 获取所有熵盟列表（包括成员数量和管辖知识域数量）
 router.get('/list', async (req, res) => {
   try {
-    const alliances = await EntropyAlliance.find()
-      .populate('founder', 'username profession')
-      .sort({ createdAt: -1 });
+    const { page, pageSize, skip } = parsePagination(req.query, {
+      pageKey: 'page',
+      pageSizeKey: 'pageSize',
+      defaultPageSize: DEFAULT_PAGE_SIZE,
+      maxPageSize: MAX_PAGE_SIZE
+    });
 
-    // 为每个熵盟计算成员数量和管辖知识域数量
-    const alliancesWithStats = await Promise.all(alliances.map(async (alliance) => {
-      const allianceMembers = await User.find({ allianceId: alliance._id }).select('_id').lean();
-      const memberIds = allianceMembers.map((item) => item._id);
-      const memberCount = memberIds.length;
+    const [alliances, total] = await Promise.all([
+      EntropyAlliance.find()
+        .populate('founder', 'username profession')
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(skip)
+        .limit(pageSize),
+      EntropyAlliance.countDocuments()
+    ]);
+    const allianceRows = await buildAllianceRowsWithStats(alliances);
 
-      const domainCount = await Node.countDocuments({
-        status: 'approved',
-        $or: [
-          { allianceId: alliance._id },
-          { allianceId: null, domainMaster: { $in: memberIds } }
-        ]
-      });
-
-      return buildAlliancePayload(alliance, {
-        memberCount,
-        domainCount
-      });
-    }));
-
-    res.json({ alliances: alliancesWithStats });
+    res.json({
+      alliances: allianceRows,
+      pagination: buildPaginationPayload({ page, pageSize, total })
+    });
   } catch (error) {
     console.error('获取熵盟列表失败:', error);
     res.status(500).json({ error: '服务器错误' });
@@ -251,29 +327,57 @@ router.get('/:allianceId', async (req, res) => {
       return res.status(404).json({ error: '熵盟不存在' });
     }
 
-    // 获取成员列表
-    const members = await User.find({ allianceId: alliance._id })
-      .select('username level profession createdAt');
+    const memberPager = parsePagination(req.query, {
+      pageKey: 'memberPage',
+      pageSizeKey: 'memberPageSize',
+      defaultPageSize: DEFAULT_MEMBER_PAGE_SIZE,
+      maxPageSize: MAX_PAGE_SIZE
+    });
+    const domainPager = parsePagination(req.query, {
+      pageKey: 'domainPage',
+      pageSizeKey: 'domainPageSize',
+      defaultPageSize: DEFAULT_DOMAIN_PAGE_SIZE,
+      maxPageSize: MAX_PAGE_SIZE
+    });
 
-    // 获取管辖域列表
-    const memberIds = members.map((item) => item._id);
-    const domains = await Node.find({
-      status: 'approved',
-      $or: [
-        { allianceId: alliance._id },
-        { allianceId: null, domainMaster: { $in: memberIds } }
-      ]
-    })
-      .populate('domainMaster', 'username profession')
-      .select('name description domainMaster');
+    const [memberTotal, domainTotal, members, domains] = await Promise.all([
+      User.countDocuments({ allianceId: alliance._id }),
+      Node.countDocuments({ status: 'approved', allianceId: alliance._id }),
+      User.find({ allianceId: alliance._id })
+        .select('username level profession createdAt')
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(memberPager.skip)
+        .limit(memberPager.pageSize)
+        .lean(),
+      Node.find({
+        status: 'approved',
+        allianceId: alliance._id
+      })
+        .populate('domainMaster', 'username profession')
+        .select('name description domainMaster')
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(domainPager.skip)
+        .limit(domainPager.pageSize)
+        .lean()
+    ]);
 
     res.json({
       alliance: buildAlliancePayload(alliance, {
-        memberCount: members.length,
-        domainCount: domains.length
+        memberCount: memberTotal,
+        domainCount: domainTotal
       }),
       members,
-      domains
+      domains,
+      memberPagination: buildPaginationPayload({
+        page: memberPager.page,
+        pageSize: memberPager.pageSize,
+        total: memberTotal
+      }),
+      domainPagination: buildPaginationPayload({
+        page: domainPager.page,
+        pageSize: domainPager.pageSize,
+        total: domainTotal
+      })
     });
   } catch (error) {
     console.error('获取熵盟详情失败:', error);
@@ -417,14 +521,13 @@ router.post('/join/:allianceId', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '盟主不存在，暂时无法申请加入该熵盟' });
     }
 
-    const applicantId = getIdString(user._id);
-    const targetAllianceId = getIdString(alliance._id);
-    const hasPendingApply = (founderUser.notifications || []).some((item) => (
-      item.type === 'alliance_join_apply' &&
-      item.status === 'pending' &&
-      getIdString(item.inviteeId) === applicantId &&
-      getIdString(item.allianceId) === targetAllianceId
-    ));
+    const hasPendingApply = await Notification.exists({
+      userId: founderUser._id,
+      type: 'alliance_join_apply',
+      status: 'pending',
+      inviteeId: user._id,
+      allianceId: alliance._id
+    });
 
     if (hasPendingApply) {
       return res.status(400).json({ error: '你已提交过该熵盟的加入申请，请等待盟主审核' });
@@ -465,7 +568,7 @@ router.post('/join/:allianceId', authenticateToken, async (req, res) => {
 router.get('/leader/:allianceId/pending-applications', authenticateToken, async (req, res) => {
   try {
     const { allianceId } = req.params;
-    const leader = await User.findById(req.user.userId).select('_id notifications');
+    const leader = await User.findById(req.user.userId).select('_id');
     if (!leader) {
       return res.status(404).json({ error: '用户不存在' });
     }
@@ -479,24 +582,49 @@ router.get('/leader/:allianceId/pending-applications', authenticateToken, async 
       return res.status(403).json({ error: '只有盟主可以查看入盟申请' });
     }
 
-    const applications = (leader.notifications || [])
-      .filter((item) => (
-        item.type === 'alliance_join_apply' &&
-        item.status === 'pending' &&
-        getIdString(item.allianceId) === getIdString(alliance._id)
-      ))
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .map((item) => ({
-        notificationId: item._id,
-        applicantId: item.inviteeId || item.inviterId || null,
-        applicantUsername: item.inviteeUsername || item.inviterUsername || '未知',
-        message: item.message || '',
-        createdAt: item.createdAt
-      }));
+    const pager = parsePagination(req.query, {
+      pageKey: 'page',
+      pageSizeKey: 'pageSize',
+      defaultPageSize: DEFAULT_PAGE_SIZE,
+      maxPageSize: MAX_PAGE_SIZE
+    });
+
+    const [total, rows] = await Promise.all([
+      Notification.countDocuments({
+        userId: leader._id,
+        type: 'alliance_join_apply',
+        status: 'pending',
+        allianceId: alliance._id
+      }),
+      Notification.find({
+        userId: leader._id,
+        type: 'alliance_join_apply',
+        status: 'pending',
+        allianceId: alliance._id
+      })
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(pager.skip)
+        .limit(pager.pageSize)
+        .select('_id inviteeId inviterId inviteeUsername inviterUsername message createdAt')
+        .lean()
+    ]);
+
+    const applications = rows.map((item) => ({
+      notificationId: item._id,
+      applicantId: item.inviteeId || item.inviterId || null,
+      applicantUsername: item.inviteeUsername || item.inviterUsername || '未知',
+      message: item.message || '',
+      createdAt: item.createdAt
+    }));
 
     res.json({
       success: true,
-      applications
+      applications,
+      pagination: buildPaginationPayload({
+        page: pager.page,
+        pageSize: pager.pageSize,
+        total
+      })
     });
   } catch (error) {
     console.error('获取待处理入盟申请失败:', error);
@@ -908,17 +1036,13 @@ router.get('/my/info', authenticateToken, async (req, res) => {
       return res.json({ alliance: null });
     }
 
-    // 获取熵盟的成员数和管辖域数
-    const memberCount = await User.countDocuments({ allianceId: user.allianceId._id });
-    const memberDocs = await User.find({ allianceId: user.allianceId._id }).select('_id').lean();
-    const memberIds = memberDocs.map((item) => item._id);
-    const domainCount = await Node.countDocuments({
-      status: 'approved',
-      $or: [
-        { allianceId: user.allianceId._id },
-        { allianceId: null, domainMaster: { $in: memberIds } }
-      ]
-    });
+    const [memberCount, domainCount] = await Promise.all([
+      User.countDocuments({ allianceId: user.allianceId._id }),
+      Node.countDocuments({
+        status: 'approved',
+        allianceId: user.allianceId._id
+      })
+    ]);
 
     res.json({
       alliance: buildAlliancePayload(user.allianceId, {
@@ -943,30 +1067,27 @@ router.get('/admin/all', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: '无权限执行此操作' });
     }
 
-    const alliances = await EntropyAlliance.find()
-      .populate('founder', 'username profession')
-      .sort({ createdAt: -1 });
+    const { page, pageSize, skip } = parsePagination(req.query, {
+      pageKey: 'page',
+      pageSizeKey: 'pageSize',
+      defaultPageSize: DEFAULT_PAGE_SIZE,
+      maxPageSize: MAX_PAGE_SIZE
+    });
+    const [alliances, total] = await Promise.all([
+      EntropyAlliance.find()
+        .populate('founder', 'username profession')
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(skip)
+        .limit(pageSize),
+      EntropyAlliance.countDocuments()
+    ]);
+    const allianceRows = await buildAllianceRowsWithStats(alliances);
 
-    // 为每个熵盟计算成员数量和管辖知识域数量
-    const alliancesWithStats = await Promise.all(alliances.map(async (alliance) => {
-      const allianceMembers = await User.find({ allianceId: alliance._id }).select('_id').lean();
-      const memberIds = allianceMembers.map((item) => item._id);
-      const memberCount = memberIds.length;
-      const domainCount = await Node.countDocuments({
-        status: 'approved',
-        $or: [
-          { allianceId: alliance._id },
-          { allianceId: null, domainMaster: { $in: memberIds } }
-        ]
-      });
-
-      return buildAlliancePayload(alliance, {
-        memberCount,
-        domainCount
-      });
-    }));
-
-    res.json({ success: true, alliances: alliancesWithStats });
+    res.json({
+      success: true,
+      alliances: allianceRows,
+      pagination: buildPaginationPayload({ page, pageSize, total })
+    });
   } catch (error) {
     console.error('获取熵盟列表失败:', error);
     res.status(500).json({ error: '服务器错误' });

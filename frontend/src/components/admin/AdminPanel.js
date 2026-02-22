@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Users, Zap, Bell, Shield, Check, X, Search, Plus, AlertTriangle, ArrowLeft, ArrowRight, RotateCcw, ChevronDown, ChevronUp, Settings } from 'lucide-react';
+import { Users, Zap, Bell, Shield, Check, X, Search, Plus, AlertTriangle, ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 import MiniPreviewRenderer from '../modals/MiniPreviewRenderer';
 import './Admin.css';
 
@@ -17,6 +17,11 @@ const ASSOC_RELATION_TYPES = {
 };
 
 const UNIT_TYPE_ID_PATTERN = /^[a-zA-Z0-9_-]{2,64}$/;
+const ADMIN_ALLIANCE_PAGE_SIZE = 20;
+const ADMIN_USER_PAGE_SIZE = 50;
+const ADMIN_DOMAIN_PAGE_SIZE = 20;
+const ADMIN_USER_PAGE_SIZE_OPTIONS = [10, 20, 30, 50];
+const ADMIN_DOMAIN_PAGE_SIZE_OPTIONS = [5, 10, 15, 20, 30];
 
 const createEmptyUnitTypeForm = () => ({
     unitTypeId: '',
@@ -34,11 +39,95 @@ const createEmptyUnitTypeForm = () => ({
     sortOrder: '0'
 });
 
+const NEW_SENSE_RELATION_OPTIONS = [
+    { value: ASSOC_RELATION_TYPES.CONTAINS, label: '包含' },
+    { value: ASSOC_RELATION_TYPES.EXTENDS, label: '扩展' },
+    { value: ASSOC_RELATION_TYPES.INSERT, label: '插入' }
+];
+
+const createLocalId = (prefix = 'id') => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const buildSenseKey = (nodeId = '', senseId = '') => {
+    const safeNodeId = String(nodeId || '').trim();
+    const safeSenseId = String(senseId || '').trim();
+    if (!safeNodeId || !safeSenseId) return '';
+    return `${safeNodeId}:${safeSenseId}`;
+};
+
+const createEmptyNewSenseForm = () => ({
+    title: '',
+    content: '',
+    relationType: ASSOC_RELATION_TYPES.CONTAINS,
+    selectedTarget: null,
+    insertLeftTarget: null,
+    insertRightTarget: null,
+    insertDirection: ASSOC_RELATION_TYPES.CONTAINS,
+    insertDirectionLocked: false,
+    insertDirectionHint: '先选择左右释义，再确认插入关系。',
+    relations: []
+});
+
+const normalizeSenseSearchTarget = (item = {}) => ({
+    nodeId: item?.nodeId || item?._id || '',
+    senseId: typeof item?.senseId === 'string' ? item.senseId : '',
+    displayName: item?.displayName || item?.name || '',
+    domainName: item?.domainName || item?.name || '',
+    senseTitle: item?.senseTitle || item?.activeSenseTitle || '',
+    description: item?.senseContent || item?.description || '',
+    searchKey: item?.searchKey || buildSenseKey(item?.nodeId || item?._id || '', item?.senseId || ''),
+    relationToAnchor: item?.relationToAnchor || ''
+});
+
+const parseAssociationKeyword = (rawKeyword = '') => {
+    const tokens = String(rawKeyword || '')
+        .trim()
+        .split(/\s+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    let mode = '';
+    const textTokens = [];
+    tokens.forEach((token) => {
+        const normalized = token.toLowerCase().replace(/[，,;；。！？!?]+$/g, '');
+        if (normalized === '#include' || normalized.startsWith('#include')) {
+            mode = 'include';
+            return;
+        }
+        if (normalized === '#expand' || normalized.startsWith('#expand')) {
+            mode = 'expand';
+            return;
+        }
+        textTokens.push(token);
+    });
+    return {
+        mode,
+        textKeyword: textTokens.join(' ').trim()
+    };
+};
+
+const matchKeywordByDomainAndSense = (item = {}, textKeyword = '') => {
+    const normalized = String(textKeyword || '').trim().toLowerCase();
+    if (!normalized) return true;
+    const keywords = normalized.split(/\s+/).filter(Boolean);
+    if (keywords.length === 0) return true;
+    const haystack = `${item?.displayName || ''} ${item?.domainName || ''} ${item?.senseTitle || ''}`.toLowerCase();
+    return keywords.every((keyword) => haystack.includes(keyword));
+};
+
 const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [adminTab, setAdminTab] = useState(initialTab);
     
     // User Management State
     const [allUsers, setAllUsers] = useState([]);
+    const [adminUserPage, setAdminUserPage] = useState(1);
+    const [adminUserPagination, setAdminUserPagination] = useState({
+        page: 1,
+        pageSize: ADMIN_USER_PAGE_SIZE,
+        total: 0,
+        totalPages: 0
+    });
+    const [isAdminUserLoading, setIsAdminUserLoading] = useState(false);
+    const [adminUserSearchInput, setAdminUserSearchInput] = useState('');
+    const [adminUserSearchKeyword, setAdminUserSearchKeyword] = useState('');
+    const [adminUserPageSize, setAdminUserPageSize] = useState(ADMIN_USER_PAGE_SIZE);
     const [editingUser, setEditingUser] = useState(null);
     const [editForm, setEditForm] = useState({
         username: '',
@@ -59,15 +148,46 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
     // Node Management State
     const [allNodes, setAllNodes] = useState([]);
+    const [adminDomainPage, setAdminDomainPage] = useState(1);
+    const [adminDomainPagination, setAdminDomainPagination] = useState({
+        page: 1,
+        pageSize: ADMIN_DOMAIN_PAGE_SIZE,
+        total: 0,
+        totalPages: 0
+    });
+    const [isAdminDomainLoading, setIsAdminDomainLoading] = useState(false);
+    const [adminDomainSearchInput, setAdminDomainSearchInput] = useState('');
+    const [adminDomainSearchKeyword, setAdminDomainSearchKeyword] = useState('');
+    const [adminDomainPageSize, setAdminDomainPageSize] = useState(ADMIN_DOMAIN_PAGE_SIZE);
     const [editingNode, setEditingNode] = useState(null);
     const [editNodeForm, setEditNodeForm] = useState({
         name: '',
         description: '',
+        knowledgePoint: 0,
         prosperity: 0,
         resources: { food: 0, metal: 0, energy: 0 },
         productionRates: { food: 0, metal: 0, energy: 0 },
         contentScore: 1
     });
+    const [showEditNodeModal, setShowEditNodeModal] = useState(false);
+    const [showAddSenseModal, setShowAddSenseModal] = useState(false);
+    const [addingSenseNode, setAddingSenseNode] = useState(null);
+    const [newSenseForm, setNewSenseForm] = useState(createEmptyNewSenseForm);
+    const [newSenseTargetSide, setNewSenseTargetSide] = useState('single');
+    const [newSenseSearchKeyword, setNewSenseSearchKeyword] = useState('');
+    const [newSenseSearchResults, setNewSenseSearchResults] = useState([]);
+    const [newSenseSearchLoading, setNewSenseSearchLoading] = useState(false);
+    const [isSavingNewSense, setIsSavingNewSense] = useState(false);
+    const [isSavingNodeEdit, setIsSavingNodeEdit] = useState(false);
+    const [editingSenseToken, setEditingSenseToken] = useState('');
+    const [editingSenseForm, setEditingSenseForm] = useState({ title: '', content: '' });
+    const [editingSenseActionToken, setEditingSenseActionToken] = useState('');
+    const [showDeleteSenseModal, setShowDeleteSenseModal] = useState(false);
+    const [deletingSenseContext, setDeletingSenseContext] = useState(null);
+    const [deleteSensePreviewData, setDeleteSensePreviewData] = useState(null);
+    const [deleteSensePreviewLoading, setDeleteSensePreviewLoading] = useState(false);
+    const [deleteSenseBridgeDecisions, setDeleteSenseBridgeDecisions] = useState({});
+    const [isDeletingSense, setIsDeletingSense] = useState(false);
     const [showDeleteNodeConfirmModal, setShowDeleteNodeConfirmModal] = useState(false);
     const [deletingNodeTarget, setDeletingNodeTarget] = useState(null);
     const [isDeletingNode, setIsDeletingNode] = useState(false);
@@ -140,6 +260,14 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
     // Alliance Management State
     const [adminAlliances, setAdminAlliances] = useState([]);
+    const [adminAlliancePage, setAdminAlliancePage] = useState(1);
+    const [adminAlliancePagination, setAdminAlliancePagination] = useState({
+        page: 1,
+        pageSize: ADMIN_ALLIANCE_PAGE_SIZE,
+        total: 0,
+        totalPages: 0
+    });
+    const [isAdminAllianceLoading, setIsAdminAllianceLoading] = useState(false);
     const [editingAlliance, setEditingAlliance] = useState(null);
     const [editAllianceForm, setEditAllianceForm] = useState({
         name: '',
@@ -148,13 +276,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     });
 
     // Association View/Edit State
-    const [showAssociationModal, setShowAssociationModal] = useState(false);
-    const [viewingAssociationNode, setViewingAssociationNode] = useState(null);
-    
     const [showEditAssociationModal, setShowEditAssociationModal] = useState(false);
     const [editingAssociationNode, setEditingAssociationNode] = useState(null);
     const [editAssociations, setEditAssociations] = useState([]);
     const [assocSearchKeyword, setAssocSearchKeyword] = useState('');
+    const [assocSearchAppliedKeyword, setAssocSearchAppliedKeyword] = useState('');
     const [assocSearchResults, setAssocSearchResults] = useState([]);
     const [assocSearchLoading, setAssocSearchLoading] = useState(false);
     const [isEditAssociationListExpanded, setIsEditAssociationListExpanded] = useState(true);
@@ -164,9 +290,19 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [assocSelectedRelationType, setAssocSelectedRelationType] = useState(null);
     const [assocSelectedNodeB, setAssocSelectedNodeB] = useState(null);
     const [assocInsertDirection, setAssocInsertDirection] = useState(null);
+    const [assocInsertDirectionLocked, setAssocInsertDirectionLocked] = useState(false);
+    const [editingAssociationSenseId, setEditingAssociationSenseId] = useState('');
+    const [assocSelectedSourceSenseId, setAssocSelectedSourceSenseId] = useState('');
+    const [assocSelectedNodeASenseId, setAssocSelectedNodeASenseId] = useState('');
+    const [assocSelectedNodeBSenseId, setAssocSelectedNodeBSenseId] = useState('');
     const [assocNodeBCandidates, setAssocNodeBCandidates] = useState({ parents: [], children: [] });
     const [assocNodeBSearchKeyword, setAssocNodeBSearchKeyword] = useState('');
+    const [assocNodeBSearchAppliedKeyword, setAssocNodeBSearchAppliedKeyword] = useState('');
+    const [assocNodeBExtraSearchResults, setAssocNodeBExtraSearchResults] = useState([]);
+    const [assocNodeBExtraSearchLoading, setAssocNodeBExtraSearchLoading] = useState(false);
     const [assocEditingIndex, setAssocEditingIndex] = useState(null);
+    const assocEditRequestIdRef = useRef(0);
+    const assocNodeBSearchRequestIdRef = useRef(0);
     const [assocRemovalStrategy, setAssocRemovalStrategy] = useState('disconnect');
     const [assocMutationPreview, setAssocMutationPreview] = useState(null);
     const [assocPreviewLoading, setAssocPreviewLoading] = useState(false);
@@ -175,31 +311,89 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
     const assocPreviewCanvasRef = useRef(null);
     const assocPreviewRendererRef = useRef(null);
+    const relationContextCacheRef = useRef(new Map());
 
     // Initial Fetch
     useEffect(() => {
         fetchPendingNodes();
         fetchPendingMasterApplications();
-        fetchAllUsers();
-        fetchAllNodes();
+        fetchAllUsers(1);
+        fetchAllNodes(1);
         fetchAdminSettings();
         fetchArmyUnitTypes();
     }, []);
 
     // --- User Management Functions ---
-    const fetchAllUsers = async () => {
+    const fetchAllUsers = async (page = adminUserPage, keyword = adminUserSearchKeyword, pageSize = adminUserPageSize) => {
         const token = localStorage.getItem('token');
+        const requestedPage = Number.parseInt(page, 10);
+        const safePage = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : adminUserPage;
+        const requestedPageSize = Number.parseInt(pageSize, 10);
+        const safePageSize = Number.isInteger(requestedPageSize) && requestedPageSize > 0 ? requestedPageSize : adminUserPageSize;
+        const normalizedKeyword = typeof keyword === 'string' ? keyword.trim() : '';
+        setIsAdminUserLoading(true);
         try {
-            const response = await fetch('http://localhost:5000/api/admin/users', {
+            const params = new URLSearchParams({
+                page: String(Math.max(1, safePage)),
+                pageSize: String(Math.max(1, safePageSize))
+            });
+            if (normalizedKeyword) {
+                params.set('keyword', normalizedKeyword);
+            }
+            const response = await fetch(`http://localhost:5000/api/admin/users?${params.toString()}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
                 const data = await response.json();
-                setAllUsers(data.users);
+                const pagination = data?.pagination || {};
+                const nextPage = Math.max(1, parseInt(pagination.page, 10) || parseInt(data?.page, 10) || Math.max(1, safePage));
+                const nextPageSize = Math.max(
+                    1,
+                    parseInt(pagination.pageSize, 10) || parseInt(data?.pageSize, 10) || Math.max(1, safePageSize)
+                );
+                const total = Math.max(0, parseInt(pagination.total, 10) || parseInt(data?.total, 10) || 0);
+                const totalPages = Math.max(
+                    0,
+                    parseInt(pagination.totalPages, 10) || parseInt(data?.totalPages, 10) || Math.ceil(total / nextPageSize)
+                );
+
+                setAllUsers(Array.isArray(data?.users) ? data.users : []);
+                setAdminUserPagination({
+                    page: nextPage,
+                    pageSize: nextPageSize,
+                    total,
+                    totalPages
+                });
+                setAdminUserPage(nextPage);
+                setAdminUserPageSize(nextPageSize);
             }
         } catch (error) {
             console.error('获取用户列表失败:', error);
+        } finally {
+            setIsAdminUserLoading(false);
         }
+    };
+
+    const submitAdminUserSearch = () => {
+        const normalizedKeyword = adminUserSearchInput.trim();
+        setAdminUserSearchKeyword(normalizedKeyword);
+        setAdminUserPage(1);
+        fetchAllUsers(1, normalizedKeyword, adminUserPageSize);
+    };
+
+    const clearAdminUserSearch = () => {
+        setAdminUserSearchInput('');
+        setAdminUserSearchKeyword('');
+        setAdminUserPage(1);
+        fetchAllUsers(1, '', adminUserPageSize);
+    };
+
+    const handleAdminUserPageSizeChange = (nextPageSize) => {
+        const parsedPageSize = Number.parseInt(nextPageSize, 10);
+        if (!Number.isInteger(parsedPageSize) || parsedPageSize <= 0) return;
+        setAdminUserPageSize(parsedPageSize);
+        setAdminUserPage(1);
+        fetchAllUsers(1, adminUserSearchKeyword, parsedPageSize);
     };
 
     const startEditUser = (user) => {
@@ -259,7 +453,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             if (response.ok) {
                 alert('用户信息已更新');
                 setEditingUser(null);
-                fetchAllUsers();
+                fetchAllUsers(adminUserPage, adminUserSearchKeyword);
             } else {
                 const data = await response.json();
                 alert(data.error || '更新失败');
@@ -280,7 +474,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             });
             if (response.ok) {
                 alert('用户已删除');
-                fetchAllUsers();
+                const targetPage = adminUserPage > 1 && allUsers.length <= 1
+                    ? adminUserPage - 1
+                    : adminUserPage;
+                fetchAllUsers(targetPage, adminUserSearchKeyword);
             } else {
                 const data = await response.json();
                 alert(data.error || '删除失败');
@@ -664,19 +861,68 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }
     };
 
-    const fetchAllNodes = async () => {
+    const fetchAllNodes = async (page = adminDomainPage, keyword = adminDomainSearchKeyword, pageSize = adminDomainPageSize) => {
         const token = localStorage.getItem('token');
+        const requestedPage = Number.parseInt(page, 10);
+        const safePage = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : adminDomainPage;
+        const requestedPageSize = Number.parseInt(pageSize, 10);
+        const safePageSize = Number.isInteger(requestedPageSize) && requestedPageSize > 0 ? requestedPageSize : adminDomainPageSize;
+        const normalizedKeyword = typeof keyword === 'string' ? keyword.trim() : '';
+        setIsAdminDomainLoading(true);
         try {
-            const response = await fetch('http://localhost:5000/api/nodes', {
+            const params = new URLSearchParams({
+                page: String(Math.max(1, safePage)),
+                pageSize: String(Math.max(1, safePageSize))
+            });
+            if (normalizedKeyword) {
+                params.set('keyword', normalizedKeyword);
+            }
+            const response = await fetch(`http://localhost:5000/api/nodes?${params.toString()}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
                 const data = await response.json();
-                setAllNodes(data.nodes);
+                const nextPage = Math.max(1, parseInt(data?.page, 10) || Math.max(1, safePage));
+                const nextPageSize = Math.max(1, parseInt(data?.pageSize, 10) || Math.max(1, safePageSize));
+                const total = Math.max(0, parseInt(data?.total, 10) || 0);
+                const totalPages = Math.max(0, Math.ceil(total / nextPageSize));
+                setAllNodes(Array.isArray(data?.nodes) ? data.nodes : []);
+                setAdminDomainPagination({
+                    page: nextPage,
+                    pageSize: nextPageSize,
+                    total,
+                    totalPages
+                });
+                setAdminDomainPage(nextPage);
+                setAdminDomainPageSize(nextPageSize);
             }
         } catch (error) {
             console.error('获取节点列表失败:', error);
+        } finally {
+            setIsAdminDomainLoading(false);
         }
+    };
+
+    const submitAdminDomainSearch = () => {
+        const normalizedKeyword = adminDomainSearchInput.trim();
+        setAdminDomainSearchKeyword(normalizedKeyword);
+        setAdminDomainPage(1);
+        fetchAllNodes(1, normalizedKeyword, adminDomainPageSize);
+    };
+
+    const clearAdminDomainSearch = () => {
+        setAdminDomainSearchInput('');
+        setAdminDomainSearchKeyword('');
+        setAdminDomainPage(1);
+        fetchAllNodes(1, '', adminDomainPageSize);
+    };
+
+    const handleAdminDomainPageSizeChange = (nextPageSize) => {
+        const parsedPageSize = Number.parseInt(nextPageSize, 10);
+        if (!Number.isInteger(parsedPageSize) || parsedPageSize <= 0) return;
+        setAdminDomainPageSize(parsedPageSize);
+        setAdminDomainPage(1);
+        fetchAllNodes(1, adminDomainSearchKeyword, parsedPageSize);
     };
 
     const normalizeNodeSenses = useCallback((node) => {
@@ -712,6 +958,216 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         const matched = normalizeNodeSenses(node).find((sense) => sense.senseId === key);
         return matched?.title || key;
     }, [normalizeNodeSenses]);
+
+    const resolveNodeSenseId = useCallback((nodeLike, fallbackSenseId = '') => {
+        const preferred = typeof fallbackSenseId === 'string' ? fallbackSenseId.trim() : '';
+        const sourceList = normalizeNodeSenses(nodeLike);
+        if (preferred && sourceList.some((item) => item.senseId === preferred)) {
+            return preferred;
+        }
+        const directSenseId = (typeof nodeLike?.senseId === 'string' ? nodeLike.senseId.trim() : '')
+            || (typeof nodeLike?.activeSenseId === 'string' ? nodeLike.activeSenseId.trim() : '');
+        if (directSenseId && sourceList.some((item) => item.senseId === directSenseId)) {
+            return directSenseId;
+        }
+        return sourceList[0]?.senseId || '';
+    }, [normalizeNodeSenses]);
+
+    const formatNodeSenseDisplay = useCallback((nodeLike, senseId = '') => {
+        const nodeName = nodeLike?.name || '未知节点';
+        const senseTitle = getSenseTitleById(nodeLike, senseId);
+        return senseTitle ? `${nodeName}-${senseTitle}` : nodeName;
+    }, [getSenseTitleById]);
+
+    const resolveAssociationNodeId = useCallback((nodeLike) => (
+        String(nodeLike?._id || nodeLike?.nodeId || '').trim()
+    ), []);
+
+    const resolveAssociationSenseId = useCallback((nodeLike, fallbackSenseId = '') => {
+        const fallback = String(fallbackSenseId || '').trim();
+        if (fallback) return fallback;
+        const directSenseId = String(nodeLike?.senseId || nodeLike?.activeSenseId || '').trim();
+        if (directSenseId) return directSenseId;
+        return resolveNodeSenseId(nodeLike, '');
+    }, [resolveNodeSenseId]);
+
+    const toAssociationSenseKey = useCallback((nodeLike, fallbackSenseId = '') => {
+        const nodeId = resolveAssociationNodeId(nodeLike);
+        const senseId = resolveAssociationSenseId(nodeLike, fallbackSenseId);
+        return buildSenseKey(nodeId, senseId);
+    }, [resolveAssociationNodeId, resolveAssociationSenseId]);
+
+    const normalizeAssociationCandidate = useCallback((target) => {
+        const normalizedTarget = normalizeSenseSearchTarget(target);
+        const nodeId = String(normalizedTarget.nodeId || target?._id || target?.nodeId || '').trim();
+        const senseId = resolveAssociationSenseId(
+            { ...target, ...normalizedTarget, _id: nodeId, nodeId },
+            normalizedTarget.senseId || target?.senseId || target?.activeSenseId || ''
+        );
+        const searchKey = buildSenseKey(nodeId, senseId);
+        if (!searchKey) return null;
+        const domainName = normalizedTarget.domainName || target?.name || '';
+        const senseTitle = normalizedTarget.senseTitle || target?.activeSenseTitle || '';
+        const displayName = normalizedTarget.displayName || `${domainName}${senseTitle ? `-${senseTitle}` : ''}` || searchKey;
+        return {
+            ...target,
+            ...normalizedTarget,
+            _id: nodeId,
+            nodeId,
+            name: domainName || target?.name || '',
+            domainName: domainName || target?.name || '',
+            senseId,
+            activeSenseId: senseId,
+            searchKey,
+            displayName
+        };
+    }, [resolveAssociationSenseId]);
+
+    const assocAllowedEditingSenseKeySet = useMemo(() => {
+        const set = new Set();
+        if (assocEditingIndex === null) return set;
+        const current = Array.isArray(editAssociations) ? editAssociations[assocEditingIndex] : null;
+        if (!current) return set;
+        const append = (nodeLike, senseId = '') => {
+            const key = toAssociationSenseKey(nodeLike, senseId);
+            if (key) set.add(key);
+        };
+        append(current?.nodeA, current?.nodeASenseId || current?.targetSenseId || '');
+        append(current?.nodeB, current?.nodeBSenseId || '');
+        (Array.isArray(current?.actualAssociations) ? current.actualAssociations : []).forEach((actual) => {
+            append(actual?.targetNode && typeof actual.targetNode === 'object'
+                ? actual.targetNode
+                : { _id: actual?.targetNode }, actual?.targetSenseId || '');
+        });
+        return set;
+    }, [assocEditingIndex, editAssociations, toAssociationSenseKey]);
+
+    const assocBlockedSenseKeySet = useMemo(() => {
+        const set = new Set();
+        const append = (nodeLike, senseId = '') => {
+            const key = toAssociationSenseKey(nodeLike, senseId);
+            if (key) set.add(key);
+        };
+
+        (Array.isArray(editAssociations) ? editAssociations : []).forEach((assoc, index) => {
+            if (assocEditingIndex !== null && index === assocEditingIndex) return;
+            append(assoc?.nodeA, assoc?.nodeASenseId || assoc?.targetSenseId || '');
+            append(assoc?.nodeB, assoc?.nodeBSenseId || '');
+            (Array.isArray(assoc?.actualAssociations) ? assoc.actualAssociations : []).forEach((actual) => {
+                append(actual?.targetNode && typeof actual.targetNode === 'object'
+                    ? actual.targetNode
+                    : { _id: actual?.targetNode }, actual?.targetSenseId || '');
+            });
+        });
+
+        if (set.size === 0 && Array.isArray(editingAssociationNode?.associations)) {
+            const sourceSenseId = resolveAssociationSenseId(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId || '');
+            editingAssociationNode.associations.forEach((assoc) => {
+                const assocSourceSenseId = String(assoc?.sourceSenseId || '').trim();
+                if (sourceSenseId && assocSourceSenseId && assocSourceSenseId !== sourceSenseId) return;
+                append(assoc?.targetNode && typeof assoc.targetNode === 'object'
+                    ? assoc.targetNode
+                    : { _id: assoc?.targetNode }, assoc?.targetSenseId || '');
+            });
+        }
+        return set;
+    }, [
+        assocEditingIndex,
+        assocSelectedSourceSenseId,
+        editAssociations,
+        editingAssociationNode,
+        editingAssociationSenseId,
+        resolveAssociationSenseId,
+        toAssociationSenseKey
+    ]);
+
+    const isAssociationCandidateSelectable = useCallback((nodeLike, fallbackSenseId = '', options = {}) => {
+        const excludedSenseKeySet = options?.excludedSenseKeySet instanceof Set ? options.excludedSenseKeySet : new Set();
+        const excludedNodeIdSet = options?.excludedNodeIdSet instanceof Set ? options.excludedNodeIdSet : new Set();
+        const candidateNodeId = resolveAssociationNodeId(nodeLike);
+        if (!candidateNodeId) return false;
+        if (candidateNodeId === String(editingAssociationNode?._id || '')) return false;
+        if (excludedNodeIdSet.has(candidateNodeId)) return false;
+        const candidateKey = toAssociationSenseKey(nodeLike, fallbackSenseId);
+        if (!candidateKey) return false;
+        if (excludedSenseKeySet.has(candidateKey)) return false;
+        if (assocBlockedSenseKeySet.has(candidateKey) && !assocAllowedEditingSenseKeySet.has(candidateKey)) return false;
+        return true;
+    }, [
+        assocAllowedEditingSenseKeySet,
+        assocBlockedSenseKeySet,
+        editingAssociationNode,
+        resolveAssociationNodeId,
+        toAssociationSenseKey
+    ]);
+
+    const fetchSenseRelationContext = useCallback(async (target) => {
+        const nodeId = target?.nodeId || target?._id || '';
+        const senseId = typeof target?.senseId === 'string' ? target.senseId.trim() : '';
+        if (!nodeId || !senseId) {
+            return {
+                parentTargets: [],
+                childTargets: [],
+                parentKeySet: new Set(),
+                childKeySet: new Set()
+            };
+        }
+        const cacheKey = `${nodeId}:${senseId}`;
+        if (relationContextCacheRef.current.has(cacheKey)) {
+            return relationContextCacheRef.current.get(cacheKey);
+        }
+
+        const toEmpty = () => ({
+            parentTargets: [],
+            childTargets: [],
+            parentKeySet: new Set(),
+            childKeySet: new Set()
+        });
+
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(senseId)}`);
+            if (!response.ok) {
+                const empty = toEmpty();
+                relationContextCacheRef.current.set(cacheKey, empty);
+                return empty;
+            }
+            const data = await response.json();
+            const detailNode = data?.node || {};
+            const normalizeNodeList = (list = []) => (
+                (Array.isArray(list) ? list : [])
+                    .map((item) => normalizeSenseSearchTarget({
+                        _id: item?._id,
+                        nodeId: item?._id,
+                        senseId: item?.activeSenseId,
+                        displayName: item?.displayName || `${item?.name || ''}${item?.activeSenseTitle ? `-${item.activeSenseTitle}` : ''}`,
+                        name: item?.name || '',
+                        domainName: item?.name || '',
+                        senseTitle: item?.activeSenseTitle || '',
+                        senseContent: item?.activeSenseContent || '',
+                        description: item?.activeSenseContent || item?.description || ''
+                    }))
+                    .filter((item) => item.nodeId && item.senseId && item.searchKey)
+            );
+
+            const parentTargets = normalizeNodeList(detailNode?.parentNodesInfo || data?.parentNodes || []);
+            const childTargets = normalizeNodeList(detailNode?.childNodesInfo || data?.childNodes || []);
+            const parentKeySet = new Set(parentTargets.map((item) => item.searchKey));
+            const childKeySet = new Set(childTargets.map((item) => item.searchKey));
+            const contextData = {
+                parentTargets,
+                childTargets,
+                parentKeySet,
+                childKeySet
+            };
+            relationContextCacheRef.current.set(cacheKey, contextData);
+            return contextData;
+        } catch (error) {
+            console.error('获取释义关系上下文失败:', error);
+            const empty = toEmpty();
+            relationContextCacheRef.current.set(cacheKey, empty);
+            return empty;
+        }
+    }, []);
 
     const nodeByIdMap = useMemo(() => {
         const map = new Map();
@@ -835,7 +1291,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setEditingNode(node._id);
         setEditNodeForm({
             name: node.name,
-            description: node.description,
+            description: node.description || '',
+            knowledgePoint: Number(node?.knowledgePoint?.value || 0),
             prosperity: node.prosperity || 100,
             resources: {
                 food: node.resources?.food || 0,
@@ -849,10 +1306,44 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             },
             contentScore: node.contentScore || 1
         });
+        setShowEditNodeModal(true);
     };
 
-    const saveNodeEdit = async (nodeId) => {
+    const closeEditNodeModal = () => {
+        if (isSavingNodeEdit) return;
+        setShowEditNodeModal(false);
+        setEditingNode(null);
+    };
+
+    const saveNodeEdit = async (nodeId = editingNode) => {
+        if (!nodeId) return;
+        const trimmedName = String(editNodeForm.name || '').trim();
+        const trimmedDescription = String(editNodeForm.description || '').trim();
+        const parsedKnowledgePoint = Number(editNodeForm.knowledgePoint);
+        const parsedProsperity = Number(editNodeForm.prosperity);
+        const parsedContentScore = Number(editNodeForm.contentScore);
+        if (!trimmedName) {
+            alert('标题不能为空');
+            return;
+        }
+        if (!trimmedDescription) {
+            alert('概述不能为空');
+            return;
+        }
+        if (!Number.isFinite(parsedKnowledgePoint) || parsedKnowledgePoint < 0) {
+            alert('知识点必须是大于等于 0 的数字');
+            return;
+        }
+        if (!Number.isFinite(parsedProsperity) || parsedProsperity < 0) {
+            alert('繁荣度必须是大于等于 0 的数字');
+            return;
+        }
+        if (!Number.isFinite(parsedContentScore) || parsedContentScore < 1) {
+            alert('内容分数至少为 1');
+            return;
+        }
         const token = localStorage.getItem('token');
+        setIsSavingNodeEdit(true);
         try {
             const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}`, {
                 method: 'PUT',
@@ -860,12 +1351,19 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify(editNodeForm)
+                body: JSON.stringify({
+                    name: trimmedName,
+                    description: trimmedDescription,
+                    knowledgePoint: Number(parsedKnowledgePoint.toFixed(2)),
+                    prosperity: Math.round(parsedProsperity),
+                    contentScore: Math.round(parsedContentScore)
+                })
             });
             if (response.ok) {
                 alert('节点信息已更新');
+                setShowEditNodeModal(false);
                 setEditingNode(null);
-                fetchAllNodes();
+                fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
             } else {
                 const data = await response.json();
                 alert(data.error || '更新失败');
@@ -873,6 +1371,565 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         } catch (error) {
             console.error('更新节点失败:', error);
             alert('更新失败');
+        } finally {
+            setIsSavingNodeEdit(false);
+        }
+    };
+
+    const resetNewSenseEditor = () => {
+        setNewSenseForm(createEmptyNewSenseForm());
+        setNewSenseTargetSide('single');
+        setNewSenseSearchKeyword('');
+        setNewSenseSearchResults([]);
+        setNewSenseSearchLoading(false);
+    };
+
+    const openAddSenseModal = (node) => {
+        setAddingSenseNode(node || null);
+        resetNewSenseEditor();
+        setShowAddSenseModal(true);
+    };
+
+    const closeAddSenseModal = () => {
+        if (isSavingNewSense) return;
+        setShowAddSenseModal(false);
+        setAddingSenseNode(null);
+        resetNewSenseEditor();
+    };
+
+    const getDirectRelationBetweenTargets = useCallback((leftTarget, rightTarget) => {
+        if (!leftTarget?.nodeId || !rightTarget?.nodeId || !leftTarget?.senseId || !rightTarget?.senseId) {
+            return null;
+        }
+        const leftNode = allNodes.find((node) => String(node?._id || '') === String(leftTarget.nodeId));
+        const rightNode = allNodes.find((node) => String(node?._id || '') === String(rightTarget.nodeId));
+        const leftAssociations = Array.isArray(leftNode?.associations) ? leftNode.associations : [];
+        const rightAssociations = Array.isArray(rightNode?.associations) ? rightNode.associations : [];
+        const hasLeftContainsRight = leftAssociations.some((assoc) => (
+            String(assoc?.targetNode?._id || assoc?.targetNode || '') === String(rightTarget.nodeId)
+            && (assoc?.relationType || '') === ASSOC_RELATION_TYPES.CONTAINS
+            && String(assoc?.sourceSenseId || '').trim() === String(leftTarget.senseId).trim()
+            && String(assoc?.targetSenseId || '').trim() === String(rightTarget.senseId).trim()
+        ));
+        const hasRightContainsLeft = rightAssociations.some((assoc) => (
+            String(assoc?.targetNode?._id || assoc?.targetNode || '') === String(leftTarget.nodeId)
+            && (assoc?.relationType || '') === ASSOC_RELATION_TYPES.CONTAINS
+            && String(assoc?.sourceSenseId || '').trim() === String(rightTarget.senseId).trim()
+            && String(assoc?.targetSenseId || '').trim() === String(leftTarget.senseId).trim()
+        ));
+        if (hasLeftContainsRight) {
+            return {
+                relationExists: true,
+                lockedDirection: ASSOC_RELATION_TYPES.CONTAINS
+            };
+        }
+        if (hasRightContainsLeft) {
+            return {
+                relationExists: true,
+                lockedDirection: ASSOC_RELATION_TYPES.EXTENDS
+            };
+        }
+        return {
+            relationExists: false,
+            lockedDirection: ASSOC_RELATION_TYPES.CONTAINS
+        };
+    }, [allNodes]);
+
+    const refreshNewSenseInsertDirection = useCallback((nextForm) => {
+        const left = nextForm?.insertLeftTarget || null;
+        const right = nextForm?.insertRightTarget || null;
+        if (!left || !right) {
+            return {
+                ...nextForm,
+                insertDirectionLocked: false,
+                insertDirectionHint: '先选择左右释义，再确认插入关系。'
+            };
+        }
+        const leftName = left.displayName || `${left.nodeId}:${left.senseId}`;
+        const rightName = right.displayName || `${right.nodeId}:${right.senseId}`;
+        const relationStatus = getDirectRelationBetweenTargets(left, right);
+        if (relationStatus?.relationExists) {
+            const lockedDirection = relationStatus.lockedDirection === ASSOC_RELATION_TYPES.EXTENDS
+                ? ASSOC_RELATION_TYPES.EXTENDS
+                : ASSOC_RELATION_TYPES.CONTAINS;
+            return {
+                ...nextForm,
+                insertDirection: lockedDirection,
+                insertDirectionLocked: true,
+                insertDirectionHint: `当前释义将插入到「${leftName}」和「${rightName}」之间，「${leftName}」和「${rightName}」原来的关联将改为「${leftName}-当前释义-${rightName}」。`
+            };
+        }
+        return {
+            ...nextForm,
+            insertDirectionLocked: false,
+            insertDirectionHint: `当前释义将插入到「${leftName}」和「${rightName}」之间，「${leftName}」和「${rightName}」新建关联为「${leftName}-当前释义-${rightName}」。`
+        };
+    }, [getDirectRelationBetweenTargets]);
+
+    const searchTargetsForNewSense = async (keyword = newSenseSearchKeyword) => {
+        const normalizedKeyword = String(keyword || '').trim();
+        const keywordMeta = parseAssociationKeyword(normalizedKeyword);
+        if (!keywordMeta.textKeyword && !keywordMeta.mode) {
+            setNewSenseSearchResults([]);
+            return;
+        }
+
+        const isInsertMode = newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT;
+        const anchorTarget = isInsertMode
+            ? (newSenseTargetSide === 'left'
+                ? (newSenseForm.insertRightTarget || null)
+                : (newSenseTargetSide === 'right' ? (newSenseForm.insertLeftTarget || null) : null))
+            : null;
+        const oppositeTargetSearchKey = isInsertMode
+            ? (newSenseTargetSide === 'left'
+                ? (newSenseForm.insertRightTarget?.searchKey || '')
+                : (newSenseTargetSide === 'right' ? (newSenseForm.insertLeftTarget?.searchKey || '') : ''))
+            : '';
+
+        if (keywordMeta.mode && isInsertMode && anchorTarget?.searchKey) {
+            setNewSenseSearchLoading(true);
+            try {
+                const anchorContext = await fetchSenseRelationContext(anchorTarget);
+                const baseList = keywordMeta.mode === 'include'
+                    ? anchorContext.parentTargets
+                    : anchorContext.childTargets;
+                const filtered = baseList
+                    .filter((item) => item.searchKey !== oppositeTargetSearchKey)
+                    .filter((item) => matchKeywordByDomainAndSense(item, keywordMeta.textKeyword))
+                    .map((item) => ({
+                        ...item,
+                        relationToAnchor: keywordMeta.mode === 'include' ? '上级' : '下级'
+                    }));
+                setNewSenseSearchResults(filtered);
+            } finally {
+                setNewSenseSearchLoading(false);
+            }
+            return;
+        }
+
+        if (keywordMeta.mode && isInsertMode && !anchorTarget?.searchKey && !keywordMeta.textKeyword) {
+            setNewSenseSearchResults([]);
+            return;
+        }
+
+        if (!keywordMeta.textKeyword) {
+            setNewSenseSearchResults([]);
+            return;
+        }
+        const effectiveKeyword = keywordMeta.textKeyword;
+        if (!effectiveKeyword) {
+            setNewSenseSearchResults([]);
+            return;
+        }
+
+        const token = localStorage.getItem('token');
+        setNewSenseSearchLoading(true);
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!response.ok) {
+                setNewSenseSearchResults([]);
+                return;
+            }
+            const data = await response.json();
+            let results = (Array.isArray(data) ? data : [])
+                .map((item) => normalizeSenseSearchTarget(item))
+                .filter((item) => item.nodeId && item.senseId && item.searchKey)
+                .filter((item) => matchKeywordByDomainAndSense(item, keywordMeta.textKeyword));
+
+            if (isInsertMode && anchorTarget?.searchKey) {
+                const anchorContext = await fetchSenseRelationContext(anchorTarget);
+                results = results
+                    .filter((item) => item.searchKey !== oppositeTargetSearchKey)
+                    .map((item) => {
+                        let relationToAnchor = '无关';
+                        if (anchorContext.parentKeySet.has(item.searchKey)) relationToAnchor = '上级';
+                        if (anchorContext.childKeySet.has(item.searchKey)) relationToAnchor = '下级';
+                        return { ...item, relationToAnchor };
+                    });
+                if (keywordMeta.mode === 'include') {
+                    results = results.filter((item) => item.relationToAnchor === '上级');
+                } else if (keywordMeta.mode === 'expand') {
+                    results = results.filter((item) => item.relationToAnchor === '下级');
+                }
+            }
+            setNewSenseSearchResults(results);
+        } catch (error) {
+            console.error('搜索释义失败:', error);
+            setNewSenseSearchResults([]);
+        } finally {
+            setNewSenseSearchLoading(false);
+        }
+    };
+
+    const chooseNewSenseTarget = (target) => {
+        const normalized = normalizeSenseSearchTarget(target);
+        if (!normalized.nodeId || !normalized.senseId) {
+            return;
+        }
+        setNewSenseForm((prev) => {
+            if (prev.relationType === ASSOC_RELATION_TYPES.INSERT) {
+                if (newSenseTargetSide === 'left') {
+                    return refreshNewSenseInsertDirection({
+                        ...prev,
+                        insertLeftTarget: normalized
+                    });
+                }
+                if (newSenseTargetSide === 'right') {
+                    return refreshNewSenseInsertDirection({
+                        ...prev,
+                        insertRightTarget: normalized
+                    });
+                }
+                return prev;
+            }
+            return {
+                ...prev,
+                selectedTarget: normalized
+            };
+        });
+    };
+
+    const removeRelationFromNewSense = (relationId) => {
+        setNewSenseForm((prev) => ({
+            ...prev,
+            relations: (Array.isArray(prev.relations) ? prev.relations : []).filter((item) => item.id !== relationId)
+        }));
+    };
+
+    const addRelationToNewSense = () => {
+        setNewSenseForm((prev) => {
+            const relationList = Array.isArray(prev.relations) ? prev.relations : [];
+            if (prev.relationType === ASSOC_RELATION_TYPES.INSERT) {
+                if (!prev.insertLeftTarget?.searchKey || !prev.insertRightTarget?.searchKey) {
+                    alert('请先选择插入关系的左右释义');
+                    return prev;
+                }
+                if (prev.insertLeftTarget.searchKey === prev.insertRightTarget.searchKey) {
+                    alert('插入关系的左右释义不能是同一个');
+                    return prev;
+                }
+                const insertDirection = prev.insertDirection === ASSOC_RELATION_TYPES.EXTENDS
+                    ? ASSOC_RELATION_TYPES.EXTENDS
+                    : ASSOC_RELATION_TYPES.CONTAINS;
+                const duplicated = relationList.some((item) => (
+                    item.kind === ASSOC_RELATION_TYPES.INSERT
+                    && item.direction === insertDirection
+                    && item.leftTarget?.searchKey === prev.insertLeftTarget.searchKey
+                    && item.rightTarget?.searchKey === prev.insertRightTarget.searchKey
+                ));
+                if (duplicated) {
+                    alert('该插入关系已存在');
+                    return prev;
+                }
+                return {
+                    ...prev,
+                    relations: [
+                        ...relationList,
+                        {
+                            id: createLocalId('rel'),
+                            kind: ASSOC_RELATION_TYPES.INSERT,
+                            relationType: ASSOC_RELATION_TYPES.INSERT,
+                            direction: insertDirection,
+                            leftTarget: prev.insertLeftTarget,
+                            rightTarget: prev.insertRightTarget
+                        }
+                    ],
+                    insertLeftTarget: null,
+                    insertRightTarget: null,
+                    insertDirectionLocked: false,
+                    insertDirection: ASSOC_RELATION_TYPES.CONTAINS,
+                    insertDirectionHint: '先选择左右释义，再确认插入关系。'
+                };
+            }
+            if (!prev.selectedTarget?.searchKey) {
+                alert('请先选择目标释义');
+                return prev;
+            }
+            const duplicated = relationList.some((item) => (
+                item.kind === 'single'
+                && item.relationType === prev.relationType
+                && item.target?.searchKey === prev.selectedTarget.searchKey
+            ));
+            if (duplicated) {
+                alert('该关联关系已存在');
+                return prev;
+            }
+            const oppositeType = prev.relationType === ASSOC_RELATION_TYPES.CONTAINS
+                ? ASSOC_RELATION_TYPES.EXTENDS
+                : ASSOC_RELATION_TYPES.CONTAINS;
+            const hasOpposite = relationList.some((item) => (
+                item.kind === 'single'
+                && item.relationType === oppositeType
+                && item.target?.searchKey === prev.selectedTarget.searchKey
+            ));
+            if (hasOpposite) {
+                alert('同一个释义不能同时包含并扩展同一个目标释义');
+                return prev;
+            }
+            return {
+                ...prev,
+                relations: [
+                    ...relationList,
+                    {
+                        id: createLocalId('rel'),
+                        kind: 'single',
+                        relationType: prev.relationType,
+                        target: prev.selectedTarget
+                    }
+                ],
+                selectedTarget: null
+            };
+        });
+    };
+
+    const saveNewSense = async () => {
+        if (!addingSenseNode?._id) return;
+        const trimmedTitle = String(newSenseForm.title || '').trim();
+        const trimmedContent = String(newSenseForm.content || '').trim();
+        if (!trimmedTitle) {
+            alert('释义题目不能为空');
+            return;
+        }
+        if (!trimmedContent) {
+            alert('释义内容不能为空');
+            return;
+        }
+        const duplicated = normalizeNodeSenses(addingSenseNode).some((item) => (
+            String(item?.title || '').trim().toLowerCase() === trimmedTitle.toLowerCase()
+        ));
+        if (duplicated) {
+            alert('同一知识域下多个释义题目不能重名');
+            return;
+        }
+        const relationList = Array.isArray(newSenseForm.relations) ? newSenseForm.relations : [];
+        if (relationList.length < 1) {
+            alert('每个释义至少需要 1 条关联关系');
+            return;
+        }
+        const associations = [];
+        relationList.forEach((relation) => {
+            if (relation.kind === 'single' && relation?.target?.nodeId && relation?.target?.senseId) {
+                associations.push({
+                    targetNode: relation.target.nodeId,
+                    targetSenseId: relation.target.senseId,
+                    relationType: relation.relationType
+                });
+            }
+            if (relation.kind === ASSOC_RELATION_TYPES.INSERT && relation?.leftTarget?.nodeId && relation?.rightTarget?.nodeId) {
+                const upperTarget = relation.direction === ASSOC_RELATION_TYPES.EXTENDS
+                    ? relation.rightTarget
+                    : relation.leftTarget;
+                const lowerTarget = relation.direction === ASSOC_RELATION_TYPES.EXTENDS
+                    ? relation.leftTarget
+                    : relation.rightTarget;
+                associations.push({
+                    targetNode: upperTarget.nodeId,
+                    targetSenseId: upperTarget.senseId,
+                    relationType: ASSOC_RELATION_TYPES.INSERT,
+                    insertSide: 'left',
+                    insertGroupId: relation.id
+                });
+                associations.push({
+                    targetNode: lowerTarget.nodeId,
+                    targetSenseId: lowerTarget.senseId,
+                    relationType: ASSOC_RELATION_TYPES.INSERT,
+                    insertSide: 'right',
+                    insertGroupId: relation.id
+                });
+            }
+        });
+        if (associations.length < 1) {
+            alert('请至少添加 1 条有效关联关系');
+            return;
+        }
+        const token = localStorage.getItem('token');
+        setIsSavingNewSense(true);
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${addingSenseNode._id}/admin/senses`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    title: trimmedTitle,
+                    content: trimmedContent,
+                    associations
+                })
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data?.error || '新增释义失败');
+                return;
+            }
+            alert(data?.message || '释义已新增');
+            setShowAddSenseModal(false);
+            setAddingSenseNode(null);
+            resetNewSenseEditor();
+            fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
+        } catch (error) {
+            console.error('新增释义失败:', error);
+            alert('新增释义失败');
+        } finally {
+            setIsSavingNewSense(false);
+        }
+    };
+
+    const getSenseEditToken = (nodeId, senseId) => `${String(nodeId || '')}:${String(senseId || '')}`;
+
+    const startEditSenseText = (node, sense) => {
+        const token = getSenseEditToken(node?._id, sense?.senseId);
+        if (!token) return;
+        setEditingSenseToken(token);
+        setEditingSenseForm({
+            title: sense?.title || '',
+            content: sense?.content || ''
+        });
+    };
+
+    const cancelEditSenseText = () => {
+        if (editingSenseActionToken) return;
+        setEditingSenseToken('');
+        setEditingSenseForm({ title: '', content: '' });
+    };
+
+    const saveSenseTextEdit = async (node, sense) => {
+        const nodeId = node?._id;
+        const senseId = sense?.senseId;
+        if (!nodeId || !senseId) return;
+        const token = getSenseEditToken(nodeId, senseId);
+        const title = String(editingSenseForm.title || '').trim();
+        const content = String(editingSenseForm.content || '').trim();
+        if (!title) {
+            alert('释义题目不能为空');
+            return;
+        }
+        if (!content) {
+            alert('释义内容不能为空');
+            return;
+        }
+        setEditingSenseActionToken(token);
+        const authToken = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/admin/senses/${encodeURIComponent(senseId)}/text`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`
+                },
+                body: JSON.stringify({ title, content })
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data?.error || '释义编辑失败');
+                return;
+            }
+            alert(data?.message || '释义已更新');
+            setEditingSenseToken('');
+            setEditingSenseForm({ title: '', content: '' });
+            fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
+        } catch (error) {
+            console.error('释义编辑失败:', error);
+            alert('释义编辑失败');
+        } finally {
+            setEditingSenseActionToken('');
+        }
+    };
+
+    const fetchDeleteSensePreview = useCallback(async (node, sense, decisions = {}) => {
+        if (!node?._id || !sense?.senseId) return;
+        const token = localStorage.getItem('token');
+        setDeleteSensePreviewLoading(true);
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/admin/senses/${encodeURIComponent(sense.senseId)}/delete-preview`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    onRemovalStrategy: 'disconnect',
+                    bridgeDecisions: toBridgeDecisionPayload(decisions)
+                })
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data?.error || '删除释义预览失败');
+                return;
+            }
+            setDeleteSensePreviewData(data);
+        } catch (error) {
+            console.error('删除释义预览失败:', error);
+            alert('删除释义预览失败');
+        } finally {
+            setDeleteSensePreviewLoading(false);
+        }
+    }, [toBridgeDecisionPayload]);
+
+    const openDeleteSenseModal = (node, sense) => {
+        setDeletingSenseContext({ node, sense });
+        setDeleteSenseBridgeDecisions({});
+        setDeleteSensePreviewData(null);
+        setShowDeleteSenseModal(true);
+        fetchDeleteSensePreview(node, sense, {});
+    };
+
+    const closeDeleteSenseModal = () => {
+        if (isDeletingSense) return;
+        setShowDeleteSenseModal(false);
+        setDeletingSenseContext(null);
+        setDeleteSenseBridgeDecisions({});
+        setDeleteSensePreviewData(null);
+        setDeleteSensePreviewLoading(false);
+    };
+
+    const deleteSense = async () => {
+        const node = deletingSenseContext?.node;
+        const sense = deletingSenseContext?.sense;
+        if (!node?._id || !sense?.senseId) return;
+        if ((deleteSensePreviewData?.unresolvedBridgeDecisionCount || 0) > 0) {
+            alert('请先逐条确认删除后的上下级承接关系（保留承接或断开）');
+            return;
+        }
+        const token = localStorage.getItem('token');
+        setIsDeletingSense(true);
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/admin/senses/${encodeURIComponent(sense.senseId)}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    onRemovalStrategy: 'disconnect',
+                    bridgeDecisions: toBridgeDecisionPayload(deleteSenseBridgeDecisions)
+                })
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                if (data?.bridgeDecisionItems) {
+                    setDeleteSensePreviewData((prev) => ({
+                        ...(prev || {}),
+                        ...data
+                    }));
+                }
+                alert(data?.error || '删除释义失败');
+                return;
+            }
+            alert(data?.message || '释义已删除');
+            setShowDeleteSenseModal(false);
+            setDeletingSenseContext(null);
+            setDeleteSenseBridgeDecisions({});
+            setDeleteSensePreviewData(null);
+            setDeleteSensePreviewLoading(false);
+            fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
+        } catch (error) {
+            console.error('删除释义失败:', error);
+            alert('删除释义失败');
+        } finally {
+            setIsDeletingSense(false);
         }
     };
 
@@ -951,7 +2008,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             if (response.ok) {
                 alert('节点已删除');
                 isSuccess = true;
-                fetchAllNodes();
+                const targetPage = adminDomainPage > 1 && allNodes.length <= 1
+                    ? adminDomainPage - 1
+                    : adminDomainPage;
+                fetchAllNodes(targetPage, adminDomainSearchKeyword);
             } else {
                 if (data?.bridgeDecisionItems) {
                     setDeletePreviewData((prev) => ({
@@ -1002,7 +2062,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             if (response.ok) {
                 const data = await response.json();
                 alert(data.message);
-                fetchAllNodes();
+                fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
             } else {
                 const data = await response.json();
                 alert(data.error || '操作失败');
@@ -1045,22 +2105,30 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const deleteBridgeDecisionItems = Array.isArray(deletePreviewData?.bridgeDecisionItems)
         ? deletePreviewData.bridgeDecisionItems
         : [];
+    const deleteSensePreviewSummary = deleteSensePreviewData?.summary || null;
+    const deleteSenseBeforeRelations = Array.isArray(deleteSensePreviewSummary?.beforeRelations)
+        ? deleteSensePreviewSummary.beforeRelations
+        : [];
+    const deleteSenseAfterRelations = Array.isArray(deleteSensePreviewSummary?.reconnectLines)
+        ? deleteSensePreviewSummary.reconnectLines
+            .map((item) => item?.line)
+            .filter(Boolean)
+        : [];
+    const deleteSenseBridgeDecisionItems = Array.isArray(deleteSensePreviewData?.bridgeDecisionItems)
+        ? deleteSensePreviewData.bridgeDecisionItems
+        : [];
+    const newSenseKeywordMeta = useMemo(
+        () => parseAssociationKeyword(newSenseSearchKeyword),
+        [newSenseSearchKeyword]
+    );
+    const newSenseAnchorTarget = useMemo(() => {
+        if (newSenseForm.relationType !== ASSOC_RELATION_TYPES.INSERT) return null;
+        if (newSenseTargetSide === 'left') return newSenseForm.insertRightTarget || null;
+        if (newSenseTargetSide === 'right') return newSenseForm.insertLeftTarget || null;
+        return null;
+    }, [newSenseForm, newSenseTargetSide]);
 
     // --- Association Management Functions ---
-    const openAssociationModal = (node) => {
-        setViewingAssociationNode(node);
-        setShowAssociationModal(true);
-    };
-
-    const getRelationMeta = (uiRelationType) => {
-        const isParent = uiRelationType === ASSOC_RELATION_TYPES.EXTENDS;
-        return {
-            roleText: isParent ? '母域' : '子域',
-            badgeClass: uiRelationType,
-            displayText: (targetNodeName) => `作为 ${targetNodeName} 的${isParent ? '母域' : '子域'}`
-        };
-    };
-
     const toBackendRelationType = (uiRelationType) => (
         uiRelationType === ASSOC_RELATION_TYPES.EXTENDS
             ? ASSOC_RELATION_TYPES.CONTAINS
@@ -1073,12 +2141,20 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setAssocSelectedRelationType(null);
         setAssocSelectedNodeB(null);
         setAssocInsertDirection(null);
+        setAssocInsertDirectionLocked(false);
+        setAssocSelectedSourceSenseId('');
+        setAssocSelectedNodeASenseId('');
+        setAssocSelectedNodeBSenseId('');
         setAssocNodeBCandidates({ parents: [], children: [] });
         setAssocNodeBSearchKeyword('');
+        setAssocNodeBExtraSearchResults([]);
+        setAssocNodeBExtraSearchLoading(false);
         setAssocEditingIndex(null);
         setAssocSearchKeyword('');
+        setAssocSearchAppliedKeyword('');
         setAssocSearchResults([]);
         setAssocSearchLoading(false);
+        setAssocNodeBSearchAppliedKeyword('');
         setAssocPreviewLoading(false);
         setAssocBridgeDecisions({});
 
@@ -1091,6 +2167,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const closeEditAssociationModal = useCallback(() => {
         setShowEditAssociationModal(false);
         setEditingAssociationNode(null);
+        setEditingAssociationSenseId('');
         setEditAssociations([]);
         setAssocMutationPreview(null);
         setAssocRemovalStrategy('disconnect');
@@ -1101,8 +2178,16 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
     useEffect(() => {
         if (assocCurrentStep === ASSOC_STEPS.PREVIEW && assocPreviewCanvasRef.current) {
-            if (!assocPreviewRendererRef.current) {
-                assocPreviewRendererRef.current = new MiniPreviewRenderer(assocPreviewCanvasRef.current);
+            const canvas = assocPreviewCanvasRef.current;
+            const shouldRecreateRenderer = (
+                !assocPreviewRendererRef.current
+                || assocPreviewRendererRef.current.canvas !== canvas
+            );
+            if (shouldRecreateRenderer) {
+                if (assocPreviewRendererRef.current) {
+                    assocPreviewRendererRef.current.destroy();
+                }
+                assocPreviewRendererRef.current = new MiniPreviewRenderer(canvas);
             }
 
             assocPreviewRendererRef.current.setPreviewScene({
@@ -1110,13 +2195,17 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 nodeB: assocSelectedNodeB,
                 relationType: assocSelectedRelationType,
                 newNodeName: editingAssociationNode?.name || '当前节点',
-                insertDirection: assocInsertDirection
+                insertDirection: assocInsertDirection,
+                nodeALabel: formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId),
+                nodeBLabel: formatNodeSenseDisplay(assocSelectedNodeB, assocSelectedNodeBSenseId),
+                newNodeLabel: formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)
             });
         }
 
         return () => {
             if (assocCurrentStep !== ASSOC_STEPS.PREVIEW && assocPreviewRendererRef.current) {
-                assocPreviewRendererRef.current.stopAnimation();
+                assocPreviewRendererRef.current.destroy();
+                assocPreviewRendererRef.current = null;
             }
         };
     }, [
@@ -1125,6 +2214,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         assocSelectedNodeB,
         assocSelectedRelationType,
         assocInsertDirection,
+        assocSelectedNodeASenseId,
+        assocSelectedNodeBSenseId,
+        assocSelectedSourceSenseId,
+        assocEditingIndex,
+        formatNodeSenseDisplay,
         editingAssociationNode
     ]);
 
@@ -1148,26 +2242,43 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         return null;
     };
 
-    const buildSimpleAssociation = ({ targetNodeId, targetNodeName, backendRelationType }) => {
+    const buildSimpleAssociation = ({
+        currentNode,
+        sourceSenseId,
+        targetNode,
+        targetNodeId,
+        targetNodeName,
+        targetSenseId,
+        backendRelationType
+    }) => {
         const uiRelationType = backendRelationType === ASSOC_RELATION_TYPES.CONTAINS
             ? ASSOC_RELATION_TYPES.EXTENDS
             : ASSOC_RELATION_TYPES.CONTAINS;
-        const relationMeta = getRelationMeta(uiRelationType);
+        const relationArrow = uiRelationType === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→';
+        const sourceDisplay = formatNodeSenseDisplay(currentNode, sourceSenseId);
+        const targetDisplay = formatNodeSenseDisplay(
+            targetNode || { _id: targetNodeId, name: targetNodeName },
+            targetSenseId
+        );
         return {
             type: uiRelationType,
-            nodeA: { _id: targetNodeId, name: targetNodeName },
+            nodeA: targetNode || { _id: targetNodeId, name: targetNodeName },
             nodeB: null,
             direction: null,
+            sourceSenseId,
+            targetSenseId,
             actualAssociations: [{
                 targetNode: targetNodeId,
                 relationType: backendRelationType,
-                nodeName: targetNodeName
+                nodeName: targetNodeName,
+                sourceSenseId,
+                targetSenseId
             }],
-            displayText: relationMeta.displayText(targetNodeName)
+            displayText: `${sourceDisplay} ${relationArrow} ${targetDisplay}`
         };
     };
 
-    const openEditAssociationModal = (node) => {
+    const openEditAssociationModal = (node, sourceSense = null) => {
         setEditingAssociationNode(node);
         setShowEditAssociationModal(true);
         setIsEditAssociationListExpanded(true);
@@ -1176,24 +2287,34 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setAssocApplyLoading(false);
         setAssocBridgeDecisions({});
         resetAssociationEditor();
+        const selectedSenseId = resolveNodeSenseId(node, sourceSense?.senseId || '');
+        setEditingAssociationSenseId(selectedSenseId);
+        setAssocSelectedSourceSenseId(selectedSenseId);
 
         const rebuiltAssociations = [];
 
         if (Array.isArray(node.associations) && node.associations.length > 0) {
             node.associations.forEach((assoc) => {
                 const targetNodeId = assoc?.targetNode?._id || assoc?.targetNode;
+                const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+                if (sourceSenseId && sourceSenseId !== selectedSenseId) return;
                 const targetNodeName = assoc?.targetNode?.name;
+                const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
                 if (targetNodeId && targetNodeName && assoc.relationType) {
                     rebuiltAssociations.push(buildSimpleAssociation({
+                        currentNode: node,
+                        sourceSenseId: sourceSenseId || selectedSenseId,
+                        targetNode: assoc?.targetNode,
                         targetNodeId,
                         targetNodeName,
+                        targetSenseId,
                         backendRelationType: assoc.relationType
                     }));
                 }
             });
         }
 
-        if (rebuiltAssociations.length === 0) {
+        if (rebuiltAssociations.length === 0 && (!Array.isArray(node.associations) || node.associations.length === 0)) {
             const nodeMap = {};
             allNodes.forEach(n => {
                 nodeMap[n.name] = n;
@@ -1203,8 +2324,12 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 const targetNode = nodeMap[nodeName];
                 if (targetNode) {
                     rebuiltAssociations.push(buildSimpleAssociation({
+                        currentNode: node,
+                        sourceSenseId: selectedSenseId,
+                        targetNode,
                         targetNodeId: targetNode._id,
                         targetNodeName: targetNode.name,
+                        targetSenseId: resolveNodeSenseId(targetNode),
                         backendRelationType: ASSOC_RELATION_TYPES.EXTENDS
                     }));
                 }
@@ -1214,8 +2339,12 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 const targetNode = nodeMap[nodeName];
                 if (targetNode) {
                     rebuiltAssociations.push(buildSimpleAssociation({
+                        currentNode: node,
+                        sourceSenseId: selectedSenseId,
+                        targetNode,
                         targetNodeId: targetNode._id,
                         targetNodeName: targetNode.name,
+                        targetSenseId: resolveNodeSenseId(targetNode),
                         backendRelationType: ASSOC_RELATION_TYPES.CONTAINS
                     }));
                 }
@@ -1227,7 +2356,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
     const searchAssociationNodes = useCallback(async (keyword) => {
         const normalizedKeyword = (keyword || '').trim();
-        if (!normalizedKeyword) {
+        const keywordMeta = parseAssociationKeyword(normalizedKeyword);
+        const effectiveKeyword = keywordMeta.textKeyword;
+        setAssocSearchAppliedKeyword(normalizedKeyword);
+        if (!effectiveKeyword) {
             setAssocSearchResults([]);
             return;
         }
@@ -1235,12 +2367,16 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setAssocSearchLoading(true);
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(normalizedKeyword)}`, {
+            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
                 const data = await response.json();
-                const filtered = data.filter(n => n._id !== editingAssociationNode?._id);
+                const filtered = (Array.isArray(data) ? data : [])
+                    .map((item) => normalizeAssociationCandidate(item))
+                    .filter(Boolean)
+                    .filter((item) => matchKeywordByDomainAndSense(item, effectiveKeyword))
+                    .filter((item) => isAssociationCandidateSelectable(item, item?.senseId || ''));
                 setAssocSearchResults(filtered);
             } else {
                 setAssocSearchResults([]);
@@ -1251,38 +2387,94 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         } finally {
             setAssocSearchLoading(false);
         }
-    }, [editingAssociationNode]);
+    }, [isAssociationCandidateSelectable, normalizeAssociationCandidate]);
 
-    // 选择节点步骤中，输入时自动搜索
-    useEffect(() => {
-        if (assocCurrentStep !== ASSOC_STEPS.SELECT_NODE_A) {
+    const clearAssocNodeASearch = useCallback(() => {
+        setAssocSearchKeyword('');
+        setAssocSearchAppliedKeyword('');
+        setAssocSearchResults([]);
+        setAssocSearchLoading(false);
+    }, []);
+
+    const submitAssocNodeBSearch = useCallback(async (rawKeyword = assocNodeBSearchKeyword) => {
+        const normalizedKeyword = String(rawKeyword || '').trim();
+        setAssocNodeBSearchKeyword(normalizedKeyword);
+        setAssocNodeBSearchAppliedKeyword(normalizedKeyword);
+
+        if (assocCurrentStep !== ASSOC_STEPS.SELECT_NODE_B) return;
+
+        const keywordMeta = parseAssociationKeyword(normalizedKeyword);
+        const effectiveKeyword = keywordMeta.textKeyword;
+        if (!keywordMeta.mode && !effectiveKeyword) {
+            setAssocNodeBExtraSearchResults([]);
+            setAssocNodeBExtraSearchLoading(false);
+            return;
+        }
+        if (keywordMeta.mode || !effectiveKeyword) {
+            setAssocNodeBExtraSearchResults([]);
+            setAssocNodeBExtraSearchLoading(false);
             return;
         }
 
-        if (!assocSearchKeyword.trim()) {
-            setAssocSearchResults([]);
-            setAssocSearchLoading(false);
-            return;
+        const requestId = ++assocNodeBSearchRequestIdRef.current;
+        const token = localStorage.getItem('token');
+        setAssocNodeBExtraSearchLoading(true);
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (requestId !== assocNodeBSearchRequestIdRef.current) return;
+            if (!response.ok) {
+                setAssocNodeBExtraSearchResults([]);
+                return;
+            }
+            const data = await response.json();
+            const normalized = (Array.isArray(data) ? data : [])
+                .map((item) => normalizeAssociationCandidate(item))
+                .filter(Boolean)
+                .filter((item) => isAssociationCandidateSelectable(item, item?.senseId || ''));
+            setAssocNodeBExtraSearchResults(normalized);
+        } catch (error) {
+            if (requestId !== assocNodeBSearchRequestIdRef.current) return;
+            console.error('搜索第二目标释义失败:', error);
+            setAssocNodeBExtraSearchResults([]);
+        } finally {
+            if (requestId === assocNodeBSearchRequestIdRef.current) {
+                setAssocNodeBExtraSearchLoading(false);
+            }
         }
+    }, [assocCurrentStep, assocNodeBSearchKeyword, isAssociationCandidateSelectable, normalizeAssociationCandidate]);
 
-        const timer = setTimeout(() => {
-            searchAssociationNodes(assocSearchKeyword);
-        }, 220);
-
-        return () => clearTimeout(timer);
-    }, [assocSearchKeyword, assocCurrentStep, searchAssociationNodes]);
+    const clearAssocNodeBSearch = useCallback(() => {
+        assocNodeBSearchRequestIdRef.current += 1;
+        setAssocNodeBSearchKeyword('');
+        setAssocNodeBSearchAppliedKeyword('');
+        setAssocNodeBExtraSearchResults([]);
+        setAssocNodeBExtraSearchLoading(false);
+    }, []);
 
     const startAddEditAssociation = () => {
         setAssocMutationPreview(null);
         setAssocBridgeDecisions({});
         resetAssociationEditor();
+        setAssocSelectedSourceSenseId(resolveNodeSenseId(editingAssociationNode, editingAssociationSenseId));
         setAssocCurrentStep(ASSOC_STEPS.SELECT_NODE_A);
     };
 
     const selectAssocNodeA = async (node) => {
-        const nodeDetail = await fetchNodeDetailForAssociation(node._id);
+        const normalizedCandidate = normalizeAssociationCandidate(node);
+        if (!normalizedCandidate || !isAssociationCandidateSelectable(normalizedCandidate, normalizedCandidate.senseId || '')) {
+            alert('该释义不可选，请更换目标释义');
+            return;
+        }
+        const targetNodeId = normalizedCandidate.nodeId;
+        const nodeDetail = await fetchNodeDetailForAssociation(targetNodeId);
         if (nodeDetail) {
             setAssocSelectedNodeA(nodeDetail);
+            const defaultSourceSenseId = resolveNodeSenseId(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId);
+            const defaultTargetSenseId = resolveAssociationSenseId(nodeDetail, normalizedCandidate.senseId || assocSelectedNodeASenseId);
+            setAssocSelectedSourceSenseId(defaultSourceSenseId);
+            setAssocSelectedNodeASenseId(defaultTargetSenseId);
             setAssocCurrentStep(ASSOC_STEPS.SELECT_RELATION);
             setAssocSearchResults([]);
             setAssocSearchKeyword('');
@@ -1300,69 +2492,211 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 children: assocSelectedNodeA?.childNodesInfo || []
             };
             setAssocNodeBCandidates(candidates);
-
-            if (candidates.parents.length === 0 && candidates.children.length === 0) {
-                alert('该节点没有母域或子域节点，无法使用插入模式。');
-                return;
-            }
+            clearAssocNodeBSearch();
+            setAssocInsertDirectionLocked(false);
             setAssocCurrentStep(ASSOC_STEPS.SELECT_NODE_B);
         } else {
             setAssocCurrentStep(ASSOC_STEPS.PREVIEW);
         }
     };
 
-    const selectAssocNodeB = (node, fromParents) => {
-        setAssocSelectedNodeB(node);
+    const selectAssocNodeB = async (node, fromParents) => {
+        const normalizedCandidate = normalizeAssociationCandidate(node);
+        const selectedNodeAKey = toAssociationSenseKey(assocSelectedNodeA, assocSelectedNodeASenseId);
+        const excludedSenseKeySet = new Set([selectedNodeAKey].filter(Boolean));
+        if (!normalizedCandidate || !isAssociationCandidateSelectable(normalizedCandidate, normalizedCandidate.senseId || '', { excludedSenseKeySet })) {
+            alert('该释义不可选，请更换第二个目标释义');
+            return;
+        }
+        const targetNodeId = normalizedCandidate.nodeId;
+        const nodeDetail = await fetchNodeDetailForAssociation(targetNodeId);
+        const selectedNode = nodeDetail || normalizedCandidate;
+        setAssocSelectedNodeB(selectedNode);
+        setAssocSelectedNodeBSenseId(resolveAssociationSenseId(selectedNode, normalizedCandidate.senseId || ''));
         setAssocInsertDirection(fromParents ? 'bToA' : 'aToB');
+        setAssocInsertDirectionLocked(false);
         setAssocCurrentStep(ASSOC_STEPS.PREVIEW);
     };
 
-    const replayAssocPreview = () => {
-        if (assocPreviewRendererRef.current) {
-            assocPreviewRendererRef.current.setPreviewScene({
-                nodeA: assocSelectedNodeA,
-                nodeB: assocSelectedNodeB,
-                relationType: assocSelectedRelationType,
-                newNodeName: editingAssociationNode?.name || '当前节点',
-                insertDirection: assocInsertDirection
-            });
+    const hasExactSenseAssociation = useCallback((sourceNode, targetNodeId, relationType, sourceSenseId, targetSenseId) => {
+        if (!sourceNode || !targetNodeId || !relationType || !sourceSenseId || !targetSenseId) return false;
+        const assocList = Array.isArray(sourceNode?.associations) ? sourceNode.associations : [];
+        return assocList.some((assoc) => {
+            const assocTargetNodeId = assoc?.targetNode?._id || assoc?.targetNode;
+            const assocRelationType = assoc?.relationType;
+            const assocSourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+            const assocTargetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+            return (
+                String(assocTargetNodeId || '') === String(targetNodeId)
+                && assocRelationType === relationType
+                && assocSourceSenseId === String(sourceSenseId)
+                && assocTargetSenseId === String(targetSenseId)
+            );
+        });
+    }, []);
+
+    const buildInsertNarrative = useCallback((sourceNode, sourceSenseId, nodeA, nodeASenseId, nodeB, nodeBSenseId) => {
+        const sourceDisplay = formatNodeSenseDisplay(sourceNode, sourceSenseId);
+        const nodeADisplay = formatNodeSenseDisplay(nodeA, nodeASenseId);
+        const nodeBDisplay = formatNodeSenseDisplay(nodeB, nodeBSenseId);
+        const hasOriginalRelation = (
+            hasExactSenseAssociation(nodeA, nodeB?._id, ASSOC_RELATION_TYPES.CONTAINS, nodeASenseId, nodeBSenseId)
+            || hasExactSenseAssociation(nodeA, nodeB?._id, ASSOC_RELATION_TYPES.EXTENDS, nodeASenseId, nodeBSenseId)
+            || hasExactSenseAssociation(nodeB, nodeA?._id, ASSOC_RELATION_TYPES.CONTAINS, nodeBSenseId, nodeASenseId)
+            || hasExactSenseAssociation(nodeB, nodeA?._id, ASSOC_RELATION_TYPES.EXTENDS, nodeBSenseId, nodeASenseId)
+        );
+        if (hasOriginalRelation) {
+            return `${sourceDisplay} 将插入到 ${nodeADisplay} 和 ${nodeBDisplay} 之间，${nodeADisplay}和${nodeBDisplay}原来的关联将改为${nodeADisplay}-${sourceDisplay}-${nodeBDisplay}`;
         }
-    };
+        return `${sourceDisplay} 将插入到 ${nodeADisplay} 和 ${nodeBDisplay} 之间，${nodeADisplay}和${nodeBDisplay}新建关联为${nodeADisplay}-${sourceDisplay}-${nodeBDisplay}`;
+    }, [formatNodeSenseDisplay, hasExactSenseAssociation]);
+
+    useEffect(() => {
+        if (assocSelectedRelationType !== ASSOC_RELATION_TYPES.INSERT) return;
+        if (!assocSelectedNodeA?._id || !assocSelectedNodeB?._id) return;
+        if (!assocSelectedNodeASenseId || !assocSelectedNodeBSenseId) return;
+
+        const hasAContainsB = hasExactSenseAssociation(
+            assocSelectedNodeA,
+            assocSelectedNodeB._id,
+            ASSOC_RELATION_TYPES.CONTAINS,
+            assocSelectedNodeASenseId,
+            assocSelectedNodeBSenseId
+        );
+        const hasAExtendsB = hasExactSenseAssociation(
+            assocSelectedNodeA,
+            assocSelectedNodeB._id,
+            ASSOC_RELATION_TYPES.EXTENDS,
+            assocSelectedNodeASenseId,
+            assocSelectedNodeBSenseId
+        );
+        const hasBContainsA = hasExactSenseAssociation(
+            assocSelectedNodeB,
+            assocSelectedNodeA._id,
+            ASSOC_RELATION_TYPES.CONTAINS,
+            assocSelectedNodeBSenseId,
+            assocSelectedNodeASenseId
+        );
+        const hasBExtendsA = hasExactSenseAssociation(
+            assocSelectedNodeB,
+            assocSelectedNodeA._id,
+            ASSOC_RELATION_TYPES.EXTENDS,
+            assocSelectedNodeBSenseId,
+            assocSelectedNodeASenseId
+        );
+
+        if (hasAContainsB || hasBExtendsA) {
+            setAssocInsertDirection('aToB');
+            setAssocInsertDirectionLocked(true);
+            return;
+        }
+        if (hasAExtendsB || hasBContainsA) {
+            setAssocInsertDirection('bToA');
+            setAssocInsertDirectionLocked(true);
+            return;
+        }
+        if (!assocInsertDirection) {
+            setAssocInsertDirection('aToB');
+        }
+        setAssocInsertDirectionLocked(false);
+    }, [
+        assocSelectedRelationType,
+        assocSelectedNodeA,
+        assocSelectedNodeB,
+        assocSelectedNodeASenseId,
+        assocSelectedNodeBSenseId,
+        assocInsertDirection,
+        hasExactSenseAssociation
+    ]);
 
     const confirmEditAssociation = () => {
         let associationData;
+        const effectiveSourceSenseId = resolveNodeSenseId(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId);
+        const sourceDisplay = formatNodeSenseDisplay(editingAssociationNode, effectiveSourceSenseId);
 
         if (assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT) {
+            if (!assocSelectedNodeA?._id || !assocSelectedNodeB?._id) {
+                alert('请先选择插入的两个目标释义');
+                return;
+            }
+            if (!effectiveSourceSenseId || !assocSelectedNodeASenseId || !assocSelectedNodeBSenseId) {
+                alert('请先选择当前释义与目标释义');
+                return;
+            }
+            const effectiveInsertDirection = assocInsertDirection === 'bToA' ? 'bToA' : 'aToB';
             associationData = {
                 type: ASSOC_RELATION_TYPES.INSERT,
                 nodeA: assocSelectedNodeA,
                 nodeB: assocSelectedNodeB,
-                direction: assocInsertDirection,
-                actualAssociations: assocInsertDirection === 'aToB'
+                direction: effectiveInsertDirection,
+                sourceSenseId: effectiveSourceSenseId,
+                nodeASenseId: assocSelectedNodeASenseId,
+                nodeBSenseId: assocSelectedNodeBSenseId,
+                actualAssociations: effectiveInsertDirection === 'aToB'
                     ? [
-                        { targetNode: assocSelectedNodeA._id, relationType: ASSOC_RELATION_TYPES.EXTENDS, nodeName: assocSelectedNodeA.name },
-                        { targetNode: assocSelectedNodeB._id, relationType: ASSOC_RELATION_TYPES.CONTAINS, nodeName: assocSelectedNodeB.name }
+                        {
+                            targetNode: assocSelectedNodeA._id,
+                            relationType: ASSOC_RELATION_TYPES.EXTENDS,
+                            nodeName: assocSelectedNodeA.name,
+                            sourceSenseId: effectiveSourceSenseId,
+                            targetSenseId: assocSelectedNodeASenseId
+                        },
+                        {
+                            targetNode: assocSelectedNodeB._id,
+                            relationType: ASSOC_RELATION_TYPES.CONTAINS,
+                            nodeName: assocSelectedNodeB.name,
+                            sourceSenseId: effectiveSourceSenseId,
+                            targetSenseId: assocSelectedNodeBSenseId
+                        }
                     ]
                     : [
-                        { targetNode: assocSelectedNodeB._id, relationType: ASSOC_RELATION_TYPES.EXTENDS, nodeName: assocSelectedNodeB.name },
-                        { targetNode: assocSelectedNodeA._id, relationType: ASSOC_RELATION_TYPES.CONTAINS, nodeName: assocSelectedNodeA.name }
+                        {
+                            targetNode: assocSelectedNodeB._id,
+                            relationType: ASSOC_RELATION_TYPES.EXTENDS,
+                            nodeName: assocSelectedNodeB.name,
+                            sourceSenseId: effectiveSourceSenseId,
+                            targetSenseId: assocSelectedNodeBSenseId
+                        },
+                        {
+                            targetNode: assocSelectedNodeA._id,
+                            relationType: ASSOC_RELATION_TYPES.CONTAINS,
+                            nodeName: assocSelectedNodeA.name,
+                            sourceSenseId: effectiveSourceSenseId,
+                            targetSenseId: assocSelectedNodeASenseId
+                        }
                     ],
-                displayText: `插入到 ${assocSelectedNodeA.name} 和 ${assocSelectedNodeB.name} 之间`
+                displayText: buildInsertNarrative(
+                    editingAssociationNode,
+                    effectiveSourceSenseId,
+                    assocSelectedNodeA,
+                    assocSelectedNodeASenseId,
+                    assocSelectedNodeB,
+                    assocSelectedNodeBSenseId
+                )
             };
         } else {
+            if (!assocSelectedNodeA?._id || !effectiveSourceSenseId || !assocSelectedNodeASenseId) {
+                alert('请先选择当前释义与目标释义');
+                return;
+            }
             const backendRelationType = toBackendRelationType(assocSelectedRelationType);
-            const relationMeta = getRelationMeta(assocSelectedRelationType);
+            const relationArrow = assocSelectedRelationType === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→';
+            const targetDisplay = formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId);
             associationData = {
                 type: assocSelectedRelationType,
                 nodeA: assocSelectedNodeA,
                 nodeB: null,
                 direction: null,
+                sourceSenseId: effectiveSourceSenseId,
+                nodeASenseId: assocSelectedNodeASenseId,
                 actualAssociations: [{
                     targetNode: assocSelectedNodeA._id,
                     relationType: backendRelationType,
-                    nodeName: assocSelectedNodeA.name
+                    nodeName: assocSelectedNodeA.name,
+                    sourceSenseId: effectiveSourceSenseId,
+                    targetSenseId: assocSelectedNodeASenseId
                 }],
-                displayText: relationMeta.displayText(assocSelectedNodeA.name)
+                displayText: `${sourceDisplay} ${relationArrow} ${targetDisplay}`
             };
         }
 
@@ -1373,10 +2707,18 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             }
 
             if (assoc.type === ASSOC_RELATION_TYPES.INSERT && associationData.type === ASSOC_RELATION_TYPES.INSERT) {
-                const existingPair = [assoc.nodeA._id, assoc.nodeB._id].sort();
-                const newPair = [associationData.nodeA._id, associationData.nodeB._id].sort();
-                if (existingPair[0] === newPair[0] && existingPair[1] === newPair[1]) {
-                    duplicateReason = `已经存在插入到 ${assoc.nodeA.name} 和 ${assoc.nodeB.name} 之间的关联`;
+                const existingPair = [
+                    `${assoc.nodeA._id}:${assoc.nodeASenseId || ''}`,
+                    `${assoc.nodeB._id}:${assoc.nodeBSenseId || ''}`,
+                    assoc.sourceSenseId || ''
+                ].sort();
+                const newPair = [
+                    `${associationData.nodeA._id}:${associationData.nodeASenseId || ''}`,
+                    `${associationData.nodeB._id}:${associationData.nodeBSenseId || ''}`,
+                    associationData.sourceSenseId || ''
+                ].sort();
+                if (JSON.stringify(existingPair) === JSON.stringify(newPair)) {
+                    duplicateReason = `该释义插入关系已存在：${assoc.displayText}`;
                     return true;
                 }
                 return false;
@@ -1385,11 +2727,14 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             if (assoc.type !== ASSOC_RELATION_TYPES.INSERT && associationData.type !== ASSOC_RELATION_TYPES.INSERT) {
                 const found = assoc.actualAssociations.some(aa =>
                     associationData.actualAssociations.some(ba =>
-                        aa.targetNode.toString() === ba.targetNode.toString() && aa.relationType === ba.relationType
+                        aa.targetNode.toString() === ba.targetNode.toString()
+                        && aa.relationType === ba.relationType
+                        && (aa.sourceSenseId || '') === (ba.sourceSenseId || '')
+                        && (aa.targetSenseId || '') === (ba.targetSenseId || '')
                     )
                 );
                 if (found) {
-                    duplicateReason = `已经存在与 ${assoc.nodeA.name} 的${assoc.type === ASSOC_RELATION_TYPES.EXTENDS ? '母域' : '子域'}关系`;
+                    duplicateReason = `该释义关系已存在：${assoc.displayText}`;
                     return true;
                 }
                 return false;
@@ -1399,11 +2744,14 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             const simpleAssoc = assoc.type === ASSOC_RELATION_TYPES.INSERT ? associationData : assoc;
             const conflict = insertAssoc.actualAssociations.find(ia =>
                 simpleAssoc.actualAssociations.some(sa =>
-                    ia.targetNode.toString() === sa.targetNode.toString() && ia.relationType === sa.relationType
+                    ia.targetNode.toString() === sa.targetNode.toString()
+                    && ia.relationType === sa.relationType
+                    && (ia.sourceSenseId || '') === (sa.sourceSenseId || '')
+                    && (ia.targetSenseId || '') === (sa.targetSenseId || '')
                 )
             );
             if (conflict) {
-                duplicateReason = `与现有关联冲突：当前节点对 ${conflict.nodeName} 已经有${conflict.relationType === ASSOC_RELATION_TYPES.EXTENDS ? '子域' : '母域'}关系`;
+                duplicateReason = `与现有关联冲突：${sourceDisplay} 对 ${formatNodeSenseDisplay({ name: conflict.nodeName }, conflict.targetSenseId)} 已存在同向关系`;
                 return true;
             }
             return false;
@@ -1436,21 +2784,41 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     };
 
     const editExistingAssociation = async (index) => {
+        const requestId = ++assocEditRequestIdRef.current;
         const assoc = editAssociations[index];
         let nextNodeA = assoc.nodeA;
+        let nextNodeB = assoc.nodeB;
+
+        if (assocPreviewRendererRef.current) {
+            assocPreviewRendererRef.current.destroy();
+            assocPreviewRendererRef.current = null;
+        }
 
         if (nextNodeA?._id && (!nextNodeA.parentNodesInfo || !nextNodeA.childNodesInfo)) {
             const nodeDetail = await fetchNodeDetailForAssociation(nextNodeA._id);
+            if (requestId !== assocEditRequestIdRef.current) return;
             if (nodeDetail) {
                 nextNodeA = nodeDetail;
             }
         }
+        if (nextNodeB?._id && (!nextNodeB.parentNodesInfo || !nextNodeB.childNodesInfo)) {
+            const nodeDetail = await fetchNodeDetailForAssociation(nextNodeB._id);
+            if (requestId !== assocEditRequestIdRef.current) return;
+            if (nodeDetail) {
+                nextNodeB = nodeDetail;
+            }
+        }
+        if (requestId !== assocEditRequestIdRef.current) return;
 
         setAssocEditingIndex(index);
         setAssocSelectedNodeA(nextNodeA);
+        setAssocSelectedNodeASenseId(assoc.nodeASenseId || resolveNodeSenseId(nextNodeA));
         setAssocSelectedRelationType(assoc.type);
-        setAssocSelectedNodeB(assoc.nodeB);
+        setAssocSelectedNodeB(nextNodeB);
+        setAssocSelectedNodeBSenseId(assoc.nodeBSenseId || resolveNodeSenseId(nextNodeB));
+        setAssocSelectedSourceSenseId(assoc.sourceSenseId || resolveNodeSenseId(editingAssociationNode, editingAssociationSenseId));
         setAssocInsertDirection(assoc.direction);
+        setAssocInsertDirectionLocked(assoc.type === ASSOC_RELATION_TYPES.INSERT);
         setAssocCurrentStep(ASSOC_STEPS.PREVIEW);
     };
 
@@ -1466,7 +2834,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 break;
             case ASSOC_STEPS.SELECT_NODE_B:
                 setAssocSelectedNodeB(null);
+                setAssocSelectedNodeBSenseId('');
                 setAssocInsertDirection(null);
+                setAssocInsertDirectionLocked(false);
                 setAssocCurrentStep(ASSOC_STEPS.SELECT_RELATION);
                 break;
             case ASSOC_STEPS.PREVIEW:
@@ -1481,17 +2851,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }
     };
 
-    const resolveNodeDefaultSenseId = useCallback((nodeLike, fallbackNodeId = '') => {
-        const directSenseId = nodeLike?.activeSenseId
-            || (Array.isArray(nodeLike?.synonymSenses) ? nodeLike.synonymSenses[0]?.senseId : '')
-            || '';
-        if (directSenseId) return directSenseId;
-        const matched = allNodes.find((item) => item?._id === (fallbackNodeId || nodeLike?._id));
-        return matched?.activeSenseId
-            || (Array.isArray(matched?.synonymSenses) ? matched.synonymSenses[0]?.senseId : '')
-            || 'sense_1';
-    }, [allNodes]);
-
     const resolveEditingSenseTitle = useCallback((senseId) => {
         const sourceList = Array.isArray(editingAssociationNode?.synonymSenses) ? editingAssociationNode.synonymSenses : [];
         const key = (senseId || '').trim();
@@ -1501,22 +2860,55 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     }, [editingAssociationNode]);
 
     const buildAssociationPayloadForMutation = useCallback(() => {
-        const sourceSenseId = resolveNodeDefaultSenseId(editingAssociationNode, editingAssociationNode?._id);
-        return editAssociations.flatMap((assoc, index) => {
+        const effectiveEditingSenseId = resolveNodeSenseId(editingAssociationNode, editingAssociationSenseId);
+        const untouchedAssociations = (Array.isArray(editingAssociationNode?.associations) ? editingAssociationNode.associations : [])
+            .filter((assoc) => {
+                const rawSourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+                const normalizedSourceSenseId = rawSourceSenseId || effectiveEditingSenseId;
+                if (!effectiveEditingSenseId) return false;
+                return normalizedSourceSenseId !== effectiveEditingSenseId;
+            })
+            .map((assoc) => ({
+                targetNode: assoc?.targetNode?._id || assoc?.targetNode || '',
+                relationType: assoc?.relationType || '',
+                sourceSenseId: (typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '') || effectiveEditingSenseId,
+                targetSenseId: (() => {
+                    const rawTargetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+                    if (rawTargetSenseId) return rawTargetSenseId;
+                    const targetNodeRaw = assoc?.targetNode;
+                    const targetNode = (targetNodeRaw && typeof targetNodeRaw === 'object')
+                        ? targetNodeRaw
+                        : nodeByIdMap.get(String(targetNodeRaw || ''));
+                    return resolveNodeSenseId(targetNode);
+                })(),
+                insertSide: '',
+                insertGroupId: ''
+            }))
+            .filter((assoc) => !!assoc.targetNode && !!assoc.relationType && !!assoc.sourceSenseId && !!assoc.targetSenseId);
+
+        const editedAssociations = editAssociations.flatMap((assoc, index) => {
             if (assoc.type === ASSOC_RELATION_TYPES.INSERT) {
                 const direction = assoc.direction === 'bToA' ? 'bToA' : 'aToB';
                 const upperNode = direction === 'aToB' ? assoc.nodeA : assoc.nodeB;
                 const lowerNode = direction === 'aToB' ? assoc.nodeB : assoc.nodeA;
                 const upperNodeId = upperNode?._id;
                 const lowerNodeId = lowerNode?._id;
+                const sourceSenseId = assoc.sourceSenseId || effectiveEditingSenseId;
+                const upperSenseId = direction === 'aToB'
+                    ? (assoc.nodeASenseId || resolveNodeSenseId(upperNode))
+                    : (assoc.nodeBSenseId || resolveNodeSenseId(upperNode));
+                const lowerSenseId = direction === 'aToB'
+                    ? (assoc.nodeBSenseId || resolveNodeSenseId(lowerNode))
+                    : (assoc.nodeASenseId || resolveNodeSenseId(lowerNode));
                 if (!upperNodeId || !lowerNodeId) return [];
+                if (!sourceSenseId || !upperSenseId || !lowerSenseId) return [];
                 const insertGroupId = `admin_insert_${index}_${upperNodeId}_${lowerNodeId}_${direction}`;
                 return [
                     {
                         targetNode: upperNodeId,
                         relationType: ASSOC_RELATION_TYPES.INSERT,
                         sourceSenseId,
-                        targetSenseId: resolveNodeDefaultSenseId(upperNode, upperNodeId),
+                        targetSenseId: upperSenseId,
                         insertSide: 'left',
                         insertGroupId
                     },
@@ -1524,7 +2916,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                         targetNode: lowerNodeId,
                         relationType: ASSOC_RELATION_TYPES.INSERT,
                         sourceSenseId,
-                        targetSenseId: resolveNodeDefaultSenseId(lowerNode, lowerNodeId),
+                        targetSenseId: lowerSenseId,
                         insertSide: 'right',
                         insertGroupId
                     }
@@ -1532,19 +2924,23 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             }
 
             return assoc.actualAssociations.map((actual) => {
-                const fallbackNode = assoc.nodeA?._id === actual.targetNode ? assoc.nodeA : assoc.nodeB;
                 return {
                     targetNode: actual.targetNode,
                     relationType: actual.relationType,
-                    sourceSenseId,
-                    targetSenseId: resolveNodeDefaultSenseId(fallbackNode, actual.targetNode)
+                    sourceSenseId: actual.sourceSenseId || effectiveEditingSenseId,
+                    targetSenseId: actual.targetSenseId || ''
                 };
             });
         });
-    }, [editAssociations, editingAssociationNode, resolveNodeDefaultSenseId]);
+        return [...untouchedAssociations, ...editedAssociations];
+    }, [editAssociations, editingAssociationNode, editingAssociationSenseId, nodeByIdMap, resolveNodeSenseId]);
 
     const previewAssociationEdit = async (decisionMap = assocBridgeDecisions) => {
         if (!editingAssociationNode?._id) return;
+        if (editAssociations.length < 1) {
+            alert('每个释义至少保留 1 条关联关系');
+            return;
+        }
         const token = localStorage.getItem('token');
         const associationsPayload = buildAssociationPayloadForMutation();
         setAssocPreviewLoading(true);
@@ -1577,6 +2973,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
     const saveAssociationEdit = async () => {
         if (!editingAssociationNode?._id) return;
+        if (editAssociations.length < 1) {
+            alert('每个释义至少保留 1 条关联关系');
+            return;
+        }
         if (!assocMutationPreview) {
             alert('请先预览变更，再确认保存');
             return;
@@ -1606,7 +3006,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             if (response.ok) {
                 alert(data.message);
                 closeEditAssociationModal();
-                fetchAllNodes();
+                fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
             } else {
                 if (data?.bridgeDecisionItems) {
                     setAssocMutationPreview((prev) => ({
@@ -1687,12 +3087,16 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         const bridgeDecisionItems = Array.isArray(assocMutationPreview?.bridgeDecisionItems)
             ? assocMutationPreview.bridgeDecisionItems
             : [];
+        const insertPlanNarratives = Array.isArray(summary.insertPlanNarratives)
+            ? summary.insertPlanNarratives
+            : [];
         const beforeRelations = Array.isArray(summary.beforeRelations) ? summary.beforeRelations : [];
         const afterRelations = Array.isArray(summary.afterRelations) ? summary.afterRelations : [];
         const hasChanges = (summary.removed?.length || 0) > 0
             || (summary.added?.length || 0) > 0
             || (summary.lostBridgePairs?.length || 0) > 0
-            || (summary.reconnectLines?.length || 0) > 0;
+            || (summary.reconnectLines?.length || 0) > 0
+            || insertPlanNarratives.length > 0;
 
         return (
             <div className="admin-assoc-mutation-preview">
@@ -1737,6 +3141,17 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                     <div className="admin-assoc-mutation-block">
                         <h6>将新增</h6>
                         {summary.added.map((line, index) => renderMutationLine(line, `added_${index}`, 'added'))}
+                    </div>
+                )}
+
+                {insertPlanNarratives.length > 0 && (
+                    <div className="admin-assoc-mutation-block">
+                        <h6>插入关系说明</h6>
+                        {insertPlanNarratives.map((item, index) => (
+                            <div key={item?.key || `insert_narrative_${index}`} className="admin-assoc-mutation-line neutral">
+                                <span className="endpoint">{item?.text || ''}</span>
+                            </div>
+                        ))}
                     </div>
                 )}
 
@@ -1793,9 +3208,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         if (!assocCurrentStep) return null;
 
         const steps = [
-            { key: ASSOC_STEPS.SELECT_NODE_A, label: '选择节点' },
+            { key: ASSOC_STEPS.SELECT_NODE_A, label: '选择目标释义' },
             { key: ASSOC_STEPS.SELECT_RELATION, label: '选择关系' },
-            ...(assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT ? [{ key: ASSOC_STEPS.SELECT_NODE_B, label: '第二节点' }] : []),
+            ...(assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT ? [{ key: ASSOC_STEPS.SELECT_NODE_B, label: '第二目标释义' }] : []),
             { key: ASSOC_STEPS.PREVIEW, label: '预览确认' }
         ];
         const currentIndex = steps.findIndex(s => s.key === assocCurrentStep);
@@ -1825,23 +3240,46 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
     const renderAssocSelectNodeA = () => (
         <div className="admin-assoc-step">
-            <h5>步骤 1：选择关联节点</h5>
-            <p className="admin-assoc-step-description">搜索并选择一个现有节点作为关联目标</p>
+            <h5>步骤 1：选择目标释义</h5>
+            <p className="admin-assoc-step-description">
+                当前正在编辑：<strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId)}</strong>
+            </p>
+            <p className="admin-assoc-step-description">搜索并选择一个现有释义作为关联目标（可输入关键词，不区分大小写）</p>
 
             <div className="search-input-group">
-                <input
-                    type="text"
-                    value={assocSearchKeyword}
-                    onChange={(e) => setAssocSearchKeyword(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && searchAssociationNodes(assocSearchKeyword)}
-                    placeholder="搜索标题或释义题目..."
-                    className="form-input"
-                />
+                <div className="admin-assoc-search-input-wrap">
+                    <input
+                        type="text"
+                        value={assocSearchKeyword}
+                        onChange={(e) => setAssocSearchKeyword(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                searchAssociationNodes(assocSearchKeyword);
+                            }
+                        }}
+                        placeholder="搜索标题或释义题目（回车或点击搜索）"
+                        className="form-input"
+                    />
+                    {!!assocSearchKeyword && (
+                        <button
+                            type="button"
+                            className="admin-assoc-search-clear"
+                            onClick={clearAssocNodeASearch}
+                            aria-label="清空搜索"
+                        >
+                            X
+                        </button>
+                    )}
+                </div>
                 <button onClick={() => searchAssociationNodes(assocSearchKeyword)} disabled={assocSearchLoading} className="btn btn-primary">
                     <Search className="icon-small" />
                     {assocSearchLoading ? '...' : '搜索'}
                 </button>
             </div>
+            {!assocSearchLoading && assocSearchAppliedKeyword && assocSearchResults.length === 0 && (
+                <p className="admin-assoc-step-description">未找到匹配释义</p>
+            )}
 
             {assocSearchResults.length > 0 && (
                 <div className="search-results">
@@ -1852,7 +3290,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                             onClick={() => selectAssocNodeA(node)}
                         >
                             <div className="node-info">
-                                <strong>{node.name}</strong>
+                                <strong>{node.displayName || node.name}</strong>
                                 <span className="node-description">{node.description}</span>
                             </div>
                             <ArrowRight className="icon-small" />
@@ -1867,23 +3305,49 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         <div className="admin-assoc-step">
             <h5>步骤 2：选择关系类型</h5>
             <p className="admin-assoc-step-description">
-                选择当前节点与 <strong>{assocSelectedNodeA?.name}</strong> 的关系
+                选择 <strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId)}</strong>
+                与 <strong>{formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)}</strong> 的关系
             </p>
+            <p className="admin-assoc-step-description">
+                当前释义固定为：<strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId)}</strong>
+            </p>
+
+            <div className="admin-assoc-sense-selector-row">
+                <label className="admin-assoc-sense-selector">
+                    目标释义
+                    <select
+                        value={assocSelectedNodeASenseId}
+                        onChange={(e) => setAssocSelectedNodeASenseId(e.target.value)}
+                        className="edit-input"
+                    >
+                        {(() => {
+                            const options = normalizeNodeSenses(assocSelectedNodeA)
+                                .filter((sense) => isAssociationCandidateSelectable(assocSelectedNodeA, sense.senseId));
+                            if (options.length < 1) {
+                                return <option value="">无可选释义</option>;
+                            }
+                            return options.map((sense) => (
+                                <option key={`target_a_${sense.senseId}`} value={sense.senseId}>{sense.title}</option>
+                            ));
+                        })()}
+                    </select>
+                </label>
+            </div>
 
             <div className="admin-assoc-relation-cards">
                 <div className="admin-assoc-relation-card" onClick={() => selectAssocRelationType(ASSOC_RELATION_TYPES.EXTENDS)}>
                     <div className="admin-assoc-relation-icon extends">↑</div>
                     <div className="admin-assoc-relation-content">
-                        <h6>作为母域节点</h6>
-                        <p>当前节点将成为 {assocSelectedNodeA?.name} 的母域（上级概念）</p>
+                        <h6>扩展（上级）</h6>
+                        <p>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)} 将成为 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 的上级</p>
                     </div>
                 </div>
 
                 <div className="admin-assoc-relation-card" onClick={() => selectAssocRelationType(ASSOC_RELATION_TYPES.CONTAINS)}>
                     <div className="admin-assoc-relation-icon contains">↓</div>
                     <div className="admin-assoc-relation-content">
-                        <h6>作为子域节点</h6>
-                        <p>当前节点将成为 {assocSelectedNodeA?.name} 的子域（下级概念）</p>
+                        <h6>包含（下级）</h6>
+                        <p>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)} 将成为 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 的下级</p>
                     </div>
                 </div>
 
@@ -1897,8 +3361,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 >
                     <div className="admin-assoc-relation-icon insert">⇄</div>
                     <div className="admin-assoc-relation-content">
-                        <h6>插入到两节点之间</h6>
-                        <p>将当前节点插入到 {assocSelectedNodeA?.name} 与另一个节点之间</p>
+                        <h6>插入到两释义之间</h6>
+                        <p>将 {formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)} 插入到 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 与另一个释义之间</p>
                     </div>
                 </div>
             </div>
@@ -1906,64 +3370,177 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     );
 
     const renderAssocSelectNodeB = () => {
-        const filteredNodeBCandidates = {
-            parents: assocNodeBCandidates.parents.filter(n =>
-                assocNodeBSearchKeyword.trim() === '' ||
-                n.name.toLowerCase().includes(assocNodeBSearchKeyword.toLowerCase())
-            ),
-            children: assocNodeBCandidates.children.filter(n =>
-                assocNodeBSearchKeyword.trim() === '' ||
-                n.name.toLowerCase().includes(assocNodeBSearchKeyword.toLowerCase())
-            )
+        const keywordMeta = parseAssociationKeyword(assocNodeBSearchAppliedKeyword);
+        const keywordText = keywordMeta.textKeyword;
+        const keywordMode = keywordMeta.mode;
+        const hasSubmittedSearch = !!String(assocNodeBSearchAppliedKeyword || '').trim();
+        const selectedNodeAKey = toAssociationSenseKey(assocSelectedNodeA, assocSelectedNodeASenseId);
+        const excludedSenseKeySet = new Set([selectedNodeAKey].filter(Boolean));
+        const normalizeCandidateList = (list = []) => {
+            const seen = new Set();
+            return (Array.isArray(list) ? list : [])
+                .map((item) => normalizeAssociationCandidate(item))
+                .filter(Boolean)
+                .filter((item) => {
+                    if (seen.has(item.searchKey)) return false;
+                    seen.add(item.searchKey);
+                    return true;
+                });
         };
+        const matchNodeBCandidate = (nodeLike = {}) => matchKeywordByDomainAndSense(nodeLike, keywordText);
+        const isNodeBCandidateSelectable = (nodeLike = {}) => isAssociationCandidateSelectable(nodeLike, nodeLike?.senseId || nodeLike?.activeSenseId || '', {
+            excludedSenseKeySet
+        });
+
+        const normalizedParents = normalizeCandidateList(assocNodeBCandidates.parents);
+        const normalizedChildren = normalizeCandidateList(assocNodeBCandidates.children);
+
+        const filteredNodeBCandidates = hasSubmittedSearch
+            ? {
+                parents: normalizedParents.filter((item) => (
+                    isNodeBCandidateSelectable(item)
+                    && matchNodeBCandidate(item)
+                )),
+                children: normalizedChildren.filter((item) => (
+                    isNodeBCandidateSelectable(item)
+                    && matchNodeBCandidate(item)
+                ))
+            }
+            : { parents: [], children: [] };
+        const visibleParents = hasSubmittedSearch && keywordMode !== 'expand' ? filteredNodeBCandidates.parents : [];
+        const visibleChildren = hasSubmittedSearch && keywordMode !== 'include' ? filteredNodeBCandidates.children : [];
+        const baseCandidateKeySet = new Set([
+            ...filteredNodeBCandidates.parents.map((item) => item?.searchKey || ''),
+            ...filteredNodeBCandidates.children.map((item) => item?.searchKey || '')
+        ].filter(Boolean));
+        const extraNodeBCandidates = (!hasSubmittedSearch || keywordMode)
+            ? []
+            : normalizeCandidateList(assocNodeBExtraSearchResults).filter((node) => {
+                if (baseCandidateKeySet.has(node?.searchKey || '')) return false;
+                if (!keywordText.trim()) return false;
+                if (!isNodeBCandidateSelectable(node)) return false;
+                return matchNodeBCandidate(node);
+            });
 
         return (
             <div className="admin-assoc-step">
-                <h5>步骤 3：选择第二个节点</h5>
+                <h5>步骤 3：选择第二个目标释义</h5>
                 <p className="admin-assoc-step-description">
-                    选择要与 <strong>{assocSelectedNodeA?.name}</strong> 之间插入当前节点的目标节点
+                    选择要与 <strong>{formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)}</strong> 之间插入当前释义的另一侧释义
+                </p>
+                <p className="admin-assoc-step-description">
+                    搜索支持 <code>#include</code>（只看上级）和 <code>#expand</code>（只看下级）
                 </p>
 
-                <div className="admin-assoc-node-b-search">
-                    <input
-                        type="text"
-                        value={assocNodeBSearchKeyword}
-                        onChange={(e) => setAssocNodeBSearchKeyword(e.target.value)}
-                        placeholder="搜索候选节点..."
-                        className="form-input"
-                    />
+                <div className="search-input-group admin-assoc-node-b-search">
+                    <div className="admin-assoc-search-input-wrap">
+                        <input
+                            type="text"
+                            value={assocNodeBSearchKeyword}
+                            onChange={(e) => setAssocNodeBSearchKeyword(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    submitAssocNodeBSearch(assocNodeBSearchKeyword);
+                                }
+                            }}
+                            placeholder="搜索候选释义（回车或点击搜索）"
+                            className="form-input"
+                        />
+                        {!!assocNodeBSearchKeyword && (
+                            <button
+                                type="button"
+                                className="admin-assoc-search-clear"
+                                onClick={clearAssocNodeBSearch}
+                                aria-label="清空搜索"
+                            >
+                                X
+                            </button>
+                        )}
+                    </div>
+                    <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => submitAssocNodeBSearch(assocNodeBSearchKeyword)}
+                        disabled={assocNodeBExtraSearchLoading}
+                    >
+                        <Search className="icon-small" />
+                        {assocNodeBExtraSearchLoading ? '...' : '搜索'}
+                    </button>
+                </div>
+                <div className="admin-assoc-command-buttons">
+                    <button
+                        type="button"
+                        className="admin-assoc-command-btn"
+                        onClick={() => submitAssocNodeBSearch('#include')}
+                    >
+                        #include
+                    </button>
+                    <button
+                        type="button"
+                        className="admin-assoc-command-btn"
+                        onClick={() => submitAssocNodeBSearch('#expand')}
+                    >
+                        #expand
+                    </button>
                 </div>
 
-                {filteredNodeBCandidates.parents.length > 0 && (
+                {visibleParents.length > 0 && (
                     <div className="admin-assoc-candidate-section">
                         <h6 className="admin-assoc-candidate-header parent">
                             <span className="admin-assoc-candidate-icon">↑</span> 母域节点（上级）
                         </h6>
                         <div className="admin-assoc-candidate-list">
-                            {filteredNodeBCandidates.parents.map(node => (
-                                <div key={node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, true)}>
-                                    <span className="admin-assoc-candidate-name">{node.name}</span>
-                                    <span className="admin-assoc-candidate-hint">插入到 {node.name} 和 {assocSelectedNodeA?.name} 之间</span>
+                            {visibleParents.map(node => (
+                                <div key={node.searchKey || node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, true)}>
+                                    <span className="admin-assoc-candidate-name">{node.displayName || node.name}</span>
+                                    <span className="admin-assoc-candidate-hint">插入到 {node.displayName || node.name} 和 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 之间</span>
                                 </div>
                             ))}
                         </div>
                     </div>
                 )}
 
-                {filteredNodeBCandidates.children.length > 0 && (
+                {visibleChildren.length > 0 && (
                     <div className="admin-assoc-candidate-section">
                         <h6 className="admin-assoc-candidate-header child">
                             <span className="admin-assoc-candidate-icon">↓</span> 子域节点（下级）
                         </h6>
                         <div className="admin-assoc-candidate-list">
-                            {filteredNodeBCandidates.children.map(node => (
-                                <div key={node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, false)}>
-                                    <span className="admin-assoc-candidate-name">{node.name}</span>
-                                    <span className="admin-assoc-candidate-hint">插入到 {assocSelectedNodeA?.name} 和 {node.name} 之间</span>
+                            {visibleChildren.map(node => (
+                                <div key={node.searchKey || node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, false)}>
+                                    <span className="admin-assoc-candidate-name">{node.displayName || node.name}</span>
+                                    <span className="admin-assoc-candidate-hint">插入到 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 和 {node.displayName || node.name} 之间</span>
                                 </div>
                             ))}
                         </div>
                     </div>
+                )}
+
+                {extraNodeBCandidates.length > 0 && (
+                    <div className="admin-assoc-candidate-section">
+                        <h6 className="admin-assoc-candidate-header child">
+                            <span className="admin-assoc-candidate-icon">+</span> 其它可插入节点（将新建承接关系）
+                        </h6>
+                        <div className="admin-assoc-candidate-list">
+                            {extraNodeBCandidates.map(node => (
+                                <div key={node.searchKey || node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, false)}>
+                                    <span className="admin-assoc-candidate-name">{node.displayName || formatNodeSenseDisplay(node, resolveNodeSenseId(node))}</span>
+                                    <span className="admin-assoc-candidate-hint">插入到 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 和 {node.displayName || formatNodeSenseDisplay(node, resolveNodeSenseId(node))} 之间（将新建承接关系）</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+                {!keywordMode && assocNodeBExtraSearchLoading && keywordText.trim() && (
+                    <p className="admin-assoc-step-description">正在搜索其它节点...</p>
+                )}
+
+                {!hasSubmittedSearch && (
+                    <p className="admin-assoc-step-description">输入关键词后按回车或点击搜索，或点击下方命令按钮。</p>
+                )}
+                {hasSubmittedSearch && visibleParents.length === 0 && visibleChildren.length === 0 && extraNodeBCandidates.length === 0 && !assocNodeBExtraSearchLoading && (
+                    <p className="admin-assoc-step-description">未找到匹配释义</p>
                 )}
             </div>
         );
@@ -1972,33 +3549,115 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const renderAssocPreview = () => (
         <div className="admin-assoc-step admin-assoc-preview-step">
             <h5>步骤 {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT ? '4' : '3'}：预览确认</h5>
-            <p className="admin-assoc-step-description">查看关联关系生效后的结构变化</p>
+            <p className="admin-assoc-step-description">查看释义关联关系生效后的结构变化</p>
+            <p className="admin-assoc-step-description">
+                当前释义固定为：<strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId)}</strong>
+            </p>
+
+            <div className="admin-assoc-sense-selector-row">
+                <label className="admin-assoc-sense-selector">
+                    {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT ? '左侧释义' : '目标释义'}
+                    <select
+                        value={assocSelectedNodeASenseId}
+                        onChange={(e) => setAssocSelectedNodeASenseId(e.target.value)}
+                        className="edit-input"
+                    >
+                        {(() => {
+                            const excludedSenseKeySet = new Set();
+                            if (assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT) {
+                                const selectedNodeBSenseKey = toAssociationSenseKey(assocSelectedNodeB, assocSelectedNodeBSenseId);
+                                if (selectedNodeBSenseKey) excludedSenseKeySet.add(selectedNodeBSenseKey);
+                            }
+                            const options = normalizeNodeSenses(assocSelectedNodeA)
+                                .filter((sense) => isAssociationCandidateSelectable(
+                                    assocSelectedNodeA,
+                                    sense.senseId,
+                                    { excludedSenseKeySet }
+                                ));
+                            if (options.length < 1) {
+                                return <option value="">无可选释义</option>;
+                            }
+                            return options.map((sense) => (
+                                <option key={`preview_target_a_${sense.senseId}`} value={sense.senseId}>{sense.title}</option>
+                            ));
+                        })()}
+                    </select>
+                </label>
+                {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT && (
+                    <label className="admin-assoc-sense-selector">
+                        右侧释义
+                        <select
+                            value={assocSelectedNodeBSenseId}
+                            onChange={(e) => setAssocSelectedNodeBSenseId(e.target.value)}
+                            className="edit-input"
+                        >
+                            {(() => {
+                                const selectedNodeASenseKey = toAssociationSenseKey(assocSelectedNodeA, assocSelectedNodeASenseId);
+                                const excludedSenseKeySet = new Set([selectedNodeASenseKey].filter(Boolean));
+                                const options = normalizeNodeSenses(assocSelectedNodeB)
+                                    .filter((sense) => isAssociationCandidateSelectable(
+                                        assocSelectedNodeB,
+                                        sense.senseId,
+                                        { excludedSenseKeySet }
+                                    ));
+                                if (options.length < 1) {
+                                    return <option value="">无可选释义</option>;
+                                }
+                                return options.map((sense) => (
+                                    <option key={`preview_target_b_${sense.senseId}`} value={sense.senseId}>{sense.title}</option>
+                                ));
+                            })()}
+                        </select>
+                    </label>
+                )}
+            </div>
+
+            {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT && (
+                <div className="admin-assoc-step-description" style={{ marginBottom: '0.65rem' }}>
+                    {assocInsertDirectionLocked
+                        ? '插入方向已按原有关联自动锁定。'
+                        : '当前两侧释义无直接上下级，插入方向可切换。'}
+                    <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        style={{ marginLeft: '0.6rem' }}
+                        onClick={() => setAssocInsertDirection((prev) => (prev === 'aToB' ? 'bToA' : 'aToB'))}
+                        disabled={assocInsertDirectionLocked}
+                    >
+                        切换方向
+                    </button>
+                </div>
+            )}
 
             <div className="admin-assoc-preview-canvas-container">
                 <canvas
                     ref={assocPreviewCanvasRef}
-                    width={320}
-                    height={200}
+                    width={360}
+                    height={240}
                     className="admin-assoc-preview-canvas"
                 />
             </div>
 
             <div className="admin-assoc-preview-info">
                 {assocSelectedRelationType === ASSOC_RELATION_TYPES.EXTENDS && (
-                    <span><strong>{editingAssociationNode?.name}</strong> 将成为 <strong>{assocSelectedNodeA?.name}</strong> 的母域</span>
+                    <span><strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)}</strong> 将成为 <strong>{formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)}</strong> 的上级</span>
                 )}
                 {assocSelectedRelationType === ASSOC_RELATION_TYPES.CONTAINS && (
-                    <span><strong>{editingAssociationNode?.name}</strong> 将成为 <strong>{assocSelectedNodeA?.name}</strong> 的子域</span>
+                    <span><strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)}</strong> 将成为 <strong>{formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)}</strong> 的下级</span>
                 )}
                 {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT && (
-                    <span><strong>{editingAssociationNode?.name}</strong> 将插入到 <strong>{assocSelectedNodeA?.name}</strong> 和 <strong>{assocSelectedNodeB?.name}</strong> 之间</span>
+                    <span>{buildInsertNarrative(
+                        editingAssociationNode,
+                        assocSelectedSourceSenseId,
+                        assocSelectedNodeA,
+                        assocSelectedNodeASenseId,
+                        assocSelectedNodeB,
+                        assocSelectedNodeBSenseId
+                    )}</span>
                 )}
             </div>
 
             <div className="admin-assoc-preview-actions">
-                <button onClick={replayAssocPreview} className="btn btn-secondary">
-                    <RotateCcw className="icon-small" /> 重播
-                </button>
                 <button onClick={confirmEditAssociation} className="btn btn-success">
                     <Check className="icon-small" /> 确认关联
                 </button>
@@ -2022,18 +3681,34 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     };
 
     // --- Alliance Management Functions ---
-    const fetchAdminAlliances = async () => {
+    const fetchAdminAlliances = async (page = adminAlliancePage) => {
         const token = localStorage.getItem('token');
+        setIsAdminAllianceLoading(true);
         try {
-            const response = await fetch('http://localhost:5000/api/alliances/admin/all', {
+            const params = new URLSearchParams({
+                page: String(Math.max(1, page)),
+                pageSize: String(ADMIN_ALLIANCE_PAGE_SIZE)
+            });
+            const response = await fetch(`http://localhost:5000/api/alliances/admin/all?${params.toString()}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
                 const data = await response.json();
-                setAdminAlliances(data.alliances);
+                const pagination = data?.pagination || {};
+                const nextPage = Math.max(1, parseInt(pagination.page, 10) || Math.max(1, page));
+                setAdminAlliances(Array.isArray(data?.alliances) ? data.alliances : []);
+                setAdminAlliancePagination({
+                    page: nextPage,
+                    pageSize: Math.max(1, parseInt(pagination.pageSize, 10) || ADMIN_ALLIANCE_PAGE_SIZE),
+                    total: Math.max(0, parseInt(pagination.total, 10) || 0),
+                    totalPages: Math.max(0, parseInt(pagination.totalPages, 10) || 0)
+                });
+                setAdminAlliancePage(nextPage);
             }
         } catch (error) {
             console.error('获取熵盟列表失败:', error);
+        } finally {
+            setIsAdminAllianceLoading(false);
         }
     };
 
@@ -2066,7 +3741,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 const data = await response.json();
                 alert(data.message);
                 cancelEditAlliance();
-                fetchAdminAlliances();
+                fetchAdminAlliances(adminAlliancePage);
             } else {
                 const data = await response.json();
                 alert(data.error || '保存失败');
@@ -2088,7 +3763,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             if (response.ok) {
                 const data = await response.json();
                 alert(data.message);
-                fetchAdminAlliances();
+                const targetPage = (adminAlliances.length === 1 && adminAlliancePage > 1)
+                    ? adminAlliancePage - 1
+                    : adminAlliancePage;
+                fetchAdminAlliances(targetPage);
             } else {
                 const data = await response.json();
                 alert(data.error || '删除失败');
@@ -2141,7 +3819,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             if (response.ok) {
                 alert(data.message);
                 setShowChangeMasterModal(false);
-                fetchAllNodes();
+                fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
             } else {
                 alert(data.error || '更换失败');
             }
@@ -2163,7 +3841,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 <button
                     onClick={() => {
                         setAdminTab('users');
-                        fetchAllUsers();
+                        setAdminUserPage(1);
+                        fetchAllUsers(1, adminUserSearchKeyword);
                     }}
                     className={`admin-tab ${adminTab === 'users' ? 'active' : ''}`}
                 >
@@ -2173,12 +3852,13 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 <button
                     onClick={() => {
                         setAdminTab('nodes');
-                        fetchAllNodes();
+                        setAdminDomainPage(1);
+                        fetchAllNodes(1, adminDomainSearchKeyword);
                     }}
                     className={`admin-tab ${adminTab === 'nodes' ? 'active' : ''}`}
                 >
                     <Zap className="icon-small" />
-                    节点管理
+                    知识域管理
                 </button>
                 <button
                     onClick={() => {
@@ -2196,7 +3876,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 <button
                     onClick={() => {
                         setAdminTab('alliances');
-                        fetchAdminAlliances();
+                        setAdminAlliancePage(1);
+                        fetchAdminAlliances(1);
                     }}
                     className={`admin-tab ${adminTab === 'alliances' ? 'active' : ''}`}
                 >
@@ -2228,15 +3909,68 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             {/* 用户管理选项卡 */}
             {adminTab === 'users' && (
                 <div className="users-table-container">
-                    <div className="table-info">
-                        <p>总用户数: <strong>{allUsers.length}</strong></p>
-                        <button 
-                            onClick={fetchAllUsers}
-                            className="btn btn-primary"
-                            style={{ marginLeft: '1rem' }}
-                        >
-                            刷新数据
-                        </button>
+                    <div className="table-info admin-list-toolbar">
+                        <p>总用户数: <strong>{adminUserPagination.total}</strong></p>
+                        <div className="admin-toolbar-center">
+                            <label htmlFor="adminUserPageSizeSelect">每页显示</label>
+                            <select
+                                id="adminUserPageSizeSelect"
+                                className="admin-page-size-select"
+                                value={adminUserPageSize}
+                                onChange={(e) => handleAdminUserPageSizeChange(e.target.value)}
+                                disabled={isAdminUserLoading}
+                            >
+                                {ADMIN_USER_PAGE_SIZE_OPTIONS.map((option) => (
+                                    <option key={`user_page_size_${option}`} value={option}>{option}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="admin-toolbar-right">
+                            <div className="admin-search-group">
+                                <div className="admin-search-input-wrap">
+                                    <input
+                                        type="text"
+                                        value={adminUserSearchInput}
+                                        onChange={(e) => setAdminUserSearchInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                submitAdminUserSearch();
+                                            }
+                                        }}
+                                        placeholder="搜索用户名/职业（回车确认）"
+                                        className="admin-search-input"
+                                    />
+                                    {adminUserSearchKeyword && (
+                                        <button
+                                            type="button"
+                                            className="admin-search-clear-btn"
+                                            onClick={clearAdminUserSearch}
+                                            title="清空搜索"
+                                            aria-label="清空搜索"
+                                            disabled={isAdminUserLoading}
+                                        >
+                                            X
+                                        </button>
+                                    )}
+                                </div>
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={submitAdminUserSearch}
+                                    disabled={isAdminUserLoading}
+                                >
+                                    搜索
+                                </button>
+                            </div>
+                            <button 
+                                onClick={() => fetchAllUsers(adminUserPage, adminUserSearchKeyword)}
+                                className="btn btn-primary"
+                                disabled={isAdminUserLoading}
+                            >
+                                刷新数据
+                            </button>
+                        </div>
                     </div>
                     
                     <div className="table-responsive">
@@ -2380,6 +4114,31 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                 ))}
                             </tbody>
                         </table>
+                    </div>
+                    <div className="admin-list-pagination">
+                        <div className="admin-list-page-info">
+                            {isAdminUserLoading
+                                ? '加载中...'
+                                : `第 ${adminUserPagination.page} / ${Math.max(1, adminUserPagination.totalPages || 1)} 页`}
+                        </div>
+                        <div className="admin-list-page-actions">
+                            <button
+                                type="button"
+                                className="btn btn-small btn-secondary"
+                                onClick={() => fetchAllUsers(adminUserPagination.page - 1, adminUserSearchKeyword)}
+                                disabled={isAdminUserLoading || adminUserPagination.page <= 1}
+                            >
+                                上一页
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-small btn-secondary"
+                                onClick={() => fetchAllUsers(adminUserPagination.page + 1, adminUserSearchKeyword)}
+                                disabled={isAdminUserLoading || (adminUserPagination.totalPages > 0 && adminUserPagination.page >= adminUserPagination.totalPages)}
+                            >
+                                下一页
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -2873,18 +4632,71 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 </div>
             )}
 
-            {/* 节点管理选项卡 */}
+            {/* 知识域管理选项卡 */}
             {adminTab === 'nodes' && (
                 <div className="nodes-table-container">
-                    <div className="table-info">
-                        <p>总节点数: <strong>{allNodes.length}</strong></p>
-                        <button 
-                            onClick={fetchAllNodes}
-                            className="btn btn-primary"
-                            style={{ marginLeft: '1rem' }}
-                        >
-                            刷新数据
-                        </button>
+                    <div className="table-info admin-list-toolbar">
+                        <p>总知识域数: <strong>{adminDomainPagination.total}</strong></p>
+                        <div className="admin-toolbar-center">
+                            <label htmlFor="adminDomainPageSizeSelect">每页显示</label>
+                            <select
+                                id="adminDomainPageSizeSelect"
+                                className="admin-page-size-select"
+                                value={adminDomainPageSize}
+                                onChange={(e) => handleAdminDomainPageSizeChange(e.target.value)}
+                                disabled={isAdminDomainLoading}
+                            >
+                                {ADMIN_DOMAIN_PAGE_SIZE_OPTIONS.map((option) => (
+                                    <option key={`domain_page_size_${option}`} value={option}>{option}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="admin-toolbar-right">
+                            <div className="admin-search-group">
+                                <div className="admin-search-input-wrap">
+                                    <input
+                                        type="text"
+                                        value={adminDomainSearchInput}
+                                        onChange={(e) => setAdminDomainSearchInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                submitAdminDomainSearch();
+                                            }
+                                        }}
+                                        placeholder="搜索标题/释义内容（回车确认）"
+                                        className="admin-search-input"
+                                    />
+                                    {adminDomainSearchKeyword && (
+                                        <button
+                                            type="button"
+                                            className="admin-search-clear-btn"
+                                            onClick={clearAdminDomainSearch}
+                                            title="清空搜索"
+                                            aria-label="清空搜索"
+                                            disabled={isAdminDomainLoading}
+                                        >
+                                            X
+                                        </button>
+                                    )}
+                                </div>
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={submitAdminDomainSearch}
+                                    disabled={isAdminDomainLoading}
+                                >
+                                    搜索
+                                </button>
+                            </div>
+                            <button 
+                                onClick={() => fetchAllNodes(adminDomainPage, adminDomainSearchKeyword)}
+                                className="btn btn-primary"
+                                disabled={isAdminDomainLoading}
+                            >
+                                刷新数据
+                            </button>
+                        </div>
                     </div>
 
                     <div className="admin-domain-list">
@@ -2892,35 +4704,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                             <div key={node._id} className="admin-domain-card">
                                 <div className="admin-domain-title-row">
                                     <div className="admin-domain-title-main">
-                                        {editingNode === node._id ? (
-                                            <>
-                                                <input
-                                                    type="text"
-                                                    value={editNodeForm.name}
-                                                    onChange={(e) => setEditNodeForm({
-                                                        ...editNodeForm,
-                                                        name: e.target.value
-                                                    })}
-                                                    className="edit-input"
-                                                    placeholder="标题"
-                                                />
-                                                <textarea
-                                                    value={editNodeForm.description}
-                                                    onChange={(e) => setEditNodeForm({
-                                                        ...editNodeForm,
-                                                        description: e.target.value
-                                                    })}
-                                                    className="edit-textarea"
-                                                    rows="2"
-                                                    placeholder="概述"
-                                                />
-                                            </>
-                                        ) : (
-                                            <>
-                                                <h3 className="admin-domain-title">{node.name}</h3>
-                                                <p className="admin-domain-description">{node.description || '暂无概述'}</p>
-                                            </>
-                                        )}
+                                        <h3 className="admin-domain-title">{node.name}</h3>
                                     </div>
 
                                     <div className="admin-domain-title-meta">
@@ -2933,39 +4717,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                         <span className="admin-domain-meta-item">创建时间：{new Date(node.createdAt).toLocaleString('zh-CN')}</span>
                                         <span className="admin-domain-meta-item">知识点：{(node.knowledgePoint?.value || 0).toFixed(2)}</span>
                                         <span className="admin-domain-meta-item">释义数：{node.senses.length}</span>
-                                        {editingNode === node._id ? (
-                                            <>
-                                                <label className="admin-domain-meta-edit">
-                                                    繁荣度
-                                                    <input
-                                                        type="number"
-                                                        value={editNodeForm.prosperity}
-                                                        onChange={(e) => setEditNodeForm({
-                                                            ...editNodeForm,
-                                                            prosperity: parseInt(e.target.value, 10)
-                                                        })}
-                                                        className="edit-input-small"
-                                                    />
-                                                </label>
-                                                <label className="admin-domain-meta-edit">
-                                                    内容分数
-                                                    <input
-                                                        type="number"
-                                                        value={editNodeForm.contentScore}
-                                                        onChange={(e) => setEditNodeForm({
-                                                            ...editNodeForm,
-                                                            contentScore: parseInt(e.target.value, 10)
-                                                        })}
-                                                        className="edit-input-small"
-                                                    />
-                                                </label>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <span className="admin-domain-meta-item">繁荣度：{Math.round(node.prosperity || 0)}</span>
-                                                <span className="admin-domain-meta-item">内容分数：{node.contentScore || 1}</span>
-                                            </>
-                                        )}
+                                        <span className="admin-domain-meta-item">繁荣度：{Math.round(node.prosperity || 0)}</span>
+                                        <span className="admin-domain-meta-item">内容分数：{node.contentScore || 1}</span>
                                     </div>
                                 </div>
 
@@ -2986,80 +4739,115 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                     {node.isFeatured && (
                                         <span className="featured-badge-small">热门排序：{node.featuredOrder || 0}</span>
                                     )}
-                                    {editingNode === node._id ? (
-                                        <>
-                                            <button
-                                                onClick={() => saveNodeEdit(node._id)}
-                                                className="btn-action btn-save"
-                                            >
-                                                保存标题
-                                            </button>
-                                            <button
-                                                onClick={() => setEditingNode(null)}
-                                                className="btn-action btn-cancel"
-                                            >
-                                                取消
-                                            </button>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <button
-                                                onClick={() => startEditNode(node)}
-                                                className="btn-action btn-edit"
-                                            >
-                                                编辑标题
-                                            </button>
-                                            <button
-                                                onClick={() => openDeleteNodeConfirmModal(node)}
-                                                className="btn-action btn-delete"
-                                            >
-                                                删除标题
-                                            </button>
-                                        </>
-                                    )}
+                                    <button
+                                        onClick={() => startEditNode(node)}
+                                        className="btn-action btn-edit"
+                                    >
+                                        编辑标题
+                                    </button>
+                                    <button
+                                        onClick={() => openAddSenseModal(node)}
+                                        className="btn-action btn-primary-small"
+                                    >
+                                        新增释义
+                                    </button>
+                                    <button
+                                        onClick={() => openDeleteNodeConfirmModal(node)}
+                                        className="btn-action btn-delete"
+                                    >
+                                        删除标题
+                                    </button>
                                 </div>
 
                                 <div className="admin-domain-sense-list">
                                     {node.senses.map((sense) => (
-                                        <div key={`${node._id}_${sense.senseId}`} className="admin-domain-sense-item">
+                                        <div
+                                            key={`${node._id}_${sense.senseId}`}
+                                            className={`admin-domain-sense-item ${editingSenseToken === getSenseEditToken(node._id, sense.senseId) ? 'is-editing' : ''}`}
+                                        >
                                             <div className="admin-domain-sense-main">
                                                 <div className="admin-domain-sense-title-row">
-                                                    <h4 className="admin-domain-sense-title">{sense.title}</h4>
+                                                    {editingSenseToken === getSenseEditToken(node._id, sense.senseId) ? (
+                                                        <div className="admin-field-with-error">
+                                                            <input
+                                                                type="text"
+                                                                className="edit-input"
+                                                                value={editingSenseForm.title}
+                                                                onChange={(e) => setEditingSenseForm((prev) => ({
+                                                                    ...prev,
+                                                                    title: e.target.value
+                                                                }))}
+                                                                placeholder="释义题目"
+                                                            />
+                                                            {String(editingSenseForm.title || '').trim() === '' && (
+                                                                <span className="error-text inline-field-error">释义题目不能为空</span>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <h4 className="admin-domain-sense-title">{sense.title}</h4>
+                                                    )}
                                                     <span className="admin-domain-sense-count">
                                                         关联 {sense.associationSummary.all.length}
                                                     </span>
                                                 </div>
-                                                <p className="admin-domain-sense-content">{sense.content || '暂无释义内容'}</p>
-
-                                                <div className="admin-domain-sense-relations">
-                                                    {sense.associationSummary.all.length > 0 ? (
-                                                        sense.associationSummary.all.map((item) => (
-                                                            <span
-                                                                key={item.id}
-                                                                className={`admin-domain-relation-chip ${item.direction}`}
-                                                                title={item.displayText}
-                                                            >
-                                                                {item.displayText}
-                                                            </span>
-                                                        ))
-                                                    ) : (
-                                                        <span className="admin-domain-relation-empty">暂无关联</span>
-                                                    )}
-                                                </div>
+                                                {editingSenseToken === getSenseEditToken(node._id, sense.senseId) && (
+                                                    <div className="admin-field-with-error">
+                                                        <textarea
+                                                            className="edit-textarea admin-domain-sense-edit-textarea"
+                                                            rows={4}
+                                                            value={editingSenseForm.content}
+                                                            onChange={(e) => setEditingSenseForm((prev) => ({
+                                                                ...prev,
+                                                                content: e.target.value
+                                                            }))}
+                                                            placeholder="释义内容"
+                                                        />
+                                                        {String(editingSenseForm.content || '').trim() === '' && (
+                                                            <span className="error-text inline-field-error">释义内容不能为空</span>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </div>
 
                                             <div className="admin-domain-sense-actions">
+                                                {editingSenseToken === getSenseEditToken(node._id, sense.senseId) ? (
+                                                    <>
+                                                        <button
+                                                            onClick={() => saveSenseTextEdit(node, sense)}
+                                                            className="btn-action btn-save"
+                                                            disabled={editingSenseActionToken === getSenseEditToken(node._id, sense.senseId)}
+                                                        >
+                                                            {editingSenseActionToken === getSenseEditToken(node._id, sense.senseId) ? '保存中...' : '保存文本'}
+                                                        </button>
+                                                        <button
+                                                            onClick={cancelEditSenseText}
+                                                            className="btn-action btn-cancel"
+                                                            disabled={editingSenseActionToken === getSenseEditToken(node._id, sense.senseId)}
+                                                        >
+                                                            取消
+                                                        </button>
+                                                    </>
+                                                ) : (
+                                                    <button
+                                                        onClick={() => startEditSenseText(node, sense)}
+                                                        className="btn-action btn-edit"
+                                                    >
+                                                        编辑文本
+                                                    </button>
+                                                )}
                                                 <button
-                                                    onClick={() => openAssociationModal(node)}
-                                                    className="btn-action btn-view"
+                                                    onClick={() => openEditAssociationModal(node, sense)}
+                                                    className="btn-action btn-edit"
+                                                    disabled={editingSenseActionToken === getSenseEditToken(node._id, sense.senseId)}
                                                 >
-                                                    查看关联
+                                                    关联管理
                                                 </button>
                                                 <button
-                                                    onClick={() => openEditAssociationModal(node)}
-                                                    className="btn-action btn-edit"
+                                                    onClick={() => openDeleteSenseModal(node, sense)}
+                                                    className="btn-action btn-delete"
+                                                    disabled={editingSenseActionToken === getSenseEditToken(node._id, sense.senseId)}
                                                 >
-                                                    编辑关联
+                                                    删除释义
                                                 </button>
                                             </div>
                                         </div>
@@ -3068,18 +4856,44 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                             </div>
                         ))}
                     </div>
+                    <div className="admin-list-pagination">
+                        <div className="admin-list-page-info">
+                            {isAdminDomainLoading
+                                ? '加载中...'
+                                : `第 ${adminDomainPagination.page} / ${Math.max(1, adminDomainPagination.totalPages || 1)} 页`}
+                        </div>
+                        <div className="admin-list-page-actions">
+                            <button
+                                type="button"
+                                className="btn btn-small btn-secondary"
+                                onClick={() => fetchAllNodes(adminDomainPagination.page - 1, adminDomainSearchKeyword)}
+                                disabled={isAdminDomainLoading || adminDomainPagination.page <= 1}
+                            >
+                                上一页
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-small btn-secondary"
+                                onClick={() => fetchAllNodes(adminDomainPagination.page + 1, adminDomainSearchKeyword)}
+                                disabled={isAdminDomainLoading || (adminDomainPagination.totalPages > 0 && adminDomainPagination.page >= adminDomainPagination.totalPages)}
+                            >
+                                下一页
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 
             {/* 熵盟管理选项卡 */}
             {adminTab === 'alliances' && (
                 <div className="alliances-admin-container">
-                    <div className="table-info">
-                        <p>总熵盟数: <strong>{adminAlliances.length}</strong></p>
+                    <div className="table-info alliances-admin-toolbar">
+                        <p>总熵盟数: <strong>{adminAlliancePagination.total}</strong></p>
                         <button
-                            onClick={fetchAdminAlliances}
+                            onClick={() => fetchAdminAlliances(adminAlliancePage)}
                             className="btn btn-primary"
                             style={{ marginLeft: '1rem' }}
+                            disabled={isAdminAllianceLoading}
                         >
                             刷新数据
                         </button>
@@ -3197,9 +5011,467 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
                         {adminAlliances.length === 0 && (
                             <div className="empty-alliances-admin">
-                                <p>暂无熵盟</p>
+                                <p>{isAdminAllianceLoading ? '加载中...' : '暂无熵盟'}</p>
                             </div>
                         )}
+                    </div>
+                    <div className="alliances-admin-pagination">
+                        <div className="alliances-admin-page-info">
+                            {isAdminAllianceLoading
+                                ? '加载中...'
+                                : `第 ${adminAlliancePagination.page} / ${Math.max(1, adminAlliancePagination.totalPages || 1)} 页`}
+                        </div>
+                        <div className="alliances-admin-page-actions">
+                            <button
+                                type="button"
+                                className="btn btn-small btn-secondary"
+                                onClick={() => fetchAdminAlliances(adminAlliancePagination.page - 1)}
+                                disabled={isAdminAllianceLoading || adminAlliancePagination.page <= 1}
+                            >
+                                上一页
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-small btn-secondary"
+                                onClick={() => fetchAdminAlliances(adminAlliancePagination.page + 1)}
+                                disabled={isAdminAllianceLoading || (adminAlliancePagination.totalPages > 0 && adminAlliancePagination.page >= adminAlliancePagination.totalPages)}
+                            >
+                                下一页
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showEditNodeModal && editingNode && (
+                <div className="modal-backdrop" onClick={closeEditNodeModal}>
+                    <div className="modal-content admin-edit-domain-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>编辑知识域标题</h3>
+                            <button className="btn-close" onClick={closeEditNodeModal} disabled={isSavingNodeEdit}>
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <div className="form-group">
+                                <label>标题</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={editNodeForm.name}
+                                    onChange={(e) => setEditNodeForm((prev) => ({ ...prev, name: e.target.value }))}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label>概述</label>
+                                <textarea
+                                    className="form-textarea"
+                                    rows={4}
+                                    value={editNodeForm.description}
+                                    onChange={(e) => setEditNodeForm((prev) => ({ ...prev, description: e.target.value }))}
+                                />
+                            </div>
+                            <div className="admin-modal-grid-fields">
+                                <label>
+                                    知识点
+                                    <input
+                                        type="number"
+                                        className="edit-input"
+                                        value={editNodeForm.knowledgePoint}
+                                        onChange={(e) => setEditNodeForm((prev) => ({ ...prev, knowledgePoint: e.target.value }))}
+                                    />
+                                </label>
+                                <label>
+                                    繁荣度
+                                    <input
+                                        type="number"
+                                        className="edit-input"
+                                        value={editNodeForm.prosperity}
+                                        onChange={(e) => setEditNodeForm((prev) => ({ ...prev, prosperity: e.target.value }))}
+                                    />
+                                </label>
+                                <label>
+                                    内容分数
+                                    <input
+                                        type="number"
+                                        className="edit-input"
+                                        value={editNodeForm.contentScore}
+                                        onChange={(e) => setEditNodeForm((prev) => ({ ...prev, contentScore: e.target.value }))}
+                                    />
+                                </label>
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn btn-secondary" onClick={closeEditNodeModal} disabled={isSavingNodeEdit}>取消</button>
+                            <button className="btn btn-primary" onClick={() => saveNodeEdit(editingNode)} disabled={isSavingNodeEdit}>
+                                {isSavingNodeEdit ? '保存中...' : '保存标题'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showAddSenseModal && addingSenseNode && (
+                <div className="modal-backdrop" onClick={closeAddSenseModal}>
+                    <div className="modal-content admin-add-sense-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>新增释义：{addingSenseNode.name}</h3>
+                            <button className="btn-close" onClick={closeAddSenseModal} disabled={isSavingNewSense}>
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <div className="form-group">
+                                <label>释义题目</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={newSenseForm.title}
+                                    onChange={(e) => setNewSenseForm((prev) => ({ ...prev, title: e.target.value }))}
+                                    placeholder="同一知识域下不可重名"
+                                />
+                                {String(newSenseForm.title || '').trim() === '' && (
+                                    <span className="error-text inline-field-error">释义题目不能为空</span>
+                                )}
+                            </div>
+                            <div className="form-group">
+                                <label>释义内容</label>
+                                <textarea
+                                    className="form-textarea"
+                                    rows={4}
+                                    value={newSenseForm.content}
+                                    onChange={(e) => setNewSenseForm((prev) => ({ ...prev, content: e.target.value }))}
+                                />
+                                {String(newSenseForm.content || '').trim() === '' && (
+                                    <span className="error-text inline-field-error">释义内容不能为空</span>
+                                )}
+                            </div>
+
+                            <div className="admin-add-sense-relations">
+                                <div className="admin-add-sense-relations-header">
+                                    <h4>关联关系（至少 1 条）</h4>
+                                    <span>已添加 {newSenseForm.relations.length} 条</span>
+                                </div>
+
+                                <div className="admin-assoc-relation-cards">
+                                    {NEW_SENSE_RELATION_OPTIONS.map((option) => {
+                                        const isActive = newSenseForm.relationType === option.value;
+                                        const iconClass = option.value === ASSOC_RELATION_TYPES.CONTAINS
+                                            ? 'contains'
+                                            : (option.value === ASSOC_RELATION_TYPES.EXTENDS ? 'extends' : 'insert');
+                                        const iconText = option.value === ASSOC_RELATION_TYPES.CONTAINS
+                                            ? '↓'
+                                            : (option.value === ASSOC_RELATION_TYPES.EXTENDS ? '↑' : '⇄');
+                                        const hintText = option.value === ASSOC_RELATION_TYPES.CONTAINS
+                                            ? '当前释义作为上级（包含目标）'
+                                            : (option.value === ASSOC_RELATION_TYPES.EXTENDS
+                                                ? '当前释义作为下级（扩展目标）'
+                                                : '当前释义插入在两个释义之间');
+                                        return (
+                                            <div
+                                                key={`new_sense_relation_${option.value}`}
+                                                className={`admin-assoc-relation-card ${isActive ? 'active' : ''}`}
+                                                onClick={() => {
+                                                    setNewSenseTargetSide(option.value === ASSOC_RELATION_TYPES.INSERT ? 'left' : 'single');
+                                                    setNewSenseForm((prev) => (
+                                                        prev.relationType === option.value
+                                                            ? prev
+                                                            : {
+                                                                ...prev,
+                                                                relationType: option.value,
+                                                                selectedTarget: null,
+                                                                insertLeftTarget: null,
+                                                                insertRightTarget: null,
+                                                                insertDirection: ASSOC_RELATION_TYPES.CONTAINS,
+                                                                insertDirectionLocked: false,
+                                                                insertDirectionHint: '先选择左右释义，再确认插入关系。'
+                                                            }
+                                                    ));
+                                                }}
+                                                role="button"
+                                                tabIndex={0}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' || e.key === ' ') {
+                                                        e.preventDefault();
+                                                        e.currentTarget.click();
+                                                    }
+                                                }}
+                                            >
+                                                <div className={`admin-assoc-relation-icon ${iconClass}`}>{iconText}</div>
+                                                <div className="admin-assoc-relation-content">
+                                                    <h6>{option.label}</h6>
+                                                    <p>{hintText}</p>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                {newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT && (
+                                    <>
+                                        <div className="admin-add-sense-insert-targets">
+                                            <button
+                                                type="button"
+                                                className={`btn-action ${newSenseTargetSide === 'left' ? 'btn-primary-small' : 'btn-view'}`}
+                                                onClick={() => setNewSenseTargetSide('left')}
+                                            >
+                                                左侧：{newSenseForm.insertLeftTarget?.displayName || '未选择'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className={`btn-action ${newSenseTargetSide === 'right' ? 'btn-primary-small' : 'btn-view'}`}
+                                                onClick={() => setNewSenseTargetSide('right')}
+                                            >
+                                                右侧：{newSenseForm.insertRightTarget?.displayName || '未选择'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="btn-action btn-secondary"
+                                                onClick={() => {
+                                                    if (newSenseForm.insertDirectionLocked) return;
+                                                    setNewSenseForm((prev) => ({
+                                                        ...prev,
+                                                        insertDirection: prev.insertDirection === ASSOC_RELATION_TYPES.EXTENDS
+                                                            ? ASSOC_RELATION_TYPES.CONTAINS
+                                                            : ASSOC_RELATION_TYPES.EXTENDS
+                                                    }));
+                                                }}
+                                                disabled={newSenseForm.insertDirectionLocked}
+                                            >
+                                                方向：{newSenseForm.insertDirection === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→'}
+                                            </button>
+                                        </div>
+                                        <p className={`admin-add-sense-insert-hint ${newSenseForm.insertDirectionLocked ? 'locked' : ''}`}>
+                                            {newSenseForm.insertDirectionHint}
+                                        </p>
+                                    </>
+                                )}
+
+                                {newSenseForm.relationType !== ASSOC_RELATION_TYPES.INSERT && (
+                                    <p className="admin-add-sense-selected-target">
+                                        当前目标：{newSenseForm.selectedTarget?.displayName || '未选择'}
+                                    </p>
+                                )}
+
+                                <div className="search-input-group">
+                                    <input
+                                        type="text"
+                                        className="form-input"
+                                        value={newSenseSearchKeyword}
+                                        onChange={(e) => setNewSenseSearchKeyword(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                searchTargetsForNewSense();
+                                            }
+                                        }}
+                                        placeholder={newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT
+                                            ? '搜索标题或释义题目（支持 #include / #expand）'
+                                            : '搜索标题或释义题目'}
+                                    />
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={() => searchTargetsForNewSense()}
+                                        disabled={newSenseSearchLoading}
+                                    >
+                                        {newSenseSearchLoading ? '搜索中...' : '搜索'}
+                                    </button>
+                                </div>
+                                {newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT && (
+                                    <p className="admin-assoc-step-description" style={{ marginTop: '0.45rem', marginBottom: '0.45rem' }}>
+                                        可输入 <code>#include</code> 仅看另一侧释义上级，<code>#expand</code> 仅看另一侧释义下级。
+                                        {!newSenseAnchorTarget && newSenseKeywordMeta.mode && '（请先选择另一侧释义）'}
+                                    </p>
+                                )}
+
+                                {newSenseSearchResults.length > 0 && (
+                                    <div className="admin-add-sense-search-results admin-assoc-candidate-list">
+                                        {newSenseSearchResults.map((item) => (
+                                            <button
+                                                key={item.searchKey}
+                                                type="button"
+                                                className="search-result-item selectable admin-assoc-candidate-item"
+                                                onClick={() => chooseNewSenseTarget(item)}
+                                            >
+                                                <div className="node-info">
+                                                    <div className="node-title-row">
+                                                        {newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT && !!item.relationToAnchor && (
+                                                            <span className={`relation-prefix relation-${item.relationToAnchor || 'none'}`}>
+                                                                {item.relationToAnchor}
+                                                            </span>
+                                                        )}
+                                                        <strong>{item.displayName}</strong>
+                                                    </div>
+                                                    <span className="node-description">{item.description || '无释义内容'}</span>
+                                                </div>
+                                                <ArrowRight className="icon-small" />
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                                {newSenseSearchResults.length === 0 && (newSenseKeywordMeta.textKeyword || newSenseKeywordMeta.mode) && !newSenseSearchLoading && (
+                                    <p className="admin-assoc-step-description" style={{ marginTop: '0.45rem' }}>没有匹配结果</p>
+                                )}
+
+                                <button type="button" className="btn btn-success admin-add-sense-add-relation-btn" onClick={addRelationToNewSense}>
+                                    添加当前关系
+                                </button>
+
+                                <div className="admin-add-sense-added-relations">
+                                    {newSenseForm.relations.length > 0 ? (
+                                        newSenseForm.relations.map((relation) => (
+                                            <div key={relation.id} className="admin-add-sense-relation-item">
+                                                {relation.kind === ASSOC_RELATION_TYPES.INSERT ? (
+                                                    <span>
+                                                        插入：{relation.leftTarget?.displayName || '未知'} {relation.direction === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→'} 当前释义 {relation.direction === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→'} {relation.rightTarget?.displayName || '未知'}
+                                                    </span>
+                                                ) : (
+                                                    <span>
+                                                        {relation.relationType === ASSOC_RELATION_TYPES.CONTAINS ? '包含' : '扩展'}：{relation.target?.displayName || '未知'}
+                                                    </span>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-danger btn-small"
+                                                    onClick={() => removeRelationFromNewSense(relation.id)}
+                                                >
+                                                    删除
+                                                </button>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <p className="admin-add-sense-empty-relations">当前还没有关联关系</p>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn btn-secondary" onClick={closeAddSenseModal} disabled={isSavingNewSense}>取消</button>
+                            <button className="btn btn-primary" onClick={saveNewSense} disabled={isSavingNewSense}>
+                                {isSavingNewSense ? '保存中...' : '确认新增释义'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showDeleteSenseModal && deletingSenseContext?.node && deletingSenseContext?.sense && (
+                <div className="modal-backdrop" onClick={closeDeleteSenseModal}>
+                    <div className="modal-content admin-delete-domain-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>删除释义确认：{deletingSenseContext.sense.title}</h3>
+                            <button className="btn-close" onClick={closeDeleteSenseModal}>
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <p className="admin-delete-domain-hint">
+                                删除后将清理该释义全部关联。请先查看删除前/删除后关联变化并确认承接策略。
+                            </p>
+
+                            <div className="admin-delete-domain-total-preview">
+                                <span>删除前关联总数：{deleteSenseBeforeRelations.length}</span>
+                                <span>删除后关联总数：{deleteSenseAfterRelations.length}</span>
+                            </div>
+
+                            {deleteSensePreviewLoading && (
+                                <div className="admin-delete-domain-loading">正在计算删除前后关联预览...</div>
+                            )}
+
+                            <div className="admin-delete-domain-before-after-grid global">
+                                <div className="admin-delete-domain-before-after-block before">
+                                    <h6>删除前</h6>
+                                    <div className="admin-delete-domain-assoc-list">
+                                        {deleteSenseBeforeRelations.length > 0 ? (
+                                            deleteSenseBeforeRelations.map((line, index) => (
+                                                <span key={`del_sense_before_${index}`} className="admin-delete-domain-assoc-chip outgoing">
+                                                    {`${line.source?.displayName || '未知释义'} ${formatRelationArrowText(line.relationType)} ${line.target?.displayName || '未知释义'}`}
+                                                </span>
+                                            ))
+                                        ) : (
+                                            <span className="admin-delete-domain-assoc-empty">删除前无关联</span>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="admin-delete-domain-before-after-block after">
+                                    <h6>删除后</h6>
+                                    <div className="admin-delete-domain-assoc-list">
+                                        {deleteSenseAfterRelations.length > 0 ? (
+                                            deleteSenseAfterRelations.map((line, index) => (
+                                                <span key={`del_sense_after_${index}`} className="admin-delete-domain-assoc-chip incoming">
+                                                    {`${line.source?.displayName || '未知释义'} ${formatRelationArrowText(line.relationType)} ${line.target?.displayName || '未知释义'}`}
+                                                </span>
+                                            ))
+                                        ) : (
+                                            <span className="admin-delete-domain-assoc-empty">删除后未保留该释义关联</span>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {deleteSenseBridgeDecisionItems.length > 0 && (
+                                <div className="admin-delete-bridge-decision-section">
+                                    <h6>承接关系逐条确认</h6>
+                                    <p className="admin-assoc-step-description" style={{ marginBottom: '0.45rem' }}>
+                                        对每组“上级-将删除释义-下级”选择删除后是保留承接还是断开独立。
+                                    </p>
+                                    {(deleteSensePreviewData?.unresolvedBridgeDecisionCount || 0) > 0 && (
+                                        <p className="admin-assoc-step-description" style={{ marginBottom: '0.45rem', color: '#fca5a5' }}>
+                                            尚有 {deleteSensePreviewData.unresolvedBridgeDecisionCount} 组未确认，不能删除。
+                                        </p>
+                                    )}
+                                    <div className="admin-bridge-decision-list">
+                                        {(deleteSensePreviewSummary?.lostBridgePairs || []).map((pair, index) => {
+                                            const pairKey = pair.pairKey;
+                                            const selectedAction = deleteSenseBridgeDecisions[pairKey] || '';
+                                            return (
+                                                <div key={pairKey || `del_sense_bridge_${index}`} className="admin-bridge-decision-item">
+                                                    <div className="admin-bridge-decision-line">
+                                                        <span>{pair.upper?.displayName || '未知上级释义'}</span>
+                                                        <span className="arrow">⇢ {getSenseTitleById(deletingSenseContext.node, pair.sourceSenseId) || '当前释义'} ⇢</span>
+                                                        <span>{pair.lower?.displayName || '未知下级释义'}</span>
+                                                    </div>
+                                                    <div className="admin-bridge-decision-actions">
+                                                        <button
+                                                            className={`admin-bridge-decision-btn ${selectedAction === 'reconnect' ? 'active reconnect' : ''}`}
+                                                            onClick={() => {
+                                                                const next = { ...deleteSenseBridgeDecisions, [pairKey]: 'reconnect' };
+                                                                setDeleteSenseBridgeDecisions(next);
+                                                                fetchDeleteSensePreview(deletingSenseContext.node, deletingSenseContext.sense, next);
+                                                            }}
+                                                            disabled={deleteSensePreviewLoading || isDeletingSense}
+                                                        >
+                                                            保留承接
+                                                        </button>
+                                                        <button
+                                                            className={`admin-bridge-decision-btn ${selectedAction === 'disconnect' ? 'active disconnect' : ''}`}
+                                                            onClick={() => {
+                                                                const next = { ...deleteSenseBridgeDecisions, [pairKey]: 'disconnect' };
+                                                                setDeleteSenseBridgeDecisions(next);
+                                                                fetchDeleteSensePreview(deletingSenseContext.node, deletingSenseContext.sense, next);
+                                                            }}
+                                                            disabled={deleteSensePreviewLoading || isDeletingSense}
+                                                        >
+                                                            断开独立
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn btn-secondary" onClick={closeDeleteSenseModal} disabled={isDeletingSense}>取消</button>
+                            <button
+                                className="btn btn-danger"
+                                onClick={deleteSense}
+                                disabled={isDeletingSense || deleteSensePreviewLoading || (deleteSensePreviewData?.unresolvedBridgeDecisionCount || 0) > 0}
+                            >
+                                {isDeletingSense ? '删除中...' : '确认删除释义'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -3385,61 +5657,12 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 </div>
             )}
 
-            {/* View Association Modal */}
-            {showAssociationModal && viewingAssociationNode && (
-                <div className="modal-backdrop" onClick={() => setShowAssociationModal(false)}>
-                    <div className="modal-content association-modal" onClick={e => e.stopPropagation()}>
-                        <div className="modal-header">
-                            <h2>节点关联详情: {viewingAssociationNode.name}</h2>
-                            <button className="btn-close" onClick={() => setShowAssociationModal(false)}><X size={20} /></button>
-                        </div>
-                        <div className="modal-body">
-                            <div className="association-section">
-                                <h4 className="section-title">母域节点</h4>
-                                <p className="association-hint">当前节点拓展了以下节点（或者说，以下节点包含当前节点）</p>
-                                <div className="association-list">
-                                    {viewingAssociationNode.relatedParentDomains?.length > 0 ? (
-                                        <ul>
-                                            {viewingAssociationNode.relatedParentDomains.map((domain, i) => (
-                                                <li key={i} className="domain-item parent-domain">
-                                                    <span className="domain-badge parent">⬆ 母域</span>
-                                                    {domain}
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    ) : <p className="empty-message">暂无母域节点</p>}
-                                </div>
-                            </div>
-                            <div className="association-section">
-                                <h4 className="section-title">子域节点</h4>
-                                <p className="association-hint">以下节点拓展了当前节点（或者说，当前节点包含以下节点）</p>
-                                <div className="association-list">
-                                    {viewingAssociationNode.relatedChildDomains?.length > 0 ? (
-                                        <ul>
-                                            {viewingAssociationNode.relatedChildDomains.map((domain, i) => (
-                                                <li key={i} className="domain-item child-domain">
-                                                    <span className="domain-badge child">⬇ 子域</span>
-                                                    {domain}
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    ) : <p className="empty-message">暂无子域节点</p>}
-                                </div>
-                            </div>
-                        </div>
-                        <div className="modal-footer">
-                            <button className="btn btn-secondary" onClick={() => setShowAssociationModal(false)}>关闭</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             {/* Edit Association Modal */}
             {showEditAssociationModal && editingAssociationNode && (
-                <div className="modal-backdrop" onClick={closeEditAssociationModal}>
+                <div className="modal-backdrop">
                     <div className="modal-content admin-edit-association-modal" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h3>编辑关联: {editingAssociationNode.name}</h3>
+                            <h3>编辑释义关联: {formatNodeSenseDisplay(editingAssociationNode, editingAssociationSenseId)}</h3>
                             <button className="btn-close" onClick={closeEditAssociationModal}><X size={20} /></button>
                         </div>
                         <div className="modal-body">
@@ -3449,7 +5672,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                     onClick={() => setIsEditAssociationListExpanded(!isEditAssociationListExpanded)}
                                 >
                                     <h4>
-                                        关联关系
+                                        释义关联关系
                                         <span className="association-count">({editAssociations.length})</span>
                                     </h4>
                                     {isEditAssociationListExpanded ? <ChevronUp className="icon-small" /> : <ChevronDown className="icon-small" />}
@@ -3460,12 +5683,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                         {editAssociations.map((association, index) => (
                                             <div
                                                 key={index}
-                                                className={`admin-edit-association-item ${assocCurrentStep === null ? 'clickable' : ''}`}
-                                                onClick={() => {
-                                                    if (assocCurrentStep === null) {
-                                                        editExistingAssociation(index);
-                                                    }
-                                                }}
+                                                className="admin-edit-association-item clickable"
+                                                onClick={() => editExistingAssociation(index)}
                                             >
                                                 <div className="admin-edit-association-info">
                                                     <span className="admin-edit-association-display">{association.displayText}</span>
@@ -3557,7 +5776,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                             <button
                                 className="btn btn-secondary"
                                 onClick={() => previewAssociationEdit()}
-                                disabled={assocCurrentStep !== null || assocPreviewLoading || assocApplyLoading}
+                                disabled={editAssociations.length === 0 || assocCurrentStep !== null || assocPreviewLoading || assocApplyLoading}
                             >
                                 {assocPreviewLoading ? '预览中...' : '预览变更'}
                             </button>
@@ -3565,6 +5784,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                 className="btn btn-primary"
                                 onClick={saveAssociationEdit}
                                 disabled={
+                                    editAssociations.length === 0
+                                    || 
                                     !assocMutationPreview
                                     || (assocMutationPreview?.unresolvedBridgeDecisionCount || 0) > 0
                                     || assocCurrentStep !== null

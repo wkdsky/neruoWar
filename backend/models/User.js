@@ -354,5 +354,9 @@ userSchema.index({ role: 1 });
 userSchema.index({ allianceId: 1, role: 1 });
 userSchema.index({ location: 1, role: 1 });
 userSchema.index({ 'travelState.status': 1, role: 1 });
+userSchema.index({ allianceId: 1, createdAt: -1 });
+userSchema.index({ role: 1, location: 1, _id: 1 });
+userSchema.index({ role: 1, 'travelState.targetNodeId': 1, 'travelState.status': 1 });
+userSchema.index({ role: 1, 'travelState.stoppingNearestNodeId': 1, 'travelState.status': 1 });
 
 module.exports = mongoose.model('User', userSchema);

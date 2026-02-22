@@ -28,24 +28,57 @@ class MiniPreviewRenderer {
    * @param {string} config.relationType - 关系类型 'extends' | 'contains' | 'insert'
    * @param {string} config.newNodeName - 新节点名称
    * @param {string} config.insertDirection - 插入方向 'aToB' | 'bToA'
+   * @param {string} config.nodeALabel - 节点 A 标签（可传标题-释义）
+   * @param {string} config.nodeBLabel - 节点 B 标签（可传标题-释义）
+   * @param {string} config.newNodeLabel - 当前节点标签（可传标题-释义）
    */
   setPreviewScene(config) {
-    const { nodeA, nodeB, relationType, newNodeName, insertDirection } = config;
+    const {
+      nodeA,
+      nodeB,
+      relationType,
+      newNodeName,
+      insertDirection,
+      nodeALabel,
+      nodeBLabel,
+      newNodeLabel
+    } = config;
 
     const centerX = this.canvas.width / 2;
     const centerY = this.canvas.height / 2;
-    const radius = 35;
-    const distance = 100;
+    const minSize = Math.min(this.canvas.width, this.canvas.height);
+    const radius = Math.max(24, Math.floor(minSize * 0.125));
+    const distance = Math.max(88, Math.floor(minSize * 0.48));
 
     this.nodes = [];
     this.lines = [];
+    this.previewNode = null;
 
     if (relationType === 'insert' && nodeB) {
       // 插入模式：三个节点
-      this.setupInsertPreview(centerX, centerY, radius, distance, nodeA, nodeB, newNodeName, insertDirection);
+      this.setupInsertPreview(
+        centerX,
+        centerY,
+        radius,
+        distance,
+        nodeA,
+        nodeB,
+        newNodeName,
+        insertDirection,
+        { nodeALabel, nodeBLabel, newNodeLabel }
+      );
     } else {
       // 简单模式：两个节点
-      this.setupSimplePreview(centerX, centerY, radius, distance, nodeA, newNodeName, relationType);
+      this.setupSimplePreview(
+        centerX,
+        centerY,
+        radius,
+        distance,
+        nodeA,
+        newNodeName,
+        relationType,
+        { nodeALabel, newNodeLabel }
+      );
     }
 
     this.startAnimation();
@@ -54,41 +87,48 @@ class MiniPreviewRenderer {
   /**
    * 设置简单关联预览（母域/子域）
    */
-  setupSimplePreview(centerX, centerY, radius, distance, nodeA, newNodeName, relationType) {
+  setupSimplePreview(centerX, centerY, radius, distance, nodeA, newNodeName, relationType, labels = {}) {
     const isExtends = relationType === 'extends';
+    const verticalOffset = Math.max(radius + 12, Math.floor(distance * 0.45));
+    const nodeAY = centerY + (isExtends ? verticalOffset : -verticalOffset);
+    const newNodeY = centerY + (isExtends ? -verticalOffset : verticalOffset);
+    const relationFrom = isExtends ? 'newNode' : 'nodeA';
+    const relationTo = isExtends ? 'nodeA' : 'newNode';
 
     // Node A 在中心
     this.nodes.push({
       id: 'nodeA',
       x: centerX,
-      y: centerY + (isExtends ? 40 : -40),
+      y: nodeAY,
       radius: radius,
-      label: nodeA?.name || 'Node A',
+      label: labels.nodeALabel || nodeA?.name || 'Node A',
       color: '#8b5cf6',
       glowColor: 'rgba(139, 92, 246, 0.3)',
-      isExisting: true
+      isExisting: true,
+      isBottomLevel: isExtends
     });
 
     // 新节点
     this.previewNode = {
       id: 'newNode',
       x: centerX,
-      y: centerY + (isExtends ? -60 : 60),
+      y: newNodeY,
       targetX: centerX,
-      targetY: centerY + (isExtends ? -60 : 60),
+      targetY: newNodeY,
       radius: radius,
-      label: newNodeName || '新节点',
+      label: labels.newNodeLabel || newNodeName || '新节点',
       color: '#38bdf8',
       glowColor: 'rgba(56, 189, 248, 0.4)',
       isPreview: true,
       opacity: 0,
-      scale: 0.5
+      scale: 0.5,
+      isBottomLevel: !isExtends
     };
 
-    // 连线
+    // 连线：始终从“包含者(上方)”指向“被包含者(下方)”
     this.lines.push({
-      from: 'nodeA',
-      to: 'newNode',
+      from: relationFrom,
+      to: relationTo,
       color: isExtends ? '#22c55e' : '#facc15',
       isDashed: true,
       opacity: 0,
@@ -99,37 +139,44 @@ class MiniPreviewRenderer {
   /**
    * 设置插入预览（三节点）
    */
-  setupInsertPreview(centerX, centerY, radius, distance, nodeA, nodeB, newNodeName, insertDirection) {
+  setupInsertPreview(centerX, centerY, radius, distance, nodeA, nodeB, newNodeName, insertDirection, labels = {}) {
     const isAtoB = insertDirection === 'aToB';
+    const verticalOffset = Math.max(radius + 24, Math.floor(distance * 0.62));
+    const topNodeId = isAtoB ? 'nodeA' : 'nodeB';
+    const bottomNodeId = isAtoB ? 'nodeB' : 'nodeA';
 
-    // Node A（上方或下方）
     this.nodes.push({
-      id: 'nodeA',
+      id: topNodeId,
       x: centerX,
-      y: centerY - 70,
+      y: centerY - verticalOffset,
       radius: radius * 0.9,
-      label: nodeA?.name || 'Node A',
+      label: isAtoB
+        ? (labels.nodeALabel || nodeA?.name || 'Node A')
+        : (labels.nodeBLabel || nodeB?.name || 'Node B'),
       color: '#8b5cf6',
       glowColor: 'rgba(139, 92, 246, 0.3)',
-      isExisting: true
+      isExisting: true,
+      isBottomLevel: false
     });
 
-    // Node B（下方或上方）
     this.nodes.push({
-      id: 'nodeB',
+      id: bottomNodeId,
       x: centerX,
-      y: centerY + 70,
+      y: centerY + verticalOffset,
       radius: radius * 0.9,
-      label: nodeB?.name || 'Node B',
+      label: isAtoB
+        ? (labels.nodeBLabel || nodeB?.name || 'Node B')
+        : (labels.nodeALabel || nodeA?.name || 'Node A'),
       color: '#8b5cf6',
       glowColor: 'rgba(139, 92, 246, 0.3)',
-      isExisting: true
+      isExisting: true,
+      isBottomLevel: true
     });
 
     // 原有连线（将被移除）
     this.lines.push({
-      from: 'nodeA',
-      to: 'nodeB',
+      from: topNodeId,
+      to: bottomNodeId,
       color: '#64748b',
       isDashed: false,
       opacity: 1,
@@ -139,34 +186,35 @@ class MiniPreviewRenderer {
     // 新节点
     this.previewNode = {
       id: 'newNode',
-      x: centerX + 80,
+      x: centerX + Math.max(70, Math.floor(distance * 0.55)),
       y: centerY,
       targetX: centerX,
       targetY: centerY,
       radius: radius,
-      label: newNodeName || '新节点',
+      label: labels.newNodeLabel || newNodeName || '新节点',
       color: '#38bdf8',
       glowColor: 'rgba(56, 189, 248, 0.4)',
       isPreview: true,
       opacity: 0,
-      scale: 0.5
+      scale: 0.5,
+      isBottomLevel: false
     };
 
-    // 新连线 1：nodeA 到 newNode
+    // 新连线 1：上级节点到当前节点
     this.lines.push({
-      from: 'nodeA',
+      from: topNodeId,
       to: 'newNode',
-      color: isAtoB ? '#facc15' : '#22c55e',
+      color: '#facc15',
       isDashed: true,
       opacity: 0,
       isNew: true
     });
 
-    // 新连线 2：newNode 到 nodeB
+    // 新连线 2：当前节点到下级节点
     this.lines.push({
       from: 'newNode',
-      to: 'nodeB',
-      color: isAtoB ? '#22c55e' : '#facc15',
+      to: bottomNodeId,
+      color: '#22c55e',
       isDashed: true,
       opacity: 0,
       isNew: true
@@ -177,6 +225,7 @@ class MiniPreviewRenderer {
    * 开始动画
    */
   startAnimation() {
+    this.stopAnimation();
     this.isAnimating = true;
     this.startTime = performance.now();
     this.animate();
@@ -260,8 +309,8 @@ class MiniPreviewRenderer {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
 
-    // 绘制连线
-    this.renderLines();
+    // 先渲染光锥层，保证节点和文字都压在光锥之上
+    this.renderHierarchyBeams();
 
     // 绘制现有节点
     this.nodes.forEach(node => this.renderNode(node));
@@ -272,12 +321,30 @@ class MiniPreviewRenderer {
     }
   }
 
+  renderHierarchyBeams() {
+    const beamNodes = [
+      ...this.nodes,
+      ...(this.previewNode ? [this.previewNode] : [])
+    ]
+      .filter((node) => !!node && !node.isBottomLevel)
+      .sort((a, b) => (a.y || 0) - (b.y || 0));
+
+    beamNodes.forEach((node) => {
+      const scale = node?.scale || 1;
+      const radius = (node?.radius || 0) * scale;
+      if (!Number.isFinite(radius) || radius <= 0) return;
+      const baseOpacity = node?.isPreview ? 0.62 : 0.54;
+      const nodeOpacity = node?.isPreview ? Math.max(0, Math.min(1, Number(node?.opacity) || 0)) : 1;
+      const finalOpacity = baseOpacity * nodeOpacity;
+      if (finalOpacity <= 0) return;
+      this.renderHierarchyBeam(node.x, node.y, radius, node.color, finalOpacity);
+    });
+  }
+
   /**
    * 渲染连线
    */
   renderLines() {
-    const ctx = this.ctx;
-
     this.lines.forEach(line => {
       const fromNode = this.nodes.find(n => n.id === line.from) ||
                        (this.previewNode?.id === line.from ? this.previewNode : null);
@@ -286,25 +353,18 @@ class MiniPreviewRenderer {
 
       if (!fromNode || !toNode) return;
       if (line.opacity <= 0) return;
-
-      ctx.save();
-      ctx.globalAlpha = line.opacity;
-      ctx.strokeStyle = line.color;
-      ctx.lineWidth = 2;
-
-      if (line.isDashed) {
-        // 动态虚线
-        const dashOffset = this.animationPhase * 20;
-        ctx.setLineDash([8, 6]);
-        ctx.lineDashOffset = -dashOffset;
-      } else {
-        ctx.setLineDash([]);
-      }
+      if (
+        !Number.isFinite(fromNode.x) || !Number.isFinite(fromNode.y)
+        || !Number.isFinite(toNode.x) || !Number.isFinite(toNode.y)
+      ) return;
 
       // 计算连线起止点（从节点边缘开始）
       const dx = toNode.x - fromNode.x;
       const dy = toNode.y - fromNode.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
+      if (!Number.isFinite(dist) || dist < 0.0001) {
+        return;
+      }
       const nx = dx / dist;
       const ny = dy / dist;
 
@@ -316,15 +376,17 @@ class MiniPreviewRenderer {
       const endX = toNode.x - nx * toRadius;
       const endY = toNode.y - ny * toRadius;
 
-      ctx.beginPath();
-      ctx.moveTo(startX, startY);
-      ctx.lineTo(endX, endY);
-      ctx.stroke();
-
-      // 绘制箭头
-      this.drawArrow(ctx, endX, endY, Math.atan2(dy, dx), line.color);
-
-      ctx.restore();
+      this.renderTriangularConnection({
+        startX,
+        startY,
+        endX,
+        endY,
+        color: line.color,
+        opacity: line.opacity,
+        isRemoving: !!line.isRemoving,
+        isNew: !!line.isNew,
+        isDashed: !!line.isDashed
+      });
     });
   }
 
@@ -332,6 +394,7 @@ class MiniPreviewRenderer {
    * 绘制箭头
    */
   drawArrow(ctx, x, y, angle, color) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(angle)) return;
     const arrowSize = 8;
     ctx.save();
     ctx.fillStyle = color;
@@ -341,6 +404,119 @@ class MiniPreviewRenderer {
     ctx.moveTo(0, 0);
     ctx.lineTo(-arrowSize, -arrowSize / 2);
     ctx.lineTo(-arrowSize, arrowSize / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  renderTriangularConnection({
+    startX,
+    startY,
+    endX,
+    endY,
+    color = '#38bdf8',
+    opacity = 1,
+    isRemoving = false,
+    isNew = false,
+    isDashed = false
+  }) {
+    const ctx = this.ctx;
+    if (
+      !Number.isFinite(startX) || !Number.isFinite(startY)
+      || !Number.isFinite(endX) || !Number.isFinite(endY)
+      || opacity <= 0
+    ) return;
+
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (!Number.isFinite(dist) || dist < 0.0001) return;
+
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const px = -ny;
+    const py = nx;
+
+    const pulse = 1 + Math.sin(this.animationPhase * 4.5) * 0.08;
+    const baseWidth = (isRemoving ? 5 : 8) * pulse;
+    const tipWidth = (isRemoving ? 11 : 18) * pulse;
+    const midX = startX + dx * 0.74;
+    const midY = startY + dy * 0.74;
+
+    const p1x = startX + px * (baseWidth * 0.5);
+    const p1y = startY + py * (baseWidth * 0.5);
+    const p2x = startX - px * (baseWidth * 0.5);
+    const p2y = startY - py * (baseWidth * 0.5);
+    const p3x = midX + px * (tipWidth * 0.5);
+    const p3y = midY + py * (tipWidth * 0.5);
+    const p4x = endX;
+    const p4y = endY;
+    const p5x = midX - px * (tipWidth * 0.5);
+    const p5y = midY - py * (tipWidth * 0.5);
+
+    const animatedStrength = isDashed || isNew
+      ? (0.9 + Math.sin(this.animationPhase * 8) * 0.1)
+      : 1;
+    const alpha = Math.max(0.06, Math.min(1, opacity * animatedStrength));
+    const gradient = ctx.createLinearGradient(startX, startY, endX, endY);
+    gradient.addColorStop(0, this.colorToRgba(color, alpha * (isRemoving ? 0.35 : 0.68)));
+    gradient.addColorStop(0.68, this.colorToRgba(color, alpha * (isRemoving ? 0.24 : 0.46)));
+    gradient.addColorStop(1, this.colorToRgba(color, alpha * 0.02));
+
+    ctx.save();
+    ctx.fillStyle = gradient;
+    ctx.shadowColor = this.colorToRgba(color, isRemoving ? 0.26 : 0.62);
+    ctx.shadowBlur = isRemoving ? 8 : 16;
+
+    ctx.beginPath();
+    ctx.moveTo(p1x, p1y);
+    ctx.lineTo(p3x, p3y);
+    ctx.lineTo(p4x, p4y);
+    ctx.lineTo(p5x, p5y);
+    ctx.lineTo(p2x, p2y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  colorToRgba(color, alpha = 1) {
+    const safeAlpha = Math.max(0, Math.min(1, Number(alpha) || 0));
+    const hex = String(color || '').trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+      const value = parseInt(hex.slice(1), 16);
+      const r = (value >> 16) & 255;
+      const g = (value >> 8) & 255;
+      const b = value & 255;
+      return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+    return `rgba(56, 189, 248, ${safeAlpha})`;
+  }
+
+  renderHierarchyBeam(x, y, radius, color, opacity = 0.35) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius) || radius <= 0) return;
+    const ctx = this.ctx;
+    const topHalfWidth = Math.max(2, radius * 0.1);
+    const touchY = y + Math.sqrt(Math.max(0, radius * radius - topHalfWidth * topHalfWidth));
+    const topLeftX = x - topHalfWidth;
+    const topRightX = x + topHalfWidth;
+    const maxEndY = this.canvas.height - 4;
+    const beamBottomY = Math.min(maxEndY, touchY + radius * 3.45);
+    if (!Number.isFinite(beamBottomY) || beamBottomY <= touchY) return;
+    const bottomHalfWidth = Math.max(22, radius * 1.9);
+    const gradient = ctx.createLinearGradient(x, touchY, x, beamBottomY);
+    gradient.addColorStop(0, this.colorToRgba(color, opacity * 1.0));
+    gradient.addColorStop(0.48, this.colorToRgba(color, opacity * 0.62));
+    gradient.addColorStop(1, this.colorToRgba(color, opacity * 0.08));
+
+    ctx.save();
+    ctx.fillStyle = gradient;
+    ctx.shadowColor = this.colorToRgba(color, opacity * 0.85);
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.moveTo(topLeftX, touchY);
+    ctx.lineTo(topRightX, touchY);
+    ctx.lineTo(x + bottomHalfWidth, beamBottomY);
+    ctx.lineTo(x - bottomHalfWidth, beamBottomY);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
@@ -383,11 +559,16 @@ class MiniPreviewRenderer {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    let displayLabel = label;
-    if (ctx.measureText(label).width > radius * 1.6) {
-      displayLabel = label.substring(0, 4) + '...';
-    }
+    const { nodePart, sensePart } = this.splitNodeSenseLabel(label);
+    let displayLabel = sensePart || nodePart || label;
+    displayLabel = this.truncateLabel(displayLabel, 6);
     ctx.fillText(displayLabel, x, y);
+
+    this.renderLabelTag(x, y + radius + 12, label, {
+      bg: 'rgba(15, 23, 42, 0.88)',
+      border: 'rgba(148, 163, 184, 0.55)',
+      text: '#e2e8f0'
+    });
 
     ctx.restore();
   }
@@ -397,7 +578,7 @@ class MiniPreviewRenderer {
    */
   renderPreviewNode(node) {
     const ctx = this.ctx;
-    const { x, y, radius, label, color, glowColor, opacity, scale, pulseScale = 1, pulseGlow = 0.4 } = node;
+    const { x, y, radius, label, color, opacity, scale, pulseScale = 1, pulseGlow = 0.4 } = node;
 
     if (opacity <= 0) return;
 
@@ -439,10 +620,9 @@ class MiniPreviewRenderer {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    let displayLabel = label;
-    if (ctx.measureText(label).width > finalRadius * 1.6) {
-      displayLabel = label.substring(0, 4) + '...';
-    }
+    const { nodePart, sensePart } = this.splitNodeSenseLabel(label);
+    let displayLabel = sensePart || nodePart || label;
+    displayLabel = this.truncateLabel(displayLabel, 6);
     ctx.fillText(displayLabel, x, y - 2);
 
     // "待审核"标签
@@ -450,6 +630,74 @@ class MiniPreviewRenderer {
     ctx.fillStyle = '#fcd34d';
     ctx.fillText('待审核', x, y + 12);
 
+    this.renderLabelTag(x, y + finalRadius + 14, label, {
+      bg: 'rgba(3, 105, 161, 0.28)',
+      border: 'rgba(56, 189, 248, 0.65)',
+      text: '#e0f2fe'
+    });
+
+    ctx.restore();
+  }
+
+  splitNodeSenseLabel(label = '') {
+    const text = String(label || '').trim();
+    if (!text) return { nodePart: '', sensePart: '' };
+    const index = text.indexOf('-');
+    if (index <= 0 || index >= text.length - 1) {
+      return { nodePart: text, sensePart: '' };
+    }
+    return {
+      nodePart: text.slice(0, index),
+      sensePart: text.slice(index + 1)
+    };
+  }
+
+  truncateLabel(text = '', maxChars = 12) {
+    const source = String(text || '').trim();
+    if (!source) return '';
+    if (source.length <= maxChars) return source;
+    return `${source.slice(0, Math.max(1, maxChars - 1))}…`;
+  }
+
+  renderLabelTag(x, y, text, style = {}) {
+    const ctx = this.ctx;
+    const safeText = this.truncateLabel(text, 18);
+    if (!safeText) return;
+
+    ctx.save();
+    ctx.font = '10px sans-serif';
+    const paddingX = 6;
+    const radius = 5;
+    const width = Math.max(36, ctx.measureText(safeText).width + paddingX * 2);
+    const height = 16;
+    const left = x - width / 2;
+    const minY = height / 2 + 2;
+    const maxY = this.canvas.height - height / 2 - 2;
+    const clampedY = Math.min(maxY, Math.max(minY, y));
+    const top = clampedY - height / 2;
+
+    ctx.fillStyle = style.bg || 'rgba(15, 23, 42, 0.88)';
+    ctx.strokeStyle = style.border || 'rgba(148, 163, 184, 0.55)';
+    ctx.lineWidth = 1;
+
+    ctx.beginPath();
+    ctx.moveTo(left + radius, top);
+    ctx.lineTo(left + width - radius, top);
+    ctx.quadraticCurveTo(left + width, top, left + width, top + radius);
+    ctx.lineTo(left + width, top + height - radius);
+    ctx.quadraticCurveTo(left + width, top + height, left + width - radius, top + height);
+    ctx.lineTo(left + radius, top + height);
+    ctx.quadraticCurveTo(left, top + height, left, top + height - radius);
+    ctx.lineTo(left, top + radius);
+    ctx.quadraticCurveTo(left, top, left + radius, top);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = style.text || '#e2e8f0';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(safeText, x, clampedY + 0.2);
     ctx.restore();
   }
 

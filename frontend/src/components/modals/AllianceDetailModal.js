@@ -10,6 +10,14 @@ import {
 } from '../../utils/allianceVisualStyle';
 
 const EMPTY_ITEMS = [];
+const DEFAULT_PENDING_PAGE_SIZE = 20;
+const DEFAULT_DETAIL_PAGE_SIZE = 30;
+const DEFAULT_PAGINATION = {
+    page: 1,
+    pageSize: DEFAULT_DETAIL_PAGE_SIZE,
+    total: 0,
+    totalPages: 0
+};
 
 const AllianceDetailModal = ({ 
     isOpen, 
@@ -28,6 +36,14 @@ const AllianceDetailModal = ({
     const alliance = selectedAlliance?.alliance || null;
     const members = selectedAlliance?.members || EMPTY_ITEMS;
     const domains = selectedAlliance?.domains || EMPTY_ITEMS;
+    const memberPagination = selectedAlliance?.memberPagination || {
+        ...DEFAULT_PAGINATION,
+        total: alliance?.memberCount || members.length
+    };
+    const domainPagination = selectedAlliance?.domainPagination || {
+        ...DEFAULT_PAGINATION,
+        total: alliance?.domainCount || domains.length
+    };
     const isCurrentAllianceMember = Boolean(userAlliance && userAlliance._id === alliance?._id);
     const isCurrentUserFounder = Boolean(
         isCurrentAllianceMember &&
@@ -59,8 +75,16 @@ const AllianceDetailModal = ({
     const isLeaderManager = !isAdmin && isCurrentUserFounder;
     const [activeTab, setActiveTab] = useState('overview');
     const [pendingApplications, setPendingApplications] = useState([]);
+    const [pendingApplicationsPage, setPendingApplicationsPage] = useState(1);
+    const [pendingApplicationsPagination, setPendingApplicationsPagination] = useState({
+        page: 1,
+        pageSize: DEFAULT_PENDING_PAGE_SIZE,
+        total: 0,
+        totalPages: 0
+    });
     const [isManageLoading, setIsManageLoading] = useState(false);
     const [manageActionKey, setManageActionKey] = useState('');
+    const [detailPageLoading, setDetailPageLoading] = useState(false);
     const [announcementDraft, setAnnouncementDraft] = useState('');
     const [declarationDraft, setDeclarationDraft] = useState('');
     const [knowledgeContributionDraft, setKnowledgeContributionDraft] = useState('10');
@@ -75,6 +99,13 @@ const AllianceDetailModal = ({
         if (!isOpen) {
             setActiveTab('overview');
             setPendingApplications([]);
+            setPendingApplicationsPage(1);
+            setPendingApplicationsPagination({
+                page: 1,
+                pageSize: DEFAULT_PENDING_PAGE_SIZE,
+                total: 0,
+                totalPages: 0
+            });
             setIsStyleCreatorOpen(false);
             setIsHandoverModalOpen(false);
             setHandoverMode('');
@@ -158,12 +189,22 @@ const AllianceDetailModal = ({
     const fetchPendingApplications = useCallback(async (silent = false) => {
         if (!token || !isLeaderManager || !alliance?._id) {
             setPendingApplications([]);
+            setPendingApplicationsPagination({
+                page: 1,
+                pageSize: DEFAULT_PENDING_PAGE_SIZE,
+                total: 0,
+                totalPages: 0
+            });
             return;
         }
 
         setIsManageLoading(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/alliances/leader/${alliance._id}/pending-applications`, {
+            const query = new URLSearchParams({
+                page: String(Math.max(1, pendingApplicationsPage)),
+                pageSize: String(Math.max(1, pendingApplicationsPagination.pageSize || DEFAULT_PENDING_PAGE_SIZE))
+            });
+            const response = await fetch(`http://localhost:5000/api/alliances/leader/${alliance._id}/pending-applications?${query.toString()}`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -181,8 +222,21 @@ const AllianceDetailModal = ({
             }
             if (response.ok) {
                 setPendingApplications(data.applications || []);
+                const pagination = data?.pagination || {};
+                setPendingApplicationsPagination({
+                    page: Math.max(1, parseInt(pagination.page, 10) || pendingApplicationsPage),
+                    pageSize: Math.max(1, parseInt(pagination.pageSize, 10) || pendingApplicationsPagination.pageSize || DEFAULT_PENDING_PAGE_SIZE),
+                    total: Math.max(0, parseInt(pagination.total, 10) || 0),
+                    totalPages: Math.max(0, parseInt(pagination.totalPages, 10) || 0)
+                });
             } else {
                 setPendingApplications([]);
+                setPendingApplicationsPagination({
+                    page: 1,
+                    pageSize: pendingApplicationsPagination.pageSize || DEFAULT_PENDING_PAGE_SIZE,
+                    total: 0,
+                    totalPages: 0
+                });
                 if (!silent) {
                     window.alert(data.error || '获取入盟申请失败');
                 }
@@ -194,19 +248,34 @@ const AllianceDetailModal = ({
         } finally {
             setIsManageLoading(false);
         }
-    }, [token, isLeaderManager, alliance?._id]);
+    }, [token, isLeaderManager, alliance?._id, pendingApplicationsPage, pendingApplicationsPagination.pageSize]);
+
+    useEffect(() => {
+        if (isOpen && isLeaderManager && activeTab === 'manage') {
+            fetchPendingApplications(false);
+        }
+    }, [isOpen, isLeaderManager, activeTab, alliance?._id, pendingApplicationsPage, fetchPendingApplications]);
 
     useEffect(() => {
         if (isOpen && isLeaderManager) {
-            fetchPendingApplications(true);
+            setPendingApplicationsPage(1);
         }
-    }, [isOpen, isLeaderManager, alliance?._id, fetchPendingApplications]);
+    }, [isOpen, isLeaderManager, alliance?._id]);
 
-    useEffect(() => {
-        if (isOpen && activeTab === 'manage' && isLeaderManager) {
-            fetchPendingApplications(false);
+    const requestDetailPage = async ({ memberPage, domainPage } = {}) => {
+        if (typeof onRefreshAllianceDetail !== 'function' || !alliance?._id) return;
+        setDetailPageLoading(true);
+        try {
+            await onRefreshAllianceDetail(alliance._id, {
+                memberPage: Math.max(1, memberPage || memberPagination.page || 1),
+                memberPageSize: Math.max(1, memberPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE),
+                domainPage: Math.max(1, domainPage || domainPagination.page || 1),
+                domainPageSize: Math.max(1, domainPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE)
+            });
+        } finally {
+            setDetailPageLoading(false);
         }
-    }, [isOpen, activeTab, isLeaderManager, alliance?._id, fetchPendingApplications]);
+    };
 
     const handleApplicationDecision = async (notificationId, action) => {
         if (!token || !notificationId) return;
@@ -230,7 +299,12 @@ const AllianceDetailModal = ({
             window.alert(data.message || '处理完成');
             await fetchPendingApplications();
             if (typeof onAllianceChanged === 'function') {
-                await onAllianceChanged(alliance._id);
+                await onAllianceChanged(alliance._id, {
+                    memberPage: memberPagination.page || 1,
+                    memberPageSize: memberPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE,
+                    domainPage: domainPagination.page || 1,
+                    domainPageSize: domainPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE
+                });
             }
         } catch (error) {
             window.alert(`处理入盟申请失败: ${error.message}`);
@@ -262,14 +336,24 @@ const AllianceDetailModal = ({
             window.alert(data.message || '成员已移除');
             const dissolved = (data.message || '').includes('自动解散');
             if (typeof onAllianceChanged === 'function') {
-                await onAllianceChanged(dissolved ? '' : alliance._id);
+                await onAllianceChanged(dissolved ? '' : alliance._id, {
+                    memberPage: memberPagination.page || 1,
+                    memberPageSize: memberPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE,
+                    domainPage: domainPagination.page || 1,
+                    domainPageSize: domainPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE
+                });
             }
             if (dissolved) {
                 onClose();
                 return;
             }
             if (typeof onRefreshAllianceDetail === 'function') {
-                await onRefreshAllianceDetail(alliance._id);
+                await onRefreshAllianceDetail(alliance._id, {
+                    memberPage: memberPagination.page || 1,
+                    memberPageSize: memberPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE,
+                    domainPage: domainPagination.page || 1,
+                    domainPageSize: domainPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE
+                });
             }
         } catch (error) {
             window.alert(`移除成员失败: ${error.message}`);
@@ -297,10 +381,20 @@ const AllianceDetailModal = ({
             }
             window.alert(data.message || '更新成功');
             if (typeof onAllianceChanged === 'function') {
-                await onAllianceChanged(alliance._id);
+                await onAllianceChanged(alliance._id, {
+                    memberPage: memberPagination.page || 1,
+                    memberPageSize: memberPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE,
+                    domainPage: domainPagination.page || 1,
+                    domainPageSize: domainPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE
+                });
             }
             if (typeof onRefreshAllianceDetail === 'function') {
-                await onRefreshAllianceDetail(alliance._id);
+                await onRefreshAllianceDetail(alliance._id, {
+                    memberPage: memberPagination.page || 1,
+                    memberPageSize: memberPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE,
+                    domainPage: domainPagination.page || 1,
+                    domainPageSize: domainPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE
+                });
             }
             return true;
         } catch (error) {
@@ -431,10 +525,20 @@ const AllianceDetailModal = ({
                     closeConfirmModal();
                     closeHandoverModal();
                     if (typeof onAllianceChanged === 'function') {
-                        await onAllianceChanged(alliance._id);
+                        await onAllianceChanged(alliance._id, {
+                            memberPage: memberPagination.page || 1,
+                            memberPageSize: memberPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE,
+                            domainPage: domainPagination.page || 1,
+                            domainPageSize: domainPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE
+                        });
                     }
                     if (typeof onRefreshAllianceDetail === 'function') {
-                        await onRefreshAllianceDetail(alliance._id);
+                        await onRefreshAllianceDetail(alliance._id, {
+                            memberPage: memberPagination.page || 1,
+                            memberPageSize: memberPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE,
+                            domainPage: domainPagination.page || 1,
+                            domainPageSize: domainPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE
+                        });
                     }
                 }
             }
@@ -472,14 +576,39 @@ const AllianceDetailModal = ({
 
     const renderMembersList = (withManageActions = false) => (
         <div className="alliance-section-detail">
-            <h3>成员列表 ({members.length}人)</h3>
+            <h3>成员列表 ({memberPagination.total || alliance?.memberCount || members.length}人)</h3>
             {renderMemberGrid(withManageActions)}
+            {memberPagination.totalPages > 1 && (
+                <div className="alliance-list-pager">
+                    <div className="alliance-list-pager-info">
+                        成员页 {memberPagination.page} / {memberPagination.totalPages}
+                    </div>
+                    <div className="alliance-list-pager-actions">
+                        <button
+                            type="button"
+                            className="btn btn-small btn-secondary"
+                            onClick={() => requestDetailPage({ memberPage: memberPagination.page - 1 })}
+                            disabled={detailPageLoading || memberPagination.page <= 1}
+                        >
+                            上一页
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-small btn-secondary"
+                            onClick={() => requestDetailPage({ memberPage: memberPagination.page + 1 })}
+                            disabled={detailPageLoading || memberPagination.page >= memberPagination.totalPages}
+                        >
+                            下一页
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 
     const renderDomainsList = () => (
         <div className="alliance-section-detail">
-            <h3>管辖知识域 ({domains.length}个)</h3>
+            <h3>管辖知识域 ({domainPagination.total || alliance?.domainCount || domains.length}个)</h3>
             <div className="domains-list">
                 {domains.length > 0 ? (
                     domains.map((domain) => (
@@ -498,6 +627,31 @@ const AllianceDetailModal = ({
                     <p className="empty-message">该熵盟暂无管辖知识域</p>
                 )}
             </div>
+            {domainPagination.totalPages > 1 && (
+                <div className="alliance-list-pager">
+                    <div className="alliance-list-pager-info">
+                        管辖域页 {domainPagination.page} / {domainPagination.totalPages}
+                    </div>
+                    <div className="alliance-list-pager-actions">
+                        <button
+                            type="button"
+                            className="btn btn-small btn-secondary"
+                            onClick={() => requestDetailPage({ domainPage: domainPagination.page - 1 })}
+                            disabled={detailPageLoading || domainPagination.page <= 1}
+                        >
+                            上一页
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-small btn-secondary"
+                            onClick={() => requestDetailPage({ domainPage: domainPagination.page + 1 })}
+                            disabled={detailPageLoading || domainPagination.page >= domainPagination.totalPages}
+                        >
+                            下一页
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 
@@ -524,7 +678,7 @@ const AllianceDetailModal = ({
     const renderManageTab = () => (
         <>
             <div className="alliance-section-detail">
-                <h3>入盟申请</h3>
+                <h3>入盟申请 ({pendingApplicationsPagination.total || 0})</h3>
                 {isManageLoading ? (
                     <p className="empty-message">加载中...</p>
                 ) : pendingApplications.length === 0 ? (
@@ -564,6 +718,31 @@ const AllianceDetailModal = ({
                                 </div>
                             );
                         })}
+                    </div>
+                )}
+                {pendingApplicationsPagination.totalPages > 1 && (
+                    <div className="alliance-list-pager">
+                        <div className="alliance-list-pager-info">
+                            申请页 {pendingApplicationsPagination.page} / {pendingApplicationsPagination.totalPages}
+                        </div>
+                        <div className="alliance-list-pager-actions">
+                            <button
+                                type="button"
+                                className="btn btn-small btn-secondary"
+                                onClick={() => setPendingApplicationsPage((prev) => Math.max(1, prev - 1))}
+                                disabled={isManageLoading || pendingApplicationsPagination.page <= 1}
+                            >
+                                上一页
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-small btn-secondary"
+                                onClick={() => setPendingApplicationsPage((prev) => prev + 1)}
+                                disabled={isManageLoading || pendingApplicationsPagination.page >= pendingApplicationsPagination.totalPages}
+                            >
+                                下一页
+                            </button>
+                        </div>
                     </div>
                 )}
             </div>
@@ -895,9 +1074,9 @@ const AllianceDetailModal = ({
                                 onClick={() => setActiveTab('manage')}
                             >
                                 盟主管理
-                                {pendingApplications.length > 0 && (
+                                {(pendingApplicationsPagination.total || 0) > 0 && (
                                     <span className="alliance-tab-badge">
-                                        {pendingApplications.length > 99 ? '99+' : pendingApplications.length}
+                                        {(pendingApplicationsPagination.total || 0) > 99 ? '99+' : pendingApplicationsPagination.total}
                                     </span>
                                 )}
                             </button>

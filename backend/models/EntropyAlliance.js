@@ -139,6 +139,7 @@ EntropyAllianceSchema.pre('validate', function ensureVisualStyle(next) {
 
 // 索引优化
 EntropyAllianceSchema.index({ founder: 1 });
+EntropyAllianceSchema.index({ createdAt: -1, _id: -1 });
 
 // 虚拟字段：成员数量（通过查询User表计算）
 EntropyAllianceSchema.virtual('memberCount', {

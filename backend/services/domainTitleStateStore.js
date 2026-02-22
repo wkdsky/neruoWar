@@ -386,7 +386,12 @@ const upsertNodeDefenseLayout = async ({ nodeId, layout = {}, actorUserId = null
   };
 };
 
-const upsertNodeSiegeState = async ({ nodeId, siegeState = {}, actorUserId = null } = {}) => {
+const upsertNodeSiegeState = async ({
+  nodeId,
+  siegeState = {},
+  actorUserId = null,
+  expectedUpdatedAt = null
+} = {}) => {
   if (!isDomainTitleStateCollectionWriteEnabled()) {
     return { skipped: true, modified: 0, upserted: 0 };
   }
@@ -396,8 +401,13 @@ const upsertNodeSiegeState = async ({ nodeId, siegeState = {}, actorUserId = nul
   const normalized = normalizeSiegeState(siegeState);
   const actorId = toObjectIdOrNull(actorUserId);
   const now = new Date();
+  const filter = { nodeId: safeNodeId };
+  if (expectedUpdatedAt) {
+    filter.updatedAt = new Date(expectedUpdatedAt);
+  }
+
   const result = await DomainSiegeState.updateOne(
-    { nodeId: safeNodeId },
+    filter,
     {
       $set: {
         cheng: normalized.cheng,
@@ -413,6 +423,7 @@ const upsertNodeSiegeState = async ({ nodeId, siegeState = {}, actorUserId = nul
     skipped: false,
     modified: result?.modifiedCount || 0,
     upserted: result?.upsertedCount || 0,
+    conflict: Boolean(expectedUpdatedAt) && (result?.matchedCount || 0) === 0 && (result?.upsertedCount || 0) === 0,
     siegeState: normalized
   };
 };

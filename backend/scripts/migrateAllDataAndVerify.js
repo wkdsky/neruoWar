@@ -44,7 +44,8 @@ const DEFAULTS = {
   verifySampleSessions: 120,
   verifySampleNodes: 120,
   verifySampleTitleStates: 120,
-  verifySampleTitleProjections: 120
+  verifySampleTitleProjections: 120,
+  verifySampleAllianceCanonical: 120
 };
 
 const parseCliArgs = (argv = []) => {
@@ -128,6 +129,10 @@ const getRuntimeOptions = () => {
     verifySampleTitleProjections: parseInteger(
       args['verify-sample-title-projections'] ?? process.env.VERIFY_SAMPLE_TITLE_PROJECTIONS,
       DEFAULTS.verifySampleTitleProjections
+    ),
+    verifySampleAllianceCanonical: parseInteger(
+      args['verify-sample-alliance-canonical'] ?? process.env.VERIFY_SAMPLE_ALLIANCE_CANONICAL,
+      DEFAULTS.verifySampleAllianceCanonical
     )
   };
 };
@@ -766,6 +771,88 @@ const migrateDomainTitleProjection = async ({ nodeBatchSize }) => {
     metrics.relationDeletes += result?.relationResult?.deleted || 0;
   }
 
+  return metrics;
+};
+
+const migrateDomainAllianceCanonical = async ({ nodeBatchSize, bulkOpLimit }) => {
+  logStep('开始迁移标题-熵盟归属到 Node.allianceId（按 domainMaster 用户归属）');
+  const metrics = {
+    nodesScanned: 0,
+    nodesUpdated: 0,
+    nodesAlreadyConsistent: 0,
+    nodesMissingMasterUser: 0,
+    userRowsLoaded: 0
+  };
+
+  const cursor = Node.collection.find(
+    {},
+    {
+      projection: {
+        _id: 1,
+        domainMaster: 1,
+        allianceId: 1
+      }
+    }
+  ).batchSize(nodeBatchSize);
+
+  let nodeBatch = [];
+
+  const flushBatch = async () => {
+    if (nodeBatch.length === 0) return;
+    const masterIds = Array.from(new Set(
+      nodeBatch
+        .map((item) => getIdString(item?.domainMaster))
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    )).map((id) => new mongoose.Types.ObjectId(id));
+
+    const masterRows = masterIds.length > 0
+      ? await User.find({ _id: { $in: masterIds } }).select('_id allianceId').lean()
+      : [];
+    metrics.userRowsLoaded += masterRows.length;
+    const masterAllianceMap = new Map(masterRows.map((row) => [getIdString(row?._id), row?.allianceId || null]));
+
+    const ops = [];
+    for (const node of nodeBatch) {
+      metrics.nodesScanned += 1;
+      const masterId = getIdString(node?.domainMaster);
+      const expectedAllianceId = masterId ? (masterAllianceMap.get(masterId) || null) : null;
+      if (masterId && !masterAllianceMap.has(masterId)) {
+        metrics.nodesMissingMasterUser += 1;
+      }
+      if (getIdString(node?.allianceId) === getIdString(expectedAllianceId)) {
+        metrics.nodesAlreadyConsistent += 1;
+        continue;
+      }
+      ops.push({
+        updateOne: {
+          filter: { _id: node._id },
+          update: {
+            $set: {
+              allianceId: expectedAllianceId
+            }
+          }
+        }
+      });
+    }
+
+    if (ops.length > 0) {
+      for (let i = 0; i < ops.length; i += bulkOpLimit) {
+        const chunk = ops.slice(i, i + bulkOpLimit);
+        const result = await Node.bulkWrite(chunk, { ordered: false });
+        metrics.nodesUpdated += (result?.modifiedCount || 0) + (result?.upsertedCount || 0);
+      }
+    }
+
+    nodeBatch = [];
+  };
+
+  for await (const node of cursor) {
+    nodeBatch.push(node);
+    if (nodeBatch.length >= nodeBatchSize) {
+      await flushBatch();
+    }
+  }
+  await flushBatch();
   return metrics;
 };
 
@@ -1791,12 +1878,113 @@ const verifyParticipantSamplesNewOnly = async ({ sampleSize }) => {
   };
 };
 
+const buildDomainAllianceCanonicalSummary = async () => {
+  const rows = await Node.aggregate([
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'domainMaster',
+        foreignField: '_id',
+        as: 'masterRows'
+      }
+    },
+    {
+      $project: {
+        hasValidMasterId: { $eq: [{ $type: '$domainMaster' }, 'objectId'] },
+        allianceId: { $ifNull: ['$allianceId', null] },
+        expectedAllianceId: {
+          $ifNull: [{ $arrayElemAt: ['$masterRows.allianceId', 0] }, null]
+        },
+        hasMasterRow: {
+          $gt: [{ $size: '$masterRows' }, 0]
+        }
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalNodes: { $sum: 1 },
+        mismatchedNodes: {
+          $sum: {
+            $cond: [{ $ne: ['$allianceId', '$expectedAllianceId'] }, 1, 0]
+          }
+        },
+        nodesMissingMasterUser: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$hasValidMasterId', true] },
+                  { $eq: ['$hasMasterRow', false] }
+                ]
+              },
+              1,
+              0
+            ]
+          }
+        }
+      }
+    }
+  ]).allowDiskUse(true);
+
+  return rows[0] || {
+    totalNodes: 0,
+    mismatchedNodes: 0,
+    nodesMissingMasterUser: 0
+  };
+};
+
+const verifyDomainAllianceCanonicalSamples = async ({ sampleSize }) => {
+  const rows = await Node.aggregate([
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'domainMaster',
+        foreignField: '_id',
+        as: 'masterRows'
+      }
+    },
+    {
+      $project: {
+        name: 1,
+        status: 1,
+        domainMaster: 1,
+        allianceId: { $ifNull: ['$allianceId', null] },
+        expectedAllianceId: {
+          $ifNull: [{ $arrayElemAt: ['$masterRows.allianceId', 0] }, null]
+        }
+      }
+    },
+    {
+      $match: {
+        $expr: { $ne: ['$allianceId', '$expectedAllianceId'] }
+      }
+    },
+    { $sort: { _id: 1 } },
+    { $limit: sampleSize }
+  ]).allowDiskUse(true);
+
+  return {
+    sampledNodes: rows.length,
+    mismatchedNodes: rows.length,
+    mismatchDetails: rows.map((item) => ({
+      nodeId: String(item?._id || ''),
+      name: item?.name || '',
+      status: item?.status || '',
+      domainMaster: getIdString(item?.domainMaster),
+      allianceId: getIdString(item?.allianceId),
+      expectedAllianceId: getIdString(item?.expectedAllianceId)
+    }))
+  };
+};
+
 const verifyMigrationConsistency = async ({
   verifySampleUsers,
   verifySampleSessions,
   verifySampleNodes,
   verifySampleTitleStates,
   verifySampleTitleProjections,
+  verifySampleAllianceCanonical,
   verifyBaseline
 }) => {
   logStep('开始全局一致性校验');
@@ -1810,7 +1998,8 @@ const verifyMigrationConsistency = async ({
     legacyTitleStateSummary,
     newTitleStateSummary,
     legacyTitleProjectionSummary,
-    newTitleProjectionSummary
+    newTitleProjectionSummary,
+    allianceCanonicalSummary
   ] = await Promise.all([
     buildLegacyNotificationGlobalSummary(),
     buildNewNotificationGlobalSummary(),
@@ -1821,7 +2010,8 @@ const verifyMigrationConsistency = async ({
     buildLegacyTitleStateGlobalSummary(),
     buildNewTitleStateGlobalSummary(),
     buildLegacyTitleProjectionGlobalSummary(),
-    buildNewTitleProjectionGlobalSummary()
+    buildNewTitleProjectionGlobalSummary(),
+    buildDomainAllianceCanonicalSummary()
   ]);
 
   const hasLegacyData = (
@@ -1848,7 +2038,8 @@ const verifyMigrationConsistency = async ({
     participantSampleCheck,
     nodeSenseSampleCheck,
     titleStateSampleCheck,
-    titleProjectionSampleCheck
+    titleProjectionSampleCheck,
+    allianceCanonicalSampleCheck
   ] = await Promise.all([
     resolvedBaseline === 'legacy'
       ? verifyNotificationSamples({ sampleSize: verifySampleUsers })
@@ -1862,7 +2053,8 @@ const verifyMigrationConsistency = async ({
     resolvedTitleStateBaseline === 'legacy'
       ? verifyTitleStateSamples({ sampleSize: verifySampleTitleStates })
       : verifyTitleStateSamplesNewOnly({ sampleSize: verifySampleTitleStates }),
-    verifyTitleProjectionSamples({ sampleSize: verifySampleTitleProjections })
+    verifyTitleProjectionSamples({ sampleSize: verifySampleTitleProjections }),
+    verifyDomainAllianceCanonicalSamples({ sampleSize: verifySampleAllianceCanonical })
   ]);
 
   const errors = [];
@@ -1961,6 +2153,16 @@ const verifyMigrationConsistency = async ({
   if (titleProjectionSampleCheck.mismatchedNodes > 0) {
     errors.push(`标题投影抽样存在不一致 mismatchedNodes=${titleProjectionSampleCheck.mismatchedNodes}`);
   }
+  if (allianceCanonicalSummary.mismatchedNodes > 0) {
+    errors.push(
+      `标题熵盟归属不一致 mismatchedNodes=${allianceCanonicalSummary.mismatchedNodes}`
+    );
+  }
+  if (allianceCanonicalSummary.nodesMissingMasterUser > 0) {
+    warnings.push(
+      `存在 domainMaster 指向缺失用户的标题 nodes=${allianceCanonicalSummary.nodesMissingMasterUser}`
+    );
+  }
 
   return {
     ok: errors.length === 0,
@@ -1982,11 +2184,13 @@ const verifyMigrationConsistency = async ({
     newTitleStateSummary,
     legacyTitleProjectionSummary,
     newTitleProjectionSummary,
+    allianceCanonicalSummary,
     notificationSampleCheck,
     participantSampleCheck,
     nodeSenseSampleCheck,
     titleStateSampleCheck,
-    titleProjectionSampleCheck
+    titleProjectionSampleCheck,
+    allianceCanonicalSampleCheck
   };
 };
 
@@ -2091,12 +2295,14 @@ const run = async () => {
       const nodeSenseMetrics = await migrateNodeSenses(options);
       const titleStateMetrics = await migrateDomainTitleStates(options);
       const titleProjectionMetrics = await migrateDomainTitleProjection(options);
+      const domainAllianceMetrics = await migrateDomainAllianceCanonical(options);
       summary.migrationResult = {
         notificationMetrics,
         participantMetrics,
         nodeSenseMetrics,
         titleStateMetrics,
-        titleProjectionMetrics
+        titleProjectionMetrics,
+        domainAllianceMetrics
       };
       logStep('迁移阶段完成', summary.migrationResult);
     }

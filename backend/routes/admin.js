@@ -39,6 +39,15 @@ const parseNumberField = ({ body, key, required = false, integer = false, min = 
   return { value };
 };
 
+const toSafeInteger = (value, fallback, { min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER } = {}) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (parsed < min || parsed > max) return fallback;
+  return parsed;
+};
+
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const parseUnitTypePayload = (body, { create = false } = {}) => {
   const source = body && typeof body === 'object' ? body : {};
   const parsed = {};
@@ -134,13 +143,30 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
   return { parsed, errors };
 };
 
-// 获取所有用户的完整信息（包括明文密码）
+// 获取用户分页列表（包括明文密码）
 router.get('/users', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const users = await User.find()
-      .select('+plainPassword')  // 包含明文密码
-      .sort({ createdAt: -1 })
-      .lean();  // 转换为普通对象
+    const page = toSafeInteger(req.query?.page, 1, { min: 1, max: 1000000 });
+    const pageSize = toSafeInteger(req.query?.pageSize, 50, { min: 1, max: 200 });
+    const keyword = typeof req.query?.keyword === 'string' ? req.query.keyword.trim() : '';
+    const query = {};
+    if (keyword) {
+      const keywordRegex = new RegExp(escapeRegex(keyword), 'i');
+      query.$or = [
+        { username: keywordRegex },
+        { profession: keywordRegex }
+      ];
+    }
+
+    const [users, total] = await Promise.all([
+      User.find(query)
+        .select('+plainPassword')  // 包含明文密码
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .lean(),  // 转换为普通对象
+      User.countDocuments(query)
+    ]);
 
     // 返回所有字段
     const usersData = users.map(user => {
@@ -162,10 +188,23 @@ router.get('/users', authenticateToken, isAdmin, async (req, res) => {
       };
     });
 
+    const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
+
     res.json({
       success: true,
       count: usersData.length,
-      users: usersData
+      total,
+      page,
+      pageSize,
+      totalPages,
+      hasMore: page * pageSize < total,
+      users: usersData,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages
+      }
     });
   } catch (error) {
     console.error('获取用户列表错误:', error);

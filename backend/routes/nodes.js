@@ -124,6 +124,23 @@ const pickNodeSenseById = (node = {}, senseId = '') => {
   return senses.find((item) => item.senseId === targetSenseId) || senses[0];
 };
 
+const allocateNextSenseId = (senseList = []) => {
+  const used = new Set((Array.isArray(senseList) ? senseList : []).map((item) => String(item?.senseId || '').trim()).filter(Boolean));
+  let maxNumeric = 0;
+  used.forEach((id) => {
+    const matched = /^sense_(\d+)$/.exec(id);
+    if (!matched) return;
+    const value = Number.parseInt(matched[1], 10);
+    if (Number.isInteger(value) && value > maxNumeric) maxNumeric = value;
+  });
+
+  let next = maxNumeric + 1;
+  while (used.has(`sense_${next}`)) {
+    next += 1;
+  }
+  return `sense_${next}`;
+};
+
 const buildNodeSenseSearchEntries = (node = {}, keywords = []) => {
   const normalizedKeywords = (Array.isArray(keywords) ? keywords : [])
     .map((item) => String(item || '').trim().toLowerCase())
@@ -862,6 +879,66 @@ const buildAssociationMutationSummary = ({
   };
 };
 
+const buildInsertPlanNarratives = ({
+  node,
+  insertPlans = [],
+  targetNodeMap = new Map()
+}) => {
+  const currentNodeName = typeof node?.name === 'string' ? node.name : '';
+  const getSenseTitle = (nodeDoc = null, senseId = '') => {
+    const senses = normalizeNodeSenseList(nodeDoc || {});
+    const key = typeof senseId === 'string' ? senseId.trim() : '';
+    if (!key) return '';
+    return senses.find((item) => item.senseId === key)?.title || '';
+  };
+  const toDisplay = (nodeDoc = null, nodeId = '', senseId = '') => {
+    const localNodeDoc = nodeDoc || targetNodeMap.get(getIdString(nodeId)) || null;
+    const nodeName = localNodeDoc?.name || currentNodeName || '未知节点';
+    const senseTitle = getSenseTitle(localNodeDoc, senseId);
+    return senseTitle ? `${nodeName}-${senseTitle}` : nodeName;
+  };
+
+  return (Array.isArray(insertPlans) ? insertPlans : []).map((plan, index) => {
+    const upperNode = targetNodeMap.get(getIdString(plan?.upperNodeId)) || null;
+    const lowerNode = targetNodeMap.get(getIdString(plan?.lowerNodeId)) || null;
+    const currentDisplay = toDisplay(node, node?._id, plan?.sourceSenseId);
+    const upperDisplay = toDisplay(upperNode, plan?.upperNodeId, plan?.upperSenseId);
+    const lowerDisplay = toDisplay(lowerNode, plan?.lowerNodeId, plan?.lowerSenseId);
+
+    const hadOriginalRelation = (
+      hasExactDirectedContainsOrExtendsAssociation(
+        upperNode,
+        plan?.lowerNodeId,
+        'contains',
+        plan?.upperSenseId,
+        plan?.lowerSenseId
+      )
+      || hasExactDirectedContainsOrExtendsAssociation(
+        lowerNode,
+        plan?.upperNodeId,
+        'extends',
+        plan?.lowerSenseId,
+        plan?.upperSenseId
+      )
+    );
+
+    const relationChainText = `${upperDisplay}-${currentDisplay}-${lowerDisplay}`;
+    const text = hadOriginalRelation
+      ? `${currentDisplay} 将插入到 ${upperDisplay} 和 ${lowerDisplay} 之间，${upperDisplay}和${lowerDisplay}原来的关联将改为${relationChainText}。`
+      : `${currentDisplay} 将插入到 ${upperDisplay} 和 ${lowerDisplay} 之间，${upperDisplay}和${lowerDisplay}新建关联为${relationChainText}。`;
+
+    return {
+      key: `${getIdString(plan?.upperNodeId)}:${plan?.upperSenseId || ''}|${getIdString(plan?.lowerNodeId)}:${plan?.lowerSenseId || ''}|${plan?.sourceSenseId || ''}|${index}`,
+      sourceDisplayName: currentDisplay,
+      upperDisplayName: upperDisplay,
+      lowerDisplayName: lowerDisplay,
+      relationChainText,
+      hadOriginalRelation,
+      text
+    };
+  });
+};
+
 const validateAssociationMutationPermission = async ({ node, requestUserId = '' }) => {
   const requesterId = getIdString(requestUserId);
   if (!isValidObjectId(requesterId)) {
@@ -975,6 +1052,7 @@ const parseAssociationMutationPayload = async ({ node, rawAssociations = [] }) =
 const buildAssociationMutationPreviewData = async ({
   node,
   effectiveAssociations = [],
+  insertPlans = [],
   onRemovalStrategy = 'disconnect',
   bridgeDecisions = []
 }) => {
@@ -1013,6 +1091,11 @@ const buildAssociationMutationPreviewData = async ({
     nextAssociations: nextRelationAssociations,
     lostBridgePairs,
     reconnectPairs,
+    targetNodeMap
+  });
+  mutationSummary.insertPlanNarratives = buildInsertPlanNarratives({
+    node,
+    insertPlans,
     targetNodeMap
   });
 
@@ -3469,9 +3552,19 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
     const page = toSafeInteger(req.query?.page, 1, { min: 1, max: 1000000 });
     const pageSize = toSafeInteger(req.query?.pageSize, 50, { min: 1, max: 200 });
     const statusFilter = typeof req.query?.status === 'string' ? req.query.status.trim() : '';
+    const keyword = typeof req.query?.keyword === 'string' ? req.query.keyword.trim() : '';
     const query = {};
     if (statusFilter === 'approved' || statusFilter === 'pending' || statusFilter === 'rejected') {
       query.status = statusFilter;
+    }
+    if (keyword) {
+      const keywordRegex = new RegExp(escapeRegex(keyword), 'i');
+      query.$or = [
+        { name: keywordRegex },
+        { description: keywordRegex },
+        { 'synonymSenses.title': keywordRegex },
+        { 'synonymSenses.content': keywordRegex }
+      ];
     }
 
     const [nodes, total] = await Promise.all([
@@ -3505,7 +3598,7 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
 router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { nodeId } = req.params;
-    const { name, description, prosperity, contentScore } = req.body;
+    const { name, description, prosperity, contentScore, knowledgePoint } = req.body;
 
     const node = await Node.findById(nodeId);
     if (!node) {
@@ -3542,6 +3635,18 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
       node.contentScore = contentScore;
     }
 
+    if (knowledgePoint !== undefined) {
+      const parsedKnowledgePoint = Number(knowledgePoint);
+      if (!Number.isFinite(parsedKnowledgePoint) || parsedKnowledgePoint < 0) {
+        return res.status(400).json({ error: '知识点必须是大于等于0的数字' });
+      }
+      node.knowledgePoint = node.knowledgePoint && typeof node.knowledgePoint === 'object'
+        ? node.knowledgePoint
+        : {};
+      node.knowledgePoint.value = Number(parsedKnowledgePoint.toFixed(2));
+      node.knowledgePoint.lastUpdated = new Date();
+    }
+
     await node.save();
     await syncDomainTitleProjectionFromNode(node);
 
@@ -3553,6 +3658,351 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
   } catch (error) {
     console.error('更新节点信息错误:', error);
     res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 管理员新增释义（必须至少包含1条关联）
+router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const { title, content, associations } = req.body || {};
+
+    const node = await Node.findById(nodeId).select('name status synonymSenses associations relatedParentDomains relatedChildDomains');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+    if (node.status !== 'approved') {
+      return res.status(400).json({ error: '仅已审批知识域可新增释义' });
+    }
+
+    await hydrateNodeSensesForNodes([node]);
+    const existingSenses = normalizeNodeSenseList(node);
+    const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+    const trimmedContent = typeof content === 'string' ? content.trim() : '';
+    if (!trimmedTitle) {
+      return res.status(400).json({ error: '释义题目不能为空' });
+    }
+    if (!trimmedContent) {
+      return res.status(400).json({ error: '释义内容不能为空' });
+    }
+
+    const titleKey = trimmedTitle.toLowerCase();
+    const duplicated = existingSenses.some((sense) => (
+      (typeof sense?.title === 'string' ? sense.title.trim().toLowerCase() : '') === titleKey
+    ));
+    if (duplicated) {
+      return res.status(400).json({ error: '同一知识域下多个释义题目不能重名' });
+    }
+
+    const nextSenseId = allocateNextSenseId(existingSenses);
+    const rawAssociations = Array.isArray(associations) ? associations : [];
+    if (rawAssociations.length === 0) {
+      return res.status(400).json({ error: '每个释义至少需要1条关联关系' });
+    }
+
+    const localSenseIdSet = new Set([...existingSenses.map((item) => item.senseId), nextSenseId]);
+    const injectedAssociations = rawAssociations.map((assoc) => ({
+      ...assoc,
+      sourceSenseId: nextSenseId
+    }));
+    const normalizedAssociations = normalizeAssociationDraftList(injectedAssociations, localSenseIdSet);
+    if (normalizedAssociations.length === 0) {
+      return res.status(400).json({ error: '新增释义必须至少包含1条有效关联关系' });
+    }
+
+    const targetNodeIds = Array.from(new Set(normalizedAssociations.map((item) => item.targetNode)));
+    const targetNodes = targetNodeIds.length > 0
+      ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
+          .select('_id name synonymSenses description')
+          .lean()
+      : [];
+    await hydrateNodeSensesForNodes(targetNodes);
+    const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+    if (targetNodes.length !== targetNodeIds.length) {
+      return res.status(400).json({ error: '存在无效的关联目标知识域' });
+    }
+
+    for (const assoc of normalizedAssociations) {
+      const targetNode = targetNodeMap.get(assoc.targetNode);
+      if (!targetNode) {
+        return res.status(400).json({ error: '存在无效的关联目标知识域' });
+      }
+      const matched = normalizeNodeSenseList(targetNode).some((sense) => sense.senseId === assoc.targetSenseId);
+      if (!matched) {
+        return res.status(400).json({ error: `目标知识域「${targetNode.name}」不存在指定释义` });
+      }
+    }
+
+    const relationRuleValidation = validateAssociationRuleSet({
+      currentNodeId: node._id,
+      associations: normalizedAssociations
+    });
+    if (relationRuleValidation.error) {
+      return res.status(400).json({ error: relationRuleValidation.error });
+    }
+
+    const {
+      error: associationResolveError,
+      effectiveAssociations,
+      insertPlans
+    } = resolveAssociationsWithInsertPlans(normalizedAssociations);
+    if (associationResolveError) {
+      return res.status(400).json({ error: associationResolveError });
+    }
+
+    const coveredSourceSenseSet = new Set(effectiveAssociations.map((item) => item.sourceSenseId).filter(Boolean));
+    if (!coveredSourceSenseSet.has(nextSenseId)) {
+      return res.status(400).json({ error: '新增释义必须至少包含1条有效关联关系' });
+    }
+
+    const oldAssociations = Array.isArray(node.associations) ? node.associations : [];
+    const oldRelationAssociations = normalizeRelationAssociationList(oldAssociations);
+    const nextAssociations = dedupeAssociationList([...oldRelationAssociations, ...effectiveAssociations]);
+    const mergedRuleValidation = validateAssociationRuleSet({
+      currentNodeId: node._id,
+      associations: nextAssociations
+    });
+    if (mergedRuleValidation.error) {
+      return res.status(400).json({ error: mergedRuleValidation.error });
+    }
+
+    const nextSenses = [...existingSenses, { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent }];
+    node.synonymSenses = nextSenses;
+    node.associations = nextAssociations;
+    await rebuildRelatedDomainNamesForNodes([node]);
+    await node.save();
+    await upsertNodeSensesReplace({
+      nodeId: node._id,
+      senses: nextSenses,
+      actorUserId: req.user.userId
+    });
+    await syncDomainTitleProjectionFromNode(node);
+
+    if (insertPlans.length > 0) {
+      await applyInsertAssociationRewire({
+        insertPlans,
+        newNodeId: node._id,
+        newNodeName: node.name
+      });
+    }
+
+    await syncReciprocalAssociationsForNode({
+      nodeDoc: node,
+      oldAssociations,
+      nextAssociations
+    });
+
+    return res.json({
+      success: true,
+      message: '释义已新增',
+      sense: { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent },
+      node
+    });
+  } catch (error) {
+    console.error('管理员新增释义错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 管理员编辑释义文本
+router.put('/:nodeId/admin/senses/:senseId/text', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { nodeId, senseId } = req.params;
+    const { title, content } = req.body || {};
+
+    const node = await Node.findById(nodeId).select('status synonymSenses associations');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+    if (node.status !== 'approved') {
+      return res.status(400).json({ error: '仅已审批知识域可编辑释义' });
+    }
+
+    await hydrateNodeSensesForNodes([node]);
+    const sourceSenses = normalizeNodeSenseList(node);
+    const targetSenseId = typeof senseId === 'string' ? senseId.trim() : '';
+    const targetIndex = sourceSenses.findIndex((sense) => sense.senseId === targetSenseId);
+    if (targetIndex < 0) {
+      return res.status(404).json({ error: '释义不存在' });
+    }
+
+    const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+    const trimmedContent = typeof content === 'string' ? content.trim() : '';
+    if (!trimmedTitle) {
+      return res.status(400).json({ error: '释义题目不能为空' });
+    }
+    if (!trimmedContent) {
+      return res.status(400).json({ error: '释义内容不能为空' });
+    }
+
+    const titleKey = trimmedTitle.toLowerCase();
+    const duplicated = sourceSenses.some((sense, index) => (
+      index !== targetIndex
+      && (typeof sense?.title === 'string' ? sense.title.trim().toLowerCase() : '') === titleKey
+    ));
+    if (duplicated) {
+      return res.status(400).json({ error: '同一知识域下多个释义题目不能重名' });
+    }
+
+    const nextSenses = sourceSenses.map((sense, index) => (
+      index === targetIndex
+        ? { ...sense, title: trimmedTitle, content: trimmedContent }
+        : sense
+    ));
+
+    node.synonymSenses = nextSenses;
+    await node.save();
+    await upsertNodeSensesReplace({
+      nodeId: node._id,
+      senses: nextSenses,
+      actorUserId: req.user.userId
+    });
+    await syncDomainTitleProjectionFromNode(node);
+
+    return res.json({
+      success: true,
+      message: '释义文本已更新',
+      sense: nextSenses[targetIndex],
+      node
+    });
+  } catch (error) {
+    console.error('管理员编辑释义文本错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 管理员删除释义预览
+router.post('/:nodeId/admin/senses/:senseId/delete-preview', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { nodeId, senseId } = req.params;
+    const { onRemovalStrategy, bridgeDecisions } = req.body || {};
+
+    const node = await Node.findById(nodeId).select('name status synonymSenses associations');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+    if (node.status !== 'approved') {
+      return res.status(400).json({ error: '仅已审批知识域可删除释义' });
+    }
+
+    await hydrateNodeSensesForNodes([node]);
+    const sourceSenses = normalizeNodeSenseList(node);
+    const targetSenseId = typeof senseId === 'string' ? senseId.trim() : '';
+    const targetSense = sourceSenses.find((sense) => sense.senseId === targetSenseId);
+    if (!targetSense) {
+      return res.status(404).json({ error: '释义不存在' });
+    }
+    if (sourceSenses.length <= 1) {
+      return res.status(400).json({ error: '知识域至少保留1个释义，不能删除最后一个释义' });
+    }
+
+    const oldRelationAssociations = normalizeRelationAssociationList(node.associations || []);
+    const nextRelationAssociations = oldRelationAssociations.filter((assoc) => assoc.sourceSenseId !== targetSenseId);
+    const previewData = await buildAssociationMutationPreviewData({
+      node,
+      effectiveAssociations: nextRelationAssociations,
+      insertPlans: [],
+      onRemovalStrategy,
+      bridgeDecisions
+    });
+
+    return res.json({
+      success: true,
+      strategy: previewData.strategy,
+      deletingSense: targetSense,
+      bridgeDecisionItems: previewData.bridgeDecisionItems,
+      unresolvedBridgeDecisionCount: previewData.unresolvedBridgeDecisionCount,
+      summary: previewData.mutationSummary,
+      stats: {
+        removedCount: previewData.mutationSummary.removed.length,
+        addedCount: previewData.mutationSummary.added.length,
+        lostBridgePairCount: previewData.mutationSummary.lostBridgePairs.length,
+        reconnectCount: previewData.mutationSummary.reconnectLines.length
+      }
+    });
+  } catch (error) {
+    console.error('管理员删除释义预览错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 管理员删除释义
+router.delete('/:nodeId/admin/senses/:senseId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { nodeId, senseId } = req.params;
+    const { onRemovalStrategy, bridgeDecisions } = req.body || {};
+
+    const node = await Node.findById(nodeId).select('name status synonymSenses associations relatedParentDomains relatedChildDomains');
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+    if (node.status !== 'approved') {
+      return res.status(400).json({ error: '仅已审批知识域可删除释义' });
+    }
+
+    await hydrateNodeSensesForNodes([node]);
+    const sourceSenses = normalizeNodeSenseList(node);
+    const targetSenseId = typeof senseId === 'string' ? senseId.trim() : '';
+    const targetSense = sourceSenses.find((sense) => sense.senseId === targetSenseId);
+    if (!targetSense) {
+      return res.status(404).json({ error: '释义不存在' });
+    }
+    if (sourceSenses.length <= 1) {
+      return res.status(400).json({ error: '知识域至少保留1个释义，不能删除最后一个释义' });
+    }
+
+    const oldAssociations = Array.isArray(node.associations) ? node.associations : [];
+    const oldRelationAssociations = normalizeRelationAssociationList(oldAssociations);
+    const nextAssociations = oldRelationAssociations.filter((assoc) => assoc.sourceSenseId !== targetSenseId);
+    const previewData = await buildAssociationMutationPreviewData({
+      node,
+      effectiveAssociations: nextAssociations,
+      insertPlans: [],
+      onRemovalStrategy,
+      bridgeDecisions
+    });
+
+    if (previewData.mutationSummary.lostBridgePairs.length > 0 && previewData.unresolvedBridgeDecisionCount > 0) {
+      return res.status(400).json({
+        error: '请先逐条确认删除后的上下级承接关系（保留承接或断开）',
+        bridgeDecisionItems: previewData.bridgeDecisionItems,
+        unresolvedBridgeDecisionCount: previewData.unresolvedBridgeDecisionCount,
+        summary: previewData.mutationSummary
+      });
+    }
+
+    const nextSenses = sourceSenses.filter((sense) => sense.senseId !== targetSenseId);
+    node.synonymSenses = nextSenses;
+    node.associations = nextAssociations;
+    await rebuildRelatedDomainNamesForNodes([node]);
+    await node.save();
+    await upsertNodeSensesReplace({
+      nodeId: node._id,
+      senses: nextSenses,
+      actorUserId: req.user.userId
+    });
+    await syncDomainTitleProjectionFromNode(node);
+
+    if (previewData.reconnectPairs.length > 0) {
+      await applyReconnectPairs(previewData.reconnectPairs);
+    }
+
+    await syncReciprocalAssociationsForNode({
+      nodeDoc: node,
+      oldAssociations,
+      nextAssociations
+    });
+
+    return res.json({
+      success: true,
+      message: `释义「${targetSense.title}」已删除`,
+      strategy: previewData.strategy,
+      summary: previewData.mutationSummary,
+      node
+    });
+  } catch (error) {
+    console.error('管理员删除释义错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
   }
 });
 
@@ -3740,6 +4190,7 @@ router.post('/:nodeId/associations/preview', authenticateToken, async (req, res)
     const previewData = await buildAssociationMutationPreviewData({
       node,
       effectiveAssociations: parseResult.effectiveAssociations,
+      insertPlans: parseResult.insertPlans,
       onRemovalStrategy,
       bridgeDecisions
     });
@@ -3797,6 +4248,7 @@ router.put('/:nodeId/associations', authenticateToken, async (req, res) => {
     const previewData = await buildAssociationMutationPreviewData({
       node,
       effectiveAssociations,
+      insertPlans,
       onRemovalStrategy,
       bridgeDecisions
     });
@@ -6073,17 +6525,18 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
       actorUserId: requestUserId
     });
 
-    const members = await User.find({
+    const notifyMessage = `熵盟成员 ${user.username} 在知识域「${node.name}」${CITY_GATE_LABELS[targetGateKey]}发起围城，点击可查看并支援`;
+    const memberQuery = {
       _id: { $ne: user._id },
       role: 'common',
       allianceId: user.allianceId
-    }).select('_id notifications');
+    };
+    const memberCursor = User.find(memberQuery).select('_id').lean().cursor();
 
-    const notifyMessage = `熵盟成员 ${user.username} 在知识域「${node.name}」${CITY_GATE_LABELS[targetGateKey]}发起围城，点击可查看并支援`;
-    const supportNotificationDocs = [];
-    for (const member of members) {
-      member.notifications = Array.isArray(member.notifications) ? member.notifications : [];
-      const supportNotification = pushNotificationToUser(member, {
+    let notifiedCount = 0;
+    let supportNotificationDocs = [];
+    for await (const member of memberCursor) {
+      const supportNotification = buildNotificationPayload({
         type: 'info',
         title: `围城支援请求：${node.name}`,
         message: notifyMessage,
@@ -6099,13 +6552,16 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
         inviteeUsername: '',
         createdAt: now
       });
-      await member.save();
-      if (supportNotification) {
-        supportNotificationDocs.push(toCollectionNotificationDoc(member._id, supportNotification));
+      supportNotificationDocs.push(toCollectionNotificationDoc(member._id, supportNotification));
+      if (supportNotificationDocs.length >= 1000) {
+        await writeNotificationsToCollection(supportNotificationDocs);
+        notifiedCount += supportNotificationDocs.length;
+        supportNotificationDocs = [];
       }
     }
     if (supportNotificationDocs.length > 0) {
       await writeNotificationsToCollection(supportNotificationDocs);
+      notifiedCount += supportNotificationDocs.length;
     }
 
     const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
@@ -6119,7 +6575,7 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
 
     return res.json({
       success: true,
-      message: `已呼叫熵盟支援（通知 ${members.length} 人）`,
+      message: `已呼叫熵盟支援（通知 ${notifiedCount} 人）`,
       ...payload
     });
   } catch (error) {

@@ -147,6 +147,51 @@ const getActiveManualParticipantIdSet = (lock = {}, atMs = Date.now()) => {
   return participantSet;
 };
 
+const DISTRIBUTION_NOTIFICATION_BATCH_SIZE = 1000;
+const DISTRIBUTION_ANNOUNCEMENT_LOCATION_LIMIT = Math.max(
+  1000,
+  parseInt(process.env.DISTRIBUTION_ANNOUNCEMENT_LOCATION_LIMIT, 10) || 50000
+);
+const OBJECT_ID_QUERY_CHUNK_SIZE = 2000;
+
+const writeNotificationDocsInChunks = async (docs = [], batchSize = DISTRIBUTION_NOTIFICATION_BATCH_SIZE) => {
+  const source = Array.isArray(docs) ? docs.filter(Boolean) : [];
+  if (source.length === 0) return 0;
+  let total = 0;
+  for (let i = 0; i < source.length; i += batchSize) {
+    const batch = source.slice(i, i + batchSize);
+    await writeNotificationsToCollection(batch);
+    total += batch.length;
+  }
+  return total;
+};
+
+const chunkArray = (items = [], size = OBJECT_ID_QUERY_CHUNK_SIZE) => {
+  const source = Array.isArray(items) ? items : [];
+  const safeSize = Math.max(1, parseInt(size, 10) || OBJECT_ID_QUERY_CHUNK_SIZE);
+  const chunks = [];
+  for (let i = 0; i < source.length; i += safeSize) {
+    chunks.push(source.slice(i, i + safeSize));
+  }
+  return chunks;
+};
+
+const loadCommonUsersByObjectIds = async ({ objectIds = [], select = '_id allianceId', lean = true } = {}) => {
+  const ids = (Array.isArray(objectIds) ? objectIds : []).filter(Boolean);
+  if (ids.length === 0) return [];
+  const rows = [];
+  const chunks = chunkArray(ids, OBJECT_ID_QUERY_CHUNK_SIZE);
+  for (const chunk of chunks) {
+    const query = User.find({
+      role: 'common',
+      _id: { $in: chunk }
+    }).select(select);
+    const result = lean ? await query.lean() : await query;
+    rows.push(...result);
+  }
+  return rows;
+};
+
 let isProcessing = false;
 
 class KnowledgeDistributionService {
@@ -374,9 +419,6 @@ class KnowledgeDistributionService {
   }
 
   static async publishAnnouncementNotifications({ node, masterUser, lock }) {
-    const users = await User.find({ role: 'common' }).select('_id allianceId');
-    if (!users.length) return;
-
     const projectedTotalCents = toCents(
       Number.isFinite(Number(lock?.projectedDistributableTotal))
         ? lock.projectedDistributableTotal
@@ -390,48 +432,73 @@ class KnowledgeDistributionService {
     const nowDate = new Date();
     const masterId = getIdString(node?.domainMaster);
     const rules = this.getCommonRuleSets(lock?.ruleSnapshot || {}, lock);
+    const activeManualParticipantIds = await this.loadActiveManualParticipantIds({
+      nodeId: node?._id,
+      lock,
+      atMs: timeline.executeAtMs || nowDate.getTime()
+    });
+    const fixedUserIds = Array.from(new Set([
+      masterId,
+      ...Array.from(rules.adminPercentMap.keys()),
+      ...Array.from(rules.customUserPercentMap.keys()),
+      ...activeManualParticipantIds
+    ].filter((id) => isValidObjectId(id))));
+    const fixedUserIdSet = new Set(fixedUserIds);
+    const fixedObjectIds = fixedUserIds.map((id) => new mongoose.Types.ObjectId(id));
 
-    const ops = [];
+    const targetUsers = [];
+    const seenUserIds = new Set();
+    if (fixedObjectIds.length > 0) {
+      const fixedUsers = await loadCommonUsersByObjectIds({
+        objectIds: fixedObjectIds,
+        select: '_id allianceId',
+        lean: true
+      });
+      for (const user of fixedUsers) {
+        const userId = getIdString(user?._id);
+        if (!isValidObjectId(userId) || seenUserIds.has(userId)) continue;
+        seenUserIds.add(userId);
+        targetUsers.push(user);
+      }
+    }
+
+    if (typeof node?.name === 'string' && node.name.trim()) {
+      const locationQuery = {
+        role: 'common',
+        location: node.name
+      };
+      if (fixedObjectIds.length > 0) {
+        locationQuery._id = { $nin: fixedObjectIds };
+      }
+      const locationCursor = User.find(locationQuery)
+        .select('_id allianceId')
+        .sort({ _id: 1 })
+        .lean()
+        .cursor();
+      for await (const user of locationCursor) {
+        if (targetUsers.length >= (fixedUserIds.length + DISTRIBUTION_ANNOUNCEMENT_LOCATION_LIMIT)) {
+          break;
+        }
+        const userId = getIdString(user?._id);
+        if (!isValidObjectId(userId) || seenUserIds.has(userId)) continue;
+        seenUserIds.add(userId);
+        targetUsers.push(user);
+      }
+    }
+    if (targetUsers.length === 0) return;
+
     const collectionNotificationDocs = [];
-    for (const user of users) {
+    for (const user of targetUsers) {
       const userId = getIdString(user?._id);
-      const isFixedRecipient = userId === masterId || rules.adminPercentMap.has(userId);
+      const isFixedRecipient = fixedUserIdSet.has(userId);
       const maxPercent = this.calculateProjectedMaxPercentForUser({ user, node, lock });
+      if (!isFixedRecipient && maxPercent <= 0) continue;
       const estimatedMaxCents = Math.floor(projectedTotalCents * (maxPercent / 100));
       const estimatedMax = fromCents(estimatedMaxCents);
       const message = isFixedRecipient
         ? `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。`
         : `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。请前往知识域「${node.name}」参与分发，点击前往${entryCloseText ? `（入场截止 ${entryCloseText}）` : ''}。`;
       const notificationId = new mongoose.Types.ObjectId();
-
-      ops.push({
-        updateOne: {
-          filter: { _id: user._id },
-          update: {
-            $push: {
-              notifications: {
-                $each: [{
-                  _id: notificationId,
-                  type: 'domain_distribution_announcement',
-                  title: `知识点分发预告：${node.name}`,
-                  message,
-                  read: false,
-                  status: 'info',
-                  nodeId: node._id,
-                  nodeName: node.name,
-                  requiresArrival: !isFixedRecipient,
-                  allianceId: lock.masterAllianceId || null,
-                  allianceName: lock.masterAllianceName || '',
-                  inviterId: masterUser._id,
-                  inviterUsername: masterUser.username,
-                  createdAt: nowDate
-                }],
-                $position: 0
-              }
-            }
-          }
-        }
-      });
 
       collectionNotificationDocs.push({
         _id: notificationId,
@@ -452,10 +519,7 @@ class KnowledgeDistributionService {
       });
     }
 
-    if (ops.length > 0) {
-      await User.bulkWrite(ops, { ordered: false });
-      await writeNotificationsToCollection(collectionNotificationDocs);
-    }
+    await writeNotificationDocsInChunks(collectionNotificationDocs);
   }
 
   static async executeLockedDistribution(nodeId, now = new Date()) {
@@ -530,19 +594,13 @@ class KnowledgeDistributionService {
     ].filter((id) => isValidObjectId(id))));
     const fixedObjectIds = fixedUserIds.map((id) => new mongoose.Types.ObjectId(id));
 
-    const userOrConditions = [
-      { location: node.name },
-      { 'travelState.status': { $in: ['moving', 'stopping'] } },
-      { 'travelState.isTraveling': true }
-    ];
-    if (fixedObjectIds.length > 0) {
-      userOrConditions.push({ _id: { $in: fixedObjectIds } });
-    }
-    const userQuery = {
-      role: 'common',
-      $or: userOrConditions
-    };
-    const candidateUsers = await User.find(userQuery).select('_id username allianceId location travelState knowledgeBalance');
+    const candidateUsers = fixedObjectIds.length > 0
+      ? await loadCommonUsersByObjectIds({
+        objectIds: fixedObjectIds,
+        select: '_id username allianceId location travelState knowledgeBalance',
+        lean: true
+      })
+      : [];
     const userMap = new Map(candidateUsers.map((item) => [getIdString(item._id), item]));
     const settleOps = [];
     for (const user of candidateUsers) {
@@ -734,27 +792,7 @@ class KnowledgeDistributionService {
         updateOne: {
           filter: { _id: new mongoose.Types.ObjectId(userId) },
           update: {
-            $inc: { knowledgeBalance: amount },
-            $push: {
-              notifications: {
-                $each: [{
-                  _id: notificationId,
-                  type: 'domain_distribution_result',
-                  title: `知识点到账：${node.name}`,
-                  message: `你从知识域「${node.name}」获得了 ${amount.toFixed(2)} 知识点，已存入个人账户。`,
-                  read: false,
-                  status: 'info',
-                  nodeId: node._id,
-                  nodeName: node.name,
-                  allianceId: masterAllianceId || null,
-                  allianceName: lock.masterAllianceName || '',
-                  inviterId: masterUser._id,
-                  inviterUsername: masterUser.username,
-                  createdAt: notificationTime
-                }],
-                $position: 0
-              }
-            }
+            $inc: { knowledgeBalance: amount }
           }
         }
       });
@@ -778,7 +816,7 @@ class KnowledgeDistributionService {
     }
     if (userOps.length > 0) {
       await User.bulkWrite(userOps, { ordered: false });
-      await writeNotificationsToCollection(collectionNotificationDocs);
+      await writeNotificationDocsInChunks(collectionNotificationDocs);
     }
 
     const resultUserRewards = Array.from(userRewardCents.entries())

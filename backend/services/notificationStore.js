@@ -11,8 +11,16 @@ const toObjectIdOrNull = (value) => {
   return new mongoose.Types.ObjectId(String(value));
 };
 
-const isNotificationCollectionReadEnabled = () => process.env.NOTIFICATION_COLLECTION_READ === 'true';
-const isNotificationDualWriteEnabled = () => process.env.NOTIFICATION_DUAL_WRITE === 'true';
+const parseEnvFlag = (rawValue, defaultValue = true) => {
+  if (typeof rawValue !== 'string') return defaultValue;
+  const normalized = rawValue.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return defaultValue;
+};
+
+const isNotificationCollectionReadEnabled = () => parseEnvFlag(process.env.NOTIFICATION_COLLECTION_READ, true);
+const isNotificationDualWriteEnabled = () => parseEnvFlag(process.env.NOTIFICATION_DUAL_WRITE, true);
 
 const normalizeNotificationDoc = (item = {}) => {
   const userId = toObjectIdOrNull(item.userId);

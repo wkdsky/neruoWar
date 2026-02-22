@@ -4,27 +4,61 @@ import '../../App.css';
 import AllianceDetailModal from '../modals/AllianceDetailModal';
 import CreateAllianceModal from '../modals/CreateAllianceModal';
 
+const ALLIANCE_LIST_PAGE_SIZE = 20;
+const ALLIANCE_DETAIL_MEMBER_PAGE_SIZE = 30;
+const ALLIANCE_DETAIL_DOMAIN_PAGE_SIZE = 30;
+
 const AlliancePanel = ({ username, token, isAdmin }) => {
     const [alliances, setAlliances] = useState([]);
+    const [alliancesPage, setAlliancesPage] = useState(1);
+    const [alliancesPagination, setAlliancesPagination] = useState({
+        page: 1,
+        pageSize: ALLIANCE_LIST_PAGE_SIZE,
+        total: 0,
+        totalPages: 0
+    });
+    const [isAlliancesLoading, setIsAlliancesLoading] = useState(false);
     const [userAlliance, setUserAlliance] = useState(null);
+    const [allianceDetailQuery, setAllianceDetailQuery] = useState({
+        memberPage: 1,
+        memberPageSize: ALLIANCE_DETAIL_MEMBER_PAGE_SIZE,
+        domainPage: 1,
+        domainPageSize: ALLIANCE_DETAIL_DOMAIN_PAGE_SIZE
+    });
     const [selectedAlliance, setSelectedAlliance] = useState(null);
     const [showAllianceDetailModal, setShowAllianceDetailModal] = useState(false);
     const [showCreateAllianceModal, setShowCreateAllianceModal] = useState(false);
 
     useEffect(() => {
-        fetchAlliances();
+        fetchAlliances({ page: 1 });
         fetchUserAlliance();
     }, []);
 
-    const fetchAlliances = async () => {
+    const fetchAlliances = async ({ page = alliancesPage, pageSize = ALLIANCE_LIST_PAGE_SIZE } = {}) => {
+        setIsAlliancesLoading(true);
         try {
-            const response = await fetch('http://localhost:5000/api/alliances/list');
+            const params = new URLSearchParams({
+                page: String(Math.max(1, page)),
+                pageSize: String(Math.max(1, pageSize))
+            });
+            const response = await fetch(`http://localhost:5000/api/alliances/list?${params.toString()}`);
             if (response.ok) {
                 const data = await response.json();
-                setAlliances(data.alliances);
+                const pagination = data?.pagination || {};
+                const nextPage = Math.max(1, parseInt(pagination.page, 10) || Math.max(1, page));
+                setAlliances(Array.isArray(data?.alliances) ? data.alliances : []);
+                setAlliancesPagination({
+                    page: nextPage,
+                    pageSize: Math.max(1, parseInt(pagination.pageSize, 10) || pageSize),
+                    total: Math.max(0, parseInt(pagination.total, 10) || 0),
+                    totalPages: Math.max(0, parseInt(pagination.totalPages, 10) || 0)
+                });
+                setAlliancesPage(nextPage);
             }
         } catch (error) {
             console.error('获取熵盟列表失败:', error);
+        } finally {
+            setIsAlliancesLoading(false);
         }
     };
 
@@ -45,12 +79,31 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
         }
     };
 
-    const fetchAllianceDetail = async (allianceId, openModal = true) => {
+    const fetchAllianceDetail = async (allianceId, {
+        openModal = true,
+        memberPage = allianceDetailQuery.memberPage,
+        memberPageSize = allianceDetailQuery.memberPageSize,
+        domainPage = allianceDetailQuery.domainPage,
+        domainPageSize = allianceDetailQuery.domainPageSize
+    } = {}) => {
+        if (!allianceId) return;
         try {
-            const response = await fetch(`http://localhost:5000/api/alliances/${allianceId}`);
+            const params = new URLSearchParams({
+                memberPage: String(Math.max(1, memberPage)),
+                memberPageSize: String(Math.max(1, memberPageSize)),
+                domainPage: String(Math.max(1, domainPage)),
+                domainPageSize: String(Math.max(1, domainPageSize))
+            });
+            const response = await fetch(`http://localhost:5000/api/alliances/${allianceId}?${params.toString()}`);
             if (response.ok) {
                 const data = await response.json();
                 setSelectedAlliance(data);
+                setAllianceDetailQuery({
+                    memberPage: Math.max(1, parseInt(data?.memberPagination?.page, 10) || memberPage),
+                    memberPageSize: Math.max(1, parseInt(data?.memberPagination?.pageSize, 10) || memberPageSize),
+                    domainPage: Math.max(1, parseInt(data?.domainPagination?.page, 10) || domainPage),
+                    domainPageSize: Math.max(1, parseInt(data?.domainPagination?.pageSize, 10) || domainPageSize)
+                });
                 if (openModal) {
                     setShowAllianceDetailModal(true);
                 }
@@ -75,7 +128,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
             if (response.ok) {
                 alert('熵盟创建成功！');
                 setShowCreateAllianceModal(false);
-                fetchAlliances();
+                fetchAlliances({ page: alliancesPage });
                 fetchUserAlliance();
             } else {
                 alert(data.error || '创建失败');
@@ -98,7 +151,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
             if (response.ok) {
                 alert(data.message || '申请已提交，等待盟主审核');
                 setShowAllianceDetailModal(false);
-                fetchAlliances();
+                fetchAlliances({ page: alliancesPage });
                 fetchUserAlliance();
             } else {
                 alert(data.error || '加入失败');
@@ -123,7 +176,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
             if (response.ok) {
                 alert(data.message);
                 setShowAllianceDetailModal(false);
-                fetchAlliances();
+                fetchAlliances({ page: alliancesPage });
                 fetchUserAlliance();
                 return true;
             } else {
@@ -151,7 +204,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
             const data = await response.json();
             if (response.ok) {
                 alert(data.message || '盟主身份已转交');
-                await fetchAlliances();
+                await fetchAlliances({ page: alliancesPage });
                 await fetchUserAlliance();
                 return true;
             }
@@ -182,7 +235,11 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                                 <p>成员: {userAlliance.memberCount} | 管辖域: {userAlliance.domainCount}</p>
                             </div>
                             <button
-                                onClick={() => fetchAllianceDetail(userAlliance._id)}
+                                onClick={() => fetchAllianceDetail(userAlliance._id, {
+                                    openModal: true,
+                                    memberPage: 1,
+                                    domainPage: 1
+                                })}
                                 className="btn btn-secondary btn-small"
                             >
                                 熵盟详情
@@ -213,7 +270,11 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                         <div
                             key={alliance._id}
                             className="alliance-card"
-                            onClick={() => fetchAllianceDetail(alliance._id)}
+                            onClick={() => fetchAllianceDetail(alliance._id, {
+                                openModal: true,
+                                memberPage: 1,
+                                domainPage: 1
+                            })}
                         >
                             <div className="alliance-flag-large" style={{ backgroundColor: alliance.flag }}></div>
                             <div className="alliance-card-content">
@@ -237,6 +298,31 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                     ))
                 )}
             </div>
+            <div className="alliance-list-pagination">
+                <div className="alliance-list-page-info">
+                    {isAlliancesLoading
+                        ? '加载中...'
+                        : `第 ${alliancesPagination.page} / ${Math.max(1, alliancesPagination.totalPages || 1)} 页，共 ${alliancesPagination.total} 个熵盟`}
+                </div>
+                <div className="alliance-list-page-actions">
+                    <button
+                        type="button"
+                        className="btn btn-small btn-secondary"
+                        onClick={() => fetchAlliances({ page: alliancesPagination.page - 1 })}
+                        disabled={isAlliancesLoading || alliancesPagination.page <= 1}
+                    >
+                        上一页
+                    </button>
+                    <button
+                        type="button"
+                        className="btn btn-small btn-secondary"
+                        onClick={() => fetchAlliances({ page: alliancesPagination.page + 1 })}
+                        disabled={isAlliancesLoading || (alliancesPagination.totalPages > 0 && alliancesPagination.page >= alliancesPagination.totalPages)}
+                    >
+                        下一页
+                    </button>
+                </div>
+            </div>
 
             {/* 熵盟详情弹窗 */}
             <AllianceDetailModal
@@ -250,12 +336,18 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                 isAdmin={isAdmin}
                 currentUsername={username}
                 token={token}
-                onRefreshAllianceDetail={(allianceId) => fetchAllianceDetail(allianceId, false)}
-                onAllianceChanged={async (allianceId) => {
-                    await fetchAlliances();
+                onRefreshAllianceDetail={(allianceId, pagination = {}) => fetchAllianceDetail(allianceId, {
+                    openModal: false,
+                    ...pagination
+                })}
+                onAllianceChanged={async (allianceId, pagination = null) => {
+                    await fetchAlliances({ page: alliancesPage });
                     await fetchUserAlliance();
                     if (allianceId) {
-                        await fetchAllianceDetail(allianceId, false);
+                        await fetchAllianceDetail(allianceId, {
+                            openModal: false,
+                            ...(pagination || allianceDetailQuery)
+                        });
                     }
                 }}
             />

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Plus, Search, Trash2, Link2 } from 'lucide-react';
+import { X, Plus, Search, Trash2, Link2, ArrowRight } from 'lucide-react';
 import './CreateNodeModal.css';
 
 const RELATION_OPTIONS = [
@@ -254,7 +254,7 @@ const CreateNodeModal = ({
       updateSense(senseLocalId, (sense) => ({
         ...sense,
         insertDirectionLocked: false,
-        insertDirectionHint: '先选定左右释义；若两者无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。'
+        insertDirectionHint: '先选定左右释义后，将显示插入后的承接说明。'
       }));
       return;
     }
@@ -265,6 +265,8 @@ const CreateNodeModal = ({
     ]);
     const rightKey = rightTarget.searchKey;
     const leftKey = leftTarget.searchKey;
+    const leftDisplayName = leftTarget.displayName || leftTarget.domainName || '左侧释义';
+    const rightDisplayName = rightTarget.displayName || rightTarget.domainName || '右侧释义';
     const rightIsChild = leftContext.childKeySet.has(rightKey) || rightContext.parentKeySet.has(leftKey);
     const rightIsParent = leftContext.parentKeySet.has(rightKey) || rightContext.childKeySet.has(leftKey);
 
@@ -273,9 +275,7 @@ const CreateNodeModal = ({
         ...sense,
         insertDirection: rightIsChild ? 'contains' : 'extends',
         insertDirectionLocked: true,
-        insertDirectionHint: rightIsChild
-          ? '已识别：左侧与右侧原本是“上级→下级”，方向已锁定为“→包含→包含”。'
-          : '已识别：左侧与右侧原本是“下级←上级”，方向已锁定为“←拓展←拓展”。'
+        insertDirectionHint: `当前释义将插入到「${leftDisplayName}」和「${rightDisplayName}」之间，「${leftDisplayName}」和「${rightDisplayName}」原来的关联将改为「${leftDisplayName}-当前释义-${rightDisplayName}」。`
       }));
       return;
     }
@@ -283,7 +283,7 @@ const CreateNodeModal = ({
     updateSense(senseLocalId, (sense) => ({
       ...sense,
       insertDirectionLocked: false,
-      insertDirectionHint: '左右释义当前无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。'
+      insertDirectionHint: `当前释义将插入到「${leftDisplayName}」和「${rightDisplayName}」之间，「${leftDisplayName}」和「${rightDisplayName}」新建关联为「${leftDisplayName}-当前释义-${rightDisplayName}」。`
     }));
   }, [fetchSenseRelationContext, updateSense]);
 
@@ -480,7 +480,7 @@ const CreateNodeModal = ({
           insertLeftTarget: null,
           insertRightTarget: null,
           insertDirectionLocked: false,
-          insertDirectionHint: '先选定左右释义；若两者无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。'
+          insertDirectionHint: '先选定左右释义后，将显示插入后的承接说明。'
         };
       }
 
@@ -755,7 +755,7 @@ const CreateNodeModal = ({
                 const insertDirection = sense.insertDirection === 'extends' ? 'extends' : 'contains';
                 const insertSegmentText = insertDirection === 'contains' ? '→包含→' : '←拓展←';
                 const insertDirectionHint = sense.insertDirectionHint
-                  || '先选定左右释义；若两者无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。';
+                  || '先选定左右释义后，将显示插入后的承接说明。';
                 const relationHint = sense.relationType === 'insert'
                   ? `${insertSegmentText}${insertDirection === 'contains' ? '包含' : '拓展'}；${insertDirectionHint}`
                   : (RELATION_OPTIONS.find((option) => option.value === sense.relationType)?.hint || '');
@@ -792,14 +792,13 @@ const CreateNodeModal = ({
                     />
                     {fieldErrors.content && <span className="error-text inline-field-error">{fieldErrors.content}</span>}
 
-                    <div className="sense-relations-editor">
+                    <div className="sense-relations-editor admin-add-sense-relations">
                       <div className="relation-type-row">
-                        <div className="relation-type-switcher">
+                        <div className="admin-assoc-relation-cards create-relation-cards">
                           {RELATION_OPTIONS.map((option) => (
-                            <button
+                            <div
                               key={`${sense.localId}-${option.value}`}
-                              type="button"
-                              className={`relation-type-btn ${sense.relationType === option.value ? 'active' : ''}`}
+                              className={`admin-assoc-relation-card ${sense.relationType === option.value ? 'active' : ''}`}
                               onClick={() => updateSense(sense.localId, {
                                 relationType: option.value,
                                 selectedTarget: null,
@@ -807,11 +806,25 @@ const CreateNodeModal = ({
                                 insertRightTarget: null,
                                 insertDirection: 'contains',
                                 insertDirectionLocked: false,
-                                insertDirectionHint: '先选定左右释义；若两者无直接上下级，可点击线段在“→包含→包含 / ←拓展←拓展”之间切换。'
+                                insertDirectionHint: '先选定左右释义后，将显示插入后的承接说明。'
                               })}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  e.currentTarget.click();
+                                }
+                              }}
                             >
-                              {option.label}
-                            </button>
+                              <div className={`admin-assoc-relation-icon ${option.value === 'contains' ? 'contains' : (option.value === 'extends' ? 'extends' : 'insert')}`}>
+                                {option.value === 'contains' ? '↓' : (option.value === 'extends' ? '↑' : '⇄')}
+                              </div>
+                              <div className="admin-assoc-relation-content">
+                                <h6>{option.label}</h6>
+                                <p>{option.hint}</p>
+                              </div>
+                            </div>
                           ))}
                         </div>
                         <button
@@ -827,6 +840,31 @@ const CreateNodeModal = ({
 
                       {sense.relationType === 'insert' ? (
                         <>
+                          <div className="admin-add-sense-insert-targets">
+                            <button
+                              type="button"
+                              className={`btn-action ${sense.insertLeftTarget ? 'btn-primary-small' : 'btn-view'}`}
+                              onClick={() => openTargetSelector(sense.localId, 'left')}
+                            >
+                              左侧：{sense.insertLeftTarget?.displayName || '未选择'}
+                            </button>
+                            <button
+                              type="button"
+                              className={`btn-action ${sense.insertRightTarget ? 'btn-primary-small' : 'btn-view'}`}
+                              onClick={() => openTargetSelector(sense.localId, 'right')}
+                            >
+                              右侧：{sense.insertRightTarget?.displayName || '未选择'}
+                            </button>
+                            <button
+                              type="button"
+                              className={`btn-action btn-secondary ${sense.insertDirectionLocked ? 'locked' : ''}`}
+                              onClick={() => toggleInsertDirection(sense.localId)}
+                              disabled={sense.insertDirectionLocked}
+                              title={sense.insertDirectionLocked ? '该方向已由左右节点现有关联锁定，不能切换' : '点击可切换插入方向'}
+                            >
+                              方向：{insertSegmentText}
+                            </button>
+                          </div>
                           <div className="relation-visual relation-visual-insert">
                             <button
                               type="button"
@@ -864,45 +902,50 @@ const CreateNodeModal = ({
                               {sense.insertRightTarget?.displayName || '点此选择右侧释义'}
                             </button>
                           </div>
-                          <div className={`insert-direction-state ${sense.insertDirectionLocked ? 'locked' : ''}`}>
+                          <p className={`admin-add-sense-insert-hint ${sense.insertDirectionLocked ? 'locked' : ''}`}>
                             {sense.insertDirectionLocked
                               ? '当前方向已锁定（由左右释义原有上下级关系决定）'
                               : '当前方向可切换（点击任一线段即可切换）'}
-                          </div>
+                          </p>
                         </>
                       ) : (
-                        <div className="relation-visual relation-visual-single">
-                          {sense.relationType === 'contains' ? (
-                            <>
-                              <div className="relation-node current">{sense.title?.trim() || `当前释义${index + 1}`}</div>
-                              <div className="relation-arrow">下级 ↓</div>
-                              <button
-                                type="button"
-                                className="relation-node target clickable"
-                                onClick={() => openTargetSelector(sense.localId, 'single')}
-                              >
-                                {sense.selectedTarget?.displayName || '点此选择目标释义'}
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                className="relation-node target clickable"
-                                onClick={() => openTargetSelector(sense.localId, 'single')}
-                              >
-                                {sense.selectedTarget?.displayName || '点此选择目标释义'}
-                              </button>
-                              <div className="relation-arrow">上级 ↑</div>
-                              <div className="relation-node current">{sense.title?.trim() || `当前释义${index + 1}`}</div>
-                            </>
-                          )}
-                        </div>
+                        <>
+                          <p className="admin-add-sense-selected-target">
+                            当前目标：{sense.selectedTarget?.displayName || '未选择'}
+                          </p>
+                          <div className="relation-visual relation-visual-single">
+                            {sense.relationType === 'contains' ? (
+                              <>
+                                <div className="relation-node current">{sense.title?.trim() || `当前释义${index + 1}`}</div>
+                                <div className="relation-arrow">下级 ↓</div>
+                                <button
+                                  type="button"
+                                  className="relation-node target clickable"
+                                  onClick={() => openTargetSelector(sense.localId, 'single')}
+                                >
+                                  {sense.selectedTarget?.displayName || '点此选择目标释义'}
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="relation-node target clickable"
+                                  onClick={() => openTargetSelector(sense.localId, 'single')}
+                                >
+                                  {sense.selectedTarget?.displayName || '点此选择目标释义'}
+                                </button>
+                                <div className="relation-arrow">上级 ↑</div>
+                                <div className="relation-node current">{sense.title?.trim() || `当前释义${index + 1}`}</div>
+                              </>
+                            )}
+                          </div>
+                        </>
                       )}
 
                       <button
                         type="button"
-                        className="btn btn-success add-relation-btn"
+                        className="btn btn-success add-relation-btn admin-add-sense-add-relation-btn"
                         onClick={() => addRelationToSense(sense.localId)}
                       >
                         <Link2 className="icon-small" />
@@ -910,12 +953,12 @@ const CreateNodeModal = ({
                       </button>
                       {fieldErrors.relation && <span className="error-text inline-field-error">{fieldErrors.relation}</span>}
 
-                      <div className="sense-relations-list relation-inner-scroll">
+                      <div className="sense-relations-list relation-inner-scroll admin-add-sense-added-relations">
                         {sense.relations.length === 0 ? (
-                          <div className="empty-relation-hint">当前释义还没有关联关系</div>
+                          <div className="empty-relation-hint admin-add-sense-empty-relations">当前释义还没有关联关系</div>
                         ) : (
                           sense.relations.map((relation) => (
-                            <div key={relation.id} className="relation-card">
+                            <div key={relation.id} className="relation-card admin-add-sense-relation-item">
                               <div className="relation-card-top">
                                 <span className="relation-type-pill">{RELATION_LABEL_MAP[relation.relationType] || relation.relationType}</span>
                                 <button
@@ -994,37 +1037,42 @@ const CreateNodeModal = ({
                   onChange={(e) => setTargetSelector((prev) => ({ ...prev, keyword: e.target.value }))}
                 />
               </div>
-              <div className="target-selector-command-hint">
-                <code>#include</code> 显示另一侧释义的上级，<code>#expand</code> 显示另一侧释义的下级
-              </div>
+              {targetSelector.side !== 'single' && (
+                <div className="target-selector-command-hint">
+                  <code>#include</code> 显示另一侧释义的上级，<code>#expand</code> 显示另一侧释义的下级
+                </div>
+              )}
 
-              <div className="target-selector-results relation-inner-scroll">
+              <div className="target-selector-results relation-inner-scroll admin-add-sense-search-results admin-assoc-candidate-list">
                 {targetSelector.loading && (
-                  <div className="target-selector-empty">搜索中...</div>
+                  <p className="admin-assoc-step-description target-selector-empty">搜索中...</p>
                 )}
                 {!targetSelector.loading && !parsedSelectorKeyword.textKeyword && !parsedSelectorKeyword.mode && (
-                  <div className="target-selector-empty">输入关键字开始搜索</div>
+                  <p className="admin-assoc-step-description target-selector-empty">输入关键字开始搜索</p>
                 )}
                 {!targetSelector.loading && (parsedSelectorKeyword.textKeyword || parsedSelectorKeyword.mode) && targetSelector.results.length === 0 && (
-                  <div className="target-selector-empty">没有匹配结果</div>
+                  <p className="admin-assoc-step-description target-selector-empty">没有匹配结果</p>
                 )}
                 {!targetSelector.loading && targetSelector.results.map((item) => (
                   <button
                     key={item.searchKey}
                     type="button"
-                    className={`search-result-item selectable ${targetSelector.selected?.searchKey === item.searchKey ? 'selected' : ''}`}
+                    className={`search-result-item selectable admin-assoc-candidate-item ${targetSelector.selected?.searchKey === item.searchKey ? 'selected' : ''}`}
                     onClick={() => setTargetSelector((prev) => ({ ...prev, selected: item }))}
                   >
-                    <div className="node-info">
-                      <div className="node-title-row">
-                        {targetSelector.side !== 'single' && !!item.relationToAnchor && (
-                          <span className={`relation-prefix relation-${item.relationToAnchor || 'none'}`}>
-                            {item.relationToAnchor || '无关'}
-                          </span>
-                        )}
-                        <strong>{renderKeywordHighlight(item.displayName, selectorSearchHighlightKeyword)}</strong>
+                    <div className="admin-assoc-search-item">
+                      <div className="node-info admin-assoc-search-main">
+                        <div className="node-title-row">
+                          {targetSelector.side !== 'single' && !!item.relationToAnchor && (
+                            <span className={`relation-prefix relation-${item.relationToAnchor || 'none'}`}>
+                              {item.relationToAnchor || '无关'}
+                            </span>
+                          )}
+                          <strong>{renderKeywordHighlight(item.displayName, selectorSearchHighlightKeyword)}</strong>
+                        </div>
+                        <span className="node-description admin-assoc-search-hint">{item.description}</span>
                       </div>
-                      <span className="node-description">{item.description}</span>
+                      <ArrowRight className="icon-small" />
                     </div>
                   </button>
                 ))}

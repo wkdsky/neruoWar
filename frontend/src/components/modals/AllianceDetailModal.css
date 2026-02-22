@@ -259,6 +259,25 @@
     color: #94a3b8;
 }
 
+.alliance-list-pager {
+    margin-top: 0.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+}
+
+.alliance-list-pager-info {
+    color: #94a3b8;
+    font-size: 0.85rem;
+}
+
+.alliance-list-pager-actions {
+    display: flex;
+    gap: 0.55rem;
+}
+
 .alliance-style-list {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
