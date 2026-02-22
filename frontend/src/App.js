@@ -542,7 +542,6 @@ const App = () => {
     const sceneManagerRef = useRef(null);
     const [isWebGLReady, setIsWebGLReady] = useState(false);
     const [clickedNodeForTransition, setClickedNodeForTransition] = useState(null);
-    const [canvasKey, setCanvasKey] = useState(0); // 用于强制重新渲染canvas
 
     // 搜索栏相关引用
     const searchBarRef = useRef(null);
@@ -613,6 +612,7 @@ const App = () => {
 
         // 每次view变化时，清理并重新创建场景管理器
         if (sceneManagerRef.current) {
+            setIsWebGLReady(false);
             sceneManagerRef.current.destroy();
             sceneManagerRef.current = null;
         }
@@ -724,7 +724,7 @@ const App = () => {
         } catch (error) {
             console.error('WebGL初始化失败:', error);
         }
-    }, [view, canvasKey]); // 添加canvasKey作为依赖，用于强制重新初始化
+    }, [view]);
 
     // 更新按钮点击回调（确保获取最新的当前主视角节点）
     useEffect(() => {
@@ -813,6 +813,13 @@ const App = () => {
     setProfession(data.profession || '求知');
     setUserLocation(data.location || '');
     setUserAvatar(data.avatar || 'default_male_1');
+    const needsLocationSelection = data.role !== 'admin' && (!data.location || data.location === '');
+    if (needsLocationSelection) {
+      // 先打开降临弹窗，避免出现首页闪一下再弹窗
+      setShowLocationModal(true);
+    } else {
+      setShowLocationModal(false);
+    }
 
     // 重新初始化socket连接（连接事件中会处理认证）
     initializeSocket(data.token);
@@ -832,10 +839,6 @@ const App = () => {
         setUserLocation('任意');
         localStorage.setItem('userLocation', '任意');
         setView('home');
-      } else {
-        // 普通用户显示位置选择弹窗
-        setShowLocationModal(true);
-        // 不设置view，保持在登录状态但显示弹窗
       }
     } else {
       setView('home');
@@ -895,10 +898,9 @@ const App = () => {
       setShowLocationModal(false);
       setView('home');
 
-      // 强制重新初始化WebGL（确保canvas渲染后再初始化）
-      setTimeout(() => {
-        setCanvasKey(prev => prev + 1);
-      }, 50);
+      // 首次降临后主动拉取首页数据，避免首屏空白
+      fetchRootNodes();
+      fetchFeaturedNodes();
     }
     // 如果失败，updateUserLocation已经显示了错误消息，保持弹窗打开
   };
@@ -1916,6 +1918,7 @@ const App = () => {
 
   useEffect(() => {
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
+    if (view === 'login') return;
 
     const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army'].includes(view);
     if (!isKnownView) {
@@ -4232,9 +4235,9 @@ const App = () => {
                 adminReminders.push({
                     key: 'pending-node-create',
                     title: (adminPendingNodes.length === 1 && latestPendingNode?.name)
-                        ? `有用户提交了创建「${latestPendingNode.name}」知识域`
-                        : '有用户提交了创建知识域申请',
-                    message: `当前有 ${adminPendingNodes.length} 条建节点申请待审批。`,
+                        ? `有用户提交了「${latestPendingNode.name}」新知识域创建申请`
+                        : '有用户提交了创建新知识域申请',
+                    message: `当前有 ${adminPendingNodes.length} 条创建新知识域申请待审批。`,
                     createdAt: latestPendingNode?.createdAt || null
                 });
             }
@@ -4747,12 +4750,8 @@ const App = () => {
         );
     };
 
-    if (view === 'login') {
-        return <Login onLogin={handleLoginSuccess} />;
-    }
-
     // 如果需要显示位置选择弹窗，只显示弹窗，不显示其他内容
-    if (showLocationModal) {
+    if (authenticated && showLocationModal) {
         return (
             <LocationSelectionModal
                 onConfirm={handleLocationConfirm}
@@ -4761,6 +4760,10 @@ const App = () => {
                 onLogout={handleLogout}
             />
         );
+    }
+
+    if (view === 'login') {
+        return <Login onLogin={handleLoginSuccess} />;
     }
 
     const isKnowledgeDomainActive = showKnowledgeDomain || isTransitioningToDomain;

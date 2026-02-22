@@ -414,7 +414,7 @@ const NodeDetail = ({
                                 className="btn btn-success create-node-btn"
                             >
                                 <Plus size={18} />
-                                创建节点
+                                创建新知识域
                             </button>
                         </div>
                     </div>

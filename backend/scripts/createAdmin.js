@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 require('dotenv').config();
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/node-game';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/strategy-game';
 
 async function createAdmin() {
   try {
@@ -11,7 +11,7 @@ async function createAdmin() {
     console.log('已连接到 MongoDB');
 
     // 检查是否已有用户名为admin的用户
-    const existingUser = await User.findOne({ username: 'wkd' });
+    const existingUser = await User.findOne({ username: 'admin' });
     if (existingUser) {
       // 如果存在，更新其role为admin
       existingUser.role = 'admin';
@@ -19,8 +19,8 @@ async function createAdmin() {
       console.log('已更新现有用户为管理员:', existingUser.username);
     } else {
       // 创建管理员账户
-      const adminUsername = 'wkd';
-      const adminPassword = 'wkd123'; // 建议首次登录后修改
+      const adminUsername = 'admin';
+      const adminPassword = '123456'; // 建议首次登录后修改
 
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(adminPassword, salt);

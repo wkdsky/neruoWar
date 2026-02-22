@@ -3,6 +3,7 @@ import { Search, X, MapPin, Eye, LogOut } from 'lucide-react';
 
 const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, username, onLogout }) => {
     const [searchQuery, setSearchQuery] = useState('');
+    const [searchAppliedQuery, setSearchAppliedQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [isSearching, setIsSearching] = useState(false);
     const [selectedNode, setSelectedNode] = useState(null);
@@ -10,9 +11,37 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
     const [locationTreeData, setLocationTreeData] = useState(null);
     const treeCanvasRef = useRef(null);
 
-    // 搜索节点
+    const normalizeLocationTitleResults = useCallback((items = [], query = '') => {
+        const normalizedQuery = String(query || '').trim().toLowerCase();
+        const keywords = normalizedQuery.split(/\s+/).filter(Boolean);
+        const seenNodeIds = new Set();
+        return (Array.isArray(items) ? items : [])
+            .filter((item) => {
+                const title = String(item?.domainName || item?.name || '').trim().toLowerCase();
+                if (!title) return false;
+                return keywords.length < 1 || keywords.every((keyword) => title.includes(keyword));
+            })
+            .map((item) => {
+                const nodeId = String(item?._id || item?.nodeId || '').trim();
+                return {
+                    _id: nodeId,
+                    name: String(item?.domainName || item?.name || '').trim(),
+                    description: String(item?.description || '').trim()
+                };
+            })
+            .filter((item) => {
+                if (!item._id || !item.name) return false;
+                if (seenNodeIds.has(item._id)) return false;
+                seenNodeIds.add(item._id);
+                return true;
+            });
+    }, []);
+
+    // 搜索节点（只返回标题级结果）
     const performSearch = useCallback(async (query) => {
-        if (!query || query.trim() === '') {
+        const normalizedQuery = String(query || '').trim();
+        setSearchAppliedQuery(normalizedQuery);
+        if (!normalizedQuery) {
             setSearchResults([]);
             setIsSearching(false);
             return;
@@ -20,26 +49,31 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
 
         setIsSearching(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(query)}`);
+            const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(normalizedQuery)}`);
             if (response.ok) {
                 const data = await response.json();
-                setSearchResults(data.results);
+                setSearchResults(normalizeLocationTitleResults(data?.results || [], normalizedQuery));
+            } else {
+                setSearchResults([]);
             }
         } catch (error) {
             console.error('搜索失败:', error);
+            setSearchResults([]);
         } finally {
             setIsSearching(false);
         }
+    }, [normalizeLocationTitleResults]);
+
+    const handleSearchSubmit = useCallback(() => {
+        performSearch(searchQuery);
+    }, [performSearch, searchQuery]);
+
+    const clearSearch = useCallback(() => {
+        setSearchQuery('');
+        setSearchAppliedQuery('');
+        setSearchResults([]);
+        setIsSearching(false);
     }, []);
-
-    // 防抖搜索
-    useEffect(() => {
-        const timeoutId = setTimeout(() => {
-            performSearch(searchQuery);
-        }, 300);
-
-        return () => clearTimeout(timeoutId);
-    }, [searchQuery, performSearch]);
 
     // 选择节点
     const handleSelectNode = (node) => {
@@ -406,28 +440,45 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
                     <div className="location-search-section">
                         <div className="location-search-bar">
                             <Search className="search-icon" size={24} />
-                            <input
-                                type="text"
-                                placeholder="搜索节点...（支持多关键词，用空格分隔）"
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="location-search-input"
-                            />
-                            {searchQuery && (
-                                <button
-                                    onClick={() => {
-                                        setSearchQuery('');
+                            <div className="location-search-input-wrap">
+                                <input
+                                    type="text"
+                                    placeholder="搜索标题...（支持多关键词，用空格分隔）"
+                                    value={searchQuery}
+                                    onChange={(e) => {
+                                        setSearchQuery(e.target.value);
+                                        setSearchAppliedQuery('');
                                         setSearchResults([]);
                                     }}
-                                    className="location-search-clear"
-                                >
-                                    <X size={18} />
-                                </button>
-                            )}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            handleSearchSubmit();
+                                        }
+                                    }}
+                                    className="location-search-input"
+                                />
+                                {searchQuery && (
+                                    <button
+                                        onClick={clearSearch}
+                                        className="location-search-clear"
+                                        aria-label="清空搜索"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                )}
+                            </div>
+                            <button
+                                className="location-search-submit"
+                                onClick={handleSearchSubmit}
+                                disabled={!searchQuery.trim() || isSearching}
+                            >
+                                {isSearching ? '搜索中...' : '搜索'}
+                            </button>
                         </div>
 
                         {/* 搜索结果 */}
-                        {searchQuery && searchResults.length > 0 && (
+                        {searchAppliedQuery && searchResults.length > 0 && (
                             <div className="location-search-results">
                                 {searchResults.map((node) => (
                                     <div
@@ -436,14 +487,13 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
                                         onClick={() => handleSelectNode(node)}
                                     >
                                         <div className="result-title">{node.name}</div>
-                                        <div className="result-desc">{node.description}</div>
                                     </div>
                                 ))}
                             </div>
                         )}
 
-                        {searchQuery && !isSearching && searchResults.length === 0 && (
-                            <div className="location-no-results">未找到匹配的节点</div>
+                        {searchAppliedQuery && !isSearching && searchResults.length === 0 && (
+                            <div className="location-no-results">未找到匹配的标题</div>
                         )}
 
                         {isSearching && (
@@ -481,7 +531,6 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
                                     <span className="selected-node-name">{selectedNode.name}</span>
                                 </div>
                                 <div className="selected-node-info">
-                                    <div className="selected-node-desc">{selectedNode.description}</div>
                                     <button
                                         className="btn-view-location"
                                         onClick={handleViewLocation}

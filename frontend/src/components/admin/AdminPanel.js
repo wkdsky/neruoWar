@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Users, Zap, Bell, Shield, Check, X, Search, Plus, AlertTriangle, ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Settings } from 'lucide-react';
+import { Users, Zap, Bell, Shield, Check, X, Search, Plus, AlertTriangle, ArrowRight, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 import MiniPreviewRenderer from '../modals/MiniPreviewRenderer';
+import AssociationAddFlowEditor from '../shared/AssociationAddFlowEditor';
 import './Admin.css';
 
 const ASSOC_STEPS = {
@@ -15,6 +16,8 @@ const ASSOC_RELATION_TYPES = {
     CONTAINS: 'contains',
     INSERT: 'insert'
 };
+const REL_SYMBOL_SUPERSET = '⊇';
+const REL_SYMBOL_SUBSET = '⊆';
 
 const UNIT_TYPE_ID_PATTERN = /^[a-zA-Z0-9_-]{2,64}$/;
 const ADMIN_ALLIANCE_PAGE_SIZE = 20;
@@ -40,8 +43,8 @@ const createEmptyUnitTypeForm = () => ({
 });
 
 const NEW_SENSE_RELATION_OPTIONS = [
-    { value: ASSOC_RELATION_TYPES.CONTAINS, label: '包含' },
-    { value: ASSOC_RELATION_TYPES.EXTENDS, label: '扩展' },
+    { value: ASSOC_RELATION_TYPES.CONTAINS, label: REL_SYMBOL_SUBSET },
+    { value: ASSOC_RELATION_TYPES.EXTENDS, label: REL_SYMBOL_SUPERSET },
     { value: ASSOC_RELATION_TYPES.INSERT, label: '插入' }
 ];
 
@@ -197,6 +200,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [pendingNodes, setPendingNodes] = useState([]);
     const [pendingNodeActionId, setPendingNodeActionId] = useState('');
     const [pendingNodeActionGroupName, setPendingNodeActionGroupName] = useState('');
+    const [pendingNodeSelectedSenseByNodeId, setPendingNodeSelectedSenseByNodeId] = useState({});
     const [pendingMasterApplications, setPendingMasterApplications] = useState([]);
     const [masterApplyActionId, setMasterApplyActionId] = useState('');
 
@@ -303,11 +307,18 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [assocEditingIndex, setAssocEditingIndex] = useState(null);
     const assocEditRequestIdRef = useRef(0);
     const assocNodeBSearchRequestIdRef = useRef(0);
-    const [assocRemovalStrategy, setAssocRemovalStrategy] = useState('disconnect');
-    const [assocMutationPreview, setAssocMutationPreview] = useState(null);
-    const [assocPreviewLoading, setAssocPreviewLoading] = useState(false);
     const [assocApplyLoading, setAssocApplyLoading] = useState(false);
     const [assocBridgeDecisions, setAssocBridgeDecisions] = useState({});
+    const [showAssocDeleteDecisionModal, setShowAssocDeleteDecisionModal] = useState(false);
+    const [assocDeleteDecisionContext, setAssocDeleteDecisionContext] = useState(null);
+    const [assocDeleteDecisionAction, setAssocDeleteDecisionAction] = useState('disconnect');
+    const [assocDeleteSearchKeyword, setAssocDeleteSearchKeyword] = useState('');
+    const [assocDeleteSearchAppliedKeyword, setAssocDeleteSearchAppliedKeyword] = useState('');
+    const [assocDeleteSearchResults, setAssocDeleteSearchResults] = useState([]);
+    const [assocDeleteSearchLoading, setAssocDeleteSearchLoading] = useState(false);
+    const [assocDeleteSelectedTarget, setAssocDeleteSelectedTarget] = useState(null);
+    const [assocDeleteApplying, setAssocDeleteApplying] = useState(false);
+    const assocDeleteSearchRequestIdRef = useRef(0);
 
     const assocPreviewCanvasRef = useRef(null);
     const assocPreviewRendererRef = useRef(null);
@@ -777,7 +788,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             });
             if (response.ok) {
                 const data = await response.json();
-                let message = '节点审批通过';
+                let message = '知识域申请审批通过';
                 if (data.autoRejectedCount > 0) {
                     message += `，已自动拒绝 ${data.autoRejectedCount} 个同名申请`;
                 }
@@ -785,7 +796,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 fetchPendingNodes();
             } else {
                 const data = await response.json();
-                if ((data?.error || '').includes('已存在同名的审核通过节点')) {
+                if ((data?.error || '').includes('已存在同名的审核通过知识域')) {
                     alert('该同名申请已被其他审批结果处理，列表已刷新');
                     fetchPendingNodes();
                 } else {
@@ -815,7 +826,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 body: JSON.stringify({ nodeId })
             });
             if (response.ok) {
-                alert('节点已拒绝');
+                alert('知识域申请已拒绝');
                 setPendingNodes(prev => prev.filter(node => node._id !== nodeId));
             } else {
                 const data = await response.json();
@@ -945,12 +956,64 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }];
     }, []);
 
-    const relationTypeText = useCallback((relationType) => {
-        if (relationType === ASSOC_RELATION_TYPES.CONTAINS) return '包含';
-        if (relationType === ASSOC_RELATION_TYPES.EXTENDS) return '扩展';
-        if (relationType === ASSOC_RELATION_TYPES.INSERT) return '插入';
-        return '关联';
+    const getBackendRelationSymbol = useCallback((relationType) => {
+        if (relationType === ASSOC_RELATION_TYPES.CONTAINS) return REL_SYMBOL_SUPERSET;
+        if (relationType === ASSOC_RELATION_TYPES.EXTENDS) return REL_SYMBOL_SUBSET;
+        return '↔';
     }, []);
+
+    const getUiRelationSymbol = useCallback((uiRelationType) => {
+        if (uiRelationType === ASSOC_RELATION_TYPES.EXTENDS) return REL_SYMBOL_SUPERSET;
+        if (uiRelationType === ASSOC_RELATION_TYPES.CONTAINS) return REL_SYMBOL_SUBSET;
+        return '↔';
+    }, []);
+
+    const formatBackendRelationExpression = useCallback((sourceDisplay, relationType, targetDisplay) => (
+        `${sourceDisplay} ${getBackendRelationSymbol(relationType)} ${targetDisplay}`
+    ), [getBackendRelationSymbol]);
+
+    const formatUiRelationExpression = useCallback((sourceDisplay, uiRelationType, targetDisplay) => (
+        `${sourceDisplay} ${getUiRelationSymbol(uiRelationType)} ${targetDisplay}`
+    ), [getUiRelationSymbol]);
+
+    const isSameDirectionInsertAssociation = useCallback((association) => {
+        if (!association || association.type !== ASSOC_RELATION_TYPES.INSERT) return false;
+        const sourceSenseId = String(association?.sourceSenseId || '').trim();
+        const relationList = (Array.isArray(association?.actualAssociations) ? association.actualAssociations : [])
+            .filter((item) => {
+                const relationType = item?.relationType;
+                if (relationType !== ASSOC_RELATION_TYPES.CONTAINS && relationType !== ASSOC_RELATION_TYPES.EXTENDS) return false;
+                if (!sourceSenseId) return true;
+                return String(item?.sourceSenseId || '').trim() === sourceSenseId;
+            });
+        if (relationList.length !== 2) return false;
+        const containsItem = relationList.find((item) => item?.relationType === ASSOC_RELATION_TYPES.CONTAINS);
+        const extendsItem = relationList.find((item) => item?.relationType === ASSOC_RELATION_TYPES.EXTENDS);
+        if (!containsItem || !extendsItem) return false;
+        const containsTargetKey = `${String(containsItem?.targetNode || '')}:${String(containsItem?.targetSenseId || '').trim()}`;
+        const extendsTargetKey = `${String(extendsItem?.targetNode || '')}:${String(extendsItem?.targetSenseId || '').trim()}`;
+        if (!containsTargetKey || !extendsTargetKey) return false;
+        if (containsTargetKey === extendsTargetKey) return false;
+        return true;
+    }, []);
+
+    const resolveAssociationDisplayType = useCallback((association) => {
+        if (!association) return '';
+        if (association?.type !== ASSOC_RELATION_TYPES.INSERT) {
+            return association?.type || '';
+        }
+        if (isSameDirectionInsertAssociation(association)) {
+            return ASSOC_RELATION_TYPES.INSERT;
+        }
+        const fallbackActual = (Array.isArray(association?.actualAssociations) ? association.actualAssociations : [])
+            .find((item) => (
+                item?.relationType === ASSOC_RELATION_TYPES.CONTAINS
+                || item?.relationType === ASSOC_RELATION_TYPES.EXTENDS
+            )) || null;
+        return fallbackActual?.relationType === ASSOC_RELATION_TYPES.CONTAINS
+            ? ASSOC_RELATION_TYPES.EXTENDS
+            : ASSOC_RELATION_TYPES.CONTAINS;
+    }, [isSameDirectionInsertAssociation]);
 
     const getSenseTitleById = useCallback((node, senseId) => {
         const key = typeof senseId === 'string' ? senseId.trim() : '';
@@ -1224,8 +1287,69 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         return targetSenseTitle ? `${targetNodeName}-${targetSenseTitle}` : targetNodeName;
     }, [getSenseTitleById, nodeByIdMap]);
 
+    const getPendingRelationBadgeMeta = useCallback((relationType = '', insertSide = '') => {
+        if (relationType === ASSOC_RELATION_TYPES.CONTAINS) {
+            return { className: 'parent', label: `包含 ${REL_SYMBOL_SUPERSET}` };
+        }
+        if (relationType === ASSOC_RELATION_TYPES.EXTENDS) {
+            return { className: 'child', label: `扩展 ${REL_SYMBOL_SUBSET}` };
+        }
+        if (relationType === ASSOC_RELATION_TYPES.INSERT) {
+            const normalizedInsertSide = String(insertSide || '').trim();
+            const suffix = normalizedInsertSide === 'left'
+                ? '（左）'
+                : (normalizedInsertSide === 'right' ? '（右）' : '');
+            return { className: 'insert', label: `插入${suffix}` };
+        }
+        return { className: 'insert', label: '关联' };
+    }, []);
+
+    const getPendingSenseAssociations = useCallback((node, senseId) => {
+        const normalizedSenseId = String(senseId || '').trim();
+        if (!node || !normalizedSenseId) return [];
+        const sourceSenses = normalizeNodeSenses(node);
+        const canUseLooseSourceMatch = sourceSenses.length === 1;
+        const sourceDisplay = formatNodeSenseDisplay(node, normalizedSenseId);
+        const allAssociations = Array.isArray(node?.associations) ? node.associations : [];
+        return allAssociations
+            .filter((assoc) => {
+                const assocSourceSenseId = String(assoc?.sourceSenseId || '').trim();
+                if (assocSourceSenseId) return assocSourceSenseId === normalizedSenseId;
+                return canUseLooseSourceMatch;
+            })
+            .map((assoc, index) => {
+                const relationType = assoc?.relationType || '';
+                const targetDisplay = resolveAssociationTargetDisplay(assoc);
+                const relationMeta = getPendingRelationBadgeMeta(relationType, assoc?.insertSide || '');
+                return {
+                    id: `pending_assoc_${node?._id || 'node'}_${normalizedSenseId}_${index}`,
+                    relationType,
+                    relationClassName: relationMeta.className,
+                    relationLabel: relationMeta.label,
+                    displayText: formatBackendRelationExpression(sourceDisplay, relationType, targetDisplay)
+                };
+            });
+    }, [
+        formatBackendRelationExpression,
+        formatNodeSenseDisplay,
+        getPendingRelationBadgeMeta,
+        normalizeNodeSenses,
+        resolveAssociationTargetDisplay
+    ]);
+
+    const selectPendingNodeSense = useCallback((nodeId, senseId) => {
+        const safeNodeId = String(nodeId || '').trim();
+        const safeSenseId = String(senseId || '').trim();
+        if (!safeNodeId || !safeSenseId) return;
+        setPendingNodeSelectedSenseByNodeId((prev) => ({
+            ...prev,
+            [safeNodeId]: safeSenseId
+        }));
+    }, []);
+
     const getNodeSenseAssociationSummary = useCallback((node, senseId) => {
         const localSenseId = typeof senseId === 'string' ? senseId.trim() : '';
+        const currentDisplay = formatNodeSenseDisplay(node, localSenseId);
         const allAssociations = Array.isArray(node?.associations) ? node.associations : [];
         const outgoing = allAssociations
             .filter((assoc) => {
@@ -1236,7 +1360,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 id: `out_${index}_${assoc?.targetNode?._id || assoc?.targetNode || 'unknown'}`,
                 direction: 'outgoing',
                 relationType: assoc?.relationType || '',
-                displayText: `${relationTypeText(assoc?.relationType)} → ${resolveAssociationTargetDisplay(assoc)}`
+                displayText: formatBackendRelationExpression(
+                    currentDisplay,
+                    assoc?.relationType || '',
+                    resolveAssociationTargetDisplay(assoc)
+                )
             }));
 
         const incomingKey = `${node?._id}:${localSenseId}`;
@@ -1248,7 +1376,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             id: `in_${index}_${item.sourceNodeId || 'unknown'}_${item.sourceSenseId || 'sense'}`,
             direction: 'incoming',
             relationType: item.relationType,
-            displayText: `${item.sourceDisplayName} → ${relationTypeText(item.relationType)}`
+            displayText: formatBackendRelationExpression(
+                item.sourceDisplayName,
+                item.relationType,
+                currentDisplay
+            )
         }));
 
         return {
@@ -1256,7 +1388,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             incoming,
             all: [...outgoing, ...incoming]
         };
-    }, [incomingAssociationMap, relationTypeText, resolveAssociationTargetDisplay]);
+    }, [formatBackendRelationExpression, formatNodeSenseDisplay, incomingAssociationMap, resolveAssociationTargetDisplay]);
 
     const buildNodeDeletePreview = useCallback((node) => {
         if (!node?._id) {
@@ -1665,7 +1797,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 && item.target?.searchKey === prev.selectedTarget.searchKey
             ));
             if (hasOpposite) {
-                alert('同一个释义不能同时包含并扩展同一个目标释义');
+                alert(`同一个释义不能同时使用 ${REL_SYMBOL_SUPERSET} 与 ${REL_SYMBOL_SUBSET} 指向同一目标释义`);
                 return prev;
             }
             return {
@@ -2155,8 +2287,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setAssocSearchResults([]);
         setAssocSearchLoading(false);
         setAssocNodeBSearchAppliedKeyword('');
-        setAssocPreviewLoading(false);
-        setAssocBridgeDecisions({});
 
         if (assocPreviewRendererRef.current) {
             assocPreviewRendererRef.current.destroy();
@@ -2169,10 +2299,17 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setEditingAssociationNode(null);
         setEditingAssociationSenseId('');
         setEditAssociations([]);
-        setAssocMutationPreview(null);
-        setAssocRemovalStrategy('disconnect');
         setAssocApplyLoading(false);
         setAssocBridgeDecisions({});
+        setShowAssocDeleteDecisionModal(false);
+        setAssocDeleteDecisionContext(null);
+        setAssocDeleteDecisionAction('disconnect');
+        setAssocDeleteSearchKeyword('');
+        setAssocDeleteSearchAppliedKeyword('');
+        setAssocDeleteSearchResults([]);
+        setAssocDeleteSearchLoading(false);
+        setAssocDeleteSelectedTarget(null);
+        setAssocDeleteApplying(false);
         resetAssociationEditor();
     }, [resetAssociationEditor]);
 
@@ -2198,7 +2335,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 insertDirection: assocInsertDirection,
                 nodeALabel: formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId),
                 nodeBLabel: formatNodeSenseDisplay(assocSelectedNodeB, assocSelectedNodeBSenseId),
-                newNodeLabel: formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)
+                newNodeLabel: formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId),
+                showPendingTag: false
             });
         }
 
@@ -2254,7 +2392,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         const uiRelationType = backendRelationType === ASSOC_RELATION_TYPES.CONTAINS
             ? ASSOC_RELATION_TYPES.EXTENDS
             : ASSOC_RELATION_TYPES.CONTAINS;
-        const relationArrow = uiRelationType === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→';
         const sourceDisplay = formatNodeSenseDisplay(currentNode, sourceSenseId);
         const targetDisplay = formatNodeSenseDisplay(
             targetNode || { _id: targetNodeId, name: targetNodeName },
@@ -2274,7 +2411,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 sourceSenseId,
                 targetSenseId
             }],
-            displayText: `${sourceDisplay} ${relationArrow} ${targetDisplay}`
+            displayText: formatUiRelationExpression(sourceDisplay, uiRelationType, targetDisplay),
+            pendingRemoval: false,
+            pendingDecisionLines: []
         };
     };
 
@@ -2282,10 +2421,17 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         setEditingAssociationNode(node);
         setShowEditAssociationModal(true);
         setIsEditAssociationListExpanded(true);
-        setAssocMutationPreview(null);
-        setAssocRemovalStrategy('disconnect');
         setAssocApplyLoading(false);
         setAssocBridgeDecisions({});
+        setShowAssocDeleteDecisionModal(false);
+        setAssocDeleteDecisionContext(null);
+        setAssocDeleteDecisionAction('disconnect');
+        setAssocDeleteSearchKeyword('');
+        setAssocDeleteSearchAppliedKeyword('');
+        setAssocDeleteSearchResults([]);
+        setAssocDeleteSearchLoading(false);
+        setAssocDeleteSelectedTarget(null);
+        setAssocDeleteApplying(false);
         resetAssociationEditor();
         const selectedSenseId = resolveNodeSenseId(node, sourceSense?.senseId || '');
         setEditingAssociationSenseId(selectedSenseId);
@@ -2454,8 +2600,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     }, []);
 
     const startAddEditAssociation = () => {
-        setAssocMutationPreview(null);
-        setAssocBridgeDecisions({});
         resetAssociationEditor();
         setAssocSelectedSourceSenseId(resolveNodeSenseId(editingAssociationNode, editingAssociationSenseId));
         setAssocCurrentStep(ASSOC_STEPS.SELECT_NODE_A);
@@ -2535,63 +2679,81 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         });
     }, []);
 
-    const buildInsertNarrative = useCallback((sourceNode, sourceSenseId, nodeA, nodeASenseId, nodeB, nodeBSenseId) => {
-        const sourceDisplay = formatNodeSenseDisplay(sourceNode, sourceSenseId);
-        const nodeADisplay = formatNodeSenseDisplay(nodeA, nodeASenseId);
-        const nodeBDisplay = formatNodeSenseDisplay(nodeB, nodeBSenseId);
-        const hasOriginalRelation = (
-            hasExactSenseAssociation(nodeA, nodeB?._id, ASSOC_RELATION_TYPES.CONTAINS, nodeASenseId, nodeBSenseId)
-            || hasExactSenseAssociation(nodeA, nodeB?._id, ASSOC_RELATION_TYPES.EXTENDS, nodeASenseId, nodeBSenseId)
-            || hasExactSenseAssociation(nodeB, nodeA?._id, ASSOC_RELATION_TYPES.CONTAINS, nodeBSenseId, nodeASenseId)
-            || hasExactSenseAssociation(nodeB, nodeA?._id, ASSOC_RELATION_TYPES.EXTENDS, nodeBSenseId, nodeASenseId)
+    const hasLooseSenseAssociation = useCallback((sourceNode, targetNodeId, relationType, sourceSenseId, targetSenseId) => {
+        if (!sourceNode || !targetNodeId || !relationType) return false;
+        const assocList = Array.isArray(sourceNode?.associations) ? sourceNode.associations : [];
+        const expectedSourceSenseId = String(sourceSenseId || '').trim();
+        const expectedTargetSenseId = String(targetSenseId || '').trim();
+        return assocList.some((assoc) => {
+            const assocTargetNodeId = assoc?.targetNode?._id || assoc?.targetNode;
+            const assocRelationType = assoc?.relationType;
+            const assocSourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+            const assocTargetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+            if (String(assocTargetNodeId || '') !== String(targetNodeId)) return false;
+            if (assocRelationType !== relationType) return false;
+            const sourceMatch = !assocSourceSenseId || !expectedSourceSenseId || assocSourceSenseId === expectedSourceSenseId;
+            const targetMatch = !assocTargetSenseId || !expectedTargetSenseId || assocTargetSenseId === expectedTargetSenseId;
+            return sourceMatch && targetMatch;
+        });
+    }, []);
+
+    const resolveExistingPairInsertDirection = useCallback((nodeA, nodeASenseId, nodeB, nodeBSenseId) => {
+        const aNodeId = String(nodeA?._id || '');
+        const bNodeId = String(nodeB?._id || '');
+        if (!aNodeId || !bNodeId) return '';
+        const hasAContainsB = (
+            hasExactSenseAssociation(nodeA, bNodeId, ASSOC_RELATION_TYPES.CONTAINS, nodeASenseId, nodeBSenseId)
+            || hasLooseSenseAssociation(nodeA, bNodeId, ASSOC_RELATION_TYPES.CONTAINS, nodeASenseId, nodeBSenseId)
         );
-        if (hasOriginalRelation) {
-            return `${sourceDisplay} 将插入到 ${nodeADisplay} 和 ${nodeBDisplay} 之间，${nodeADisplay}和${nodeBDisplay}原来的关联将改为${nodeADisplay}-${sourceDisplay}-${nodeBDisplay}`;
+        const hasBExtendsA = (
+            hasExactSenseAssociation(nodeB, aNodeId, ASSOC_RELATION_TYPES.EXTENDS, nodeBSenseId, nodeASenseId)
+            || hasLooseSenseAssociation(nodeB, aNodeId, ASSOC_RELATION_TYPES.EXTENDS, nodeBSenseId, nodeASenseId)
+        );
+        if (hasAContainsB || hasBExtendsA) {
+            return 'aToB';
         }
-        return `${sourceDisplay} 将插入到 ${nodeADisplay} 和 ${nodeBDisplay} 之间，${nodeADisplay}和${nodeBDisplay}新建关联为${nodeADisplay}-${sourceDisplay}-${nodeBDisplay}`;
-    }, [formatNodeSenseDisplay, hasExactSenseAssociation]);
+        const hasBContainsA = (
+            hasExactSenseAssociation(nodeB, aNodeId, ASSOC_RELATION_TYPES.CONTAINS, nodeBSenseId, nodeASenseId)
+            || hasLooseSenseAssociation(nodeB, aNodeId, ASSOC_RELATION_TYPES.CONTAINS, nodeBSenseId, nodeASenseId)
+        );
+        const hasAExtendsB = (
+            hasExactSenseAssociation(nodeA, bNodeId, ASSOC_RELATION_TYPES.EXTENDS, nodeASenseId, nodeBSenseId)
+            || hasLooseSenseAssociation(nodeA, bNodeId, ASSOC_RELATION_TYPES.EXTENDS, nodeASenseId, nodeBSenseId)
+        );
+        if (hasBContainsA || hasAExtendsB) {
+            return 'bToA';
+        }
+        return '';
+    }, [hasExactSenseAssociation, hasLooseSenseAssociation]);
+
+    const buildInsertNarrative = useCallback((sourceNode, sourceSenseId, nodeA, nodeASenseId, nodeB, nodeBSenseId, preferredDirection = '') => {
+        const sourceDisplay = formatNodeSenseDisplay(sourceNode, sourceSenseId);
+        const fixedDirection = resolveExistingPairInsertDirection(nodeA, nodeASenseId, nodeB, nodeBSenseId);
+        const effectiveDirection = fixedDirection || (preferredDirection === 'bToA' ? 'bToA' : 'aToB');
+        const leftDisplay = formatNodeSenseDisplay(nodeA, nodeASenseId);
+        const rightDisplay = formatNodeSenseDisplay(nodeB, nodeBSenseId);
+        const relationSymbol = effectiveDirection === 'aToB' ? REL_SYMBOL_SUPERSET : REL_SYMBOL_SUBSET;
+        const chainPreview = `${leftDisplay} ${relationSymbol} ${sourceDisplay} ${relationSymbol} ${rightDisplay}`;
+        const hasOriginalRelation = !!fixedDirection;
+        if (hasOriginalRelation) {
+            return `${sourceDisplay} 将插入到 ${leftDisplay} 和 ${rightDisplay} 之间，原有链路将改为：${chainPreview}`;
+        }
+        return `${sourceDisplay} 将插入到 ${leftDisplay} 和 ${rightDisplay} 之间，将新建链路：${chainPreview}`;
+    }, [formatNodeSenseDisplay, resolveExistingPairInsertDirection]);
 
     useEffect(() => {
         if (assocSelectedRelationType !== ASSOC_RELATION_TYPES.INSERT) return;
         if (!assocSelectedNodeA?._id || !assocSelectedNodeB?._id) return;
         if (!assocSelectedNodeASenseId || !assocSelectedNodeBSenseId) return;
 
-        const hasAContainsB = hasExactSenseAssociation(
+        const fixedDirection = resolveExistingPairInsertDirection(
             assocSelectedNodeA,
-            assocSelectedNodeB._id,
-            ASSOC_RELATION_TYPES.CONTAINS,
             assocSelectedNodeASenseId,
+            assocSelectedNodeB,
             assocSelectedNodeBSenseId
         );
-        const hasAExtendsB = hasExactSenseAssociation(
-            assocSelectedNodeA,
-            assocSelectedNodeB._id,
-            ASSOC_RELATION_TYPES.EXTENDS,
-            assocSelectedNodeASenseId,
-            assocSelectedNodeBSenseId
-        );
-        const hasBContainsA = hasExactSenseAssociation(
-            assocSelectedNodeB,
-            assocSelectedNodeA._id,
-            ASSOC_RELATION_TYPES.CONTAINS,
-            assocSelectedNodeBSenseId,
-            assocSelectedNodeASenseId
-        );
-        const hasBExtendsA = hasExactSenseAssociation(
-            assocSelectedNodeB,
-            assocSelectedNodeA._id,
-            ASSOC_RELATION_TYPES.EXTENDS,
-            assocSelectedNodeBSenseId,
-            assocSelectedNodeASenseId
-        );
-
-        if (hasAContainsB || hasBExtendsA) {
-            setAssocInsertDirection('aToB');
-            setAssocInsertDirectionLocked(true);
-            return;
-        }
-        if (hasAExtendsB || hasBContainsA) {
-            setAssocInsertDirection('bToA');
+        if (fixedDirection) {
+            setAssocInsertDirection(fixedDirection);
             setAssocInsertDirectionLocked(true);
             return;
         }
@@ -2606,7 +2768,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         assocSelectedNodeASenseId,
         assocSelectedNodeBSenseId,
         assocInsertDirection,
-        hasExactSenseAssociation
+        resolveExistingPairInsertDirection
     ]);
 
     const confirmEditAssociation = () => {
@@ -2671,7 +2833,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                     assocSelectedNodeA,
                     assocSelectedNodeASenseId,
                     assocSelectedNodeB,
-                    assocSelectedNodeBSenseId
+                    assocSelectedNodeBSenseId,
+                    effectiveInsertDirection
                 )
             };
         } else {
@@ -2680,7 +2843,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 return;
             }
             const backendRelationType = toBackendRelationType(assocSelectedRelationType);
-            const relationArrow = assocSelectedRelationType === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→';
             const targetDisplay = formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId);
             associationData = {
                 type: assocSelectedRelationType,
@@ -2696,13 +2858,16 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                     sourceSenseId: effectiveSourceSenseId,
                     targetSenseId: assocSelectedNodeASenseId
                 }],
-                displayText: `${sourceDisplay} ${relationArrow} ${targetDisplay}`
+                displayText: formatUiRelationExpression(sourceDisplay, assocSelectedRelationType, targetDisplay)
             };
         }
 
         let duplicateReason = null;
         const isDuplicate = editAssociations.some((assoc, index) => {
             if (assocEditingIndex !== null && index === assocEditingIndex) {
+                return false;
+            }
+            if (assoc?.pendingRemoval) {
                 return false;
             }
 
@@ -2762,6 +2927,12 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             return;
         }
 
+        associationData = {
+            ...associationData,
+            pendingRemoval: false,
+            pendingDecisionLines: []
+        };
+
         if (assocEditingIndex !== null) {
             setEditAssociations(prev => {
                 const next = [...prev];
@@ -2772,15 +2943,297 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             setEditAssociations(prev => [...prev, associationData]);
         }
 
-        setAssocMutationPreview(null);
-        setAssocBridgeDecisions({});
         resetAssociationEditor();
     };
 
-    const removeEditAssociation = (index) => {
-        setAssocMutationPreview(null);
-        setAssocBridgeDecisions({});
-        setEditAssociations(prev => prev.filter((_, i) => i !== index));
+    const resolveEditingSenseTitle = useCallback((senseId) => {
+        const sourceList = Array.isArray(editingAssociationNode?.synonymSenses) ? editingAssociationNode.synonymSenses : [];
+        const key = (senseId || '').trim();
+        if (!key) return '';
+        const matched = sourceList.find((sense) => (sense?.senseId || '').trim() === key);
+        return matched?.title || key;
+    }, [editingAssociationNode]);
+
+    const closeAssocDeleteDecisionModal = useCallback(() => {
+        if (assocDeleteApplying) return;
+        setShowAssocDeleteDecisionModal(false);
+        setAssocDeleteDecisionContext(null);
+        setAssocDeleteDecisionAction('disconnect');
+        setAssocDeleteSearchKeyword('');
+        setAssocDeleteSearchAppliedKeyword('');
+        setAssocDeleteSearchResults([]);
+        setAssocDeleteSearchLoading(false);
+        setAssocDeleteSelectedTarget(null);
+    }, [assocDeleteApplying]);
+
+    const searchAssocDeleteTargets = useCallback(async (keyword = assocDeleteSearchKeyword) => {
+        const deleteMode = assocDeleteDecisionContext?.mode || '';
+        if (deleteMode !== 'upper') {
+            setAssocDeleteSearchAppliedKeyword(String(keyword || '').trim());
+            setAssocDeleteSearchResults([]);
+            setAssocDeleteSearchLoading(false);
+            return;
+        }
+        const normalizedKeyword = String(keyword || '').trim();
+        const keywordMeta = parseAssociationKeyword(normalizedKeyword);
+        const effectiveKeyword = keywordMeta.textKeyword;
+        setAssocDeleteSearchAppliedKeyword(normalizedKeyword);
+        if (!effectiveKeyword) {
+            setAssocDeleteSearchResults([]);
+            return;
+        }
+        const requestId = ++assocDeleteSearchRequestIdRef.current;
+        setAssocDeleteSearchLoading(true);
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (requestId !== assocDeleteSearchRequestIdRef.current) return;
+            if (!response.ok) {
+                setAssocDeleteSearchResults([]);
+                return;
+            }
+            const data = await response.json();
+            const deletingAssoc = assocDeleteDecisionContext?.association || null;
+            const deletingTargetNodeId = String(
+                deletingAssoc?.nodeA?._id
+                || deletingAssoc?.nodeA?.nodeId
+                || deletingAssoc?.nodeA
+                || ''
+            ).trim();
+            const deletingTargetKey = toAssociationSenseKey(
+                deletingAssoc?.nodeA,
+                deletingAssoc?.nodeASenseId || deletingAssoc?.targetSenseId || ''
+            );
+            const editingNodeId = String(editingAssociationNode?._id || '').trim();
+            const results = (Array.isArray(data) ? data : [])
+                .map((item) => normalizeAssociationCandidate(item))
+                .filter(Boolean)
+                .filter((item) => matchKeywordByDomainAndSense(item, effectiveKeyword))
+                .filter((item) => String(item?.nodeId || '') !== editingNodeId)
+                .filter((item) => String(item?.nodeId || '') !== deletingTargetNodeId)
+                .filter((item) => item?.searchKey !== deletingTargetKey);
+            setAssocDeleteSearchResults(results);
+        } catch (error) {
+            if (requestId !== assocDeleteSearchRequestIdRef.current) return;
+            console.error('删除决策弹窗搜索失败:', error);
+            setAssocDeleteSearchResults([]);
+        } finally {
+            if (requestId === assocDeleteSearchRequestIdRef.current) {
+                setAssocDeleteSearchLoading(false);
+            }
+        }
+    }, [
+        editingAssociationNode,
+        assocDeleteDecisionContext,
+        assocDeleteSearchKeyword,
+        normalizeAssociationCandidate,
+        toAssociationSenseKey
+    ]);
+
+    const stageAssociationRemovalByDecision = async ({
+        index,
+        decisionAction = 'disconnect',
+        bridgeItems = [],
+        replacementTarget = null,
+        effectiveAssociationType = ''
+    }) => {
+        const removedAssociation = Array.isArray(editAssociations) ? editAssociations[index] : null;
+        if (!removedAssociation) return;
+        const isStrictInsertAssociation = isSameDirectionInsertAssociation(removedAssociation);
+        const resolvedAssociationType = String(effectiveAssociationType || removedAssociation?.type || '').trim();
+
+        const normalizedAction = decisionAction === 'reconnect' ? 'reconnect' : 'disconnect';
+        const nextBridgeDecisions = { ...assocBridgeDecisions };
+        const pendingDecisionLines = [];
+        let pendingReassignPlan = null;
+        const effectiveSourceSenseId = removedAssociation?.sourceSenseId
+            || resolveNodeSenseId(editingAssociationNode, editingAssociationSenseId);
+        const sourceDisplay = formatNodeSenseDisplay(editingAssociationNode, effectiveSourceSenseId);
+        const targetDisplay = formatNodeSenseDisplay(
+            removedAssociation?.nodeA,
+            removedAssociation?.nodeASenseId || removedAssociation?.targetSenseId || ''
+        );
+        const isUpperRelationDeletion = resolvedAssociationType === ASSOC_RELATION_TYPES.EXTENDS;
+        const isInsertRelationDeletion = resolvedAssociationType === ASSOC_RELATION_TYPES.INSERT && isStrictInsertAssociation;
+
+        (Array.isArray(bridgeItems) ? bridgeItems : []).forEach((item) => {
+            const pairKey = item?.pairKey || '';
+            if (!pairKey) return;
+            nextBridgeDecisions[pairKey] = normalizedAction;
+            const sourceTitle = resolveEditingSenseTitle(item?.sourceSenseId || '');
+            const upperDisplay = item?.upper?.displayName || '上级释义';
+            const lowerDisplay = item?.lower?.displayName || '下级释义';
+            if (normalizedAction === 'reconnect') {
+                pendingDecisionLines.push(`恢复：${upperDisplay} → ${sourceTitle || '当前释义'} → ${lowerDisplay}`);
+            }
+        });
+
+        if (pendingDecisionLines.length < 1) {
+            pendingDecisionLines.push(
+                normalizedAction === 'reconnect'
+                    ? `恢复：${sourceDisplay} 与 ${targetDisplay} 的原有链路`
+                    : `拆分：${sourceDisplay} 与 ${targetDisplay} 将解除关系`
+            );
+        }
+
+        let nextAssociations = editAssociations.map((assoc, i) => (
+            i === index
+                ? { ...assoc, pendingRemoval: true, pendingDecisionLines: [], pendingReassignPlan: null }
+                : assoc
+        ));
+
+        if (isUpperRelationDeletion && decisionAction === 'reassign_upper' && replacementTarget?.nodeId && replacementTarget?.senseId) {
+            const replacementNodeId = String(replacementTarget.nodeId || replacementTarget._id || '').trim();
+            const replacementSenseId = resolveAssociationSenseId(replacementTarget, replacementTarget.senseId || '');
+            const replacementNodeName = replacementTarget?.name || replacementTarget?.domainName || replacementTarget?.displayName || '';
+            if (replacementNodeId && replacementSenseId && replacementNodeName) {
+                const lowerNodeId = String(
+                    removedAssociation?.nodeA?._id
+                    || removedAssociation?.nodeA?.nodeId
+                    || removedAssociation?.nodeA
+                    || ''
+                ).trim();
+                const lowerSenseId = String(
+                    removedAssociation?.nodeASenseId
+                    || removedAssociation?.targetSenseId
+                    || ''
+                ).trim();
+                if (lowerNodeId && lowerSenseId) {
+                    pendingReassignPlan = {
+                        lowerNodeId,
+                        lowerSenseId,
+                        newUpperNodeId: replacementNodeId,
+                        newUpperSenseId: replacementSenseId
+                    };
+                    pendingDecisionLines.push(`改接：${targetDisplay} 将改为 ${formatNodeSenseDisplay(replacementTarget, replacementSenseId)} 的下级`);
+                }
+            }
+        }
+
+        if (resolvedAssociationType === ASSOC_RELATION_TYPES.CONTAINS) {
+            pendingDecisionLines.push(`${sourceDisplay} 作为下级，删除后保持独立`);
+        }
+        if (isUpperRelationDeletion && decisionAction === 'reassign_upper' && !pendingReassignPlan) {
+            pendingDecisionLines.push('未选择可用上级，暂不改接');
+        }
+        if (isInsertRelationDeletion && pendingDecisionLines.length < 2) {
+            pendingDecisionLines.push('该插入关系将在应用更改后移除');
+        }
+        if (isUpperRelationDeletion && decisionAction !== 'reassign_upper' && pendingDecisionLines.length < 2) {
+            pendingDecisionLines.push(`${targetDisplay} 与 ${sourceDisplay} 解绑后将保持独立`);
+        }
+
+        const stagedWithDecisionLines = nextAssociations.map((assoc, i) => (
+            i === index
+                ? { ...assoc, pendingRemoval: true, pendingDecisionLines, pendingReassignPlan }
+                : assoc
+        ));
+        setAssocBridgeDecisions(nextBridgeDecisions);
+        setEditAssociations(stagedWithDecisionLines);
+    };
+
+    const confirmAssocDeleteDecision = async () => {
+        const context = assocDeleteDecisionContext || null;
+        if (!context) return;
+        const decisionMode = context?.mode || 'upper';
+        if (decisionMode === 'upper' && assocDeleteDecisionAction === 'reassign_upper' && !assocDeleteSelectedTarget) {
+            alert('请先选择新的上级释义');
+            return;
+        }
+        setAssocDeleteApplying(true);
+        try {
+            await stageAssociationRemovalByDecision({
+                index: context.index,
+                decisionAction: assocDeleteDecisionAction,
+                bridgeItems: context.bridgeItems || [],
+                replacementTarget: (
+                    decisionMode === 'upper' && assocDeleteDecisionAction === 'reassign_upper'
+                        ? (assocDeleteSelectedTarget || null)
+                        : null
+                ),
+                effectiveAssociationType: context.effectiveAssociationType || ''
+            });
+            setShowAssocDeleteDecisionModal(false);
+            setAssocDeleteDecisionContext(null);
+            setAssocDeleteDecisionAction('disconnect');
+            setAssocDeleteSearchKeyword('');
+            setAssocDeleteSearchAppliedKeyword('');
+            setAssocDeleteSearchResults([]);
+            setAssocDeleteSearchLoading(false);
+            setAssocDeleteSelectedTarget(null);
+        } finally {
+            setAssocDeleteApplying(false);
+        }
+    };
+
+    const removeEditAssociation = async (index) => {
+        const removedAssociation = Array.isArray(editAssociations) ? editAssociations[index] : null;
+        if (!removedAssociation) return;
+        const effectiveAssociationType = resolveAssociationDisplayType(removedAssociation);
+        if (removedAssociation?.pendingRemoval) {
+            const revertedAssociations = editAssociations.map((assoc, i) => (
+                i === index
+                    ? { ...assoc, pendingRemoval: false, pendingDecisionLines: [], pendingReassignPlan: null }
+                    : assoc
+            ));
+            setEditAssociations(revertedAssociations);
+            return;
+        }
+
+        // 当前释义作为下级：直接暂存删除，不弹决策窗
+        if (effectiveAssociationType === ASSOC_RELATION_TYPES.CONTAINS) {
+            const stagedProbe = editAssociations.map((assoc, i) => (
+                i === index
+                    ? { ...assoc, pendingRemoval: true, pendingDecisionLines: [] }
+                    : assoc
+            ));
+            const previewData = await previewAssociationEdit(assocBridgeDecisions, stagedProbe, { silent: true });
+            const bridgeItems = Array.isArray(previewData?.bridgeDecisionItems) ? previewData.bridgeDecisionItems : [];
+            await stageAssociationRemovalByDecision({
+                index,
+                decisionAction: 'disconnect',
+                bridgeItems,
+                replacementTarget: null,
+                effectiveAssociationType
+            });
+            return;
+        }
+
+        const stagedProbe = editAssociations.map((assoc, i) => (
+            i === index
+                ? { ...assoc, pendingRemoval: true, pendingDecisionLines: [] }
+                : assoc
+        ));
+        const previewData = await previewAssociationEdit(assocBridgeDecisions, stagedProbe, { silent: true });
+        const bridgeItems = Array.isArray(previewData?.bridgeDecisionItems) ? previewData.bridgeDecisionItems : [];
+        const existingActions = bridgeItems
+            .map((item) => assocBridgeDecisions[item?.pairKey || ''])
+            .filter(Boolean);
+        const deleteDecisionMode = effectiveAssociationType === ASSOC_RELATION_TYPES.INSERT ? 'insert' : 'upper';
+        const defaultAction = deleteDecisionMode === 'insert'
+            ? (
+                existingActions.length > 0 && existingActions.every((action) => action === 'reconnect')
+                    ? 'reconnect'
+                    : 'disconnect'
+            )
+            : 'disconnect';
+
+        setAssocDeleteDecisionContext({
+            index,
+            association: removedAssociation,
+            bridgeItems,
+            effectiveAssociationType,
+            mode: deleteDecisionMode
+        });
+        setAssocDeleteDecisionAction(defaultAction);
+        setAssocDeleteSearchKeyword('');
+        setAssocDeleteSearchAppliedKeyword('');
+        setAssocDeleteSearchResults([]);
+        setAssocDeleteSearchLoading(false);
+        setAssocDeleteSelectedTarget(null);
+        setShowAssocDeleteDecisionModal(true);
     };
 
     const editExistingAssociation = async (index) => {
@@ -2851,15 +3304,194 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }
     };
 
-    const resolveEditingSenseTitle = useCallback((senseId) => {
-        const sourceList = Array.isArray(editingAssociationNode?.synonymSenses) ? editingAssociationNode.synonymSenses : [];
-        const key = (senseId || '').trim();
-        if (!key) return '';
-        const matched = sourceList.find((sense) => (sense?.senseId || '').trim() === key);
-        return matched?.title || key;
-    }, [editingAssociationNode]);
+    const assocNodeASenseOptions = useMemo(() => {
+        if (!assocSelectedNodeA) return [];
+        const excludedSenseKeySet = new Set();
+        if (
+            assocCurrentStep === ASSOC_STEPS.PREVIEW
+            && assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT
+        ) {
+            const selectedNodeBSenseKey = toAssociationSenseKey(assocSelectedNodeB, assocSelectedNodeBSenseId);
+            if (selectedNodeBSenseKey) excludedSenseKeySet.add(selectedNodeBSenseKey);
+        }
+        return normalizeNodeSenses(assocSelectedNodeA)
+            .filter((sense) => isAssociationCandidateSelectable(
+                assocSelectedNodeA,
+                sense.senseId,
+                { excludedSenseKeySet }
+            ))
+            .map((sense) => ({ senseId: sense.senseId, title: sense.title }));
+    }, [
+        assocSelectedNodeA,
+        assocCurrentStep,
+        assocSelectedRelationType,
+        assocSelectedNodeB,
+        assocSelectedNodeBSenseId,
+        toAssociationSenseKey,
+        normalizeNodeSenses,
+        isAssociationCandidateSelectable
+    ]);
 
-    const buildAssociationPayloadForMutation = useCallback(() => {
+    const assocNodeBSenseOptions = useMemo(() => {
+        if (!assocSelectedNodeB) return [];
+        const selectedNodeASenseKey = toAssociationSenseKey(assocSelectedNodeA, assocSelectedNodeASenseId);
+        const excludedSenseKeySet = new Set([selectedNodeASenseKey].filter(Boolean));
+        return normalizeNodeSenses(assocSelectedNodeB)
+            .filter((sense) => isAssociationCandidateSelectable(
+                assocSelectedNodeB,
+                sense.senseId,
+                { excludedSenseKeySet }
+            ))
+            .map((sense) => ({ senseId: sense.senseId, title: sense.title }));
+    }, [
+        assocSelectedNodeB,
+        assocSelectedNodeA,
+        assocSelectedNodeASenseId,
+        toAssociationSenseKey,
+        normalizeNodeSenses,
+        isAssociationCandidateSelectable
+    ]);
+
+    const assocNodeBView = useMemo(() => {
+        const keywordMeta = parseAssociationKeyword(assocNodeBSearchAppliedKeyword);
+        const keywordText = keywordMeta.textKeyword;
+        const keywordMode = keywordMeta.mode;
+        const hasSubmittedSearch = !!String(assocNodeBSearchAppliedKeyword || '').trim();
+        const selectedNodeAKey = toAssociationSenseKey(assocSelectedNodeA, assocSelectedNodeASenseId);
+        const excludedSenseKeySet = new Set([selectedNodeAKey].filter(Boolean));
+        const normalizeCandidateList = (list = []) => {
+            const seen = new Set();
+            return (Array.isArray(list) ? list : [])
+                .map((item) => normalizeAssociationCandidate(item))
+                .filter(Boolean)
+                .filter((item) => {
+                    if (seen.has(item.searchKey)) return false;
+                    seen.add(item.searchKey);
+                    return true;
+                });
+        };
+        const matchNodeBCandidate = (nodeLike = {}) => matchKeywordByDomainAndSense(nodeLike, keywordText);
+        const isNodeBCandidateSelectable = (nodeLike = {}) => isAssociationCandidateSelectable(
+            nodeLike,
+            nodeLike?.senseId || nodeLike?.activeSenseId || '',
+            { excludedSenseKeySet }
+        );
+        const normalizedParents = normalizeCandidateList(assocNodeBCandidates.parents);
+        const normalizedChildren = normalizeCandidateList(assocNodeBCandidates.children);
+
+        const filteredNodeBCandidates = hasSubmittedSearch
+            ? {
+                parents: normalizedParents.filter((item) => (
+                    isNodeBCandidateSelectable(item)
+                    && matchNodeBCandidate(item)
+                )),
+                children: normalizedChildren.filter((item) => (
+                    isNodeBCandidateSelectable(item)
+                    && matchNodeBCandidate(item)
+                ))
+            }
+            : { parents: [], children: [] };
+        const visibleParentsRaw = hasSubmittedSearch && keywordMode !== 'expand' ? filteredNodeBCandidates.parents : [];
+        const visibleChildrenRaw = hasSubmittedSearch && keywordMode !== 'include' ? filteredNodeBCandidates.children : [];
+        const baseCandidateKeySet = new Set([
+            ...filteredNodeBCandidates.parents.map((item) => item?.searchKey || ''),
+            ...filteredNodeBCandidates.children.map((item) => item?.searchKey || '')
+        ].filter(Boolean));
+        const extraNodeBCandidatesRaw = (!hasSubmittedSearch || keywordMode)
+            ? []
+            : normalizeCandidateList(assocNodeBExtraSearchResults).filter((node) => {
+                if (baseCandidateKeySet.has(node?.searchKey || '')) return false;
+                if (!keywordText.trim()) return false;
+                if (!isNodeBCandidateSelectable(node)) return false;
+                return matchNodeBCandidate(node);
+            });
+
+        const nodeADisplay = formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId);
+        const visibleParents = visibleParentsRaw.map((node) => ({
+            ...node,
+            hint: `插入到 ${node.displayName || node.name} 和 ${nodeADisplay} 之间`
+        }));
+        const visibleChildren = visibleChildrenRaw.map((node) => ({
+            ...node,
+            hint: `插入到 ${nodeADisplay} 和 ${node.displayName || node.name} 之间`
+        }));
+        const visibleExtra = extraNodeBCandidatesRaw.map((node) => {
+            const displayName = node.displayName || formatNodeSenseDisplay(node, resolveNodeSenseId(node));
+            return {
+                ...node,
+                hint: `插入到 ${nodeADisplay} 和 ${displayName} 之间（将新建承接关系）`
+            };
+        });
+
+        return {
+            hasSubmittedSearch,
+            keywordMode,
+            keywordText,
+            parents: visibleParents,
+            children: visibleChildren,
+            extra: visibleExtra
+        };
+    }, [
+        assocNodeBSearchAppliedKeyword,
+        assocSelectedNodeA,
+        assocSelectedNodeASenseId,
+        assocNodeBCandidates.parents,
+        assocNodeBCandidates.children,
+        assocNodeBExtraSearchResults,
+        toAssociationSenseKey,
+        normalizeAssociationCandidate,
+        isAssociationCandidateSelectable,
+        formatNodeSenseDisplay,
+        resolveNodeSenseId
+    ]);
+
+    const assocInsertRelationAvailable = useMemo(() => (
+        (Array.isArray(assocSelectedNodeA?.parentNodesInfo) && assocSelectedNodeA.parentNodesInfo.length > 0)
+        || (Array.isArray(assocSelectedNodeA?.childNodesInfo) && assocSelectedNodeA.childNodesInfo.length > 0)
+    ), [assocSelectedNodeA]);
+
+    const assocPreviewInfoText = useMemo(() => {
+        if (assocSelectedRelationType === ASSOC_RELATION_TYPES.EXTENDS) {
+            return formatUiRelationExpression(
+                formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId),
+                ASSOC_RELATION_TYPES.EXTENDS,
+                formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)
+            );
+        }
+        if (assocSelectedRelationType === ASSOC_RELATION_TYPES.CONTAINS) {
+            return formatUiRelationExpression(
+                formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId),
+                ASSOC_RELATION_TYPES.CONTAINS,
+                formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)
+            );
+        }
+        if (assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT) {
+            return buildInsertNarrative(
+                editingAssociationNode,
+                assocSelectedSourceSenseId,
+                assocSelectedNodeA,
+                assocSelectedNodeASenseId,
+                assocSelectedNodeB,
+                assocSelectedNodeBSenseId,
+                assocInsertDirection
+            );
+        }
+        return '';
+    }, [
+        assocSelectedRelationType,
+        editingAssociationNode,
+        assocSelectedSourceSenseId,
+        assocSelectedNodeA,
+        assocSelectedNodeASenseId,
+        assocSelectedNodeB,
+        assocSelectedNodeBSenseId,
+        assocInsertDirection,
+        formatUiRelationExpression,
+        formatNodeSenseDisplay,
+        buildInsertNarrative
+    ]);
+
+    const buildAssociationPayloadForMutation = useCallback((associationDraftList = editAssociations) => {
         const effectiveEditingSenseId = resolveNodeSenseId(editingAssociationNode, editingAssociationSenseId);
         const untouchedAssociations = (Array.isArray(editingAssociationNode?.associations) ? editingAssociationNode.associations : [])
             .filter((assoc) => {
@@ -2886,7 +3518,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             }))
             .filter((assoc) => !!assoc.targetNode && !!assoc.relationType && !!assoc.sourceSenseId && !!assoc.targetSenseId);
 
-        const editedAssociations = editAssociations.flatMap((assoc, index) => {
+        const safeDraftList = Array.isArray(associationDraftList) ? associationDraftList : [];
+        const activeDraftList = safeDraftList.filter((assoc) => !assoc?.pendingRemoval);
+        const editedAssociations = activeDraftList.flatMap((assoc, index) => {
             if (assoc.type === ASSOC_RELATION_TYPES.INSERT) {
                 const direction = assoc.direction === 'bToA' ? 'bToA' : 'aToB';
                 const upperNode = direction === 'aToB' ? assoc.nodeA : assoc.nodeB;
@@ -2935,15 +3569,15 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         return [...untouchedAssociations, ...editedAssociations];
     }, [editAssociations, editingAssociationNode, editingAssociationSenseId, nodeByIdMap, resolveNodeSenseId]);
 
-    const previewAssociationEdit = async (decisionMap = assocBridgeDecisions) => {
-        if (!editingAssociationNode?._id) return;
-        if (editAssociations.length < 1) {
-            alert('每个释义至少保留 1 条关联关系');
-            return;
-        }
+    const previewAssociationEdit = useCallback(async (
+        decisionMap = assocBridgeDecisions,
+        associationDraftList = editAssociations,
+        options = {}
+    ) => {
+        if (!editingAssociationNode?._id) return null;
+        const { silent = false } = options || {};
         const token = localStorage.getItem('token');
-        const associationsPayload = buildAssociationPayloadForMutation();
-        setAssocPreviewLoading(true);
+        const associationsPayload = buildAssociationPayloadForMutation(associationDraftList);
         try {
             const response = await fetch(`http://localhost:5000/api/nodes/${editingAssociationNode._id}/associations/preview`, {
                 method: 'POST',
@@ -2953,41 +3587,148 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 },
                 body: JSON.stringify({
                     associations: associationsPayload,
-                    onRemovalStrategy: assocRemovalStrategy,
+                    onRemovalStrategy: 'disconnect',
                     bridgeDecisions: toBridgeDecisionPayload(decisionMap)
                 })
             });
             const data = await response.json();
             if (response.ok) {
-                setAssocMutationPreview(data);
+                return data;
             } else {
-                alert(data.error || '预览失败');
+                if (!silent) {
+                    alert(data.error || '预览失败');
+                }
+                return null;
             }
         } catch (error) {
             console.error('预览关联变更失败:', error);
-            alert('预览失败');
-        } finally {
-            setAssocPreviewLoading(false);
+            if (!silent) {
+                alert('预览失败');
+            }
+            return null;
+        }
+    }, [
+        assocBridgeDecisions,
+        editAssociations,
+        editingAssociationNode,
+        buildAssociationPayloadForMutation,
+        toBridgeDecisionPayload
+    ]);
+
+    const applyUpperReassignPlan = async (plan, token) => {
+        const lowerNodeId = String(plan?.lowerNodeId || '').trim();
+        const lowerSenseId = String(plan?.lowerSenseId || '').trim();
+        const newUpperNodeId = String(plan?.newUpperNodeId || '').trim();
+        const newUpperSenseId = String(plan?.newUpperSenseId || '').trim();
+        if (!lowerNodeId || !lowerSenseId || !newUpperNodeId || !newUpperSenseId) {
+            return;
+        }
+        const lowerNodeDetail = await fetchNodeDetailForAssociation(lowerNodeId);
+        if (!lowerNodeDetail?._id) {
+            throw new Error('获取下级释义节点详情失败');
+        }
+        const normalizedAssociations = (Array.isArray(lowerNodeDetail?.associations) ? lowerNodeDetail.associations : [])
+            .map((assoc) => ({
+                targetNode: assoc?.targetNode?._id || assoc?.targetNode || '',
+                relationType: assoc?.relationType || '',
+                sourceSenseId: String(assoc?.sourceSenseId || '').trim(),
+                targetSenseId: String(assoc?.targetSenseId || '').trim(),
+                insertSide: String(assoc?.insertSide || '').trim(),
+                insertGroupId: String(assoc?.insertGroupId || '').trim()
+            }))
+            .filter((assoc) => (
+                !!assoc.targetNode
+                && !!assoc.relationType
+                && !!assoc.sourceSenseId
+                && !!assoc.targetSenseId
+            ));
+        const hasReassignAssociation = normalizedAssociations.some((assoc) => (
+            String(assoc.targetNode || '') === newUpperNodeId
+            && assoc.relationType === ASSOC_RELATION_TYPES.EXTENDS
+            && String(assoc.sourceSenseId || '') === lowerSenseId
+            && String(assoc.targetSenseId || '') === newUpperSenseId
+        ));
+        if (hasReassignAssociation) {
+            return;
+        }
+        const nextAssociations = [
+            ...normalizedAssociations,
+            {
+                targetNode: newUpperNodeId,
+                relationType: ASSOC_RELATION_TYPES.EXTENDS,
+                sourceSenseId: lowerSenseId,
+                targetSenseId: newUpperSenseId
+            }
+        ];
+        const response = await fetch(`http://localhost:5000/api/nodes/${lowerNodeId}/associations`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                associations: nextAssociations,
+                onRemovalStrategy: 'disconnect',
+                bridgeDecisions: []
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data?.error || '改接上级失败');
         }
     };
 
     const saveAssociationEdit = async () => {
         if (!editingAssociationNode?._id) return;
-        if (editAssociations.length < 1) {
-            alert('每个释义至少保留 1 条关联关系');
+        let previewSnapshot = await previewAssociationEdit(assocBridgeDecisions, editAssociations, { silent: true });
+        if (!previewSnapshot) {
+            alert('无法计算关联变更，请稍后重试');
             return;
         }
-        if (!assocMutationPreview) {
-            alert('请先预览变更，再确认保存');
-            return;
+        const bridgeDecisionItems = Array.isArray(previewSnapshot?.bridgeDecisionItems)
+            ? previewSnapshot.bridgeDecisionItems
+            : [];
+        const autoFilledBridgeDecisions = { ...assocBridgeDecisions };
+        let hasAutoFilledDecision = false;
+        bridgeDecisionItems.forEach((item) => {
+            const pairKey = String(item?.pairKey || '').trim();
+            if (!pairKey) return;
+            if (!autoFilledBridgeDecisions[pairKey]) {
+                autoFilledBridgeDecisions[pairKey] = 'disconnect';
+                hasAutoFilledDecision = true;
+            }
+        });
+        if (hasAutoFilledDecision) {
+            setAssocBridgeDecisions(autoFilledBridgeDecisions);
+            previewSnapshot = await previewAssociationEdit(autoFilledBridgeDecisions, editAssociations, { silent: true });
+            if (!previewSnapshot) {
+                alert('无法计算关联变更，请稍后重试');
+                return;
+            }
         }
-        if ((assocMutationPreview?.unresolvedBridgeDecisionCount || 0) > 0) {
-            alert('请先逐条确认删除后的上下级承接关系（保留承接或断开）');
+        if ((previewSnapshot?.unresolvedBridgeDecisionCount || 0) > 0) {
+            alert('关联改动中存在未确认的承接关系，已自动按“断开”处理后仍无法保存，请重试。');
             return;
         }
 
         const token = localStorage.getItem('token');
         const associationsPayload = buildAssociationPayloadForMutation();
+        const pendingReassignPlanMap = new Map();
+        (Array.isArray(editAssociations) ? editAssociations : [])
+            .filter((assoc) => !!assoc?.pendingRemoval && !!assoc?.pendingReassignPlan)
+            .map((assoc) => assoc.pendingReassignPlan)
+            .filter(Boolean)
+            .forEach((plan) => {
+                const key = [
+                    String(plan?.lowerNodeId || '').trim(),
+                    String(plan?.lowerSenseId || '').trim(),
+                    String(plan?.newUpperNodeId || '').trim(),
+                    String(plan?.newUpperSenseId || '').trim()
+                ].join('|');
+                if (!key || pendingReassignPlanMap.has(key)) return;
+                pendingReassignPlanMap.set(key, plan);
+            });
+        const pendingReassignPlans = Array.from(pendingReassignPlanMap.values());
         setAssocApplyLoading(true);
         try {
             const response = await fetch(`http://localhost:5000/api/nodes/${editingAssociationNode._id}/associations`, {
@@ -2998,22 +3739,30 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 },
                 body: JSON.stringify({
                     associations: associationsPayload,
-                    onRemovalStrategy: assocRemovalStrategy,
-                    bridgeDecisions: toBridgeDecisionPayload(assocBridgeDecisions)
+                    onRemovalStrategy: 'disconnect',
+                    bridgeDecisions: toBridgeDecisionPayload(autoFilledBridgeDecisions)
                 })
             });
             const data = await response.json();
             if (response.ok) {
-                alert(data.message);
+                const reassignErrors = [];
+                for (const plan of pendingReassignPlans) {
+                    try {
+                        // 删除主关联后，再按用户决策将下级改接到新的上级。
+                        // 这一步是独立写入，避免把“改接上级”混入当前释义的关联草稿。
+                        await applyUpperReassignPlan(plan, token);
+                    } catch (error) {
+                        reassignErrors.push(error?.message || '未知错误');
+                    }
+                }
+                if (reassignErrors.length > 0) {
+                    alert(`${data.message}\n但以下改接未完成：\n${reassignErrors.join('\n')}`);
+                } else {
+                    alert(data.message);
+                }
                 closeEditAssociationModal();
                 fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
             } else {
-                if (data?.bridgeDecisionItems) {
-                    setAssocMutationPreview((prev) => ({
-                        ...(prev || {}),
-                        ...data
-                    }));
-                }
                 alert(data.error || '保存失败');
             }
         } catch (error) {
@@ -3025,660 +3774,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     };
 
     const formatRelationArrowText = (relationType) => (
-        relationType === ASSOC_RELATION_TYPES.CONTAINS ? '→包含→' : '←拓展←'
+        relationType === ASSOC_RELATION_TYPES.CONTAINS
+            ? REL_SYMBOL_SUPERSET
+            : (relationType === ASSOC_RELATION_TYPES.EXTENDS ? REL_SYMBOL_SUBSET : '↔')
     );
-
-    const renderMutationLine = (line, key, tone = 'neutral') => (
-        <div key={key} className={`admin-assoc-mutation-line ${tone}`}>
-            <span className="endpoint">{line.source?.displayName || '未知释义'}</span>
-            <span className="arrow">{formatRelationArrowText(line.relationType)}</span>
-            <span className="endpoint">{line.target?.displayName || '未知释义'}</span>
-        </div>
-    );
-
-    const renderBridgeDecisionItem = (item, index) => {
-        const selectedAction = assocBridgeDecisions[item.pairKey] || item.explicitAction || '';
-        const displayUpper = item?.upper?.displayName || '未知上级释义';
-        const displayLower = item?.lower?.displayName || '未知下级释义';
-        return (
-            <div key={item.pairKey || `bridge_decision_${index}`} className="admin-bridge-decision-item">
-                <div className="admin-bridge-decision-line">
-                    <span>{displayUpper}</span>
-                    <span className="arrow">⇢ {resolveEditingSenseTitle(item.sourceSenseId)} ⇢</span>
-                    <span>{displayLower}</span>
-                </div>
-                <div className="admin-bridge-decision-actions">
-                    <button
-                        className={`admin-bridge-decision-btn ${selectedAction === 'reconnect' ? 'active reconnect' : ''}`}
-                        onClick={() => {
-                            const next = {
-                                ...assocBridgeDecisions,
-                                [item.pairKey]: 'reconnect'
-                            };
-                            setAssocBridgeDecisions(next);
-                            previewAssociationEdit(next);
-                        }}
-                        disabled={assocPreviewLoading || assocApplyLoading}
-                    >
-                        保留承接
-                    </button>
-                    <button
-                        className={`admin-bridge-decision-btn ${selectedAction === 'disconnect' ? 'active disconnect' : ''}`}
-                        onClick={() => {
-                            const next = {
-                                ...assocBridgeDecisions,
-                                [item.pairKey]: 'disconnect'
-                            };
-                            setAssocBridgeDecisions(next);
-                            previewAssociationEdit(next);
-                        }}
-                        disabled={assocPreviewLoading || assocApplyLoading}
-                    >
-                        断开独立
-                    </button>
-                </div>
-            </div>
-        );
-    };
-
-    const renderAssocMutationPreview = () => {
-        if (!assocMutationPreview?.summary) return null;
-        const summary = assocMutationPreview.summary;
-        const bridgeDecisionItems = Array.isArray(assocMutationPreview?.bridgeDecisionItems)
-            ? assocMutationPreview.bridgeDecisionItems
-            : [];
-        const insertPlanNarratives = Array.isArray(summary.insertPlanNarratives)
-            ? summary.insertPlanNarratives
-            : [];
-        const beforeRelations = Array.isArray(summary.beforeRelations) ? summary.beforeRelations : [];
-        const afterRelations = Array.isArray(summary.afterRelations) ? summary.afterRelations : [];
-        const hasChanges = (summary.removed?.length || 0) > 0
-            || (summary.added?.length || 0) > 0
-            || (summary.lostBridgePairs?.length || 0) > 0
-            || (summary.reconnectLines?.length || 0) > 0
-            || insertPlanNarratives.length > 0;
-
-        return (
-            <div className="admin-assoc-mutation-preview">
-                <div className="admin-assoc-mutation-header">
-                    <h5>关联变更预览</h5>
-                    <span className={`strategy-badge ${assocMutationPreview?.strategy || 'disconnect'}`}>
-                        {assocMutationPreview?.strategy === 'reconnect' ? '断开后自动重连' : '断开后不重连'}
-                    </span>
-                </div>
-
-                <div className="admin-assoc-before-after-grid">
-                    <div className="admin-assoc-before-after-block before">
-                        <h6>编辑前</h6>
-                        {beforeRelations.length > 0 ? (
-                            beforeRelations.map((line, index) => renderMutationLine(line, `before_${index}`, 'neutral'))
-                        ) : (
-                            <div className="admin-assoc-empty-change">编辑前无关联</div>
-                        )}
-                    </div>
-                    <div className="admin-assoc-before-after-block after">
-                        <h6>编辑后</h6>
-                        {afterRelations.length > 0 ? (
-                            afterRelations.map((line, index) => renderMutationLine(line, `after_${index}`, 'neutral'))
-                        ) : (
-                            <div className="admin-assoc-empty-change">编辑后无关联</div>
-                        )}
-                    </div>
-                </div>
-
-                {!hasChanges && (
-                    <div className="admin-assoc-empty-change">本次操作不会改变任何关联关系。</div>
-                )}
-
-                {summary.removed?.length > 0 && (
-                    <div className="admin-assoc-mutation-block">
-                        <h6>将移除</h6>
-                        {summary.removed.map((line, index) => renderMutationLine(line, `removed_${index}`, 'removed'))}
-                    </div>
-                )}
-
-                {summary.added?.length > 0 && (
-                    <div className="admin-assoc-mutation-block">
-                        <h6>将新增</h6>
-                        {summary.added.map((line, index) => renderMutationLine(line, `added_${index}`, 'added'))}
-                    </div>
-                )}
-
-                {insertPlanNarratives.length > 0 && (
-                    <div className="admin-assoc-mutation-block">
-                        <h6>插入关系说明</h6>
-                        {insertPlanNarratives.map((item, index) => (
-                            <div key={item?.key || `insert_narrative_${index}`} className="admin-assoc-mutation-line neutral">
-                                <span className="endpoint">{item?.text || ''}</span>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {summary.lostBridgePairs?.length > 0 && (
-                    <div className="admin-assoc-mutation-block">
-                        <h6>受影响的上级/下级对</h6>
-                        {summary.lostBridgePairs.map((pair, index) => (
-                            <div key={`bridge_${index}`} className="admin-assoc-mutation-line warning">
-                                <span className="endpoint">{pair.upper?.displayName || '未知释义'}</span>
-                                <span className="arrow">⇢ {resolveEditingSenseTitle(pair.sourceSenseId)} ⇢</span>
-                                <span className="endpoint">{pair.lower?.displayName || '未知释义'}</span>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {summary.reconnectLines?.length > 0 && (
-                    <div className="admin-assoc-mutation-block">
-                        <h6>将自动重连</h6>
-                        {summary.reconnectLines.map((item, index) => renderMutationLine(item.line, `reconnect_${index}`, 'reconnect'))}
-                    </div>
-                )}
-
-                {bridgeDecisionItems.length > 0 && (
-                    <div className="admin-assoc-mutation-block">
-                        <h6>承接关系逐条确认</h6>
-                        <p className="admin-assoc-step-description" style={{ marginBottom: '0.45rem' }}>
-                            对每组“上级-当前释义-下级”选择删除后是保留承接还是断开独立。
-                        </p>
-                        {(assocMutationPreview?.unresolvedBridgeDecisionCount || 0) > 0 && (
-                            <p className="admin-assoc-step-description" style={{ marginBottom: '0.45rem', color: '#fca5a5' }}>
-                                尚有 {assocMutationPreview.unresolvedBridgeDecisionCount} 组未确认，不能保存。
-                            </p>
-                        )}
-                        <div className="admin-bridge-decision-list">
-                            {summary.lostBridgePairs.map((pair, index) => {
-                                const decision = bridgeDecisionItems.find((item) => item.pairKey === pair.pairKey) || {};
-                                return renderBridgeDecisionItem({
-                                    ...decision,
-                                    pairKey: pair.pairKey,
-                                    sourceSenseId: pair.sourceSenseId,
-                                    upper: pair.upper,
-                                    lower: pair.lower
-                                }, index);
-                            })}
-                        </div>
-                    </div>
-                )}
-            </div>
-        );
-    };
-
-    const renderAssocStepIndicator = () => {
-        if (!assocCurrentStep) return null;
-
-        const steps = [
-            { key: ASSOC_STEPS.SELECT_NODE_A, label: '选择目标释义' },
-            { key: ASSOC_STEPS.SELECT_RELATION, label: '选择关系' },
-            ...(assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT ? [{ key: ASSOC_STEPS.SELECT_NODE_B, label: '第二目标释义' }] : []),
-            { key: ASSOC_STEPS.PREVIEW, label: '预览确认' }
-        ];
-        const currentIndex = steps.findIndex(s => s.key === assocCurrentStep);
-
-        return (
-            <div className="admin-assoc-step-indicator">
-                {steps.map((step, index) => (
-                    <React.Fragment key={step.key}>
-                        <div className={`admin-assoc-step-dot ${index <= currentIndex ? 'active' : ''} ${step.key === assocCurrentStep ? 'current' : ''}`}>
-                            {index + 1}
-                        </div>
-                        {index < steps.length - 1 && (
-                            <div className={`admin-assoc-step-line ${index < currentIndex ? 'active' : ''}`} />
-                        )}
-                    </React.Fragment>
-                ))}
-                <div className="admin-assoc-step-labels">
-                    {steps.map((step) => (
-                        <span key={step.key} className={`admin-assoc-step-label ${step.key === assocCurrentStep ? 'current' : ''}`}>
-                            {step.label}
-                        </span>
-                    ))}
-                </div>
-            </div>
-        );
-    };
-
-    const renderAssocSelectNodeA = () => (
-        <div className="admin-assoc-step">
-            <h5>步骤 1：选择目标释义</h5>
-            <p className="admin-assoc-step-description">
-                当前正在编辑：<strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId)}</strong>
-            </p>
-            <p className="admin-assoc-step-description">搜索并选择一个现有释义作为关联目标（可输入关键词，不区分大小写）</p>
-
-            <div className="search-input-group">
-                <div className="admin-assoc-search-input-wrap">
-                    <input
-                        type="text"
-                        value={assocSearchKeyword}
-                        onChange={(e) => setAssocSearchKeyword(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                e.preventDefault();
-                                searchAssociationNodes(assocSearchKeyword);
-                            }
-                        }}
-                        placeholder="搜索标题或释义题目（回车或点击搜索）"
-                        className="form-input"
-                    />
-                    {!!assocSearchKeyword && (
-                        <button
-                            type="button"
-                            className="admin-assoc-search-clear"
-                            onClick={clearAssocNodeASearch}
-                            aria-label="清空搜索"
-                        >
-                            X
-                        </button>
-                    )}
-                </div>
-                <button onClick={() => searchAssociationNodes(assocSearchKeyword)} disabled={assocSearchLoading} className="btn btn-primary">
-                    <Search className="icon-small" />
-                    {assocSearchLoading ? '...' : '搜索'}
-                </button>
-            </div>
-            {!assocSearchLoading && assocSearchAppliedKeyword && assocSearchResults.length === 0 && (
-                <p className="admin-assoc-step-description">未找到匹配释义</p>
-            )}
-
-            {assocSearchResults.length > 0 && (
-                <div className="search-results">
-                    {assocSearchResults.map(node => (
-                        <div
-                            key={node.searchKey || `${node._id}_${node.senseId || 'sense'}`}
-                            className="search-result-item clickable"
-                            onClick={() => selectAssocNodeA(node)}
-                        >
-                            <div className="node-info">
-                                <strong>{node.displayName || node.name}</strong>
-                                <span className="node-description">{node.description}</span>
-                            </div>
-                            <ArrowRight className="icon-small" />
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-
-    const renderAssocSelectRelation = () => (
-        <div className="admin-assoc-step">
-            <h5>步骤 2：选择关系类型</h5>
-            <p className="admin-assoc-step-description">
-                选择 <strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId)}</strong>
-                与 <strong>{formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)}</strong> 的关系
-            </p>
-            <p className="admin-assoc-step-description">
-                当前释义固定为：<strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId)}</strong>
-            </p>
-
-            <div className="admin-assoc-sense-selector-row">
-                <label className="admin-assoc-sense-selector">
-                    目标释义
-                    <select
-                        value={assocSelectedNodeASenseId}
-                        onChange={(e) => setAssocSelectedNodeASenseId(e.target.value)}
-                        className="edit-input"
-                    >
-                        {(() => {
-                            const options = normalizeNodeSenses(assocSelectedNodeA)
-                                .filter((sense) => isAssociationCandidateSelectable(assocSelectedNodeA, sense.senseId));
-                            if (options.length < 1) {
-                                return <option value="">无可选释义</option>;
-                            }
-                            return options.map((sense) => (
-                                <option key={`target_a_${sense.senseId}`} value={sense.senseId}>{sense.title}</option>
-                            ));
-                        })()}
-                    </select>
-                </label>
-            </div>
-
-            <div className="admin-assoc-relation-cards">
-                <div className="admin-assoc-relation-card" onClick={() => selectAssocRelationType(ASSOC_RELATION_TYPES.EXTENDS)}>
-                    <div className="admin-assoc-relation-icon extends">↑</div>
-                    <div className="admin-assoc-relation-content">
-                        <h6>扩展（上级）</h6>
-                        <p>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)} 将成为 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 的上级</p>
-                    </div>
-                </div>
-
-                <div className="admin-assoc-relation-card" onClick={() => selectAssocRelationType(ASSOC_RELATION_TYPES.CONTAINS)}>
-                    <div className="admin-assoc-relation-icon contains">↓</div>
-                    <div className="admin-assoc-relation-content">
-                        <h6>包含（下级）</h6>
-                        <p>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)} 将成为 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 的下级</p>
-                    </div>
-                </div>
-
-                <div
-                    className={`admin-assoc-relation-card ${(!assocSelectedNodeA?.parentNodesInfo?.length && !assocSelectedNodeA?.childNodesInfo?.length) ? 'disabled' : ''}`}
-                    onClick={() => {
-                        if (assocSelectedNodeA?.parentNodesInfo?.length || assocSelectedNodeA?.childNodesInfo?.length) {
-                            selectAssocRelationType(ASSOC_RELATION_TYPES.INSERT);
-                        }
-                    }}
-                >
-                    <div className="admin-assoc-relation-icon insert">⇄</div>
-                    <div className="admin-assoc-relation-content">
-                        <h6>插入到两释义之间</h6>
-                        <p>将 {formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)} 插入到 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 与另一个释义之间</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-
-    const renderAssocSelectNodeB = () => {
-        const keywordMeta = parseAssociationKeyword(assocNodeBSearchAppliedKeyword);
-        const keywordText = keywordMeta.textKeyword;
-        const keywordMode = keywordMeta.mode;
-        const hasSubmittedSearch = !!String(assocNodeBSearchAppliedKeyword || '').trim();
-        const selectedNodeAKey = toAssociationSenseKey(assocSelectedNodeA, assocSelectedNodeASenseId);
-        const excludedSenseKeySet = new Set([selectedNodeAKey].filter(Boolean));
-        const normalizeCandidateList = (list = []) => {
-            const seen = new Set();
-            return (Array.isArray(list) ? list : [])
-                .map((item) => normalizeAssociationCandidate(item))
-                .filter(Boolean)
-                .filter((item) => {
-                    if (seen.has(item.searchKey)) return false;
-                    seen.add(item.searchKey);
-                    return true;
-                });
-        };
-        const matchNodeBCandidate = (nodeLike = {}) => matchKeywordByDomainAndSense(nodeLike, keywordText);
-        const isNodeBCandidateSelectable = (nodeLike = {}) => isAssociationCandidateSelectable(nodeLike, nodeLike?.senseId || nodeLike?.activeSenseId || '', {
-            excludedSenseKeySet
-        });
-
-        const normalizedParents = normalizeCandidateList(assocNodeBCandidates.parents);
-        const normalizedChildren = normalizeCandidateList(assocNodeBCandidates.children);
-
-        const filteredNodeBCandidates = hasSubmittedSearch
-            ? {
-                parents: normalizedParents.filter((item) => (
-                    isNodeBCandidateSelectable(item)
-                    && matchNodeBCandidate(item)
-                )),
-                children: normalizedChildren.filter((item) => (
-                    isNodeBCandidateSelectable(item)
-                    && matchNodeBCandidate(item)
-                ))
-            }
-            : { parents: [], children: [] };
-        const visibleParents = hasSubmittedSearch && keywordMode !== 'expand' ? filteredNodeBCandidates.parents : [];
-        const visibleChildren = hasSubmittedSearch && keywordMode !== 'include' ? filteredNodeBCandidates.children : [];
-        const baseCandidateKeySet = new Set([
-            ...filteredNodeBCandidates.parents.map((item) => item?.searchKey || ''),
-            ...filteredNodeBCandidates.children.map((item) => item?.searchKey || '')
-        ].filter(Boolean));
-        const extraNodeBCandidates = (!hasSubmittedSearch || keywordMode)
-            ? []
-            : normalizeCandidateList(assocNodeBExtraSearchResults).filter((node) => {
-                if (baseCandidateKeySet.has(node?.searchKey || '')) return false;
-                if (!keywordText.trim()) return false;
-                if (!isNodeBCandidateSelectable(node)) return false;
-                return matchNodeBCandidate(node);
-            });
-
-        return (
-            <div className="admin-assoc-step">
-                <h5>步骤 3：选择第二个目标释义</h5>
-                <p className="admin-assoc-step-description">
-                    选择要与 <strong>{formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)}</strong> 之间插入当前释义的另一侧释义
-                </p>
-                <p className="admin-assoc-step-description">
-                    搜索支持 <code>#include</code>（只看上级）和 <code>#expand</code>（只看下级）
-                </p>
-
-                <div className="search-input-group admin-assoc-node-b-search">
-                    <div className="admin-assoc-search-input-wrap">
-                        <input
-                            type="text"
-                            value={assocNodeBSearchKeyword}
-                            onChange={(e) => setAssocNodeBSearchKeyword(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    submitAssocNodeBSearch(assocNodeBSearchKeyword);
-                                }
-                            }}
-                            placeholder="搜索候选释义（回车或点击搜索）"
-                            className="form-input"
-                        />
-                        {!!assocNodeBSearchKeyword && (
-                            <button
-                                type="button"
-                                className="admin-assoc-search-clear"
-                                onClick={clearAssocNodeBSearch}
-                                aria-label="清空搜索"
-                            >
-                                X
-                            </button>
-                        )}
-                    </div>
-                    <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={() => submitAssocNodeBSearch(assocNodeBSearchKeyword)}
-                        disabled={assocNodeBExtraSearchLoading}
-                    >
-                        <Search className="icon-small" />
-                        {assocNodeBExtraSearchLoading ? '...' : '搜索'}
-                    </button>
-                </div>
-                <div className="admin-assoc-command-buttons">
-                    <button
-                        type="button"
-                        className="admin-assoc-command-btn"
-                        onClick={() => submitAssocNodeBSearch('#include')}
-                    >
-                        #include
-                    </button>
-                    <button
-                        type="button"
-                        className="admin-assoc-command-btn"
-                        onClick={() => submitAssocNodeBSearch('#expand')}
-                    >
-                        #expand
-                    </button>
-                </div>
-
-                {visibleParents.length > 0 && (
-                    <div className="admin-assoc-candidate-section">
-                        <h6 className="admin-assoc-candidate-header parent">
-                            <span className="admin-assoc-candidate-icon">↑</span> 母域节点（上级）
-                        </h6>
-                        <div className="admin-assoc-candidate-list">
-                            {visibleParents.map(node => (
-                                <div key={node.searchKey || node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, true)}>
-                                    <span className="admin-assoc-candidate-name">{node.displayName || node.name}</span>
-                                    <span className="admin-assoc-candidate-hint">插入到 {node.displayName || node.name} 和 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 之间</span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {visibleChildren.length > 0 && (
-                    <div className="admin-assoc-candidate-section">
-                        <h6 className="admin-assoc-candidate-header child">
-                            <span className="admin-assoc-candidate-icon">↓</span> 子域节点（下级）
-                        </h6>
-                        <div className="admin-assoc-candidate-list">
-                            {visibleChildren.map(node => (
-                                <div key={node.searchKey || node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, false)}>
-                                    <span className="admin-assoc-candidate-name">{node.displayName || node.name}</span>
-                                    <span className="admin-assoc-candidate-hint">插入到 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 和 {node.displayName || node.name} 之间</span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {extraNodeBCandidates.length > 0 && (
-                    <div className="admin-assoc-candidate-section">
-                        <h6 className="admin-assoc-candidate-header child">
-                            <span className="admin-assoc-candidate-icon">+</span> 其它可插入节点（将新建承接关系）
-                        </h6>
-                        <div className="admin-assoc-candidate-list">
-                            {extraNodeBCandidates.map(node => (
-                                <div key={node.searchKey || node._id} className="admin-assoc-candidate-item" onClick={() => selectAssocNodeB(node, false)}>
-                                    <span className="admin-assoc-candidate-name">{node.displayName || formatNodeSenseDisplay(node, resolveNodeSenseId(node))}</span>
-                                    <span className="admin-assoc-candidate-hint">插入到 {formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)} 和 {node.displayName || formatNodeSenseDisplay(node, resolveNodeSenseId(node))} 之间（将新建承接关系）</span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-                {!keywordMode && assocNodeBExtraSearchLoading && keywordText.trim() && (
-                    <p className="admin-assoc-step-description">正在搜索其它节点...</p>
-                )}
-
-                {!hasSubmittedSearch && (
-                    <p className="admin-assoc-step-description">输入关键词后按回车或点击搜索，或点击下方命令按钮。</p>
-                )}
-                {hasSubmittedSearch && visibleParents.length === 0 && visibleChildren.length === 0 && extraNodeBCandidates.length === 0 && !assocNodeBExtraSearchLoading && (
-                    <p className="admin-assoc-step-description">未找到匹配释义</p>
-                )}
-            </div>
-        );
-    };
-
-    const renderAssocPreview = () => (
-        <div className="admin-assoc-step admin-assoc-preview-step">
-            <h5>步骤 {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT ? '4' : '3'}：预览确认</h5>
-            <p className="admin-assoc-step-description">查看释义关联关系生效后的结构变化</p>
-            <p className="admin-assoc-step-description">
-                当前释义固定为：<strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId)}</strong>
-            </p>
-
-            <div className="admin-assoc-sense-selector-row">
-                <label className="admin-assoc-sense-selector">
-                    {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT ? '左侧释义' : '目标释义'}
-                    <select
-                        value={assocSelectedNodeASenseId}
-                        onChange={(e) => setAssocSelectedNodeASenseId(e.target.value)}
-                        className="edit-input"
-                    >
-                        {(() => {
-                            const excludedSenseKeySet = new Set();
-                            if (assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT) {
-                                const selectedNodeBSenseKey = toAssociationSenseKey(assocSelectedNodeB, assocSelectedNodeBSenseId);
-                                if (selectedNodeBSenseKey) excludedSenseKeySet.add(selectedNodeBSenseKey);
-                            }
-                            const options = normalizeNodeSenses(assocSelectedNodeA)
-                                .filter((sense) => isAssociationCandidateSelectable(
-                                    assocSelectedNodeA,
-                                    sense.senseId,
-                                    { excludedSenseKeySet }
-                                ));
-                            if (options.length < 1) {
-                                return <option value="">无可选释义</option>;
-                            }
-                            return options.map((sense) => (
-                                <option key={`preview_target_a_${sense.senseId}`} value={sense.senseId}>{sense.title}</option>
-                            ));
-                        })()}
-                    </select>
-                </label>
-                {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT && (
-                    <label className="admin-assoc-sense-selector">
-                        右侧释义
-                        <select
-                            value={assocSelectedNodeBSenseId}
-                            onChange={(e) => setAssocSelectedNodeBSenseId(e.target.value)}
-                            className="edit-input"
-                        >
-                            {(() => {
-                                const selectedNodeASenseKey = toAssociationSenseKey(assocSelectedNodeA, assocSelectedNodeASenseId);
-                                const excludedSenseKeySet = new Set([selectedNodeASenseKey].filter(Boolean));
-                                const options = normalizeNodeSenses(assocSelectedNodeB)
-                                    .filter((sense) => isAssociationCandidateSelectable(
-                                        assocSelectedNodeB,
-                                        sense.senseId,
-                                        { excludedSenseKeySet }
-                                    ));
-                                if (options.length < 1) {
-                                    return <option value="">无可选释义</option>;
-                                }
-                                return options.map((sense) => (
-                                    <option key={`preview_target_b_${sense.senseId}`} value={sense.senseId}>{sense.title}</option>
-                                ));
-                            })()}
-                        </select>
-                    </label>
-                )}
-            </div>
-
-            {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT && (
-                <div className="admin-assoc-step-description" style={{ marginBottom: '0.65rem' }}>
-                    {assocInsertDirectionLocked
-                        ? '插入方向已按原有关联自动锁定。'
-                        : '当前两侧释义无直接上下级，插入方向可切换。'}
-                    <button
-                        type="button"
-                        className="btn btn-secondary btn-small"
-                        style={{ marginLeft: '0.6rem' }}
-                        onClick={() => setAssocInsertDirection((prev) => (prev === 'aToB' ? 'bToA' : 'aToB'))}
-                        disabled={assocInsertDirectionLocked}
-                    >
-                        切换方向
-                    </button>
-                </div>
-            )}
-
-            <div className="admin-assoc-preview-canvas-container">
-                <canvas
-                    ref={assocPreviewCanvasRef}
-                    width={360}
-                    height={240}
-                    className="admin-assoc-preview-canvas"
-                />
-            </div>
-
-            <div className="admin-assoc-preview-info">
-                {assocSelectedRelationType === ASSOC_RELATION_TYPES.EXTENDS && (
-                    <span><strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)}</strong> 将成为 <strong>{formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)}</strong> 的上级</span>
-                )}
-                {assocSelectedRelationType === ASSOC_RELATION_TYPES.CONTAINS && (
-                    <span><strong>{formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId)}</strong> 将成为 <strong>{formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)}</strong> 的下级</span>
-                )}
-                {assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT && (
-                    <span>{buildInsertNarrative(
-                        editingAssociationNode,
-                        assocSelectedSourceSenseId,
-                        assocSelectedNodeA,
-                        assocSelectedNodeASenseId,
-                        assocSelectedNodeB,
-                        assocSelectedNodeBSenseId
-                    )}</span>
-                )}
-            </div>
-
-            <div className="admin-assoc-preview-actions">
-                <button onClick={confirmEditAssociation} className="btn btn-success">
-                    <Check className="icon-small" /> 确认关联
-                </button>
-            </div>
-        </div>
-    );
-
-    const renderAssocCurrentStep = () => {
-        switch (assocCurrentStep) {
-            case ASSOC_STEPS.SELECT_NODE_A:
-                return renderAssocSelectNodeA();
-            case ASSOC_STEPS.SELECT_RELATION:
-                return renderAssocSelectRelation();
-            case ASSOC_STEPS.SELECT_NODE_B:
-                return renderAssocSelectNodeB();
-            case ASSOC_STEPS.PREVIEW:
-                return renderAssocPreview();
-            default:
-                return null;
-        }
-    };
 
     // --- Alliance Management Functions ---
     const fetchAdminAlliances = async (page = adminAlliancePage) => {
@@ -3828,6 +3927,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             alert('更换失败');
         }
     };
+
+    const assocDeleteMode = assocDeleteDecisionContext?.mode || 'upper';
+    const isAssocDeleteInsertMode = assocDeleteMode === 'insert';
+    const isAssocDeleteUpperMode = assocDeleteMode === 'upper';
+    const shouldShowAssocDeleteSearch = isAssocDeleteUpperMode && assocDeleteDecisionAction === 'reassign_upper';
 
     return (
         <div className="admin-section">
@@ -4415,7 +4519,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 <div className="pending-nodes-container">
                     <div className="table-info">
                         <p>待审批总数: <strong>{pendingApprovalCount}</strong></p>
-                        <span className="pending-summary-tag node">建节点申请: {pendingNodes.length}</span>
+                        <span className="pending-summary-tag node">创建新知识域申请: {pendingNodes.length}</span>
                         <span className="pending-summary-tag master">域主申请: {pendingMasterApplications.length}</span>
                         {groupedPendingNodes.some(g => g.hasConflict) && (
                             <span className="conflict-warning">
@@ -4447,7 +4551,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                             {pendingNodes.length > 0 && (
                                 <div className="pending-approval-section node">
                                     <div className="pending-approval-section-header">
-                                        <h3>节点创建审批</h3>
+                                        <h3>新知识域创建审批</h3>
                                         <span className="pending-section-count">{pendingNodes.length}</span>
                                     </div>
                                     <div className="pending-nodes-list admin">
@@ -4467,6 +4571,18 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                             const isNodeActing = pendingNodeActionId === node._id;
                                                             const isGroupActing = Boolean(group.hasConflict && pendingNodeActionGroupName === group.name && pendingNodeActionId);
                                                             const disableActions = isNodeActing || isGroupActing;
+                                                            const pendingSenseList = normalizeNodeSenses(node);
+                                                            const selectedSenseCandidate = pendingNodeSelectedSenseByNodeId[node._id];
+                                                            const selectedSenseId = pendingSenseList.some((sense) => sense.senseId === selectedSenseCandidate)
+                                                                ? selectedSenseCandidate
+                                                                : (pendingSenseList[0]?.senseId || '');
+                                                            const senseAssociationMap = new Map(
+                                                                pendingSenseList.map((sense) => [sense.senseId, getPendingSenseAssociations(node, sense.senseId)])
+                                                            );
+                                                            const selectedSense = pendingSenseList.find((sense) => sense.senseId === selectedSenseId) || null;
+                                                            const selectedSenseAssociations = selectedSense
+                                                                ? (senseAssociationMap.get(selectedSense.senseId) || [])
+                                                                : [];
                                                             return (
                                                         <div key={node._id} className={`pending-node-card pending-review-card pending-review-card-node ${group.hasConflict ? 'conflict-card' : ''}`}>
                                                             {group.hasConflict && (
@@ -4475,7 +4591,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                             <div className="node-header">
                                                                 <h3 className="node-title">{node.name}</h3>
                                                                 <div className="pending-card-badges">
-                                                                    <span className="pending-card-type pending-card-type-node">建节点申请</span>
+                                                                    <span className="pending-card-type pending-card-type-node">创建新知识域申请</span>
                                                                     <span className={`status-badge status-${node.status}`}>
                                                                         {node.status === 'pending' ? '待审批' :
                                                                             node.status === 'approved' ? '已通过' : '已拒绝'}
@@ -4501,23 +4617,53 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                                     </div>
                                                                 </div>
 
-                                                                {node.associations && node.associations.length > 0 && (
-                                                                    <div className="associations-section">
-                                                                        <h4>关联关系 ({node.associations.length} 个)</h4>
-                                                                        <div className="associations-list">
-                                                                            {node.associations.map((association, idx) => (
-                                                                                <div key={idx} className="association-item">
-                                                                                    <span className="node-name">
-                                                                                        {association.targetNode?.name || '未知节点'}
-                                                                                    </span>
-                                                                                    <span className={`admin-relation-badge ${association.relationType === 'contains' ? 'parent' : 'child'}`}>
-                                                                                        {association.relationType === 'contains' ? '母域' : '子域'}
-                                                                                    </span>
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
+                                                                <div className="pending-sense-review-section">
+                                                                    <h4>新建释义（{pendingSenseList.length} 个）</h4>
+                                                                    <div className="pending-sense-chip-list">
+                                                                        {pendingSenseList.map((sense) => {
+                                                                            const isActive = selectedSenseId === sense.senseId;
+                                                                            const associationCount = (senseAssociationMap.get(sense.senseId) || []).length;
+                                                                            return (
+                                                                                <button
+                                                                                    key={sense.senseId}
+                                                                                    type="button"
+                                                                                    className={`pending-sense-chip ${isActive ? 'active' : ''}`}
+                                                                                    onClick={() => selectPendingNodeSense(node._id, sense.senseId)}
+                                                                                >
+                                                                                    <span className="pending-sense-chip-title">{sense.title || sense.senseId}</span>
+                                                                                    <span className="pending-sense-chip-count">{associationCount} 条关联</span>
+                                                                                </button>
+                                                                            );
+                                                                        })}
                                                                     </div>
-                                                                )}
+
+                                                                    {selectedSense && (
+                                                                        <div className="pending-sense-detail-panel">
+                                                                            <div className="pending-sense-detail-header">
+                                                                                <h5>{selectedSense.title || selectedSense.senseId}</h5>
+                                                                                <span>关联关系：{selectedSenseAssociations.length} 条</span>
+                                                                            </div>
+                                                                            <p className="pending-sense-detail-content">
+                                                                                {selectedSense.content || '（该释义暂无内容）'}
+                                                                            </p>
+
+                                                                            <div className="pending-sense-relation-list">
+                                                                                {selectedSenseAssociations.length > 0 ? (
+                                                                                    selectedSenseAssociations.map((relationItem) => (
+                                                                                        <div key={relationItem.id} className="pending-sense-relation-item">
+                                                                                            <span className="pending-sense-relation-text">{relationItem.displayText}</span>
+                                                                                            <span className={`admin-relation-badge ${relationItem.relationClassName}`}>
+                                                                                                {relationItem.relationLabel}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                    ))
+                                                                                ) : (
+                                                                                    <p className="pending-sense-empty">该释义暂无关联关系</p>
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
                                                             </div>
 
                                                             <div className="node-actions">
@@ -5163,9 +5309,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                             ? '↓'
                                             : (option.value === ASSOC_RELATION_TYPES.EXTENDS ? '↑' : '⇄');
                                         const hintText = option.value === ASSOC_RELATION_TYPES.CONTAINS
-                                            ? '当前释义作为上级（包含目标）'
+                                            ? `当前释义 ${REL_SYMBOL_SUBSET} 目标释义`
                                             : (option.value === ASSOC_RELATION_TYPES.EXTENDS
-                                                ? '当前释义作为下级（扩展目标）'
+                                                ? `当前释义 ${REL_SYMBOL_SUPERSET} 目标释义`
                                                 : '当前释义插入在两个释义之间');
                                         return (
                                             <div
@@ -5238,7 +5384,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                 }}
                                                 disabled={newSenseForm.insertDirectionLocked}
                                             >
-                                                方向：{newSenseForm.insertDirection === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→'}
+                                                方向：{newSenseForm.insertDirection === ASSOC_RELATION_TYPES.EXTENDS
+                                                    ? `左 ${REL_SYMBOL_SUBSET} 当前释义 ${REL_SYMBOL_SUBSET} 右`
+                                                    : `左 ${REL_SYMBOL_SUPERSET} 当前释义 ${REL_SYMBOL_SUPERSET} 右`}
                                             </button>
                                         </div>
                                         <p className={`admin-add-sense-insert-hint ${newSenseForm.insertDirectionLocked ? 'locked' : ''}`}>
@@ -5323,11 +5471,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                             <div key={relation.id} className="admin-add-sense-relation-item">
                                                 {relation.kind === ASSOC_RELATION_TYPES.INSERT ? (
                                                     <span>
-                                                        插入：{relation.leftTarget?.displayName || '未知'} {relation.direction === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→'} 当前释义 {relation.direction === ASSOC_RELATION_TYPES.EXTENDS ? '←拓展←' : '→包含→'} {relation.rightTarget?.displayName || '未知'}
+                                                        插入：{relation.leftTarget?.displayName || '未知'} {relation.direction === ASSOC_RELATION_TYPES.EXTENDS ? REL_SYMBOL_SUBSET : REL_SYMBOL_SUPERSET} 当前释义 {relation.direction === ASSOC_RELATION_TYPES.EXTENDS ? REL_SYMBOL_SUBSET : REL_SYMBOL_SUPERSET} {relation.rightTarget?.displayName || '未知'}
                                                     </span>
                                                 ) : (
                                                     <span>
-                                                        {relation.relationType === ASSOC_RELATION_TYPES.CONTAINS ? '包含' : '扩展'}：{relation.target?.displayName || '未知'}
+                                                        当前释义 {relation.relationType === ASSOC_RELATION_TYPES.CONTAINS ? REL_SYMBOL_SUPERSET : REL_SYMBOL_SUBSET} {relation.target?.displayName || '未知'}
                                                     </span>
                                                 )}
                                                 <button
@@ -5673,41 +5821,71 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                 >
                                     <h4>
                                         释义关联关系
-                                        <span className="association-count">({editAssociations.length})</span>
+                                        <span className="association-count">
+                                            ({editAssociations.filter((item) => !item?.pendingRemoval).length}/{editAssociations.length})
+                                        </span>
                                     </h4>
                                     {isEditAssociationListExpanded ? <ChevronUp className="icon-small" /> : <ChevronDown className="icon-small" />}
                                 </div>
 
                                 {isEditAssociationListExpanded && editAssociations.length > 0 && (
                                     <div className="admin-edit-associations-list">
-                                        {editAssociations.map((association, index) => (
-                                            <div
-                                                key={index}
-                                                className="admin-edit-association-item clickable"
-                                                onClick={() => editExistingAssociation(index)}
-                                            >
-                                                <div className="admin-edit-association-info">
-                                                    <span className="admin-edit-association-display">{association.displayText}</span>
-                                                    <span className={`admin-edit-relation-badge ${association.type}`}>
-                                                        {association.type === ASSOC_RELATION_TYPES.EXTENDS && '母域'}
-                                                        {association.type === ASSOC_RELATION_TYPES.CONTAINS && '子域'}
-                                                        {association.type === ASSOC_RELATION_TYPES.INSERT && '插入'}
-                                                    </span>
+                                        {editAssociations.map((association, index) => {
+                                            const isPendingRemoval = !!association?.pendingRemoval;
+                                            const pendingDecisionLines = Array.isArray(association?.pendingDecisionLines)
+                                                ? association.pendingDecisionLines
+                                                : [];
+                                            const displayAssociationType = resolveAssociationDisplayType(association);
+                                            return (
+                                                <div
+                                                    key={index}
+                                                    className={`admin-edit-association-item ${isPendingRemoval ? 'pending-removal' : 'clickable'}`}
+                                                    onClick={() => {
+                                                        if (isPendingRemoval) return;
+                                                        editExistingAssociation(index);
+                                                    }}
+                                                >
+                                                    <div className="admin-edit-association-info">
+                                                        <span className={`admin-edit-association-display ${isPendingRemoval ? 'pending-removal' : ''}`}>
+                                                            {association.displayText}
+                                                        </span>
+                                                        <span className={`admin-edit-relation-badge ${displayAssociationType} ${isPendingRemoval ? 'pending-removal' : ''}`}>
+                                                            {isPendingRemoval
+                                                                ? '待删除'
+                                                                : (
+                                                                    displayAssociationType === ASSOC_RELATION_TYPES.EXTENDS
+                                                                        ? REL_SYMBOL_SUPERSET
+                                                                        : (displayAssociationType === ASSOC_RELATION_TYPES.CONTAINS ? REL_SYMBOL_SUBSET : '插入')
+                                                                )}
+                                                        </span>
+                                                        {isPendingRemoval && pendingDecisionLines.length > 0 && (
+                                                            <div className="admin-edit-association-pending-result">
+                                                                {pendingDecisionLines.map((line, lineIndex) => (
+                                                                    <div
+                                                                        key={`assoc_pending_${index}_${lineIndex}`}
+                                                                        className="admin-edit-association-pending-line"
+                                                                    >
+                                                                        {line}
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <div className="admin-edit-association-actions">
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                removeEditAssociation(index);
+                                                            }}
+                                                            className={`btn btn-small ${isPendingRemoval ? 'btn-secondary' : 'btn-danger'}`}
+                                                            disabled={assocCurrentStep !== null}
+                                                        >
+                                                            {isPendingRemoval ? '撤回' : <X className="icon-small" />}
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                                <div className="admin-edit-association-actions">
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            removeEditAssociation(index);
-                                                        }}
-                                                        className="btn btn-danger btn-small"
-                                                        disabled={assocCurrentStep !== null}
-                                                    >
-                                                        <X className="icon-small" />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 )}
 
@@ -5716,19 +5894,53 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                 )}
 
                                 {assocCurrentStep ? (
-                                    <div className="admin-assoc-editor">
-                                        {renderAssocStepIndicator()}
-                                        {renderAssocCurrentStep()}
-
-                                        <div className="admin-assoc-editor-navigation">
-                                            <button onClick={goBackAssocStep} className="btn btn-secondary">
-                                                <ArrowLeft className="icon-small" /> 返回
-                                            </button>
-                                            <button onClick={resetAssociationEditor} className="btn btn-danger">
-                                                取消
-                                            </button>
-                                        </div>
-                                    </div>
+                                    <AssociationAddFlowEditor
+                                        steps={ASSOC_STEPS}
+                                        relationTypes={ASSOC_RELATION_TYPES}
+                                        relSymbolSubset={REL_SYMBOL_SUBSET}
+                                        relSymbolSuperset={REL_SYMBOL_SUPERSET}
+                                        currentStep={assocCurrentStep}
+                                        selectedRelationType={assocSelectedRelationType}
+                                        sourceDisplay={formatNodeSenseDisplay(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId)}
+                                        targetDisplay={formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId)}
+                                        secondTargetDisplay={formatNodeSenseDisplay(assocSelectedNodeB, assocSelectedNodeBSenseId)}
+                                        nodeASenseOptions={assocNodeASenseOptions}
+                                        selectedNodeASenseId={assocSelectedNodeASenseId}
+                                        nodeBSenseOptions={assocNodeBSenseOptions}
+                                        selectedNodeBSenseId={assocSelectedNodeBSenseId}
+                                        insertDirection={assocInsertDirection}
+                                        insertDirectionLocked={assocInsertDirectionLocked}
+                                        insertRelationAvailable={assocInsertRelationAvailable}
+                                        nodeASearchKeyword={assocSearchKeyword}
+                                        nodeASearchAppliedKeyword={assocSearchAppliedKeyword}
+                                        nodeASearchLoading={assocSearchLoading}
+                                        nodeASearchResults={assocSearchResults}
+                                        nodeBSearchKeyword={assocNodeBSearchKeyword}
+                                        nodeBSearchAppliedKeyword={assocNodeBSearchAppliedKeyword}
+                                        nodeBSearchLoading={assocNodeBExtraSearchLoading}
+                                        nodeBCandidatesParents={assocNodeBView.parents}
+                                        nodeBCandidatesChildren={assocNodeBView.children}
+                                        nodeBCandidatesExtra={assocNodeBView.extra}
+                                        previewCanvasRef={assocPreviewCanvasRef}
+                                        previewInfoText={assocPreviewInfoText}
+                                        onNodeASearchKeywordChange={setAssocSearchKeyword}
+                                        onSubmitNodeASearch={() => searchAssociationNodes(assocSearchKeyword)}
+                                        onClearNodeASearch={clearAssocNodeASearch}
+                                        onSelectNodeA={selectAssocNodeA}
+                                        onChangeNodeASenseId={setAssocSelectedNodeASenseId}
+                                        onSelectRelationType={selectAssocRelationType}
+                                        onNodeBSearchKeywordChange={setAssocNodeBSearchKeyword}
+                                        onSubmitNodeBSearch={(keyword) => submitAssocNodeBSearch(keyword ?? assocNodeBSearchKeyword)}
+                                        onClearNodeBSearch={clearAssocNodeBSearch}
+                                        onSelectNodeBParent={(node) => selectAssocNodeB(node, true)}
+                                        onSelectNodeBChild={(node) => selectAssocNodeB(node, false)}
+                                        onSelectNodeBExtra={(node) => selectAssocNodeB(node, false)}
+                                        onChangeNodeBSenseId={setAssocSelectedNodeBSenseId}
+                                        onToggleInsertDirection={() => setAssocInsertDirection((prev) => (prev === 'aToB' ? 'bToA' : 'aToB'))}
+                                        onConfirm={confirmEditAssociation}
+                                        onBack={goBackAssocStep}
+                                        onCancel={resetAssociationEditor}
+                                    />
                                 ) : (
                                     <button onClick={startAddEditAssociation} className="btn btn-primary admin-add-association-btn">
                                         <Plus className="icon-small" /> 添加关联
@@ -5736,64 +5948,187 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                 )}
                             </div>
 
-                            <div className="admin-assoc-strategy-panel">
-                                <div className="admin-assoc-strategy-header">
-                                    <h4>删除关联处理策略</h4>
-                                    <span className="admin-assoc-strategy-tip">先预览再确认保存</span>
-                                </div>
-                                <div className="admin-assoc-strategy-options">
-                                    <button
-                                        className={`admin-assoc-strategy-option ${assocRemovalStrategy === 'disconnect' ? 'active' : ''}`}
-                                        onClick={() => {
-                                            setAssocRemovalStrategy('disconnect');
-                                            setAssocMutationPreview(null);
-                                            setAssocBridgeDecisions({});
-                                        }}
-                                        disabled={assocPreviewLoading || assocApplyLoading}
-                                    >
-                                        直接断开
-                                        <small>删除后不自动连接受影响的上级/下级</small>
-                                    </button>
-                                    <button
-                                        className={`admin-assoc-strategy-option ${assocRemovalStrategy === 'reconnect' ? 'active' : ''}`}
-                                        onClick={() => {
-                                            setAssocRemovalStrategy('reconnect');
-                                            setAssocMutationPreview(null);
-                                            setAssocBridgeDecisions({});
-                                        }}
-                                        disabled={assocPreviewLoading || assocApplyLoading}
-                                    >
-                                        自动重连
-                                        <small>删除后将受影响的上级/下级直接重新连接</small>
-                                    </button>
-                                </div>
-                            </div>
-
-                            {renderAssocMutationPreview()}
                         </div>
                         <div className="modal-footer">
                             <button className="btn btn-secondary" onClick={closeEditAssociationModal}>取消</button>
                             <button
-                                className="btn btn-secondary"
-                                onClick={() => previewAssociationEdit()}
-                                disabled={editAssociations.length === 0 || assocCurrentStep !== null || assocPreviewLoading || assocApplyLoading}
-                            >
-                                {assocPreviewLoading ? '预览中...' : '预览变更'}
-                            </button>
-                            <button
                                 className="btn btn-primary"
                                 onClick={saveAssociationEdit}
                                 disabled={
-                                    editAssociations.length === 0
-                                    || 
-                                    !assocMutationPreview
-                                    || (assocMutationPreview?.unresolvedBridgeDecisionCount || 0) > 0
-                                    || assocCurrentStep !== null
-                                    || assocPreviewLoading
+                                    assocCurrentStep !== null
                                     || assocApplyLoading
                                 }
                             >
-                                {assocApplyLoading ? '保存中...' : '确认保存'}
+                                {assocApplyLoading ? '保存中...' : '应用更改'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showAssocDeleteDecisionModal && assocDeleteDecisionContext && (
+                <div className="modal-backdrop">
+                    <div className="modal-content admin-assoc-delete-decision-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>删除关联决策</h3>
+                            <button
+                                className="btn-close"
+                                onClick={closeAssocDeleteDecisionModal}
+                                disabled={assocDeleteApplying}
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <p className="admin-assoc-step-description">
+                                即将删除：<strong>{assocDeleteDecisionContext?.association?.displayText || ''}</strong>
+                            </p>
+                            <div className="admin-assoc-delete-option-grid">
+                                {isAssocDeleteInsertMode ? (
+                                    <>
+                                        <button
+                                            type="button"
+                                            className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'reconnect' ? 'active reconnect' : ''}`}
+                                            onClick={() => setAssocDeleteDecisionAction('reconnect')}
+                                            disabled={assocDeleteApplying}
+                                        >
+                                            <strong>两端直连</strong>
+                                            <small>删除插入后，原两端释义恢复直接关联</small>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'disconnect' ? 'active disconnect' : ''}`}
+                                            onClick={() => setAssocDeleteDecisionAction('disconnect')}
+                                            disabled={assocDeleteApplying}
+                                        >
+                                            <strong>两端不连</strong>
+                                            <small>删除插入后，原两端释义不再直接关联</small>
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <button
+                                            type="button"
+                                            className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'disconnect' ? 'active disconnect' : ''}`}
+                                            onClick={() => setAssocDeleteDecisionAction('disconnect')}
+                                            disabled={assocDeleteApplying}
+                                        >
+                                            <strong>直接删除</strong>
+                                            <small>删除后，下级释义不改接新上级</small>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'reassign_upper' ? 'active reconnect' : ''}`}
+                                            onClick={() => setAssocDeleteDecisionAction('reassign_upper')}
+                                            disabled={assocDeleteApplying}
+                                        >
+                                            <strong>改接新上级</strong>
+                                            <small>删除后，为该下级释义指定新的上级</small>
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+
+                            {Array.isArray(assocDeleteDecisionContext?.bridgeItems) && assocDeleteDecisionContext.bridgeItems.length > 0 ? (
+                                <div className="admin-assoc-delete-impact-list">
+                                    {assocDeleteDecisionContext.bridgeItems.map((item, index) => (
+                                        <div key={item?.pairKey || `assoc_delete_bridge_${index}`} className="admin-assoc-delete-impact-item">
+                                            <span>{item?.upper?.displayName || '上级释义'}</span>
+                                            <span className="arrow">→ {resolveEditingSenseTitle(item?.sourceSenseId || '')} →</span>
+                                            <span>{item?.lower?.displayName || '下级释义'}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="admin-assoc-step-description">该删除不会产生额外的链路承接冲突。</p>
+                            )}
+
+                            {shouldShowAssocDeleteSearch && (
+                                <div className="admin-assoc-delete-search-panel">
+                                    <h4>选择新的上级释义</h4>
+                                    <p className="admin-assoc-step-description">仅在“改接新上级”模式下生效；不会显示当前释义和当前下级释义。</p>
+                                    <div className="search-input-group">
+                                        <div className="admin-assoc-search-input-wrap">
+                                            <input
+                                                type="text"
+                                                className="form-input"
+                                                placeholder="搜索标题或释义题目（回车/搜索）"
+                                                value={assocDeleteSearchKeyword}
+                                                onChange={(e) => setAssocDeleteSearchKeyword(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        e.preventDefault();
+                                                        searchAssocDeleteTargets(assocDeleteSearchKeyword);
+                                                    }
+                                                }}
+                                            />
+                                            {!!assocDeleteSearchKeyword && (
+                                                <button
+                                                    type="button"
+                                                    className="admin-assoc-search-clear"
+                                                    onClick={() => {
+                                                        assocDeleteSearchRequestIdRef.current += 1;
+                                                        setAssocDeleteSearchKeyword('');
+                                                        setAssocDeleteSearchAppliedKeyword('');
+                                                        setAssocDeleteSearchResults([]);
+                                                        setAssocDeleteSearchLoading(false);
+                                                        setAssocDeleteSelectedTarget(null);
+                                                    }}
+                                                    aria-label="清空搜索"
+                                                    disabled={assocDeleteApplying}
+                                                >
+                                                    X
+                                                </button>
+                                            )}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="btn btn-primary"
+                                            onClick={() => searchAssocDeleteTargets(assocDeleteSearchKeyword)}
+                                            disabled={assocDeleteSearchLoading || assocDeleteApplying}
+                                        >
+                                            <Search className="icon-small" />
+                                            {assocDeleteSearchLoading ? '...' : '搜索'}
+                                        </button>
+                                    </div>
+                                    {assocDeleteSearchAppliedKeyword && assocDeleteSearchResults.length === 0 && !assocDeleteSearchLoading && (
+                                        <p className="admin-assoc-step-description">未找到可用上级释义。</p>
+                                    )}
+                                    {assocDeleteSearchResults.length > 0 && (
+                                        <div className="admin-assoc-delete-search-results">
+                                            {assocDeleteSearchResults.map((item) => (
+                                                <div
+                                                    key={item?.searchKey || `${item?.nodeId}:${item?.senseId}`}
+                                                    className={`admin-assoc-delete-search-item ${assocDeleteSelectedTarget?.searchKey === item?.searchKey ? 'selected' : ''}`}
+                                                    onClick={() => setAssocDeleteSelectedTarget(item)}
+                                                >
+                                                    <span>{item?.displayName || formatNodeSenseDisplay(item, item?.senseId || '')}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {assocDeleteSelectedTarget && (
+                                        <p className="admin-assoc-step-description">
+                                            已选择新上级：<strong>{formatNodeSenseDisplay(assocDeleteSelectedTarget, assocDeleteSelectedTarget?.senseId || '')}</strong>
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                        <div className="modal-footer">
+                            <button
+                                className="btn btn-secondary"
+                                onClick={closeAssocDeleteDecisionModal}
+                                disabled={assocDeleteApplying}
+                            >
+                                取消
+                            </button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={confirmAssocDeleteDecision}
+                                disabled={assocDeleteApplying}
+                            >
+                                {assocDeleteApplying ? '处理中...' : '确认暂存删除'}
                             </button>
                         </div>
                     </div>

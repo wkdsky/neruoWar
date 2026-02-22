@@ -31,6 +31,7 @@ class MiniPreviewRenderer {
    * @param {string} config.nodeALabel - 节点 A 标签（可传标题-释义）
    * @param {string} config.nodeBLabel - 节点 B 标签（可传标题-释义）
    * @param {string} config.newNodeLabel - 当前节点标签（可传标题-释义）
+   * @param {boolean} config.showPendingTag - 是否显示“待审核”字样
    */
   setPreviewScene(config) {
     const {
@@ -41,7 +42,8 @@ class MiniPreviewRenderer {
       insertDirection,
       nodeALabel,
       nodeBLabel,
-      newNodeLabel
+      newNodeLabel,
+      showPendingTag = true
     } = config;
 
     const centerX = this.canvas.width / 2;
@@ -65,7 +67,7 @@ class MiniPreviewRenderer {
         nodeB,
         newNodeName,
         insertDirection,
-        { nodeALabel, nodeBLabel, newNodeLabel }
+        { nodeALabel, nodeBLabel, newNodeLabel, showPendingTag }
       );
     } else {
       // 简单模式：两个节点
@@ -77,7 +79,7 @@ class MiniPreviewRenderer {
         nodeA,
         newNodeName,
         relationType,
-        { nodeALabel, newNodeLabel }
+        { nodeALabel, newNodeLabel, showPendingTag }
       );
     }
 
@@ -122,6 +124,7 @@ class MiniPreviewRenderer {
       isPreview: true,
       opacity: 0,
       scale: 0.5,
+      showPendingTag: labels.showPendingTag !== false,
       isBottomLevel: !isExtends
     };
 
@@ -132,7 +135,7 @@ class MiniPreviewRenderer {
       color: isExtends ? '#22c55e' : '#facc15',
       isDashed: true,
       opacity: 0,
-      label: isExtends ? '母域' : '子域'
+      label: isExtends ? '⊇' : '⊆'
     });
   }
 
@@ -141,7 +144,7 @@ class MiniPreviewRenderer {
    */
   setupInsertPreview(centerX, centerY, radius, distance, nodeA, nodeB, newNodeName, insertDirection, labels = {}) {
     const isAtoB = insertDirection === 'aToB';
-    const verticalOffset = Math.max(radius + 24, Math.floor(distance * 0.62));
+    const verticalOffset = Math.max(radius + 54, Math.floor(distance * 0.82));
     const topNodeId = isAtoB ? 'nodeA' : 'nodeB';
     const bottomNodeId = isAtoB ? 'nodeB' : 'nodeA';
 
@@ -197,6 +200,7 @@ class MiniPreviewRenderer {
       isPreview: true,
       opacity: 0,
       scale: 0.5,
+      showPendingTag: labels.showPendingTag !== false,
       isBottomLevel: false
     };
 
@@ -495,8 +499,8 @@ class MiniPreviewRenderer {
   renderHierarchyBeam(x, y, radius, color, opacity = 0.35) {
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius) || radius <= 0) return;
     const ctx = this.ctx;
-    const topHalfWidth = Math.max(2, radius * 0.1);
-    const touchY = y + Math.sqrt(Math.max(0, radius * radius - topHalfWidth * topHalfWidth));
+    const topHalfWidth = Math.max(20, radius * 0.8);
+    const touchY = y + Math.sqrt(Math.max(25, radius * radius - topHalfWidth * topHalfWidth));
     const topLeftX = x - topHalfWidth;
     const topRightX = x + topHalfWidth;
     const maxEndY = this.canvas.height - 4;
@@ -578,7 +582,7 @@ class MiniPreviewRenderer {
    */
   renderPreviewNode(node) {
     const ctx = this.ctx;
-    const { x, y, radius, label, color, opacity, scale, pulseScale = 1, pulseGlow = 0.4 } = node;
+    const { x, y, radius, label, color, opacity, scale, pulseScale = 1, pulseGlow = 0.4, showPendingTag = true } = node;
 
     if (opacity <= 0) return;
 
@@ -625,10 +629,12 @@ class MiniPreviewRenderer {
     displayLabel = this.truncateLabel(displayLabel, 6);
     ctx.fillText(displayLabel, x, y - 2);
 
-    // "待审核"标签
-    ctx.font = '9px sans-serif';
-    ctx.fillStyle = '#fcd34d';
-    ctx.fillText('待审核', x, y + 12);
+    if (showPendingTag) {
+      // "待审核"标签（仅普通用户创建节点流程显示）
+      ctx.font = '9px sans-serif';
+      ctx.fillStyle = '#fcd34d';
+      ctx.fillText('待审核', x, y + 12);
+    }
 
     this.renderLabelTag(x, y + finalRadius + 14, label, {
       bg: 'rgba(3, 105, 161, 0.28)',

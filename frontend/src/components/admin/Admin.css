@@ -964,8 +964,7 @@
         grid-template-columns: 1fr;
     }
 
-    .admin-delete-domain-before-after-grid,
-    .admin-assoc-before-after-grid {
+    .admin-delete-domain-before-after-grid {
         grid-template-columns: 1fr;
     }
 }
@@ -1349,6 +1348,126 @@
     border-radius: 8px;
 }
 
+.pending-sense-review-section {
+    grid-column: 1 / -1;
+    margin-top: 0.35rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid rgba(100, 116, 139, 0.4);
+}
+
+.pending-sense-review-section h4 {
+    margin: 0;
+    color: #f8fafc;
+    font-size: 0.92rem;
+}
+
+.pending-sense-chip-list {
+    margin-top: 0.6rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.pending-sense-chip {
+    border: 1px solid rgba(100, 116, 139, 0.55);
+    background: rgba(15, 23, 42, 0.45);
+    border-radius: 7px;
+    color: #cbd5e1;
+    cursor: pointer;
+    padding: 0.35rem 0.55rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.pending-sense-chip:hover {
+    border-color: rgba(96, 165, 250, 0.7);
+    background: rgba(30, 41, 59, 0.75);
+}
+
+.pending-sense-chip.active {
+    border-color: rgba(96, 165, 250, 0.95);
+    background: rgba(30, 58, 138, 0.28);
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35) inset;
+}
+
+.pending-sense-chip-title {
+    font-size: 0.8rem;
+    color: #f1f5f9;
+    font-weight: 600;
+}
+
+.pending-sense-chip-count {
+    font-size: 0.72rem;
+    color: #93c5fd;
+}
+
+.pending-sense-detail-panel {
+    margin-top: 0.7rem;
+    border: 1px solid rgba(100, 116, 139, 0.45);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.5);
+    padding: 0.7rem;
+}
+
+.pending-sense-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.pending-sense-detail-header h5 {
+    margin: 0;
+    color: #f8fafc;
+    font-size: 0.88rem;
+}
+
+.pending-sense-detail-header span {
+    color: #93c5fd;
+    font-size: 0.75rem;
+}
+
+.pending-sense-detail-content {
+    margin: 0.55rem 0 0;
+    color: #cbd5e1;
+    font-size: 0.8rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+}
+
+.pending-sense-relation-list {
+    margin-top: 0.62rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.pending-sense-relation-item {
+    border: 1px solid rgba(100, 116, 139, 0.4);
+    border-radius: 7px;
+    background: rgba(15, 23, 42, 0.6);
+    padding: 0.48rem 0.55rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.pending-sense-relation-text {
+    color: #e2e8f0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
+.pending-sense-empty {
+    margin: 0;
+    color: #94a3b8;
+    font-size: 0.78rem;
+}
+
 .detail-group {
     display: flex;
     flex-direction: column;
@@ -1481,6 +1600,11 @@
 .admin-relation-badge.child {
     background: rgba(250, 204, 21, 0.2);
     color: #fcd34d;
+}
+
+.admin-relation-badge.insert {
+    background: rgba(125, 211, 252, 0.2);
+    color: #bae6fd;
 }
 
 .admin-relation-option-cards {
@@ -1622,6 +1746,11 @@
     border-color: rgba(96, 165, 250, 0.65);
 }
 
+.admin-edit-association-item.pending-removal {
+    border-color: rgba(248, 113, 113, 0.55);
+    background: rgba(69, 10, 10, 0.3);
+}
+
 .admin-edit-association-info {
     flex: 1;
     display: flex;
@@ -1634,6 +1763,12 @@
 .admin-edit-association-display {
     color: #e2e8f0;
     font-size: 0.875rem;
+}
+
+.admin-edit-association-display.pending-removal {
+    color: #fca5a5;
+    text-decoration: line-through;
+    text-decoration-thickness: 2px;
 }
 
 .admin-edit-relation-badge {
@@ -1656,6 +1791,125 @@
 .admin-edit-relation-badge.insert {
     background: rgba(99, 102, 241, 0.2);
     color: #a5b4fc;
+}
+
+.admin-edit-relation-badge.pending-removal {
+    background: rgba(248, 113, 113, 0.18);
+    color: #fca5a5;
+}
+
+.admin-edit-association-pending-result {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+}
+
+.admin-edit-association-pending-line {
+    font-size: 0.78rem;
+    color: #fdba74;
+    background: rgba(124, 45, 18, 0.28);
+    border: 1px solid rgba(251, 146, 60, 0.35);
+    border-radius: 6px;
+    padding: 0.22rem 0.42rem;
+}
+
+.admin-assoc-delete-decision-modal {
+    width: min(760px, 95vw);
+}
+
+.admin-assoc-delete-option-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+    margin: 0.65rem 0 0.85rem;
+}
+
+.admin-assoc-delete-option {
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.55);
+    color: #e2e8f0;
+    text-align: left;
+    padding: 0.7rem 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    cursor: pointer;
+}
+
+.admin-assoc-delete-option small {
+    color: #94a3b8;
+}
+
+.admin-assoc-delete-option.active.reconnect {
+    border-color: rgba(74, 222, 128, 0.6);
+    background: rgba(22, 101, 52, 0.25);
+}
+
+.admin-assoc-delete-option.active.disconnect {
+    border-color: rgba(248, 113, 113, 0.6);
+    background: rgba(127, 29, 29, 0.25);
+}
+
+.admin-assoc-delete-impact-list {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 8px;
+    padding: 0.55rem 0.65rem;
+    margin-bottom: 0.8rem;
+    background: rgba(2, 6, 23, 0.42);
+}
+
+.admin-assoc-delete-impact-item {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.82rem;
+    color: #e2e8f0;
+    margin-bottom: 0.35rem;
+}
+
+.admin-assoc-delete-impact-item:last-child {
+    margin-bottom: 0;
+}
+
+.admin-assoc-delete-impact-item .arrow {
+    color: #fcd34d;
+}
+
+.admin-assoc-delete-search-panel {
+    margin-top: 0.75rem;
+    padding-top: 0.7rem;
+    border-top: 1px dashed rgba(148, 163, 184, 0.3);
+}
+
+.admin-assoc-delete-search-panel h4 {
+    margin: 0 0 0.45rem;
+    color: #f8fafc;
+}
+
+.admin-assoc-delete-search-results {
+    margin-top: 0.55rem;
+    max-height: 180px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.admin-assoc-delete-search-item {
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: rgba(15, 23, 42, 0.45);
+    border-radius: 8px;
+    padding: 0.5rem 0.6rem;
+    color: #e2e8f0;
+    cursor: pointer;
+}
+
+.admin-assoc-delete-search-item.selected {
+    border-color: rgba(96, 165, 250, 0.7);
+    background: rgba(30, 64, 175, 0.24);
 }
 
 .admin-edit-association-actions {
@@ -1990,218 +2244,25 @@
     margin-top: 0.9rem;
 }
 
-.admin-assoc-strategy-panel {
-    margin-top: 0.9rem;
-    padding: 0.85rem;
-    border-radius: 8px;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-    background: rgba(15, 23, 42, 0.52);
-}
-
-.admin-assoc-strategy-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.8rem;
-    margin-bottom: 0.65rem;
-}
-
-.admin-assoc-strategy-header h4 {
-    margin: 0;
-    color: #e2e8f0;
-    font-size: 0.9rem;
-}
-
-.admin-assoc-strategy-tip {
-    color: #93c5fd;
-    font-size: 0.76rem;
-}
-
-.admin-assoc-strategy-options {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.6rem;
-}
-
-.admin-assoc-strategy-option {
-    text-align: left;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    padding: 0.6rem 0.7rem;
-    border-radius: 7px;
-    border: 1px solid rgba(100, 116, 139, 0.45);
-    color: #cbd5e1;
-    background: rgba(30, 41, 59, 0.62);
-    cursor: pointer;
-    font-size: 0.84rem;
-    transition: border-color 0.2s ease, background 0.2s ease;
-}
-
-.admin-assoc-strategy-option:hover:not(:disabled) {
-    border-color: rgba(96, 165, 250, 0.65);
-}
-
-.admin-assoc-strategy-option.active {
-    border-color: rgba(59, 130, 246, 0.75);
-    background: rgba(30, 64, 175, 0.32);
-    color: #eff6ff;
-}
-
-.admin-assoc-strategy-option small {
-    color: #94a3b8;
-    font-size: 0.72rem;
-    line-height: 1.4;
-}
-
-.admin-assoc-strategy-option:disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-}
-
-.admin-assoc-mutation-preview {
-    margin-top: 0.85rem;
-    padding: 0.85rem;
-    border-radius: 8px;
-    border: 1px solid rgba(59, 130, 246, 0.28);
-    background: rgba(2, 6, 23, 0.55);
-    max-height: 280px;
-    overflow-y: auto;
-}
-
-.admin-assoc-before-after-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.55rem;
-    margin-bottom: 0.55rem;
-}
-
-.admin-assoc-before-after-block {
-    border: 1px solid rgba(100, 116, 139, 0.35);
-    border-radius: 8px;
-    padding: 0.55rem;
-    background: rgba(15, 23, 42, 0.45);
-}
-
-.admin-assoc-before-after-block h6 {
-    margin: 0 0 0.3rem 0;
-    color: #93c5fd;
-    font-size: 0.78rem;
-}
-
-.admin-assoc-before-after-block.after h6 {
-    color: #86efac;
-}
-
-.admin-assoc-mutation-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.8rem;
-    margin-bottom: 0.7rem;
-}
-
-.admin-assoc-mutation-header h5 {
-    margin: 0;
-    color: #e2e8f0;
-    font-size: 0.88rem;
-}
-
-.strategy-badge {
-    border-radius: 999px;
-    padding: 0.18rem 0.56rem;
-    font-size: 0.72rem;
-    border: 1px solid rgba(148, 163, 184, 0.4);
-    color: #cbd5e1;
-    background: rgba(30, 41, 59, 0.7);
-}
-
-.strategy-badge.reconnect {
-    border-color: rgba(34, 197, 94, 0.45);
-    color: #bbf7d0;
-    background: rgba(20, 83, 45, 0.45);
-}
-
-.strategy-badge.disconnect {
-    border-color: rgba(248, 113, 113, 0.45);
-    color: #fecaca;
-    background: rgba(127, 29, 29, 0.35);
-}
-
-.admin-assoc-empty-change {
-    border-radius: 6px;
-    border: 1px dashed rgba(100, 116, 139, 0.45);
-    color: #cbd5e1;
-    padding: 0.6rem 0.7rem;
-    font-size: 0.8rem;
-    background: rgba(30, 41, 59, 0.36);
-}
-
-.admin-assoc-mutation-block {
-    margin-top: 0.65rem;
-}
-
-.admin-assoc-mutation-block h6 {
-    margin: 0 0 0.36rem 0;
-    font-size: 0.79rem;
-    color: #93c5fd;
-}
-
-.admin-assoc-mutation-line {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.77rem;
-    line-height: 1.45;
-    color: #cbd5e1;
-    padding: 0.2rem 0;
-}
-
-.admin-assoc-mutation-line .endpoint {
-    color: #e2e8f0;
-}
-
-.admin-assoc-mutation-line .arrow {
-    color: #93c5fd;
-    white-space: nowrap;
-}
-
-.admin-assoc-mutation-line.removed .arrow {
-    color: #fda4af;
-}
-
-.admin-assoc-mutation-line.added .arrow,
-.admin-assoc-mutation-line.reconnect .arrow {
-    color: #86efac;
-}
-
-.admin-assoc-mutation-line.warning .arrow {
-    color: #fcd34d;
-}
-
 .admin-edit-association-modal .admin-edit-associations-list,
-.admin-edit-association-modal .admin-assoc-candidate-list,
-.admin-edit-association-modal .admin-assoc-mutation-preview {
+.admin-edit-association-modal .admin-assoc-candidate-list {
     scrollbar-width: thin;
     scrollbar-color: rgba(148, 163, 184, 0.55) rgba(15, 23, 42, 0.35);
 }
 
 .admin-edit-association-modal .admin-edit-associations-list::-webkit-scrollbar,
-.admin-edit-association-modal .admin-assoc-candidate-list::-webkit-scrollbar,
-.admin-edit-association-modal .admin-assoc-mutation-preview::-webkit-scrollbar {
+.admin-edit-association-modal .admin-assoc-candidate-list::-webkit-scrollbar {
     width: 8px;
 }
 
 .admin-edit-association-modal .admin-edit-associations-list::-webkit-scrollbar-track,
-.admin-edit-association-modal .admin-assoc-candidate-list::-webkit-scrollbar-track,
-.admin-edit-association-modal .admin-assoc-mutation-preview::-webkit-scrollbar-track {
+.admin-edit-association-modal .admin-assoc-candidate-list::-webkit-scrollbar-track {
     background: rgba(15, 23, 42, 0.35);
     border-radius: 999px;
 }
 
 .admin-edit-association-modal .admin-edit-associations-list::-webkit-scrollbar-thumb,
-.admin-edit-association-modal .admin-assoc-candidate-list::-webkit-scrollbar-thumb,
-.admin-edit-association-modal .admin-assoc-mutation-preview::-webkit-scrollbar-thumb {
+.admin-edit-association-modal .admin-assoc-candidate-list::-webkit-scrollbar-thumb {
     background: linear-gradient(180deg, rgba(96, 165, 250, 0.6), rgba(59, 130, 246, 0.45));
     border-radius: 999px;
     border: 1px solid rgba(15, 23, 42, 0.45);

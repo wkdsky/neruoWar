@@ -78,6 +78,37 @@ const toCollectionNotificationDoc = (userId, notification = {}) => {
   };
 };
 
+const pushDomainCreateApplyResultNotification = ({
+  applicant,
+  nodeName = '',
+  nodeId = null,
+  decision = 'rejected',
+  processorUser = null,
+  rejectedReason = ''
+} = {}) => {
+  if (!applicant) return null;
+  const safeNodeName = String(nodeName || '').trim() || '知识域';
+  const operatorName = String(processorUser?.username || '').trim() || '管理员';
+  const message = decision === 'accepted'
+    ? `${operatorName} 已通过你创建新知识域「${safeNodeName}」的申请`
+    : (String(rejectedReason || '').trim() || `${operatorName} 已拒绝你创建新知识域「${safeNodeName}」的申请`);
+
+  return pushNotificationToUser(applicant, {
+    type: 'info',
+    title: `新知识域申请结果：${safeNodeName}`,
+    message,
+    read: false,
+    status: decision === 'accepted' ? 'accepted' : 'rejected',
+    nodeId: decision === 'accepted' ? (nodeId || null) : null,
+    nodeName: safeNodeName,
+    inviterId: processorUser?._id || null,
+    inviterUsername: operatorName,
+    inviteeId: applicant?._id || null,
+    inviteeUsername: applicant?.username || '',
+    respondedAt: new Date()
+  });
+};
+
 const isDomainMaster = (node, userId) => {
   const masterId = getIdString(node?.domainMaster);
   const currentUserId = getIdString(userId);
@@ -1410,6 +1441,7 @@ const applyInsertAssociationRewire = async ({ insertPlans = [], newNodeId = '', 
   if (dirtyNodes.length === 0) return;
   for (const targetNode of dirtyNodes) {
     await targetNode.save();
+    await syncDomainTitleProjectionFromNode(targetNode);
   }
 };
 
@@ -1511,6 +1543,7 @@ const syncReciprocalAssociationsForNode = async ({
   await rebuildRelatedDomainNamesForNodes(dirtyNodes);
   for (const targetNode of dirtyNodes) {
     await targetNode.save();
+    await syncDomainTitleProjectionFromNode(targetNode);
   }
 };
 
@@ -3029,7 +3062,7 @@ router.get('/search', authenticateToken, async (req, res) => {
   }
 });
 
-// 创建节点（普通用户需要申请，管理员直接创建）
+// 创建知识域（普通用户需要申请，管理员直接创建）
 router.post('/create', authenticateToken, async (req, res) => {
   try {
     const {
@@ -3049,7 +3082,7 @@ router.post('/create', authenticateToken, async (req, res) => {
     // 检查标题唯一性（只检查已审核通过的节点）
     const existingApprovedNode = await Node.findOne({ name, status: 'approved' });
     if (existingApprovedNode) {
-      return res.status(400).json({ error: '该节点标题已被使用（已有同名的审核通过节点）' });
+      return res.status(400).json({ error: '该知识域标题已被使用（已有同名的审核通过知识域）' });
     }
 
     // 检查用户是否为管理员
@@ -3066,7 +3099,7 @@ router.post('/create', authenticateToken, async (req, res) => {
         // 返回待审核节点信息，让管理员选择
         return res.status(409).json({
           error: 'PENDING_NODES_EXIST',
-          message: '已有用户提交了同名节点的申请，请先处理这些申请',
+          message: '已有用户提交了同名知识域的申请，请先处理这些申请',
           pendingNodes: pendingNodesWithSameName
         });
       }
@@ -3098,79 +3131,89 @@ router.post('/create', authenticateToken, async (req, res) => {
       content: item.content
     }));
 
-    const rawAssociations = Array.isArray(associations) ? associations : [];
-    if (rawAssociations.length === 0) {
-      return res.status(400).json({ error: '每个释义至少需要一个关联关系' });
-    }
+    const approvedNodeCount = await Node.countDocuments({ status: 'approved' });
+    const isColdStartBootstrap = approvedNodeCount === 0;
 
+    const rawAssociations = Array.isArray(associations) ? associations : [];
     const localSenseIdSet = new Set(uniqueSenses.map((item) => item.senseId));
     const normalizedAssociations = normalizeAssociationDraftList(rawAssociations, localSenseIdSet);
 
-    if (normalizedAssociations.length === 0) {
+    if (!isUserAdmin && !isColdStartBootstrap && rawAssociations.length === 0) {
+      return res.status(400).json({ error: '每个释义至少需要一个关联关系' });
+    }
+    if (!isUserAdmin && !isColdStartBootstrap && normalizedAssociations.length === 0) {
       return res.status(400).json({ error: '创建知识域必须至少有一个有效关联关系' });
     }
 
-    // 验证关联关系目标节点和目标释义
-    const targetNodeIds = Array.from(new Set(normalizedAssociations.map((item) => item.targetNode)));
-    const targetNodes = targetNodeIds.length > 0
-      ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
-          .select('_id name synonymSenses description')
-          .lean()
-      : [];
-    await hydrateNodeSensesForNodes(targetNodes);
-    const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
-    if (targetNodes.length !== targetNodeIds.length) {
-      return res.status(400).json({ error: '存在无效的关联目标知识域' });
-    }
+    let targetNodeMap = new Map();
+    let effectiveAssociations = [];
+    let insertPlans = [];
 
-    for (const assoc of normalizedAssociations) {
-      const targetNode = targetNodeMap.get(assoc.targetNode);
-      if (!targetNode) {
+    const shouldValidateAssociationGraph = !isColdStartBootstrap && normalizedAssociations.length > 0;
+    if (shouldValidateAssociationGraph) {
+      // 验证关联关系目标节点和目标释义
+      const targetNodeIds = Array.from(new Set(normalizedAssociations.map((item) => item.targetNode)));
+      const targetNodes = targetNodeIds.length > 0
+        ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
+            .select('_id name synonymSenses description')
+            .lean()
+        : [];
+      await hydrateNodeSensesForNodes(targetNodes);
+      targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+      if (targetNodes.length !== targetNodeIds.length) {
         return res.status(400).json({ error: '存在无效的关联目标知识域' });
       }
-      if (assoc.targetSenseId) {
-        const senseList = normalizeNodeSenseList(targetNode);
-        const matched = senseList.some((sense) => sense.senseId === assoc.targetSenseId);
-        if (!matched) {
-          return res.status(400).json({ error: `目标知识域「${targetNode.name}」不存在指定释义` });
+
+      for (const assoc of normalizedAssociations) {
+        const targetNode = targetNodeMap.get(assoc.targetNode);
+        if (!targetNode) {
+          return res.status(400).json({ error: '存在无效的关联目标知识域' });
         }
+        if (assoc.targetSenseId) {
+          const senseList = normalizeNodeSenseList(targetNode);
+          const matched = senseList.some((sense) => sense.senseId === assoc.targetSenseId);
+          if (!matched) {
+            return res.status(400).json({ error: `目标知识域「${targetNode.name}」不存在指定释义` });
+          }
+        }
+      }
+
+      const relationRuleValidation = validateAssociationRuleSet({
+        currentNodeId: '',
+        associations: normalizedAssociations
+      });
+      if (relationRuleValidation.error) {
+        return res.status(400).json({ error: relationRuleValidation.error });
+      }
+
+      if (!isUserAdmin) {
+        // 普通用户必须保证每个释义至少有一个关联关系
+        const coveredSourceSenseSet = new Set(normalizedAssociations.map((item) => item.sourceSenseId).filter(Boolean));
+        const missingRelationSenses = uniqueSenses.filter((item) => !coveredSourceSenseSet.has(item.senseId));
+        if (missingRelationSenses.length > 0) {
+          return res.status(400).json({
+            error: `每个释义至少需要一个关联关系，未满足：${missingRelationSenses.map((item) => item.title).join('、')}`
+          });
+        }
+      }
+
+      const associationResolved = resolveAssociationsWithInsertPlans(normalizedAssociations);
+      if (associationResolved.error) {
+        return res.status(400).json({ error: associationResolved.error });
+      }
+      effectiveAssociations = associationResolved.effectiveAssociations;
+      insertPlans = associationResolved.insertPlans;
+
+      const effectiveRelationRuleValidation = validateAssociationRuleSet({
+        currentNodeId: '',
+        associations: effectiveAssociations
+      });
+      if (effectiveRelationRuleValidation.error) {
+        return res.status(400).json({ error: effectiveRelationRuleValidation.error });
       }
     }
 
-    const relationRuleValidation = validateAssociationRuleSet({
-      currentNodeId: '',
-      associations: normalizedAssociations
-    });
-    if (relationRuleValidation.error) {
-      return res.status(400).json({ error: relationRuleValidation.error });
-    }
-
-    // 验证：每个释义至少有一个关联关系
-    const coveredSourceSenseSet = new Set(normalizedAssociations.map((item) => item.sourceSenseId).filter(Boolean));
-    const missingRelationSenses = uniqueSenses.filter((item) => !coveredSourceSenseSet.has(item.senseId));
-    if (missingRelationSenses.length > 0) {
-      return res.status(400).json({
-        error: `每个释义至少需要一个关联关系，未满足：${missingRelationSenses.map((item) => item.title).join('、')}`
-      });
-    }
-
-    const {
-      error: associationResolveError,
-      effectiveAssociations,
-      insertPlans
-    } = resolveAssociationsWithInsertPlans(normalizedAssociations);
-    if (associationResolveError) {
-      return res.status(400).json({ error: associationResolveError });
-    }
-    const effectiveRelationRuleValidation = validateAssociationRuleSet({
-      currentNodeId: '',
-      associations: effectiveAssociations
-    });
-    if (effectiveRelationRuleValidation.error) {
-      return res.status(400).json({ error: effectiveRelationRuleValidation.error });
-    }
-
-    const associationsForStorage = isUserAdmin ? effectiveAssociations : normalizedAssociations;
+    const associationsForStorage = isColdStartBootstrap ? [] : (isUserAdmin ? effectiveAssociations : normalizedAssociations);
     const relationAssociationsForSummary = associationsForStorage.filter((association) => (
       association.relationType === 'contains' || association.relationType === 'extends'
     ));
@@ -3206,7 +3249,7 @@ router.post('/create', authenticateToken, async (req, res) => {
       relatedParentDomains,
       relatedChildDomains,
       status: isUserAdmin ? 'approved' : 'pending',
-      contentScore: 1 // 新建节点默认内容分数为1
+      contentScore: 1 // 新建知识域默认内容分数为1
     });
 
     await node.save();
@@ -3252,7 +3295,7 @@ router.post('/create', authenticateToken, async (req, res) => {
 
     res.status(201).json(node);
   } catch (error) {
-    console.error('创建节点错误:', error);
+    console.error('创建知识域错误:', error);
     res.status(500).json({ error: '服务器错误' });
   }
 });
@@ -3262,8 +3305,21 @@ router.get('/pending', authenticateToken, isAdmin, async (req, res) => {
   try {
     const nodes = await Node.find({ status: 'pending' })
       .populate('owner', 'username profession')
-      .populate('associations.targetNode', 'name description');
+      .populate('associations.targetNode', 'name description synonymSenses');
     await hydrateNodeSensesForNodes(nodes);
+    const targetNodes = [];
+    nodes.forEach((node) => {
+      const assocList = Array.isArray(node?.associations) ? node.associations : [];
+      assocList.forEach((association) => {
+        const targetNode = association?.targetNode;
+        if (targetNode && typeof targetNode === 'object' && targetNode._id) {
+          targetNodes.push(targetNode);
+        }
+      });
+    });
+    if (targetNodes.length > 0) {
+      await hydrateNodeSensesForNodes(targetNodes);
+    }
     res.json(nodes);
   } catch (error) {
     console.error('获取待审批节点错误:', error);
@@ -3271,81 +3327,93 @@ router.get('/pending', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
-// 审批节点
+// 审批知识域申请
 router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { nodeId } = req.body;
     const node = await Node.findById(nodeId).populate('associations.targetNode', 'name');
+    const processorUser = await User.findById(req.user.userId).select('_id username');
 
     if (!node) {
-      return res.status(404).json({ error: '节点不存在' });
+      return res.status(404).json({ error: '知识域不存在' });
     }
 
     // 检查是否已有同名的已审核节点
     const existingApproved = await Node.findOne({ name: node.name, status: 'approved' });
     if (existingApproved) {
-      return res.status(400).json({ error: '已存在同名的审核通过节点，无法批准此申请' });
+      return res.status(400).json({ error: '已存在同名的审核通过知识域，无法批准此申请' });
     }
+
+    const approvedNodeCount = await Node.countDocuments({
+      status: 'approved',
+      _id: { $ne: node._id }
+    });
+    const isColdStartBootstrap = approvedNodeCount === 0;
 
     await hydrateNodeSensesForNodes([node]);
     const localSenseIdSet = new Set(normalizeNodeSenseList(node).map((item) => item.senseId));
     const normalizedAssociations = normalizeAssociationDraftList(node.associations, localSenseIdSet);
-    if (normalizedAssociations.length === 0) {
+    if (!isColdStartBootstrap && normalizedAssociations.length === 0) {
       return res.status(400).json({ error: '该节点缺少有效关联关系，无法审批通过' });
     }
 
-    const targetNodeIds = Array.from(new Set(normalizedAssociations.map((item) => item.targetNode)));
-    const targetNodes = targetNodeIds.length > 0
-      ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
-          .select('_id name synonymSenses description')
-          .lean()
-      : [];
-    await hydrateNodeSensesForNodes(targetNodes);
-    const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
-    if (targetNodes.length !== targetNodeIds.length) {
-      return res.status(400).json({ error: '存在无效的关联目标知识域，无法审批通过' });
-    }
-    for (const assoc of normalizedAssociations) {
-      const targetNode = targetNodeMap.get(assoc.targetNode);
-      if (!targetNode) {
+    let targetNodeMap = new Map();
+    let effectiveAssociations = [];
+    let insertPlans = [];
+
+    if (!isColdStartBootstrap) {
+      const targetNodeIds = Array.from(new Set(normalizedAssociations.map((item) => item.targetNode)));
+      const targetNodes = targetNodeIds.length > 0
+        ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
+            .select('_id name synonymSenses description')
+            .lean()
+        : [];
+      await hydrateNodeSensesForNodes(targetNodes);
+      targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+      if (targetNodes.length !== targetNodeIds.length) {
         return res.status(400).json({ error: '存在无效的关联目标知识域，无法审批通过' });
       }
-      const matched = normalizeNodeSenseList(targetNode).some((sense) => sense.senseId === assoc.targetSenseId);
-      if (!matched) {
-        return res.status(400).json({ error: `目标知识域「${targetNode.name}」不存在指定释义` });
+      for (const assoc of normalizedAssociations) {
+        const targetNode = targetNodeMap.get(assoc.targetNode);
+        if (!targetNode) {
+          return res.status(400).json({ error: '存在无效的关联目标知识域，无法审批通过' });
+        }
+        const matched = normalizeNodeSenseList(targetNode).some((sense) => sense.senseId === assoc.targetSenseId);
+        if (!matched) {
+          return res.status(400).json({ error: `目标知识域「${targetNode.name}」不存在指定释义` });
+        }
       }
-    }
 
-    const relationRuleValidation = validateAssociationRuleSet({
-      currentNodeId: node._id,
-      associations: normalizedAssociations
-    });
-    if (relationRuleValidation.error) {
-      return res.status(400).json({ error: relationRuleValidation.error });
-    }
-
-    const coveredSourceSenseSet = new Set(normalizedAssociations.map((item) => item.sourceSenseId).filter(Boolean));
-    const missingRelationSenses = normalizeNodeSenseList(node).filter((item) => !coveredSourceSenseSet.has(item.senseId));
-    if (missingRelationSenses.length > 0) {
-      return res.status(400).json({
-        error: `每个释义至少需要一个关联关系，未满足：${missingRelationSenses.map((item) => item.title).join('、')}`
+      const relationRuleValidation = validateAssociationRuleSet({
+        currentNodeId: node._id,
+        associations: normalizedAssociations
       });
-    }
+      if (relationRuleValidation.error) {
+        return res.status(400).json({ error: relationRuleValidation.error });
+      }
 
-    const {
-      error: associationResolveError,
-      effectiveAssociations,
-      insertPlans
-    } = resolveAssociationsWithInsertPlans(normalizedAssociations);
-    if (associationResolveError) {
-      return res.status(400).json({ error: associationResolveError });
-    }
-    const effectiveRelationRuleValidation = validateAssociationRuleSet({
-      currentNodeId: node._id,
-      associations: effectiveAssociations
-    });
-    if (effectiveRelationRuleValidation.error) {
-      return res.status(400).json({ error: effectiveRelationRuleValidation.error });
+      const coveredSourceSenseSet = new Set(normalizedAssociations.map((item) => item.sourceSenseId).filter(Boolean));
+      const missingRelationSenses = normalizeNodeSenseList(node).filter((item) => !coveredSourceSenseSet.has(item.senseId));
+      if (missingRelationSenses.length > 0) {
+        return res.status(400).json({
+          error: `每个释义至少需要一个关联关系，未满足：${missingRelationSenses.map((item) => item.title).join('、')}`
+        });
+      }
+
+      const associationResolved = resolveAssociationsWithInsertPlans(normalizedAssociations);
+      if (associationResolved.error) {
+        return res.status(400).json({ error: associationResolved.error });
+      }
+      effectiveAssociations = associationResolved.effectiveAssociations;
+      insertPlans = associationResolved.insertPlans;
+
+      const effectiveRelationRuleValidation = validateAssociationRuleSet({
+        currentNodeId: node._id,
+        associations: effectiveAssociations
+      });
+      if (effectiveRelationRuleValidation.error) {
+        return res.status(400).json({ error: effectiveRelationRuleValidation.error });
+      }
     }
 
     let relatedParentDomains = [];
@@ -3371,15 +3439,12 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     if (owner?.role === 'admin') {
       node.domainMaster = null;
       node.allianceId = null;
-    } else if (node.domainMaster) {
-      const currentMaster = await User.findById(node.domainMaster).select('role allianceId');
-      if (!currentMaster || currentMaster.role === 'admin') {
-        node.domainMaster = null;
-        node.allianceId = null;
-      } else {
-        node.allianceId = currentMaster.allianceId || null;
-      }
+    } else if (owner) {
+      // 普通用户的创建申请通过后，域主固定为该申请用户本人
+      node.domainMaster = owner._id;
+      node.allianceId = owner.allianceId || null;
     } else {
+      node.domainMaster = null;
       node.allianceId = null;
     }
     // 设置默认内容分数为1
@@ -3410,11 +3475,29 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     }).populate('owner', 'username');
 
     const rejectedInfo = [];
+    const reviewResultNotificationDocs = [];
     for (const rejectedNode of rejectedNodes) {
       rejectedInfo.push({
         id: rejectedNode._id,
         owner: rejectedNode.owner?.username || '未知用户'
       });
+      const rejectedOwnerId = getIdString(rejectedNode.owner?._id || rejectedNode.owner);
+      if (isValidObjectId(rejectedOwnerId)) {
+        const rejectedOwner = await User.findById(rejectedOwnerId).select('_id username notifications');
+        if (rejectedOwner) {
+          const rejectedNotification = pushDomainCreateApplyResultNotification({
+            applicant: rejectedOwner,
+            nodeName: rejectedNode.name,
+            decision: 'rejected',
+            processorUser,
+            rejectedReason: `你创建新知识域「${rejectedNode.name}」的申请未通过：同名申请已有其他申请通过`
+          });
+          await rejectedOwner.save();
+          if (rejectedNotification) {
+            reviewResultNotificationDocs.push(toCollectionNotificationDoc(rejectedOwner._id, rejectedNotification));
+          }
+        }
+      }
       // 删除被拒绝的节点
       await Node.findByIdAndDelete(rejectedNode._id);
       await NodeSense.deleteMany({ nodeId: rejectedNode._id });
@@ -3442,6 +3525,24 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
       $push: { ownedNodes: node._id }
     });
 
+    const approvedOwner = await User.findById(node.owner).select('_id username notifications');
+    if (approvedOwner) {
+      const acceptedNotification = pushDomainCreateApplyResultNotification({
+        applicant: approvedOwner,
+        nodeName: node.name,
+        nodeId: node._id,
+        decision: 'accepted',
+        processorUser
+      });
+      await approvedOwner.save();
+      if (acceptedNotification) {
+        reviewResultNotificationDocs.push(toCollectionNotificationDoc(approvedOwner._id, acceptedNotification));
+      }
+    }
+    if (reviewResultNotificationDocs.length > 0) {
+      await writeNotificationsToCollection(reviewResultNotificationDocs);
+    }
+
     res.json({
       ...node.toObject(),
       autoRejectedCount: rejectedInfo.length,
@@ -3453,14 +3554,15 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
-// 拒绝节点（直接删除）
+// 拒绝知识域申请（直接删除）
 router.post('/reject', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { nodeId } = req.body;
+    const processorUser = await User.findById(req.user.userId).select('_id username');
     
     const node = await Node.findByIdAndDelete(nodeId);
     if (!node) {
-      return res.status(404).json({ error: '节点不存在' });
+      return res.status(404).json({ error: '知识域不存在' });
     }
     await NodeSense.deleteMany({ nodeId: node._id });
     await deleteNodeTitleStatesByNodeIds([node._id]);
@@ -3471,9 +3573,25 @@ router.post('/reject', authenticateToken, isAdmin, async (req, res) => {
       $pull: { ownedNodes: nodeId }
     });
 
+    const owner = await User.findById(node.owner).select('_id username notifications');
+    if (owner) {
+      const rejectedNotification = pushDomainCreateApplyResultNotification({
+        applicant: owner,
+        nodeName: node.name,
+        decision: 'rejected',
+        processorUser
+      });
+      await owner.save();
+      if (rejectedNotification) {
+        await writeNotificationsToCollection([
+          toCollectionNotificationDoc(owner._id, rejectedNotification)
+        ]);
+      }
+    }
+
     res.json({
       success: true,
-      message: '节点申请已被拒绝并删除',
+      message: '知识域申请已被拒绝并删除',
       deletedNode: node.name
     });
   } catch (error) {

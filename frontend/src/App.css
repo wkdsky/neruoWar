@@ -3063,13 +3063,21 @@ body {
     margin-right: 0.75rem;
 }
 
-.location-search-input {
+.location-search-input-wrap {
+    position: relative;
     flex: 1;
+    display: flex;
+    align-items: center;
+}
+
+.location-search-input {
+    width: 100%;
     background: transparent;
     border: none;
     color: white;
     font-size: 1rem;
     outline: none;
+    padding-right: 1.8rem;
 }
 
 .location-search-input::placeholder {
@@ -3077,6 +3085,10 @@ body {
 }
 
 .location-search-clear {
+    position: absolute;
+    right: 0.2rem;
+    top: 50%;
+    transform: translateY(-50%);
     background: none;
     border: none;
     color: #9ca3af;
@@ -3090,6 +3102,30 @@ body {
 
 .location-search-clear:hover {
     color: #e9d5ff;
+}
+
+.location-search-submit {
+    margin-left: 0.7rem;
+    padding: 0.45rem 0.8rem;
+    border-radius: 8px;
+    border: 1px solid rgba(168, 85, 247, 0.45);
+    background: rgba(124, 58, 237, 0.22);
+    color: #e9d5ff;
+    font-size: 0.86rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.location-search-submit:hover:not(:disabled) {
+    background: rgba(124, 58, 237, 0.34);
+    border-color: rgba(168, 85, 247, 0.7);
+}
+
+.location-search-submit:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .location-search-results {
