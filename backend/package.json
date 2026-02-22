@@ -7,7 +7,6 @@
         "start": "node server.js",
         "dev": "nodemon server.js",
         "create-admin": "node scripts/createAdmin.js",
-        "reset-all-data-bootstrap-admin": "node scripts/resetAllDataAndBootstrapAdmin.js",
         "init-user-domain-preferences": "node scripts/initUserDomainPreferences.js",
         "migrate-all-data": "node scripts/migrateAllDataAndVerify.js --mode=migrate-verify --strict=true",
         "rebuild-all-migrated-data": "node scripts/migrateAllDataAndVerify.js --mode=migrate-verify --reset-target=true --strict=true",

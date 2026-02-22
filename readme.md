@@ -45,3 +45,24 @@ pm2 start npm --name frontend -- start
 用户收到分发的知识点后，存入其个人账户中。
 
 标题+释义选择浮层
+
+
+------------------------------
+脚本归档说明（2026-02-22）
+------------------------------
+
+本项目 backend/scripts 下的脚本属于人工执行的运维/迁移工具，不是后端服务运行时依赖。
+
+已归档删除：
+1) backend/scripts/resetAllDataAndBootstrapAdmin.js
+   - 作用：清空数据库并重建管理员
+   - 处理：已删除，同时移除了 backend/package.json 中的 reset-all-data-bootstrap-admin 命令
+2) backend/scripts/migrateProfession.js
+   - 作用：历史职业字段一次性迁移
+   - 处理：已删除
+3) backend/scripts/removeNameUniqueIndex.js
+   - 作用：历史移除 Node.name 唯一索引
+   - 处理：已删除
+
+当前保留脚本用途见：
+backend/scripts/README.md
