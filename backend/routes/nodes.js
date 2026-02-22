@@ -5,8 +5,21 @@ const Node = require('../models/Node');
 const NodeSense = require('../models/NodeSense');
 const User = require('../models/User');
 const DistributionParticipant = require('../models/DistributionParticipant');
+const DistributionResult = require('../models/DistributionResult');
 const EntropyAlliance = require('../models/EntropyAlliance');
 const KnowledgeDistributionService = require('../services/KnowledgeDistributionService');
+const schedulerService = require('../services/schedulerService');
+const {
+  normalizeUnits: normalizeSiegeParticipantUnits,
+  upsertParticipant: upsertSiegeParticipant,
+  migrateEmbeddedAttackers: migrateEmbeddedSiegeAttackers,
+  settleArrivedParticipants: settleSiegeArrivedParticipants,
+  markParticipantsRetreated: markSiegeParticipantsRetreated,
+  getGatePreview: getSiegeGatePreview,
+  listParticipants: listSiegeParticipants,
+  findActiveParticipant: findActiveSiegeParticipant,
+  findUserActiveParticipants
+} = require('../services/siegeParticipantStore');
 const { fetchArmyUnitTypes } = require('../services/armyUnitTypeService');
 const { upsertNotificationsToCollection, writeNotificationsToCollection } = require('../services/notificationStore');
 const {
@@ -27,8 +40,7 @@ const {
   resolveNodeSiegeState,
   upsertNodeDefenseLayout,
   upsertNodeSiegeState,
-  deleteNodeTitleStatesByNodeIds,
-  listSiegeStatesByAttackerUserId
+  deleteNodeTitleStatesByNodeIds
 } = require('../services/domainTitleStateStore');
 const {
   isDomainTitleProjectionReadEnabled,
@@ -343,6 +355,71 @@ const DISTRIBUTION_LOCK_PARTICIPANT_PREVIEW_LIMIT = 50;
 const DISTRIBUTION_JOIN_ORDER_SCAN_LIMIT = 5000;
 const DISTRIBUTION_LEGACY_PARTICIPANT_MIRROR_LIMIT = 2000;
 const DISTRIBUTION_POOL_USER_LIST_LIMIT = 200;
+const DISTRIBUTION_RESULT_PAGE_SIZE_MAX = 200;
+
+const parseDistributionResultCursor = (value = '') => {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw || !mongoose.Types.ObjectId.isValid(raw)) return null;
+  return new mongoose.Types.ObjectId(raw);
+};
+
+const listDistributionResultsByNode = async ({
+  nodeId,
+  executeAt = null,
+  limit = 50,
+  cursor = null
+} = {}) => {
+  if (!isValidObjectId(nodeId)) {
+    return { rows: [], nextCursor: null };
+  }
+  const safeLimit = Math.max(1, Math.min(DISTRIBUTION_RESULT_PAGE_SIZE_MAX, parseInt(limit, 10) || 50));
+  const query = {
+    nodeId: new mongoose.Types.ObjectId(String(nodeId))
+  };
+  if (executeAt instanceof Date) {
+    query.executeAt = executeAt;
+  }
+  if (cursor instanceof mongoose.Types.ObjectId) {
+    query._id = { $lt: cursor };
+  }
+
+  const rows = await DistributionResult.find(query)
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(safeLimit)
+    .select('nodeId executeAt userId amount createdAt')
+    .lean();
+  const nextCursor = rows.length >= safeLimit
+    ? getIdString(rows[rows.length - 1]?._id)
+    : null;
+  return { rows, nextCursor };
+};
+
+const listDistributionResultsByUser = async ({
+  userId,
+  limit = 50,
+  cursor = null
+} = {}) => {
+  if (!isValidObjectId(userId)) {
+    return { rows: [], nextCursor: null };
+  }
+  const safeLimit = Math.max(1, Math.min(DISTRIBUTION_RESULT_PAGE_SIZE_MAX, parseInt(limit, 10) || 50));
+  const query = {
+    userId: new mongoose.Types.ObjectId(String(userId))
+  };
+  if (cursor instanceof mongoose.Types.ObjectId) {
+    query._id = { $lt: cursor };
+  }
+  const rows = await DistributionResult.find(query)
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(safeLimit)
+    .select('nodeId executeAt userId amount createdAt')
+    .lean();
+  const nextCursor = rows.length >= safeLimit
+    ? getIdString(rows[rows.length - 1]?._id)
+    : null;
+  return { rows, nextCursor };
+};
 
 const buildManualJoinOrderMapFromLegacyLock = (lock = {}, limit = DISTRIBUTION_JOIN_ORDER_SCAN_LIMIT) => {
   const map = new Map();
@@ -1559,6 +1636,10 @@ const CITY_GATE_LABELS = {
   qi: '启门'
 };
 const SIEGE_SUPPORT_UNIT_DURATION_SECONDS = 60;
+const SIEGE_PARTICIPANT_PREVIEW_LIMIT = Math.max(1, parseInt(process.env.SIEGE_PARTICIPANT_PREVIEW_LIMIT, 10) || 50);
+const SIEGE_PARTICIPANT_RESULT_LIMIT_MAX = Math.max(10, parseInt(process.env.SIEGE_PARTICIPANT_RESULT_LIMIT_MAX, 10) || 200);
+const SIEGE_MIGRATE_EMBEDDED_ATTACKERS_ON_READ = process.env.SIEGE_MIGRATE_EMBEDDED_ATTACKERS_ON_READ !== 'false';
+const READ_LEGACY_RESULTUSERREWARDS = process.env.READ_LEGACY_RESULTUSERREWARDS !== 'false';
 
 const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -2076,6 +2157,7 @@ const getNodeGateState = (node, gateKey) => {
     attackerAllianceId: gate.attackerAllianceId || null,
     initiatorUserId: gate.initiatorUserId || null,
     initiatorUsername: gate.initiatorUsername || '',
+    participantCount: Math.max(attackers.length, Math.floor(Number(gate.participantCount) || 0)),
     attackers
   };
 };
@@ -2088,6 +2170,7 @@ const createEmptySiegeGateState = () => ({
   attackerAllianceId: null,
   initiatorUserId: null,
   initiatorUsername: '',
+  participantCount: 0,
   attackers: []
 });
 
@@ -2117,61 +2200,76 @@ const getMutableNodeSiegeState = (node) => {
   return node.__workingCitySiegeState;
 };
 
-const settleNodeSiegeState = (node, nowDate = new Date()) => {
+const isSameGatePreviewState = (before = {}, after = {}) => {
+  if (!!before?.active !== !!after?.active) return false;
+  if (Math.max(0, Number(before?.participantCount) || 0) !== Math.max(0, Number(after?.participantCount) || 0)) return false;
+  if (getIdString(before?.attackerAllianceId) !== getIdString(after?.attackerAllianceId)) return false;
+  if (getIdString(before?.initiatorUserId) !== getIdString(after?.initiatorUserId)) return false;
+  if ((before?.initiatorUsername || '') !== (after?.initiatorUsername || '')) return false;
+  const beforeAttackers = Array.isArray(before?.attackers) ? before.attackers : [];
+  const afterAttackers = Array.isArray(after?.attackers) ? after.attackers : [];
+  if (beforeAttackers.length !== afterAttackers.length) return false;
+  for (let i = 0; i < beforeAttackers.length; i += 1) {
+    const prev = beforeAttackers[i] || {};
+    const next = afterAttackers[i] || {};
+    if (getIdString(prev?.userId) !== getIdString(next?.userId)) return false;
+    if ((prev?.status || '') !== (next?.status || '')) return false;
+    if ((prev?.username || '') !== (next?.username || '')) return false;
+  }
+  return true;
+};
+
+const settleNodeSiegeState = async (node, nowDate = new Date()) => {
   const siegeState = getMutableNodeSiegeState(node);
   let changed = false;
-  const nowMs = nowDate.getTime();
 
   for (const gateKey of CITY_GATE_KEYS) {
     const gate = siegeState?.[gateKey];
     if (!gate || typeof gate !== 'object') continue;
-    const attackers = Array.isArray(gate.attackers) ? gate.attackers : [];
-    for (const attacker of attackers) {
-      if (!attacker || typeof attacker !== 'object') continue;
-      if (attacker.status !== 'moving') continue;
-      const arriveAtMs = new Date(attacker.arriveAt || 0).getTime();
-      if (!Number.isFinite(arriveAtMs) || arriveAtMs <= 0) continue;
-      if (arriveAtMs > nowMs) continue;
-      attacker.status = 'sieging';
-      attacker.joinedAt = attacker.joinedAt || nowDate;
-      attacker.updatedAt = nowDate;
+    const legacyAttackers = Array.isArray(gate.attackers) ? gate.attackers : [];
+    if (SIEGE_MIGRATE_EMBEDDED_ATTACKERS_ON_READ && legacyAttackers.length > 0) {
+      await migrateEmbeddedSiegeAttackers({
+        nodeId: node?._id,
+        gateKey,
+        attackers: legacyAttackers
+      });
+    }
+
+    await settleSiegeArrivedParticipants({
+      nodeId: node?._id,
+      gateKey,
+      now: nowDate
+    });
+
+    const preview = await getSiegeGatePreview({
+      nodeId: node?._id,
+      gateKey,
+      limit: SIEGE_PARTICIPANT_PREVIEW_LIMIT
+    });
+    const initiator = (preview.attackers || []).find((item) => !!item?.isInitiator) || null;
+    const nextGate = {
+      ...(gate || createEmptySiegeGateState()),
+      active: !!preview.active,
+      startedAt: preview.active ? (gate.startedAt || nowDate) : null,
+      updatedAt: nowDate,
+      supportNotifiedAt: gate.supportNotifiedAt || null,
+      attackerAllianceId: preview.active ? (preview.firstActiveAllianceId || gate.attackerAllianceId || null) : null,
+      initiatorUserId: preview.active ? (initiator?.userId || gate.initiatorUserId || null) : null,
+      initiatorUsername: preview.active ? (initiator?.username || gate.initiatorUsername || '') : '',
+      participantCount: Math.max(0, Number(preview.participantCount) || 0),
+      attackers: Array.isArray(preview.attackers) ? preview.attackers.slice(0, SIEGE_PARTICIPANT_PREVIEW_LIMIT) : []
+    };
+    if (!preview.active) {
+      nextGate.attackerAllianceId = null;
+      nextGate.initiatorUserId = null;
+      nextGate.initiatorUsername = '';
+      nextGate.participantCount = 0;
+      nextGate.attackers = [];
+    }
+    if (!isSameGatePreviewState(gate, nextGate)) {
       changed = true;
     }
-
-    const hasActive = attackers.some((item) => item?.status === 'moving' || item?.status === 'sieging');
-    if (!!gate.active !== hasActive) {
-      gate.active = hasActive;
-      changed = true;
-    }
-
-    if (!hasActive) {
-      if (gate.attackerAllianceId) {
-        gate.attackerAllianceId = null;
-        changed = true;
-      }
-      continue;
-    }
-
-    if (!gate.startedAt) {
-      gate.startedAt = nowDate;
-      changed = true;
-    }
-
-    const activeFirst = attackers.find((item) => item?.status === 'moving' || item?.status === 'sieging') || null;
-    const activeAllianceId = activeFirst?.allianceId || null;
-    if (getIdString(gate.attackerAllianceId) !== getIdString(activeAllianceId)) {
-      gate.attackerAllianceId = activeAllianceId;
-      changed = true;
-    }
-  }
-
-  if (changed) {
-    for (const gateKey of CITY_GATE_KEYS) {
-      const gate = siegeState?.[gateKey];
-      if (gate && typeof gate === 'object') {
-        gate.updatedAt = nowDate;
-      }
-    }
+    siegeState[gateKey] = nextGate;
   }
   return {
     changed,
@@ -2202,7 +2300,11 @@ const buildSiegeGateSummary = (node, gateKey, unitTypeMap = new Map()) => {
   );
   const aggregateUnits = mapToUnitCountEntries(aggregateMap, unitTypeMap);
   const totalCount = aggregateUnits.reduce((sum, item) => sum + item.count, 0);
-  const active = !!gateState.active && activeAttackers.length > 0;
+  const participantCount = Math.max(
+    activeAttackers.length,
+    Math.max(0, Math.floor(Number(gateState.participantCount) || 0))
+  );
+  const active = !!gateState.active && participantCount > 0;
   return {
     gateKey,
     gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
@@ -2214,6 +2316,8 @@ const buildSiegeGateSummary = (node, gateKey, unitTypeMap = new Map()) => {
     attackerAllianceId: getIdString(gateState.attackerAllianceId),
     initiatorUserId: getIdString(gateState.initiatorUserId),
     initiatorUsername: gateState.initiatorUsername || '',
+    participantCount,
+    attackersTruncated: participantCount > attackers.length,
     attackers,
     activeAttackers,
     aggregateUnits,
@@ -2246,6 +2350,10 @@ const maskSiegeGateStateForDomainAdmin = (gateState = {}) => {
   const activeAttackersSource = Array.isArray(gateState?.activeAttackers)
     ? gateState.activeAttackers
     : (Array.isArray(gateState?.attackers) ? gateState.attackers : []).filter((item) => isSiegeAttackerActive(item));
+  const participantCount = Math.max(
+    activeAttackersSource.length,
+    Math.max(0, Math.floor(Number(gateState?.participantCount) || 0))
+  );
   const activeAttackers = activeAttackersSource
     .map((item) => pickDomainAdminAttackerView(item))
     .filter((item) => !!item.userId);
@@ -2260,6 +2368,8 @@ const maskSiegeGateStateForDomainAdmin = (gateState = {}) => {
     attackerAllianceId: getIdString(gateState?.attackerAllianceId),
     initiatorUserId: getIdString(gateState?.initiatorUserId),
     initiatorUsername: typeof gateState?.initiatorUsername === 'string' ? gateState.initiatorUsername : '',
+    participantCount,
+    attackersTruncated: participantCount > activeAttackers.length,
     attackers: activeAttackers,
     activeAttackers,
     aggregateUnits: [],
@@ -2933,6 +3043,10 @@ const serializeDistributionLock = (locked = null, options = {}) => {
     userId: getIdString(item?.userId),
     amount: round2(Math.max(0, Number(item?.amount) || 0))
   })).filter((item) => isValidObjectId(item.userId));
+  const rewardParticipantCount = Math.max(
+    resultUserRewards.length,
+    Math.max(0, Math.floor(Number(locked?.rewardParticipantCount) || 0))
+  );
   return {
     executeAt: locked.executeAt || null,
     entryCloseAt: entryCloseAt || null,
@@ -2952,6 +3066,9 @@ const serializeDistributionLock = (locked = null, options = {}) => {
     participantTotal,
     participantsTruncated: participantTotal > participants.length,
     participants,
+    distributedTotal: round2(Math.max(0, Number(locked?.distributedTotal) || 0)),
+    rewardParticipantCount,
+    resultUserRewardsTruncated: rewardParticipantCount > resultUserRewards.length,
     resultUserRewards,
     enemyAllianceIds: (Array.isArray(locked.enemyAllianceIds) ? locked.enemyAllianceIds : []).map((item) => getIdString(item)).filter(Boolean),
     ruleSnapshot: serializeDistributionRule(locked.ruleSnapshot || {})
@@ -6410,7 +6527,7 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
       includeSiegeState: true
     });
 
-    const settled = settleNodeSiegeState(node, new Date());
+    const settled = await settleNodeSiegeState(node, new Date());
     if (settled.changed) {
       await upsertNodeSiegeState({
         nodeId: node._id,
@@ -6427,9 +6544,42 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
       unitTypes,
       intelSnapshot
     });
+    const participantsLimit = Math.max(
+      1,
+      Math.min(
+        SIEGE_PARTICIPANT_RESULT_LIMIT_MAX,
+        parseInt(req.query?.participantsLimit, 10) || SIEGE_PARTICIPANT_PREVIEW_LIMIT
+      )
+    );
+    const participantsCursor = typeof req.query?.participantsCursor === 'string'
+      ? req.query.participantsCursor.trim()
+      : '';
+    const participantsGateRaw = typeof req.query?.participantsGate === 'string'
+      ? req.query.participantsGate.trim()
+      : '';
+    const participantsGate = CITY_GATE_KEYS.includes(participantsGateRaw)
+      ? participantsGateRaw
+      : (CITY_GATE_KEYS.includes(payload?.compareGate) ? payload.compareGate : '');
+    const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
+    const participantsPage = participantsGate
+      ? await listSiegeParticipants({
+        nodeId: node._id,
+        gateKey: participantsGate,
+        statuses: ['moving', 'sieging', 'retreated'],
+        limit: participantsLimit,
+        cursor: participantsCursor
+      })
+      : { rows: [], nextCursor: null };
 
     return res.json({
       success: true,
+      participantsPage: {
+        gateKey: participantsGate,
+        limit: participantsLimit,
+        cursor: participantsCursor || null,
+        nextCursor: participantsPage.nextCursor || null,
+        rows: (participantsPage.rows || []).map((item) => serializeSiegeAttacker(item, unitTypeMap, Date.now()))
+      },
       ...payload
     });
   } catch (error) {
@@ -6475,7 +6625,7 @@ router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
       includeSiegeState: true
     });
 
-    const settled = settleNodeSiegeState(node, new Date());
+    const settled = await settleNodeSiegeState(node, new Date());
     if (settled.changed) {
       await upsertNodeSiegeState({
         nodeId: node._id,
@@ -6515,15 +6665,13 @@ router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
     const fromNodeId = user.lastArrivedFromNodeId || null;
     const fromNodeName = (user.lastArrivedFromNodeName || '').trim();
     const workingSiegeState = getMutableNodeSiegeState(node);
-
-    const nextAttackers = Array.isArray(workingSiegeState?.[gateKey]?.attackers)
-      ? workingSiegeState[gateKey].attackers.filter((item) => getIdString(item?.userId) !== requestUserId)
-      : [];
-    nextAttackers.push({
+    await upsertSiegeParticipant({
+      nodeId: node._id,
+      gateKey,
       userId: user._id,
       username: user.username || '',
       allianceId: user.allianceId || null,
-      units: normalizedOwnUnits,
+      units: normalizeSiegeParticipantUnits(normalizedOwnUnits),
       fromNodeId,
       fromNodeName,
       autoRetreatPercent: 40,
@@ -6535,16 +6683,22 @@ router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
       joinedAt: now,
       updatedAt: now
     });
+    const gatePreview = await getSiegeGatePreview({
+      nodeId: node._id,
+      gateKey,
+      limit: SIEGE_PARTICIPANT_PREVIEW_LIMIT
+    });
 
     workingSiegeState[gateKey] = {
       ...(workingSiegeState?.[gateKey] || {}),
-      active: true,
+      active: !!gatePreview.active,
       startedAt: workingSiegeState?.[gateKey]?.startedAt || now,
       updatedAt: now,
-      attackerAllianceId: user.allianceId || null,
+      attackerAllianceId: gatePreview.firstActiveAllianceId || user.allianceId || null,
       initiatorUserId: user._id,
       initiatorUsername: user.username || '',
-      attackers: nextAttackers
+      participantCount: Math.max(0, Number(gatePreview.participantCount) || 0),
+      attackers: Array.isArray(gatePreview.attackers) ? gatePreview.attackers.slice(0, SIEGE_PARTICIPANT_PREVIEW_LIMIT) : []
     };
     await upsertNodeSiegeState({
       nodeId: node._id,
@@ -6608,7 +6762,7 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
       includeSiegeState: true
     });
 
-    const settled = settleNodeSiegeState(node, new Date());
+    const settled = await settleNodeSiegeState(node, new Date());
     if (settled.changed) {
       await upsertNodeSiegeState({
         nodeId: node._id,
@@ -6619,10 +6773,12 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
 
     let targetGateKey = '';
     for (const gateKey of CITY_GATE_KEYS) {
-      const gateSummary = buildSiegeGateSummary(node, gateKey, buildArmyUnitTypeMap(unitTypes));
-      if (!gateSummary.active) continue;
-      const matched = gateSummary.activeAttackers.find((item) => item.userId === requestUserId && item.isInitiator);
-      if (!matched) continue;
+      const matched = await findActiveSiegeParticipant({
+        nodeId: node._id,
+        gateKey,
+        userId: requestUserId
+      });
+      if (!matched || !matched.isInitiator) continue;
       targetGateKey = gateKey;
       break;
     }
@@ -6644,43 +6800,25 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
     });
 
     const notifyMessage = `熵盟成员 ${user.username} 在知识域「${node.name}」${CITY_GATE_LABELS[targetGateKey]}发起围城，点击可查看并支援`;
-    const memberQuery = {
-      _id: { $ne: user._id },
-      role: 'common',
-      allianceId: user.allianceId
-    };
-    const memberCursor = User.find(memberQuery).select('_id').lean().cursor();
-
-    let notifiedCount = 0;
-    let supportNotificationDocs = [];
-    for await (const member of memberCursor) {
-      const supportNotification = buildNotificationPayload({
-        type: 'info',
+    const operationKey = new mongoose.Types.ObjectId().toString();
+    const eventDedupeKey = `siege_support_event:${operationKey}`;
+    const taskDedupeKey = `siege_support_broadcast_job:${operationKey}`;
+    const { task: supportBroadcastTask } = await schedulerService.enqueue({
+      type: 'siege_support_broadcast_job',
+      runAt: now,
+      payload: {
+        allianceId: requestAllianceId,
+        actorUserId: requestUserId,
+        actorUsername: user.username || '',
+        nodeId: getIdString(node._id),
+        nodeName: node.name || '',
+        gateKey: targetGateKey,
         title: `围城支援请求：${node.name}`,
         message: notifyMessage,
-        read: false,
-        status: 'info',
-        nodeId: node._id,
-        nodeName: node.name,
-        allianceId: user.allianceId || null,
-        allianceName: '',
-        inviterId: user._id,
-        inviterUsername: user.username || '',
-        inviteeId: member._id,
-        inviteeUsername: '',
-        createdAt: now
-      });
-      supportNotificationDocs.push(toCollectionNotificationDoc(member._id, supportNotification));
-      if (supportNotificationDocs.length >= 1000) {
-        await writeNotificationsToCollection(supportNotificationDocs);
-        notifiedCount += supportNotificationDocs.length;
-        supportNotificationDocs = [];
-      }
-    }
-    if (supportNotificationDocs.length > 0) {
-      await writeNotificationsToCollection(supportNotificationDocs);
-      notifiedCount += supportNotificationDocs.length;
-    }
+        dedupeKey: eventDedupeKey
+      },
+      dedupeKey: taskDedupeKey
+    });
 
     const intelSnapshotRaw = findUserIntelSnapshotByNodeId(user, node._id);
     const intelSnapshot = intelSnapshotRaw ? serializeIntelSnapshot(intelSnapshotRaw) : null;
@@ -6693,7 +6831,8 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
 
     return res.json({
       success: true,
-      message: `已呼叫熵盟支援（通知 ${notifiedCount} 人）`,
+      message: '已提交熵盟支援广播任务',
+      supportBroadcastTaskId: getIdString(supportBroadcastTask?._id) || null,
       ...payload
     });
   } catch (error) {
@@ -6757,7 +6896,7 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
       includeSiegeState: true
     });
 
-    const settled = settleNodeSiegeState(node, new Date());
+    const settled = await settleNodeSiegeState(node, new Date());
     if (settled.changed) {
       await upsertNodeSiegeState({
         nodeId: node._id,
@@ -6788,40 +6927,21 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
     if (!targetGateKey) {
       return res.status(400).json({ error: '当前不存在可支援的同盟围城战场' });
     }
-    if (gateSummaries[targetGateKey].activeAttackers.some((item) => item.userId === requestUserId)) {
+    const existingSelfParticipant = await findActiveSiegeParticipant({
+      nodeId: node._id,
+      gateKey: targetGateKey,
+      userId: requestUserId
+    });
+    if (existingSelfParticipant) {
       return res.status(400).json({ error: '你已在该战场中，不能重复派遣' });
     }
 
     const roster = normalizeUserRoster(user.armyRoster, unitTypes);
     const rosterMap = buildUnitCountMap(roster);
-    const committedNodes = isDomainTitleStateCollectionReadEnabled()
-      ? (await listSiegeStatesByAttackerUserId(user._id, { select: 'nodeId cheng qi' }))
-        .map((row) => ({
-          _id: row?.nodeId || null,
-          __titleStateCollection: {
-            citySiegeState: {
-              cheng: row?.cheng || createEmptySiegeGateState(),
-              qi: row?.qi || createEmptySiegeGateState()
-            }
-          }
-        }))
-      : await Node.find({
-        status: 'approved',
-        $or: [
-          { 'citySiegeState.cheng.attackers.userId': user._id },
-          { 'citySiegeState.qi.attackers.userId': user._id }
-        ]
-      }).select('citySiegeState');
     let committedMap = new Map();
-    committedNodes.forEach((itemNode) => {
-      CITY_GATE_KEYS.forEach((itemGateKey) => {
-        const gateState = getNodeGateState(itemNode, itemGateKey);
-        (gateState.attackers || []).forEach((attacker) => {
-          if (getIdString(attacker?.userId) !== requestUserId) return;
-          if (!isSiegeAttackerActive(attacker)) return;
-          committedMap = mergeUnitCountMaps(committedMap, buildUnitCountMap(attacker?.units || []));
-        });
-      });
+    const activeSiegeParticipants = await findUserActiveParticipants({ userId: requestUserId });
+    activeSiegeParticipants.forEach((participant) => {
+      committedMap = mergeUnitCountMaps(committedMap, buildUnitCountMap(participant?.units || []));
     });
     const dispatchMap = buildUnitCountMap(normalizedUnits);
     for (const [unitTypeId, dispatchCount] of dispatchMap.entries()) {
@@ -6919,16 +7039,13 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
 
     const now = new Date();
     const arriveAt = new Date(now.getTime() + (selectedSupportPath.distanceUnits * SIEGE_SUPPORT_UNIT_DURATION_SECONDS * 1000));
-    const gateCurrent = getNodeGateState(node, targetGateKey);
-    const nextAttackers = Array.isArray(gateCurrent.attackers)
-      ? gateCurrent.attackers.filter((item) => getIdString(item?.userId) !== requestUserId)
-      : [];
-
-    nextAttackers.push({
+    await upsertSiegeParticipant({
+      nodeId: node._id,
+      gateKey: targetGateKey,
       userId: user._id,
       username: user.username || '',
       allianceId: user.allianceId || null,
-      units: normalizedUnits,
+      units: normalizeSiegeParticipantUnits(normalizedUnits),
       fromNodeId: selectedSupportPath.path[0]?.nodeId || null,
       fromNodeName: currentLocationName,
       autoRetreatPercent,
@@ -6940,15 +7057,21 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
       joinedAt: null,
       updatedAt: now
     });
+    const gatePreview = await getSiegeGatePreview({
+      nodeId: node._id,
+      gateKey: targetGateKey,
+      limit: SIEGE_PARTICIPANT_PREVIEW_LIMIT
+    });
 
     const workingSiegeState = getMutableNodeSiegeState(node);
     workingSiegeState[targetGateKey] = {
       ...(workingSiegeState?.[targetGateKey] || {}),
-      active: true,
+      active: !!gatePreview.active,
       startedAt: workingSiegeState?.[targetGateKey]?.startedAt || now,
       updatedAt: now,
-      attackerAllianceId: workingSiegeState?.[targetGateKey]?.attackerAllianceId || user.allianceId || null,
-      attackers: nextAttackers
+      attackerAllianceId: gatePreview.firstActiveAllianceId || workingSiegeState?.[targetGateKey]?.attackerAllianceId || user.allianceId || null,
+      participantCount: Math.max(0, Number(gatePreview.participantCount) || 0),
+      attackers: Array.isArray(gatePreview.attackers) ? gatePreview.attackers.slice(0, SIEGE_PARTICIPANT_PREVIEW_LIMIT) : []
     };
     await upsertNodeSiegeState({
       nodeId: node._id,
@@ -7044,7 +7167,7 @@ router.post('/:nodeId/siege/retreat', authenticateToken, async (req, res) => {
       includeSiegeState: true
     });
 
-    const settled = settleNodeSiegeState(node, new Date());
+    const settled = await settleNodeSiegeState(node, new Date());
     if (settled.changed) {
       await upsertNodeSiegeState({
         nodeId: node._id,
@@ -7056,16 +7179,19 @@ router.post('/:nodeId/siege/retreat', authenticateToken, async (req, res) => {
     let targetGateKey = '';
     let retreatCount = 0;
     for (const gateKey of CITY_GATE_KEYS) {
-      const gateState = getNodeGateState(node, gateKey);
-      if (!gateState.active) continue;
-      const initiator = (gateState.attackers || []).find((attacker) => (
-        getIdString(attacker?.userId) === requestUserId
-        && isSiegeAttackerActive(attacker)
-        && !!attacker?.isInitiator
-      ));
-      if (!initiator) continue;
+      const initiator = await findActiveSiegeParticipant({
+        nodeId: node._id,
+        gateKey,
+        userId: requestUserId
+      });
+      if (!initiator || !initiator.isInitiator) continue;
       targetGateKey = gateKey;
-      retreatCount = (gateState.attackers || []).filter((attacker) => isSiegeAttackerActive(attacker)).length;
+      const gatePreview = await getSiegeGatePreview({
+        nodeId: node._id,
+        gateKey,
+        limit: 1
+      });
+      retreatCount = Math.max(0, Number(gatePreview.participantCount) || 0);
       break;
     }
 
@@ -7074,6 +7200,11 @@ router.post('/:nodeId/siege/retreat', authenticateToken, async (req, res) => {
     }
 
     const now = new Date();
+    await markSiegeParticipantsRetreated({
+      nodeId: node._id,
+      gateKey: targetGateKey,
+      now
+    });
     const workingSiegeState = getMutableNodeSiegeState(node);
     workingSiegeState[targetGateKey] = {
       ...createEmptySiegeGateState(),
@@ -7113,80 +7244,50 @@ router.get('/me/siege-supports', authenticateToken, async (req, res) => {
       return res.status(401).json({ error: '无效的用户身份' });
     }
 
-    let nodes = [];
-    if (isDomainTitleStateCollectionReadEnabled()) {
-      const siegeRows = await listSiegeStatesByAttackerUserId(requestUserId, {
-        select: 'nodeId cheng qi'
-      });
-      const nodeIds = siegeRows
-        .map((item) => item?.nodeId)
-        .filter((item) => !!item);
-      const nodeRows = nodeIds.length > 0
-        ? await Node.find({
-          _id: { $in: nodeIds },
-          status: 'approved'
-        }).select('_id name').lean()
-        : [];
-      const nodeNameMap = new Map(nodeRows.map((item) => [getIdString(item?._id), item?.name || '']));
-      nodes = siegeRows
-        .filter((item) => nodeNameMap.has(getIdString(item?.nodeId)))
-        .map((item) => ({
-          _id: item.nodeId,
-          name: nodeNameMap.get(getIdString(item.nodeId)) || '',
-          __titleStateCollection: {
-            citySiegeState: {
-              cheng: item?.cheng || createEmptySiegeGateState(),
-              qi: item?.qi || createEmptySiegeGateState()
-            }
-          }
-        }));
-    } else {
-      nodes = await Node.find({
-        status: 'approved',
-        $or: [
-          { 'citySiegeState.cheng.attackers.userId': new mongoose.Types.ObjectId(requestUserId) },
-          { 'citySiegeState.qi.attackers.userId': new mongoose.Types.ObjectId(requestUserId) }
-        ]
-      }).select('name citySiegeState');
-    }
+    const activeParticipants = await findUserActiveParticipants({ userId: requestUserId });
+    const nodeIds = Array.from(new Set(
+      activeParticipants
+        .map((item) => getIdString(item?.nodeId))
+        .filter((id) => isValidObjectId(id))
+    )).map((id) => new mongoose.Types.ObjectId(id));
+    const nodeRows = nodeIds.length > 0
+      ? await Node.find({
+        _id: { $in: nodeIds },
+        status: 'approved'
+      }).select('_id name').lean()
+      : [];
+    const nodeNameMap = new Map(nodeRows.map((item) => [getIdString(item?._id), item?.name || '']));
     const unitTypes = await fetchArmyUnitTypes();
     const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
     const nowMs = Date.now();
 
     const rows = [];
-    for (const node of nodes) {
-      const settledLocal = settleNodeSiegeState(node, new Date(nowMs));
-      if (settledLocal.changed) {
-        await upsertNodeSiegeState({
-          nodeId: node._id,
-          siegeState: settledLocal.siegeState,
-          actorUserId: requestUserId
-        });
+    for (const participant of activeParticipants) {
+      const nodeId = getIdString(participant?.nodeId);
+      if (!nodeNameMap.has(nodeId)) continue;
+      const participantLike = { ...(participant || {}) };
+      const arriveAtMs = new Date(participantLike.arriveAt || 0).getTime();
+      if (participantLike.status === 'moving' && Number.isFinite(arriveAtMs) && arriveAtMs > 0 && arriveAtMs <= nowMs) {
+        participantLike.status = 'sieging';
+        participantLike.joinedAt = participantLike.joinedAt || new Date(nowMs);
       }
-      for (const gateKey of CITY_GATE_KEYS) {
-        const gateState = getNodeGateState(node, gateKey);
-        for (const attacker of (gateState.attackers || [])) {
-          if (getIdString(attacker?.userId) !== requestUserId) continue;
-          if (!isSiegeAttackerActive(attacker)) continue;
-          const serialized = serializeSiegeAttacker(attacker, unitTypeMap, nowMs);
-          rows.push({
-            nodeId: getIdString(node._id),
-            nodeName: node.name || '',
-            gateKey,
-            gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
-            status: serialized.status,
-            statusLabel: serialized.statusLabel,
-            totalCount: serialized.totalCount,
-            units: serialized.units,
-            fromNodeName: serialized.fromNodeName,
-            autoRetreatPercent: serialized.autoRetreatPercent,
-            requestedAt: serialized.requestedAt,
-            arriveAt: serialized.arriveAt,
-            joinedAt: serialized.joinedAt,
-            remainingSeconds: serialized.remainingSeconds
-          });
-        }
-      }
+      const serialized = serializeSiegeAttacker(participantLike, unitTypeMap, nowMs);
+      rows.push({
+        nodeId,
+        nodeName: nodeNameMap.get(nodeId) || '',
+        gateKey: participantLike.gateKey || '',
+        gateLabel: CITY_GATE_LABELS[participantLike.gateKey] || participantLike.gateKey || '',
+        status: serialized.status,
+        statusLabel: serialized.statusLabel,
+        totalCount: serialized.totalCount,
+        units: serialized.units,
+        fromNodeName: serialized.fromNodeName,
+        autoRetreatPercent: serialized.autoRetreatPercent,
+        requestedAt: serialized.requestedAt,
+        arriveAt: serialized.arriveAt,
+        joinedAt: serialized.joinedAt,
+        remainingSeconds: serialized.remainingSeconds
+      });
     }
 
     rows.sort((a, b) => {
@@ -7784,6 +7885,8 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
       ruleProfileName: selectedProfile.name || '',
       enemyAllianceIds: Array.isArray(masterAlliance?.enemyAllianceIds) ? masterAlliance.enemyAllianceIds : [],
       participants: [],
+      distributedTotal: 0,
+      rewardParticipantCount: 0,
       resultUserRewards: [],
       ruleSnapshot: selectedRule
     };
@@ -7878,11 +7981,33 @@ router.get('/:nodeId/distribution-participation', authenticateToken, async (req,
     const rules = KnowledgeDistributionService.getCommonRuleSets(lock.ruleSnapshot || {}, lock);
     const currentAllianceId = getIdString(currentUser.allianceId);
     const masterAllianceId = getIdString(lock.masterAllianceId);
-    const rewardSnapshotMap = new Map(
-      (Array.isArray(lock.resultUserRewards) ? lock.resultUserRewards : [])
-        .map((item) => [getIdString(item?.userId), round2(Math.max(0, Number(item?.amount) || 0))])
-        .filter(([userId]) => isValidObjectId(userId))
-    );
+    const rewardSnapshotMap = new Map();
+    const lockExecuteAt = toDistributionSessionExecuteAt(lock);
+    if (lock.executedAt && lockExecuteAt instanceof Date) {
+      const currentRewardRow = await DistributionResult.findOne({
+        nodeId: node._id,
+        executeAt: lockExecuteAt,
+        userId: currentUser._id
+      }).select('userId amount').lean();
+      if (currentRewardRow) {
+        rewardSnapshotMap.set(
+          getIdString(currentRewardRow.userId),
+          round2(Math.max(0, Number(currentRewardRow.amount) || 0))
+        );
+      } else if (READ_LEGACY_RESULTUSERREWARDS) {
+        for (const item of (Array.isArray(lock.resultUserRewards) ? lock.resultUserRewards : [])) {
+          const itemUserId = getIdString(item?.userId);
+          if (!isValidObjectId(itemUserId)) continue;
+          rewardSnapshotMap.set(itemUserId, round2(Math.max(0, Number(item?.amount) || 0)));
+        }
+      }
+    } else if (READ_LEGACY_RESULTUSERREWARDS) {
+      for (const item of (Array.isArray(lock.resultUserRewards) ? lock.resultUserRewards : [])) {
+        const itemUserId = getIdString(item?.userId);
+        if (!isValidObjectId(itemUserId)) continue;
+        rewardSnapshotMap.set(itemUserId, round2(Math.max(0, Number(item?.amount) || 0)));
+      }
+    }
     const isBlocked = KnowledgeDistributionService.isUserBlocked({
       userId: currentUserId,
       allianceId: currentAllianceId,
@@ -8323,6 +8448,117 @@ router.get('/:nodeId/distribution-participants', authenticateToken, async (req, 
     });
   } catch (error) {
     console.error('获取分发参与者列表错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 分页获取分发结果（按会话）
+router.get('/:nodeId/distribution-results', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name status knowledgeDistributionLocked');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+
+    const executeAtRaw = typeof req.query?.executeAt === 'string' ? req.query.executeAt.trim() : '';
+    let executeAt = null;
+    if (executeAtRaw) {
+      const parsedExecuteAt = new Date(executeAtRaw);
+      if (!Number.isFinite(parsedExecuteAt.getTime())) {
+        return res.status(400).json({ error: 'executeAt 参数无效' });
+      }
+      executeAt = parsedExecuteAt;
+    }
+    if (!(executeAt instanceof Date)) {
+      const latest = await DistributionResult.findOne({
+        nodeId: new mongoose.Types.ObjectId(String(nodeId))
+      }).sort({ executeAt: -1, createdAt: -1, _id: -1 }).select('executeAt').lean();
+      executeAt = latest?.executeAt || toDistributionSessionExecuteAt(node.knowledgeDistributionLocked || {});
+    }
+
+    if (!(executeAt instanceof Date)) {
+      return res.json({
+        success: true,
+        nodeId: node._id,
+        nodeName: node.name,
+        executeAt: null,
+        limit: 0,
+        cursor: null,
+        nextCursor: null,
+        rows: []
+      });
+    }
+
+    const limit = Math.max(
+      1,
+      Math.min(DISTRIBUTION_RESULT_PAGE_SIZE_MAX, parseInt(req.query?.limit, 10) || 50)
+    );
+    const cursor = parseDistributionResultCursor(req.query?.cursor);
+    const page = await listDistributionResultsByNode({
+      nodeId: node._id,
+      executeAt,
+      limit,
+      cursor
+    });
+
+    const userIds = Array.from(new Set(
+      (page.rows || [])
+        .map((item) => getIdString(item?.userId))
+        .filter((id) => isValidObjectId(id))
+    )).map((id) => new mongoose.Types.ObjectId(id));
+    const users = userIds.length > 0
+      ? await User.find({ _id: { $in: userIds } })
+          .select('_id username avatar profession allianceId')
+          .lean()
+      : [];
+    const userMap = new Map(users.map((item) => [getIdString(item?._id), item]));
+
+    const allianceIds = Array.from(new Set(
+      users
+        .map((item) => getIdString(item?.allianceId))
+        .filter((id) => isValidObjectId(id))
+    )).map((id) => new mongoose.Types.ObjectId(id));
+    const alliances = allianceIds.length > 0
+      ? await EntropyAlliance.find({ _id: { $in: allianceIds } }).select('_id name').lean()
+      : [];
+    const allianceNameMap = new Map(alliances.map((item) => [getIdString(item?._id), item?.name || '']));
+
+    const rows = (page.rows || []).map((item) => {
+      const userId = getIdString(item?.userId);
+      const user = userMap.get(userId) || null;
+      const allianceId = getIdString(user?.allianceId);
+      return {
+        _id: getIdString(item?._id),
+        nodeId: getIdString(item?.nodeId),
+        executeAt: item?.executeAt || null,
+        userId,
+        username: user?.username || '',
+        avatar: user?.avatar || 'default_male_1',
+        profession: user?.profession || '',
+        allianceId: allianceId || '',
+        allianceName: allianceNameMap.get(allianceId) || '',
+        amount: round2(Math.max(0, Number(item?.amount) || 0)),
+        createdAt: item?.createdAt || null
+      };
+    });
+
+    return res.json({
+      success: true,
+      nodeId: node._id,
+      nodeName: node.name,
+      executeAt,
+      limit,
+      cursor: cursor ? String(cursor) : null,
+      nextCursor: page.nextCursor || null,
+      rows
+    });
+  } catch (error) {
+    console.error('获取分发结果列表错误:', error);
     return res.status(500).json({ error: '服务器错误' });
   }
 });

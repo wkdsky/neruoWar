@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Node = require('../models/Node');
 const User = require('../models/User');
 const DistributionParticipant = require('../models/DistributionParticipant');
+const DistributionResult = require('../models/DistributionResult');
 const EntropyAlliance = require('../models/EntropyAlliance');
 const { writeNotificationsToCollection } = require('./notificationStore');
 
@@ -153,6 +154,14 @@ const DISTRIBUTION_ANNOUNCEMENT_LOCATION_LIMIT = Math.max(
   parseInt(process.env.DISTRIBUTION_ANNOUNCEMENT_LOCATION_LIMIT, 10) || 50000
 );
 const OBJECT_ID_QUERY_CHUNK_SIZE = 2000;
+const DISTRIBUTION_RESULT_PREVIEW_LIMIT = Math.max(
+  1,
+  Math.min(500, parseInt(process.env.DISTRIBUTION_RESULT_PREVIEW_LIMIT, 10) || 200)
+);
+const DISTRIBUTION_RESULT_BULK_BATCH_SIZE = Math.max(
+  100,
+  parseInt(process.env.DISTRIBUTION_RESULT_BULK_BATCH_SIZE, 10) || 1000
+);
 
 const writeNotificationDocsInChunks = async (docs = [], batchSize = DISTRIBUTION_NOTIFICATION_BATCH_SIZE) => {
   const source = Array.isArray(docs) ? docs.filter(Boolean) : [];
@@ -540,17 +549,27 @@ class KnowledgeDistributionService {
       lock,
       atMs: timeline.executeAtMs || now.getTime()
     }));
+    const lockExecuteAt = lock?.executeAt ? new Date(lock.executeAt) : new Date(timeline.executeAtMs || now.getTime());
+    const lockId = `${getIdString(node?._id)}:${lockExecuteAt.toISOString()}`;
     const totalPoolCents = toCents((Number(node.knowledgePoint?.value) || 0) + (Number(node.knowledgeDistributionCarryover) || 0));
     const distributionPercent = getDistributionScopePercent(lock.ruleSnapshot || lock);
     const distributionPoolCents = Math.floor(totalPoolCents * (distributionPercent / 100));
 
-    const finalizeDistribution = async ({ carryoverCents, executedAt, resultUserRewards = [] }) => {
+    const finalizeDistribution = async ({
+      carryoverCents,
+      executedAt,
+      resultUserRewards = [],
+      distributedTotal = 0,
+      rewardParticipantCount = 0
+    }) => {
       node.knowledgePoint.value = 0;
       node.knowledgePoint.lastUpdated = executedAt;
       node.knowledgeDistributionCarryover = fromCents(carryoverCents);
       node.knowledgeDistributionLastExecutedAt = executedAt;
       if (node.knowledgeDistributionLocked) {
         node.knowledgeDistributionLocked.executedAt = executedAt;
+        node.knowledgeDistributionLocked.distributedTotal = round2(Math.max(0, Number(distributedTotal) || 0));
+        node.knowledgeDistributionLocked.rewardParticipantCount = Math.max(0, parseInt(rewardParticipantCount, 10) || 0);
         node.knowledgeDistributionLocked.resultUserRewards = Array.isArray(resultUserRewards)
           ? resultUserRewards
           : [];
@@ -571,7 +590,9 @@ class KnowledgeDistributionService {
       await finalizeDistribution({
         carryoverCents: totalPoolCents,
         executedAt: now,
-        resultUserRewards: []
+        resultUserRewards: [],
+        distributedTotal: 0,
+        rewardParticipantCount: 0
       });
       return;
     }
@@ -581,7 +602,9 @@ class KnowledgeDistributionService {
       await finalizeDistribution({
         carryoverCents: totalPoolCents,
         executedAt: now,
-        resultUserRewards: []
+        resultUserRewards: [],
+        distributedTotal: 0,
+        rewardParticipantCount: 0
       });
       return;
     }
@@ -819,19 +842,53 @@ class KnowledgeDistributionService {
       await writeNotificationDocsInChunks(collectionNotificationDocs);
     }
 
-    const resultUserRewards = Array.from(userRewardCents.entries())
+    const resultUserRewardsAll = Array.from(userRewardCents.entries())
       .filter(([userId, cents]) => isValidObjectId(userId) && cents > 0)
       .map(([userId, cents]) => ({
         userId: new mongoose.Types.ObjectId(userId),
         amount: fromCents(cents)
       }));
 
+    if (resultUserRewardsAll.length > 0) {
+      const resultOps = [];
+      for (const item of resultUserRewardsAll) {
+        resultOps.push({
+          updateOne: {
+            filter: {
+              nodeId: node._id,
+              executeAt: lockExecuteAt,
+              userId: item.userId
+            },
+            update: {
+              $set: {
+                nodeId: node._id,
+                executeAt: lockExecuteAt,
+                lockId,
+                userId: item.userId,
+                amount: round2(Math.max(0, Number(item.amount) || 0)),
+                createdAt: notificationTime
+              }
+            },
+            upsert: true
+          }
+        });
+      }
+      for (let index = 0; index < resultOps.length; index += DISTRIBUTION_RESULT_BULK_BATCH_SIZE) {
+        const batch = resultOps.slice(index, index + DISTRIBUTION_RESULT_BULK_BATCH_SIZE);
+        await DistributionResult.bulkWrite(batch, { ordered: false });
+      }
+    }
+
+    const resultUserRewardsPreview = resultUserRewardsAll.slice(0, DISTRIBUTION_RESULT_PREVIEW_LIMIT);
+
     const distributedTotalCents = distributedUserCents + effectiveAllianceContributionCents;
     const carryoverCents = Math.max(0, totalPoolCents - distributedTotalCents);
     await finalizeDistribution({
       carryoverCents,
       executedAt: now,
-      resultUserRewards
+      resultUserRewards: resultUserRewardsPreview,
+      distributedTotal: fromCents(distributedTotalCents),
+      rewardParticipantCount: resultUserRewardsAll.length
     });
   }
 }

@@ -1,10 +1,12 @@
 const mongoose = require('mongoose');
 const DomainDefenseLayout = require('../models/DomainDefenseLayout');
 const DomainSiegeState = require('../models/DomainSiegeState');
+const SiegeParticipant = require('../models/SiegeParticipant');
 
 const CITY_GATE_KEYS = ['cheng', 'qi'];
 const CITY_BUILDING_LIMIT = 3;
 const CITY_BUILDING_DEFAULT_RADIUS = 0.17;
+const SIEGE_EMBEDDED_PREVIEW_LIMIT = Math.max(1, parseInt(process.env.SIEGE_EMBEDDED_PREVIEW_LIMIT, 10) || 50);
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -59,6 +61,7 @@ const createEmptySiegeGateState = () => ({
   attackerAllianceId: null,
   initiatorUserId: null,
   initiatorUsername: '',
+  participantCount: 0,
   attackers: []
 });
 
@@ -193,6 +196,11 @@ const normalizeSiegeGateState = (gateState = {}) => {
     });
   }
 
+  const participantCount = Math.max(
+    attackers.length,
+    Math.max(0, Math.floor(Number(gateState?.participantCount) || 0))
+  );
+  const previewAttackers = attackers.slice(0, SIEGE_EMBEDDED_PREVIEW_LIMIT);
   const hasActiveAttacker = attackers.some((item) => item.status === 'moving' || item.status === 'sieging');
   return {
     active: !!gateState?.active && hasActiveAttacker,
@@ -202,7 +210,8 @@ const normalizeSiegeGateState = (gateState = {}) => {
     attackerAllianceId: toObjectIdOrNull(gateState?.attackerAllianceId),
     initiatorUserId: toObjectIdOrNull(gateState?.initiatorUserId),
     initiatorUsername: typeof gateState?.initiatorUsername === 'string' ? gateState.initiatorUsername : '',
-    attackers
+    participantCount,
+    attackers: previewAttackers
   };
 };
 
@@ -455,6 +464,24 @@ const listSiegeStatesByAttackerUserId = async (userId, { select = 'nodeId cheng 
   if (!isDomainTitleStateCollectionReadEnabled()) return [];
   const safeUserId = toObjectIdOrNull(userId);
   if (!safeUserId) return [];
+
+  const participantRows = await SiegeParticipant.find({
+    userId: safeUserId,
+    status: { $in: ['moving', 'sieging'] }
+  }).select('nodeId').lean();
+  const nodeIds = Array.from(new Set(
+    participantRows
+      .map((row) => toObjectIdOrNull(row?.nodeId))
+      .filter(Boolean)
+      .map((id) => String(id))
+  )).map((id) => new mongoose.Types.ObjectId(id));
+
+  if (nodeIds.length > 0) {
+    return DomainSiegeState.find({
+      nodeId: { $in: nodeIds }
+    }).select(select).lean();
+  }
+
   return DomainSiegeState.find({
     $or: [
       { 'cheng.attackers.userId': safeUserId },

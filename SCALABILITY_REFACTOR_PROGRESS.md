@@ -1,0 +1,221 @@
+# SCALABILITY_REFACTOR_PROGRESS
+
+## 1. 背景与目标（为何现在定型、避免未来迁移的点）
+- 在开发期固化高并发可扩展范式，避免未来用户上量后再做痛苦迁移。
+- 重点消除四类扩展阻塞：
+  - 多实例下默认 `setInterval` 重复执行带来的重复副作用。
+  - 熵盟广播 fanout-on-write 导致线性写放大。
+  - 围城/分发高基数嵌入数组导致 16MB 风险、热点写冲突。
+  - 长任务占用 HTTP 线程导致接口抖动。
+- 目标范式：
+  - API 进程只负责请求与入队。
+  - Worker 进程基于 Mongo 原子 claim 执行任务。
+  - 广播改为 topic event + 用户已读 cursor（fanout-on-read）。
+  - 高基数数据落独立集合，主文档保留聚合态与预览。
+
+## 2. 当前代码已核对的事实（列出你确认的关键事实：哪些 setInterval、哪些 fanout、哪些嵌入数组、哪些集合/索引）
+- `backend/server.js`
+  - 原有 legacy 资源/知识点广播 tick 已有 env 开关。
+  - 原无开关默认运行的管理员卸任超时处理与知识点分发 tick 已确认存在。
+- `backend/routes/alliance.js`
+  - 原 `broadcastAllianceAnnouncement()` 通过用户 cursor 批量写通知（fanout-on-write）。
+- `backend/routes/nodes.js`
+  - 原 `POST /:nodeId/siege/request-support` 对熵盟成员 cursor fanout 写通知。
+- 成员关系与公告字段
+  - `User.allianceId` 为单盟关系。
+  - `EntropyAlliance.announcement` / `announcementUpdatedAt` 已存在。
+- 高基数嵌入风险（改造前事实）
+  - `Node.citySiegeState.{cheng,qi}.attackers[]`。
+  - `DomainSiegeState.{cheng,qi}.attackers[]`。
+  - `Node.knowledgeDistributionLocked.resultUserRewards[]`。
+- 额外核对
+  - `domainTitleStateStore.listSiegeStatesByAttackerUserId` 历史依赖嵌入 attackers 查询，已做集合化优先查询并保留旧数据兜底。
+  - `notificationStore` 与 `DistributionParticipant` 既有集合可复用，改造未引入新中间件。
+
+## 3. Non-goals（本次不做什么：例如不引入 Kafka/ES，不做真实亿级压测等）
+- 不引入 Kafka/ES/etcd 等重依赖。
+- 不做真实线上亿级压测，只提供本地可运行 seed + 验收脚本。
+- 不一次性删除全部 legacy 路径，统一用 env 开关默认关闭。
+- 不做前端大改，仅新增后端 API 能力与兼容响应结构。
+
+## 4. 改造总览（本次改造点与影响面）
+- 调度与执行
+  - 新增 `ScheduledTask` + `schedulerService` + `backend/worker.js`。
+  - API 进程改为周期 enqueue；Worker 执行任务，支持并发 claim 与过期锁回收。
+- 熵盟广播
+  - 新增 `AllianceBroadcastEvent`。
+  - 熵盟公告与围城支援请求改为 topic 事件，默认不做 fanout 写通知。
+  - 用户新增 `allianceBroadcastSeenAt` 实现 O(1) 已读游标。
+- 围城参与者
+  - 新增 `SiegeParticipant`。
+  - 围城参与者改为外置集合，`Node/DomainSiegeState` 仅保留 `participantCount + topK attackers` 预览。
+  - 支持读取时迁移旧嵌入 attackers（env 控制，默认开）。
+- 分发结果
+  - 新增 `DistributionResult`。
+  - `KnowledgeDistributionService` 分发结果改为外置批量写入。
+  - `knowledgeDistributionLocked` 仅保留摘要字段与 preview。
+- 长任务任务化
+  - 公告发布、围城支援请求改为 HTTP 入队返回 taskId，worker 异步执行。
+- 数据与验收
+  - 新增 `backend/scripts/seed_scalability_dataset.js`，支持 `smoke/acceptance/stress` + `--reset`。
+
+## 5. 任务清单 Checklist（[ ]/[x]；每条都要写“验收方法”）
+- [x] 创建并持续维护 `SCALABILITY_REFACTOR_PROGRESS.md`
+  - 改动文件：`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：根目录文件存在且按 1~9 固定章节持续更新。
+- [x] ScheduledTask + schedulerService + worker + server enqueue 改造
+  - 改动文件：`backend/models/ScheduledTask.js`、`backend/services/schedulerService.js`、`backend/worker.js`、`backend/services/domainAdminResignService.js`、`backend/server.js`
+  - 验收方法：`claim_test` 脚本结果 `claimedByA=1, claimedByB=0`；`recoverExpiredLocks` 将过期 running 任务回收为 `ready`。
+- [x] 熵盟公告改为 topic event + user cursor（fanout 默认关闭）
+  - 改动文件：`backend/models/AllianceBroadcastEvent.js`、`backend/services/allianceBroadcastService.js`、`backend/models/User.js`、`backend/routes/alliance.js`
+  - 验收方法：acceptance 数据上公告+支援触发后 `AllianceBroadcastEvent` 增量 2，`Notification(type=alliance_announcement)` 增量 0。
+- [x] 围城支援请求改为 topic event（fanout 默认关闭）
+  - 改动文件：`backend/routes/nodes.js`、`backend/services/allianceBroadcastService.js`
+  - 验收方法：`POST /:nodeId/siege/request-support` 返回 `supportBroadcastTaskId`，事件集合新增 1 条，无成员级通知写放大。
+- [x] 围城 attackers 外置到 `SiegeParticipant`，并支持分页读取
+  - 改动文件：`backend/models/SiegeParticipant.js`、`backend/services/siegeParticipantStore.js`、`backend/routes/nodes.js`、`backend/models/Node.js`、`backend/models/DomainSiegeState.js`、`backend/services/domainTitleStateStore.js`
+  - 验收方法：acceptance 数据上 `participantCollectionCount=5000`，`Node/DomainSiegeState` 嵌入 attackers 仅 50 条预览。
+- [x] 分发结果外置到 `DistributionResult`，并提供分页查询
+  - 改动文件：`backend/models/DistributionResult.js`、`backend/services/KnowledgeDistributionService.js`、`backend/routes/nodes.js`、`backend/routes/users.js`、`backend/server.js`、`backend/models/Node.js`
+  - 验收方法：acceptance 数据上 `distributionResultCount=5000`，`knowledgeDistributionLocked.resultUserRewards` 仅预览 200 条。
+- [x] 长任务从 HTTP 线程剥离（Job/Task + Worker）
+  - 改动文件：`backend/routes/alliance.js`、`backend/routes/nodes.js`、`backend/worker.js`、`backend/services/allianceBroadcastService.js`
+  - 验收方法：公告/支援接口快速返回任务 ID（`announcementTaskId` / `supportBroadcastTaskId`），实际写事件由 worker 处理。
+- [x] 新增 seed（smoke/acceptance/stress + reset）
+  - 改动文件：`backend/scripts/seed_scalability_dataset.js`、`backend/package.json`
+  - 验收方法：`--profile smoke --reset` 与 `--profile acceptance --reset` 可执行并输出目标规模。
+- [x] WebSocket 广播审计（默认不全局高频广播）
+  - 改动文件：`backend/server.js`
+  - 验收方法：默认 env 下 `ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS=false`，不存在每秒 `io.emit('knowledgePointUpdated', ...)` 广播路径。
+- [x] 索引审计与热查询映射
+  - 改动文件：`backend/models/ScheduledTask.js`、`backend/models/AllianceBroadcastEvent.js`、`backend/models/SiegeParticipant.js`、`backend/models/DistributionResult.js`、`backend/models/Node.js`
+  - 验收方法：第 9 节列出热查询 -> 索引映射，覆盖调度/广播/围城/分发关键路径。
+
+## 6. 进度日志（按时间顺序：做了什么、为什么、改了哪些文件、风险/待办）
+- 2026-02-22T23:41:53+08:00
+  - 做了什么：建立改造目标、事实核对与进度文档骨架。
+  - 为什么：先锁定改造边界与验收标准，避免后续偏离。
+  - 改动文件：`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：围城逻辑耦合深，需要用“外置主数据 + 嵌入预览”渐进替换。
+- 2026-02-22T23:42:00+08:00 ~ 2026-02-22T23:59:00+08:00
+  - 做了什么：完成调度任务模型/服务/worker；server 默认改为 enqueue；legacy 管理员卸任 tick 与分发 tick 默认关闭。
+  - 为什么：去除多实例 setInterval 重复执行风险，统一后台执行入口。
+  - 改动文件：`backend/models/ScheduledTask.js`、`backend/services/schedulerService.js`、`backend/worker.js`、`backend/services/domainAdminResignService.js`、`backend/server.js`
+  - 风险/待办：`KnowledgeDistributionService.processTick()` 需继续保持幂等（已通过锁与 executedAt 判定兜底）。
+- 2026-02-23T00:00:00+08:00 ~ 2026-02-23T00:22:00+08:00
+  - 做了什么：完成熵盟公告与围城支援从 fanout-on-write 到 topic event 的改造，并引入用户已读游标接口。
+  - 为什么：把大联盟广播写放大从 O(N) 降到 O(1) 写入。
+  - 改动文件：`backend/models/AllianceBroadcastEvent.js`、`backend/services/allianceBroadcastService.js`、`backend/models/User.js`、`backend/routes/alliance.js`、`backend/routes/nodes.js`
+  - 风险/待办：保留 `ALLOW_ALLIANCE_ANNOUNCEMENT_FANOUT` / `ALLOW_SIEGE_SUPPORT_FANOUT` 兼容开关，默认关闭。
+- 2026-02-23T00:22:00+08:00 ~ 2026-02-23T00:35:00+08:00
+  - 做了什么：完成围城参与者外置（`SiegeParticipant`）与分发结果外置（`DistributionResult`），并补充分页查询接口。
+  - 为什么：移除高基数嵌入主文档，避免 16MB 与热点写冲突。
+  - 改动文件：`backend/models/SiegeParticipant.js`、`backend/services/siegeParticipantStore.js`、`backend/models/Node.js`、`backend/models/DomainSiegeState.js`、`backend/services/domainTitleStateStore.js`、`backend/models/DistributionResult.js`、`backend/services/KnowledgeDistributionService.js`、`backend/routes/nodes.js`、`backend/routes/users.js`
+  - 风险/待办：旧数据读取迁移依赖 `SIEGE_MIGRATE_EMBEDDED_ATTACKERS_ON_READ`（默认 true），需要在后续维护窗口清理历史冗余预览。
+- 2026-02-23T00:35:00+08:00 ~ 2026-02-23T00:49:18+08:00
+  - 做了什么：新增并执行 seed 脚本（smoke/acceptance）；完成关键行为断言（无 fanout、外置数据规模、调度 claim/recover）。
+  - 为什么：确保改造不是“仅代码形态变化”，而是能在大样本下证明关键不变量成立。
+  - 改动文件：`backend/scripts/seed_scalability_dataset.js`、`backend/package.json`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：补跑真实 HTTP 鉴权 E2E 并回填文档。
+- 2026-02-23T01:00:50+08:00
+  - 做了什么：完成带 JWT 的真实 HTTP E2E 回归（API:5100 + worker-a/worker-b），覆盖登录、公告任务化、广播读取与已读、围城支援任务化、围城分页、分发结果分页。
+  - 为什么：验证鉴权中间件、路由参数、异步任务执行与数据库写入在真实请求链路下全部打通。
+  - 改动文件：`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：`5000` 端口已有常驻进程，本轮使用 `5100` 独立实例完成验收；后续如需统一脚本可固定测试端口。
+
+## 7. 回归/验证步骤（本地如何启动 API/worker/seed，如何验证不破坏原功能）
+- 1) 启动 MongoDB
+  - `mongod --dbpath <your_db_path>`
+- 2) 安装依赖
+  - `cd backend && npm install`
+- 3) 生成数据
+  - `node scripts/seed_scalability_dataset.js --profile smoke --reset`
+  - `node scripts/seed_scalability_dataset.js --profile acceptance --reset`
+- 4) 启动 API（默认仅 HTTP/WebSocket，不执行新任务处理）
+  - `ENABLE_LEGACY_RESOURCE_TICK=false ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS=false ENABLE_LEGACY_ADMIN_RESIGN_TICK=false ENABLE_LEGACY_DISTRIBUTION_TICK=false ENABLE_SCHEDULED_TASK_ENQUEUE=true node server.js`
+- 5) 启动 Worker（可 1~2 个进程）
+  - `WORKER_OWNER_ID=worker-a WORKER_CONCURRENCY=2 node worker.js`
+  - `WORKER_OWNER_ID=worker-b WORKER_CONCURRENCY=2 node worker.js`
+- 6) 验证项
+  - 熵盟公告更新：调用公告更新接口，检查 `AllianceBroadcastEvent` 增量接近 1，`Notification(type=alliance_announcement)` 不接近成员数。
+  - 围城支援请求：调用 `POST /api/nodes/:nodeId/siege/request-support`，检查事件增量约 1，无成员级通知 fanout。
+  - 围城参与者分页：`GET /api/nodes/:nodeId/siege?participantsLimit=50&participantsCursor=...`
+  - 分发结果分页：`GET /api/nodes/:nodeId/distribution-results?limit=50&cursor=...` 与 `GET /api/users/me/distribution-results?limit=50&cursor=...`
+  - 调度幂等与去重：两个 worker 同时运行时同一任务只会被一个 worker claim；停 worker 后重启可通过 `recoverExpiredLocks` 回收锁。
+- 7) 已执行的真实 HTTP E2E（2026-02-23）
+  - 启动实例（本轮端口）：
+    - `ENABLE_LEGACY_RESOURCE_TICK=false ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS=false ENABLE_LEGACY_ADMIN_RESIGN_TICK=false ENABLE_LEGACY_DISTRIBUTION_TICK=false ENABLE_SCHEDULED_TASK_ENQUEUE=true PORT=5100 node server.js`
+    - `WORKER_OWNER_ID=worker-a WORKER_CONCURRENCY=2 WORKER_POLL_MS=500 node worker.js`
+    - `WORKER_OWNER_ID=worker-b WORKER_CONCURRENCY=2 WORKER_POLL_MS=500 node worker.js`
+  - 鉴权登录：
+    - `POST /api/login`（admin/common）均 `200`，成功签发 JWT。
+  - 公告任务化链路：
+    - `PUT /api/alliances/admin/:allianceId` 返回 `announcementTaskId=699b362481b22919f2ba4fd7`，状态轮询为 `done`（attempts=1）。
+    - `GET /api/alliances/me/broadcasts` 返回 `unread=true`；`POST /api/alliances/me/broadcasts/mark-read` 后再次读取 `unread=false`。
+  - 围城支援任务化链路：
+    - `POST /api/nodes/:nodeId/siege/request-support` 返回 `supportBroadcastTaskId=699b362581b22919f2ba4ff4`，状态轮询为 `done`（attempts=1）。
+  - 分页接口：
+    - `GET /api/nodes/:nodeId/siege?participantsGate=cheng&participantsLimit=30` 返回 `rows=30` 且有 `nextCursor`。
+    - `GET /api/nodes/:nodeId/distribution-results?limit=30` 返回 `rows=30` 且有 `nextCursor`。
+    - `GET /api/users/me/distribution-results?limit=30` 返回用户维度结果（本次用户 `rows=1`）。
+  - 写放大验证（同一 E2E 时间窗内）：
+    - `allianceAnnouncementNotificationDelta=0`
+    - `siegeSupportNotificationDelta=0`
+    - `allianceBroadcastEventDelta=2`
+
+## 8. 数据生成与验收数据规模（本次新增的 seed 方案：profile、规模、预期 DB 行为）
+- 脚本
+  - `backend/scripts/seed_scalability_dataset.js`
+  - 参数：`--profile smoke|acceptance|stress`、`--reset`
+  - 清理策略：通过固定 marker/prefix 删除本脚本产生的数据，不污染存量业务数据。
+- Profile: smoke（<1 分钟）
+  - users: 200（admin 20 + common 180）
+  - alliances: 2（成员 50 / 100）
+  - nodes: 100（10 个分发锁）
+  - node_senses: 500
+  - siege participants: 5
+  - distribution results: 50
+  - 实测输出：`users=200, alliances=2, nodes=100, nodeSenses=500, siege.participantCount=5`
+- Profile: acceptance（主验收档）
+  - users: 20,000（common 为主）
+  - alliances: 3（15,000 / 3,000 / 200）
+  - nodes: 5,000（200 个分发锁）
+  - node_senses: 100,000
+  - siege participants（热点节点）: 5,000
+  - distribution results（热点分发会话）: 5,000
+  - 实测输出：`users=20000, alliances=3, nodes=5000, nodeSenses=100000, siege.participantCount=5000, distribution.resultCount=5000`
+- Profile: stress（可选）
+  - users: 100,000
+  - big alliance: 80,000
+  - nodes: 20,000
+  - node_senses: 500,000
+- 本次关键验收实测结果
+  - 广播写放大：`notificationDelta=0`，`eventDelta=2`（公告 + 支援）。
+  - 围城外置：`participantCollectionCount=5000`，Node/DomainSiegeState 嵌入预览均为 50。
+  - 分发外置：`distributionResultCount=5000`，lock 内预览 `resultUserRewards=200`，`rewardParticipantCount=5000`。
+  - 调度 claim：`claimedByA=1, claimedByB=0`；过期锁回收后 `status=ready`。
+  - 真实 HTTP E2E：admin/common 登录均成功，公告/支援任务均 `done`，广播读已读链路正确，围城/分发分页接口返回正确游标。
+
+## 9. 未来扩展点（未来上分片/多实例时只需哪些小改）
+- 热查询与索引映射（索引审计）
+  - ScheduledTask 调度拉取：`{ status: 1, runAt: 1 }` + `{ lockedUntil: 1 }` + `{ dedupeKey: 1 } unique sparse。
+  - 熵盟广播列表：`AllianceBroadcastEvent { allianceId: 1, createdAt: -1, _id: -1 }`。
+  - 围城参与者分页/筛选：
+    - `{ nodeId: 1, gateKey: 1, status: 1, updatedAt: -1 }`
+    - `{ nodeId: 1, gateKey: 1, userId: 1 } unique`
+    - `{ allianceId: 1, status: 1, updatedAt: -1 }`
+    - `{ userId: 1, status: 1, updatedAt: -1 }`
+  - 分发结果查询：
+    - `{ nodeId: 1, executeAt: -1, userId: 1 } unique`
+    - `{ userId: 1, createdAt: -1 }`
+  - 节点分发待执行扫描：`Node { status: 1, knowledgeDistributionLocked.executeAt: 1 }`。
+- WebSocket 广播底线审计
+  - 默认不启用 legacy 高频广播路径。
+  - 每秒全量广播仅在 `ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS=true` 时存在（显式开关）。
+- 未来上量时的小改路径
+  - 多 worker 水平扩容：直接增加 worker 实例，依赖 Mongo 原子 claim。
+  - 分片建议：
+    - `SiegeParticipant` 可按 `nodeId`（或 `nodeId + gateKey`）做分片键。
+    - `DistributionResult` 可按 `nodeId` 或 `userId` 分片，视读流量主路径选择。
+    - `AllianceBroadcastEvent` 可按 `allianceId` 分片。
+  - 拆服务建议：调度 worker、围城服务、分发服务可按集合边界独立拆分，无需迁移大嵌入字段。

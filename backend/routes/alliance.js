@@ -5,8 +5,10 @@ const EntropyAlliance = require('../models/EntropyAlliance');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const Node = require('../models/Node');
+const AllianceBroadcastEvent = require('../models/AllianceBroadcastEvent');
 const { authenticateToken } = require('../middleware/auth');
 const { writeNotificationsToCollection } = require('../services/notificationStore');
+const schedulerService = require('../services/schedulerService');
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -49,7 +51,8 @@ const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_MEMBER_PAGE_SIZE = 30;
 const DEFAULT_DOMAIN_PAGE_SIZE = 30;
-const NOTIFICATION_BATCH_SIZE = 1000;
+const DEFAULT_BROADCAST_PAGE_SIZE = 50;
+const MAX_BROADCAST_PAGE_SIZE = 200;
 
 const parsePositiveInt = (value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) => {
   const parsed = parseInt(value, 10);
@@ -227,64 +230,62 @@ const syncMasterDomainsAlliance = async ({ userId, allianceId }) => {
 
 const broadcastAllianceAnnouncement = async ({
   allianceId,
-  allianceName,
   announcement,
-  actorUserId = null
+  actorUserId = null,
+  actorUsername = ''
 }) => {
   const normalizedAnnouncement = typeof announcement === 'string' ? announcement.trim() : '';
   const targetAllianceId = getIdString(allianceId);
-  const normalizedAllianceName = typeof allianceName === 'string' ? allianceName.trim() : '';
   const actorId = getIdString(actorUserId);
 
-  if (!targetAllianceId || !normalizedAnnouncement || !normalizedAllianceName) {
-    return 0;
+  if (!targetAllianceId || !normalizedAnnouncement) {
+    return '';
   }
 
-  const query = { allianceId: targetAllianceId };
-  if (actorId && mongoose.Types.ObjectId.isValid(actorId)) {
-    query._id = { $ne: new mongoose.Types.ObjectId(actorId) };
-  }
-  const cursor = User.find(query).select('_id').lean().cursor();
-
-  let notifiedCount = 0;
-  let pendingDocs = [];
-  for await (const member of cursor) {
-    const notification = buildNotificationPayload({
-      type: 'alliance_announcement',
-      title: `熵盟「${normalizedAllianceName}」发布了新公告`,
-      message: normalizedAnnouncement,
-      read: false,
-      status: 'info',
+  const operationKey = new mongoose.Types.ObjectId().toString();
+  const eventDedupeKey = `alliance_announcement_event:${operationKey}`;
+  const taskDedupeKey = `alliance_announcement_broadcast_job:${operationKey}`;
+  const { task } = await schedulerService.enqueue({
+    type: 'alliance_announcement_broadcast_job',
+    runAt: new Date(),
+    payload: {
       allianceId: targetAllianceId,
-      allianceName: normalizedAllianceName,
-      createdAt: new Date()
-    });
-    pendingDocs.push({
-      _id: notification._id,
-      userId: member._id,
-      type: 'alliance_announcement',
-      title: `熵盟「${normalizedAllianceName}」发布了新公告`,
-      message: normalizedAnnouncement,
-      read: false,
-      status: 'info',
-      allianceId: targetAllianceId,
-      allianceName: normalizedAllianceName,
-      createdAt: notification.createdAt
-    });
+      announcement: normalizedAnnouncement,
+      actorUserId: actorId || null,
+      actorUsername: typeof actorUsername === 'string' ? actorUsername : '',
+      dedupeKey: eventDedupeKey
+    },
+    dedupeKey: taskDedupeKey
+  });
 
-    if (pendingDocs.length >= NOTIFICATION_BATCH_SIZE) {
-      await writeNotificationsToCollection(pendingDocs);
-      notifiedCount += pendingDocs.length;
-      pendingDocs = [];
-    }
+  return getIdString(task?._id);
+};
+
+const serializeAllianceBroadcastEvent = (event = {}) => ({
+  _id: getIdString(event?._id),
+  allianceId: getIdString(event?.allianceId),
+  type: typeof event?.type === 'string' ? event.type : '',
+  actorUserId: getIdString(event?.actorUserId),
+  actorUsername: typeof event?.actorUsername === 'string' ? event.actorUsername : '',
+  nodeId: getIdString(event?.nodeId),
+  nodeName: typeof event?.nodeName === 'string' ? event.nodeName : '',
+  gateKey: typeof event?.gateKey === 'string' ? event.gateKey : '',
+  title: typeof event?.title === 'string' ? event.title : '',
+  message: typeof event?.message === 'string' ? event.message : '',
+  createdAt: event?.createdAt || null
+});
+
+const parseBroadcastBefore = (value) => {
+  if (typeof value !== 'string' || !value.trim()) return { beforeId: null, beforeDate: null };
+  const raw = value.trim();
+  if (mongoose.Types.ObjectId.isValid(raw)) {
+    return { beforeId: new mongoose.Types.ObjectId(raw), beforeDate: null };
   }
-
-  if (pendingDocs.length > 0) {
-    await writeNotificationsToCollection(pendingDocs);
-    notifiedCount += pendingDocs.length;
+  const date = new Date(raw);
+  if (Number.isFinite(date.getTime())) {
+    return { beforeId: null, beforeDate: date };
   }
-
-  return notifiedCount;
+  return { beforeId: null, beforeDate: null };
 };
 
 // 获取所有熵盟列表（包括成员数量和管辖知识域数量）
@@ -568,7 +569,7 @@ router.post('/join/:allianceId', authenticateToken, async (req, res) => {
 router.get('/leader/:allianceId/pending-applications', authenticateToken, async (req, res) => {
   try {
     const { allianceId } = req.params;
-    const leader = await User.findById(req.user.userId).select('_id');
+    const leader = await User.findById(req.user.userId).select('_id username');
     if (!leader) {
       return res.status(404).json({ error: '用户不存在' });
     }
@@ -722,7 +723,7 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
       activateVisualStyleId
     } = req.body || {};
 
-    const leader = await User.findById(req.user.userId).select('_id');
+    const leader = await User.findById(req.user.userId).select('_id username');
     if (!leader) {
       return res.status(404).json({ error: '用户不存在' });
     }
@@ -739,7 +740,10 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
 
     const previousAnnouncement = (alliance.announcement || '').trim();
     let hasChanges = false;
+    let hasPersistentChanges = false;
     let shouldBroadcastAllianceAnnouncement = false;
+    let announcementTaskId = '';
+    let pendingAnnouncement = '';
 
     if (typeof declaration === 'string') {
       const normalizedDeclaration = declaration.trim();
@@ -748,13 +752,19 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
       }
       alliance.declaration = normalizedDeclaration;
       hasChanges = true;
+      hasPersistentChanges = true;
     }
 
     if (typeof announcement === 'string') {
       const normalizedAnnouncement = announcement.trim();
-      alliance.announcement = normalizedAnnouncement;
-      alliance.announcementUpdatedAt = new Date();
       shouldBroadcastAllianceAnnouncement = Boolean(normalizedAnnouncement) && normalizedAnnouncement !== previousAnnouncement;
+      if (shouldBroadcastAllianceAnnouncement) {
+        pendingAnnouncement = normalizedAnnouncement;
+      } else {
+        alliance.announcement = normalizedAnnouncement;
+        alliance.announcementUpdatedAt = new Date();
+        hasPersistentChanges = true;
+      }
       hasChanges = true;
     }
 
@@ -765,6 +775,7 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
       }
       alliance.knowledgeContributionPercent = parsedContribution;
       hasChanges = true;
+      hasPersistentChanges = true;
     }
 
     if (createVisualStyle && typeof createVisualStyle === 'object') {
@@ -780,6 +791,7 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
         alliance.activeVisualStyleId = alliance.visualStyles[alliance.visualStyles.length - 1]._id;
       }
       hasChanges = true;
+      hasPersistentChanges = true;
     }
 
     if (typeof activateVisualStyleId === 'string' && activateVisualStyleId.trim()) {
@@ -791,6 +803,7 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
       }
       alliance.activeVisualStyleId = targetStyle._id;
       hasChanges = true;
+      hasPersistentChanges = true;
     }
 
     if (typeof deleteVisualStyleId === 'string' && deleteVisualStyleId.trim()) {
@@ -810,25 +823,31 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
         alliance.activeVisualStyleId = styleList[0]?._id || null;
       }
       hasChanges = true;
+      hasPersistentChanges = true;
     }
 
     if (!hasChanges) {
       return res.status(400).json({ error: '未提供可更新内容' });
     }
 
-    await alliance.save();
+    if (hasPersistentChanges) {
+      await alliance.save();
+    }
     if (shouldBroadcastAllianceAnnouncement) {
-      await broadcastAllianceAnnouncement({
+      announcementTaskId = await broadcastAllianceAnnouncement({
         allianceId: alliance._id,
-        allianceName: alliance.name,
-        announcement: alliance.announcement,
-        actorUserId: leader._id
+        announcement: pendingAnnouncement,
+        actorUserId: leader._id,
+        actorUsername: leader.username || ''
       });
+      alliance.announcement = pendingAnnouncement;
+      alliance.announcementUpdatedAt = new Date();
     }
 
     res.json({
       success: true,
-      message: '熵盟信息已更新',
+      message: announcementTaskId ? '熵盟信息已更新，公告广播任务已提交' : '熵盟信息已更新',
+      announcementTaskId: announcementTaskId || null,
       alliance: buildAlliancePayload(alliance)
     });
   } catch (error) {
@@ -983,9 +1002,7 @@ router.post('/leader/:allianceId/transfer', authenticateToken, async (req, res) 
       { _id: alliance._id },
       {
         $set: {
-          founder: targetMember._id,
-          announcement: transferAnnouncement,
-          announcementUpdatedAt: transferAt
+          founder: targetMember._id
         }
       }
     );
@@ -1011,15 +1028,19 @@ router.post('/leader/:allianceId/transfer', authenticateToken, async (req, res) 
     ]);
 
     // 自动发布并广播熵盟公告（所有盟内成员可见）
-    await broadcastAllianceAnnouncement({
+    const announcementTaskId = await broadcastAllianceAnnouncement({
       allianceId: alliance._id,
-      allianceName: alliance.name,
-      announcement: transferAnnouncement
+      announcement: transferAnnouncement,
+      actorUserId: previousLeader._id,
+      actorUsername: previousLeader.username || ''
     });
 
     res.json({
       success: true,
-      message: '盟主身份已成功转交，你当前为普通盟成员'
+      message: announcementTaskId
+        ? '盟主身份已成功转交，你当前为普通盟成员（公告广播任务已提交）'
+        : '盟主身份已成功转交，你当前为普通盟成员',
+      announcementTaskId: announcementTaskId || null
     });
   } catch (error) {
     console.error('转交盟主失败:', error);
@@ -1053,6 +1074,129 @@ router.get('/my/info', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('获取用户熵盟信息失败:', error);
     res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 获取当前用户熵盟广播事件（fanout-on-read）
+router.get('/me/broadcasts', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId).select('_id allianceId allianceBroadcastSeenAt').lean();
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const allianceId = user?.allianceId;
+    if (!allianceId) {
+      return res.json({
+        events: [],
+        unread: false,
+        newestAt: null,
+        seenAt: user?.allianceBroadcastSeenAt || null,
+        nextCursor: null
+      });
+    }
+
+    const limit = parsePositiveInt(req.query?.limit, DEFAULT_BROADCAST_PAGE_SIZE, {
+      min: 1,
+      max: MAX_BROADCAST_PAGE_SIZE
+    });
+    const { beforeId, beforeDate } = parseBroadcastBefore(req.query?.before);
+
+    const query = { allianceId };
+    if (beforeId) {
+      query._id = { $lt: beforeId };
+    } else if (beforeDate) {
+      query.createdAt = { $lt: beforeDate };
+    }
+
+    const [events, newestEvent, alliance] = await Promise.all([
+      AllianceBroadcastEvent.find(query)
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(limit)
+        .lean(),
+      AllianceBroadcastEvent.findOne({ allianceId })
+        .sort({ createdAt: -1, _id: -1 })
+        .select('createdAt')
+        .lean(),
+      EntropyAlliance.findById(allianceId)
+        .select('announcementUpdatedAt')
+        .lean()
+    ]);
+
+    const newestEventAtMs = new Date(newestEvent?.createdAt || 0).getTime();
+    const announcementUpdatedAtMs = new Date(alliance?.announcementUpdatedAt || 0).getTime();
+    const newestAtMs = Math.max(
+      Number.isFinite(newestEventAtMs) ? newestEventAtMs : 0,
+      Number.isFinite(announcementUpdatedAtMs) ? announcementUpdatedAtMs : 0
+    );
+    const newestAt = newestAtMs > 0 ? new Date(newestAtMs) : null;
+    const seenAtMs = new Date(user?.allianceBroadcastSeenAt || 0).getTime();
+    const unread = !!newestAt && (!Number.isFinite(seenAtMs) || seenAtMs <= 0 || newestAtMs > seenAtMs);
+
+    const nextCursor = events.length >= limit
+      ? getIdString(events[events.length - 1]?._id)
+      : null;
+
+    return res.json({
+      events: events.map((item) => serializeAllianceBroadcastEvent(item)),
+      unread,
+      newestAt,
+      seenAt: user?.allianceBroadcastSeenAt || null,
+      nextCursor
+    });
+  } catch (error) {
+    console.error('获取熵盟广播事件失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 标记当前用户熵盟广播已读（O(1) 游标更新）
+router.post('/me/broadcasts/mark-read', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId).select('_id allianceId').lean();
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    if (!user.allianceId) {
+      return res.json({
+        success: true,
+        seenAt: null,
+        unread: false
+      });
+    }
+
+    const [newestEvent, alliance] = await Promise.all([
+      AllianceBroadcastEvent.findOne({ allianceId: user.allianceId })
+        .sort({ createdAt: -1, _id: -1 })
+        .select('createdAt')
+        .lean(),
+      EntropyAlliance.findById(user.allianceId)
+        .select('announcementUpdatedAt')
+        .lean()
+    ]);
+
+    const newestEventAtMs = new Date(newestEvent?.createdAt || 0).getTime();
+    const announcementUpdatedAtMs = new Date(alliance?.announcementUpdatedAt || 0).getTime();
+    const newestAtMs = Math.max(
+      Number.isFinite(newestEventAtMs) ? newestEventAtMs : 0,
+      Number.isFinite(announcementUpdatedAtMs) ? announcementUpdatedAtMs : 0
+    );
+    const seenAt = newestAtMs > 0 ? new Date(newestAtMs) : new Date();
+
+    await User.updateOne(
+      { _id: user._id },
+      { $set: { allianceBroadcastSeenAt: seenAt } }
+    );
+
+    return res.json({
+      success: true,
+      seenAt,
+      unread: false
+    });
+  } catch (error) {
+    console.error('标记熵盟广播已读失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
   }
 });
 
@@ -1113,6 +1257,9 @@ router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
 
     const previousAnnouncement = (alliance.announcement || '').trim();
     let shouldBroadcastAllianceAnnouncement = false;
+    let hasPersistentChanges = false;
+    let pendingAnnouncement = '';
+    let announcementTaskId = '';
 
     // 如果更改名称，检查是否已被使用
     if (name && name !== alliance.name) {
@@ -1121,34 +1268,53 @@ router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
         return res.status(400).json({ error: '熵盟名称已被使用' });
       }
       alliance.name = name;
+      hasPersistentChanges = true;
     }
 
-    if (flag) alliance.flag = flag;
-    if (declaration) alliance.declaration = declaration;
+    if (flag) {
+      alliance.flag = flag;
+      hasPersistentChanges = true;
+    }
+    if (declaration) {
+      alliance.declaration = declaration;
+      hasPersistentChanges = true;
+    }
     if (typeof announcement === 'string') {
       const normalizedAnnouncement = announcement.trim();
-      alliance.announcement = normalizedAnnouncement;
-      alliance.announcementUpdatedAt = new Date();
       shouldBroadcastAllianceAnnouncement = Boolean(normalizedAnnouncement) && normalizedAnnouncement !== previousAnnouncement;
+      if (shouldBroadcastAllianceAnnouncement) {
+        pendingAnnouncement = normalizedAnnouncement;
+      } else {
+        alliance.announcement = normalizedAnnouncement;
+        alliance.announcementUpdatedAt = new Date();
+        hasPersistentChanges = true;
+      }
     }
 
-    await alliance.save();
+    if (hasPersistentChanges) {
+      await alliance.save();
+    }
     if (shouldBroadcastAllianceAnnouncement) {
-      await broadcastAllianceAnnouncement({
+      announcementTaskId = await broadcastAllianceAnnouncement({
         allianceId: alliance._id,
-        allianceName: alliance.name,
-        announcement: alliance.announcement,
-        actorUserId: adminUser._id
+        announcement: pendingAnnouncement,
+        actorUserId: adminUser._id,
+        actorUsername: adminUser.username || ''
       });
+      alliance.announcement = pendingAnnouncement;
+      alliance.announcementUpdatedAt = new Date();
     }
 
-    const updatedAlliance = await EntropyAlliance.findById(allianceId)
-      .populate('founder', 'username profession');
+    const updatedAlliance = hasPersistentChanges
+      ? await EntropyAlliance.findById(allianceId)
+          .populate('founder', 'username profession')
+      : alliance;
 
     res.json({
       success: true,
-      message: '熵盟信息已更新',
-      alliance: buildAlliancePayload(updatedAlliance)
+      message: announcementTaskId ? '熵盟信息已更新，公告广播任务已提交' : '熵盟信息已更新',
+      announcementTaskId: announcementTaskId || null,
+      alliance: buildAlliancePayload(updatedAlliance || alliance)
     });
   } catch (error) {
     console.error('更新熵盟失败:', error);

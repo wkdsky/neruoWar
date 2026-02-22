@@ -6,6 +6,8 @@
     "scripts": {
         "start": "node server.js",
         "dev": "nodemon server.js",
+        "worker": "node worker.js",
+        "seed-scalability": "node scripts/seed_scalability_dataset.js",
         "create-admin": "node scripts/createAdmin.js",
         "init-user-domain-preferences": "node scripts/initUserDomainPreferences.js",
         "migrate-all-data": "node scripts/migrateAllDataAndVerify.js --mode=migrate-verify --strict=true",

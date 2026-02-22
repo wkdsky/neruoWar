@@ -66,3 +66,8 @@ pm2 start npm --name frontend -- start
 
 当前保留脚本用途见：
 backend/scripts/README.md
+
+codex --sandbox workspace-write \
+  --ask-for-approval never \
+  -c sandbox_workspace_write.network_access=true \
+  -c features.use_linux_sandbox_bwrap=true

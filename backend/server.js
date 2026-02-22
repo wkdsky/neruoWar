@@ -3,27 +3,23 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
-const mongoose = require('mongoose');
 
 const connectDB = require('./config/database');
 const authRoutes = require('./routes/auth');
 const User = require('./models/User');
 const Node = require('./models/Node');
-const Notification = require('./models/Notification');
 const Army = require('./models/Army');
 const Technology = require('./models/Technology');
 const GameService = require('./services/GameService');
 const KnowledgeDistributionService = require('./services/KnowledgeDistributionService');
+const schedulerService = require('./services/schedulerService');
+const { processExpiredDomainAdminResignRequests } = require('./services/domainAdminResignService');
 const adminRoutes = require('./routes/admin');
 const nodeRoutes = require('./routes/nodes');
 const allianceRoutes = require('./routes/alliance');
 const armyRoutes = require('./routes/army');
 const senseRoutes = require('./routes/senses');
-const {
-  isNotificationCollectionReadEnabled,
-  upsertNotificationsToCollection,
-  writeNotificationsToCollection
-} = require('./services/notificationStore');
+const usersRoutes = require('./routes/users');
 // 初始化Express
 const app = express();
 const server = http.createServer(app);
@@ -54,204 +50,45 @@ app.use('/api/nodes', nodeRoutes);
 app.use('/api/alliances', allianceRoutes);
 app.use('/api/army', armyRoutes);
 app.use('/api/senses', senseRoutes);
+app.use('/api/users', usersRoutes);
 // 连接数据库
 connectDB();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
-const RESIGN_REQUEST_EXPIRE_MS = 3 * 24 * 60 * 60 * 1000;
 const ENABLE_LEGACY_SOCKET_HANDLERS = process.env.ENABLE_LEGACY_SOCKET_HANDLERS === 'true';
 const ENABLE_LEGACY_RESOURCE_TICK = process.env.ENABLE_LEGACY_RESOURCE_TICK === 'true';
 const ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS = process.env.ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS === 'true';
+const ENABLE_LEGACY_ADMIN_RESIGN_TICK = process.env.ENABLE_LEGACY_ADMIN_RESIGN_TICK === 'true';
+const ENABLE_LEGACY_DISTRIBUTION_TICK = process.env.ENABLE_LEGACY_DISTRIBUTION_TICK === 'true';
+const ENABLE_SCHEDULED_TASK_ENQUEUE = process.env.ENABLE_SCHEDULED_TASK_ENQUEUE !== 'false';
+const SCHEDULED_TASK_ENQUEUE_INTERVAL_MS = Math.max(
+  10 * 1000,
+  parseInt(process.env.SCHEDULED_TASK_ENQUEUE_INTERVAL_MS, 10) || 60 * 1000
+);
 
-const getIdString = (value) => {
-  if (!value) return '';
-  if (typeof value === 'string') return value;
-  if (value instanceof mongoose.Types.ObjectId) return value.toString();
-  if (typeof value === 'object' && value._id && value._id !== value) return getIdString(value._id);
-  if (typeof value === 'object' && typeof value.id === 'string' && value.id) return value.id;
-  if (typeof value.toString === 'function') {
-    const text = value.toString();
-    return text === '[object Object]' ? '' : text;
-  }
-  return '';
+const getTaskMinuteBucket = (date = new Date()) => {
+  const safeDate = date instanceof Date ? date : new Date(date);
+  return safeDate.toISOString().slice(0, 16);
 };
 
-const toCollectionNotificationDoc = (userId, notification = {}) => {
-  const source = typeof notification?.toObject === 'function' ? notification.toObject() : notification;
-  return {
-    ...source,
-    _id: source?._id,
-    userId
-  };
+const enqueueCoreScheduledTasks = async (baseTime = new Date()) => {
+  const runAt = baseTime instanceof Date ? baseTime : new Date(baseTime);
+  const minuteBucket = getTaskMinuteBucket(runAt);
+  await Promise.all([
+    schedulerService.enqueue({
+      type: 'domain_admin_resign_timeout_tick',
+      runAt,
+      payload: {},
+      dedupeKey: `domain_admin_resign_timeout_tick:${minuteBucket}`
+    }),
+    schedulerService.enqueue({
+      type: 'knowledge_distribution_tick',
+      runAt,
+      payload: {},
+      dedupeKey: `knowledge_distribution_tick:${minuteBucket}`
+    })
+  ]);
 };
-
-const pushNotificationToUser = (user, payload = {}) => {
-  if (!user) return null;
-  const notification = {
-    ...payload,
-    _id: payload?._id && mongoose.Types.ObjectId.isValid(String(payload._id))
-      ? new mongoose.Types.ObjectId(String(payload._id))
-      : new mongoose.Types.ObjectId(),
-    createdAt: payload?.createdAt ? new Date(payload.createdAt) : new Date()
-  };
-  user.notifications = Array.isArray(user.notifications) ? user.notifications : [];
-  user.notifications.unshift(notification);
-  return notification;
-};
-
-const processExpiredDomainAdminResignRequests = async () => {
-  const deadline = new Date(Date.now() - RESIGN_REQUEST_EXPIRE_MS);
-  if (isNotificationCollectionReadEnabled()) {
-    const expiredRows = await Notification.find({
-      type: 'domain_admin_resign_request',
-      status: 'pending',
-      createdAt: { $lte: deadline }
-    }).select('_id userId nodeId nodeName inviteeId').lean();
-
-    for (const row of expiredRows) {
-      const domainMasterId = getIdString(row?.userId);
-      const requesterId = getIdString(row?.inviteeId);
-      const nowDate = new Date();
-      let node = null;
-      let requester = null;
-
-      if (isValidObjectId(getIdString(row?.nodeId))) {
-        node = await Node.findById(row.nodeId).select('name status domainMaster domainAdmins');
-      }
-      if (isValidObjectId(requesterId)) {
-        requester = await User.findById(requesterId).select('_id username');
-      }
-
-      if (
-        node &&
-        node.status === 'approved' &&
-        getIdString(node.domainMaster) === domainMasterId
-      ) {
-        const before = (node.domainAdmins || []).length;
-        node.domainAdmins = (node.domainAdmins || []).filter((adminId) => getIdString(adminId) !== requesterId);
-        if (node.domainAdmins.length !== before) {
-          await node.save();
-        }
-      }
-
-      await Notification.updateOne(
-        { _id: row._id, status: 'pending' },
-        {
-          $set: {
-            status: 'accepted',
-            read: true,
-            respondedAt: nowDate
-          }
-        }
-      );
-
-      if (requester) {
-        const requesterNotification = {
-          _id: new mongoose.Types.ObjectId(),
-          userId: requester._id,
-          type: 'domain_admin_resign_result',
-          title: `卸任申请结果：${row?.nodeName || node?.name || '知识域'}`,
-          message: '你的卸任申请已超时自动同意',
-          read: false,
-          status: 'accepted',
-          nodeId: node?._id || row?.nodeId || null,
-          nodeName: node?.name || row?.nodeName || '',
-          inviterId: row?.userId || null,
-          inviterUsername: '',
-          inviteeId: requester._id,
-          inviteeUsername: requester.username || '',
-          respondedAt: nowDate,
-          createdAt: nowDate
-        };
-        await writeNotificationsToCollection([requesterNotification]);
-      }
-    }
-    return;
-  }
-
-  const candidates = await User.find({
-    notifications: {
-      $elemMatch: {
-        type: 'domain_admin_resign_request',
-        status: 'pending',
-        createdAt: { $lte: deadline }
-      }
-    }
-  });
-
-  for (const domainMaster of candidates) {
-    let changed = false;
-    const changedMasterNotificationDocs = [];
-
-    for (const notification of domainMaster.notifications || []) {
-      if (
-        notification.type !== 'domain_admin_resign_request' ||
-        notification.status !== 'pending' ||
-        new Date(notification.createdAt || 0).getTime() > deadline.getTime()
-      ) {
-        continue;
-      }
-
-      const nodeId = getIdString(notification.nodeId);
-      const requesterId = getIdString(notification.inviteeId);
-      const nowDate = new Date();
-      let node = null;
-      let requester = null;
-
-      if (nodeId) {
-        node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
-      }
-      if (requesterId) {
-        requester = await User.findById(requesterId);
-      }
-
-      if (node && node.status === 'approved' && getIdString(node.domainMaster) === getIdString(domainMaster._id)) {
-        const before = (node.domainAdmins || []).length;
-        node.domainAdmins = (node.domainAdmins || []).filter((adminId) => getIdString(adminId) !== requesterId);
-        if (node.domainAdmins.length !== before) {
-          await node.save();
-        }
-      }
-
-      notification.status = 'accepted';
-      notification.read = true;
-      notification.respondedAt = nowDate;
-      changed = true;
-      changedMasterNotificationDocs.push(toCollectionNotificationDoc(domainMaster._id, notification));
-
-      if (requester) {
-        const requesterNotification = pushNotificationToUser(requester, {
-          type: 'domain_admin_resign_result',
-          title: `卸任申请结果：${notification.nodeName || node?.name || '知识域'}`,
-          message: '你的卸任申请已超时自动同意',
-          read: false,
-          status: 'accepted',
-          nodeId: node?._id || notification.nodeId || null,
-          nodeName: node?.name || notification.nodeName || '',
-          inviterId: domainMaster._id,
-          inviterUsername: domainMaster.username,
-          inviteeId: requester._id,
-          inviteeUsername: requester.username,
-          respondedAt: nowDate,
-          createdAt: nowDate
-        });
-        await requester.save();
-        await writeNotificationsToCollection([
-          toCollectionNotificationDoc(requester._id, requesterNotification)
-        ]);
-      }
-    }
-
-    if (changed) {
-      await domainMaster.save();
-      if (changedMasterNotificationDocs.length > 0) {
-        await upsertNotificationsToCollection(changedMasterNotificationDocs);
-      }
-    }
-  }
-};
-
-const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // 健康检查
 app.get('/health', (req, res) => {
@@ -507,23 +344,40 @@ if (ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS) {
   }, 1000);
 }
 
-// 定时任务：自动处理超时的管理员卸任申请（3天）
-setInterval(async () => {
-  try {
-    await processExpiredDomainAdminResignRequests();
-  } catch (error) {
-    console.error('自动处理卸任申请错误:', error);
-  }
-}, 60 * 1000);
+if (ENABLE_LEGACY_ADMIN_RESIGN_TICK) {
+  // 旧模式：自动处理超时的管理员卸任申请（默认关闭）
+  setInterval(async () => {
+    try {
+      await processExpiredDomainAdminResignRequests();
+    } catch (error) {
+      console.error('自动处理卸任申请错误:', error);
+    }
+  }, 60 * 1000);
+}
 
-// 定时任务：知识点分发公告与执行
-setInterval(async () => {
-  try {
-    await KnowledgeDistributionService.processTick();
-  } catch (error) {
-    console.error('知识点分发调度错误:', error);
-  }
-}, 60 * 1000);
+if (ENABLE_LEGACY_DISTRIBUTION_TICK) {
+  // 旧模式：知识点分发公告与执行（默认关闭）
+  setInterval(async () => {
+    try {
+      await KnowledgeDistributionService.processTick();
+    } catch (error) {
+      console.error('知识点分发调度错误:', error);
+    }
+  }, 60 * 1000);
+}
+
+if (!ENABLE_LEGACY_ADMIN_RESIGN_TICK && !ENABLE_LEGACY_DISTRIBUTION_TICK && ENABLE_SCHEDULED_TASK_ENQUEUE) {
+  // 新模式：API 进程仅负责 enqueue，真正执行由 worker 处理
+  const enqueueWithLog = async () => {
+    try {
+      await enqueueCoreScheduledTasks(new Date());
+    } catch (error) {
+      console.error('ScheduledTask enqueue 错误:', error);
+    }
+  };
+  enqueueWithLog();
+  setInterval(enqueueWithLog, SCHEDULED_TASK_ENQUEUE_INTERVAL_MS);
+}
 
 // 启动服务��
 const PORT = process.env.PORT || 5000;

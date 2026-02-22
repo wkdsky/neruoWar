@@ -249,6 +249,10 @@ const userSchema = new mongoose.Schema({
     ref: 'EntropyAlliance',
     default: null  // 默认不属于任何熵盟
   },
+  allianceBroadcastSeenAt: {
+    type: Date,
+    default: null
+  },
   profession: {
     type: String,
     default: '求知'  // 默认职业为"求知"

@@ -288,6 +288,16 @@ const NodeLockedDistributionSchema = new mongoose.Schema({
     type: [DistributionParticipantSchema],
     default: []
   },
+  distributedTotal: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  rewardParticipantCount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   resultUserRewards: {
     type: [DistributionResultUserRewardSchema],
     default: []
@@ -305,6 +315,7 @@ const CITY_BUILDING_MAX_RADIUS = 0.24;
 const CITY_BUILDING_MIN_DISTANCE = 0.34;
 const CITY_BUILDING_MAX_DISTANCE = 0.86;
 const CITY_GATE_KEYS = ['cheng', 'qi'];
+const SIEGE_EMBEDDED_PREVIEW_LIMIT = Math.max(1, parseInt(process.env.SIEGE_EMBEDDED_PREVIEW_LIMIT, 10) || 50);
 const LEGACY_TITLE_STATE_EMBED_WRITE_ENABLED = process.env.NODE_LEGACY_TITLE_STATE_EMBED_WRITE === 'true';
 
 const CityBuildingSchema = new mongoose.Schema({
@@ -484,6 +495,11 @@ const CitySiegeGateStateSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  participantCount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   attackers: {
     type: [CitySiegeAttackerSchema],
     default: []
@@ -563,6 +579,7 @@ const createDefaultCitySiegeState = () => ({
     attackerAllianceId: null,
     initiatorUserId: null,
     initiatorUsername: '',
+    participantCount: 0,
     attackers: []
   },
   qi: {
@@ -573,6 +590,7 @@ const createDefaultCitySiegeState = () => ({
     attackerAllianceId: null,
     initiatorUserId: null,
     initiatorUsername: '',
+    participantCount: 0,
     attackers: []
   }
 });
@@ -1192,6 +1210,11 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
           updatedAt: item?.updatedAt || null
         };
       }).filter((item) => !!getIdString(item.userId));
+      const participantCount = Math.max(
+        attackers.length,
+        Math.max(0, Math.floor(Number(gateState?.participantCount) || 0))
+      );
+      const previewAttackers = attackers.slice(0, SIEGE_EMBEDDED_PREVIEW_LIMIT);
       const hasActiveAttacker = attackers.some((item) => item.status === 'moving' || item.status === 'sieging');
       return {
         active: !!gateState?.active && hasActiveAttacker,
@@ -1201,7 +1224,8 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
         attackerAllianceId: gateState?.attackerAllianceId || null,
         initiatorUserId: gateState?.initiatorUserId || null,
         initiatorUsername: typeof gateState?.initiatorUsername === 'string' ? gateState.initiatorUsername : '',
-        attackers
+        participantCount,
+        attackers: previewAttackers
       };
     };
     this.citySiegeState = {
