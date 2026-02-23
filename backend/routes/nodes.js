@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const Node = require('../models/Node');
 const NodeSense = require('../models/NodeSense');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const DistributionParticipant = require('../models/DistributionParticipant');
 const DistributionResult = require('../models/DistributionResult');
 const EntropyAlliance = require('../models/EntropyAlliance');
@@ -21,7 +22,11 @@ const {
   findUserActiveParticipants
 } = require('../services/siegeParticipantStore');
 const { fetchArmyUnitTypes } = require('../services/armyUnitTypeService');
-const { upsertNotificationsToCollection, writeNotificationsToCollection } = require('../services/notificationStore');
+const {
+  isNotificationCollectionReadEnabled,
+  upsertNotificationsToCollection,
+  writeNotificationsToCollection
+} = require('../services/notificationStore');
 const {
   findShortestApprovedPathToAnyTargets,
   listApprovedNodesByNames
@@ -210,6 +215,10 @@ const buildNodeSenseDisplayName = (nodeName = '', senseTitle = '') => {
   const safeTitle = typeof senseTitle === 'string' ? senseTitle.trim() : '';
   return safeTitle ? `${safeName}-${safeTitle}` : safeName;
 };
+
+const normalizeRecentVisitMode = (value) => (
+  value === 'sense' ? 'sense' : 'title'
+);
 
 const normalizeAssociationRelationType = (value) => (
   value === 'contains' || value === 'extends' || value === 'insert' ? value : ''
@@ -3859,6 +3868,7 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
   try {
     const page = toSafeInteger(req.query?.page, 1, { min: 1, max: 1000000 });
     const pageSize = toSafeInteger(req.query?.pageSize, 50, { min: 1, max: 200 });
+    const requestLatest = req.query?.latest === '1' || req.query?.latest === 'true';
     const statusFilter = typeof req.query?.status === 'string' ? req.query.status.trim() : '';
     const keyword = typeof req.query?.keyword === 'string' ? req.query.keyword.trim() : '';
     const query = {};
@@ -3886,15 +3896,23 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
       Node.countDocuments(query)
     ]);
     await hydrateNodeSensesForNodes(nodes);
+    const responseNodes = Array.isArray(nodes) ? nodes : [];
+    if (requestLatest) {
+      const now = new Date();
+      responseNodes.forEach((node) => {
+        Node.applyKnowledgePointProjection(node, now);
+      });
+    }
     
     res.json({
       success: true,
-      count: nodes.length,
+      count: responseNodes.length,
       total,
       page,
       pageSize,
       hasMore: page * pageSize < total,
-      nodes: nodes
+      latest: requestLatest,
+      nodes: responseNodes
     });
   } catch (error) {
     console.error('获取节点列表错误:', error);
@@ -5175,6 +5193,7 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
   try {
     const { nodeId } = req.params;
     const requestedSenseId = typeof req.query?.senseId === 'string' ? req.query.senseId.trim() : '';
+    const includeFavoriteCount = req.query?.includeFavoriteCount === '1';
     if (!isValidObjectId(nodeId)) {
       return res.status(400).json({ error: '无效的节点ID' });
     }
@@ -5195,7 +5214,7 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
         select: 'username profession avatar level allianceId',
         populate: { path: 'allianceId', select: 'name flag visualStyles activeVisualStyleId' }
       })
-      .select('name description synonymSenses owner domainMaster domainAdmins allianceId associations relatedParentDomains relatedChildDomains knowledgePoint contentScore createdAt status');
+      .select('name description synonymSenses owner domainMaster domainAdmins allianceId associations relatedParentDomains relatedChildDomains knowledgePoint prosperity contentScore createdAt status');
 
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
@@ -5299,7 +5318,15 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
       };
     };
 
+    const now = new Date();
+    const applyProjectedKnowledgePoint = (nodeLike) => {
+      if (!nodeLike || typeof nodeLike !== 'object') return nodeLike;
+      Node.applyKnowledgePointProjection(nodeLike, now);
+      return nodeLike;
+    };
+
     const nodeObj = node.toObject();
+    applyProjectedKnowledgePoint(nodeObj);
     nodeObj.synonymSenses = nodeSenses;
     nodeObj.activeSenseId = activeSenseId;
     nodeObj.activeSenseTitle = activeSense?.title || '';
@@ -5310,9 +5337,17 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     nodeObj.domainAdmins = Array.isArray(node.domainAdmins)
       ? node.domainAdmins.map(normalizeUserForNodeDetail).filter(Boolean)
       : [];
+    const favoriteUserCount = includeFavoriteCount
+      ? await User.countDocuments({ favoriteDomains: node._id })
+      : null;
+    if (favoriteUserCount !== null) {
+      nodeObj.favoriteUserCount = Number(favoriteUserCount) || 0;
+    }
     const [styledNode] = await attachVisualStyleToNodeList([nodeObj]);
-    const styledParentNodes = await attachVisualStyleToNodeList(parentNodes.map(decorateNodeWithSense));
-    const styledChildNodes = await attachVisualStyleToNodeList(childNodes.map(decorateNodeWithSense));
+    const decoratedParentNodes = parentNodes.map((item) => applyProjectedKnowledgePoint(decorateNodeWithSense(item)));
+    const decoratedChildNodes = childNodes.map((item) => applyProjectedKnowledgePoint(decorateNodeWithSense(item)));
+    const styledParentNodes = await attachVisualStyleToNodeList(decoratedParentNodes);
+    const styledChildNodes = await attachVisualStyleToNodeList(decoratedChildNodes);
 
     res.json({
       success: true,
@@ -5566,12 +5601,42 @@ router.get('/me/related-domains', authenticateToken, async (req, res) => {
         const nodeId = getIdString(item.nodeId);
         const node = recentNodeMap.get(nodeId);
         if (!node) return null;
+        const visitMode = normalizeRecentVisitMode(item?.visitMode);
+        const rawSenseId = typeof item?.senseId === 'string' ? item.senseId.trim() : '';
+        const selectedSense = visitMode === 'sense'
+          ? pickNodeSenseById(node, rawSenseId)
+          : null;
+        const selectedSenseId = visitMode === 'sense'
+          ? (selectedSense?.senseId || rawSenseId)
+          : '';
+        const selectedSenseTitle = visitMode === 'sense'
+          ? (selectedSense?.title || '')
+          : '';
+        const recentVisitDisplayName = visitMode === 'sense'
+          ? buildNodeSenseDisplayName(node.name || '', selectedSenseTitle)
+          : (node.name || '');
         return {
           ...node,
-          visitedAt: item.visitedAt
+          visitedAt: item.visitedAt,
+          recentVisitMode: visitMode,
+          recentVisitSenseId: selectedSenseId,
+          recentVisitSenseTitle: selectedSenseTitle,
+          recentVisitDisplayName
         };
       })
       .filter(Boolean);
+
+    const now = new Date();
+    const applyKnowledgePointProjectionForList = (list = []) => {
+      (Array.isArray(list) ? list : []).forEach((item) => {
+        if (!item || typeof item !== 'object') return;
+        Node.applyKnowledgePointProjection(item, now);
+      });
+    };
+    applyKnowledgePointProjectionForList(domainMasterDomains);
+    applyKnowledgePointProjectionForList(domainAdminDomains);
+    applyKnowledgePointProjectionForList(favoriteDomains);
+    applyKnowledgePointProjectionForList(recentDomains);
 
     res.json({
       success: true,
@@ -5647,10 +5712,32 @@ router.post('/:nodeId/recent-visit', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: '用户不存在' });
     }
 
+    const visitModeInput = typeof req.body?.mode === 'string'
+      ? req.body.mode
+      : req.body?.visitMode;
+    const visitMode = normalizeRecentVisitMode(
+      visitModeInput || (typeof req.body?.senseId === 'string' && req.body.senseId.trim() ? 'sense' : 'title')
+    );
+    const senseId = visitMode === 'sense' && typeof req.body?.senseId === 'string'
+      ? req.body.senseId.trim()
+      : '';
+
     const targetId = getIdString(node._id);
-    const filtered = (user.recentVisitedDomains || []).filter((item) => getIdString(item?.nodeId) !== targetId);
+    const filtered = (user.recentVisitedDomains || []).filter((item) => {
+      if (getIdString(item?.nodeId) !== targetId) return true;
+      const itemMode = normalizeRecentVisitMode(item?.visitMode);
+      const itemSenseId = itemMode === 'sense' && typeof item?.senseId === 'string'
+        ? item.senseId.trim()
+        : '';
+      return !(itemMode === visitMode && itemSenseId === senseId);
+    });
     user.recentVisitedDomains = [
-      { nodeId: node._id, visitedAt: new Date() },
+      {
+        nodeId: node._id,
+        visitMode,
+        senseId,
+        visitedAt: new Date()
+      },
       ...filtered
     ].slice(0, 50);
 
@@ -5824,12 +5911,25 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
       });
     }
 
-    const hasPendingRequest = (domainMaster.notifications || []).some((notification) => (
-      notification.type === 'domain_admin_resign_request' &&
-      notification.status === 'pending' &&
-      getIdString(notification.nodeId) === nodeId &&
-      getIdString(notification.inviteeId) === requestUserId
-    ));
+    const useCollectionNotification = isNotificationCollectionReadEnabled();
+    let hasPendingRequest = false;
+    if (useCollectionNotification) {
+      const pendingDoc = await Notification.findOne({
+        userId: domainMaster._id,
+        type: 'domain_admin_resign_request',
+        status: 'pending',
+        nodeId: node._id,
+        inviteeId: requester._id
+      }).select('_id').lean();
+      hasPendingRequest = !!pendingDoc;
+    } else {
+      hasPendingRequest = (domainMaster.notifications || []).some((notification) => (
+        notification.type === 'domain_admin_resign_request' &&
+        notification.status === 'pending' &&
+        getIdString(notification.nodeId) === nodeId &&
+        getIdString(notification.inviteeId) === requestUserId
+      ));
+    }
 
     if (hasPendingRequest) {
       return res.status(409).json({ error: '你已提交过卸任申请，请等待域主处理' });
@@ -5972,13 +6072,25 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
     const canResign = !canEdit && !isSystemAdmin && isDomainAdmin(node, requestUserId);
     let resignPending = false;
     if (canResign && isValidObjectId(domainMasterId)) {
-      const domainMaster = await User.findById(domainMasterId).select('notifications');
-      resignPending = !!(domainMaster?.notifications || []).some((notification) => (
-        notification.type === 'domain_admin_resign_request' &&
-        notification.status === 'pending' &&
-        getIdString(notification.nodeId) === nodeId &&
-        getIdString(notification.inviteeId) === requestUserId
-      ));
+      const useCollectionNotification = isNotificationCollectionReadEnabled();
+      if (useCollectionNotification) {
+        const pendingDoc = await Notification.findOne({
+          userId: domainMasterId,
+          type: 'domain_admin_resign_request',
+          status: 'pending',
+          nodeId,
+          inviteeId: requestUserId
+        }).select('_id').lean();
+        resignPending = !!pendingDoc;
+      } else {
+        const domainMaster = await User.findById(domainMasterId).select('notifications');
+        resignPending = !!(domainMaster?.notifications || []).some((notification) => (
+          notification.type === 'domain_admin_resign_request' &&
+          notification.status === 'pending' &&
+          getIdString(notification.nodeId) === nodeId &&
+          getIdString(notification.inviteeId) === requestUserId
+        ));
+      }
     }
 
     res.json({

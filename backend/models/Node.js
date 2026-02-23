@@ -607,7 +607,8 @@ const computeKnowledgePointSnapshot = ({
     : nowMs;
   const minutesElapsed = Math.max(0, (nowMs - lastUpdatedMs) / (1000 * 60));
   const baseValue = Number(knowledgePoint?.value) || 0;
-  const score = Number(contentScore) || 0;
+  const rawScore = Number(contentScore);
+  const score = Number.isFinite(rawScore) && rawScore > 0 ? rawScore : 1;
   const increment = minutesElapsed * score;
   const nextValue = parseFloat((baseValue + increment).toFixed(2));
   return {

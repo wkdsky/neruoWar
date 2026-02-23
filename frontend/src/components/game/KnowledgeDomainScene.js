@@ -42,20 +42,6 @@ const getNodeDisplayName = (node) => {
   return senseTitle ? `${name}-${senseTitle}` : (name || '知识域');
 };
 
-const getNodeSenseTitle = (node) => {
-  if (typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()) return node.activeSenseTitle.trim();
-  const sense = getNodePrimarySense(node);
-  return typeof sense?.title === 'string' ? sense.title.trim() : '';
-};
-
-const getNodeSenseContent = (node) => {
-  if (typeof node?.activeSenseContent === 'string' && node.activeSenseContent.trim()) return node.activeSenseContent.trim();
-  const sense = getNodePrimarySense(node);
-  if (typeof sense?.content === 'string' && sense.content.trim()) return sense.content.trim();
-  if (typeof node?.knowledge === 'string' && node.knowledge.trim()) return node.knowledge.trim();
-  return '';
-};
-
 const DISTRIBUTION_SCOPE_OPTIONS = [
   { value: 'all', label: '全部分发（100%）' },
   { value: 'partial', label: '部分分发（按比例）' }
@@ -917,6 +903,7 @@ const KnowledgeDomainScene = ({
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isSearchingUsers, setIsSearchingUsers] = useState(false);
+  const [hasSearchedAdminUsers, setHasSearchedAdminUsers] = useState(false);
   const [invitingUsername, setInvitingUsername] = useState('');
   const [revokingInviteId, setRevokingInviteId] = useState('');
   const [removingAdminId, setRemovingAdminId] = useState('');
@@ -936,6 +923,14 @@ const KnowledgeDomainScene = ({
   const [newDistributionRuleName, setNewDistributionRuleName] = useState('');
   const [distributionClockMs, setDistributionClockMs] = useState(Date.now());
   const [hasUnsavedDistributionDraft, setHasUnsavedDistributionDraft] = useState(false);
+  const [infoPanelNode, setInfoPanelNode] = useState(node || null);
+  const [isRefreshingInfoPanel, setIsRefreshingInfoPanel] = useState(false);
+  const [infoPanelError, setInfoPanelError] = useState('');
+  const [distributionToast, setDistributionToast] = useState({
+    visible: false,
+    message: '',
+    type: 'info'
+  });
   const [activeManageSidePanel, setActiveManageSidePanel] = useState('');
   const [isDomainInfoDockExpanded, setIsDomainInfoDockExpanded] = useState(false);
   const [defenseLayoutState, setDefenseLayoutState] = useState(createDefaultDefenseLayoutState);
@@ -982,6 +977,7 @@ const KnowledgeDomainScene = ({
   const intelHeistHintTimerRef = useRef(null);
   const intelHeistScanRequestRef = useRef('');
   const intelHeistPauseStartedAtRef = useRef(0);
+  const distributionToastTimerRef = useRef(null);
   const isIntelHeistMode = mode === 'intelHeist';
   const showManageTab = !!domainAdminState.canView;
   const hasParentEntrance = Array.isArray(node?.relatedParentDomains) && node.relatedParentDomains.length > 0;
@@ -1004,6 +1000,44 @@ const KnowledgeDomainScene = ({
     fallback
   );
 
+  const refreshDomainInfoPanel = async (silent = false) => {
+    const nodeId = typeof node?._id === 'string'
+      ? node._id
+      : (typeof node?._id?.toString === 'function' ? node._id.toString() : '');
+    if (!nodeId) return null;
+
+    if (!silent) {
+      setIsRefreshingInfoPanel(true);
+      setInfoPanelError('');
+    }
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}?includeFavoriteCount=1`);
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data?.node) {
+        if (!silent) {
+          setInfoPanelError(getApiError(parsed, '刷新知识域信息失败'));
+        }
+        return null;
+      }
+      setInfoPanelNode(data.node);
+      if (!silent) {
+        setInfoPanelError('');
+      }
+      return data.node;
+    } catch (error) {
+      if (!silent) {
+        setInfoPanelError(`刷新知识域信息失败: ${error.message}`);
+      }
+      return null;
+    } finally {
+      if (!silent) {
+        setIsRefreshingInfoPanel(false);
+      }
+    }
+  };
+
   const toggleManageSidePanel = (section) => {
     setActiveManageSidePanel((prev) => (prev === section ? '' : section));
   };
@@ -1016,6 +1050,13 @@ const KnowledgeDomainScene = ({
       unitName: '',
       max: 1
     });
+  };
+
+  const clearDistributionToastTimer = () => {
+    if (distributionToastTimerRef.current) {
+      clearTimeout(distributionToastTimerRef.current);
+      distributionToastTimerRef.current = null;
+    }
   };
 
   const clearIntelHeistHintTimer = () => {
@@ -1871,12 +1912,58 @@ const KnowledgeDomainScene = ({
       setManageFeedback(data.message || '邀请已发送');
       setSearchKeyword('');
       setSearchResults([]);
+      setHasSearchedAdminUsers(false);
       await fetchDomainAdmins(true);
       await fetchDistributionSettings(true);
     } catch (error) {
       setManageFeedback(`发送邀请失败: ${error.message}`);
     } finally {
       setInvitingUsername('');
+    }
+  };
+
+  const clearDomainAdminSearch = () => {
+    setSearchKeyword('');
+    setSearchResults([]);
+    setManageFeedback('');
+    setHasSearchedAdminUsers(false);
+  };
+
+  const searchDomainAdminUsers = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id || !domainAdminState.canEdit) return;
+
+    const keyword = searchKeyword.trim();
+    if (!keyword) {
+      setSearchResults([]);
+      setHasSearchedAdminUsers(false);
+      return;
+    }
+
+    setManageFeedback('');
+    setIsSearchingUsers(true);
+    setHasSearchedAdminUsers(true);
+
+    try {
+      const response = await fetch(
+        `http://localhost:5000/api/nodes/${node._id}/domain-admins/search-users?keyword=${encodeURIComponent(keyword)}`,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        setSearchResults([]);
+        setManageFeedback(getApiError(parsed, '搜索用户失败'));
+        return;
+      }
+      setSearchResults(data.users || []);
+    } catch (error) {
+      setSearchResults([]);
+      setManageFeedback(`搜索用户失败: ${error.message}`);
+    } finally {
+      setIsSearchingUsers(false);
     }
   };
 
@@ -2151,9 +2238,10 @@ const KnowledgeDomainScene = ({
     setHasUnsavedDistributionDraft(true);
   };
 
-  const fetchDistributionSettings = async (silent = true, forceApplyRules = false) => {
+  const fetchDistributionSettings = async (silent = true, forceApplyRules = false, options = {}) => {
     const token = localStorage.getItem('token');
     if (!token || !node?._id) return;
+    const preserveFeedback = options?.preserveFeedback === true;
 
     if (!silent) {
       setDistributionState((prev) => ({ ...prev, loading: true, error: '', feedback: '' }));
@@ -2253,7 +2341,7 @@ const KnowledgeDomainScene = ({
           saving: false,
           publishing: false,
           error: '',
-          feedback: shouldPreserveLocalDraft ? prev.feedback : '',
+          feedback: (preserveFeedback || shouldPreserveLocalDraft) ? prev.feedback : '',
           canView: !!data.canView,
           canEdit: !!data.canEdit,
           isRuleLocked: !!data.isRuleLocked,
@@ -2354,7 +2442,7 @@ const KnowledgeDomainScene = ({
         isRuleLocked: !!data.isRuleLocked
       }));
       setHasUnsavedDistributionDraft(false);
-      await fetchDistributionSettings(true, true);
+      await fetchDistributionSettings(true, true, { preserveFeedback: true });
     } catch (error) {
       setDistributionState((prev) => ({
         ...prev,
@@ -2454,7 +2542,7 @@ const KnowledgeDomainScene = ({
         feedback: data.message || '分发计划已发布并锁定，不可撤回'
       }));
       setHasUnsavedDistributionDraft(false);
-      await fetchDistributionSettings(true, true);
+      await fetchDistributionSettings(true, true, { preserveFeedback: true });
     } catch (error) {
       setDistributionState((prev) => ({
         ...prev,
@@ -2468,6 +2556,48 @@ const KnowledgeDomainScene = ({
   const displayOpacity = transitionProgress < 0.4
     ? 0
     : Math.min(1, (transitionProgress - 0.4) / 0.5);
+
+  useEffect(() => {
+    return () => {
+      clearDistributionToastTimer();
+    };
+  }, []);
+
+  useEffect(() => {
+    setInfoPanelNode(node || null);
+    setInfoPanelError('');
+    setIsRefreshingInfoPanel(false);
+  }, [node]);
+
+  useEffect(() => {
+    if (!isDistributionRuleModalOpen) {
+      clearDistributionToastTimer();
+      setDistributionToast((prev) => ({ ...prev, visible: false }));
+      return;
+    }
+    const openToast = (rawMessage, type = 'info') => {
+      const normalizedMessage = typeof rawMessage === 'string' ? rawMessage.trim() : '';
+      if (!normalizedMessage) return;
+      clearDistributionToastTimer();
+      setDistributionToast({
+        visible: true,
+        message: normalizedMessage,
+        type: type === 'error' ? 'error' : (type === 'success' ? 'success' : 'info')
+      });
+      distributionToastTimerRef.current = setTimeout(() => {
+        setDistributionToast((prev) => ({ ...prev, visible: false }));
+        distributionToastTimerRef.current = null;
+      }, 2200);
+    };
+    if (distributionState.error) {
+      openToast(distributionState.error, 'error');
+      return;
+    }
+    if (distributionState.feedback) {
+      const isSuccessFeedback = /(已保存|已发布|成功|已提交)/.test(distributionState.feedback);
+      openToast(distributionState.feedback, isSuccessFeedback ? 'success' : 'info');
+    }
+  }, [isDistributionRuleModalOpen, distributionState.error, distributionState.feedback]);
 
   useEffect(() => {
     if (!isVisible || !canvasRef.current) return;
@@ -2523,6 +2653,7 @@ const KnowledgeDomainScene = ({
     setActiveTab('info');
     setSearchKeyword('');
     setSearchResults([]);
+    setHasSearchedAdminUsers(false);
     setManageFeedback('');
     setDistributionUserKeyword('');
     setDistributionUserResults([]);
@@ -2565,51 +2696,6 @@ const KnowledgeDomainScene = ({
       setActiveTab('info');
     }
   }, [showManageTab, activeTab]);
-
-  useEffect(() => {
-    if (!isVisible || activeTab !== 'manage' || !node?._id || !domainAdminState.canEdit) {
-      setSearchResults([]);
-      return undefined;
-    }
-
-    const keyword = searchKeyword.trim();
-    if (!keyword) {
-      setSearchResults([]);
-      return undefined;
-    }
-
-    const timerId = setTimeout(async () => {
-      const token = localStorage.getItem('token');
-      if (!token) return;
-
-      setIsSearchingUsers(true);
-      try {
-        const response = await fetch(
-          `http://localhost:5000/api/nodes/${node._id}/domain-admins/search-users?keyword=${encodeURIComponent(keyword)}`,
-          {
-            headers: { Authorization: `Bearer ${token}` }
-          }
-        );
-        const parsed = await parseApiResponse(response);
-        const data = parsed.data;
-        if (!response.ok || !data) {
-          setSearchResults([]);
-          setManageFeedback(getApiError(parsed, '搜索用户失败'));
-          return;
-        }
-        setSearchResults(data.users || []);
-      } catch (error) {
-        setSearchResults([]);
-        setManageFeedback(`搜索用户失败: ${error.message}`);
-      } finally {
-        setIsSearchingUsers(false);
-      }
-    }, 300);
-
-    return () => {
-      clearTimeout(timerId);
-    };
-  }, [activeTab, isVisible, node?._id, searchKeyword, domainAdminState.canEdit]);
 
   useEffect(() => {
     if (!isVisible || activeTab !== 'manage' || !node?._id || hasUnsavedDistributionDraft) return;
@@ -3037,9 +3123,14 @@ const KnowledgeDomainScene = ({
     username: adminUser.username,
     percent: adminPercentMap.get(adminUser._id) || 0
   }));
+  const infoPanelDomainNode = infoPanelNode || node || null;
   const currentPercentSummary = computePercentSummary(distributionRule, distributionState.allianceContributionPercent);
   const scopePercent = getDistributionScopePercent(distributionRule);
   const unallocatedPercent = Math.max(0, 100 - currentPercentSummary.total);
+  const infoKnowledgePointValue = Number(infoPanelDomainNode?.knowledgePoint?.value);
+  const infoProsperityValue = Number(infoPanelDomainNode?.prosperity);
+  const infoContentScoreValue = Number(infoPanelDomainNode?.contentScore);
+  const infoFavoriteUserCountValue = Number(infoPanelDomainNode?.favoriteUserCount);
 
   const lockedDistribution = distributionState.locked || null;
   const lockedExecuteMs = new Date(lockedDistribution?.executeAt || 0).getTime();
@@ -3108,12 +3199,12 @@ const KnowledgeDomainScene = ({
     && defenseLayoutState.buildMode
     && (defenseLayoutState.draftLayout?.buildings || []).length < defenseLayoutState.maxBuildings
   );
-  const masterFromNode = normalizeDomainManagerUser(node?.domainMaster);
+  const masterFromNode = normalizeDomainManagerUser(infoPanelDomainNode?.domainMaster);
   const masterFromAdminState = normalizeDomainManagerUser(domainAdminState.domainMaster);
   const displayMaster = masterFromNode || masterFromAdminState || null;
   const adminSourceList = [];
-  if (Array.isArray(node?.domainAdmins)) {
-    adminSourceList.push(...node.domainAdmins);
+  if (Array.isArray(infoPanelDomainNode?.domainAdmins)) {
+    adminSourceList.push(...infoPanelDomainNode.domainAdmins);
   }
   if (Array.isArray(domainAdminState.domainAdmins)) {
     adminSourceList.push(...domainAdminState.domainAdmins);
@@ -3445,7 +3536,12 @@ const KnowledgeDomainScene = ({
           <button
             type="button"
             className={`domain-tab-btn ${activeTab === 'info' ? 'active' : ''}`}
-            onClick={() => setActiveTab('info')}
+            onClick={() => {
+              setActiveTab('info');
+              if (isDomainInfoDockExpanded) {
+                refreshDomainInfoPanel(true);
+              }
+            }}
           >
             知识域信息
           </button>
@@ -3466,22 +3562,35 @@ const KnowledgeDomainScene = ({
 
         {activeTab === 'info' || !showManageTab ? (
           <div className="domain-tab-content">
-            <h2 className="domain-title">{getNodeDisplayName(node)}</h2>
-            {node?.description && <p className="domain-description">{`概述：${node.description}`}</p>}
-            {getNodeSenseTitle(node) && (
-              <p className="domain-description">{`当前释义：${getNodeSenseTitle(node)}`}</p>
-            )}
-            {getNodeSenseContent(node) && (
-              <p className="domain-description">{`释义内容：${getNodeSenseContent(node)}`}</p>
-            )}
+            <div className="domain-title-row">
+              <h2 className="domain-title">{infoPanelDomainNode?.name || '未命名知识域'}</h2>
+              <button
+                type="button"
+                className="btn btn-small btn-secondary domain-info-refresh-btn"
+                onClick={() => refreshDomainInfoPanel(false)}
+                disabled={isRefreshingInfoPanel}
+              >
+                {isRefreshingInfoPanel ? '刷新中...' : '刷新'}
+              </button>
+            </div>
+            {infoPanelError && <div className="domain-manage-error">{infoPanelError}</div>}
+            {infoPanelDomainNode?.description && <p className="domain-description">{`概述：${infoPanelDomainNode.description}`}</p>}
             <div className="domain-stats">
               <div className="stat-item">
                 <span className="stat-label">知识点</span>
-                <span className="stat-value">{node?.knowledgePoint?.value?.toFixed(2) || '0.00'}</span>
+                <span className="stat-value">{Number.isFinite(infoKnowledgePointValue) ? infoKnowledgePointValue.toFixed(2) : '--'}</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">繁荣度</span>
+                <span className="stat-value">{Number.isFinite(infoProsperityValue) ? Math.round(infoProsperityValue) : '--'}</span>
               </div>
               <div className="stat-item">
                 <span className="stat-label">内容分数</span>
-                <span className="stat-value">{node?.contentScore || 1}</span>
+                <span className="stat-value">{Number.isFinite(infoContentScoreValue) ? infoContentScoreValue.toFixed(2) : '--'}</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">收藏人数</span>
+                <span className="stat-value">{Number.isFinite(infoFavoriteUserCountValue) ? Math.max(0, Math.round(infoFavoriteUserCountValue)) : '--'}</span>
               </div>
             </div>
             <div className="domain-managers-card">
@@ -3723,18 +3832,52 @@ const KnowledgeDomainScene = ({
                         {domainAdminState.canEdit ? (
                           <div className="domain-admin-invite">
                             <div className="domain-admins-subtitle">邀请普通用户成为域相</div>
-                            <input
-                              type="text"
-                              className="domain-admin-search-input"
-                              placeholder="输入用户名自动搜索"
-                              value={searchKeyword}
-                              onChange={(e) => {
-                                setSearchKeyword(e.target.value);
-                                setManageFeedback('');
-                              }}
-                            />
+                            <div className="domain-admin-search-row">
+                              <div className="domain-admin-search-input-wrap">
+                                <input
+                                  type="text"
+                                  className={`domain-admin-search-input ${searchKeyword.trim() ? 'has-clear' : ''}`}
+                                  placeholder="输入用户名后回车或点击搜索"
+                                  value={searchKeyword}
+                                  onChange={(e) => {
+                                    const nextValue = e.target.value;
+                                    setSearchKeyword(nextValue);
+                                    setManageFeedback('');
+                                    setHasSearchedAdminUsers(false);
+                                    if (!nextValue.trim()) {
+                                      setSearchResults([]);
+                                    }
+                                  }}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                      event.preventDefault();
+                                      searchDomainAdminUsers();
+                                    }
+                                  }}
+                                />
+                                {searchKeyword.trim() && (
+                                  <button
+                                    type="button"
+                                    className="domain-admin-search-clear"
+                                    onClick={clearDomainAdminSearch}
+                                    disabled={isSearchingUsers}
+                                    aria-label="清空搜索"
+                                  >
+                                    X
+                                  </button>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                className="btn btn-small btn-secondary domain-admin-search-btn"
+                                onClick={searchDomainAdminUsers}
+                                disabled={isSearchingUsers || !searchKeyword.trim()}
+                              >
+                                {isSearchingUsers ? '搜索中...' : '搜索'}
+                              </button>
+                            </div>
                             {isSearchingUsers && <div className="domain-manage-tip">搜索中...</div>}
-                            {!isSearchingUsers && searchKeyword.trim() && (
+                            {!isSearchingUsers && hasSearchedAdminUsers && (
                               <div className="domain-search-results">
                                 {searchResults.length > 0 ? (
                                   searchResults.map((userItem) => (
@@ -3934,7 +4077,13 @@ const KnowledgeDomainScene = ({
       <button
         type="button"
         className="domain-right-dock-toggle"
-          onClick={() => setIsDomainInfoDockExpanded((prev) => !prev)}
+          onClick={() => {
+            const nextExpanded = !isDomainInfoDockExpanded;
+            setIsDomainInfoDockExpanded(nextExpanded);
+            if (nextExpanded && activeTab === 'info') {
+              refreshDomainInfoPanel(true);
+            }
+          }}
           aria-label={isDomainInfoDockExpanded ? '收起知识域面板' : '展开知识域面板'}
           title={isDomainInfoDockExpanded ? '收起知识域面板' : '展开知识域面板'}
         >
@@ -4083,6 +4232,11 @@ const KnowledgeDomainScene = ({
                   </button>
                 </div>
               </div>
+              {distributionToast.visible && (
+                <div className={`distribution-light-toast ${distributionToast.type}`}>
+                  {distributionToast.message}
+                </div>
+              )}
               <div className="distribution-rule-modal-body">
                 <div className="distribution-rule-sidebar">
                   <div className="distribution-subtitle">规则列表</div>

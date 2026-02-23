@@ -55,6 +55,14 @@ const AllianceDetailModal = ({
         () => (members || []).filter((member) => member.username !== currentUsername),
         [members, currentUsername]
     );
+    const totalMemberCount = useMemo(() => {
+        const countFromPagination = Number(memberPagination?.total);
+        if (Number.isFinite(countFromPagination) && countFromPagination > 0) return countFromPagination;
+        const countFromAlliance = Number(alliance?.memberCount);
+        if (Number.isFinite(countFromAlliance) && countFromAlliance > 0) return countFromAlliance;
+        return members.length;
+    }, [memberPagination?.total, alliance?.memberCount, members.length]);
+    const isFounderOnlyMember = isCurrentUserFounder && totalMemberCount <= 1;
     const removableMembers = useMemo(
         () => members.filter((member) => member.username !== currentUsername),
         [members, currentUsername]
@@ -167,6 +175,17 @@ const AllianceDetailModal = ({
 
     const openHandoverModal = (mode) => {
         if (!isCurrentUserFounder) return;
+        if (mode === 'leave' && isFounderOnlyMember) {
+            setHandoverError('');
+            setConfirmState({
+                open: true,
+                title: '确认退盟',
+                message: '当前无其他成员，退盟后熵盟即解散。该操作无法撤回，是否继续？',
+                confirmText: '确认退盟',
+                action: 'leader_leave'
+            });
+            return;
+        }
         setHandoverMode(mode);
         setIsHandoverModalOpen(true);
         setHandoverKeyword('');
@@ -479,7 +498,7 @@ const AllianceDetailModal = ({
                 title: '确认退盟',
                 message: hasCandidates
                     ? '盟主身份将先转交给所选成员，然后你将退出熵盟。该操作无法撤回，是否继续？'
-                    : '当前没有其他成员可交接，退盟后熵盟可能解散。该操作无法撤回，是否继续？',
+                    : '当前无其他成员，退盟后熵盟即解散。该操作无法撤回，是否继续？',
                 confirmText: '确认退盟',
                 action: 'leader_leave'
             });

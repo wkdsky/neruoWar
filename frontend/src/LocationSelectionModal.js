@@ -5,6 +5,7 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
     const [searchQuery, setSearchQuery] = useState('');
     const [searchAppliedQuery, setSearchAppliedQuery] = useState('');
     const [searchResults, setSearchResults] = useState([]);
+    const [isSearchResultsCollapsed, setIsSearchResultsCollapsed] = useState(false);
     const [isSearching, setIsSearching] = useState(false);
     const [selectedNode, setSelectedNode] = useState(null);
     const [showLocationTree, setShowLocationTree] = useState(false);
@@ -65,6 +66,7 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
     }, [normalizeLocationTitleResults]);
 
     const handleSearchSubmit = useCallback(() => {
+        setIsSearchResultsCollapsed(false);
         performSearch(searchQuery);
     }, [performSearch, searchQuery]);
 
@@ -72,13 +74,17 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
         setSearchQuery('');
         setSearchAppliedQuery('');
         setSearchResults([]);
+        setIsSearchResultsCollapsed(false);
         setIsSearching(false);
     }, []);
 
     // 选择节点
-    const handleSelectNode = (node) => {
+    const handleSelectNode = (node, options = {}) => {
         setSelectedNode(node);
         setShowLocationTree(false);
+        if (options.fromSearchResult) {
+            setIsSearchResultsCollapsed(true);
+        }
     };
 
     // 获取节点的完整路径和子节点
@@ -415,6 +421,10 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
         }
     };
 
+    const searchStatusText = isSearching
+        ? '搜索中...'
+        : (searchAppliedQuery && searchResults.length === 0 ? '未找到匹配的标题' : '');
+
     return (
         <div className="location-selection-overlay">
             <div className="location-selection-modal">
@@ -478,13 +488,13 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
                         </div>
 
                         {/* 搜索结果 */}
-                        {searchAppliedQuery && searchResults.length > 0 && (
+                        {searchAppliedQuery && searchResults.length > 0 && !isSearchResultsCollapsed && (
                             <div className="location-search-results">
                                 {searchResults.map((node) => (
                                     <div
                                         key={node._id}
                                         className={`location-search-result-item ${selectedNode?._id === node._id ? 'selected' : ''}`}
-                                        onClick={() => handleSelectNode(node)}
+                                        onClick={() => handleSelectNode(node, { fromSearchResult: true })}
                                     >
                                         <div className="result-title">{node.name}</div>
                                     </div>
@@ -492,13 +502,12 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
                             </div>
                         )}
 
-                        {searchAppliedQuery && !isSearching && searchResults.length === 0 && (
-                            <div className="location-no-results">未找到匹配的标题</div>
-                        )}
-
-                        {isSearching && (
-                            <div className="location-searching">搜索中...</div>
-                        )}
+                        <div
+                            className={`location-search-status ${searchStatusText ? 'visible' : ''}`}
+                            aria-live="polite"
+                        >
+                            {searchStatusText}
+                        </div>
                     </div>
 
                     {/* 热门节点 */}

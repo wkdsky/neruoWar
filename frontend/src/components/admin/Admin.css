@@ -5,6 +5,7 @@
     padding: 2rem;
     border: 2px solid rgba(239, 68, 68, 0.5);
     animation: fadeIn 0.5s ease-out;
+    color: #e2e8f0;
 }
 
 .stats-grid {
@@ -1798,6 +1799,12 @@
     color: #fca5a5;
 }
 
+.admin-edit-relation-badge.new {
+    background: rgba(56, 189, 248, 0.2);
+    color: #7dd3fc;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
 .admin-edit-association-pending-result {
     width: 100%;
     display: flex;
@@ -1862,19 +1869,74 @@
 }
 
 .admin-assoc-delete-impact-item {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    font-size: 0.82rem;
-    color: #e2e8f0;
-    margin-bottom: 0.35rem;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.45);
+    padding: 0.5rem 0.55rem;
+    margin-bottom: 0.45rem;
 }
 
 .admin-assoc-delete-impact-item:last-child {
     margin-bottom: 0;
 }
 
-.admin-assoc-delete-impact-item .arrow {
+.admin-assoc-delete-impact-line {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.42rem;
+    line-height: 1.5;
+}
+
+.admin-assoc-delete-impact-line + .admin-assoc-delete-impact-line {
+    margin-top: 0.3rem;
+}
+
+.admin-assoc-delete-impact-line .label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 3.3rem;
+    border: 1px solid rgba(148, 163, 184, 0.38);
+    border-radius: 999px;
+    padding: 0.08rem 0.45rem;
+    font-size: 0.7rem;
+    color: #cbd5e1;
+    background: rgba(30, 41, 59, 0.62);
+}
+
+.admin-assoc-delete-impact-line .diagram {
+    font-size: 0.8rem;
+    color: #e2e8f0;
+    font-weight: 500;
+}
+
+.admin-assoc-delete-impact-line .hint {
+    font-size: 0.74rem;
+    color: #93c5fd;
+}
+
+.admin-assoc-delete-impact-line.after.reconnect .diagram {
+    color: #bbf7d0;
+}
+
+.admin-assoc-delete-impact-line.after.reconnect .hint {
+    color: #86efac;
+}
+
+.admin-assoc-delete-impact-line.after.disconnect .diagram {
+    color: #fecaca;
+}
+
+.admin-assoc-delete-impact-line.after.disconnect .hint {
+    color: #fca5a5;
+}
+
+.admin-assoc-delete-impact-line.after.pending .diagram {
+    color: #fde68a;
+}
+
+.admin-assoc-delete-impact-line.after.pending .hint {
     color: #fcd34d;
 }
 

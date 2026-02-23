@@ -104,6 +104,15 @@ const RecentVisitedDomainSchema = new mongoose.Schema({
     ref: 'Node',
     required: true
   },
+  visitMode: {
+    type: String,
+    enum: ['title', 'sense'],
+    default: 'title'
+  },
+  senseId: {
+    type: String,
+    default: ''
+  },
   visitedAt: {
     type: Date,
     default: Date.now

@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Node = require('../models/Node');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const DistributionParticipant = require('../models/DistributionParticipant');
 const DistributionResult = require('../models/DistributionResult');
 const EntropyAlliance = require('../models/EntropyAlliance');
@@ -455,7 +456,14 @@ class KnowledgeDistributionService {
     return round2(Math.max(0, Number(preferredPool?.percent) || 0));
   }
 
-  static async publishAnnouncementNotifications({ node, masterUser, lock }) {
+  static buildDistributionAnnouncementPayload({
+    node,
+    masterUser,
+    lock,
+    isFixedRecipient = false,
+    maxPercent = 0,
+    nowDate = new Date()
+  } = {}) {
     const projectedTotalCents = toCents(
       Number.isFinite(Number(lock?.projectedDistributableTotal))
         ? lock.projectedDistributableTotal
@@ -466,6 +474,166 @@ class KnowledgeDistributionService {
     const entryCloseText = timeline.entryCloseAtMs > 0
       ? new Date(timeline.entryCloseAtMs).toLocaleString('zh-CN', { hour12: false })
       : '';
+    const safeMaxPercent = Math.max(0, Number(maxPercent) || 0);
+    const estimatedMaxCents = Math.floor(projectedTotalCents * (safeMaxPercent / 100));
+    const estimatedMax = fromCents(estimatedMaxCents);
+    const canJoinByArrival = !isFixedRecipient && safeMaxPercent > 0;
+    const message = isFixedRecipient
+      ? `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。`
+      : (
+        canJoinByArrival
+          ? `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。请前往知识域「${node.name}」参与分发，点击前往${entryCloseText ? `（入场截止 ${entryCloseText}）` : ''}。`
+          : `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。`
+      );
+
+    return {
+      type: 'domain_distribution_announcement',
+      title: `知识点分发预告：${node.name}`,
+      message,
+      read: false,
+      status: 'info',
+      nodeId: node._id,
+      nodeName: node.name,
+      requiresArrival: canJoinByArrival,
+      allianceId: lock.masterAllianceId || null,
+      allianceName: lock.masterAllianceName || '',
+      inviterId: masterUser?._id || null,
+      inviterUsername: masterUser?.username || '',
+      createdAt: nowDate
+    };
+  }
+
+  static async ensurePendingAnnouncementForUser(userId, now = new Date()) {
+    const safeUserId = getIdString(userId);
+    if (!isValidObjectId(safeUserId)) return { insertedCount: 0, skipped: true, reason: 'invalid_user' };
+
+    const targetUser = await User.findById(safeUserId).select('_id role allianceId').lean();
+    if (!targetUser || targetUser.role !== 'common') {
+      return { insertedCount: 0, skipped: true, reason: 'not_common_user' };
+    }
+
+    const nowMs = now.getTime();
+    const nodes = await Node.find({
+      status: 'approved',
+      knowledgeDistributionLocked: { $ne: null },
+      'knowledgeDistributionLocked.executeAt': { $gt: now }
+    }).select('_id name domainMaster knowledgeDistributionLocked').lean();
+
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      return { insertedCount: 0, skipped: true, reason: 'no_pending_lock' };
+    }
+
+    const validNodes = nodes.filter((node) => {
+      const lock = node?.knowledgeDistributionLocked || null;
+      if (!lock?.executeAt || lock.executedAt) return false;
+      const timeline = resolveLockTimeline(lock);
+      return timeline.executeAtMs > nowMs;
+    });
+    if (validNodes.length === 0) {
+      return { insertedCount: 0, skipped: true, reason: 'no_valid_lock' };
+    }
+
+    const nodeIds = validNodes
+      .map((node) => getIdString(node?._id))
+      .filter((id) => isValidObjectId(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+    if (nodeIds.length === 0) {
+      return { insertedCount: 0, skipped: true, reason: 'empty_node_ids' };
+    }
+
+    const existingAnnouncements = await Notification.find({
+      userId: new mongoose.Types.ObjectId(safeUserId),
+      type: 'domain_distribution_announcement',
+      nodeId: { $in: nodeIds }
+    }).select('nodeId createdAt').lean();
+    const latestAnnouncementMsByNodeId = new Map();
+    for (const item of (existingAnnouncements || [])) {
+      const nodeId = getIdString(item?.nodeId);
+      if (!isValidObjectId(nodeId)) continue;
+      const createdAtMs = new Date(item?.createdAt || 0).getTime();
+      if (!Number.isFinite(createdAtMs) || createdAtMs <= 0) continue;
+      const prev = latestAnnouncementMsByNodeId.get(nodeId) || 0;
+      if (createdAtMs > prev) {
+        latestAnnouncementMsByNodeId.set(nodeId, createdAtMs);
+      }
+    }
+
+    const masterIds = Array.from(new Set(
+      validNodes
+        .map((node) => getIdString(node?.domainMaster))
+        .filter((id) => isValidObjectId(id))
+    )).map((id) => new mongoose.Types.ObjectId(id));
+    const masterUsers = masterIds.length > 0
+      ? await User.find({ _id: { $in: masterIds } }).select('_id username').lean()
+      : [];
+    const masterUserMap = new Map(
+      (masterUsers || []).map((user) => [getIdString(user?._id), user])
+    );
+
+    const docs = [];
+    const safeTargetUserId = getIdString(targetUser?._id);
+    for (const node of validNodes) {
+      const lock = node?.knowledgeDistributionLocked || {};
+      const nodeId = getIdString(node?._id);
+      if (!isValidObjectId(nodeId)) continue;
+      const timeline = resolveLockTimeline(lock);
+      if (timeline.executeAtMs <= nowMs) continue;
+
+      const announcedAtMsRaw = new Date(lock?.announcedAt || 0).getTime();
+      const dedupeSinceMs = Number.isFinite(announcedAtMsRaw) && announcedAtMsRaw > 0
+        ? announcedAtMsRaw - 1000
+        : (timeline.executeAtMs - (24 * 60 * 60 * 1000));
+      const latestExistingMs = latestAnnouncementMsByNodeId.get(nodeId) || 0;
+      if (latestExistingMs >= dedupeSinceMs) {
+        continue;
+      }
+
+      const masterId = getIdString(node?.domainMaster);
+      const rules = this.getCommonRuleSets(lock?.ruleSnapshot || {}, lock);
+      const activeManualParticipantSet = new Set(
+        this.getActiveManualParticipantIds(lock, timeline.executeAtMs || nowMs)
+      );
+      const isFixedRecipient = (
+        safeTargetUserId === masterId
+        || rules.adminPercentMap.has(safeTargetUserId)
+        || rules.customUserPercentMap.has(safeTargetUserId)
+        || activeManualParticipantSet.has(safeTargetUserId)
+      );
+      const maxPercent = this.calculateProjectedMaxPercentForUser({
+        user: targetUser,
+        node,
+        lock
+      });
+
+      const payload = this.buildDistributionAnnouncementPayload({
+        node,
+        masterUser: masterUserMap.get(masterId) || null,
+        lock,
+        isFixedRecipient,
+        maxPercent,
+        nowDate: now
+      });
+
+      docs.push({
+        _id: new mongoose.Types.ObjectId(),
+        ...payload,
+        userId: targetUser._id
+      });
+    }
+
+    if (docs.length === 0) {
+      return { insertedCount: 0, skipped: true, reason: 'already_synced' };
+    }
+
+    const insertedCount = await writeNotificationDocsInChunks(docs);
+    return {
+      insertedCount,
+      skipped: false
+    };
+  }
+
+  static async publishAnnouncementNotifications({ node, masterUser, lock }) {
+    const timeline = resolveLockTimeline(lock);
     const nowDate = new Date();
     const masterId = getIdString(node?.domainMaster);
     const rules = this.getCommonRuleSets(lock?.ruleSnapshot || {}, lock);
@@ -530,29 +698,20 @@ class KnowledgeDistributionService {
       const isFixedRecipient = fixedUserIdSet.has(userId);
       const maxPercent = this.calculateProjectedMaxPercentForUser({ user, node, lock });
       if (!isFixedRecipient && maxPercent <= 0) continue;
-      const estimatedMaxCents = Math.floor(projectedTotalCents * (maxPercent / 100));
-      const estimatedMax = fromCents(estimatedMaxCents);
-      const message = isFixedRecipient
-        ? `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。`
-        : `知识域「${node.name}」将在 ${executeAtText} 分发知识点。按当前规则你预计最多可获得 ${estimatedMax.toFixed(2)} 点。请前往知识域「${node.name}」参与分发，点击前往${entryCloseText ? `（入场截止 ${entryCloseText}）` : ''}。`;
       const notificationId = new mongoose.Types.ObjectId();
+      const payload = this.buildDistributionAnnouncementPayload({
+        node,
+        masterUser,
+        lock,
+        isFixedRecipient,
+        maxPercent,
+        nowDate
+      });
 
       collectionNotificationDocs.push({
         _id: notificationId,
         userId: user._id,
-        type: 'domain_distribution_announcement',
-        title: `知识点分发预告：${node.name}`,
-        message,
-        read: false,
-        status: 'info',
-        nodeId: node._id,
-        nodeName: node.name,
-        requiresArrival: !isFixedRecipient,
-        allianceId: lock.masterAllianceId || null,
-        allianceName: lock.masterAllianceName || '',
-        inviterId: masterUser._id,
-        inviterUsername: masterUser.username,
-        createdAt: nowDate
+        ...payload
       });
     }
 

@@ -184,6 +184,7 @@ const CreateNodeModal = ({
   const relationContextCacheRef = useRef(new Map());
   const nodeASearchRequestIdRef = useRef(0);
   const nodeBSearchRequestIdRef = useRef(0);
+  const nodeBCandidateResolveRequestIdRef = useRef(0);
   const insertDirectionResolveRequestIdRef = useRef(0);
   const previewCanvasRef = useRef(null);
   const previewRendererRef = useRef(null);
@@ -292,26 +293,59 @@ const CreateNodeModal = ({
           .filter((item) => item.nodeId && item.senseId && item.searchKey)
       ));
 
-      const parentTargets = normalizeNodeList(detailNode?.parentNodesInfo || data?.parentNodes || []);
-      const childTargets = normalizeNodeList(detailNode?.childNodesInfo || data?.childNodes || []);
-      const parentKeySet = new Set(parentTargets.map((item) => item.searchKey));
-      const childKeySet = new Set(childTargets.map((item) => item.searchKey));
+      const sourceSenses = normalizeNodeSenses(detailNode, activeSenseId);
+      const canUseLooseSourceMatch = sourceSenses.length === 1;
+      const parentTargetsRaw = normalizeNodeList(detailNode?.parentNodesInfo || data?.parentNodes || []);
+      const childTargetsRaw = normalizeNodeList(detailNode?.childNodesInfo || data?.childNodes || []);
+      const parentTargetMap = new Map(parentTargetsRaw.map((item) => [item.searchKey, item]));
+      const childTargetMap = new Map(childTargetsRaw.map((item) => [item.searchKey, item]));
+      const parentKeySet = new Set();
+      const childKeySet = new Set();
 
       (Array.isArray(detailNode?.associations) ? detailNode.associations : []).forEach((assoc) => {
         const relationType = assoc?.relationType;
         if (relationType !== ASSOC_RELATION_TYPES.EXTENDS && relationType !== ASSOC_RELATION_TYPES.CONTAINS) return;
         const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
-        if (sourceSenseId && sourceSenseId !== activeSenseId) return;
+        if (sourceSenseId) {
+          if (sourceSenseId !== activeSenseId) return;
+        } else if (!canUseLooseSourceMatch) {
+          return;
+        }
         const targetNodeId = getTargetNodeId(assoc?.targetNode);
         const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
         if (!targetNodeId || !targetSenseId) return;
         const relationKey = `${targetNodeId}:${targetSenseId}`;
+        const targetNode = (assoc?.targetNode && typeof assoc.targetNode === 'object') ? assoc.targetNode : null;
+        if (targetNode) {
+          const normalizedTarget = normalizeSearchResult({
+            _id: targetNode?._id || targetNodeId,
+            nodeId: targetNode?._id || targetNodeId,
+            senseId: targetSenseId,
+            displayName: targetNode?.displayName || `${targetNode?.name || ''}${targetSenseId ? `-${targetSenseId}` : ''}`,
+            name: targetNode?.name || '',
+            domainName: targetNode?.name || '',
+            senseTitle: targetNode?.activeSenseTitle || '',
+            senseContent: targetNode?.activeSenseContent || '',
+            description: targetNode?.activeSenseContent || targetNode?.description || ''
+          });
+          if (normalizedTarget?.searchKey) {
+            parentTargetMap.set(normalizedTarget.searchKey, normalizedTarget);
+            childTargetMap.set(normalizedTarget.searchKey, normalizedTarget);
+          }
+        }
         if (relationType === ASSOC_RELATION_TYPES.EXTENDS) {
           parentKeySet.add(relationKey);
         } else if (relationType === ASSOC_RELATION_TYPES.CONTAINS) {
           childKeySet.add(relationKey);
         }
       });
+
+      const parentTargets = Array.from(parentKeySet)
+        .map((key) => parentTargetMap.get(key))
+        .filter(Boolean);
+      const childTargets = Array.from(childKeySet)
+        .map((key) => childTargetMap.get(key))
+        .filter(Boolean);
 
       const relationData = {
         parentTargets,
@@ -373,6 +407,7 @@ const CreateNodeModal = ({
   const resetRelationManagerAddFlow = useCallback(() => {
     nodeASearchRequestIdRef.current += 1;
     nodeBSearchRequestIdRef.current += 1;
+    nodeBCandidateResolveRequestIdRef.current += 1;
     insertDirectionResolveRequestIdRef.current += 1;
     setRelationManager((prev) => ({
       ...prev,
@@ -399,6 +434,7 @@ const CreateNodeModal = ({
   const openRelationManager = (senseLocalId) => {
     nodeASearchRequestIdRef.current += 1;
     nodeBSearchRequestIdRef.current += 1;
+    nodeBCandidateResolveRequestIdRef.current += 1;
     insertDirectionResolveRequestIdRef.current += 1;
     setRelationManager({
       ...createRelationManagerState(),
@@ -408,6 +444,7 @@ const CreateNodeModal = ({
   };
 
   const closeRelationManager = () => {
+    nodeBCandidateResolveRequestIdRef.current += 1;
     if (previewRendererRef.current) {
       previewRendererRef.current.destroy();
       previewRendererRef.current = null;
@@ -600,32 +637,17 @@ const CreateNodeModal = ({
       searchLoading: false,
       searchResults: []
     }));
+    loadManagedNodeBCandidatesBySense(nextNodeA, nextSenseId, relationManager.senseLocalId);
   };
 
   const selectManagedRelationType = (type) => {
     if (!relationManager.selectedNodeA) return;
 
     if (type === ASSOC_RELATION_TYPES.INSERT) {
-      const managedSense = findSenseByLocalId(relationManager.senseLocalId);
-      const excludedSenseKeySet = getManagedSenseExcludedKeySet(managedSense);
-      const selectedNodeAKey = toSenseKey(relationManager.selectedNodeA, relationManager.selectedNodeASenseId);
-      if (selectedNodeAKey) excludedSenseKeySet.add(selectedNodeAKey);
-
-      const normalizeCandidates = (list) => (
-        dedupeBySearchKey((Array.isArray(list) ? list : [])
-          .map((item) => normalizeSearchResult(item))
-          .filter((item) => item.nodeId && item.senseId && item.searchKey)
-          .filter((item) => isRelationManagerCandidateSelectable(item, excludedSenseKeySet)))
-      );
-
       setRelationManager((prev) => ({
         ...prev,
         selectedRelationType: type,
         currentStep: ASSOC_STEPS.SELECT_NODE_B,
-        nodeBCandidates: {
-          parents: normalizeCandidates(prev.selectedNodeA?.parentNodesInfo || []),
-          children: normalizeCandidates(prev.selectedNodeA?.childNodesInfo || [])
-        },
         nodeBSearchKeyword: '',
         nodeBSearchAppliedKeyword: '',
         nodeBExtraSearchResults: [],
@@ -635,6 +657,11 @@ const CreateNodeModal = ({
         insertDirection: 'aToB',
         insertDirectionLocked: false
       }));
+      loadManagedNodeBCandidatesBySense(
+        relationManager.selectedNodeA,
+        relationManager.selectedNodeASenseId,
+        relationManager.senseLocalId
+      );
       return;
     }
 
@@ -793,45 +820,151 @@ const CreateNodeModal = ({
     return '';
   }, [fetchSenseRelationContext, toRelationTarget]);
 
-  useEffect(() => {
-    if (relationManager.selectedRelationType !== ASSOC_RELATION_TYPES.INSERT) return;
-    if (!relationManager.selectedNodeA || !relationManager.selectedNodeB) return;
-    if (!relationManager.selectedNodeASenseId || !relationManager.selectedNodeBSenseId) return;
+  const loadManagedNodeBCandidatesBySense = useCallback(async (
+    nodeA = relationManager.selectedNodeA,
+    nodeASenseId = relationManager.selectedNodeASenseId,
+    senseLocalId = relationManager.senseLocalId
+  ) => {
+    const targetA = toRelationTarget(nodeA, nodeASenseId);
+    if (!targetA?.searchKey) {
+      setRelationManager((prev) => ({
+        ...prev,
+        nodeBCandidates: { parents: [], children: [] }
+      }));
+      return;
+    }
+    const requestId = nodeBCandidateResolveRequestIdRef.current + 1;
+    nodeBCandidateResolveRequestIdRef.current = requestId;
+    const context = await fetchSenseRelationContext(targetA);
+    if (requestId !== nodeBCandidateResolveRequestIdRef.current) return;
+
+    const managedSense = findSenseByLocalId(senseLocalId);
+    const excludedSenseKeySet = getManagedSenseExcludedKeySet(managedSense);
+    if (targetA.searchKey) excludedSenseKeySet.add(targetA.searchKey);
+    const normalizeCandidates = (list = []) => dedupeBySearchKey((Array.isArray(list) ? list : [])
+      .map((item) => normalizeSearchResult(item))
+      .filter((item) => item.nodeId && item.senseId && item.searchKey)
+      .filter((item) => isRelationManagerCandidateSelectable(item, excludedSenseKeySet)));
+
+    setRelationManager((prev) => ({
+      ...prev,
+      nodeBCandidates: {
+        parents: normalizeCandidates(context?.parentTargets || []),
+        children: normalizeCandidates(context?.childTargets || [])
+      }
+    }));
+  }, [
+    relationManager.selectedNodeA,
+    relationManager.selectedNodeASenseId,
+    relationManager.senseLocalId,
+    toRelationTarget,
+    fetchSenseRelationContext,
+    findSenseByLocalId,
+    getManagedSenseExcludedKeySet,
+    isRelationManagerCandidateSelectable
+  ]);
+
+  const recheckManagedInsertDirectionLock = useCallback(async (nextNodeASenseId = '', nextNodeBSenseId = '') => {
+    const isInsertRelation = relationManager.selectedRelationType === ASSOC_RELATION_TYPES.INSERT;
+    const hasBothNodes = !!relationManager.selectedNodeA && !!relationManager.selectedNodeB;
+    const safeNodeASenseId = String(nextNodeASenseId || '').trim();
+    const safeNodeBSenseId = String(nextNodeBSenseId || '').trim();
+    if (!isInsertRelation || !hasBothNodes || !safeNodeASenseId || !safeNodeBSenseId) {
+      setRelationManager((prev) => ({
+        ...prev,
+        insertDirectionLocked: false
+      }));
+      return;
+    }
 
     const requestId = insertDirectionResolveRequestIdRef.current + 1;
     insertDirectionResolveRequestIdRef.current = requestId;
+    const fixedDirection = await resolveExistingPairInsertDirection(
+      relationManager.selectedNodeA,
+      safeNodeASenseId,
+      relationManager.selectedNodeB,
+      safeNodeBSenseId
+    );
+    if (requestId !== insertDirectionResolveRequestIdRef.current) return;
 
-    (async () => {
-      const fixedDirection = await resolveExistingPairInsertDirection(
-        relationManager.selectedNodeA,
-        relationManager.selectedNodeASenseId,
-        relationManager.selectedNodeB,
-        relationManager.selectedNodeBSenseId
-      );
-      if (requestId !== insertDirectionResolveRequestIdRef.current) return;
-
+    setRelationManager((prev) => {
       if (fixedDirection) {
-        setRelationManager((prev) => ({
+        return {
           ...prev,
           insertDirection: fixedDirection,
           insertDirectionLocked: true
-        }));
-        return;
+        };
       }
-
-      setRelationManager((prev) => ({
+      return {
         ...prev,
         insertDirection: prev.insertDirection || 'aToB',
         insertDirectionLocked: false
-      }));
-    })();
+      };
+    });
   }, [
     relationManager.selectedRelationType,
     relationManager.selectedNodeA,
     relationManager.selectedNodeB,
+    resolveExistingPairInsertDirection
+  ]);
+
+  const handleManagedNodeASenseChange = useCallback((senseId = '') => {
+    const nextSenseId = String(senseId || '').trim();
+    setRelationManager((prev) => ({
+      ...prev,
+      selectedNodeASenseId: nextSenseId
+    }));
+    if (relationManager.selectedNodeA) {
+      loadManagedNodeBCandidatesBySense(relationManager.selectedNodeA, nextSenseId, relationManager.senseLocalId);
+    }
+    recheckManagedInsertDirectionLock(nextSenseId, relationManager.selectedNodeBSenseId);
+  }, [
+    relationManager.selectedNodeA,
+    relationManager.selectedNodeBSenseId,
+    relationManager.senseLocalId,
+    loadManagedNodeBCandidatesBySense,
+    recheckManagedInsertDirectionLock
+  ]);
+
+  const handleManagedNodeBSenseChange = useCallback((senseId = '') => {
+    const nextSenseId = String(senseId || '').trim();
+    setRelationManager((prev) => ({
+      ...prev,
+      selectedNodeBSenseId: nextSenseId
+    }));
+    recheckManagedInsertDirectionLock(relationManager.selectedNodeASenseId, nextSenseId);
+  }, [relationManager.selectedNodeASenseId, recheckManagedInsertDirectionLock]);
+
+  useEffect(() => {
+    recheckManagedInsertDirectionLock(
+      relationManager.selectedNodeASenseId,
+      relationManager.selectedNodeBSenseId
+    );
+  }, [
     relationManager.selectedNodeASenseId,
     relationManager.selectedNodeBSenseId,
-    resolveExistingPairInsertDirection
+    recheckManagedInsertDirectionLock
+  ]);
+
+  useEffect(() => {
+    if (
+      relationManager.currentStep !== ASSOC_STEPS.SELECT_NODE_B
+      || relationManager.selectedRelationType !== ASSOC_RELATION_TYPES.INSERT
+    ) {
+      return;
+    }
+    loadManagedNodeBCandidatesBySense(
+      relationManager.selectedNodeA,
+      relationManager.selectedNodeASenseId,
+      relationManager.senseLocalId
+    );
+  }, [
+    relationManager.currentStep,
+    relationManager.selectedRelationType,
+    relationManager.selectedNodeA,
+    relationManager.selectedNodeASenseId,
+    relationManager.senseLocalId,
+    loadManagedNodeBCandidatesBySense
   ]);
 
   const goBackManagedRelationStep = () => {
@@ -1234,9 +1367,9 @@ const CreateNodeModal = ({
     });
 
   const insertRelationAvailable = (
-    Array.isArray(relationManager.selectedNodeA?.parentNodesInfo) && relationManager.selectedNodeA.parentNodesInfo.length > 0
+    Array.isArray(relationManager.nodeBCandidates.parents) && relationManager.nodeBCandidates.parents.length > 0
   ) || (
-    Array.isArray(relationManager.selectedNodeA?.childNodesInfo) && relationManager.selectedNodeA.childNodesInfo.length > 0
+    Array.isArray(relationManager.nodeBCandidates.children) && relationManager.nodeBCandidates.children.length > 0
   );
 
   const previewInfoText = (() => {
@@ -1452,7 +1585,7 @@ const CreateNodeModal = ({
           onSubmitNodeASearch={() => searchManagedNodeA(relationManager.searchKeyword)}
           onClearNodeASearch={clearManagedNodeASearch}
           onSelectNodeA={selectManagedNodeA}
-          onChangeNodeASenseId={(senseId) => setRelationManager((prev) => ({ ...prev, selectedNodeASenseId: senseId }))}
+          onChangeNodeASenseId={handleManagedNodeASenseChange}
           onSelectRelationType={selectManagedRelationType}
           onNodeBSearchKeywordChange={(value) => setRelationManager((prev) => ({ ...prev, nodeBSearchKeyword: value }))}
           onSubmitNodeBSearch={(keyword) => submitManagedNodeBSearch(keyword ?? relationManager.nodeBSearchKeyword)}
@@ -1460,7 +1593,7 @@ const CreateNodeModal = ({
           onSelectNodeBParent={(node) => selectManagedNodeB(node, true)}
           onSelectNodeBChild={(node) => selectManagedNodeB(node, false)}
           onSelectNodeBExtra={(node) => selectManagedNodeB(node, false)}
-          onChangeNodeBSenseId={(senseId) => setRelationManager((prev) => ({ ...prev, selectedNodeBSenseId: senseId }))}
+          onChangeNodeBSenseId={handleManagedNodeBSenseChange}
           onToggleInsertDirection={() => {
             setRelationManager((prev) => {
               if (prev.insertDirectionLocked) return prev;

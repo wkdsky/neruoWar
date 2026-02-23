@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Home, Shield, Bell, Layers, Star, MapPin, ChevronLeft, ChevronRight, Users } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
@@ -31,10 +31,33 @@ const avatarMap = {
     default_male_3: defaultMale3,
     default_female_1: defaultFemale1,
     default_female_2: defaultFemale2,
-    default_female_3: defaultFemale3
+    default_female_3: defaultFemale3,
+    male1: defaultMale1,
+    male2: defaultMale2,
+    male3: defaultMale3,
+    female1: defaultFemale1,
+    female2: defaultFemale2,
+    female3: defaultFemale3
+};
+
+const resolveAvatarSrc = (avatarKey = '') => {
+    const key = typeof avatarKey === 'string' ? avatarKey.trim() : '';
+    if (!key) return avatarMap.default_male_1;
+    if (avatarMap[key]) return avatarMap[key];
+    if (/^https?:\/\//i.test(key) || key.startsWith('/') || key.startsWith('data:image/')) {
+        return key;
+    }
+    return avatarMap.default_male_1;
 };
 
 const PAGE_STATE_STORAGE_KEY = 'app:lastPageState';
+const createDefaultHeaderUserStats = () => ({
+    loading: false,
+    level: 0,
+    experience: 0,
+    knowledgeBalance: 0,
+    armyCount: 0
+});
 
 const readSavedPageState = () => {
     try {
@@ -102,18 +125,6 @@ const getNodeDisplayName = (node) => {
         ? node.activeSenseTitle.trim()
         : (typeof getNodePrimarySense(node)?.title === 'string' ? getNodePrimarySense(node).title.trim() : '');
     return senseTitle ? `${name}-${senseTitle}` : (name || '未命名知识域');
-};
-const getNodeSenseTitle = (node) => {
-    if (typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()) return node.activeSenseTitle.trim();
-    const sense = getNodePrimarySense(node);
-    return typeof sense?.title === 'string' ? sense.title.trim() : '';
-};
-const getNodeSenseContent = (node) => {
-    if (typeof node?.activeSenseContent === 'string' && node.activeSenseContent.trim()) return node.activeSenseContent.trim();
-    const sense = getNodePrimarySense(node);
-    if (typeof sense?.content === 'string' && sense.content.trim()) return sense.content.trim();
-    if (typeof node?.knowledge === 'string' && node.knowledge.trim()) return node.knowledge.trim();
-    return '';
 };
 const hexToRgba = (hex, alpha = 1) => {
     const safeHex = typeof hex === 'string' ? hex.trim() : '';
@@ -388,12 +399,15 @@ const App = () => {
     const [username, setUsername] = useState('');
     const [profession, setProfession] = useState('');
     const [userAvatar, setUserAvatar] = useState('default_male_1');
+    const [headerUserStats, setHeaderUserStats] = useState(createDefaultHeaderUserStats);
     const [nodes, setNodes] = useState([]);
     const [technologies, setTechnologies] = useState([]);
     const [view, setView] = useState('login');
     const socketRef = useRef(null);
     const isRestoringPageRef = useRef(false);
     const hasRestoredPageRef = useRef(false);
+    const isLocationDockExpandedRef = useRef(false);
+    const travelStatusRef = useRef({ isTraveling: false, isStopping: false });
     const [isAdmin, setIsAdmin] = useState(false);
     const [adminEntryTab, setAdminEntryTab] = useState('users');
 
@@ -457,6 +471,7 @@ const App = () => {
     const [showLocationModal, setShowLocationModal] = useState(false);
     const [selectedLocationNode, setSelectedLocationNode] = useState(null);
     const [currentLocationNodeDetail, setCurrentLocationNodeDetail] = useState(null);
+    const [isRefreshingLocationDetail, setIsRefreshingLocationDetail] = useState(false);
     const [travelStatus, setTravelStatus] = useState({ isTraveling: false });
     const [nodeDistributionStatus, setNodeDistributionStatus] = useState(createEmptyNodeDistributionStatus);
     const [showDistributionPanel, setShowDistributionPanel] = useState(false);
@@ -599,6 +614,17 @@ const App = () => {
             }
         };
     }, [showKnowledgeDomain, isTransitioningToDomain, view]);
+
+    const applyTravelStatus = useCallback((nextTravel) => {
+      const normalizedTravel = (nextTravel && typeof nextTravel === 'object')
+        ? nextTravel
+        : { isTraveling: false };
+      setTravelStatus(normalizedTravel);
+      travelStatusRef.current = {
+        isTraveling: !!normalizedTravel.isTraveling,
+        isStopping: !!normalizedTravel.isStopping
+      };
+    }, []);
 
     // 初始化WebGL场景
     useEffect(() => {
@@ -831,7 +857,7 @@ const App = () => {
     if (data.role !== 'admin') {
       fetchTravelStatus(true);
     } else {
-      setTravelStatus({ isTraveling: false });
+      applyTravelStatus({ isTraveling: false });
     }
 
     // 检查location字段，如果为空且不是管理员，显示位置选择弹窗
@@ -909,39 +935,82 @@ const App = () => {
   };
 
   // 根据location名称获取节点详细信息
-  const fetchLocationNodeDetail = async (locationName) => {
-    if (!locationName || locationName === '' || locationName === '任意') {
+  const fetchLocationNodeDetail = async (locationName, options = {}) => {
+    const silent = options?.silent === true;
+    const normalizedLocationName = typeof locationName === 'string' ? locationName.trim() : '';
+    if (!normalizedLocationName || normalizedLocationName === '任意') {
       setCurrentLocationNodeDetail(null);
-      return;
+      return null;
+    }
+
+    if (!silent) {
+      setIsRefreshingLocationDetail(true);
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(locationName)}`);
+      const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(normalizedLocationName)}`);
       if (response.ok) {
         const data = await response.json();
-        // 精确匹配节点名称
-        const exactMatch = (Array.isArray(data?.results) ? data.results : []).find((item) => (
-            (typeof item?.domainName === 'string' && item.domainName === locationName)
-            || (typeof item?.name === 'string' && item.name === locationName)
+        const results = Array.isArray(data?.results) ? data.results : [];
+        // 精确匹配节点名称，并优先选择带有效 ObjectId 的结果，避免落入字段不完整的搜索条目
+        const exactCandidates = results.filter((item) => (
+          (typeof item?.domainName === 'string' && item.domainName.trim() === normalizedLocationName)
+          || (typeof item?.name === 'string' && item.name.trim() === normalizedLocationName)
         ));
-        if (exactMatch) {
-          // 获取完整的节点详情
-          const detailNodeId = normalizeObjectId(exactMatch.nodeId || exactMatch._id);
-          const detailResponse = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${detailNodeId}`);
+        const exactMatch = exactCandidates.find((item) => isValidObjectId(item?.nodeId || item?._id)) || null;
+        const localNodeMatch = (Array.isArray(nodes) ? nodes : []).find((item) => (
+          typeof item?.name === 'string'
+          && item.name.trim() === normalizedLocationName
+          && isValidObjectId(item?._id)
+        ));
+        const detailNodeId = normalizeObjectId(
+          exactMatch?.nodeId
+          || exactMatch?._id
+          || localNodeMatch?._id
+        );
+        if (isValidObjectId(detailNodeId)) {
+          const detailResponse = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${detailNodeId}?includeFavoriteCount=1`);
           if (detailResponse.ok) {
             const detailData = await detailResponse.json();
-            setCurrentLocationNodeDetail(detailData.node);
-          } else {
-            setCurrentLocationNodeDetail(exactMatch);
+            if (detailData?.node) {
+              setCurrentLocationNodeDetail(detailData.node);
+              return detailData.node;
+            }
           }
         }
       }
+      return null;
     } catch (error) {
       console.error('获取位置节点详情失败:', error);
+      return null;
+    } finally {
+      if (!silent) {
+        setIsRefreshingLocationDetail(false);
+      }
     }
   };
 
+  const handleRefreshLocationNodeDetail = async () => {
+    if (!userLocation || userLocation === '任意') return;
+    await fetchLocationNodeDetail(userLocation, { silent: false });
+  };
+
+  useEffect(() => {
+    const wasExpanded = isLocationDockExpandedRef.current;
+    isLocationDockExpandedRef.current = isLocationDockExpanded;
+    if (!isLocationDockExpanded || wasExpanded) return;
+    if (isAdmin || travelStatus?.isTraveling) return;
+    const locationName = (userLocation || '').trim();
+    if (!locationName || locationName === '任意') return;
+    fetchLocationNodeDetail(locationName, { silent: false });
+  }, [isLocationDockExpanded, isAdmin, travelStatus?.isTraveling, userLocation]);
+
   const syncUserLocation = (location) => {
+    const nextLocation = location || '';
+    const prevLocation = userLocation || '';
+    if (nextLocation !== prevLocation) {
+      setCurrentLocationNodeDetail(null);
+    }
     if (!location || location === '任意') {
       setUserLocation(location || '');
       localStorage.setItem('userLocation', location || '');
@@ -979,6 +1048,90 @@ const App = () => {
     }
     return `${fallbackText}（HTTP ${response.status}）`;
   };
+
+  const fetchHeaderUserStats = useCallback(async ({ silent = true } = {}) => {
+    const token = localStorage.getItem('token');
+    if (!token || !authenticated) return null;
+
+    if (!silent) {
+      setHeaderUserStats((prev) => ({ ...prev, loading: true }));
+    }
+
+    try {
+      const [profileResponse, armyResponse] = await Promise.all([
+        fetch('http://localhost:5000/api/profile', {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        fetch('http://localhost:5000/api/army/me', {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      ]);
+      const [profileParsed, armyParsed] = await Promise.all([
+        parseApiResponse(profileResponse),
+        parseApiResponse(armyResponse)
+      ]);
+
+      const profileData = profileParsed.data && profileResponse.ok ? profileParsed.data : null;
+      const armyData = armyParsed.data && armyResponse.ok ? armyParsed.data : null;
+
+      const levelValue = Number(profileData?.level);
+      const experienceValue = Number(profileData?.experience);
+      const knowledgeBalanceValue = Number(
+        Number.isFinite(Number(profileData?.knowledgeBalance))
+          ? profileData.knowledgeBalance
+          : armyData?.knowledgeBalance
+      );
+      const armyCountValue = (Array.isArray(armyData?.roster) ? armyData.roster : []).reduce((sum, entry) => (
+        sum + Math.max(0, Math.floor(Number(entry?.count) || 0))
+      ), 0);
+
+      const nextStats = {
+        loading: false,
+        level: Number.isFinite(levelValue) ? Math.max(0, Math.floor(levelValue)) : 0,
+        experience: Number.isFinite(experienceValue) ? Math.max(0, Math.floor(experienceValue)) : 0,
+        knowledgeBalance: Number.isFinite(knowledgeBalanceValue) ? Math.max(0, knowledgeBalanceValue) : 0,
+        armyCount: Number.isFinite(armyCountValue) ? Math.max(0, Math.floor(armyCountValue)) : 0
+      };
+      setHeaderUserStats(nextStats);
+      return nextStats;
+    } catch (error) {
+      setHeaderUserStats((prev) => ({ ...prev, loading: false }));
+      return null;
+    }
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (!authenticated) {
+      setHeaderUserStats(createDefaultHeaderUserStats());
+      return undefined;
+    }
+
+    fetchHeaderUserStats({ silent: true });
+    const timerId = setInterval(() => {
+      fetchHeaderUserStats({ silent: true });
+    }, 30000);
+
+    return () => {
+      clearInterval(timerId);
+    };
+  }, [authenticated, fetchHeaderUserStats]);
+
+  useEffect(() => {
+    if (!authenticated) return undefined;
+
+    const refreshOnFocus = () => {
+      if (document.visibilityState === 'visible') {
+        fetchHeaderUserStats({ silent: true });
+      }
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnFocus);
+
+    return () => {
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnFocus);
+    };
+  }, [authenticated, fetchHeaderUserStats]);
 
   const fetchRelatedDomains = async (silent = true) => {
     const token = localStorage.getItem('token');
@@ -1049,15 +1202,26 @@ const App = () => {
     }
   };
 
-  const trackRecentDomain = async (nodeOrId) => {
+  const trackRecentDomain = async (nodeOrId, options = {}) => {
     const token = localStorage.getItem('token');
     const domainId = normalizeObjectId(nodeOrId?._id || nodeOrId);
     if (!token || !domainId) return;
+    const mode = options?.mode === 'title' ? 'title' : 'sense';
+    const senseId = mode === 'sense' && typeof options?.senseId === 'string'
+      ? options.senseId.trim()
+      : '';
 
     try {
       await fetch(`http://localhost:5000/api/nodes/${domainId}/recent-visit`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          mode,
+          senseId
+        })
       });
     } catch (error) {
       // 最近访问记录失败不影响主流程
@@ -1435,7 +1599,17 @@ const App = () => {
         syncUserLocation(data.location);
       }
 
-      setTravelStatus(data.travel || { isTraveling: false });
+      const nextTravel = data.travel || { isTraveling: false };
+      const prevTravel = travelStatusRef.current || { isTraveling: false, isStopping: false };
+      applyTravelStatus(nextTravel);
+      const justArrivedAtDestination = !!prevTravel.isTraveling && !prevTravel.isStopping && !nextTravel.isTraveling;
+      if (justArrivedAtDestination && isLocationDockExpandedRef.current && !isAdmin) {
+        const storedLocation = localStorage.getItem('userLocation') || '';
+        const locationName = storedLocation.trim();
+        if (locationName && locationName !== '任意') {
+          fetchLocationNodeDetail(locationName, { silent: false });
+        }
+      }
       return data;
     } catch (error) {
       if (!silent) {
@@ -1583,7 +1757,7 @@ const App = () => {
         return 'failed';
       }
 
-      setTravelStatus(data.travel || { isTraveling: false });
+      applyTravelStatus(data.travel || { isTraveling: false });
       const currentStoredLocation = localStorage.getItem('userLocation') || '';
       if (typeof data.location === 'string' && data.location !== currentStoredLocation) {
         syncUserLocation(data.location);
@@ -1629,7 +1803,7 @@ const App = () => {
         return;
       }
 
-      setTravelStatus(data.travel || { isTraveling: false });
+      applyTravelStatus(data.travel || { isTraveling: false });
       if (typeof data.location === 'string') {
         syncUserLocation(data.location);
       }
@@ -1643,6 +1817,9 @@ const App = () => {
   const handleMoveToNode = async (targetNode, options = {}) => {
     if (!targetNode || !targetNode._id) return;
     const promptMode = options?.promptMode === 'distribution' ? 'distribution' : 'default';
+    // 触发移动前先收起顶部弹层，避免“我的知识域”面板遮挡移动状态反馈。
+    setShowRelatedDomainsPanel(false);
+    setShowNotificationsPanel(false);
 
     if (isAdmin) {
       window.alert('管理员不可执行移动操作');
@@ -1691,22 +1868,21 @@ const App = () => {
     if (!confirmed) return false;
 
     const startResult = await startTravelToNode(targetNode._id);
+    if (startResult === 'started' || startResult === 'queued') {
+      // 移动发起成功后，默认展开右侧驻留栏以显示“移动状态”。
+      setIsAnnouncementDockExpanded(false);
+      setIsLocationDockExpanded(true);
+    }
     if (startResult === 'started') {
       return true;
     }
     return startResult === 'queued';
   };
 
-  // 当userLocation变化时，获取节点详情
-  useEffect(() => {
-    if (authenticated && userLocation) {
-      fetchLocationNodeDetail(userLocation);
-    }
-  }, [userLocation, authenticated]);
-
   useEffect(() => {
     if (!authenticated || isAdmin) {
       setTravelStatus({ isTraveling: false });
+      travelStatusRef.current = { isTraveling: false, isStopping: false };
       return;
     }
 
@@ -1830,6 +2006,12 @@ const App = () => {
 
     fetchRelatedDomains(true);
   }, [authenticated, isAdmin]);
+
+  useEffect(() => {
+    if (!showRelatedDomainsPanel) return;
+    if (!authenticated || isAdmin) return;
+    fetchRelatedDomains(false);
+  }, [showRelatedDomainsPanel, authenticated, isAdmin]);
 
   useEffect(() => {
     if (!authenticated || showLocationModal || hasRestoredPageRef.current) return;
@@ -1994,7 +2176,7 @@ const App = () => {
         setIsAdmin(false);
         setAdminEntryTab('users');
         setUserLocation('');
-        setTravelStatus({ isTraveling: false });
+        applyTravelStatus({ isTraveling: false });
         setIsStoppingTravel(false);
         setNotifications([]);
         setNotificationUnreadCount(0);
@@ -2770,7 +2952,7 @@ const App = () => {
 
             const shouldResetTrail = navOptions?.resetTrail === true || !isKnowledgeDetailView(view);
             const relation = normalizeNavigationRelation(navOptions?.relationHint);
-            trackRecentDomain(centerNode);
+            trackRecentDomain(centerNode, { mode: 'title' });
             setCurrentTitleDetail(centerNode);
             setTitleGraphData(graph);
             setCurrentNodeDetail(null);
@@ -2876,7 +3058,10 @@ const App = () => {
                 if (!isSenseOnlySwitch) {
                     setIsSenseSelectorVisible(false);
                 }
-                trackRecentDomain(data.node);
+                trackRecentDomain(data.node, {
+                    mode: 'sense',
+                    senseId: typeof data?.node?.activeSenseId === 'string' ? data.node.activeSenseId : ''
+                });
                 setCurrentNodeDetail(data.node);
                 setCurrentTitleDetail(null);
                 setTitleGraphData(null);
@@ -3286,12 +3471,19 @@ const App = () => {
         })
         .filter((item) => !!item.gateKey);
 
-    const handleOpenRelatedDomain = async (node) => {
+    const handleOpenRelatedDomain = async (node, sectionType = 'default') => {
         const nodeId = normalizeObjectId(node?._id);
         if (!nodeId) return;
         setShowRelatedDomainsPanel(false);
         const clickedNode = buildClickedNodeFromScene(nodeId);
-        await fetchTitleDetail(nodeId, clickedNode);
+        if (sectionType === 'recent' && node?.recentVisitMode === 'sense') {
+            await fetchNodeDetail(nodeId, clickedNode, {
+                relationHint: 'jump',
+                activeSenseId: typeof node?.recentVisitSenseId === 'string' ? node.recentVisitSenseId.trim() : ''
+            });
+            return;
+        }
+        await fetchTitleDetail(nodeId, clickedNode, { relationHint: 'jump' });
     };
 
     const handleOpenTravelNode = async (travelNode) => {
@@ -3301,7 +3493,7 @@ const App = () => {
         await fetchTitleDetail(nodeId, clickedNode);
     };
 
-    const renderRelatedDomainSection = (title, domainList, emptyText) => (
+    const renderRelatedDomainSection = (title, domainList, emptyText, sectionType = 'default') => (
         <div className="related-domain-section">
             <div className="related-domain-section-title">
                 <span>{title}</span>
@@ -3311,18 +3503,28 @@ const App = () => {
                 <div className="related-domain-empty">{emptyText}</div>
             ) : (
                 <div className="related-domain-list">
-                    {domainList.map((domain) => {
+                    {domainList.map((domain, index) => {
                         const domainId = normalizeObjectId(domain?._id);
                         const isFavorite = favoriteDomainSet.has(domainId);
                         const isUpdatingFavorite = favoriteActionDomainId === domainId;
+                        const isTitleOnlySection = sectionType === 'master_title';
+                        const titleOnlyName = String(domain?.name || '').trim() || '未命名知识域';
+                        const relatedDomainName = sectionType === 'recent'
+                            ? ((typeof domain?.recentVisitDisplayName === 'string' && domain.recentVisitDisplayName.trim())
+                                ? domain.recentVisitDisplayName.trim()
+                                : getNodeDisplayName(domain))
+                            : (isTitleOnlySection ? titleOnlyName : getNodeDisplayName(domain));
+                        const domainKey = sectionType === 'recent'
+                            ? `${title}-${domainId}-${domain?.recentVisitMode || 'title'}-${domain?.recentVisitSenseId || ''}-${domain?.visitedAt || index}`
+                            : `${title}-${domainId}`;
                         return (
-                            <div key={`${title}-${domainId}`} className="related-domain-item">
+                            <div key={domainKey} className="related-domain-item">
                                 <button
                                     type="button"
                                     className="related-domain-link"
-                                    onClick={() => handleOpenRelatedDomain(domain)}
+                                    onClick={() => handleOpenRelatedDomain(domain, sectionType)}
                                 >
-                                    <span className="related-domain-name">{getNodeDisplayName(domain)}</span>
+                                    <span className="related-domain-name">{relatedDomainName}</span>
                                     <span className="related-domain-meta">{formatDomainKnowledgePoint(domain)}</span>
                                 </button>
                                 <button
@@ -3349,16 +3551,24 @@ const App = () => {
             <div className="related-domains-panel">
                 <div className="related-domains-header">
                     <h3>与我相关的知识域</h3>
+                    <button
+                        type="button"
+                        className="related-domains-refresh-btn"
+                        onClick={() => fetchRelatedDomains(false)}
+                        disabled={relatedDomainsData.loading}
+                    >
+                        {relatedDomainsData.loading ? '刷新中...' : '刷新'}
+                    </button>
                 </div>
                 <div className="related-domains-body">
                     {relatedDomainsData.loading && <div className="related-domain-empty">加载中...</div>}
                     {!relatedDomainsData.loading && relatedDomainsData.error && (
                         <div className="related-domains-error">{relatedDomainsData.error}</div>
                     )}
-                    {renderRelatedDomainSection('作为域主', domainMasterDomains, '当前没有作为域主的知识域')}
+                    {renderRelatedDomainSection('作为域主', domainMasterDomains, '当前没有作为域主的知识域', 'master_title')}
                     {renderRelatedDomainSection('作为域相', domainAdminDomains, '当前没有域相身份的知识域')}
                     {renderRelatedDomainSection('收藏的知识域', favoriteDomains, '暂无收藏，点击右侧星标可收藏')}
-                    {renderRelatedDomainSection('最近访问的知识域', recentDomains, '暂无访问记录')}
+                    {renderRelatedDomainSection('最近访问的知识域', recentDomains, '暂无访问记录', 'recent')}
                 </div>
             </div>
         );
@@ -3723,7 +3933,18 @@ const App = () => {
         if (!sceneManagerRef.current || !node) return;
         const mode = options?.mode === 'intelHeist' ? 'intelHeist' : 'normal';
 
-        trackRecentDomain(node);
+        const recentVisitMode = options?.recentVisitMode === 'title' || options?.recentVisitMode === 'sense'
+            ? options.recentVisitMode
+            : (isTitleBattleView(view) ? 'title' : 'sense');
+        const recentVisitSenseId = recentVisitMode === 'sense'
+            ? (typeof options?.recentVisitSenseId === 'string'
+                ? options.recentVisitSenseId.trim()
+                : (typeof node?.activeSenseId === 'string' ? node.activeSenseId : ''))
+            : '';
+        trackRecentDomain(node, {
+            mode: recentVisitMode,
+            senseId: recentVisitSenseId
+        });
         setKnowledgeDomainMode(mode);
         setKnowledgeDomainNode(node);
         setIsTransitioningToDomain(true);
@@ -3810,7 +4031,7 @@ const App = () => {
                 ? currentLocationNodeDetail.parentNodesInfo
                 : [];
             const labelsFromNodes = parentNodes
-                .map((item) => getNodeDisplayName(item))
+                .map((item) => (typeof item?.name === 'string' ? item.name.trim() : ''))
                 .filter(Boolean);
             if (labelsFromNodes.length > 0) return labelsFromNodes;
             return (Array.isArray(currentLocationNodeDetail?.relatedParentDomains)
@@ -3824,7 +4045,7 @@ const App = () => {
                 ? currentLocationNodeDetail.childNodesInfo
                 : [];
             const labelsFromNodes = childNodes
-                .map((item) => getNodeDisplayName(item))
+                .map((item) => (typeof item?.name === 'string' ? item.name.trim() : ''))
                 .filter(Boolean);
             if (labelsFromNodes.length > 0) return labelsFromNodes;
             return (Array.isArray(currentLocationNodeDetail?.relatedChildDomains)
@@ -3833,8 +4054,43 @@ const App = () => {
                 .map((name) => (typeof name === 'string' ? name.trim() : ''))
                 .filter(Boolean);
         })();
-        const locationSenseTitle = getNodeSenseTitle(currentLocationNodeDetail);
-        const locationSenseContent = getNodeSenseContent(currentLocationNodeDetail);
+        const locationDomainMaster = currentLocationNodeDetail?.domainMaster || null;
+        const locationDomainMasterId = normalizeObjectId(locationDomainMaster?._id);
+        const locationDomainAdmins = (Array.isArray(currentLocationNodeDetail?.domainAdmins)
+            ? currentLocationNodeDetail.domainAdmins
+            : [])
+            .filter(Boolean)
+            .filter((admin, index, list) => {
+                const adminId = normalizeObjectId(admin?._id);
+                if (!adminId) return true;
+                if (adminId === locationDomainMasterId) return false;
+                return list.findIndex((candidate) => normalizeObjectId(candidate?._id) === adminId) === index;
+            });
+        const locationDisplayMaster = (locationDomainMaster && (locationDomainMaster._id || locationDomainMaster.username))
+            ? locationDomainMaster
+            : null;
+        const locationKnowledgePointValue = Number(currentLocationNodeDetail?.knowledgePoint?.value);
+        const locationProsperityValue = Number(currentLocationNodeDetail?.prosperity);
+        const locationContentScoreValue = Number(currentLocationNodeDetail?.contentScore);
+        const locationFavoriteUserCountValue = Number(currentLocationNodeDetail?.favoriteUserCount);
+        const locationStatItems = [
+            {
+                label: '知识点',
+                value: Number.isFinite(locationKnowledgePointValue) ? locationKnowledgePointValue.toFixed(2) : '--'
+            },
+            {
+                label: '繁荣度',
+                value: Number.isFinite(locationProsperityValue) ? Math.round(locationProsperityValue) : '--'
+            },
+            {
+                label: '内容分数',
+                value: Number.isFinite(locationContentScoreValue) ? locationContentScoreValue.toFixed(2) : '--'
+            },
+            {
+                label: '收藏人数',
+                value: Number.isFinite(locationFavoriteUserCountValue) ? Math.max(0, Math.round(locationFavoriteUserCountValue)) : '--'
+            }
+        ];
 
         return (
             <>
@@ -3923,13 +4179,23 @@ const App = () => {
                         <div className="location-sidebar-header home-location-sidebar-header">
                             <div className="home-location-header-row">
                                 <h3>{travelStatus?.isTraveling ? '移动状态' : '当前所在的知识域'}</h3>
-                                <button
-                                    type="button"
-                                    className="home-location-collapse-btn"
-                                    onClick={() => setIsLocationDockExpanded(false)}
-                                >
-                                    收起
-                                </button>
+                                <div className="home-location-header-actions">
+                                    <button
+                                        type="button"
+                                        className="home-location-refresh-btn"
+                                        onClick={handleRefreshLocationNodeDetail}
+                                        disabled={isRefreshingLocationDetail || !userLocation || userLocation === '任意' || travelStatus?.isTraveling}
+                                    >
+                                        {isRefreshingLocationDetail ? '刷新中...' : '刷新'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="home-location-collapse-btn"
+                                        onClick={() => setIsLocationDockExpanded(false)}
+                                    >
+                                        收起
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -4021,7 +4287,22 @@ const App = () => {
                                         }
                                     }}
                                 >
-                                    <div className="location-node-title">{getNodeDisplayName(currentLocationNodeDetail)}</div>
+                                    <div className="location-node-title-row">
+                                        <div className="location-node-title">{currentLocationNodeDetail?.name || '未命名知识域'}</div>
+                                        <button
+                                            type="button"
+                                            className="location-node-jump-btn"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                if (canJumpToLocationView) {
+                                                    handleJumpToCurrentLocationView();
+                                                }
+                                            }}
+                                            disabled={!canJumpToLocationView}
+                                        >
+                                            转到
+                                        </button>
+                                    </div>
 
                                     {currentLocationNodeDetail.description && (
                                         <div className="location-node-section">
@@ -4030,12 +4311,69 @@ const App = () => {
                                         </div>
                                     )}
 
-                                    {locationSenseTitle && (
-                                        <div className="location-node-section">
-                                            <div className="section-label">当前释义</div>
-                                            <div className="section-content">{locationSenseTitle}</div>
+                                    <div className="location-node-section">
+                                        <div className="domain-managers-card">
+                                            <div className="domain-manager-section">
+                                                <div className="domain-admins-subtitle">域主</div>
+                                                <div className="domain-manager-avatar-row">
+                                                    {locationDisplayMaster ? (
+                                                        <div
+                                                            className="domain-manager-avatar-item master"
+                                                            title={`域主：${locationDisplayMaster.username || '未命名用户'}`}
+                                                        >
+                                                            <img
+                                                                src={resolveAvatarSrc(locationDisplayMaster.avatar)}
+                                                                alt={locationDisplayMaster.username || '域主'}
+                                                                className="domain-manager-avatar-img"
+                                                            />
+                                                            <span className="domain-manager-name">{locationDisplayMaster.username || '未设置域主'}</span>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="domain-manage-tip">暂无域主信息</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="domain-manager-section">
+                                                <div className="domain-admins-subtitle">域相</div>
+                                                <div className="domain-manager-avatar-row admins">
+                                                    {locationDomainAdmins.length > 0 ? (
+                                                        locationDomainAdmins.map((admin, index) => {
+                                                            const adminId = normalizeObjectId(admin?._id);
+                                                            const key = adminId || `location-domain-admin-${index}`;
+                                                            return (
+                                                                <div
+                                                                    key={key}
+                                                                    className="domain-manager-avatar-item"
+                                                                    title={`域相：${admin?.username || '未命名用户'}`}
+                                                                >
+                                                                    <img
+                                                                        src={resolveAvatarSrc(admin?.avatar)}
+                                                                        alt={admin?.username || '域相'}
+                                                                        className="domain-manager-avatar-img"
+                                                                    />
+                                                                    <span className="domain-manager-name">{admin?.username || '未命名'}</span>
+                                                                </div>
+                                                            );
+                                                        })
+                                                    ) : (
+                                                        <div className="domain-manage-tip">暂无域相</div>
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
-                                    )}
+                                    </div>
+
+                                    <div className="location-node-section">
+                                        <div className="section-label">知识域状态</div>
+                                        <div className="location-domain-stats-grid">
+                                            {locationStatItems.map((item) => (
+                                                <div key={item.label} className="location-domain-stat-card">
+                                                    <div className="location-domain-stat-label">{item.label}</div>
+                                                    <div className="location-domain-stat-value">{item.value}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
 
                                     {locationParentLabels.length > 0 && (
                                         <div className="location-node-section">
@@ -4055,15 +4393,6 @@ const App = () => {
                                                 {locationChildLabels.map((child, idx) => (
                                                     <span key={idx} className="node-tag child-tag">{child}</span>
                                                 ))}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {locationSenseContent && (
-                                        <div className="location-node-section">
-                                            <div className="section-label">释义内容</div>
-                                            <div className="section-content knowledge-content">
-                                                {locationSenseContent}
                                             </div>
                                         </div>
                                     )}
@@ -4098,7 +4427,11 @@ const App = () => {
                                 </div>
                             ) : (
                                 <div className="location-sidebar-empty">
-                                    <p>暂未降临到任何知识域</p>
+                                    <p>
+                                        {(userLocation && userLocation !== '任意')
+                                            ? `当前位于「${userLocation}」，点击上方“刷新”获取状态`
+                                            : '暂未降临到任何知识域'}
+                                    </p>
                                 </div>
                             )}
                         </div>
@@ -4799,6 +5132,14 @@ const App = () => {
     }
 
     const isKnowledgeDomainActive = showKnowledgeDomain || isTransitioningToDomain;
+    const headerLevel = Number.isFinite(Number(headerUserStats.level)) ? Math.max(0, Math.floor(Number(headerUserStats.level))) : 0;
+    const headerExperience = Number.isFinite(Number(headerUserStats.experience)) ? Math.max(0, Math.floor(Number(headerUserStats.experience))) : 0;
+    const headerExpTarget = Math.max(100, (headerLevel + 1) * 100);
+    const headerExpProgress = Math.max(0, Math.min(100, (headerExperience / headerExpTarget) * 100));
+    const headerArmyCount = Number.isFinite(Number(headerUserStats.armyCount)) ? Math.max(0, Math.floor(Number(headerUserStats.armyCount))) : 0;
+    const headerKnowledgeBalance = Number.isFinite(Number(headerUserStats.knowledgeBalance))
+      ? Math.max(0, Number(headerUserStats.knowledgeBalance))
+      : 0;
 
     return (
         <div
@@ -4822,16 +5163,32 @@ const App = () => {
                                             await prepareForPrimaryNavigation();
                                             setView('profile');
                                         }}
-                                        title="点击进入个人中心"
+                                        title={profession ? `点击进入个人中心（${profession}）` : '点击进入个人中心'}
                                     >
                                         <img
                                             src={avatarMap[userAvatar] || avatarMap['default_male_1']}
                                             alt="头像"
                                             className="user-avatar-small"
                                         />
-                                        <span className="user-name">
-                                            {username} {profession && `【${profession}】`}
-                                        </span>
+                                        <div className="user-avatar-main">
+                                            <div className="user-avatar-top-row">
+                                                <span className="user-level-badge">{`Lv.${headerLevel}`}</span>
+                                                <span className="user-avatar-username">{username}</span>
+                                            </div>
+                                            <div className="user-exp-row">
+                                                <div className="user-exp-track">
+                                                    <div
+                                                        className="user-exp-fill"
+                                                        style={{ width: `${headerExpProgress}%` }}
+                                                    />
+                                                </div>
+                                                <span className="user-exp-text">{`${headerExperience}/${headerExpTarget}`}</span>
+                                            </div>
+                                            <div className="user-resource-row">
+                                                <span className="user-resource-item">{`兵力 ${headerArmyCount}`}</span>
+                                                <span className="user-resource-item">{`知识点 ${headerKnowledgeBalance.toFixed(2)}`}</span>
+                                            </div>
+                                        </div>
                                     </div>
                                     <button
                                         onClick={handleLogout}
@@ -4870,13 +5227,10 @@ const App = () => {
                                     <button
                                         type="button"
                                         className="btn btn-secondary related-domains-trigger-btn"
-                                        onClick={async () => {
+                                        onClick={() => {
                                             const nextVisible = !showRelatedDomainsPanel;
                                             setShowNotificationsPanel(false);
                                             setShowRelatedDomainsPanel(nextVisible);
-                                            if (nextVisible) {
-                                                await fetchRelatedDomains(false);
-                                            }
                                         }}
                                     >
                                         <Layers size={18} />

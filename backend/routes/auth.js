@@ -24,6 +24,7 @@ const {
   findShortestApprovedPathByNames,
   listApprovedNodesByNames
 } = require('../services/domainGraphTraversalService');
+const KnowledgeDistributionService = require('../services/KnowledgeDistributionService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -1395,6 +1396,12 @@ router.get('/notifications', async (req, res) => {
 
     const decoded = jwt.verify(token, JWT_SECRET);
     if (isNotificationCollectionReadEnabled()) {
+      try {
+        await KnowledgeDistributionService.ensurePendingAnnouncementForUser(decoded.userId, new Date());
+      } catch (syncError) {
+        console.error('补齐分发预告通知失败:', syncError);
+      }
+
       const [notifications, unreadCount] = await Promise.all([
         listUserNotificationsFromCollection(decoded.userId),
         countUnreadNotificationsFromCollection(decoded.userId)
