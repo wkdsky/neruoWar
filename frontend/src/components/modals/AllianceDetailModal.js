@@ -93,6 +93,11 @@ const AllianceDetailModal = ({
     const [isManageLoading, setIsManageLoading] = useState(false);
     const [manageActionKey, setManageActionKey] = useState('');
     const [detailPageLoading, setDetailPageLoading] = useState(false);
+    const [overviewAnnouncements, setOverviewAnnouncements] = useState([]);
+    const [overviewAnnouncementsTotal, setOverviewAnnouncementsTotal] = useState(0);
+    const [isOverviewAnnouncementsLoading, setIsOverviewAnnouncementsLoading] = useState(false);
+    const [isAllAnnouncementsModalOpen, setIsAllAnnouncementsModalOpen] = useState(false);
+    const [isOverviewStatsRefreshing, setIsOverviewStatsRefreshing] = useState(false);
     const [announcementDraft, setAnnouncementDraft] = useState('');
     const [declarationDraft, setDeclarationDraft] = useState('');
     const [knowledgeContributionDraft, setKnowledgeContributionDraft] = useState('10');
@@ -114,6 +119,10 @@ const AllianceDetailModal = ({
                 total: 0,
                 totalPages: 0
             });
+            setOverviewAnnouncements([]);
+            setOverviewAnnouncementsTotal(0);
+            setIsOverviewAnnouncementsLoading(false);
+            setIsAllAnnouncementsModalOpen(false);
             setIsStyleCreatorOpen(false);
             setIsHandoverModalOpen(false);
             setHandoverMode('');
@@ -149,6 +158,43 @@ const AllianceDetailModal = ({
             name: `${alliance.name || '熵盟'}风格${(alliance.visualStyles || []).length + 1}`
         }, `风格${(alliance.visualStyles || []).length + 1}`));
     }, [isOpen, alliance?._id, alliance?.announcement, alliance?.declaration, alliance?.name, alliance?.visualStyles, alliance?.knowledgeContributionPercent, activeVisualStyle]);
+
+    const fetchOverviewAnnouncements = useCallback(async () => {
+        if (!isOpen || !alliance?._id) {
+            setOverviewAnnouncements([]);
+            setOverviewAnnouncementsTotal(0);
+            return;
+        }
+        setIsOverviewAnnouncementsLoading(true);
+        try {
+            const params = new URLSearchParams({
+                page: '1',
+                pageSize: '500'
+            });
+            const response = await fetch(`http://localhost:5000/api/alliances/${alliance._id}/announcements?${params.toString()}`);
+            const data = await response.json();
+            if (!response.ok) {
+                setOverviewAnnouncements([]);
+                setOverviewAnnouncementsTotal(0);
+                return;
+            }
+            const list = Array.isArray(data?.announcements) ? data.announcements : [];
+            const total = Math.max(0, parseInt(data?.pagination?.total, 10) || list.length);
+            setOverviewAnnouncements(list);
+            setOverviewAnnouncementsTotal(total);
+        } catch (error) {
+            console.error('获取熵盟公告列表失败:', error);
+            setOverviewAnnouncements([]);
+            setOverviewAnnouncementsTotal(0);
+        } finally {
+            setIsOverviewAnnouncementsLoading(false);
+        }
+    }, [isOpen, alliance?._id]);
+
+    useEffect(() => {
+        if (!isOpen || !alliance?._id) return;
+        fetchOverviewAnnouncements();
+    }, [isOpen, alliance?._id, fetchOverviewAnnouncements]);
 
     // Handler for stopping propagation of clicks to the backdrop
     const handleContentClick = (e) => {
@@ -566,6 +612,42 @@ const AllianceDetailModal = ({
         }
     };
 
+    const totalDomainCount = useMemo(() => {
+        const countFromPagination = Number(domainPagination?.total);
+        if (Number.isFinite(countFromPagination) && countFromPagination > 0) return countFromPagination;
+        const countFromAlliance = Number(alliance?.domainCount);
+        if (Number.isFinite(countFromAlliance) && countFromAlliance > 0) return countFromAlliance;
+        return domains.length;
+    }, [domainPagination?.total, alliance?.domainCount, domains.length]);
+    const overviewAnnouncementPreview = useMemo(
+        () => overviewAnnouncements.slice(0, 5),
+        [overviewAnnouncements]
+    );
+    const hasMoreOverviewAnnouncements = overviewAnnouncementsTotal > 5;
+    const hasAnnouncementData = overviewAnnouncementPreview.length > 0;
+    const allianceKnowledgeReserveValue = Number(alliance?.knowledgeReserve);
+    const allianceKnowledgeReserveText = Number.isFinite(allianceKnowledgeReserveValue)
+        ? allianceKnowledgeReserveValue.toFixed(2)
+        : '--';
+
+    const handleRefreshOverviewStats = async () => {
+        if (isOverviewStatsRefreshing || !alliance?._id) return;
+        setIsOverviewStatsRefreshing(true);
+        try {
+            if (typeof onRefreshAllianceDetail === 'function') {
+                await onRefreshAllianceDetail(alliance._id, {
+                    memberPage: memberPagination.page || 1,
+                    memberPageSize: memberPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE,
+                    domainPage: domainPagination.page || 1,
+                    domainPageSize: domainPagination.pageSize || DEFAULT_DETAIL_PAGE_SIZE
+                });
+            }
+            await fetchOverviewAnnouncements();
+        } finally {
+            setIsOverviewStatsRefreshing(false);
+        }
+    };
+
     if (!isOpen || !selectedAlliance || !alliance) return null;
 
     const renderMemberGrid = (withManageActions = false) => (
@@ -678,19 +760,66 @@ const AllianceDetailModal = ({
         <>
             <div className="alliance-section-detail">
                 <h3>盟公告</h3>
-                {alliance.announcement ? (
-                    <div className="alliance-announcement-content">{alliance.announcement}</div>
+                {isOverviewAnnouncementsLoading ? (
+                    <p className="empty-message">公告加载中...</p>
+                ) : hasAnnouncementData ? (
+                    <div className="alliance-announcement-list-preview">
+                        {overviewAnnouncementPreview.map((item, index) => {
+                            const createdAtLabel = item?.createdAt
+                                ? new Date(item.createdAt).toLocaleString('zh-CN')
+                                : '';
+                            const actorLabel = typeof item?.actorUsername === 'string' ? item.actorUsername.trim() : '';
+                            return (
+                                <div key={item?._id || `overview-announcement-${index}`} className="alliance-announcement-item">
+                                    <div className="alliance-announcement-content">{item?.message || ''}</div>
+                                    <div className="alliance-announcement-time">
+                                        {actorLabel ? `发布者: ${actorLabel}` : '发布者: --'}
+                                        {createdAtLabel ? ` · ${createdAtLabel}` : ''}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
                 ) : (
                     <p className="empty-message">暂无盟公告</p>
                 )}
-                {alliance.announcementUpdatedAt && (
-                    <div className="alliance-announcement-time">
-                        最近发布: {new Date(alliance.announcementUpdatedAt).toLocaleString('zh-CN')}
-                    </div>
+                {hasMoreOverviewAnnouncements && (
+                    <button
+                        type="button"
+                        className="btn btn-small btn-secondary alliance-announcement-all-btn"
+                        onClick={() => setIsAllAnnouncementsModalOpen(true)}
+                    >
+                        查看全部公告
+                    </button>
                 )}
             </div>
-            {renderMembersList(false)}
-            {renderDomainsList()}
+            <div className="alliance-section-detail">
+                <h3>熵盟概览</h3>
+                <div className="alliance-overview-actions">
+                    <button
+                        type="button"
+                        className="btn btn-small btn-secondary"
+                        onClick={handleRefreshOverviewStats}
+                        disabled={isOverviewStatsRefreshing}
+                    >
+                        {isOverviewStatsRefreshing ? '刷新中...' : '手动刷新'}
+                    </button>
+                </div>
+                <div className="alliance-overview-summary-grid">
+                    <div className="alliance-overview-summary-card">
+                        <span className="summary-label">成员数量</span>
+                        <strong className="summary-value">{totalMemberCount}</strong>
+                    </div>
+                    <div className="alliance-overview-summary-card">
+                        <span className="summary-label">管辖知识域数量</span>
+                        <strong className="summary-value">{totalDomainCount}</strong>
+                    </div>
+                    <div className="alliance-overview-summary-card">
+                        <span className="summary-label">熵盟知识点</span>
+                        <strong className="summary-value">{allianceKnowledgeReserveText}</strong>
+                    </div>
+                </div>
+            </div>
         </>
     );
 
@@ -1153,6 +1282,57 @@ const AllianceDetailModal = ({
                     <button className="btn btn-secondary" onClick={onClose}>关闭</button>
                 </div>
             </div>
+            {isAllAnnouncementsModalOpen && (
+                <div
+                    className="alliance-announcement-list-backdrop"
+                    onClick={() => setIsAllAnnouncementsModalOpen(false)}
+                >
+                    <div
+                        className="alliance-announcement-list-modal"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="alliance-announcement-list-header">
+                            <h4>{`全部盟公告 (${overviewAnnouncementsTotal || overviewAnnouncements.length})`}</h4>
+                            <button
+                                type="button"
+                                className="modal-close"
+                                onClick={() => setIsAllAnnouncementsModalOpen(false)}
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="alliance-announcement-list-body">
+                            {overviewAnnouncements.length === 0 ? (
+                                <div className="empty-message">暂无盟公告</div>
+                            ) : (
+                                overviewAnnouncements.map((item, index) => {
+                                    const createdAtLabel = item?.createdAt
+                                        ? new Date(item.createdAt).toLocaleString('zh-CN')
+                                        : '';
+                                    const actorLabel = typeof item?.actorUsername === 'string' ? item.actorUsername.trim() : '';
+                                    return (
+                                        <div
+                                            key={item?._id || `all-announcement-${index}`}
+                                            className="alliance-announcement-item"
+                                        >
+                                            <div className="alliance-announcement-content">{item?.message || ''}</div>
+                                            <div className="alliance-announcement-time">
+                                                {actorLabel ? `发布者: ${actorLabel}` : '发布者: --'}
+                                                {createdAtLabel ? ` · ${createdAtLabel}` : ''}
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                            {overviewAnnouncementsTotal > overviewAnnouncements.length && (
+                                <div className="alliance-announcement-more-tip">
+                                    {`当前仅加载最近 ${overviewAnnouncements.length} 条公告`}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
             {isHandoverModalOpen && (
                 <div className="alliance-handover-backdrop" onClick={closeHandoverModal}>
                     <div className="alliance-handover-modal" onClick={(event) => event.stopPropagation()}>

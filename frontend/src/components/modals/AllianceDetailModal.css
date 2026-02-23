@@ -253,10 +253,67 @@
     border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
+.alliance-announcement-list-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.alliance-announcement-item {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    background: rgba(30, 41, 59, 0.35);
+    padding: 0.6rem;
+}
+
+.alliance-announcement-item .alliance-announcement-content {
+    border: none;
+    background: transparent;
+    padding: 0;
+}
+
 .alliance-announcement-time {
     margin-top: 0.6rem;
     font-size: 0.85rem;
     color: #94a3b8;
+}
+
+.alliance-announcement-all-btn {
+    margin-top: 0.75rem;
+}
+
+.alliance-overview-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+}
+
+.alliance-overview-actions {
+    margin-top: -0.2rem;
+    margin-bottom: 0.75rem;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.alliance-overview-summary-card {
+    border-radius: 10px;
+    border: 1px solid rgba(168, 85, 247, 0.28);
+    background: rgba(30, 41, 59, 0.42);
+    padding: 0.8rem 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.alliance-overview-summary-card .summary-label {
+    color: #94a3b8;
+    font-size: 0.82rem;
+}
+
+.alliance-overview-summary-card .summary-value {
+    color: #f5f3ff;
+    font-size: 1.4rem;
+    line-height: 1.1;
 }
 
 .alliance-list-pager {
@@ -480,6 +537,59 @@
     align-items: center;
     justify-content: center;
     padding: 1rem;
+}
+
+.alliance-announcement-list-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1020;
+    background: rgba(2, 6, 23, 0.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.alliance-announcement-list-modal {
+    width: min(720px, 95vw);
+    max-height: 88vh;
+    border-radius: 12px;
+    border: 1px solid rgba(168, 85, 247, 0.38);
+    background: rgba(15, 23, 42, 0.97);
+    box-shadow: 0 20px 38px rgba(2, 6, 23, 0.6);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.alliance-announcement-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+.alliance-announcement-list-header h4 {
+    margin: 0;
+    color: #f5f3ff;
+    font-size: 1rem;
+}
+
+.alliance-announcement-list-body {
+    padding: 0.85rem 1rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.alliance-announcement-more-tip {
+    color: #94a3b8;
+    font-size: 0.8rem;
+    text-align: center;
+    padding-top: 0.2rem;
 }
 
 .alliance-handover-modal {

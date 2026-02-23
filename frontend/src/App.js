@@ -949,39 +949,51 @@ const App = () => {
 
     try {
       const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(normalizedLocationName)}`);
-      if (response.ok) {
-        const data = await response.json();
-        const results = Array.isArray(data?.results) ? data.results : [];
-        // 精确匹配节点名称，并优先选择带有效 ObjectId 的结果，避免落入字段不完整的搜索条目
-        const exactCandidates = results.filter((item) => (
-          (typeof item?.domainName === 'string' && item.domainName.trim() === normalizedLocationName)
-          || (typeof item?.name === 'string' && item.name.trim() === normalizedLocationName)
-        ));
-        const exactMatch = exactCandidates.find((item) => isValidObjectId(item?.nodeId || item?._id)) || null;
-        const localNodeMatch = (Array.isArray(nodes) ? nodes : []).find((item) => (
-          typeof item?.name === 'string'
-          && item.name.trim() === normalizedLocationName
-          && isValidObjectId(item?._id)
-        ));
-        const detailNodeId = normalizeObjectId(
-          exactMatch?.nodeId
-          || exactMatch?._id
-          || localNodeMatch?._id
-        );
-        if (isValidObjectId(detailNodeId)) {
-          const detailResponse = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${detailNodeId}?includeFavoriteCount=1`);
-          if (detailResponse.ok) {
-            const detailData = await detailResponse.json();
-            if (detailData?.node) {
-              setCurrentLocationNodeDetail(detailData.node);
-              return detailData.node;
-            }
-          }
+      const parsedSearch = await parseApiResponse(response);
+      if (!response.ok || !parsedSearch?.data) {
+        if (!silent) {
+          window.alert(getApiErrorMessage(parsedSearch, '读取当前位置知识域失败'));
         }
+        return null;
       }
+
+      const data = parsedSearch.data;
+      const results = Array.isArray(data?.results) ? data.results : [];
+      // 精确匹配节点名称，并优先选择带有效 ObjectId 的结果，避免落入字段不完整的搜索条目
+      const exactCandidates = results.filter((item) => (
+        (typeof item?.domainName === 'string' && item.domainName.trim() === normalizedLocationName)
+        || (typeof item?.name === 'string' && item.name.trim() === normalizedLocationName)
+      ));
+      const exactMatch = exactCandidates.find((item) => isValidObjectId(item?.nodeId || item?._id)) || null;
+      const localNodeMatch = (Array.isArray(nodes) ? nodes : []).find((item) => (
+        typeof item?.name === 'string'
+        && item.name.trim() === normalizedLocationName
+        && isValidObjectId(item?._id)
+      ));
+      const detailNodeId = normalizeObjectId(
+        exactMatch?.nodeId
+        || exactMatch?._id
+        || localNodeMatch?._id
+      );
+      if (isValidObjectId(detailNodeId)) {
+        const detailResponse = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${detailNodeId}?includeFavoriteCount=1`);
+        const parsedDetail = await parseApiResponse(detailResponse);
+        if (!detailResponse.ok || !parsedDetail?.data?.node) {
+          if (!silent) {
+            window.alert(getApiErrorMessage(parsedDetail, '读取当前位置知识域详情失败'));
+          }
+          return null;
+        }
+        setCurrentLocationNodeDetail(parsedDetail.data.node);
+        return parsedDetail.data.node;
+      }
+
       return null;
     } catch (error) {
       console.error('获取位置节点详情失败:', error);
+      if (!silent) {
+        window.alert(`读取当前位置知识域失败: ${error.message}`);
+      }
       return null;
     } finally {
       if (!silent) {
@@ -2368,12 +2380,16 @@ const App = () => {
     const fetchRootNodes = async () => {
         try {
             const response = await fetch('http://localhost:5000/api/nodes/public/root-nodes');
+            const parsed = await parseApiResponse(response);
             if (response.ok) {
-                const data = await response.json();
+                const data = parsed.data || {};
                 setRootNodes(data.nodes);
+            } else {
+                window.alert(getApiErrorMessage(parsed, '读取首页根知识域失败'));
             }
         } catch (error) {
             console.error('获取根节点失败:', error);
+            window.alert(`读取首页根知识域失败: ${error.message}`);
         }
     };
 
@@ -2381,12 +2397,16 @@ const App = () => {
     const fetchFeaturedNodes = async () => {
         try {
             const response = await fetch('http://localhost:5000/api/nodes/public/featured-nodes');
+            const parsed = await parseApiResponse(response);
             if (response.ok) {
-                const data = await response.json();
+                const data = parsed.data || {};
                 setFeaturedNodes(data.nodes);
+            } else {
+                window.alert(getApiErrorMessage(parsed, '读取热门知识域失败'));
             }
         } catch (error) {
             console.error('获取热门节点失败:', error);
+            window.alert(`读取热门知识域失败: ${error.message}`);
         }
     };
 
@@ -4013,9 +4033,11 @@ const App = () => {
 
     const renderUnifiedRightDock = () => {
         if (isAdmin) return null;
+        const isKnowledgeDomainActive = showKnowledgeDomain || isTransitioningToDomain;
         const activeDetailNode = isTitleBattleView(view) ? currentTitleDetail : currentNodeDetail;
         const canRenderDock = view === 'home' || (isKnowledgeDetailView(view) && activeDetailNode);
         if (!canRenderDock) return null;
+        const shouldRenderLocationDock = !isKnowledgeDomainActive;
 
         const canJumpToLocationView = Boolean(
             !travelStatus.isTraveling &&
@@ -4174,282 +4196,284 @@ const App = () => {
                     </button>
                 </div>
 
-                <div className={`home-location-dock ${isLocationDockExpanded ? 'expanded' : 'collapsed'}`}>
-                    <aside className={`home-location-dock-panel ${isLocationDockExpanded ? 'expanded' : ''}`}>
-                        <div className="location-sidebar-header home-location-sidebar-header">
-                            <div className="home-location-header-row">
-                                <h3>{travelStatus?.isTraveling ? '移动状态' : '当前所在的知识域'}</h3>
-                                <div className="home-location-header-actions">
-                                    <button
-                                        type="button"
-                                        className="home-location-refresh-btn"
-                                        onClick={handleRefreshLocationNodeDetail}
-                                        disabled={isRefreshingLocationDetail || !userLocation || userLocation === '任意' || travelStatus?.isTraveling}
-                                    >
-                                        {isRefreshingLocationDetail ? '刷新中...' : '刷新'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="home-location-collapse-btn"
-                                        onClick={() => setIsLocationDockExpanded(false)}
-                                    >
-                                        收起
-                                    </button>
+                {shouldRenderLocationDock && (
+                    <div className={`home-location-dock ${isLocationDockExpanded ? 'expanded' : 'collapsed'}`}>
+                        <aside className={`home-location-dock-panel ${isLocationDockExpanded ? 'expanded' : ''}`}>
+                            <div className="location-sidebar-header home-location-sidebar-header">
+                                <div className="home-location-header-row">
+                                    <h3>{travelStatus?.isTraveling ? '移动状态' : '当前所在的知识域'}</h3>
+                                    <div className="home-location-header-actions">
+                                        <button
+                                            type="button"
+                                            className="home-location-refresh-btn"
+                                            onClick={handleRefreshLocationNodeDetail}
+                                            disabled={isRefreshingLocationDetail || !userLocation || userLocation === '任意' || travelStatus?.isTraveling}
+                                        >
+                                            {isRefreshingLocationDetail ? '刷新中...' : '刷新'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="home-location-collapse-btn"
+                                            onClick={() => setIsLocationDockExpanded(false)}
+                                        >
+                                            收起
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
 
-                        <div className="home-location-panel-body">
-                            {travelStatus?.isTraveling ? (
-                                <div className="travel-sidebar-content">
-                                    <div className="travel-main-info">
-                                        <div className="travel-destination">
-                                            {travelStatus?.isStopping ? '停止目标' : '目标节点'}: <strong>{travelStatus?.targetNode?.nodeName}</strong>
-                                        </div>
-                                        <div className="travel-metrics">
-                                            <span>剩余距离: {travelStatus?.remainingDistanceUnits?.toFixed?.(2) ?? travelStatus?.remainingDistanceUnits} 单位</span>
-                                            <span>剩余时间: {formatTravelSeconds(travelStatus?.remainingSeconds)}</span>
-                                            {travelStatus?.queuedTargetNode?.nodeName && (
-                                                <span>已排队目标: {travelStatus.queuedTargetNode.nodeName}</span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    <div className="travel-anim-layout">
-                                        <button
-                                            type="button"
-                                            className={`travel-node-card next ${normalizeObjectId(travelStatus?.nextNode?.nodeId) ? 'clickable' : 'disabled'}`}
-                                            onClick={() => handleOpenTravelNode(travelStatus?.nextNode)}
-                                            disabled={!normalizeObjectId(travelStatus?.nextNode?.nodeId)}
-                                        >
-                                            <div className="travel-node-label">下一目的地</div>
-                                            <div className="travel-node-name">{travelStatus?.nextNode?.nodeName || '-'}</div>
-                                        </button>
-                                        <div className="travel-track-wrap">
-                                            <div className="travel-track">
-                                                <div
-                                                    className="travel-progress-dot"
-                                                    style={{ left: `${(1 - (travelStatus?.progressInCurrentSegment || 0)) * 100}%` }}
-                                                />
+                            <div className="home-location-panel-body">
+                                {travelStatus?.isTraveling ? (
+                                    <div className="travel-sidebar-content">
+                                        <div className="travel-main-info">
+                                            <div className="travel-destination">
+                                                {travelStatus?.isStopping ? '停止目标' : '目标节点'}: <strong>{travelStatus?.targetNode?.nodeName}</strong>
+                                            </div>
+                                            <div className="travel-metrics">
+                                                <span>剩余距离: {travelStatus?.remainingDistanceUnits?.toFixed?.(2) ?? travelStatus?.remainingDistanceUnits} 单位</span>
+                                                <span>剩余时间: {formatTravelSeconds(travelStatus?.remainingSeconds)}</span>
+                                                {travelStatus?.queuedTargetNode?.nodeName && (
+                                                    <span>已排队目标: {travelStatus.queuedTargetNode.nodeName}</span>
+                                                )}
                                             </div>
                                         </div>
-                                        <button
-                                            type="button"
-                                            className={`travel-node-card reached ${normalizeObjectId(travelStatus?.lastReachedNode?.nodeId) ? 'clickable' : 'disabled'}`}
-                                            onClick={() => handleOpenTravelNode(travelStatus?.lastReachedNode)}
-                                            disabled={!normalizeObjectId(travelStatus?.lastReachedNode?.nodeId)}
-                                        >
-                                            <div className="travel-node-label">最近到达</div>
-                                            <div className="travel-node-name">{travelStatus?.lastReachedNode?.nodeName || '-'}</div>
-                                        </button>
-                                    </div>
 
-                                    <button
-                                        type="button"
-                                        className="btn btn-danger travel-stop-btn"
-                                        onClick={stopTravel}
-                                        disabled={isStoppingTravel || travelStatus?.isStopping}
-                                    >
-                                        {(isStoppingTravel || travelStatus?.isStopping) ? '停止进行中...' : '停止移动'}
-                                    </button>
-
-                                    {siegeSupportStatuses.length > 0 && (
-                                        <div className="location-siege-support-section">
-                                            <div className="section-label">派遣兵力状态</div>
-                                            <div className="location-siege-support-list">
-                                                {siegeSupportStatuses.map((item) => (
-                                                    <button
-                                                        type="button"
-                                                        key={`moving-support-${item.nodeId}-${item.gateKey}-${item.requestedAt || ''}`}
-                                                        className="location-siege-support-row"
-                                                        onClick={() => handleOpenTravelNode(item)}
-                                                        disabled={!item.nodeId}
-                                                    >
-                                                        <span>{item.nodeName || '未知知识域'}</span>
-                                                        <span>{item.gateLabel || CITY_GATE_LABEL_MAP[item.gateKey] || item.gateKey}</span>
-                                                        <span>{item.statusLabel || item.status || '-'}</span>
-                                                        <em>{item.totalCount || 0}</em>
-                                                        {item.status === 'moving' && (
-                                                            <small>剩余 {formatTravelSeconds(item.remainingSeconds)}</small>
-                                                        )}
-                                                    </button>
-                                                ))}
+                                        <div className="travel-anim-layout">
+                                            <button
+                                                type="button"
+                                                className={`travel-node-card next ${normalizeObjectId(travelStatus?.nextNode?.nodeId) ? 'clickable' : 'disabled'}`}
+                                                onClick={() => handleOpenTravelNode(travelStatus?.nextNode)}
+                                                disabled={!normalizeObjectId(travelStatus?.nextNode?.nodeId)}
+                                            >
+                                                <div className="travel-node-label">下一目的地</div>
+                                                <div className="travel-node-name">{travelStatus?.nextNode?.nodeName || '-'}</div>
+                                            </button>
+                                            <div className="travel-track-wrap">
+                                                <div className="travel-track">
+                                                    <div
+                                                        className="travel-progress-dot"
+                                                        style={{ left: `${(1 - (travelStatus?.progressInCurrentSegment || 0)) * 100}%` }}
+                                                    />
+                                                </div>
                                             </div>
+                                            <button
+                                                type="button"
+                                                className={`travel-node-card reached ${normalizeObjectId(travelStatus?.lastReachedNode?.nodeId) ? 'clickable' : 'disabled'}`}
+                                                onClick={() => handleOpenTravelNode(travelStatus?.lastReachedNode)}
+                                                disabled={!normalizeObjectId(travelStatus?.lastReachedNode?.nodeId)}
+                                            >
+                                                <div className="travel-node-label">最近到达</div>
+                                                <div className="travel-node-name">{travelStatus?.lastReachedNode?.nodeName || '-'}</div>
+                                            </button>
                                         </div>
-                                    )}
-                                </div>
-                            ) : currentLocationNodeDetail ? (
-                                <div
-                                    className={`location-sidebar-content ${canJumpToLocationView ? 'location-sidebar-jumpable' : ''}`}
-                                    onClick={() => {
-                                        if (canJumpToLocationView) {
-                                            handleJumpToCurrentLocationView();
-                                        }
-                                    }}
-                                >
-                                    <div className="location-node-title-row">
-                                        <div className="location-node-title">{currentLocationNodeDetail?.name || '未命名知识域'}</div>
+
                                         <button
                                             type="button"
-                                            className="location-node-jump-btn"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                if (canJumpToLocationView) {
-                                                    handleJumpToCurrentLocationView();
-                                                }
-                                            }}
-                                            disabled={!canJumpToLocationView}
+                                            className="btn btn-danger travel-stop-btn"
+                                            onClick={stopTravel}
+                                            disabled={isStoppingTravel || travelStatus?.isStopping}
                                         >
-                                            转到
+                                            {(isStoppingTravel || travelStatus?.isStopping) ? '停止进行中...' : '停止移动'}
                                         </button>
-                                    </div>
 
-                                    {currentLocationNodeDetail.description && (
-                                        <div className="location-node-section">
-                                            <div className="section-label">概述</div>
-                                            <div className="section-content">{currentLocationNodeDetail.description}</div>
-                                        </div>
-                                    )}
-
-                                    <div className="location-node-section">
-                                        <div className="domain-managers-card">
-                                            <div className="domain-manager-section">
-                                                <div className="domain-admins-subtitle">域主</div>
-                                                <div className="domain-manager-avatar-row">
-                                                    {locationDisplayMaster ? (
-                                                        <div
-                                                            className="domain-manager-avatar-item master"
-                                                            title={`域主：${locationDisplayMaster.username || '未命名用户'}`}
+                                        {siegeSupportStatuses.length > 0 && (
+                                            <div className="location-siege-support-section">
+                                                <div className="section-label">派遣兵力状态</div>
+                                                <div className="location-siege-support-list">
+                                                    {siegeSupportStatuses.map((item) => (
+                                                        <button
+                                                            type="button"
+                                                            key={`moving-support-${item.nodeId}-${item.gateKey}-${item.requestedAt || ''}`}
+                                                            className="location-siege-support-row"
+                                                            onClick={() => handleOpenTravelNode(item)}
+                                                            disabled={!item.nodeId}
                                                         >
-                                                            <img
-                                                                src={resolveAvatarSrc(locationDisplayMaster.avatar)}
-                                                                alt={locationDisplayMaster.username || '域主'}
-                                                                className="domain-manager-avatar-img"
-                                                            />
-                                                            <span className="domain-manager-name">{locationDisplayMaster.username || '未设置域主'}</span>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="domain-manage-tip">暂无域主信息</div>
-                                                    )}
+                                                            <span>{item.nodeName || '未知知识域'}</span>
+                                                            <span>{item.gateLabel || CITY_GATE_LABEL_MAP[item.gateKey] || item.gateKey}</span>
+                                                            <span>{item.statusLabel || item.status || '-'}</span>
+                                                            <em>{item.totalCount || 0}</em>
+                                                            {item.status === 'moving' && (
+                                                                <small>剩余 {formatTravelSeconds(item.remainingSeconds)}</small>
+                                                            )}
+                                                        </button>
+                                                    ))}
                                                 </div>
                                             </div>
-                                            <div className="domain-manager-section">
-                                                <div className="domain-admins-subtitle">域相</div>
-                                                <div className="domain-manager-avatar-row admins">
-                                                    {locationDomainAdmins.length > 0 ? (
-                                                        locationDomainAdmins.map((admin, index) => {
-                                                            const adminId = normalizeObjectId(admin?._id);
-                                                            const key = adminId || `location-domain-admin-${index}`;
-                                                            return (
-                                                                <div
-                                                                    key={key}
-                                                                    className="domain-manager-avatar-item"
-                                                                    title={`域相：${admin?.username || '未命名用户'}`}
-                                                                >
-                                                                    <img
-                                                                        src={resolveAvatarSrc(admin?.avatar)}
-                                                                        alt={admin?.username || '域相'}
-                                                                        className="domain-manager-avatar-img"
-                                                                    />
-                                                                    <span className="domain-manager-name">{admin?.username || '未命名'}</span>
-                                                                </div>
-                                                            );
-                                                        })
-                                                    ) : (
-                                                        <div className="domain-manage-tip">暂无域相</div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
+                                        )}
                                     </div>
-
-                                    <div className="location-node-section">
-                                        <div className="section-label">知识域状态</div>
-                                        <div className="location-domain-stats-grid">
-                                            {locationStatItems.map((item) => (
-                                                <div key={item.label} className="location-domain-stat-card">
-                                                    <div className="location-domain-stat-label">{item.label}</div>
-                                                    <div className="location-domain-stat-value">{item.value}</div>
-                                                </div>
-                                            ))}
+                                ) : currentLocationNodeDetail ? (
+                                    <div
+                                        className={`location-sidebar-content ${canJumpToLocationView ? 'location-sidebar-jumpable' : ''}`}
+                                        onClick={() => {
+                                            if (canJumpToLocationView) {
+                                                handleJumpToCurrentLocationView();
+                                            }
+                                        }}
+                                    >
+                                        <div className="location-node-title-row">
+                                            <div className="location-node-title">{currentLocationNodeDetail?.name || '未命名知识域'}</div>
+                                            <button
+                                                type="button"
+                                                className="location-node-jump-btn"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    if (canJumpToLocationView) {
+                                                        handleJumpToCurrentLocationView();
+                                                    }
+                                                }}
+                                                disabled={!canJumpToLocationView}
+                                            >
+                                                转到
+                                            </button>
                                         </div>
-                                    </div>
 
-                                    {locationParentLabels.length > 0 && (
-                                        <div className="location-node-section">
-                                            <div className="section-label">父域</div>
-                                            <div className="section-tags">
-                                                {locationParentLabels.map((parent, idx) => (
-                                                    <span key={idx} className="node-tag parent-tag">{parent}</span>
-                                                ))}
+                                        {currentLocationNodeDetail.description && (
+                                            <div className="location-node-section">
+                                                <div className="section-label">概述</div>
+                                                <div className="section-content">{currentLocationNodeDetail.description}</div>
                                             </div>
-                                        </div>
-                                    )}
+                                        )}
 
-                                    {locationChildLabels.length > 0 && (
                                         <div className="location-node-section">
-                                            <div className="section-label">子域</div>
-                                            <div className="section-tags">
-                                                {locationChildLabels.map((child, idx) => (
-                                                    <span key={idx} className="node-tag child-tag">{child}</span>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {siegeSupportStatuses.length > 0 && (
-                                        <div className="location-node-section location-siege-support-section">
-                                            <div className="section-label">派遣兵力状态</div>
-                                            <div className="location-siege-support-list">
-                                                {siegeSupportStatuses.map((item) => (
-                                                    <button
-                                                        type="button"
-                                                        key={`idle-support-${item.nodeId}-${item.gateKey}-${item.requestedAt || ''}`}
-                                                        className="location-siege-support-row"
-                                                        onClick={(event) => {
-                                                            event.stopPropagation();
-                                                            handleOpenTravelNode(item);
-                                                        }}
-                                                        disabled={!item.nodeId}
-                                                    >
-                                                        <span>{item.nodeName || '未知知识域'}</span>
-                                                        <span>{item.gateLabel || CITY_GATE_LABEL_MAP[item.gateKey] || item.gateKey}</span>
-                                                        <span>{item.statusLabel || item.status || '-'}</span>
-                                                        <em>{item.totalCount || 0}</em>
-                                                        {item.status === 'moving' && (
-                                                            <small>剩余 {formatTravelSeconds(item.remainingSeconds)}</small>
+                                            <div className="domain-managers-card">
+                                                <div className="domain-manager-section">
+                                                    <div className="domain-admins-subtitle">域主</div>
+                                                    <div className="domain-manager-avatar-row">
+                                                        {locationDisplayMaster ? (
+                                                            <div
+                                                                className="domain-manager-avatar-item master"
+                                                                title={`域主：${locationDisplayMaster.username || '未命名用户'}`}
+                                                            >
+                                                                <img
+                                                                    src={resolveAvatarSrc(locationDisplayMaster.avatar)}
+                                                                    alt={locationDisplayMaster.username || '域主'}
+                                                                    className="domain-manager-avatar-img"
+                                                                />
+                                                                <span className="domain-manager-name">{locationDisplayMaster.username || '未设置域主'}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="domain-manage-tip">暂无域主信息</div>
                                                         )}
-                                                    </button>
+                                                    </div>
+                                                </div>
+                                                <div className="domain-manager-section">
+                                                    <div className="domain-admins-subtitle">域相</div>
+                                                    <div className="domain-manager-avatar-row admins">
+                                                        {locationDomainAdmins.length > 0 ? (
+                                                            locationDomainAdmins.map((admin, index) => {
+                                                                const adminId = normalizeObjectId(admin?._id);
+                                                                const key = adminId || `location-domain-admin-${index}`;
+                                                                return (
+                                                                    <div
+                                                                        key={key}
+                                                                        className="domain-manager-avatar-item"
+                                                                        title={`域相：${admin?.username || '未命名用户'}`}
+                                                                    >
+                                                                        <img
+                                                                            src={resolveAvatarSrc(admin?.avatar)}
+                                                                            alt={admin?.username || '域相'}
+                                                                            className="domain-manager-avatar-img"
+                                                                        />
+                                                                        <span className="domain-manager-name">{admin?.username || '未命名'}</span>
+                                                                    </div>
+                                                                );
+                                                            })
+                                                        ) : (
+                                                            <div className="domain-manage-tip">暂无域相</div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="location-node-section">
+                                            <div className="section-label">知识域状态</div>
+                                            <div className="location-domain-stats-grid">
+                                                {locationStatItems.map((item) => (
+                                                    <div key={item.label} className="location-domain-stat-card">
+                                                        <div className="location-domain-stat-label">{item.label}</div>
+                                                        <div className="location-domain-stat-value">{item.value}</div>
+                                                    </div>
                                                 ))}
                                             </div>
                                         </div>
-                                    )}
-                                </div>
-                            ) : (
-                                <div className="location-sidebar-empty">
-                                    <p>
-                                        {(userLocation && userLocation !== '任意')
-                                            ? `当前位于「${userLocation}」，点击上方“刷新”获取状态`
-                                            : '暂未降临到任何知识域'}
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-                    </aside>
 
-                    <button
-                        type="button"
-                        className="home-location-dock-toggle"
-                        onClick={() => setIsLocationDockExpanded((prev) => !prev)}
-                        title={isLocationDockExpanded ? '收起当前所在知识域' : '展开当前所在知识域'}
-                    >
-                        <MapPin size={18} />
-                        <span className="home-location-dock-label">
-                            {travelStatus?.isTraveling ? '移动中' : '知识域'}
-                        </span>
-                        {isLocationDockExpanded ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-                    </button>
-                </div>
+                                        {locationParentLabels.length > 0 && (
+                                            <div className="location-node-section">
+                                                <div className="section-label">父域</div>
+                                                <div className="section-tags">
+                                                    {locationParentLabels.map((parent, idx) => (
+                                                        <span key={idx} className="node-tag parent-tag">{parent}</span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {locationChildLabels.length > 0 && (
+                                            <div className="location-node-section">
+                                                <div className="section-label">子域</div>
+                                                <div className="section-tags">
+                                                    {locationChildLabels.map((child, idx) => (
+                                                        <span key={idx} className="node-tag child-tag">{child}</span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {siegeSupportStatuses.length > 0 && (
+                                            <div className="location-node-section location-siege-support-section">
+                                                <div className="section-label">派遣兵力状态</div>
+                                                <div className="location-siege-support-list">
+                                                    {siegeSupportStatuses.map((item) => (
+                                                        <button
+                                                            type="button"
+                                                            key={`idle-support-${item.nodeId}-${item.gateKey}-${item.requestedAt || ''}`}
+                                                            className="location-siege-support-row"
+                                                            onClick={(event) => {
+                                                                event.stopPropagation();
+                                                                handleOpenTravelNode(item);
+                                                            }}
+                                                            disabled={!item.nodeId}
+                                                        >
+                                                            <span>{item.nodeName || '未知知识域'}</span>
+                                                            <span>{item.gateLabel || CITY_GATE_LABEL_MAP[item.gateKey] || item.gateKey}</span>
+                                                            <span>{item.statusLabel || item.status || '-'}</span>
+                                                            <em>{item.totalCount || 0}</em>
+                                                            {item.status === 'moving' && (
+                                                                <small>剩余 {formatTravelSeconds(item.remainingSeconds)}</small>
+                                                            )}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="location-sidebar-empty">
+                                        <p>
+                                            {(userLocation && userLocation !== '任意')
+                                                ? `当前位于「${userLocation}」，点击上方“刷新”获取状态`
+                                                : '暂未降临到任何知识域'}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        </aside>
+
+                        <button
+                            type="button"
+                            className="home-location-dock-toggle"
+                            onClick={() => setIsLocationDockExpanded((prev) => !prev)}
+                            title={isLocationDockExpanded ? '收起当前所在知识域' : '展开当前所在知识域'}
+                        >
+                            <MapPin size={18} />
+                            <span className="home-location-dock-label">
+                                {travelStatus?.isTraveling ? '移动中' : '知识域'}
+                            </span>
+                            {isLocationDockExpanded ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+                        </button>
+                    </div>
+                )}
             </>
         );
     };

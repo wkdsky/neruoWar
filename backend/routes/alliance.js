@@ -386,6 +386,87 @@ router.get('/:allianceId', async (req, res) => {
   }
 });
 
+// 获取熵盟公告列表
+router.get('/:allianceId/announcements', async (req, res) => {
+  try {
+    const { allianceId } = req.params;
+    const alliance = await EntropyAlliance.findById(allianceId)
+      .select('_id announcement announcementUpdatedAt')
+      .lean();
+    if (!alliance) {
+      return res.status(404).json({ error: '熵盟不存在' });
+    }
+
+    const { page, pageSize, skip } = parsePagination(req.query, {
+      pageKey: 'page',
+      pageSizeKey: 'pageSize',
+      defaultPageSize: DEFAULT_BROADCAST_PAGE_SIZE,
+      maxPageSize: MAX_BROADCAST_PAGE_SIZE
+    });
+    const query = {
+      allianceId: alliance._id,
+      type: 'announcement'
+    };
+
+    const [totalFromEvents, events] = await Promise.all([
+      AllianceBroadcastEvent.countDocuments(query),
+      AllianceBroadcastEvent.find(query)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .lean()
+    ]);
+
+    const normalizedCurrentAnnouncement = typeof alliance.announcement === 'string'
+      ? alliance.announcement.trim()
+      : '';
+    let shouldInsertLegacyAnnouncement = false;
+    if (page === 1 && normalizedCurrentAnnouncement) {
+      const hasSameInCurrentPage = events.some((item) => (
+        typeof item?.message === 'string' && item.message.trim() === normalizedCurrentAnnouncement
+      ));
+      if (!hasSameInCurrentPage) {
+        const sameCount = await AllianceBroadcastEvent.countDocuments({
+          ...query,
+          message: normalizedCurrentAnnouncement
+        });
+        shouldInsertLegacyAnnouncement = sameCount <= 0;
+      }
+    }
+
+    const mergedEvents = shouldInsertLegacyAnnouncement
+      ? [
+        {
+          _id: `legacy-${getIdString(alliance._id)}`,
+          allianceId: alliance._id,
+          type: 'announcement',
+          actorUserId: null,
+          actorUsername: '',
+          nodeId: null,
+          nodeName: '',
+          gateKey: '',
+          title: '',
+          message: normalizedCurrentAnnouncement,
+          createdAt: alliance.announcementUpdatedAt || null
+        },
+        ...events
+      ]
+      : events;
+
+    res.json({
+      announcements: mergedEvents.map((item) => serializeAllianceBroadcastEvent(item)),
+      pagination: buildPaginationPayload({
+        page,
+        pageSize,
+        total: totalFromEvents + (shouldInsertLegacyAnnouncement ? 1 : 0)
+      })
+    });
+  } catch (error) {
+    console.error('获取熵盟公告列表失败:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 // 创建新熵盟（需要认证）
 router.post('/create', authenticateToken, async (req, res) => {
   try {

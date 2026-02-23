@@ -115,6 +115,17 @@ const ensureSenseMutationPathEnabled = (res) => {
   return false;
 };
 
+const sendSenseRouteError = (res, error, fallbackMessage = '服务器错误') => {
+  if (error?.code === 'NODE_SENSE_READ_MISS') {
+    return res.status(Number(error.statusCode) || 409).json({
+      error: error.message || fallbackMessage,
+      code: error.code,
+      details: error.details || null
+    });
+  }
+  return res.status(500).json({ error: fallbackMessage });
+};
+
 router.get('/node/:nodeId', async (req, res) => {
   try {
     const { nodeId } = req.params;
@@ -147,7 +158,7 @@ router.get('/node/:nodeId', async (req, res) => {
     });
   } catch (error) {
     console.error('获取释义列表错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -192,7 +203,7 @@ router.post('/node/:nodeId', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('新增释义错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -241,7 +252,7 @@ router.put('/node/:nodeId/:senseId', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('更新释义错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -289,7 +300,7 @@ router.delete('/node/:nodeId/:senseId', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('删除释义错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -329,7 +340,7 @@ router.post('/node/:nodeId/:senseId/suggestions', authenticateToken, async (req,
     });
   } catch (error) {
     console.error('提交释义建议错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -375,7 +386,7 @@ router.get('/node/:nodeId/:senseId/suggestions', authenticateToken, async (req, 
     });
   } catch (error) {
     console.error('获取释义建议列表错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -449,7 +460,7 @@ router.post('/node/:nodeId/:senseId/suggestions/:suggestionId/review', authentic
     });
   } catch (error) {
     console.error('审核释义建议错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -491,7 +502,7 @@ router.get('/node/:nodeId/:senseId/comments', async (req, res) => {
     });
   } catch (error) {
     console.error('获取释义评论错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -530,7 +541,7 @@ router.post('/node/:nodeId/:senseId/comments', authenticateToken, async (req, re
     });
   } catch (error) {
     console.error('发布释义评论错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -575,7 +586,7 @@ router.post('/node/:nodeId/:senseId/favorite', authenticateToken, async (req, re
     });
   } catch (error) {
     console.error('释义收藏切换错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendSenseRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 

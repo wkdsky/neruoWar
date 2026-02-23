@@ -1016,8 +1016,13 @@ const KnowledgeDomainScene = ({
       const parsed = await parseApiResponse(response);
       const data = parsed.data;
       if (!response.ok || !data?.node) {
+        const errorMessage = getApiError(parsed, '刷新知识域信息失败');
+        const shouldAlert = !silent || parsed?.data?.code === 'NODE_SENSE_READ_MISS';
         if (!silent) {
-          setInfoPanelError(getApiError(parsed, '刷新知识域信息失败'));
+          setInfoPanelError(errorMessage);
+        }
+        if (shouldAlert) {
+          window.alert(errorMessage);
         }
         return null;
       }
@@ -1027,8 +1032,10 @@ const KnowledgeDomainScene = ({
       }
       return data.node;
     } catch (error) {
+      const errorMessage = `刷新知识域信息失败: ${error.message}`;
       if (!silent) {
-        setInfoPanelError(`刷新知识域信息失败: ${error.message}`);
+        setInfoPanelError(errorMessage);
+        window.alert(errorMessage);
       }
       return null;
     } finally {

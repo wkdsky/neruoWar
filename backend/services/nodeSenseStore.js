@@ -5,6 +5,7 @@ const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 const isNodeSenseCollectionReadEnabled = () => process.env.NODE_SENSE_COLLECTION_READ !== 'false';
 const isNodeSenseCollectionWriteEnabled = () => process.env.NODE_SENSE_COLLECTION_WRITE !== 'false';
+const isNodeSenseStrictReadEnabled = () => process.env.NODE_SENSE_STRICT_READ !== 'false';
 
 const toObjectIdOrNull = (value) => {
   if (!value) return null;
@@ -93,6 +94,10 @@ const hydrateNodeSensesForNodes = async (nodes = []) => {
   if (!isNodeSenseCollectionReadEnabled()) return nodes;
   const rows = Array.isArray(nodes) ? nodes : [];
   if (rows.length === 0) return rows;
+  rows.forEach((node) => {
+    if (!node || typeof node !== 'object') return;
+    node.__senseCollectionHydrated = true;
+  });
 
   const nodeIds = rows
     .map((item) => item?._id)
@@ -193,6 +198,26 @@ const listNodeSensesByNodeId = async (nodeId, { fallbackNode = null } = {}) => {
     if (rows.length > 0) {
       return normalizeSenseList(rows, fallbackNode?.description || '');
     }
+    if (isNodeSenseStrictReadEnabled()) {
+      const fallbackSenses = Array.isArray(fallbackNode?.synonymSenses) ? fallbackNode.synonymSenses : [];
+      const fallbackCount = fallbackSenses.length;
+      const reason = fallbackCount > 0
+        ? '释义集合为空/未命中（检测到旧版嵌入释义，已阻止自动回退）'
+        : '释义集合为空/未命中（且无旧版嵌入释义可回退）';
+      const error = new Error(
+        `[NODE_SENSE_READ_MISS] 操作=读取释义列表; nodeId=${String(safeNodeId)}; fallbackEmbeddedCount=${fallbackCount}; 原因=${reason}`
+      );
+      error.code = 'NODE_SENSE_READ_MISS';
+      error.statusCode = 409;
+      error.expose = true;
+      error.details = {
+        operation: '读取释义列表',
+        nodeId: String(safeNodeId),
+        fallbackEmbeddedCount: fallbackCount,
+        reason
+      };
+      throw error;
+    }
   }
 
   const sourceSenses = Array.isArray(fallbackNode?.synonymSenses) ? fallbackNode.synonymSenses : [];
@@ -202,6 +227,7 @@ const listNodeSensesByNodeId = async (nodeId, { fallbackNode = null } = {}) => {
 module.exports = {
   isNodeSenseCollectionReadEnabled,
   isNodeSenseCollectionWriteEnabled,
+  isNodeSenseStrictReadEnabled,
   normalizeSenseList,
   loadNodeSenseMapByNodeIds,
   hydrateNodeSensesForNodes,

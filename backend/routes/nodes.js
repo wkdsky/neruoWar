@@ -142,6 +142,30 @@ const isDomainAdmin = (node, userId) => {
 const DOMAIN_CARD_SELECT = '_id name description synonymSenses knowledgePoint contentScore';
 
 const normalizeNodeSenseList = (node = {}) => {
+  const isHydratedFromCollection = node?.__senseCollectionHydrated === true;
+  const hasCollectionRows = Array.isArray(node?.__senseCollectionRows) && node.__senseCollectionRows.length > 0;
+  if (isNodeSenseCollectionReadEnabled() && isHydratedFromCollection && !hasCollectionRows) {
+    const embeddedSenses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+    const embeddedCount = embeddedSenses.length;
+    const reason = embeddedCount > 0
+      ? '释义集合为空/未命中（检测到旧版嵌入释义，已阻止自动回退）'
+      : '释义集合为空/未命中（且无旧版嵌入释义可回退）';
+    const error = new Error(
+      `[NODE_SENSE_READ_MISS] 操作=读取知识域释义; nodeId=${getIdString(node?._id)}; nodeName=${String(node?.name || '')}; fallbackEmbeddedCount=${embeddedCount}; 原因=${reason}`
+    );
+    error.code = 'NODE_SENSE_READ_MISS';
+    error.statusCode = 409;
+    error.expose = true;
+    error.details = {
+      operation: '读取知识域释义',
+      nodeId: getIdString(node?._id),
+      nodeName: String(node?.name || ''),
+      fallbackEmbeddedCount: embeddedCount,
+      reason
+    };
+    throw error;
+  }
+
   const source = Array.isArray(node?.__senseCollectionRows) && node.__senseCollectionRows.length > 0
     ? node.__senseCollectionRows
     : (Array.isArray(node?.synonymSenses) ? node.synonymSenses : []);
@@ -149,6 +173,17 @@ const normalizeNodeSenseList = (node = {}) => {
     ? node.description.trim()
     : '暂无释义内容';
   return normalizeSenseList(source, fallbackContent);
+};
+
+const sendNodeRouteError = (res, error, fallbackMessage = '服务器错误') => {
+  if (error?.code === 'NODE_SENSE_READ_MISS') {
+    return res.status(Number(error.statusCode) || 409).json({
+      error: error.message || fallbackMessage,
+      code: error.code,
+      details: error.details || null
+    });
+  }
+  return res.status(500).json({ error: fallbackMessage });
 };
 
 const isNodeSenseEmbedSyncOnResponseEnabled = () => process.env.NODE_SENSE_EMBED_SYNC_ON_RESPONSE !== 'false';
@@ -193,8 +228,10 @@ const loadCanonicalNodeResponseById = async (nodeId, { populate = [] } = {}) => 
   const canonicalSenses = normalizeNodeSenseList(node);
   const embeddedSenses = toComparableSenseList(node.synonymSenses);
   const normalizedCanonicalSenses = toComparableSenseList(canonicalSenses);
+  const hasCanonicalCollectionRows = Array.isArray(node.__senseCollectionRows) && node.__senseCollectionRows.length > 0;
   if (
     isNodeSenseEmbedSyncOnResponseEnabled()
+    && hasCanonicalCollectionRows
     && !areSenseListsEquivalent(embeddedSenses, normalizedCanonicalSenses)
   ) {
     await Node.updateOne(
@@ -3252,7 +3289,7 @@ router.get('/search', authenticateToken, async (req, res) => {
     res.json(results);
   } catch (error) {
     console.error('搜索节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -3491,7 +3528,7 @@ router.post('/create', authenticateToken, async (req, res) => {
     res.status(201).json(canonicalNode || node.toObject());
   } catch (error) {
     console.error('创建知识域错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -3518,7 +3555,7 @@ router.get('/pending', authenticateToken, isAdmin, async (req, res) => {
     res.json(nodes);
   } catch (error) {
     console.error('获取待审批节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -3746,7 +3783,7 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('审批节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -3792,7 +3829,7 @@ router.post('/reject', authenticateToken, isAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('拒绝节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -3816,7 +3853,7 @@ router.post('/associate', authenticateToken, async (req, res) => {
     res.status(200).json(canonicalNode || node.toObject());
   } catch (error) {
     console.error('关联节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -3840,7 +3877,7 @@ router.post('/approve-association', authenticateToken, async (req, res) => {
     res.status(200).json(canonicalNode || node.toObject());
   } catch (error) {
     console.error('审批节点关联错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -3859,7 +3896,7 @@ router.post('/reject-association', authenticateToken, async (req, res) => {
     res.status(200).json(canonicalNode || node.toObject());
   } catch (error) {
     console.error('拒绝节点关联错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -3916,7 +3953,7 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('获取节点列表错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -3984,7 +4021,7 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('更新节点信息错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4131,7 +4168,7 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
     });
   } catch (error) {
     console.error('管理员新增释义错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4202,7 +4239,7 @@ router.put('/:nodeId/admin/senses/:senseId/text', authenticateToken, isAdmin, as
     });
   } catch (error) {
     console.error('管理员编辑释义文本错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4257,7 +4294,7 @@ router.post('/:nodeId/admin/senses/:senseId/delete-preview', authenticateToken, 
     });
   } catch (error) {
     console.error('管理员删除释义预览错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4338,7 +4375,7 @@ router.delete('/:nodeId/admin/senses/:senseId', authenticateToken, isAdmin, asyn
     });
   } catch (error) {
     console.error('管理员删除释义错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4388,7 +4425,7 @@ router.post('/:nodeId/delete-preview', authenticateToken, isAdmin, async (req, r
     });
   } catch (error) {
     console.error('删除节点预览错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4461,7 +4498,7 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('删除节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4545,7 +4582,7 @@ router.post('/:nodeId/associations/preview', authenticateToken, async (req, res)
     });
   } catch (error) {
     console.error('预览节点关联编辑错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4664,7 +4701,7 @@ router.put('/:nodeId/associations', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('编辑节点关联错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4695,7 +4732,7 @@ router.put('/:nodeId/featured', authenticateToken, isAdmin, async (req, res) => 
     });
   } catch (error) {
     console.error('设置热门节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4795,7 +4832,7 @@ router.get('/public/root-nodes', async (req, res) => {
     });
   } catch (error) {
     console.error('获取根节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4855,7 +4892,7 @@ router.get('/public/featured-nodes', async (req, res) => {
     });
   } catch (error) {
     console.error('获取热门节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4892,7 +4929,7 @@ router.get('/public/search', async (req, res) => {
     });
   } catch (error) {
     console.error('搜索节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -4911,7 +4948,7 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
         nodeId: new mongoose.Types.ObjectId(nodeId),
         status: 'approved'
       })
-        .select('nodeId name description knowledgePoint contentScore domainMaster allianceId status')
+        .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId status')
         .lean()
         .then((row) => (row ? mapProjectionRowToNodeLike(row) : null))
       : await Node.findById(nodeId)
@@ -4958,7 +4995,7 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
           status: 'approved',
           nodeId: { $in: directNeighborObjectIds }
         })
-          .select('nodeId name description knowledgePoint contentScore domainMaster allianceId status')
+          .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId status')
           .lean()
           .then((rows) => rows.map((row) => mapProjectionRowToNodeLike(row)))
         : await Node.find({
@@ -5184,7 +5221,7 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
     });
   } catch (error) {
     console.error('获取标题主视角错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -5359,7 +5396,7 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     });
   } catch (error) {
     console.error('获取节点详情错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -5418,7 +5455,7 @@ router.get('/public/all-nodes', async (req, res) => {
     });
   } catch (error) {
     console.error('获取所有节点错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -5513,7 +5550,7 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
     });
   } catch (error) {
     console.error('更换域主错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -5547,7 +5584,7 @@ router.get('/admin/search-users', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('搜索用户错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -5647,7 +5684,7 @@ router.get('/me/related-domains', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('获取相关知识域错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -5690,7 +5727,7 @@ router.post('/:nodeId/favorite', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('收藏知识域错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -5748,7 +5785,7 @@ router.post('/:nodeId/recent-visit', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('记录最近访问知识域错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -5851,7 +5888,7 @@ router.post('/:nodeId/domain-master/apply', authenticateToken, async (req, res) 
     });
   } catch (error) {
     console.error('申请成为域主错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -5958,7 +5995,7 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
     });
   } catch (error) {
     console.error('申请卸任域相错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6173,7 +6210,7 @@ router.get('/:nodeId/domain-admins/search-users', authenticateToken, async (req,
     });
   } catch (error) {
     console.error('搜索知识域域相候选用户错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6251,7 +6288,7 @@ router.post('/:nodeId/domain-admins/invite', authenticateToken, async (req, res)
     });
   } catch (error) {
     console.error('邀请知识域域相错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6314,7 +6351,7 @@ router.post('/:nodeId/domain-admins/invite/:notificationId/revoke', authenticate
     });
   } catch (error) {
     console.error('撤销域相邀请错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6353,7 +6390,7 @@ router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (r
     });
   } catch (error) {
     console.error('移除知识域域相错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6405,7 +6442,7 @@ router.put('/:nodeId/domain-admins/gate-defense-viewers', authenticateToken, asy
     });
   } catch (error) {
     console.error('保存承口/启口可查看权限错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6450,7 +6487,7 @@ router.get('/:nodeId/intel-heist', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('获取情报窃取状态错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6538,7 +6575,7 @@ router.post('/:nodeId/intel-heist/scan', authenticateToken, async (req, res) => 
     });
   } catch (error) {
     console.error('执行情报窃取建筑搜索错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6594,7 +6631,7 @@ router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('获取知识域城防配置错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6693,7 +6730,7 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
     if (error?.statusCode) {
       return res.status(error.statusCode).json({ error: error.message || '请求参数错误' });
     }
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6786,7 +6823,7 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('获取围城状态错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6844,7 +6881,7 @@ router.get('/:nodeId/siege/participants', authenticateToken, async (req, res) =>
     });
   } catch (error) {
     console.error('获取围城参与者分页错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -6982,7 +7019,7 @@ router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('发起围城错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -7097,7 +7134,7 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
     });
   } catch (error) {
     console.error('呼叫围城支援错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -7392,7 +7429,7 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('派遣围城支援错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -7492,7 +7529,7 @@ router.post('/:nodeId/siege/retreat', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('围城撤退错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -7562,7 +7599,7 @@ router.get('/me/siege-supports', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('获取围城支援状态错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -7746,7 +7783,7 @@ router.get('/:nodeId/distribution-settings', authenticateToken, async (req, res)
     });
   } catch (error) {
     console.error('获取知识点分发规则错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -7792,7 +7829,7 @@ router.get('/:nodeId/distribution-settings/search-users', authenticateToken, asy
     });
   } catch (error) {
     console.error('搜索分发用户失败:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -7833,7 +7870,7 @@ router.get('/:nodeId/distribution-settings/search-alliances', authenticateToken,
     });
   } catch (error) {
     console.error('搜索分发熵盟失败:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -8003,7 +8040,7 @@ router.put('/:nodeId/distribution-settings', authenticateToken, async (req, res)
     });
   } catch (error) {
     console.error('保存知识点分发规则错误:', error);
-    res.status(500).json({ error: '服务器错误' });
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -8174,7 +8211,7 @@ router.post('/:nodeId/distribution-settings/publish', authenticateToken, async (
     });
   } catch (error) {
     console.error('发布知识点分发计划错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -8595,7 +8632,7 @@ router.get('/:nodeId/distribution-participation', authenticateToken, async (req,
     });
   } catch (error) {
     console.error('获取分发参与状态错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -8708,7 +8745,7 @@ router.get('/:nodeId/distribution-participants', authenticateToken, async (req, 
     });
   } catch (error) {
     console.error('获取分发参与者列表错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -8820,7 +8857,7 @@ router.get('/:nodeId/distribution-results', authenticateToken, async (req, res) 
     });
   } catch (error) {
     console.error('获取分发结果列表错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -8970,7 +9007,7 @@ router.post('/:nodeId/distribution-participation/join', authenticateToken, async
     });
   } catch (error) {
     console.error('参与分发错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 
@@ -9074,7 +9111,7 @@ router.post('/:nodeId/distribution-participation/exit', authenticateToken, async
     });
   } catch (error) {
     console.error('退出分发错误:', error);
-    return res.status(500).json({ error: '服务器错误' });
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
 

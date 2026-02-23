@@ -131,6 +131,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [adminUserSearchInput, setAdminUserSearchInput] = useState('');
     const [adminUserSearchKeyword, setAdminUserSearchKeyword] = useState('');
     const [adminUserPageSize, setAdminUserPageSize] = useState(ADMIN_USER_PAGE_SIZE);
+    const [adminUserActionFeedback, setAdminUserActionFeedback] = useState({ type: '', message: '' });
+    const adminUserActionFeedbackTimerRef = useRef(null);
     const [editingUser, setEditingUser] = useState(null);
     const [editForm, setEditForm] = useState({
         username: '',
@@ -203,6 +205,27 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [pendingNodeSelectedSenseByNodeId, setPendingNodeSelectedSenseByNodeId] = useState({});
     const [pendingMasterApplications, setPendingMasterApplications] = useState([]);
     const [masterApplyActionId, setMasterApplyActionId] = useState('');
+
+    const showAdminUserActionFeedback = useCallback((type, message) => {
+        if (adminUserActionFeedbackTimerRef.current) {
+            clearTimeout(adminUserActionFeedbackTimerRef.current);
+        }
+        setAdminUserActionFeedback({
+            type: type === 'error' ? 'error' : 'success',
+            message: String(message || '').trim()
+        });
+        adminUserActionFeedbackTimerRef.current = setTimeout(() => {
+            setAdminUserActionFeedback({ type: '', message: '' });
+            adminUserActionFeedbackTimerRef.current = null;
+        }, 2800);
+    }, []);
+
+    useEffect(() => () => {
+        if (adminUserActionFeedbackTimerRef.current) {
+            clearTimeout(adminUserActionFeedbackTimerRef.current);
+            adminUserActionFeedbackTimerRef.current = null;
+        }
+    }, []);
 
     // 将待审核节点按名称分组
     const groupedPendingNodes = useMemo(() => {
@@ -432,15 +455,15 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         const parsedExperience = Number(editForm.experience);
         const parsedKnowledgeBalance = Number(editForm.knowledgeBalance);
         if (!Number.isInteger(parsedLevel) || parsedLevel < 0) {
-            alert('等级必须是大于等于0的整数');
+            showAdminUserActionFeedback('error', '等级必须是大于等于0的整数');
             return;
         }
         if (!Number.isInteger(parsedExperience) || parsedExperience < 0) {
-            alert('经验值必须是大于等于0的整数');
+            showAdminUserActionFeedback('error', '经验值必须是大于等于0的整数');
             return;
         }
         if (!Number.isFinite(parsedKnowledgeBalance) || parsedKnowledgeBalance < 0) {
-            alert('知识点余额必须是大于等于0的数字');
+            showAdminUserActionFeedback('error', '知识点余额必须是大于等于0的数字');
             return;
         }
 
@@ -464,17 +487,28 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 },
                 body: JSON.stringify(payload)
             });
+            let data = null;
+            let rawText = '';
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+                data = await response.json();
+            } else {
+                rawText = await response.text();
+            }
             if (response.ok) {
-                alert('用户信息已更新');
+                showAdminUserActionFeedback('success', data?.message || '用户信息已更新');
                 setEditingUser(null);
                 fetchAllUsers(adminUserPage, adminUserSearchKeyword);
             } else {
-                const data = await response.json();
-                alert(data.error || '更新失败');
+                const errorReason = data?.error
+                    || data?.message
+                    || rawText?.trim()
+                    || `更新失败（HTTP ${response.status}）`;
+                showAdminUserActionFeedback('error', `更新失败：${errorReason}`);
             }
         } catch (error) {
             console.error('更新用户失败:', error);
-            alert('更新失败');
+            showAdminUserActionFeedback('error', `更新失败：${error?.message || '网络异常'}`);
         }
     };
 
@@ -4663,6 +4697,15 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                             </button>
                         </div>
                     </div>
+                    {adminUserActionFeedback.message && (
+                        <div
+                            className={`admin-user-action-feedback ${adminUserActionFeedback.type === 'error' ? 'error' : 'success'}`}
+                            role="status"
+                            aria-live="polite"
+                        >
+                            {adminUserActionFeedback.message}
+                        </div>
+                    )}
                     
                     <div className="table-responsive">
                         <table className="users-table">
