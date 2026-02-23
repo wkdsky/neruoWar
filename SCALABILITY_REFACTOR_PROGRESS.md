@@ -394,3 +394,33 @@
   - 为什么：消除 `/api/senses` 与 `/api/nodes` 双写入口规则冲突，统一到单一可扩展写路径。
   - 改动文件：`backend/routes/senses.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
   - 风险/待办：旧客户端若仍调用 `/api/senses` 写接口需切换到 `/api/nodes` 或临时开启兼容开关。
+
+## 10. NodeSense 双存储一致性（2026-02-23 补充）
+- [x] NodeSense 双存储一致性（统一写入口、读路径一致、自动修复、可回退）
+  - 改动文件：`backend/models/Node.js`、`backend/models/NodeSense.js`、`backend/services/nodeSenseStore.js`、`backend/routes/nodes.js`、`backend/routes/senses.js`、`backend/worker.js`、`backend/scripts/seed_scalability_dataset.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：写释义后立即读取同节点，返回 `synonymSenses` 与本次写入规范化结果一致；collection miss + embedded 命中时仅入队去重 backfill；worker 重复执行 materialize/backfill 不破坏数据。
+
+### 10.1 最小运维开关与 Runbook
+- 正常运行：`NODE_SENSE_COLLECTION_READ=1 NODE_SENSE_COLLECTION_WRITE=1 NODE_SENSE_REPAIR_ENABLED=1`
+- 止血（停自动修复）：`NODE_SENSE_REPAIR_ENABLED=0`
+- 回滚读（全部读 embedded）：`NODE_SENSE_COLLECTION_READ=0`
+- 回滚写（只写 embedded，后续 backfill 追平）：`NODE_SENSE_COLLECTION_WRITE=0`
+
+### 10.2 验收步骤（可复制执行）
+1. 运行 seed（含旧数据）：`cd backend && node scripts/seed_scalability_dataset.js --profile smoke --reset --withOldRecords`
+2. 启动 API：`NODE_SENSE_COLLECTION_READ=true NODE_SENSE_COLLECTION_WRITE=true NODE_SENSE_REPAIR_ENABLED=true node server.js`
+3. 启动 worker：`NODE_SENSE_COLLECTION_READ=true NODE_SENSE_COLLECTION_WRITE=true NODE_SENSE_REPAIR_ENABLED=true node worker.js`
+4. 选择一个 embedded-only 节点执行 GET（触发 backfill 入队）：`GET /api/nodes/public/node-detail/:nodeId`
+5. 等待 worker 后检查集合行数：`db.nodesenses.countDocuments({ nodeId: ObjectId("<nodeId>"), status: "active" })` 应 `> 0`
+6. 再次 GET 同节点：`synonymSenses` 应按“集合优先、embedded 兜底”返回，写接口返回与读接口一致。
+
+### 10.3 本轮策略说明
+- SoT：`NodeSense` 集合。
+- `Node.synonymSenses`：兼容缓存 + 回退副本。
+- 统一写入口：`saveNodeSenses(...)`，集合写成功后再原子更新 embedded 与 `senseVersion/senseWatermark`。
+- 自动修复任务：
+  - `node_sense_backfill_job`（embedded -> collection）
+  - `node_sense_materialize_job`（collection -> embedded）
+- 幂等与防覆盖：
+  - 入队 dedupeKey：`node_sense_backfill:${nodeId}:${senseVersion}`、`node_sense_materialize:${nodeId}:${senseVersion}`
+  - materialize 更新条件带 `expectedWatermark/expectedVersion`，防旧任务覆盖新版本。

@@ -1,11 +1,15 @@
 const mongoose = require('mongoose');
+const Node = require('../models/Node');
 const NodeSense = require('../models/NodeSense');
+const schedulerService = require('./schedulerService');
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+// NodeSense 集合作为释义单一真值源（SoT）；embedded 仅作兼容缓存与回退副本。
 const isNodeSenseCollectionReadEnabled = () => process.env.NODE_SENSE_COLLECTION_READ !== 'false';
 const isNodeSenseCollectionWriteEnabled = () => process.env.NODE_SENSE_COLLECTION_WRITE !== 'false';
-const isNodeSenseStrictReadEnabled = () => process.env.NODE_SENSE_STRICT_READ !== 'false';
+// 自动修复总开关：控制 backfill/materialize 两类修复任务是否入队。
+const isNodeSenseRepairEnabled = () => process.env.NODE_SENSE_REPAIR_ENABLED !== 'false';
 
 const toObjectIdOrNull = (value) => {
   if (!value) return null;
@@ -13,6 +17,18 @@ const toObjectIdOrNull = (value) => {
   const text = String(value);
   if (!mongoose.Types.ObjectId.isValid(text)) return null;
   return new mongoose.Types.ObjectId(text);
+};
+
+const toIdString = (value) => {
+  if (!value) return '';
+  if (value instanceof mongoose.Types.ObjectId) return value.toString();
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value._id && value._id !== value) return toIdString(value._id);
+  if (typeof value.toString === 'function') {
+    const text = value.toString();
+    return text === '[object Object]' ? '' : text;
+  }
+  return '';
 };
 
 const normalizeSenseId = (value, fallbackIndex = 0) => {
@@ -117,10 +133,46 @@ const hydrateNodeSensesForNodes = async (nodes = []) => {
   return rows;
 };
 
+// 统一读路径：集合优先，嵌入兜底。
+// 返回 shouldEnqueueBackfill，供路由层在集合 miss 且 embedded 存在时入队修复。
+const resolveNodeSensesForNode = (nodeDoc = {}, options = {}) => {
+  const fallbackDescription = typeof options?.fallbackDescription === 'string'
+    ? options.fallbackDescription
+    : (typeof nodeDoc?.description === 'string' ? nodeDoc.description : '');
+  const collectionReadEnabled = isNodeSenseCollectionReadEnabled();
+  const collectionHydrated = nodeDoc?.__senseCollectionHydrated === true;
+  const collectionRows = Array.isArray(nodeDoc?.__senseCollectionRows) ? nodeDoc.__senseCollectionRows : [];
+  const embeddedRows = Array.isArray(nodeDoc?.synonymSenses) ? nodeDoc.synonymSenses : [];
+
+  if (collectionReadEnabled && collectionHydrated && collectionRows.length > 0) {
+    return {
+      senses: normalizeSenseList(collectionRows, fallbackDescription),
+      source: 'collection',
+      shouldEnqueueBackfill: false
+    };
+  }
+
+  const senses = normalizeSenseList(embeddedRows, fallbackDescription);
+  const shouldEnqueueBackfill = (
+    collectionReadEnabled
+    && collectionHydrated
+    && collectionRows.length === 0
+    && embeddedRows.length > 0
+    && isNodeSenseRepairEnabled()
+  );
+
+  return {
+    senses,
+    source: 'embedded',
+    shouldEnqueueBackfill
+  };
+};
+
 const upsertNodeSensesReplace = async ({
   nodeId,
   senses = [],
-  actorUserId = null
+  actorUserId = null,
+  watermark = ''
 } = {}) => {
   if (!isNodeSenseCollectionWriteEnabled()) {
     return { skipped: true, upserted: 0, modified: 0, deleted: 0 };
@@ -138,6 +190,7 @@ const upsertNodeSensesReplace = async ({
   }));
 
   const actorId = toObjectIdOrNull(actorUserId);
+  const safeWatermark = typeof watermark === 'string' ? watermark.trim() : '';
   const ops = normalized.map((item) => ({
     updateOne: {
       filter: {
@@ -150,7 +203,8 @@ const upsertNodeSensesReplace = async ({
           content: item.content,
           order: item.order,
           status: 'active',
-          updatedBy: actorId || null
+          updatedBy: actorId || null,
+          watermark: safeWatermark
         },
         $setOnInsert: {
           createdBy: actorId || null
@@ -184,8 +238,247 @@ const upsertNodeSensesReplace = async ({
   };
 };
 
-const listNodeSensesByNodeId = async (nodeId, { fallbackNode = null } = {}) => {
+const enqueueNodeSenseMaterializeJob = async ({ nodeId, expectedWatermark, expectedVersion }) => {
+  const safeNodeId = toIdString(nodeId);
+  if (!isValidObjectId(safeNodeId)) return;
+  const safeVersion = Number.isFinite(Number(expectedVersion)) ? Number(expectedVersion) : 0;
+  await schedulerService.enqueue({
+    type: 'node_sense_materialize_job',
+    payload: {
+      nodeId: safeNodeId,
+      expectedWatermark: typeof expectedWatermark === 'string' ? expectedWatermark : '',
+      expectedVersion: safeVersion
+    },
+    dedupeKey: `node_sense_materialize:${safeNodeId}:${safeVersion}`
+  });
+};
+
+const enqueueNodeSenseBackfillJob = async ({ nodeId, actorUserId = null, senseVersion = 0 }) => {
+  const safeNodeId = toIdString(nodeId);
+  if (!isValidObjectId(safeNodeId)) return;
+  const safeVersion = Number.isFinite(Number(senseVersion)) ? Number(senseVersion) : 0;
+  await schedulerService.enqueue({
+    type: 'node_sense_backfill_job',
+    payload: {
+      nodeId: safeNodeId,
+      actorUserId: toIdString(actorUserId) || null
+    },
+    dedupeKey: `node_sense_backfill:${safeNodeId}:${safeVersion}`
+  });
+};
+
+// 统一写入口：写后返回本次规范化结果，保证写后读一致。
+// 注意：不做集合写失败隐式降级；WRITE 开启时集合写失败直接抛错。
+const saveNodeSenses = async ({
+  nodeId,
+  senses = [],
+  actorUserId = null,
+  fallbackDescription = ''
+} = {}) => {
   const safeNodeId = toObjectIdOrNull(nodeId);
+  if (!safeNodeId) {
+    throw new Error('保存释义失败：无效 nodeId');
+  }
+
+  let effectiveFallbackDescription = typeof fallbackDescription === 'string' ? fallbackDescription : '';
+  if (!effectiveFallbackDescription.trim()) {
+    const nodeForDescription = await Node.findById(safeNodeId).select('description').lean();
+    effectiveFallbackDescription = typeof nodeForDescription?.description === 'string'
+      ? nodeForDescription.description
+      : '';
+  }
+
+  const normalizedSenses = normalizeSenseList(senses, effectiveFallbackDescription);
+  const normalizedEmbedded = normalizedSenses.map((item) => ({
+    senseId: item.senseId,
+    title: item.title,
+    content: item.content
+  }));
+
+  const now = new Date();
+  const senseWatermark = new mongoose.Types.ObjectId().toString();
+  const collectionWriteEnabled = isNodeSenseCollectionWriteEnabled();
+
+  if (collectionWriteEnabled) {
+    await upsertNodeSensesReplace({
+      nodeId: safeNodeId,
+      senses: normalizedSenses,
+      actorUserId,
+      watermark: senseWatermark
+    });
+  }
+
+  const setPayload = {
+    synonymSenses: normalizedEmbedded,
+    synonymSensesCount: normalizedSenses.length,
+    senseWatermark,
+    senseEmbeddedUpdatedAt: now
+  };
+  if (collectionWriteEnabled) {
+    setPayload.senseCollectionUpdatedAt = now;
+  }
+
+  const updatedNode = await Node.findOneAndUpdate(
+    { _id: safeNodeId },
+    {
+      $set: setPayload,
+      $inc: { senseVersion: 1 }
+    },
+    {
+      new: true,
+      projection: '_id senseVersion senseWatermark'
+    }
+  ).lean();
+
+  if (!updatedNode) {
+    throw new Error(`保存释义失败：节点不存在 nodeId=${safeNodeId.toString()}`);
+  }
+
+  const senseVersion = Number.isFinite(Number(updatedNode.senseVersion))
+    ? Number(updatedNode.senseVersion)
+    : 0;
+
+  if (collectionWriteEnabled && isNodeSenseRepairEnabled()) {
+    await enqueueNodeSenseMaterializeJob({
+      nodeId: safeNodeId,
+      expectedWatermark: senseWatermark,
+      expectedVersion: senseVersion
+    });
+  }
+
+  return {
+    senses: normalizedSenses,
+    senseVersion,
+    senseWatermark
+  };
+};
+
+// worker 任务：collection -> embedded 物化。幂等 + 版本/水位线防旧任务回写覆盖。
+const materializeNodeSensesToEmbedded = async ({
+  nodeId,
+  expectedWatermark = '',
+  expectedVersion = null
+} = {}) => {
+  const safeNodeId = toObjectIdOrNull(nodeId);
+  if (!safeNodeId) {
+    return { skipped: true, reason: 'invalid_node_id' };
+  }
+
+  const node = await Node.findById(safeNodeId)
+    .select('_id description senseVersion senseWatermark')
+    .lean();
+  if (!node) {
+    return { skipped: true, reason: 'node_not_found' };
+  }
+
+  const rows = await NodeSense.find({
+    nodeId: safeNodeId,
+    status: 'active'
+  })
+    .select('senseId title content order')
+    .sort({ order: 1, senseId: 1, _id: 1 })
+    .lean();
+
+  if (!rows.length) {
+    return { skipped: true, reason: 'collection_empty' };
+  }
+
+  const normalized = normalizeSenseList(rows, node.description || '');
+  const normalizedEmbedded = normalized.map((item) => ({
+    senseId: item.senseId,
+    title: item.title,
+    content: item.content
+  }));
+
+  const filter = { _id: safeNodeId };
+  const guardList = [];
+  const safeWatermark = typeof expectedWatermark === 'string' ? expectedWatermark.trim() : '';
+  const safeExpectedVersion = Number.isFinite(Number(expectedVersion)) ? Number(expectedVersion) : null;
+  if (safeWatermark) {
+    guardList.push({ senseWatermark: safeWatermark });
+  }
+  if (safeExpectedVersion !== null) {
+    guardList.push({ senseVersion: { $lte: safeExpectedVersion } });
+  }
+  if (guardList.length > 0) {
+    filter.$or = guardList;
+  }
+
+  const now = new Date();
+  const result = await Node.updateOne(filter, {
+    $set: {
+      synonymSenses: normalizedEmbedded,
+      synonymSensesCount: normalized.length,
+      senseEmbeddedUpdatedAt: now,
+      senseMaterializedAt: now
+    }
+  });
+
+  return {
+    skipped: false,
+    matchedCount: result?.matchedCount || 0,
+    modifiedCount: result?.modifiedCount || 0
+  };
+};
+
+// worker 任务：embedded -> collection 回填。幂等：集合已有 active 行则直接跳过。
+const backfillNodeSenseCollectionFromEmbedded = async ({ nodeId, actorUserId = null } = {}) => {
+  const safeNodeId = toObjectIdOrNull(nodeId);
+  if (!safeNodeId) {
+    return { skipped: true, reason: 'invalid_node_id' };
+  }
+  if (!isNodeSenseCollectionWriteEnabled()) {
+    return { skipped: true, reason: 'collection_write_disabled' };
+  }
+
+  const existingActiveCount = await NodeSense.countDocuments({
+    nodeId: safeNodeId,
+    status: 'active'
+  });
+  if (existingActiveCount > 0) {
+    return { skipped: true, reason: 'collection_already_has_rows', existingActiveCount };
+  }
+
+  const node = await Node.findById(safeNodeId)
+    .select('_id description synonymSenses senseWatermark')
+    .lean();
+  if (!node) {
+    return { skipped: true, reason: 'node_not_found' };
+  }
+
+  const normalized = normalizeSenseList(node.synonymSenses || [], node.description || '');
+  const watermark = (typeof node.senseWatermark === 'string' && node.senseWatermark.trim())
+    ? node.senseWatermark.trim()
+    : new mongoose.Types.ObjectId().toString();
+
+  await upsertNodeSensesReplace({
+    nodeId: safeNodeId,
+    senses: normalized,
+    actorUserId,
+    watermark
+  });
+
+  await Node.updateOne(
+    { _id: safeNodeId },
+    { $set: { senseCollectionUpdatedAt: new Date() } }
+  );
+
+  return {
+    skipped: false,
+    repairedCount: normalized.length
+  };
+};
+
+const listNodeSensesByNodeId = async (nodeId, { fallbackNode = null, actorUserId = null } = {}) => {
+  const safeNodeId = toObjectIdOrNull(nodeId);
+  let nodeDoc = fallbackNode;
+
+  if ((!nodeDoc || typeof nodeDoc !== 'object') && safeNodeId) {
+    nodeDoc = await Node.findById(safeNodeId)
+      .select('_id description synonymSenses senseVersion')
+      .lean();
+  }
+
   if (isNodeSenseCollectionReadEnabled() && safeNodeId) {
     const rows = await NodeSense.find({
       nodeId: safeNodeId,
@@ -195,42 +488,48 @@ const listNodeSensesByNodeId = async (nodeId, { fallbackNode = null } = {}) => {
       .sort({ order: 1, senseId: 1, _id: 1 })
       .lean();
 
-    if (rows.length > 0) {
-      return normalizeSenseList(rows, fallbackNode?.description || '');
-    }
-    if (isNodeSenseStrictReadEnabled()) {
-      const fallbackSenses = Array.isArray(fallbackNode?.synonymSenses) ? fallbackNode.synonymSenses : [];
-      const fallbackCount = fallbackSenses.length;
-      const reason = fallbackCount > 0
-        ? '释义集合为空/未命中（检测到旧版嵌入释义，已阻止自动回退）'
-        : '释义集合为空/未命中（且无旧版嵌入释义可回退）';
-      const error = new Error(
-        `[NODE_SENSE_READ_MISS] 操作=读取释义列表; nodeId=${String(safeNodeId)}; fallbackEmbeddedCount=${fallbackCount}; 原因=${reason}`
-      );
-      error.code = 'NODE_SENSE_READ_MISS';
-      error.statusCode = 409;
-      error.expose = true;
-      error.details = {
-        operation: '读取释义列表',
-        nodeId: String(safeNodeId),
-        fallbackEmbeddedCount: fallbackCount,
-        reason
+    if (!nodeDoc || typeof nodeDoc !== 'object') {
+      nodeDoc = {
+        _id: safeNodeId,
+        description: '',
+        synonymSenses: []
       };
-      throw error;
+    }
+    nodeDoc.__senseCollectionHydrated = true;
+    if (rows.length > 0) {
+      nodeDoc.__senseCollectionRows = rows;
     }
   }
 
-  const sourceSenses = Array.isArray(fallbackNode?.synonymSenses) ? fallbackNode.synonymSenses : [];
-  return normalizeSenseList(sourceSenses, fallbackNode?.description || '');
+  const resolved = resolveNodeSensesForNode(nodeDoc || {}, {
+    fallbackDescription: nodeDoc?.description || ''
+  });
+
+  if (resolved.shouldEnqueueBackfill) {
+    const senseVersion = Number.isFinite(Number(nodeDoc?.senseVersion)) ? Number(nodeDoc.senseVersion) : 0;
+    await enqueueNodeSenseBackfillJob({
+      nodeId: nodeDoc?._id || safeNodeId,
+      actorUserId,
+      senseVersion
+    });
+  }
+
+  return resolved.senses;
 };
 
 module.exports = {
   isNodeSenseCollectionReadEnabled,
   isNodeSenseCollectionWriteEnabled,
-  isNodeSenseStrictReadEnabled,
+  isNodeSenseRepairEnabled,
   normalizeSenseList,
   loadNodeSenseMapByNodeIds,
   hydrateNodeSensesForNodes,
+  resolveNodeSensesForNode,
   upsertNodeSensesReplace,
+  saveNodeSenses,
+  materializeNodeSensesToEmbedded,
+  backfillNodeSenseCollectionFromEmbedded,
+  enqueueNodeSenseBackfillJob,
+  enqueueNodeSenseMaterializeJob,
   listNodeSensesByNodeId
 };

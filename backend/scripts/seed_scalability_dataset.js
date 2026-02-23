@@ -358,8 +358,16 @@ const buildNodes = async ({ commonUsers = [], allianceByUserId = new Map() } = {
 
 const buildNodeSenses = async ({ nodes = [], users = [] } = {}) => {
   const createdBy = users[0]?._id || null;
+  const allNodes = Array.isArray(nodes) ? nodes : [];
+  // --withOldRecords: 注入 embedded-only 节点，模拟旧时代仅写 Node.synonymSenses 的数据。
+  const embeddedOnlyNodes = withOldRecords
+    ? allNodes.filter((_, idx) => idx % 5 === 0)
+    : [];
+  const embeddedOnlyNodeIdSet = new Set(embeddedOnlyNodes.map((item) => String(item._id)));
+  const collectionNodes = allNodes.filter((item) => !embeddedOnlyNodeIdSet.has(String(item._id)));
+
   const docs = [];
-  nodes.forEach((node) => {
+  collectionNodes.forEach((node) => {
     for (let i = 0; i < config.sensesPerNode; i += 1) {
       docs.push({
         nodeId: node._id,
@@ -374,6 +382,37 @@ const buildNodeSenses = async ({ nodes = [], users = [] } = {}) => {
     }
   });
   await insertManyInBatches(NodeSense, docs, 2000);
+
+  if (embeddedOnlyNodes.length > 0) {
+    const nowDate = now();
+    const nodeOps = embeddedOnlyNodes.map((node) => {
+      const senses = Array.from({ length: Math.max(1, config.sensesPerNode) }, (_, i) => ({
+        senseId: `sense_${i + 1}`,
+        title: `${node.name}_legacy_embedded_${i + 1}`,
+        content: `legacy embedded sense ${i + 1} for ${node.name}`
+      }));
+      return {
+        updateOne: {
+          filter: { _id: node._id },
+          update: {
+            $set: {
+              synonymSenses: senses,
+              synonymSensesCount: senses.length,
+              senseVersion: 1,
+              senseWatermark: `${MARKER}_legacy_${String(node._id)}`,
+              senseEmbeddedUpdatedAt: nowDate
+            }
+          }
+        }
+      };
+    });
+    await bulkWriteInBatches(Node, nodeOps, 1000);
+  }
+
+  return {
+    nodeSenseRowsCount: docs.length,
+    embeddedOnlyNodesCount: embeddedOnlyNodes.length
+  };
 };
 
 const updateUserLocations = async ({ commonUsers = [], nodes = [] } = {}) => {
@@ -816,8 +855,8 @@ const run = async () => {
   console.log(`[seed] nodes created count=${nodes.length}`);
 
   await updateUserLocations({ commonUsers: commons, nodes });
-  await buildNodeSenses({ nodes, users: commons });
-  console.log(`[seed] node senses created count=${nodes.length * config.sensesPerNode}`);
+  const nodeSenseSeedStats = await buildNodeSenses({ nodes, users: commons });
+  console.log(`[seed] node senses created rows=${nodeSenseSeedStats.nodeSenseRowsCount} embeddedOnlyNodes=${nodeSenseSeedStats.embeddedOnlyNodesCount}`);
 
   const siegeInfo = await createSiegeDataset({ nodes, allianceMembership });
   const distributionInfo = await createDistributionDataset({ nodes, allianceMembership });
@@ -841,7 +880,9 @@ const run = async () => {
     },
     alliances: alliances.length,
     nodes: nodes.length,
-    nodeSenses: nodes.length * config.sensesPerNode,
+    nodeSenses: nodeSenseSeedStats.nodeSenseRowsCount,
+    embeddedOnlyNodesCount: nodeSenseSeedStats.embeddedOnlyNodesCount,
+    nodeSenseRowsCount: nodeSenseSeedStats.nodeSenseRowsCount,
     siege: siegeInfo,
     distribution: distributionInfo,
     leaseTask: sleepTaskMs ? { sleepTaskMs } : null,

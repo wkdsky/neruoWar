@@ -6,14 +6,16 @@ const NodeSenseEditSuggestion = require('../models/NodeSenseEditSuggestion');
 const NodeSenseComment = require('../models/NodeSenseComment');
 const NodeSenseFavorite = require('../models/NodeSenseFavorite');
 const { authenticateToken } = require('../middleware/auth');
+const schedulerService = require('../services/schedulerService');
 const {
-  normalizeSenseList,
-  listNodeSensesByNodeId,
-  upsertNodeSensesReplace
+  isNodeSenseCollectionReadEnabled,
+  isNodeSenseRepairEnabled,
+  hydrateNodeSensesForNodes,
+  resolveNodeSensesForNode,
+  saveNodeSenses
 } = require('../services/nodeSenseStore');
 
 const router = express.Router();
-const LEGACY_NODE_SENSE_EMBED_WRITE_ENABLED = process.env.NODE_LEGACY_SENSE_EMBED_WRITE === 'true';
 const ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS = process.env.ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS === 'true';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -81,28 +83,47 @@ const canManageNodeSenses = async (node, userId) => {
   return { allowed: true, isAdmin: false };
 };
 
-const persistNodeSenses = async ({ node, nextSenses = [], actorUserId = null }) => {
-  const normalized = normalizeSenseList(nextSenses, node?.description || '');
-  if (LEGACY_NODE_SENSE_EMBED_WRITE_ENABLED) {
-    node.synonymSenses = normalized.map((item) => ({
-      senseId: item.senseId,
-      title: item.title,
-      content: item.content
-    }));
-    await node.save();
-  }
-  await upsertNodeSensesReplace({
-    nodeId: node._id,
-    senses: normalized,
-    actorUserId
+const enqueueNodeSenseBackfillFromSenseRoute = async (node = {}, actorUserId = null) => {
+  if (!isNodeSenseCollectionReadEnabled() || !isNodeSenseRepairEnabled()) return;
+  const nodeId = getIdString(node?._id);
+  if (!isValidObjectId(nodeId)) return;
+  const senseVersion = Number.isFinite(Number(node?.senseVersion)) ? Number(node.senseVersion) : 0;
+  await schedulerService.enqueue({
+    type: 'node_sense_backfill_job',
+    payload: {
+      nodeId,
+      actorUserId: getIdString(actorUserId) || null
+    },
+    dedupeKey: `node_sense_backfill:${nodeId}:${senseVersion}`
   });
-  return normalized;
+};
+
+const resolveNodeSensesWithRepair = async (node = {}, actorUserId = null) => {
+  const rows = Array.isArray(node) ? node : [node];
+  await hydrateNodeSensesForNodes(rows);
+  const resolved = resolveNodeSensesForNode(node, {
+    fallbackDescription: typeof node?.description === 'string' ? node.description : ''
+  });
+  if (resolved.shouldEnqueueBackfill) {
+    await enqueueNodeSenseBackfillFromSenseRoute(node, actorUserId);
+  }
+  return resolved.senses;
+};
+
+const persistNodeSenses = async ({ node, nextSenses = [], actorUserId = null }) => {
+  const saved = await saveNodeSenses({
+    nodeId: node?._id,
+    senses: nextSenses,
+    actorUserId,
+    fallbackDescription: node?.description || ''
+  });
+  return saved.senses;
 };
 
 const ensureApprovedNode = async (nodeId) => {
   if (!isValidObjectId(nodeId)) return null;
   const node = await Node.findById(nodeId)
-    .select('_id name description status domainMaster domainAdmins associations synonymSenses');
+    .select('_id name description status domainMaster domainAdmins associations synonymSenses senseVersion');
   if (!node || node.status !== 'approved') return null;
   return node;
 };
@@ -116,10 +137,10 @@ const ensureSenseMutationPathEnabled = (res) => {
 };
 
 const sendSenseRouteError = (res, error, fallbackMessage = '服务器错误') => {
-  if (error?.code === 'NODE_SENSE_READ_MISS') {
-    return res.status(Number(error.statusCode) || 409).json({
+  if (error?.expose && error?.message) {
+    return res.status(Number(error.statusCode) || 400).json({
       error: error.message || fallbackMessage,
-      code: error.code,
+      code: error.code || '',
       details: error.details || null
     });
   }
@@ -132,7 +153,7 @@ router.get('/node/:nodeId', async (req, res) => {
     const node = await ensureApprovedNode(nodeId);
     if (!node) return res.status(404).json({ error: '知识域不存在或未审批' });
 
-    const senses = await listNodeSensesByNodeId(node._id, { fallbackNode: node });
+    const senses = await resolveNodeSensesWithRepair(node, req.user?.userId || null);
     const [commentCounts, favoriteCounts] = await Promise.all([
       NodeSenseComment.aggregate([
         { $match: { nodeId: node._id, status: 'visible' } },
@@ -180,7 +201,7 @@ router.post('/node/:nodeId', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '释义标题和内容不能为空' });
     }
 
-    const currentSenses = await listNodeSensesByNodeId(node._id, { fallbackNode: node });
+    const currentSenses = await resolveNodeSensesWithRepair(node, req.user?.userId || null);
     if (!ensureSenseTitleUnique(currentSenses, title)) {
       return res.status(400).json({ error: '同一知识域下多个释义题目不能重名' });
     }
@@ -219,7 +240,7 @@ router.put('/node/:nodeId/:senseId', authenticateToken, async (req, res) => {
       return res.status(permission.status).json({ error: permission.error });
     }
 
-    const currentSenses = await listNodeSensesByNodeId(node._id, { fallbackNode: node });
+    const currentSenses = await resolveNodeSensesWithRepair(node, req.user?.userId || null);
     const currentSense = findSenseById(currentSenses, senseId);
     if (!currentSense) {
       return res.status(404).json({ error: '释义不存在' });
@@ -268,7 +289,7 @@ router.delete('/node/:nodeId/:senseId', authenticateToken, async (req, res) => {
       return res.status(permission.status).json({ error: permission.error });
     }
 
-    const currentSenses = await listNodeSensesByNodeId(node._id, { fallbackNode: node });
+    const currentSenses = await resolveNodeSensesWithRepair(node, req.user?.userId || null);
     const currentSense = findSenseById(currentSenses, senseId);
     if (!currentSense) {
       return res.status(404).json({ error: '释义不存在' });
@@ -310,7 +331,7 @@ router.post('/node/:nodeId/:senseId/suggestions', authenticateToken, async (req,
     const node = await ensureApprovedNode(nodeId);
     if (!node) return res.status(404).json({ error: '知识域不存在或未审批' });
 
-    const senses = await listNodeSensesByNodeId(node._id, { fallbackNode: node });
+    const senses = await resolveNodeSensesWithRepair(node, req.user?.userId || null);
     const currentSense = findSenseById(senses, senseId);
     if (!currentSense) return res.status(404).json({ error: '释义不存在' });
 
@@ -426,7 +447,7 @@ router.post('/node/:nodeId/:senseId/suggestions/:suggestionId/review', authentic
     suggestion.reviewedAt = new Date();
 
     if (action === 'approve') {
-      const senses = await listNodeSensesByNodeId(node._id, { fallbackNode: node });
+      const senses = await resolveNodeSensesWithRepair(node, req.user?.userId || null);
       const currentSense = findSenseById(senses, suggestion.senseId);
       if (!currentSense) {
         return res.status(404).json({ error: '对应释义不存在' });
@@ -470,7 +491,7 @@ router.get('/node/:nodeId/:senseId/comments', async (req, res) => {
     const node = await ensureApprovedNode(nodeId);
     if (!node) return res.status(404).json({ error: '知识域不存在或未审批' });
 
-    const senses = await listNodeSensesByNodeId(node._id, { fallbackNode: node });
+    const senses = await resolveNodeSensesWithRepair(node, req.user?.userId || null);
     const currentSense = findSenseById(senses, senseId);
     if (!currentSense) return res.status(404).json({ error: '释义不存在' });
 
@@ -512,7 +533,7 @@ router.post('/node/:nodeId/:senseId/comments', authenticateToken, async (req, re
     const node = await ensureApprovedNode(nodeId);
     if (!node) return res.status(404).json({ error: '知识域不存在或未审批' });
 
-    const senses = await listNodeSensesByNodeId(node._id, { fallbackNode: node });
+    const senses = await resolveNodeSensesWithRepair(node, req.user?.userId || null);
     const currentSense = findSenseById(senses, senseId);
     if (!currentSense) return res.status(404).json({ error: '释义不存在' });
 
@@ -551,7 +572,7 @@ router.post('/node/:nodeId/:senseId/favorite', authenticateToken, async (req, re
     const node = await ensureApprovedNode(nodeId);
     if (!node) return res.status(404).json({ error: '知识域不存在或未审批' });
 
-    const senses = await listNodeSensesByNodeId(node._id, { fallbackNode: node });
+    const senses = await resolveNodeSensesWithRepair(node, req.user?.userId || null);
     const currentSense = findSenseById(senses, senseId);
     if (!currentSense) return res.status(404).json({ error: '释义不存在' });
 

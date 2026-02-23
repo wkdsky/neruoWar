@@ -660,6 +660,36 @@ const NodeSchema = new mongoose.Schema({
     type: [SynonymSenseSchema],
     default: []
   },
+  // 释义版本号：每次通过统一写入口保存释义时 +1，用于任务去重与防旧任务回写。
+  senseVersion: {
+    type: Number,
+    default: 0
+  },
+  // 本次释义写入水位线：worker 物化任务据此避免旧任务覆盖新写入。
+  senseWatermark: {
+    type: String,
+    default: ''
+  },
+  // 最近一次 NodeSense 集合侧写成功时间（SoT 时间戳）。
+  senseCollectionUpdatedAt: {
+    type: Date,
+    default: null
+  },
+  // 最近一次 embedded（Node.synonymSenses）更新成功时间。
+  senseEmbeddedUpdatedAt: {
+    type: Date,
+    default: null
+  },
+  // 最近一次 collection -> embedded materialize 完成时间。
+  senseMaterializedAt: {
+    type: Date,
+    default: null
+  },
+  // embedded 缓存条目数，便于列表页/统计读取。
+  synonymSensesCount: {
+    type: Number,
+    default: 0
+  },
   prosperity: { 
     type: Number, 
     default: 100,
@@ -825,6 +855,7 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
     });
   }
   this.synonymSenses = normalizedSenses;
+  this.synonymSensesCount = normalizedSenses.length;
   const validSenseIds = new Set(normalizedSenses.map((item) => item.senseId));
   const hasEmbeddedSenseCatalog = normalizedSenses.length > 0;
 

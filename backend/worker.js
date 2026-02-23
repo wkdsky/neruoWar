@@ -9,6 +9,10 @@ const {
   publishSiegeSupportRequest
 } = require('./services/allianceBroadcastService');
 const { runMaintenanceCleanup } = require('./services/maintenanceCleanupService');
+const {
+  materializeNodeSensesToEmbedded,
+  backfillNodeSenseCollectionFromEmbedded
+} = require('./services/nodeSenseStore');
 
 const WORKER_CONCURRENCY = Math.max(1, Math.min(32, parseInt(process.env.WORKER_CONCURRENCY, 10) || 1));
 const WORKER_LOCK_MS = Math.max(1000, parseInt(process.env.WORKER_LOCK_MS, 10) || 90 * 1000);
@@ -76,6 +80,19 @@ const handlers = {
   },
   siege_support_broadcast_job: async (payload = {}) => {
     await publishSiegeSupportRequest(payload);
+  },
+  node_sense_materialize_job: async (payload = {}) => {
+    await materializeNodeSensesToEmbedded({
+      nodeId: payload?.nodeId,
+      expectedWatermark: payload?.expectedWatermark,
+      expectedVersion: payload?.expectedVersion
+    });
+  },
+  node_sense_backfill_job: async (payload = {}) => {
+    await backfillNodeSenseCollectionFromEmbedded({
+      nodeId: payload?.nodeId,
+      actorUserId: payload?.actorUserId || null
+    });
   },
   sleep_test_job: async (payload = {}) => {
     const requestedMs = Math.max(0, parseInt(payload?.ms, 10) || 0);

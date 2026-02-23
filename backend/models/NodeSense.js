@@ -31,6 +31,12 @@ const NodeSenseSchema = new mongoose.Schema({
     enum: ['active', 'archived'],
     default: 'active'
   },
+  // 写入水位线（审计用途）：与 Node.senseWatermark 对齐，便于追踪一次写批次。
+  watermark: {
+    type: String,
+    default: '',
+    trim: true
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

@@ -33,9 +33,10 @@ const {
 } = require('../services/domainGraphTraversalService');
 const {
   isNodeSenseCollectionReadEnabled,
-  normalizeSenseList,
+  isNodeSenseRepairEnabled,
   hydrateNodeSensesForNodes,
-  upsertNodeSensesReplace
+  resolveNodeSensesForNode,
+  saveNodeSenses
 } = require('../services/nodeSenseStore');
 const DomainTitleProjection = require('../models/DomainTitleProjection');
 const {
@@ -141,74 +142,44 @@ const isDomainAdmin = (node, userId) => {
 
 const DOMAIN_CARD_SELECT = '_id name description synonymSenses knowledgePoint contentScore';
 
-const normalizeNodeSenseList = (node = {}) => {
-  const isHydratedFromCollection = node?.__senseCollectionHydrated === true;
-  const hasCollectionRows = Array.isArray(node?.__senseCollectionRows) && node.__senseCollectionRows.length > 0;
-  if (isNodeSenseCollectionReadEnabled() && isHydratedFromCollection && !hasCollectionRows) {
-    const embeddedSenses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
-    const embeddedCount = embeddedSenses.length;
-    const reason = embeddedCount > 0
-      ? '释义集合为空/未命中（检测到旧版嵌入释义，已阻止自动回退）'
-      : '释义集合为空/未命中（且无旧版嵌入释义可回退）';
-    const error = new Error(
-      `[NODE_SENSE_READ_MISS] 操作=读取知识域释义; nodeId=${getIdString(node?._id)}; nodeName=${String(node?.name || '')}; fallbackEmbeddedCount=${embeddedCount}; 原因=${reason}`
-    );
-    error.code = 'NODE_SENSE_READ_MISS';
-    error.statusCode = 409;
-    error.expose = true;
-    error.details = {
-      operation: '读取知识域释义',
-      nodeId: getIdString(node?._id),
-      nodeName: String(node?.name || ''),
-      fallbackEmbeddedCount: embeddedCount,
-      reason
-    };
-    throw error;
-  }
+const enqueueNodeSenseBackfillFromRoute = (node = {}, actorUserId = null) => {
+  if (!isNodeSenseCollectionReadEnabled() || !isNodeSenseRepairEnabled()) return;
+  const nodeId = getIdString(node?._id);
+  if (!isValidObjectId(nodeId)) return;
+  const senseVersion = Number.isFinite(Number(node?.senseVersion)) ? Number(node.senseVersion) : 0;
+  const requesterId = getIdString(actorUserId) || null;
+  schedulerService.enqueue({
+    type: 'node_sense_backfill_job',
+    payload: {
+      nodeId,
+      actorUserId: requesterId
+    },
+    dedupeKey: `node_sense_backfill:${nodeId}:${senseVersion}`
+  }).catch((error) => {
+    console.error('入队释义 backfill 任务失败:', error);
+  });
+};
 
-  const source = Array.isArray(node?.__senseCollectionRows) && node.__senseCollectionRows.length > 0
-    ? node.__senseCollectionRows
-    : (Array.isArray(node?.synonymSenses) ? node.synonymSenses : []);
-  const fallbackContent = typeof node?.description === 'string' && node.description.trim()
-    ? node.description.trim()
-    : '暂无释义内容';
-  return normalizeSenseList(source, fallbackContent);
+// 路由统一释义读取出口：集合优先 + embedded 兜底，并在 miss 时触发可控修复任务。
+const normalizeNodeSenseList = (node = {}, { actorUserId = null } = {}) => {
+  const resolved = resolveNodeSensesForNode(node, {
+    fallbackDescription: typeof node?.description === 'string' ? node.description : ''
+  });
+  if (resolved.shouldEnqueueBackfill) {
+    enqueueNodeSenseBackfillFromRoute(node, actorUserId);
+  }
+  return resolved.senses;
 };
 
 const sendNodeRouteError = (res, error, fallbackMessage = '服务器错误') => {
-  if (error?.code === 'NODE_SENSE_READ_MISS') {
-    return res.status(Number(error.statusCode) || 409).json({
+  if (error?.expose && error?.message) {
+    return res.status(Number(error.statusCode) || 400).json({
       error: error.message || fallbackMessage,
-      code: error.code,
+      code: error.code || '',
       details: error.details || null
     });
   }
   return res.status(500).json({ error: fallbackMessage });
-};
-
-const isNodeSenseEmbedSyncOnResponseEnabled = () => process.env.NODE_SENSE_EMBED_SYNC_ON_RESPONSE !== 'false';
-
-const toComparableSenseList = (senseList = []) => (
-  (Array.isArray(senseList) ? senseList : [])
-    .map((item) => ({
-      senseId: typeof item?.senseId === 'string' ? item.senseId.trim() : '',
-      title: typeof item?.title === 'string' ? item.title.trim() : '',
-      content: typeof item?.content === 'string' ? item.content.trim() : ''
-    }))
-    .filter((item) => item.senseId && item.title && item.content)
-);
-
-const areSenseListsEquivalent = (left = [], right = []) => {
-  if (left.length !== right.length) return false;
-  for (let index = 0; index < left.length; index += 1) {
-    const l = left[index];
-    const r = right[index];
-    if (!r) return false;
-    if (l.senseId !== r.senseId) return false;
-    if (l.title !== r.title) return false;
-    if (l.content !== r.content) return false;
-  }
-  return true;
 };
 
 const loadCanonicalNodeResponseById = async (nodeId, { populate = [] } = {}) => {
@@ -226,19 +197,6 @@ const loadCanonicalNodeResponseById = async (nodeId, { populate = [] } = {}) => 
 
   await hydrateNodeSensesForNodes([node]);
   const canonicalSenses = normalizeNodeSenseList(node);
-  const embeddedSenses = toComparableSenseList(node.synonymSenses);
-  const normalizedCanonicalSenses = toComparableSenseList(canonicalSenses);
-  const hasCanonicalCollectionRows = Array.isArray(node.__senseCollectionRows) && node.__senseCollectionRows.length > 0;
-  if (
-    isNodeSenseEmbedSyncOnResponseEnabled()
-    && hasCanonicalCollectionRows
-    && !areSenseListsEquivalent(embeddedSenses, normalizedCanonicalSenses)
-  ) {
-    await Node.updateOne(
-      { _id: node._id },
-      { $set: { synonymSenses: canonicalSenses } }
-    );
-  }
 
   const nodeObj = node.toObject();
   nodeObj.synonymSenses = canonicalSenses;
@@ -3325,6 +3283,11 @@ router.post('/create', authenticateToken, async (req, res) => {
       const pendingNodesWithSameName = await Node.find({ name, status: 'pending' })
         .populate('owner', 'username profession')
         .populate('associations.targetNode', 'name');
+      await hydrateNodeSensesForNodes(pendingNodesWithSameName);
+      pendingNodesWithSameName.forEach((pendingNode) => {
+        if (!pendingNode || typeof pendingNode !== 'object') return;
+        pendingNode.synonymSenses = normalizeNodeSenseList(pendingNode, { actorUserId: req.user?.userId || null });
+      });
 
       if (pendingNodesWithSameName.length > 0) {
         // 返回待审核节点信息，让管理员选择
@@ -3484,10 +3447,11 @@ router.post('/create', authenticateToken, async (req, res) => {
     });
 
     await node.save();
-    await upsertNodeSensesReplace({
+    await saveNodeSenses({
       nodeId: node._id,
       senses: uniqueSenses,
-      actorUserId: req.user.userId
+      actorUserId: req.user.userId,
+      fallbackDescription: description
     });
     await upsertNodeDefenseLayout({
       nodeId: node._id,
@@ -3552,6 +3516,16 @@ router.get('/pending', authenticateToken, isAdmin, async (req, res) => {
     if (targetNodes.length > 0) {
       await hydrateNodeSensesForNodes(targetNodes);
     }
+    nodes.forEach((nodeDoc) => {
+      if (!nodeDoc || typeof nodeDoc !== 'object') return;
+      nodeDoc.synonymSenses = normalizeNodeSenseList(nodeDoc, { actorUserId: req.user?.userId || null });
+      const assocList = Array.isArray(nodeDoc.associations) ? nodeDoc.associations : [];
+      assocList.forEach((association) => {
+        const targetNode = association?.targetNode;
+        if (!targetNode || typeof targetNode !== 'object' || !targetNode._id) return;
+        targetNode.synonymSenses = normalizeNodeSenseList(targetNode, { actorUserId: req.user?.userId || null });
+      });
+    });
     res.json(nodes);
   } catch (error) {
     console.error('获取待审批节点错误:', error);
@@ -3682,10 +3656,11 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
     // 设置默认内容分数为1
     node.contentScore = 1;
     await node.save();
-    await upsertNodeSensesReplace({
+    await saveNodeSenses({
       nodeId: node._id,
       senses: normalizeNodeSenseList(node),
-      actorUserId: req.user.userId
+      actorUserId: req.user.userId,
+      fallbackDescription: node.description || ''
     });
     await upsertNodeDefenseLayout({
       nodeId: node._id,
@@ -3933,6 +3908,19 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
       Node.countDocuments(query)
     ]);
     await hydrateNodeSensesForNodes(nodes);
+    const associationTargetNodes = [];
+    (Array.isArray(nodes) ? nodes : []).forEach((nodeDoc) => {
+      const assocList = Array.isArray(nodeDoc?.associations) ? nodeDoc.associations : [];
+      assocList.forEach((association) => {
+        const targetNode = association?.targetNode;
+        if (targetNode && typeof targetNode === 'object' && targetNode._id) {
+          associationTargetNodes.push(targetNode);
+        }
+      });
+    });
+    if (associationTargetNodes.length > 0) {
+      await hydrateNodeSensesForNodes(associationTargetNodes);
+    }
     const responseNodes = Array.isArray(nodes) ? nodes : [];
     if (requestLatest) {
       const now = new Date();
@@ -3940,6 +3928,15 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
         Node.applyKnowledgePointProjection(node, now);
       });
     }
+    responseNodes.forEach((nodeDoc) => {
+      nodeDoc.synonymSenses = normalizeNodeSenseList(nodeDoc, { actorUserId: req.user?.userId || null });
+      const assocList = Array.isArray(nodeDoc?.associations) ? nodeDoc.associations : [];
+      assocList.forEach((association) => {
+        const targetNode = association?.targetNode;
+        if (!targetNode || typeof targetNode !== 'object' || !targetNode._id) return;
+        targetNode.synonymSenses = normalizeNodeSenseList(targetNode, { actorUserId: req.user?.userId || null });
+      });
+    });
     
     res.json({
       success: true,
@@ -4131,14 +4128,14 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
     }
 
     const nextSenses = [...existingSenses, { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent }];
-    node.synonymSenses = nextSenses;
     node.associations = nextAssociations;
     await rebuildRelatedDomainNamesForNodes([node]);
     await node.save();
-    await upsertNodeSensesReplace({
+    await saveNodeSenses({
       nodeId: node._id,
       senses: nextSenses,
-      actorUserId: req.user.userId
+      actorUserId: req.user.userId,
+      fallbackDescription: node.description || ''
     });
     await syncDomainTitleProjectionFromNode(node);
 
@@ -4218,12 +4215,11 @@ router.put('/:nodeId/admin/senses/:senseId/text', authenticateToken, isAdmin, as
         : sense
     ));
 
-    node.synonymSenses = nextSenses;
-    await node.save();
-    await upsertNodeSensesReplace({
+    await saveNodeSenses({
       nodeId: node._id,
       senses: nextSenses,
-      actorUserId: req.user.userId
+      actorUserId: req.user.userId,
+      fallbackDescription: node.description || ''
     });
     await syncDomainTitleProjectionFromNode(node);
     const canonicalNode = await loadCanonicalNodeResponseById(node._id);
@@ -4344,14 +4340,14 @@ router.delete('/:nodeId/admin/senses/:senseId', authenticateToken, isAdmin, asyn
     }
 
     const nextSenses = sourceSenses.filter((sense) => sense.senseId !== targetSenseId);
-    node.synonymSenses = nextSenses;
     node.associations = nextAssociations;
     await rebuildRelatedDomainNamesForNodes([node]);
     await node.save();
-    await upsertNodeSensesReplace({
+    await saveNodeSenses({
       nodeId: node._id,
       senses: nextSenses,
-      actorUserId: req.user.userId
+      actorUserId: req.user.userId,
+      fallbackDescription: node.description || ''
     });
     await syncDomainTitleProjectionFromNode(node);
 
@@ -5632,6 +5628,22 @@ router.get('/me/related-domains', authenticateToken, async (req, res) => {
           .select(DOMAIN_CARD_SELECT)
           .lean()
       : [];
+    await Promise.all([
+      hydrateNodeSensesForNodes(domainMasterDomains),
+      hydrateNodeSensesForNodes(domainAdminDomains),
+      hydrateNodeSensesForNodes(favoriteDomains),
+      hydrateNodeSensesForNodes(recentNodes)
+    ]);
+    const applyResolvedSenses = (list = []) => {
+      (Array.isArray(list) ? list : []).forEach((item) => {
+        if (!item || typeof item !== 'object') return;
+        item.synonymSenses = normalizeNodeSenseList(item, { actorUserId: req.user?.userId || null });
+      });
+    };
+    applyResolvedSenses(domainMasterDomains);
+    applyResolvedSenses(domainAdminDomains);
+    applyResolvedSenses(favoriteDomains);
+    applyResolvedSenses(recentNodes);
     const recentNodeMap = new Map(recentNodes.map((node) => [getIdString(node._id), node]));
     const recentDomains = recentEntries
       .map((item) => {
