@@ -61,6 +61,9 @@ const ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS = process.env.ENABLE_LEGACY_KNOWLEDGEPO
 const ENABLE_LEGACY_ADMIN_RESIGN_TICK = process.env.ENABLE_LEGACY_ADMIN_RESIGN_TICK === 'true';
 const ENABLE_LEGACY_DISTRIBUTION_TICK = process.env.ENABLE_LEGACY_DISTRIBUTION_TICK === 'true';
 const ENABLE_SCHEDULED_TASK_ENQUEUE = process.env.ENABLE_SCHEDULED_TASK_ENQUEUE !== 'false';
+const ENABLE_MAINTENANCE_CLEANUP = process.env.ENABLE_MAINTENANCE_CLEANUP !== 'false';
+const MAINTENANCE_CLEANUP_HOUR = Math.max(0, Math.min(23, parseInt(process.env.MAINTENANCE_CLEANUP_HOUR, 10) || 3));
+const MAINTENANCE_CLEANUP_MINUTE = Math.max(0, Math.min(59, parseInt(process.env.MAINTENANCE_CLEANUP_MINUTE, 10) || 30));
 const SCHEDULED_TASK_ENQUEUE_INTERVAL_MS = Math.max(
   10 * 1000,
   parseInt(process.env.SCHEDULED_TASK_ENQUEUE_INTERVAL_MS, 10) || 60 * 1000
@@ -71,10 +74,23 @@ const getTaskMinuteBucket = (date = new Date()) => {
   return safeDate.toISOString().slice(0, 16);
 };
 
+const pad2 = (value) => String(value).padStart(2, '0');
+const getLocalDateBucket = (date = new Date()) => {
+  const safeDate = date instanceof Date ? date : new Date(date);
+  return `${safeDate.getFullYear()}-${pad2(safeDate.getMonth() + 1)}-${pad2(safeDate.getDate())}`;
+};
+
+const shouldEnqueueMaintenanceCleanup = (date = new Date()) => {
+  const safeDate = date instanceof Date ? date : new Date(date);
+  const scheduledAt = new Date(safeDate);
+  scheduledAt.setHours(MAINTENANCE_CLEANUP_HOUR, MAINTENANCE_CLEANUP_MINUTE, 0, 0);
+  return safeDate.getTime() >= scheduledAt.getTime();
+};
+
 const enqueueCoreScheduledTasks = async (baseTime = new Date()) => {
   const runAt = baseTime instanceof Date ? baseTime : new Date(baseTime);
   const minuteBucket = getTaskMinuteBucket(runAt);
-  await Promise.all([
+  const enqueueTasks = [
     schedulerService.enqueue({
       type: 'domain_admin_resign_timeout_tick',
       runAt,
@@ -87,7 +103,23 @@ const enqueueCoreScheduledTasks = async (baseTime = new Date()) => {
       payload: {},
       dedupeKey: `knowledge_distribution_tick:${minuteBucket}`
     })
-  ]);
+  ];
+
+  if (ENABLE_MAINTENANCE_CLEANUP && shouldEnqueueMaintenanceCleanup(runAt)) {
+    const dateBucket = getLocalDateBucket(runAt);
+    enqueueTasks.push(
+      schedulerService.enqueue({
+        type: 'maintenance_cleanup_tick',
+        runAt,
+        payload: {
+          dateBucket
+        },
+        dedupeKey: `maintenance_cleanup:${dateBucket}`
+      })
+    );
+  }
+
+  await Promise.all(enqueueTasks);
 };
 
 // 健康检查

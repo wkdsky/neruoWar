@@ -9,6 +9,7 @@ const AllianceBroadcastEvent = require('../models/AllianceBroadcastEvent');
 const { authenticateToken } = require('../middleware/auth');
 const { writeNotificationsToCollection } = require('../services/notificationStore');
 const schedulerService = require('../services/schedulerService');
+const { encodeTimeCursor, decodeTimeCursor, buildTimeCursorQuery } = require('../utils/cursorPagination');
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -105,19 +106,16 @@ const buildAllianceRowsWithStats = async (alliances = []) => {
   const allianceIds = alliances.map((item) => item?._id).filter(Boolean);
   if (allianceIds.length === 0) return [];
 
-  const [memberCountMap, domainCountMap] = await Promise.all([
-    countByAllianceIds({ model: User, allianceIds }),
-    countByAllianceIds({
-      model: Node,
-      allianceIds,
-      extraMatch: { status: 'approved' }
-    })
-  ]);
+  const domainCountMap = await countByAllianceIds({
+    model: Node,
+    allianceIds,
+    extraMatch: { status: 'approved' }
+  });
 
   return alliances.map((alliance) => {
     const allianceId = getIdString(alliance?._id);
     return buildAlliancePayload(alliance, {
-      memberCount: memberCountMap.get(allianceId) || 0,
+      memberCount: Math.max(0, parseInt(alliance?.memberCount, 10) || 0),
       domainCount: domainCountMap.get(allianceId) || 0
     });
   });
@@ -200,7 +198,9 @@ const buildAlliancePayload = (alliance, extras = {}) => {
     declaration: alliance.declaration,
     announcement: alliance.announcement || '',
     announcementUpdatedAt: alliance.announcementUpdatedAt || null,
+    broadcastUpdatedAt: alliance.broadcastUpdatedAt || null,
     founder: alliance.founder,
+    memberCount: Math.max(0, parseInt(alliance?.memberCount, 10) || 0),
     visualStyles: styles,
     activeVisualStyleId: serializedActive?._id || '',
     activeVisualStyle: serializedActive,
@@ -342,7 +342,7 @@ router.get('/:allianceId', async (req, res) => {
     });
 
     const [memberTotal, domainTotal, members, domains] = await Promise.all([
-      User.countDocuments({ allianceId: alliance._id }),
+      Promise.resolve(Math.max(0, parseInt(alliance?.memberCount, 10) || 0)),
       Node.countDocuments({ status: 'approved', allianceId: alliance._id }),
       User.find({ allianceId: alliance._id })
         .select('username level profession createdAt')
@@ -438,6 +438,7 @@ router.post('/create', authenticateToken, async (req, res) => {
       flag: flag || '#7c3aed',
       declaration,
       founder: userId,
+      memberCount: 1,
       visualStyles: [normalizedVisualStyle]
     });
     if (alliance.visualStyles[0]?._id) {
@@ -503,6 +504,10 @@ router.post('/join/:allianceId', authenticateToken, async (req, res) => {
     if (founderId === getIdString(user._id)) {
       user.allianceId = alliance._id;
       await user.save();
+      await EntropyAlliance.updateOne(
+        { _id: alliance._id },
+        { $inc: { memberCount: 1 } }
+      );
       await syncMasterDomainsAlliance({
         userId: user._id,
         allianceId: alliance._id
@@ -668,12 +673,17 @@ router.post('/leader/:allianceId/remove-member', authenticateToken, async (req, 
 
     member.allianceId = null;
     await member.save();
+    const updatedAlliance = await EntropyAlliance.findOneAndUpdate(
+      { _id: alliance._id },
+      { $inc: { memberCount: -1 } },
+      { new: true }
+    ).select('_id memberCount');
     await syncMasterDomainsAlliance({
       userId: member._id,
       allianceId: null
     });
 
-    const remainingMembers = await User.countDocuments({ allianceId: alliance._id });
+    const remainingMembers = Math.max(0, parseInt(updatedAlliance?.memberCount, 10) || 0);
     if (remainingMembers === 0) {
       await Node.updateMany(
         { allianceId: alliance._id },
@@ -904,13 +914,18 @@ router.post('/leave', authenticateToken, async (req, res) => {
     // 退出熵盟
     user.allianceId = null;
     await user.save();
+    const updatedAlliance = await EntropyAlliance.findOneAndUpdate(
+      { _id: allianceId },
+      { $inc: { memberCount: -1 } },
+      { new: true }
+    ).select('_id memberCount');
     await syncMasterDomainsAlliance({
       userId: user._id,
       allianceId: null
     });
 
     // 检查熵盟是否还有成员，如果没有则删除熵盟
-    const remainingMembers = await User.countDocuments({ allianceId });
+    const remainingMembers = Math.max(0, parseInt(updatedAlliance?.memberCount, 10) || 0);
     if (remainingMembers === 0) {
       await Node.updateMany(
         { allianceId },
@@ -1057,8 +1072,7 @@ router.get('/my/info', authenticateToken, async (req, res) => {
       return res.json({ alliance: null });
     }
 
-    const [memberCount, domainCount] = await Promise.all([
-      User.countDocuments({ allianceId: user.allianceId._id }),
+    const [domainCount] = await Promise.all([
       Node.countDocuments({
         status: 'approved',
         allianceId: user.allianceId._id
@@ -1067,7 +1081,7 @@ router.get('/my/info', authenticateToken, async (req, res) => {
 
     res.json({
       alliance: buildAlliancePayload(user.allianceId, {
-        memberCount,
+        memberCount: Math.max(0, parseInt(user?.allianceId?.memberCount, 10) || 0),
         domainCount
       })
     });
@@ -1100,41 +1114,41 @@ router.get('/me/broadcasts', authenticateToken, async (req, res) => {
       min: 1,
       max: MAX_BROADCAST_PAGE_SIZE
     });
-    const { beforeId, beforeDate } = parseBroadcastBefore(req.query?.before);
-
     const query = { allianceId };
-    if (beforeId) {
-      query._id = { $lt: beforeId };
-    } else if (beforeDate) {
-      query.createdAt = { $lt: beforeDate };
+    const rawCursor = typeof req.query?.cursor === 'string' ? req.query.cursor.trim() : '';
+    const cursor = decodeTimeCursor(rawCursor);
+    const legacyBefore = parseBroadcastBefore(req.query?.before);
+    const cursorQuery = buildTimeCursorQuery('createdAt', cursor);
+    if (cursorQuery) {
+      Object.assign(query, cursorQuery);
+    } else if (legacyBefore.beforeId) {
+      query._id = { $lt: legacyBefore.beforeId };
+    } else if (legacyBefore.beforeDate) {
+      query.createdAt = { $lt: legacyBefore.beforeDate };
     }
 
-    const [events, newestEvent, alliance] = await Promise.all([
+    const [events, alliance] = await Promise.all([
       AllianceBroadcastEvent.find(query)
         .sort({ createdAt: -1, _id: -1 })
         .limit(limit)
         .lean(),
-      AllianceBroadcastEvent.findOne({ allianceId })
-        .sort({ createdAt: -1, _id: -1 })
-        .select('createdAt')
-        .lean(),
       EntropyAlliance.findById(allianceId)
-        .select('announcementUpdatedAt')
+        .select('announcementUpdatedAt broadcastUpdatedAt')
         .lean()
     ]);
 
-    const newestEventAtMs = new Date(newestEvent?.createdAt || 0).getTime();
+    const broadcastUpdatedAtMs = new Date(alliance?.broadcastUpdatedAt || 0).getTime();
     const announcementUpdatedAtMs = new Date(alliance?.announcementUpdatedAt || 0).getTime();
-    const newestAtMs = Math.max(
-      Number.isFinite(newestEventAtMs) ? newestEventAtMs : 0,
-      Number.isFinite(announcementUpdatedAtMs) ? announcementUpdatedAtMs : 0
-    );
+    const newestAtMs = Number.isFinite(broadcastUpdatedAtMs) && broadcastUpdatedAtMs > 0
+      ? broadcastUpdatedAtMs
+      : (Number.isFinite(announcementUpdatedAtMs) ? announcementUpdatedAtMs : 0);
     const newestAt = newestAtMs > 0 ? new Date(newestAtMs) : null;
     const seenAtMs = new Date(user?.allianceBroadcastSeenAt || 0).getTime();
     const unread = !!newestAt && (!Number.isFinite(seenAtMs) || seenAtMs <= 0 || newestAtMs > seenAtMs);
 
+    const tail = events.length > 0 ? events[events.length - 1] : null;
     const nextCursor = events.length >= limit
-      ? getIdString(events[events.length - 1]?._id)
+      ? encodeTimeCursor({ t: new Date(tail?.createdAt || 0), id: tail?._id })
       : null;
 
     return res.json({
@@ -1142,6 +1156,7 @@ router.get('/me/broadcasts', authenticateToken, async (req, res) => {
       unread,
       newestAt,
       seenAt: user?.allianceBroadcastSeenAt || null,
+      cursor: rawCursor || null,
       nextCursor
     });
   } catch (error) {
@@ -1166,22 +1181,14 @@ router.post('/me/broadcasts/mark-read', authenticateToken, async (req, res) => {
       });
     }
 
-    const [newestEvent, alliance] = await Promise.all([
-      AllianceBroadcastEvent.findOne({ allianceId: user.allianceId })
-        .sort({ createdAt: -1, _id: -1 })
-        .select('createdAt')
-        .lean(),
-      EntropyAlliance.findById(user.allianceId)
-        .select('announcementUpdatedAt')
-        .lean()
-    ]);
-
-    const newestEventAtMs = new Date(newestEvent?.createdAt || 0).getTime();
+    const alliance = await EntropyAlliance.findById(user.allianceId)
+      .select('announcementUpdatedAt broadcastUpdatedAt')
+      .lean();
+    const broadcastUpdatedAtMs = new Date(alliance?.broadcastUpdatedAt || 0).getTime();
     const announcementUpdatedAtMs = new Date(alliance?.announcementUpdatedAt || 0).getTime();
-    const newestAtMs = Math.max(
-      Number.isFinite(newestEventAtMs) ? newestEventAtMs : 0,
-      Number.isFinite(announcementUpdatedAtMs) ? announcementUpdatedAtMs : 0
-    );
+    const newestAtMs = Number.isFinite(broadcastUpdatedAtMs) && broadcastUpdatedAtMs > 0
+      ? broadcastUpdatedAtMs
+      : (Number.isFinite(announcementUpdatedAtMs) ? announcementUpdatedAtMs : 0);
     const seenAt = newestAtMs > 0 ? new Date(newestAtMs) : new Date();
 
     await User.updateOne(

@@ -35,8 +35,12 @@ const createEvent = async ({
   gateKey = '',
   title = '',
   message = '',
+  createdAt = new Date(),
   dedupeKey = ''
 }) => {
+  const safeCreatedAt = createdAt instanceof Date && Number.isFinite(createdAt.getTime())
+    ? createdAt
+    : new Date();
   const doc = {
     allianceId,
     type,
@@ -47,7 +51,7 @@ const createEvent = async ({
     gateKey: gateKey === 'cheng' || gateKey === 'qi' ? gateKey : '',
     title,
     message,
-    createdAt: new Date()
+    createdAt: safeCreatedAt
   };
   if (typeof dedupeKey === 'string' && dedupeKey.trim()) {
     doc.dedupeKey = dedupeKey.trim();
@@ -184,15 +188,6 @@ const publishAllianceAnnouncement = async ({
   }
 
   const now = new Date();
-  await EntropyAlliance.updateOne(
-    { _id: alliance._id },
-    {
-      $set: {
-        announcement: normalizedAnnouncement,
-        announcementUpdatedAt: now
-      }
-    }
-  );
 
   const title = `熵盟「${alliance.name}」发布了新公告`;
   const event = await createEvent({
@@ -202,8 +197,23 @@ const publishAllianceAnnouncement = async ({
     actorUsername: typeof actorUsername === 'string' ? actorUsername : '',
     title,
     message: normalizedAnnouncement,
+    createdAt: now,
     dedupeKey
   });
+
+  const eventAt = event?.createdAt instanceof Date
+    ? event.createdAt
+    : now;
+  await EntropyAlliance.updateOne(
+    { _id: alliance._id },
+    {
+      $set: {
+        announcement: normalizedAnnouncement,
+        announcementUpdatedAt: eventAt,
+        broadcastUpdatedAt: eventAt
+      }
+    }
+  );
 
   const notifiedCount = await fanoutAnnouncementNotificationLegacy({
     allianceId: alliance._id,
@@ -217,7 +227,7 @@ const publishAllianceAnnouncement = async ({
     allianceName: alliance.name,
     eventId: event?._id || null,
     notifiedCount,
-    announcementUpdatedAt: now
+    announcementUpdatedAt: eventAt
   };
 };
 
@@ -259,6 +269,15 @@ const publishSiegeSupportRequest = async ({
     message: safeMessage,
     dedupeKey
   });
+  const eventAt = event?.createdAt instanceof Date ? event.createdAt : new Date();
+  await EntropyAlliance.updateOne(
+    { _id: allianceObjectId },
+    {
+      $set: {
+        broadcastUpdatedAt: eventAt
+      }
+    }
+  );
 
   const notifiedCount = await fanoutSiegeSupportNotificationLegacy({
     allianceId: allianceObjectId,

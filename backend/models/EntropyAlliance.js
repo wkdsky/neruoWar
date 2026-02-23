@@ -66,6 +66,15 @@ const EntropyAllianceSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  broadcastUpdatedAt: {
+    type: Date,
+    default: null
+  },
+  memberCount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   knowledgeContributionPercent: {
     type: Number,
     default: 10,
@@ -140,14 +149,6 @@ EntropyAllianceSchema.pre('validate', function ensureVisualStyle(next) {
 // 索引优化
 EntropyAllianceSchema.index({ founder: 1 });
 EntropyAllianceSchema.index({ createdAt: -1, _id: -1 });
-
-// 虚拟字段：成员数量（通过查询User表计算）
-EntropyAllianceSchema.virtual('memberCount', {
-  ref: 'User',
-  localField: '_id',
-  foreignField: 'allianceId',
-  count: true
-});
 
 // 确保虚拟字段在toJSON和toObject时包含
 EntropyAllianceSchema.set('toJSON', { virtuals: true });

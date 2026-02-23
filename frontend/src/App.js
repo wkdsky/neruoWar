@@ -43,7 +43,9 @@ const readSavedPageState = () => {
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== 'object') return null;
         const view = typeof parsed.view === 'string' ? parsed.view : '';
-        const nodeId = typeof parsed.nodeId === 'string' ? parsed.nodeId : '';
+        const nodeId = typeof parsed.nodeId === 'string' && /^[0-9a-fA-F]{24}$/.test(parsed.nodeId)
+            ? parsed.nodeId
+            : '';
         return { view, nodeId };
     } catch (error) {
         return null;
@@ -57,6 +59,7 @@ const normalizeObjectId = (value) => {
     if (typeof value.toString === 'function') return value.toString();
     return '';
 };
+const isValidObjectId = (value) => /^[0-9a-fA-F]{24}$/.test(normalizeObjectId(value));
 const createHomeNavigationPath = () => ([
     { type: 'home', label: '首页' }
 ]);
@@ -1845,9 +1848,10 @@ const App = () => {
 
       if ((targetView === 'nodeDetail' || targetView === 'knowledgeDomain' || targetView === 'titleDetail') && targetNodeId) {
         const restoredNode = targetView === 'titleDetail'
-          ? await fetchTitleDetail(targetNodeId)
-          : await fetchNodeDetail(targetNodeId);
+          ? await fetchTitleDetail(targetNodeId, null, { silent: true })
+          : await fetchNodeDetail(targetNodeId, null, { silent: true });
         if (!restoredNode) {
+          localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
           setView('home');
           return;
         }
@@ -2734,11 +2738,22 @@ const App = () => {
 
     // 获取标题主视角详情
     const fetchTitleDetail = async (nodeId, clickedNode = null, navOptions = {}) => {
+        const shouldAlert = navOptions?.silent !== true;
+        const normalizedNodeId = normalizeObjectId(nodeId);
+        if (!isValidObjectId(normalizedNodeId)) {
+            if (shouldAlert) {
+                alert('无效的节点ID');
+            }
+            return null;
+        }
         try {
             await prepareForPrimaryNavigation();
-            const response = await fetch(`http://localhost:5000/api/nodes/public/title-detail/${nodeId}?depth=1`);
+            const response = await fetch(`http://localhost:5000/api/nodes/public/title-detail/${normalizedNodeId}?depth=1`);
             if (!response.ok) {
-                alert('获取标题主视角失败');
+                if (shouldAlert) {
+                    const parsed = await parseApiResponse(response);
+                    alert(getApiErrorMessage(parsed, '获取标题主视角失败'));
+                }
                 return null;
             }
 
@@ -2747,7 +2762,9 @@ const App = () => {
             const centerNode = graph?.centerNode || null;
             const targetNodeId = normalizeObjectId(centerNode?._id);
             if (!targetNodeId || !centerNode) {
-                alert('标题主视角数据无效');
+                if (shouldAlert) {
+                    alert('标题主视角数据无效');
+                }
                 return null;
             }
 
@@ -2820,19 +2837,29 @@ const App = () => {
             return centerNode;
         } catch (error) {
             console.error('获取标题主视角失败:', error);
-            alert('获取标题主视角失败');
+            if (shouldAlert) {
+                alert(`获取标题主视角失败: ${error.message}`);
+            }
             return null;
         }
     };
 
     // 获取释义主视角详情
     const fetchNodeDetail = async (nodeId, clickedNode = null, navOptions = {}) => {
+        const shouldAlert = navOptions?.silent !== true;
+        const normalizedNodeId = normalizeObjectId(nodeId);
+        if (!isValidObjectId(normalizedNodeId)) {
+            if (shouldAlert) {
+                alert('无效的节点ID');
+            }
+            return null;
+        }
         try {
             await prepareForPrimaryNavigation();
             const requestedSenseId = typeof navOptions?.activeSenseId === 'string' ? navOptions.activeSenseId.trim() : '';
             const detailUrl = requestedSenseId
-                ? `http://localhost:5000/api/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
-                : `http://localhost:5000/api/nodes/public/node-detail/${nodeId}`;
+                ? `http://localhost:5000/api/nodes/public/node-detail/${normalizedNodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
+                : `http://localhost:5000/api/nodes/public/node-detail/${normalizedNodeId}`;
             const response = await fetch(detailUrl);
             if (response.ok) {
                 const data = await response.json();
@@ -2920,12 +2947,17 @@ const App = () => {
                 // WebGL场景更新由useEffect自动处理
                 return data.node;
             } else {
-                alert('获取节点详情失败');
+                if (shouldAlert) {
+                    const parsed = await parseApiResponse(response);
+                    alert(getApiErrorMessage(parsed, '获取节点详情失败'));
+                }
                 return null;
             }
         } catch (error) {
             console.error('获取节点详情失败:', error);
-            alert('获取节点详情失败');
+            if (shouldAlert) {
+                alert(`获取节点详情失败: ${error.message}`);
+            }
             return null;
         }
     };

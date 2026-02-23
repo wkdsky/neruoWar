@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const Node = require('../models/Node');
 const DistributionParticipant = require('../models/DistributionParticipant');
 const EntropyAlliance = require('../models/EntropyAlliance');
@@ -611,6 +612,10 @@ const handleAllianceJoinApplyDecision = async ({
       } else {
         if (!applicantAllianceId) {
           applicant.allianceId = alliance._id;
+          await EntropyAlliance.updateOne(
+            { _id: alliance._id },
+            { $inc: { memberCount: 1 } }
+          );
         }
         decision = 'accepted';
         decisionMessage = applicantAllianceId === targetAllianceId
@@ -1578,7 +1583,19 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       return res.status(404).json({ error: '用户不存在' });
     }
 
-    const notification = user.notifications.id(req.params.notificationId);
+    const useCollectionNotification = isNotificationCollectionReadEnabled();
+    let notification = null;
+    if (useCollectionNotification) {
+      if (!isValidObjectId(req.params.notificationId)) {
+        return res.status(400).json({ error: '无效通知ID' });
+      }
+      notification = await Notification.findOne({
+        _id: req.params.notificationId,
+        userId: user._id
+      });
+    } else {
+      notification = user.notifications.id(req.params.notificationId);
+    }
     if (!notification) {
       return res.status(404).json({ error: '通知不存在' });
     }
@@ -1586,6 +1603,14 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
     if (notification.status !== 'pending') {
       return res.status(400).json({ error: '该通知不可响应' });
     }
+
+    const persistCurrentNotification = async () => {
+      if (!useCollectionNotification) {
+        await user.save();
+      }
+      await upsertNotificationToCollectionForUser(user._id, notification);
+    };
+    let persistedCurrentNotification = false;
 
     let decision = 'rejected';
     let decisionMessage = '处理完成';
@@ -1629,8 +1654,6 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       notification.status = decision;
       notification.read = true;
       notification.respondedAt = new Date();
-      await user.save();
-      await upsertNotificationToCollectionForUser(user._id, notification);
 
       if (notification.inviterId) {
         const inviter = await User.findById(notification.inviterId);
@@ -1663,8 +1686,6 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       });
       decision = result.decision;
       decisionMessage = result.message;
-      await user.save();
-      await upsertNotificationToCollectionForUser(user._id, notification);
     } else if (notification.type === 'domain_master_apply') {
       if (user.role !== 'admin') {
         return res.status(403).json({ error: '只有管理员可以处理域主申请' });
@@ -1678,8 +1699,8 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       decision = result.decision;
       decisionMessage = result.message;
       if (result.saveCurrentUser) {
-        await user.save();
-        await upsertNotificationToCollectionForUser(user._id, notification);
+        await persistCurrentNotification();
+        persistedCurrentNotification = true;
       }
     } else if (notification.type === 'alliance_join_apply') {
       const result = await handleAllianceJoinApplyDecision({
@@ -1693,11 +1714,26 @@ router.post('/notifications/:notificationId/respond', async (req, res) => {
       decision = result.decision;
       decisionMessage = result.message;
       if (result.saveLeader) {
-        await user.save();
-        await upsertNotificationToCollectionForUser(user._id, notification);
+        await persistCurrentNotification();
+        persistedCurrentNotification = true;
       }
     } else {
       return res.status(400).json({ error: '该通知类型不支持响应操作' });
+    }
+
+    if (!persistedCurrentNotification && (
+      notification.type === 'domain_admin_invite'
+      || notification.type === 'domain_admin_resign_request'
+      || (
+        notification.type === 'domain_master_apply'
+        && notification.status !== 'pending'
+      )
+      || (
+        notification.type === 'alliance_join_apply'
+        && notification.status !== 'pending'
+      )
+    )) {
+      await persistCurrentNotification();
     }
 
     res.json({

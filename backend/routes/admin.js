@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const Node = require('../models/Node');
+const EntropyAlliance = require('../models/EntropyAlliance');
 const GameSetting = require('../models/GameSetting');
 const ArmyUnitType = require('../models/ArmyUnitType');
 const { authenticateToken } = require('../middleware/auth');
@@ -47,6 +49,18 @@ const toSafeInteger = (value, fallback, { min = Number.MIN_SAFE_INTEGER, max = N
 };
 
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const getIdString = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && value._id && value._id !== value) return getIdString(value._id);
+  if (value && typeof value === 'object' && typeof value.id === 'string' && value.id) return value.id;
+  if (typeof value.toString === 'function') {
+    const text = value.toString();
+    return text === '[object Object]' ? '' : text;
+  }
+  return '';
+};
 
 const parseUnitTypePayload = (body, { create = false } = {}) => {
   const source = body && typeof body === 'object' ? body : {};
@@ -308,10 +322,50 @@ router.put('/users/:userId', authenticateToken, isAdmin, async (req, res) => {
 router.delete('/users/:userId', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { userId } = req.params;
-    
-    const user = await User.findByIdAndDelete(userId);
+
+    const user = await User.findById(userId).select('_id username allianceId');
     if (!user) {
       return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const allianceId = getIdString(user.allianceId);
+    await User.deleteOne({ _id: user._id });
+    await Node.updateMany(
+      { domainMaster: user._id },
+      { $set: { allianceId: null } }
+    );
+
+    if (allianceId) {
+      const updatedAlliance = await EntropyAlliance.findOneAndUpdate(
+        { _id: allianceId },
+        { $inc: { memberCount: -1 } },
+        { new: true }
+      ).select('_id founder memberCount');
+
+      if (updatedAlliance) {
+        const normalizedMemberCount = Math.max(0, parseInt(updatedAlliance.memberCount, 10) || 0);
+        if (normalizedMemberCount <= 0) {
+          await Node.updateMany(
+            { allianceId: updatedAlliance._id },
+            { $set: { allianceId: null } }
+          );
+          await EntropyAlliance.deleteOne({ _id: updatedAlliance._id });
+        } else if (getIdString(updatedAlliance.founder) === getIdString(user._id)) {
+          const replacement = await User.findOne({ allianceId: updatedAlliance._id }).select('_id').lean();
+          if (replacement?._id) {
+            await EntropyAlliance.updateOne(
+              { _id: updatedAlliance._id },
+              { $set: { founder: replacement._id } }
+            );
+          } else {
+            await Node.updateMany(
+              { allianceId: updatedAlliance._id },
+              { $set: { allianceId: null } }
+            );
+            await EntropyAlliance.deleteOne({ _id: updatedAlliance._id });
+          }
+        }
+      }
     }
 
     res.json({

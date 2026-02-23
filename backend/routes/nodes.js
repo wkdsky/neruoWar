@@ -51,6 +51,7 @@ const {
 } = require('../services/domainTitleProjectionStore');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
+const { encodeTimeCursor, decodeTimeCursor, buildTimeCursorQuery } = require('../utils/cursorPagination');
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -143,6 +144,65 @@ const normalizeNodeSenseList = (node = {}) => {
     ? node.description.trim()
     : '暂无释义内容';
   return normalizeSenseList(source, fallbackContent);
+};
+
+const isNodeSenseEmbedSyncOnResponseEnabled = () => process.env.NODE_SENSE_EMBED_SYNC_ON_RESPONSE !== 'false';
+
+const toComparableSenseList = (senseList = []) => (
+  (Array.isArray(senseList) ? senseList : [])
+    .map((item) => ({
+      senseId: typeof item?.senseId === 'string' ? item.senseId.trim() : '',
+      title: typeof item?.title === 'string' ? item.title.trim() : '',
+      content: typeof item?.content === 'string' ? item.content.trim() : ''
+    }))
+    .filter((item) => item.senseId && item.title && item.content)
+);
+
+const areSenseListsEquivalent = (left = [], right = []) => {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const l = left[index];
+    const r = right[index];
+    if (!r) return false;
+    if (l.senseId !== r.senseId) return false;
+    if (l.title !== r.title) return false;
+    if (l.content !== r.content) return false;
+  }
+  return true;
+};
+
+const loadCanonicalNodeResponseById = async (nodeId, { populate = [] } = {}) => {
+  const safeNodeId = getIdString(nodeId);
+  if (!isValidObjectId(safeNodeId)) return null;
+
+  let query = Node.findById(safeNodeId);
+  const populateList = Array.isArray(populate) ? populate : [];
+  populateList.forEach((item) => {
+    if (item) query = query.populate(item);
+  });
+
+  const node = await query;
+  if (!node) return null;
+
+  await hydrateNodeSensesForNodes([node]);
+  const canonicalSenses = normalizeNodeSenseList(node);
+  const embeddedSenses = toComparableSenseList(node.synonymSenses);
+  const normalizedCanonicalSenses = toComparableSenseList(canonicalSenses);
+  if (
+    isNodeSenseEmbedSyncOnResponseEnabled()
+    && !areSenseListsEquivalent(embeddedSenses, normalizedCanonicalSenses)
+  ) {
+    await Node.updateOne(
+      { _id: node._id },
+      { $set: { synonymSenses: canonicalSenses } }
+    );
+  }
+
+  const nodeObj = node.toObject();
+  nodeObj.synonymSenses = canonicalSenses;
+  delete nodeObj.__senseCollectionRows;
+  Node.applyKnowledgePointProjection(nodeObj, new Date());
+  return nodeObj;
 };
 
 const buildNodeSenseDisplayName = (nodeName = '', senseTitle = '') => {
@@ -359,9 +419,7 @@ const DISTRIBUTION_RESULT_PAGE_SIZE_MAX = 200;
 
 const parseDistributionResultCursor = (value = '') => {
   if (typeof value !== 'string') return null;
-  const raw = value.trim();
-  if (!raw || !mongoose.Types.ObjectId.isValid(raw)) return null;
-  return new mongoose.Types.ObjectId(raw);
+  return decodeTimeCursor(value);
 };
 
 const listDistributionResultsByNode = async ({
@@ -380,8 +438,9 @@ const listDistributionResultsByNode = async ({
   if (executeAt instanceof Date) {
     query.executeAt = executeAt;
   }
-  if (cursor instanceof mongoose.Types.ObjectId) {
-    query._id = { $lt: cursor };
+  const cursorQuery = buildTimeCursorQuery('createdAt', cursor);
+  if (cursorQuery) {
+    Object.assign(query, cursorQuery);
   }
 
   const rows = await DistributionResult.find(query)
@@ -389,8 +448,12 @@ const listDistributionResultsByNode = async ({
     .limit(safeLimit)
     .select('nodeId executeAt userId amount createdAt')
     .lean();
+  const tail = rows.length > 0 ? rows[rows.length - 1] : null;
   const nextCursor = rows.length >= safeLimit
-    ? getIdString(rows[rows.length - 1]?._id)
+    ? encodeTimeCursor({
+      t: new Date(tail?.createdAt || 0),
+      id: tail?._id
+    })
     : null;
   return { rows, nextCursor };
 };
@@ -407,16 +470,21 @@ const listDistributionResultsByUser = async ({
   const query = {
     userId: new mongoose.Types.ObjectId(String(userId))
   };
-  if (cursor instanceof mongoose.Types.ObjectId) {
-    query._id = { $lt: cursor };
+  const cursorQuery = buildTimeCursorQuery('createdAt', cursor);
+  if (cursorQuery) {
+    Object.assign(query, cursorQuery);
   }
   const rows = await DistributionResult.find(query)
     .sort({ createdAt: -1, _id: -1 })
     .limit(safeLimit)
     .select('nodeId executeAt userId amount createdAt')
     .lean();
+  const tail = rows.length > 0 ? rows[rows.length - 1] : null;
   const nextCursor = rows.length >= safeLimit
-    ? getIdString(rows[rows.length - 1]?._id)
+    ? encodeTimeCursor({
+      t: new Date(tail?.createdAt || 0),
+      id: tail?._id
+    })
     : null;
   return { rows, nextCursor };
 };
@@ -3410,7 +3478,8 @@ router.post('/create', authenticateToken, async (req, res) => {
       });
     }
 
-    res.status(201).json(node);
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
+    res.status(201).json(canonicalNode || node.toObject());
   } catch (error) {
     console.error('创建知识域错误:', error);
     res.status(500).json({ error: '服务器错误' });
@@ -3660,8 +3729,9 @@ router.post('/approve', authenticateToken, isAdmin, async (req, res) => {
       await writeNotificationsToCollection(reviewResultNotificationDocs);
     }
 
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
     res.json({
-      ...node.toObject(),
+      ...(canonicalNode || node.toObject()),
       autoRejectedCount: rejectedInfo.length,
       autoRejectedNodes: rejectedInfo
     });
@@ -3733,7 +3803,8 @@ router.post('/associate', authenticateToken, async (req, res) => {
     node.contentScore = 1;
     await node.save();
     await syncDomainTitleProjectionFromNode(node);
-    res.status(200).json(node);
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
+    res.status(200).json(canonicalNode || node.toObject());
   } catch (error) {
     console.error('关联节点错误:', error);
     res.status(500).json({ error: '服务器错误' });
@@ -3756,7 +3827,8 @@ router.post('/approve-association', authenticateToken, async (req, res) => {
     node.status = 'approved';
     await node.save();
     await syncDomainTitleProjectionFromNode(node);
-    res.status(200).json(node);
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
+    res.status(200).json(canonicalNode || node.toObject());
   } catch (error) {
     console.error('审批节点关联错误:', error);
     res.status(500).json({ error: '服务器错误' });
@@ -3774,7 +3846,8 @@ router.post('/reject-association', authenticateToken, async (req, res) => {
     node.status = 'rejected';
     await node.save();
     await syncDomainTitleProjectionFromNode(node);
-    res.status(200).json(node);
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
+    res.status(200).json(canonicalNode || node.toObject());
   } catch (error) {
     console.error('拒绝节点关联错误:', error);
     res.status(500).json({ error: '服务器错误' });
@@ -3884,11 +3957,12 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
 
     await node.save();
     await syncDomainTitleProjectionFromNode(node);
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
 
     res.json({
       success: true,
       message: '节点信息已更新',
-      node: node
+      node: canonicalNode || node.toObject()
     });
   } catch (error) {
     console.error('更新节点信息错误:', error);
@@ -4026,12 +4100,16 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
       oldAssociations,
       nextAssociations
     });
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
+    const canonicalSense = Array.isArray(canonicalNode?.synonymSenses)
+      ? canonicalNode.synonymSenses.find((sense) => sense?.senseId === nextSenseId) || null
+      : null;
 
     return res.json({
       success: true,
       message: '释义已新增',
-      sense: { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent },
-      node
+      sense: canonicalSense || { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent },
+      node: canonicalNode || node.toObject()
     });
   } catch (error) {
     console.error('管理员新增释义错误:', error);
@@ -4093,12 +4171,16 @@ router.put('/:nodeId/admin/senses/:senseId/text', authenticateToken, isAdmin, as
       actorUserId: req.user.userId
     });
     await syncDomainTitleProjectionFromNode(node);
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
+    const canonicalSense = Array.isArray(canonicalNode?.synonymSenses)
+      ? canonicalNode.synonymSenses.find((sense) => sense?.senseId === targetSenseId) || null
+      : null;
 
     return res.json({
       success: true,
       message: '释义文本已更新',
-      sense: nextSenses[targetIndex],
-      node
+      sense: canonicalSense || nextSenses[targetIndex],
+      node: canonicalNode || node.toObject()
     });
   } catch (error) {
     console.error('管理员编辑释义文本错误:', error);
@@ -4227,13 +4309,14 @@ router.delete('/:nodeId/admin/senses/:senseId', authenticateToken, isAdmin, asyn
       oldAssociations,
       nextAssociations
     });
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
 
     return res.json({
       success: true,
       message: `释义「${targetSense.title}」已删除`,
       strategy: previewData.strategy,
       summary: previewData.mutationSummary,
-      node
+      node: canonicalNode || node.toObject()
     });
   } catch (error) {
     console.error('管理员删除释义错误:', error);
@@ -4367,18 +4450,17 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
 // 获取单个节点（需要身份验证）
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
-    const node = await Node.findById(req.params.id);
+    const [node, user] = await Promise.all([
+      loadCanonicalNodeResponseById(req.params.id),
+      User.findById(req.user.userId).select('role')
+    ]);
     if (!node) {
       return res.status(404).json({ message: '节点不存在' });
     }
-    await hydrateNodeSensesForNodes([node]);
-    node.synonymSenses = normalizeNodeSenseList(node);
-    Node.applyKnowledgePointProjection(node, new Date());
     
     // 检查用户是否有权访问此节点
-    const user = await User.findById(req.user.userId);
-    const isOwner = node.owner.toString() === req.user.userId;
-    const isAdmin = user.role === 'admin';
+    const isOwner = getIdString(node.owner) === req.user.userId;
+    const isAdmin = user?.role === 'admin';
     
     // 只有节点所有者或管理员可以查看未审批节点
     if (node.status !== 'approved' && !isOwner && !isAdmin) {
@@ -4553,13 +4635,14 @@ router.put('/:nodeId/associations', authenticateToken, async (req, res) => {
       oldAssociations,
       nextAssociations: effectiveAssociations
     });
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
 
     res.json({
       success: true,
       message: '关联关系已更新',
       strategy: previewData.strategy,
       summary: previewData.mutationSummary,
-      node: node
+      node: canonicalNode || node.toObject()
     });
   } catch (error) {
     console.error('编辑节点关联错误:', error);
@@ -4585,11 +4668,12 @@ router.put('/:nodeId/featured', authenticateToken, isAdmin, async (req, res) => 
 
     await node.save();
     await syncDomainTitleProjectionFromNode(node);
+    const canonicalNode = await loadCanonicalNodeResponseById(node._id);
 
     res.json({
       success: true,
       message: isFeatured ? '已设置为热门节点' : '已取消热门节点',
-      node: node
+      node: canonicalNode || node.toObject()
     });
   } catch (error) {
     console.error('设置热门节点错误:', error);
@@ -5091,6 +5175,9 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
   try {
     const { nodeId } = req.params;
     const requestedSenseId = typeof req.query?.senseId === 'string' ? req.query.senseId.trim() : '';
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的节点ID' });
+    }
 
     const node = await Node.findById(nodeId)
       .populate({
@@ -5350,10 +5437,13 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
       }
       await node.save();
       await syncDomainTitleProjectionFromNode(node);
+      const canonicalNode = await loadCanonicalNodeResponseById(nodeId, {
+        populate: [{ path: 'domainMaster', select: 'username profession' }]
+      });
       return res.json({
         success: true,
         message: '域主已清除',
-        node: await Node.findById(nodeId).populate('domainMaster', 'username profession')
+        node: canonicalNode
       });
     }
 
@@ -5377,14 +5467,14 @@ router.put('/admin/domain-master/:nodeId', authenticateToken, async (req, res) =
     }
     await node.save();
     await syncDomainTitleProjectionFromNode(node);
-
-    const updatedNode = await Node.findById(nodeId)
-      .populate('domainMaster', 'username profession');
+    const canonicalNode = await loadCanonicalNodeResponseById(nodeId, {
+      populate: [{ path: 'domainMaster', select: 'username profession' }]
+    });
 
     res.json({
       success: true,
       message: '域主更换成功',
-      node: updatedNode
+      node: canonicalNode
     });
   } catch (error) {
     console.error('更换域主错误:', error);
@@ -6551,9 +6641,9 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
         parseInt(req.query?.participantsLimit, 10) || SIEGE_PARTICIPANT_PREVIEW_LIMIT
       )
     );
-    const participantsCursor = typeof req.query?.participantsCursor === 'string'
-      ? req.query.participantsCursor.trim()
-      : '';
+    const participantsCursor = typeof req.query?.cursor === 'string'
+      ? req.query.cursor.trim()
+      : (typeof req.query?.participantsCursor === 'string' ? req.query.participantsCursor.trim() : '');
     const participantsGateRaw = typeof req.query?.participantsGate === 'string'
       ? req.query.participantsGate.trim()
       : '';
@@ -6584,6 +6674,64 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('获取围城状态错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 分页获取围城参与者列表（统一 cursor 规则）
+router.get('/:nodeId/siege/participants', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('_id name status');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+
+    const gateKeyRaw = typeof req.query?.gateKey === 'string' ? req.query.gateKey.trim() : '';
+    const gateKey = CITY_GATE_KEYS.includes(gateKeyRaw) ? gateKeyRaw : '';
+    if (!gateKey) {
+      return res.status(400).json({ error: 'gateKey 必须为 cheng 或 qi' });
+    }
+
+    const limit = Math.max(
+      1,
+      Math.min(
+        SIEGE_PARTICIPANT_RESULT_LIMIT_MAX,
+        parseInt(req.query?.limit, 10) || SIEGE_PARTICIPANT_PREVIEW_LIMIT
+      )
+    );
+    const cursor = typeof req.query?.cursor === 'string' ? req.query.cursor.trim() : '';
+    const includeRetreated = req.query?.includeRetreated === 'true';
+    const statuses = includeRetreated ? ['moving', 'sieging', 'retreated'] : ['moving', 'sieging'];
+
+    const [unitTypes, participantsPage] = await Promise.all([
+      fetchArmyUnitTypes(),
+      listSiegeParticipants({
+        nodeId: node._id,
+        gateKey,
+        statuses,
+        limit,
+        cursor
+      })
+    ]);
+    const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
+
+    return res.json({
+      success: true,
+      nodeId: getIdString(node._id),
+      nodeName: node.name || '',
+      gateKey,
+      limit,
+      cursor: cursor || null,
+      nextCursor: participantsPage.nextCursor || null,
+      rows: (participantsPage.rows || []).map((item) => serializeSiegeAttacker(item, unitTypeMap, Date.now()))
+    });
+  } catch (error) {
+    console.error('获取围城参与者分页错误:', error);
     return res.status(500).json({ error: '服务器错误' });
   }
 });
@@ -8498,7 +8646,8 @@ router.get('/:nodeId/distribution-results', authenticateToken, async (req, res) 
       1,
       Math.min(DISTRIBUTION_RESULT_PAGE_SIZE_MAX, parseInt(req.query?.limit, 10) || 50)
     );
-    const cursor = parseDistributionResultCursor(req.query?.cursor);
+    const rawCursor = typeof req.query?.cursor === 'string' ? req.query.cursor.trim() : '';
+    const cursor = parseDistributionResultCursor(rawCursor);
     const page = await listDistributionResultsByNode({
       nodeId: node._id,
       executeAt,
@@ -8553,7 +8702,7 @@ router.get('/:nodeId/distribution-results', authenticateToken, async (req, res) 
       nodeName: node.name,
       executeAt,
       limit,
-      cursor: cursor ? String(cursor) : null,
+      cursor: rawCursor || null,
       nextCursor: page.nextCursor || null,
       rows
     });

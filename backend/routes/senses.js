@@ -14,6 +14,7 @@ const {
 
 const router = express.Router();
 const LEGACY_NODE_SENSE_EMBED_WRITE_ENABLED = process.env.NODE_LEGACY_SENSE_EMBED_WRITE === 'true';
+const ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS = process.env.ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS === 'true';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -106,6 +107,14 @@ const ensureApprovedNode = async (nodeId) => {
   return node;
 };
 
+const ensureSenseMutationPathEnabled = (res) => {
+  if (ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS) return true;
+  res.status(409).json({
+    error: '释义写操作已统一到 /api/nodes 规范接口。请使用 /api/nodes/:nodeId/admin/senses 系列接口；若需临时回退可设置 ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS=true'
+  });
+  return false;
+};
+
 router.get('/node/:nodeId', async (req, res) => {
   try {
     const { nodeId } = req.params;
@@ -144,6 +153,7 @@ router.get('/node/:nodeId', async (req, res) => {
 
 router.post('/node/:nodeId', authenticateToken, async (req, res) => {
   try {
+    if (!ensureSenseMutationPathEnabled(res)) return;
     const { nodeId } = req.params;
     const node = await ensureApprovedNode(nodeId);
     if (!node) return res.status(404).json({ error: '知识域不存在或未审批' });
@@ -188,6 +198,7 @@ router.post('/node/:nodeId', authenticateToken, async (req, res) => {
 
 router.put('/node/:nodeId/:senseId', authenticateToken, async (req, res) => {
   try {
+    if (!ensureSenseMutationPathEnabled(res)) return;
     const { nodeId, senseId } = req.params;
     const node = await ensureApprovedNode(nodeId);
     if (!node) return res.status(404).json({ error: '知识域不存在或未审批' });
@@ -236,6 +247,7 @@ router.put('/node/:nodeId/:senseId', authenticateToken, async (req, res) => {
 
 router.delete('/node/:nodeId/:senseId', authenticateToken, async (req, res) => {
   try {
+    if (!ensureSenseMutationPathEnabled(res)) return;
     const { nodeId, senseId } = req.params;
     const node = await ensureApprovedNode(nodeId);
     if (!node) return res.status(404).json({ error: '知识域不存在或未审批' });
@@ -394,6 +406,7 @@ router.post('/node/:nodeId/:senseId/suggestions/:suggestionId/review', authentic
 
     const action = req.body?.action === 'approve' ? 'approve' : (req.body?.action === 'reject' ? 'reject' : '');
     if (!action) return res.status(400).json({ error: '无效审核动作' });
+    if (action === 'approve' && !ensureSenseMutationPathEnabled(res)) return;
 
     const reviewComment = typeof req.body?.reviewComment === 'string' ? req.body.reviewComment.trim() : '';
     suggestion.status = action === 'approve' ? 'approved' : 'rejected';

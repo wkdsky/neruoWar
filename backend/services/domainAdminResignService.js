@@ -9,6 +9,10 @@ const {
 } = require('./notificationStore');
 
 const RESIGN_REQUEST_EXPIRE_MS = 3 * 24 * 60 * 60 * 1000;
+const DOMAIN_ADMIN_RESIGN_DEFAULT_MAX_ITEMS = Math.max(
+  1,
+  parseInt(process.env.DOMAIN_ADMIN_RESIGN_MAX_ITEMS_PER_TICK, 10) || 200
+);
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -48,18 +52,30 @@ const pushNotificationToUser = (user, payload = {}) => {
   return notification;
 };
 
-const processExpiredDomainAdminResignRequests = async (now = new Date()) => {
+const processExpiredDomainAdminResignRequests = async (now = new Date(), options = {}) => {
   const nowDate = now instanceof Date ? now : new Date(now);
   const deadline = new Date(nowDate.getTime() - RESIGN_REQUEST_EXPIRE_MS);
+  const safeMaxItems = Math.max(
+    1,
+    parseInt(options?.maxItems, 10) || DOMAIN_ADMIN_RESIGN_DEFAULT_MAX_ITEMS
+  );
+  let processedCount = 0;
 
   if (isNotificationCollectionReadEnabled()) {
     const expiredRows = await Notification.find({
       type: 'domain_admin_resign_request',
       status: 'pending',
       createdAt: { $lte: deadline }
-    }).select('_id userId nodeId nodeName inviteeId').lean();
+    })
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(safeMaxItems + 1)
+      .select('_id userId nodeId nodeName inviteeId')
+      .lean();
 
-    for (const row of expiredRows) {
+    const hasMore = expiredRows.length > safeMaxItems;
+    const rowsToProcess = hasMore ? expiredRows.slice(0, safeMaxItems) : expiredRows;
+
+    for (const row of rowsToProcess) {
       const domainMasterId = getIdString(row?.userId);
       const requesterId = getIdString(row?.inviteeId);
       let node = null;
@@ -115,8 +131,14 @@ const processExpiredDomainAdminResignRequests = async (now = new Date()) => {
         };
         await writeNotificationsToCollection([requesterNotification]);
       }
+      processedCount += 1;
     }
-    return;
+    return {
+      processedCount,
+      hasMore,
+      maxItems: safeMaxItems,
+      mode: 'collection'
+    };
   }
 
   const candidates = await User.find({
@@ -127,13 +149,25 @@ const processExpiredDomainAdminResignRequests = async (now = new Date()) => {
         createdAt: { $lte: deadline }
       }
     }
-  });
+  })
+    .sort({ _id: 1 })
+    .limit(Math.max(100, safeMaxItems * 5));
+
+  let hasMore = false;
 
   for (const domainMaster of candidates) {
+    if (processedCount >= safeMaxItems) {
+      hasMore = true;
+      break;
+    }
     let changed = false;
     const changedMasterNotificationDocs = [];
 
     for (const notification of domainMaster.notifications || []) {
+      if (processedCount >= safeMaxItems) {
+        hasMore = true;
+        break;
+      }
       if (
         notification.type !== 'domain_admin_resign_request'
         || notification.status !== 'pending'
@@ -189,6 +223,7 @@ const processExpiredDomainAdminResignRequests = async (now = new Date()) => {
           toCollectionNotificationDoc(requester._id, requesterNotification)
         ]);
       }
+      processedCount += 1;
     }
 
     if (changed) {
@@ -198,9 +233,30 @@ const processExpiredDomainAdminResignRequests = async (now = new Date()) => {
       }
     }
   }
+
+  if (!hasMore && processedCount >= safeMaxItems) {
+    const pendingRow = await User.findOne({
+      notifications: {
+        $elemMatch: {
+          type: 'domain_admin_resign_request',
+          status: 'pending',
+          createdAt: { $lte: deadline }
+        }
+      }
+    }).select('_id').lean();
+    hasMore = !!pendingRow;
+  }
+
+  return {
+    processedCount,
+    hasMore,
+    maxItems: safeMaxItems,
+    mode: 'embedded'
+  };
 };
 
 module.exports = {
   processExpiredDomainAdminResignRequests,
-  RESIGN_REQUEST_EXPIRE_MS
+  RESIGN_REQUEST_EXPIRE_MS,
+  DOMAIN_ADMIN_RESIGN_DEFAULT_MAX_ITEMS
 };

@@ -34,6 +34,8 @@ const DistributionResultSchema = new mongoose.Schema({
 
 DistributionResultSchema.index({ nodeId: 1, executeAt: -1, userId: 1 }, { unique: true });
 DistributionResultSchema.index({ userId: 1, createdAt: -1 });
+DistributionResultSchema.index({ nodeId: 1, executeAt: -1, createdAt: -1, _id: -1 });
+DistributionResultSchema.index({ userId: 1, createdAt: -1, _id: -1 });
 DistributionResultSchema.index({ lockId: 1, userId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('DistributionResult', DistributionResultSchema);

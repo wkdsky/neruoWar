@@ -28,6 +28,13 @@
   - `Node.citySiegeState.{cheng,qi}.attackers[]`。
   - `DomainSiegeState.{cheng,qi}.attackers[]`。
   - `Node.knowledgeDistributionLocked.resultUserRewards[]`。
+- 读写模型差异事实（本轮补充）
+  - `GET /api/nodes/:id` 已走 `NodeSense` 集合 hydration；
+  - 多个写接口历史上直接返回 `Node` 嵌入 `synonymSenses`，导致在个别数据状态下出现“写后返回与读接口不一致”。
+- 接口一致性风险（本轮补充）
+  - `POST /api/notifications/:notificationId/respond` 历史上只从 `user.notifications` 读取，而 `GET /api/notifications` 在集合模式从 `Notification` 集合读取，存在读写源分叉。
+  - `DELETE /api/admin/users/:userId` 历史上未同步维护熵盟 `memberCount`，会造成物化计数漂移。
+  - `/api/senses` 与 `/api/nodes` 同时提供释义写接口，规则与权限不完全一致，存在双入口语义分叉。
 - 额外核对
   - `domainTitleStateStore.listSiegeStatesByAttackerUserId` 历史依赖嵌入 attackers 查询，已做集合化优先查询并保留旧数据兜底。
   - `notificationStore` 与 `DistributionParticipant` 既有集合可复用，改造未引入新中间件。
@@ -131,6 +138,8 @@
 - 3) 生成数据
   - `node scripts/seed_scalability_dataset.js --profile smoke --reset`
   - `node scripts/seed_scalability_dataset.js --profile acceptance --reset`
+  - `npm run seed:lease-test`
+  - `npm run seed:cleanup-test`
 - 4) 启动 API（默认仅 HTTP/WebSocket，不执行新任务处理）
   - `ENABLE_LEGACY_RESOURCE_TICK=false ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS=false ENABLE_LEGACY_ADMIN_RESIGN_TICK=false ENABLE_LEGACY_DISTRIBUTION_TICK=false ENABLE_SCHEDULED_TASK_ENQUEUE=true node server.js`
 - 5) 启动 Worker（可 1~2 个进程）
@@ -162,11 +171,63 @@
     - `allianceAnnouncementNotificationDelta=0`
     - `siegeSupportNotificationDelta=0`
     - `allianceBroadcastEventDelta=2`
+- 8) 锁续租（heartbeat）验收命令
+  - `npm run seed:lease-test`
+  - `WORKER_OWNER_ID=lease-w1 WORKER_CONCURRENCY=1 WORKER_LOCK_MS=3000 WORKER_POLL_MS=300 WORKER_HEARTBEAT_ENABLE=true node worker.js`
+  - `WORKER_OWNER_ID=lease-w2 WORKER_CONCURRENCY=1 WORKER_LOCK_MS=3000 WORKER_POLL_MS=300 WORKER_HEARTBEAT_ENABLE=true node worker.js`
+  - 验证查询：`ScheduledTask.find({dedupeKey:/seed_scalability_refactor_v1_task_lease_test_sleep_test/}).select('status attempts lockOwner lockedUntil')`
+  - 预期：`sleep_test_job` 最终 `status=done` 且 `attempts=1`。
+- 9) tick 限量/拆分验收命令
+  - `npm run seed:acceptance`
+  - 将 220 个节点锁置为到期后，执行：
+    - `KnowledgeDistributionService.processTick({maxItems:50})`
+    - `processExpiredDomainAdminResignRequests(new Date(), {maxItems:50})`
+  - 预期：两者都返回 `processedCount=50` 且 `hasMore=true`。
+- 10) 清理任务验收命令
+  - `npm run seed:cleanup-test`
+  - 启动 worker：`WORKER_OWNER_ID=cleanup-w1 WORKER_CONCURRENCY=1 WORKER_POLL_MS=300 node worker.js`
+  - 预期日志：`maintenance cleanup: {"scheduledTasks":...,"allianceBroadcastEvents":...,"distributionResults":...,"siegeParticipants":...}`
+  - 清理后验证：四类“过期行”计数降为 0，cleanup task 为 `done`。
+- 11) 游标分页与 explain 验收命令
+  - 分页接口：
+    - `/api/alliances/me/broadcasts?limit=20&cursor=...`
+    - `/api/nodes/:nodeId/siege/participants?gateKey=cheng&limit=40&cursor=...`
+    - `/api/nodes/:nodeId/distribution-results?limit=40&cursor=...`
+    - `/api/users/me/distribution-results?limit=20&cursor=...`
+  - 预期：连续 5 页 `duplicateCount=0`（不重不漏）。
+  - explain 预期索引：
+    - `allianceId_1_createdAt_-1__id_-1`
+    - `nodeId_1_gateKey_1_updatedAt_-1__id_-1`
+    - `nodeId_1_executeAt_-1_createdAt_-1__id_-1`
+    - `userId_1_createdAt_-1__id_-1`
+- 12) 节点释义写后读一致性验收命令（带鉴权）
+  - `POST /api/nodes/create` 创建仅 1 条释义的节点，记录 `nodeId`
+  - 立即调用 `GET /api/nodes/:nodeId`
+  - 预期：创建响应与详情响应中的 `synonymSenses` 数量和 `senseId/title/content` 一致（不出现“写接口 1 条、读接口 3 条”）。
+  - 再执行 `POST /api/nodes/:nodeId/admin/senses`、`PUT /api/nodes/:nodeId/admin/senses/:senseId/text`、`DELETE /api/nodes/:nodeId/admin/senses/:senseId` 后重复 `GET /api/nodes/:nodeId`，预期始终一致。
+  - 已执行实测（2026-02-23）：
+    - `node scripts/seed_scalability_dataset.js --profile smoke --reset`
+    - `PORT=5200 ENABLE_LEGACY_RESOURCE_TICK=false ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS=false ENABLE_LEGACY_ADMIN_RESIGN_TICK=false ENABLE_LEGACY_DISTRIBUTION_TICK=false ENABLE_SCHEDULED_TASK_ENQUEUE=false node server.js`
+    - admin 登录后创建节点（单释义）并立即读取详情：`createCount=1 detailCount=1 exactMatch=true`
+    - 对同节点执行新增/编辑/删除释义并穿插详情读取：`addCount=2 detailAfterAdd=2 editOk=true delOk=true delCount=1 detailAfterDel=1`
+- 13) 通知响应/成员计数/释义写入口一致性验收命令
+  - 启动 API（示例）：`PORT=5300 ENABLE_SCHEDULED_TASK_ENQUEUE=false ENABLE_LEGACY_RESOURCE_TICK=false ENABLE_LEGACY_KNOWLEDGEPOINT_TICKS=false ENABLE_LEGACY_ADMIN_RESIGN_TICK=false ENABLE_LEGACY_DISTRIBUTION_TICK=false node server.js`
+  - `/api/senses` 写入口收敛验证：
+    - 调用 `POST /api/senses/node/:nodeId`（带 JWT）
+    - 预期：返回 `409`，错误提示改用 `/api/nodes/:nodeId/admin/senses`。
+  - 管理员删用户计数一致性验证：
+    - 删除前读取目标熵盟 `memberCount=100`
+    - 调用 `DELETE /api/admin/users/:userId`
+    - 删除后读取同熵盟 `memberCount=99`
+  - 通知响应读源一致性验证：
+    - 直接向 `Notification` 集合写入仅集合存在的 pending 测试通知
+    - 调用 `POST /api/notifications/:notificationId/respond`
+    - 预期：返回业务错误（本次为“该通知类型不支持响应操作”），不是“通知不存在”。
 
 ## 8. 数据生成与验收数据规模（本次新增的 seed 方案：profile、规模、预期 DB 行为）
 - 脚本
   - `backend/scripts/seed_scalability_dataset.js`
-  - 参数：`--profile smoke|acceptance|stress`、`--reset`
+  - 参数：`--profile smoke|acceptance|stress|lease_test|cleanup_test`、`--reset`、`--withOldRecords`
   - 清理策略：通过固定 marker/prefix 删除本脚本产生的数据，不污染存量业务数据。
 - Profile: smoke（<1 分钟）
   - users: 200（admin 20 + common 180）
@@ -189,25 +250,46 @@
   - big alliance: 80,000
   - nodes: 20,000
   - node_senses: 500,000
+- Profile: lease_test
+  - users: 42
+  - alliances: 2
+  - nodes: 80
+  - node_senses: 240
+  - 自动创建：`sleep_test_job(payload.ms=15000, runAt=now)`
+  - 目标：验证 `WORKER_LOCK_MS` 很小时 heartbeat 续租仍避免重复执行。
+- Profile: cleanup_test
+  - users: 62
+  - alliances: 2
+  - nodes: 120
+  - node_senses: 360
+  - 自动注入：120 天前旧 `ScheduledTask(done/failed)`、旧 `AllianceBroadcastEvent`、旧 `DistributionResult`、旧 `SiegeParticipant(status=retreated)`，并 enqueue `maintenance_cleanup_tick`。
+  - 目标：验证清理任务删除量与保留策略。
 - 本次关键验收实测结果
   - 广播写放大：`notificationDelta=0`，`eventDelta=2`（公告 + 支援）。
   - 围城外置：`participantCollectionCount=5000`，Node/DomainSiegeState 嵌入预览均为 50。
   - 分发外置：`distributionResultCount=5000`，lock 内预览 `resultUserRewards=200`，`rewardParticipantCount=5000`。
   - 调度 claim：`claimedByA=1, claimedByB=0`；过期锁回收后 `status=ready`。
   - 真实 HTTP E2E：admin/common 登录均成功，公告/支援任务均 `done`，广播读已读链路正确，围城/分发分页接口返回正确游标。
+  - lease heartbeat：`sleep_test_job` 在 `WORKER_LOCK_MS=3000` + 双 worker 条件下 `status=done`、`attempts=1`。
+  - tick 限量：分发 tick `dueBefore=220 -> dueAfter=170`，返回 `processedCount=50, hasMore=true`；卸任 tick `pendingBefore=120 -> pendingAfter=70`，返回 `processedCount=50, hasMore=true`。
+  - O(1) 未读 + 计数器：`bigAlliance.memberCount=15000`；`broadcastUpdatedAt > allianceBroadcastSeenAt` 直接判定 `unread=true`。
+  - cleanup：worker 日志显示删除 `scheduledTasks=2, allianceBroadcastEvents=1, distributionResults=1, siegeParticipants=1`，清理后过期计数均为 0。
+  - cursor/explain：四类分页连续 5 页 `duplicateCount=0`；explain 命中目标索引且 `docsExamined≈limit`。
 
 ## 9. 未来扩展点（未来上分片/多实例时只需哪些小改）
 - 热查询与索引映射（索引审计）
-  - ScheduledTask 调度拉取：`{ status: 1, runAt: 1 }` + `{ lockedUntil: 1 }` + `{ dedupeKey: 1 } unique sparse。
+  - ScheduledTask 调度拉取：`{ status: 1, runAt: 1 }` + `{ lockedUntil: 1 }` + `{ dedupeKey: 1 } unique sparse + `{ status: 1, updatedAt: 1 }`（清理）。
   - 熵盟广播列表：`AllianceBroadcastEvent { allianceId: 1, createdAt: -1, _id: -1 }`。
   - 围城参与者分页/筛选：
     - `{ nodeId: 1, gateKey: 1, status: 1, updatedAt: -1 }`
+    - `{ nodeId: 1, gateKey: 1, updatedAt: -1, _id: -1 }`
     - `{ nodeId: 1, gateKey: 1, userId: 1 } unique`
     - `{ allianceId: 1, status: 1, updatedAt: -1 }`
     - `{ userId: 1, status: 1, updatedAt: -1 }`
   - 分发结果查询：
     - `{ nodeId: 1, executeAt: -1, userId: 1 } unique`
-    - `{ userId: 1, createdAt: -1 }`
+    - `{ nodeId: 1, executeAt: -1, createdAt: -1, _id: -1 }`
+    - `{ userId: 1, createdAt: -1, _id: -1 }`
   - 节点分发待执行扫描：`Node { status: 1, knowledgeDistributionLocked.executeAt: 1 }`。
 - WebSocket 广播底线审计
   - 默认不启用 legacy 高频广播路径。
@@ -219,3 +301,96 @@
     - `DistributionResult` 可按 `nodeId` 或 `userId` 分片，视读流量主路径选择。
     - `AllianceBroadcastEvent` 可按 `allianceId` 分片。
   - 拆服务建议：调度 worker、围城服务、分发服务可按集合边界独立拆分，无需迁移大嵌入字段。
+
+## 10. 下一阶段：稳定性与可持续扩展补齐
+- [x] 任务锁续租（heartbeat/extendLock）+ `sleep_test_job` 验收任务
+  - 改动文件（计划）：`backend/services/schedulerService.js`、`backend/worker.js`、`backend/scripts/seed_scalability_dataset.js`、`backend/package.json`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：`lease_test` 下创建 `sleep_test_job(ms=15000)`，以 `WORKER_LOCK_MS=3000` 启动 2 个 worker；校验同一 task 最终 `status=done` 且无重复执行（`attempts` 不异常增长）。实测结果：heartbeat 间隔 `1000ms`，任务 `attempts=1`。当前代码层验证命令：`cd backend && node --check services/schedulerService.js && node --check worker.js`。
+- [x] tick 限量/拆分（distribution 与 resign timeout）
+  - 改动文件（计划）：`backend/services/KnowledgeDistributionService.js`、`backend/services/domainAdminResignService.js`、`backend/worker.js`、`backend/server.js`、`backend/services/schedulerService.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：acceptance 数据下设置 `KNOWLEDGE_DISTRIBUTION_MAX_ITEMS_PER_TICK=50`、`DOMAIN_ADMIN_RESIGN_MAX_ITEMS_PER_TICK=50`，观察单次任务处理数量受限、后继任务接续处理且无长时间 running 卡住。当前代码层验证命令：`cd backend && node --check services/domainAdminResignService.js && node --check services/KnowledgeDistributionService.js && node --check worker.js`。
+- [x] 历史数据清理/保留策略（maintenance_cleanup_tick）
+  - 改动文件（计划）：`backend/worker.js`、`backend/server.js`、`backend/models/ScheduledTask.js`、`backend/services/maintenanceCleanupService.js`（新增） 、`backend/scripts/seed_scalability_dataset.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：`cleanup_test` 生成旧数据并入队 `maintenance_cleanup_tick`；worker 执行后核对 `ScheduledTask/AllianceBroadcastEvent/DistributionResult/SiegeParticipant` 删除量。当前代码层验证命令：`cd backend && node --check services/maintenanceCleanupService.js && node --check worker.js && node --check server.js`。
+- [x] 高频列表接口游标分页一致性（cursor 统一规则 + 索引对齐）
+  - 改动文件（计划）：`backend/routes/alliance.js`、`backend/routes/nodes.js`、`backend/routes/users.js`、`backend/models/SiegeParticipant.js`、`backend/models/DistributionResult.js`、`backend/services/siegeParticipantStore.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：acceptance 数据连续翻页 3~5 次，验证不重不漏；`explain()` 显示走目标索引，避免大范围扫描。当前代码层验证命令：`cd backend && node --check utils/cursorPagination.js && node --check services/siegeParticipantStore.js && node --check routes/alliance.js && node --check routes/nodes.js && node --check routes/users.js`。
+- [x] 热点读优化：O(1) 未读判定 + 熵盟成员计数器
+  - 改动文件（计划）：`backend/models/EntropyAlliance.js`、`backend/services/allianceBroadcastService.js`、`backend/routes/alliance.js`、`backend/routes/auth.js`、`backend/scripts/seed_scalability_dataset.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：`broadcastUpdatedAt > allianceBroadcastSeenAt` 可直接判未读；`memberCount` 在入盟/退盟后正确增减；acceptance 下 `bigAlliance.memberCount=15000`。实测结果：`memberCount=15000`，`unread=true`（仅基于 user+alliance 文档）。
+- [x] seed 扩展（`lease_test` / `cleanup_test`）+ npm scripts
+  - 改动文件（计划）：`backend/scripts/seed_scalability_dataset.js`、`backend/package.json`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：执行 `npm run seed:lease-test`、`npm run seed:cleanup-test` 成功；生成任务与旧数据仅写 Mongo，不产生任何外部文件。实测两条脚本均执行成功并输出目标规模。
+- [x] 节点释义读写一致性统一（写接口返回标准化读模型）
+  - 改动文件（计划）：`backend/routes/nodes.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：同一节点执行写接口（创建/新增释义/编辑释义/删除释义）后，立即调用 `GET /api/nodes/:id` 比对 `synonymSenses` 数量与内容一致；代码层执行 `cd backend && node --check routes/nodes.js` 通过。
+- [x] 通知响应链路收敛到集合模型（消除读集合/写嵌入分叉）
+  - 改动文件（计划）：`backend/routes/auth.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：`NOTIFICATION_COLLECTION_READ=true` 下，先仅写入 `Notification` 集合测试通知，再调用 `POST /api/notifications/:notificationId/respond`，应命中通知并返回业务错误（而非“通知不存在”）；代码层执行 `cd backend && node --check routes/auth.js` 通过。
+- [x] 管理员删用户时同步维护熵盟计数/盟主（消除 memberCount 漂移）
+  - 改动文件（计划）：`backend/routes/admin.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：删除有盟成员后目标盟 `memberCount` 递减；若删的是盟主则自动补选盟主（或无成员时自动解散）；代码层执行 `cd backend && node --check routes/admin.js` 通过。
+- [x] 释义写入口收敛（默认关闭 legacy `/api/senses` 写操作）
+  - 改动文件（计划）：`backend/routes/senses.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 验收方法：默认环境调用 `/api/senses/node/:nodeId` 写接口返回统一收敛错误，提示改用 `/api/nodes/:nodeId/admin/senses`；设置 `ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS=true` 可临时回退旧入口。
+
+- 2026-02-23T01:07:00+08:00
+  - 做了什么：实现任务锁续租能力：`schedulerService.extendLock`（仅锁拥有者可续租）+ worker 任务心跳续租 + `sleep_test_job` handler。
+  - 为什么：避免长任务执行超过 `WORKER_LOCK_MS` 时被 `recoverExpiredLocks` 误回收并重复执行。
+  - 改动文件：`backend/services/schedulerService.js`、`backend/worker.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：待结合 `lease_test` 数据与双 worker 实测验证 `attempts` 稳定。
+- 2026-02-23T01:13:00+08:00
+  - 做了什么：为 `knowledge_distribution_tick` 与 `domain_admin_resign_timeout_tick` 增加单次处理上限和 `hasMore` 返回，并在 worker 中实现 followup 入队（5 秒桶 dedupe 限流）。
+  - 为什么：控制单任务执行时长，避免大 backlog 导致 worker 长时间占用与吞吐抖动。
+  - 改动文件：`backend/services/KnowledgeDistributionService.js`、`backend/services/domainAdminResignService.js`、`backend/worker.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：需要在 acceptance 数据下验证 `maxItems` 生效与 followup 连续消费表现。
+- 2026-02-23T01:18:00+08:00
+  - 做了什么：新增 `maintenance_cleanup_tick` 维护任务与清理服务；API 进程按日入队（默认 03:30 后当天仅一次，dedupeKey=日期桶）。
+  - 为什么：防止新集合无限增长引发索引膨胀与长期性能退化。
+  - 改动文件：`backend/services/maintenanceCleanupService.js`、`backend/worker.js`、`backend/server.js`、`backend/models/ScheduledTask.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：待 `cleanup_test` 数据集验证删除数量与保留天数配置是否符合预期。
+- 2026-02-23T01:25:00+08:00
+  - 做了什么：统一广播/围城参与者/分发结果接口 cursor 规则为 `base64({t,id})`（兼容旧 ObjectId cursor），新增围城参与者独立分页接口，并补齐排序对齐索引。
+  - 为什么：避免深分页 scan，确保排序与索引一致，分页不重不漏。
+  - 改动文件：`backend/utils/cursorPagination.js`、`backend/routes/alliance.js`、`backend/routes/nodes.js`、`backend/routes/users.js`、`backend/services/siegeParticipantStore.js`、`backend/models/SiegeParticipant.js`、`backend/models/DistributionResult.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：待在 acceptance 数据上跑 3~5 页连续翻页与 explain 验证。
+- 2026-02-23T01:52:00+08:00
+  - 做了什么：完成 `EntropyAlliance.broadcastUpdatedAt/memberCount` 落地；发布广播时同步更新 `broadcastUpdatedAt`；入盟/退盟路径更新 `memberCount`；seed 同步写入 `memberCount`。
+  - 为什么：将未读判定降为 O(1) 文档比较，并移除成员数实时聚合开销。
+  - 改动文件：`backend/models/EntropyAlliance.js`、`backend/services/allianceBroadcastService.js`、`backend/routes/alliance.js`、`backend/routes/auth.js`、`backend/scripts/seed_scalability_dataset.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：后续可为跨入口入盟路径补充更集中的 service 封装，进一步降低维护分散度。
+- 2026-02-23T01:58:00+08:00
+  - 做了什么：扩展 seed 为 `lease_test`/`cleanup_test`，增加 `--withOldRecords`；新增 npm scripts `seed:acceptance`、`seed:lease-test`、`seed:cleanup-test`；完成 lease/tick/cleanup/pagination/explain 实测。
+  - 为什么：把“锁续租、限量 tick、清理策略、游标一致性、O(1) 判未读”都落成可复现验收流程。
+  - 改动文件：`backend/scripts/seed_scalability_dataset.js`、`backend/package.json`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：无阻塞项；可继续补充 CI 级小规模 smoke 自动化脚本。
+- 2026-02-23T02:00:00+08:00
+  - 做了什么：将 `WORKER_LOCK_MS` 最小值放宽到 1s（不再强制 10s），重新按 `WORKER_LOCK_MS=3000` 完整重跑 lease 验收。
+  - 为什么：严格满足“3s 锁 + 15s 长任务”验收场景，不偏离用户指定参数。
+  - 改动文件：`backend/worker.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：无。
+- 2026-02-23T02:18:00+08:00
+  - 做了什么：新增 `loadCanonicalNodeResponseById` 统一节点返回模型；将 `POST /api/nodes/create`、`POST /api/nodes/approve`、`POST /api/nodes/associate`、`POST /api/nodes/approve-association`、`POST /api/nodes/reject-association`、`PUT /api/nodes/:nodeId`、`POST /api/nodes/:nodeId/admin/senses`、`PUT /api/nodes/:nodeId/admin/senses/:senseId/text`、`DELETE /api/nodes/:nodeId/admin/senses/:senseId`、`PUT /api/nodes/:nodeId/associations`、`PUT /api/nodes/:nodeId/featured`、`PUT /api/nodes/admin/domain-master/:nodeId` 统一为“写后回读 + hydrate + normalize”返回；`GET /api/nodes/:id` 同步复用该标准化读路径。
+  - 为什么：消除“写接口返回嵌入释义、读接口返回集合释义”造成的不一致，保证接口语义与可扩展读模型一致。
+  - 改动文件：`backend/routes/nodes.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：`NODE_SENSE_COLLECTION_READ/WRITE` 关闭组合下仍沿用兼容路径；默认配置下已确保返回一致。
+- 2026-02-23T02:31:00+08:00
+  - 做了什么：补跑真实 HTTP 鉴权回归（`/api/login`、`/api/nodes/create`、`GET /api/nodes/:id`、`POST /api/nodes/:nodeId/admin/senses`、`PUT /api/nodes/:nodeId/admin/senses/:senseId/text`、`DELETE /api/nodes/:nodeId/admin/senses/:senseId`），验证写后返回与详情读取一致。
+  - 为什么：确保“写接口对齐读接口标准”在真实请求链路下成立，而非仅静态代码检查。
+  - 改动文件：`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：无。
+- 2026-02-23T02:43:00+08:00
+  - 做了什么：将 `POST /api/notifications/:notificationId/respond` 在集合模式下改为优先从 `Notification` 集合读取通知，再统一回写集合，避免“通知列表可见但响应查不到”的读写源分叉。
+  - 为什么：通知主读路径已集合化，响应入口必须收敛到同一数据源才能保证一致。
+  - 改动文件：`backend/routes/auth.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：无。
+- 2026-02-23T02:48:00+08:00
+  - 做了什么：补齐 `DELETE /api/admin/users/:userId` 的熵盟一致性维护：递减 `memberCount`、清理被删用户作为域主的联盟归属、删除盟主时补选新盟主（无成员则自动解散）。
+  - 为什么：`memberCount` 已作为 O(1) 物化计数字段，必须避免删用户路径造成计数漂移。
+  - 改动文件：`backend/routes/admin.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：无。
+- 2026-02-23T02:52:00+08:00
+  - 做了什么：默认关闭 legacy `/api/senses` 释义写接口（新增 `ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS`），并在建议审核通过动作上执行同样的收敛校验。
+  - 为什么：消除 `/api/senses` 与 `/api/nodes` 双写入口规则冲突，统一到单一可扩展写路径。
+  - 改动文件：`backend/routes/senses.js`、`SCALABILITY_REFACTOR_PROGRESS.md`
+  - 风险/待办：旧客户端若仍调用 `/api/senses` 写接口需切换到 `/api/nodes` 或临时开启兼容开关。

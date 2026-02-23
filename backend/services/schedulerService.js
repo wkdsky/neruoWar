@@ -106,6 +106,31 @@ const claimNext = async ({ types, limit = 1, lockMs = 60 * 1000, ownerId = 'work
   return tasks;
 };
 
+const extendLock = async ({ taskId, ownerId = 'worker', lockMs = 60 * 1000 } = {}) => {
+  const safeTaskId = toObjectId(taskId);
+  if (!safeTaskId) {
+    return { matchedCount: 0, modifiedCount: 0 };
+  }
+  const safeOwnerId = typeof ownerId === 'string' ? ownerId.trim() : '';
+  if (!safeOwnerId) {
+    return { matchedCount: 0, modifiedCount: 0 };
+  }
+  const safeLockMs = Math.max(10 * 1000, parseInt(lockMs, 10) || 60 * 1000);
+  const now = Date.now();
+  return ScheduledTask.updateOne(
+    {
+      _id: safeTaskId,
+      status: 'running',
+      lockOwner: safeOwnerId
+    },
+    {
+      $set: {
+        lockedUntil: new Date(now + safeLockMs)
+      }
+    }
+  );
+};
+
 const complete = async (taskId) => {
   const safeTaskId = toObjectId(taskId);
   if (!safeTaskId) return { matchedCount: 0, modifiedCount: 0 };
@@ -181,6 +206,7 @@ const recoverExpiredLocks = async ({ now = new Date() } = {}) => {
 module.exports = {
   enqueue,
   claimNext,
+  extendLock,
   complete,
   fail,
   recoverExpiredLocks

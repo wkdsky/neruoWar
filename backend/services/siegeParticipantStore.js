@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const SiegeParticipant = require('../models/SiegeParticipant');
+const { encodeTimeCursor, decodeTimeCursor, buildTimeCursorQuery } = require('../utils/cursorPagination');
 
 const DEFAULT_PREVIEW_LIMIT = Math.max(1, parseInt(process.env.SIEGE_EMBEDDED_PREVIEW_LIMIT, 10) || 50);
 
@@ -259,11 +260,10 @@ const listParticipants = async ({
     status: { $in: normalizedStatuses }
   };
 
-  if (typeof cursor === 'string' && cursor.trim()) {
-    const rawCursor = cursor.trim();
-    if (mongoose.Types.ObjectId.isValid(rawCursor)) {
-      query._id = { $lt: new mongoose.Types.ObjectId(rawCursor) };
-    }
+  const parsedCursor = decodeTimeCursor(cursor);
+  const cursorQuery = buildTimeCursorQuery('updatedAt', parsedCursor);
+  if (cursorQuery) {
+    Object.assign(query, cursorQuery);
   }
 
   const rows = await SiegeParticipant.find(query)
@@ -271,8 +271,12 @@ const listParticipants = async ({
     .limit(safeLimit)
     .lean();
 
+  const tail = rows.length > 0 ? rows[rows.length - 1] : null;
   const nextCursor = rows.length >= safeLimit
-    ? getIdString(rows[rows.length - 1]?._id)
+    ? encodeTimeCursor({
+      t: new Date(tail?.updatedAt || 0),
+      id: tail?._id
+    })
     : null;
 
   return {

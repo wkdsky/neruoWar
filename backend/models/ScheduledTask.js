@@ -48,6 +48,7 @@ const ScheduledTaskSchema = new mongoose.Schema({
 });
 
 ScheduledTaskSchema.index({ status: 1, runAt: 1 });
+ScheduledTaskSchema.index({ status: 1, updatedAt: 1 });
 ScheduledTaskSchema.index({ dedupeKey: 1 }, { unique: true, sparse: true });
 ScheduledTaskSchema.index({ lockedUntil: 1 });
 

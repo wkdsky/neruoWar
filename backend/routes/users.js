@@ -7,6 +7,7 @@ const Node = require('../models/Node');
 const EntropyAlliance = require('../models/EntropyAlliance');
 const DistributionResult = require('../models/DistributionResult');
 const { authenticateToken } = require('../middleware/auth');
+const { encodeTimeCursor, decodeTimeCursor, buildTimeCursorQuery } = require('../utils/cursorPagination');
 
 const DISTRIBUTION_RESULT_PAGE_SIZE_MAX = 200;
 
@@ -33,9 +34,7 @@ const round2 = (value) => {
 
 const parseCursor = (value = '') => {
   if (typeof value !== 'string') return null;
-  const raw = value.trim();
-  if (!raw || !mongoose.Types.ObjectId.isValid(raw)) return null;
-  return new mongoose.Types.ObjectId(raw);
+  return decodeTimeCursor(value);
 };
 
 router.get('/me/distribution-results', authenticateToken, async (req, res) => {
@@ -51,13 +50,15 @@ router.get('/me/distribution-results', authenticateToken, async (req, res) => {
     }
 
     const limit = Math.max(1, Math.min(DISTRIBUTION_RESULT_PAGE_SIZE_MAX, parseInt(req.query?.limit, 10) || 50));
-    const cursor = parseCursor(req.query?.cursor);
+    const rawCursor = typeof req.query?.cursor === 'string' ? req.query.cursor.trim() : '';
+    const cursor = parseCursor(rawCursor);
 
     const query = {
       userId: new mongoose.Types.ObjectId(requestUserId)
     };
-    if (cursor) {
-      query._id = { $lt: cursor };
+    const cursorQuery = buildTimeCursorQuery('createdAt', cursor);
+    if (cursorQuery) {
+      Object.assign(query, cursorQuery);
     }
 
     const rows = await DistributionResult.find(query)
@@ -66,8 +67,12 @@ router.get('/me/distribution-results', authenticateToken, async (req, res) => {
       .select('_id nodeId executeAt userId amount createdAt')
       .lean();
 
+    const tail = rows.length > 0 ? rows[rows.length - 1] : null;
     const nextCursor = rows.length >= limit
-      ? getIdString(rows[rows.length - 1]?._id)
+      ? encodeTimeCursor({
+        t: new Date(tail?.createdAt || 0),
+        id: tail?._id
+      })
       : null;
 
     const nodeIds = Array.from(new Set(
@@ -95,7 +100,7 @@ router.get('/me/distribution-results', authenticateToken, async (req, res) => {
     return res.json({
       success: true,
       limit,
-      cursor: cursor ? String(cursor) : null,
+      cursor: rawCursor || null,
       nextCursor,
       rows: rows.map((item) => {
         const nodeId = getIdString(item?.nodeId);

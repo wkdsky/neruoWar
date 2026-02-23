@@ -10,6 +10,7 @@ const User = require('../models/User');
 const Node = require('../models/Node');
 const NodeSense = require('../models/NodeSense');
 const EntropyAlliance = require('../models/EntropyAlliance');
+const AllianceBroadcastEvent = require('../models/AllianceBroadcastEvent');
 const DomainSiegeState = require('../models/DomainSiegeState');
 const DomainDefenseLayout = require('../models/DomainDefenseLayout');
 const DistributionParticipant = require('../models/DistributionParticipant');
@@ -35,7 +36,9 @@ const PROFILES = {
     sensesPerNode: 5,
     lockedNodes: 10,
     siegeParticipants: 5,
-    hotDistributionParticipants: 120
+    hotDistributionParticipants: 120,
+    createSleepTestTask: false,
+    createCleanupFixtures: false
   },
   acceptance: {
     users: { admin: 50, common: 19950 },
@@ -48,7 +51,9 @@ const PROFILES = {
     sensesPerNode: 20,
     lockedNodes: 200,
     siegeParticipants: 5000,
-    hotDistributionParticipants: 5000
+    hotDistributionParticipants: 5000,
+    createSleepTestTask: false,
+    createCleanupFixtures: false
   },
   stress: {
     users: { admin: 200, common: 99800 },
@@ -61,7 +66,38 @@ const PROFILES = {
     sensesPerNode: 25,
     lockedNodes: 500,
     siegeParticipants: 20000,
-    hotDistributionParticipants: 12000
+    hotDistributionParticipants: 12000,
+    createSleepTestTask: false,
+    createCleanupFixtures: false
+  },
+  lease_test: {
+    users: { admin: 2, common: 40 },
+    alliances: [
+      { key: 'main', members: 20 },
+      { key: 'side', members: 10 }
+    ],
+    nodes: 80,
+    sensesPerNode: 3,
+    lockedNodes: 8,
+    siegeParticipants: 8,
+    hotDistributionParticipants: 20,
+    createSleepTestTask: true,
+    sleepTaskMs: 15000,
+    createCleanupFixtures: false
+  },
+  cleanup_test: {
+    users: { admin: 2, common: 60 },
+    alliances: [
+      { key: 'main', members: 30 },
+      { key: 'side', members: 20 }
+    ],
+    nodes: 120,
+    sensesPerNode: 3,
+    lockedNodes: 12,
+    siegeParticipants: 15,
+    hotDistributionParticipants: 30,
+    createSleepTestTask: false,
+    createCleanupFixtures: true
   }
 };
 
@@ -79,6 +115,7 @@ const getArgValue = (name, fallback = '') => {
 
 const profileName = (getArgValue('--profile', 'smoke') || 'smoke').trim();
 const shouldReset = args.includes('--reset');
+const withOldRecords = args.includes('--withOldRecords');
 const config = PROFILES[profileName];
 
 if (!config) {
@@ -129,6 +166,7 @@ const cleanupSeedData = async () => {
     nodeIds.length > 0 ? DistributionParticipant.deleteMany({ nodeId: { $in: nodeIds } }) : Promise.resolve(),
     nodeIds.length > 0 ? DistributionResult.deleteMany({ nodeId: { $in: nodeIds } }) : Promise.resolve(),
     nodeIds.length > 0 ? SiegeParticipant.deleteMany({ nodeId: { $in: nodeIds } }) : Promise.resolve(),
+    allianceIds.length > 0 ? AllianceBroadcastEvent.deleteMany({ allianceId: { $in: allianceIds } }) : Promise.resolve(),
     userIds.length > 0 ? DistributionParticipant.deleteMany({ userId: { $in: userIds } }) : Promise.resolve(),
     userIds.length > 0 ? DistributionResult.deleteMany({ userId: { $in: userIds } }) : Promise.resolve(),
     userIds.length > 0 ? SiegeParticipant.deleteMany({ userId: { $in: userIds } }) : Promise.resolve(),
@@ -201,7 +239,8 @@ const buildAlliances = async (commonUsers = []) => {
       name: `${ALLIANCE_NAME_PREFIX}${profileName}_${item.key}`,
       flag: ['#ef4444', '#14b8a6', '#0ea5e9', '#f59e0b'][idx % 4],
       declaration: `${item.key} alliance for scalability seed`,
-      founder: members[0]?._id || commonUsers[0]?._id
+      founder: members[0]?._id || commonUsers[0]?._id,
+      memberCount: members.length
     };
   });
 
@@ -580,6 +619,176 @@ const createScheduledTasks = async () => {
   ]);
 };
 
+const createSleepLeaseTask = async () => {
+  if (!config.createSleepTestTask) return null;
+  const ms = Math.max(1000, parseInt(config.sleepTaskMs, 10) || 15000);
+  await ScheduledTask.updateOne(
+    { dedupeKey: `${TASK_DEDUPE_PREFIX}${profileName}_sleep_test` },
+    {
+      $set: {
+        type: 'sleep_test_job',
+        runAt: new Date(),
+        status: 'ready',
+        payload: { ms },
+        lockOwner: '',
+        lockedUntil: null,
+        attempts: 0,
+        lastError: ''
+      }
+    },
+    { upsert: true }
+  );
+  return ms;
+};
+
+const createCleanupFixtures = async ({ nodes = [], commons = [], alliances = [] } = {}) => {
+  if (!config.createCleanupFixtures && !withOldRecords) {
+    return {
+      enabled: false
+    };
+  }
+  const oldDays = 120;
+  const oldDate = new Date(Date.now() - oldDays * 24 * 60 * 60 * 1000);
+  const oldExecuteAt = new Date(oldDate.getTime() - 2 * 60 * 60 * 1000);
+  const targetNode = nodes[0];
+  const targetUser = commons[0];
+  const targetAlliance = alliances[0];
+
+  if (!targetNode || !targetUser || !targetAlliance) {
+    return {
+      enabled: true,
+      skipped: true
+    };
+  }
+
+  await Promise.all([
+    ScheduledTask.updateOne(
+      { dedupeKey: `${TASK_DEDUPE_PREFIX}${profileName}_old_done` },
+      {
+        $set: {
+          type: 'maintenance_cleanup_tick',
+          runAt: oldDate,
+          status: 'done',
+          payload: { marker: MARKER },
+          lockOwner: '',
+          lockedUntil: null,
+          attempts: 1,
+          lastError: '',
+          createdAt: oldDate,
+          updatedAt: oldDate
+        }
+      },
+      { upsert: true, timestamps: false }
+    ),
+    ScheduledTask.updateOne(
+      { dedupeKey: `${TASK_DEDUPE_PREFIX}${profileName}_old_failed` },
+      {
+        $set: {
+          type: 'knowledge_distribution_tick',
+          runAt: oldDate,
+          status: 'failed',
+          payload: { marker: MARKER },
+          lockOwner: '',
+          lockedUntil: null,
+          attempts: 3,
+          lastError: 'seed old failed row',
+          createdAt: oldDate,
+          updatedAt: oldDate
+        }
+      },
+      { upsert: true, timestamps: false }
+    ),
+    AllianceBroadcastEvent.updateOne(
+      { dedupeKey: `${MARKER}_${profileName}_old_broadcast` },
+      {
+        $set: {
+          allianceId: targetAlliance._id,
+          type: 'announcement',
+          actorUserId: targetUser._id,
+          actorUsername: targetUser.username || '',
+          nodeId: targetNode._id,
+          nodeName: targetNode.name || '',
+          gateKey: '',
+          title: 'old seed broadcast',
+          message: 'old seed broadcast message',
+          dedupeKey: `${MARKER}_${profileName}_old_broadcast`,
+          createdAt: oldDate
+        }
+      },
+      { upsert: true }
+    ),
+    DistributionResult.updateOne(
+      {
+        nodeId: targetNode._id,
+        executeAt: oldExecuteAt,
+        userId: targetUser._id
+      },
+      {
+        $set: {
+          nodeId: targetNode._id,
+          executeAt: oldExecuteAt,
+          lockId: `${MARKER}:${profileName}:old-lock`,
+          userId: targetUser._id,
+          amount: 1.23,
+          createdAt: oldDate,
+          updatedAt: oldDate
+        }
+      },
+      { upsert: true, timestamps: false }
+    ),
+    SiegeParticipant.updateOne(
+      {
+        nodeId: targetNode._id,
+        gateKey: 'qi',
+        userId: targetUser._id
+      },
+      {
+        $set: {
+          nodeId: targetNode._id,
+          gateKey: 'qi',
+          userId: targetUser._id,
+          username: targetUser.username || '',
+          allianceId: targetAlliance._id,
+          units: [{ unitTypeId: 'seed_cleanup_unit', count: 1 }],
+          fromNodeId: targetNode._id,
+          fromNodeName: targetNode.name || '',
+          autoRetreatPercent: 40,
+          status: 'retreated',
+          isInitiator: false,
+          isReinforcement: true,
+          requestedAt: oldDate,
+          arriveAt: oldDate,
+          joinedAt: oldDate,
+          createdAt: oldDate,
+          updatedAt: oldDate
+        }
+      },
+      { upsert: true, timestamps: false }
+    ),
+    ScheduledTask.updateOne(
+      { dedupeKey: `${TASK_DEDUPE_PREFIX}${profileName}_cleanup_now` },
+      {
+        $set: {
+          type: 'maintenance_cleanup_tick',
+          runAt: new Date(),
+          status: 'ready',
+          payload: { marker: MARKER, profile: profileName },
+          lockOwner: '',
+          lockedUntil: null,
+          attempts: 0,
+          lastError: ''
+        }
+      },
+      { upsert: true }
+    )
+  ]);
+
+  return {
+    enabled: true,
+    oldDays
+  };
+};
+
 const run = async () => {
   await connectDB();
 
@@ -613,6 +822,8 @@ const run = async () => {
   const siegeInfo = await createSiegeDataset({ nodes, allianceMembership });
   const distributionInfo = await createDistributionDataset({ nodes, allianceMembership });
   await createScheduledTasks();
+  const sleepTaskMs = await createSleepLeaseTask();
+  const cleanupFixtureInfo = await createCleanupFixtures({ nodes, commons, alliances });
 
   const notificationCount = await Notification.countDocuments({
     userId: { $in: commons.slice(0, 10).map((item) => item._id) },
@@ -633,6 +844,8 @@ const run = async () => {
     nodeSenses: nodes.length * config.sensesPerNode,
     siege: siegeInfo,
     distribution: distributionInfo,
+    leaseTask: sleepTaskMs ? { sleepTaskMs } : null,
+    cleanupFixtures: cleanupFixtureInfo,
     sanity: {
       allianceAnnouncementNotificationsInSampleUsers: notificationCount
     }

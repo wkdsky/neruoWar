@@ -92,6 +92,7 @@ const SiegeParticipantSchema = new mongoose.Schema({
 
 SiegeParticipantSchema.index({ nodeId: 1, gateKey: 1, userId: 1 }, { unique: true });
 SiegeParticipantSchema.index({ nodeId: 1, gateKey: 1, status: 1, updatedAt: -1 });
+SiegeParticipantSchema.index({ nodeId: 1, gateKey: 1, updatedAt: -1, _id: -1 });
 SiegeParticipantSchema.index({ allianceId: 1, status: 1, updatedAt: -1 });
 SiegeParticipantSchema.index({ userId: 1, status: 1, updatedAt: -1 });
 

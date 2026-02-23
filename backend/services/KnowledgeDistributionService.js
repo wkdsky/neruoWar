@@ -162,6 +162,10 @@ const DISTRIBUTION_RESULT_BULK_BATCH_SIZE = Math.max(
   100,
   parseInt(process.env.DISTRIBUTION_RESULT_BULK_BATCH_SIZE, 10) || 1000
 );
+const KNOWLEDGE_DISTRIBUTION_DEFAULT_MAX_ITEMS = Math.max(
+  1,
+  parseInt(process.env.KNOWLEDGE_DISTRIBUTION_MAX_ITEMS_PER_TICK, 10) || 50
+);
 
 const writeNotificationDocsInChunks = async (docs = [], batchSize = DISTRIBUTION_NOTIFICATION_BATCH_SIZE) => {
   const source = Array.isArray(docs) ? docs.filter(Boolean) : [];
@@ -246,13 +250,24 @@ class KnowledgeDistributionService {
     return this.getActiveManualParticipantIds(lock, targetMs);
   }
 
-  static async processTick() {
-    if (isProcessing) return;
+  static async processTick(options = {}) {
+    if (isProcessing) {
+      return {
+        processedCount: 0,
+        hasMore: false,
+        skipped: true,
+        reason: 'processing'
+      };
+    }
     isProcessing = true;
 
     try {
       const now = new Date();
       const nearFuture = new Date(now.getTime() + 60 * 1000);
+      const safeMaxItems = Math.max(
+        1,
+        parseInt(options?.maxItems, 10) || KNOWLEDGE_DISTRIBUTION_DEFAULT_MAX_ITEMS
+      );
       const nodes = await Node.find({
         status: 'approved',
         knowledgeDistributionLocked: { $ne: null },
@@ -260,17 +275,30 @@ class KnowledgeDistributionService {
           { 'knowledgeDistributionLocked.executeAt': { $lte: nearFuture } },
           { 'knowledgeDistributionLocked.endAt': { $lte: now } }
         ]
-      }).select(
-        '_id name status contentScore knowledgePoint knowledgeDistributionLocked knowledgeDistributionCarryover domainMaster'
-      );
+      })
+        .sort({ 'knowledgeDistributionLocked.executeAt': 1, _id: 1 })
+        .limit(safeMaxItems + 1)
+        .select(
+          '_id name status contentScore knowledgePoint knowledgeDistributionLocked knowledgeDistributionCarryover domainMaster'
+        );
 
-      for (const node of nodes) {
+      const hasMore = nodes.length > safeMaxItems;
+      const rowsToProcess = hasMore ? nodes.slice(0, safeMaxItems) : nodes;
+      let processedCount = 0;
+      for (const node of rowsToProcess) {
         try {
           await this.processNode(node, now);
+          processedCount += 1;
         } catch (error) {
           console.error(`知识点分发处理失败 node=${node?._id || 'unknown'}:`, error);
         }
       }
+      return {
+        processedCount,
+        hasMore,
+        maxItems: safeMaxItems,
+        skipped: false
+      };
     } finally {
       isProcessing = false;
     }
