@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import * as THREE from 'three';
 import './BattlefieldPreviewModal.css';
 
 const CAMERA_ANGLE_PREVIEW = 45;
@@ -28,6 +29,7 @@ const WALL_ACTION_ICON_RADIUS = 12;
 const WALL_ACTION_ICON_GAP = 34;
 const WALL_ACTION_ICON_RISE = 32;
 const SCREEN_HIT_TOLERANCE_PX = 4;
+const DEPLOY_ZONE_RATIO = 0.2;
 const API_BASE = 'http://localhost:5000';
 const TOTAL_WOOD_WALL_STOCK = 10;
 const SNAP_EPSILON = 1.2;
@@ -40,6 +42,31 @@ const PALETTE_WALL_TEMPLATE = {
   height: WALL_HEIGHT,
   hp: BASE_HP,
   defense: BASE_DEFENSE
+};
+
+const disposeThreeNode = (node) => {
+  if (!node) return;
+  if (node.geometry && typeof node.geometry.dispose === 'function') {
+    node.geometry.dispose();
+  }
+  if (Array.isArray(node.material)) {
+    node.material.forEach((mat) => {
+      if (mat && typeof mat.dispose === 'function') mat.dispose();
+    });
+  } else if (node.material && typeof node.material.dispose === 'function') {
+    node.material.dispose();
+  }
+};
+
+const clearThreeGroup = (group) => {
+  if (!group) return;
+  while (group.children.length > 0) {
+    const child = group.children[group.children.length - 1];
+    if (!child) continue;
+    group.remove(child);
+    clearThreeGroup(child);
+    disposeThreeNode(child);
+  }
 };
 
 const normalizeDeg = (deg) => {
@@ -918,12 +945,17 @@ const BattlefieldPreviewModal = ({
   canEdit = false,
   onClose
 }) => {
+  const sceneCanvasRef = useRef(null);
   const canvasRef = useRef(null);
   const wrapperRef = useRef(null);
+  const threeRef = useRef(null);
+  const raycasterRef = useRef(null);
+  const raycastPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0));
   const panDragRef = useRef(null);
   const rotateDragRef = useRef(null);
   const wallActionButtonsRef = useRef([]);
   const mouseWorldRef = useRef({ x: 0, y: 0 });
+  const panWorldRef = useRef({ x: 0, y: 0 });
   const editSessionWallsRef = useRef(null);
   const pendingCacheSyncRef = useRef(null);
   const cameraAnimRef = useRef(null);
@@ -937,7 +969,7 @@ const BattlefieldPreviewModal = ({
   const [cameraAngle, setCameraAngle] = useState(CAMERA_ANGLE_PREVIEW);
   const [cameraYaw, setCameraYaw] = useState(CAMERA_YAW_DEFAULT);
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [panWorld, setPanWorld] = useState({ x: 0, y: 0 });
   const [viewportSize, setViewportSize] = useState({
     width: DEFAULT_VIEWPORT_WIDTH,
     height: DEFAULT_VIEWPORT_HEIGHT
@@ -1028,10 +1060,10 @@ const BattlefieldPreviewModal = ({
       height,
       centerX: width / 2,
       centerY: height / 2,
-      panX: pan.x,
-      panY: pan.y
+      panX: 0,
+      panY: 0
     };
-  }, [pan.x, pan.y, viewportSize.height, viewportSize.width]);
+  }, [viewportSize.height, viewportSize.width]);
 
   const wallGroups = useMemo(() => getWallGroupMetrics(walls), [walls]);
   const maxItemsPerType = Math.max(
@@ -1053,6 +1085,48 @@ const BattlefieldPreviewModal = ({
     return baseScale * zoom;
   }, [cameraAngle, fieldHeight, fieldWidth, viewport.height, viewport.width, zoom]);
 
+  const getWorldFromScreenPoint = useCallback((sx, sy) => {
+    const three = threeRef.current;
+    const camera = three?.camera;
+    if (camera && viewport.width > 0 && viewport.height > 0) {
+      if (!raycasterRef.current) {
+        raycasterRef.current = new THREE.Raycaster();
+      }
+      const ndc = new THREE.Vector2(
+        ((sx / viewport.width) * 2) - 1,
+        1 - ((sy / viewport.height) * 2)
+      );
+      raycasterRef.current.setFromCamera(ndc, camera);
+      const target = new THREE.Vector3();
+      if (raycasterRef.current.ray.intersectPlane(raycastPlaneRef.current, target)) {
+        return { x: target.x, y: target.y };
+      }
+    }
+    return unprojectScreen(sx, sy, viewport, cameraAngle, cameraYaw, worldScale);
+  }, [cameraAngle, cameraYaw, viewport, worldScale]);
+
+  const pickWallFromScreenPoint = useCallback((sx, sy) => {
+    const three = threeRef.current;
+    const camera = three?.camera;
+    const pickableWallMeshes = Array.isArray(three?.pickableWallMeshes) ? three.pickableWallMeshes : [];
+    if (!camera || pickableWallMeshes.length === 0 || viewport.width <= 0 || viewport.height <= 0) {
+      return null;
+    }
+    if (!raycasterRef.current) {
+      raycasterRef.current = new THREE.Raycaster();
+    }
+    const ndc = new THREE.Vector2(
+      ((sx / viewport.width) * 2) - 1,
+      1 - ((sy / viewport.height) * 2)
+    );
+    raycasterRef.current.setFromCamera(ndc, camera);
+    const hits = raycasterRef.current.intersectObjects(pickableWallMeshes, false);
+    if (!hits || hits.length === 0) return null;
+    const wallId = hits[0]?.object?.userData?.wallId;
+    if (!wallId) return null;
+    return walls.find((item) => item.id === wallId) || null;
+  }, [viewport.height, viewport.width, walls]);
+
   useEffect(() => {
     cameraAngleRef.current = cameraAngle;
   }, [cameraAngle]);
@@ -1061,9 +1135,66 @@ const BattlefieldPreviewModal = ({
     cameraYawRef.current = cameraYaw;
   }, [cameraYaw]);
 
+  useEffect(() => {
+    panWorldRef.current = {
+      x: Number(panWorld.x) || 0,
+      y: Number(panWorld.y) || 0
+    };
+  }, [panWorld.x, panWorld.y]);
+
+  useEffect(() => {
+    if (!open || !sceneCanvasRef.current) return undefined;
+    const canvas = sceneCanvasRef.current;
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance'
+    });
+    renderer.setPixelRatio(Math.min(2, (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1));
+    renderer.setSize(
+      Math.max(1, Math.floor(canvas.clientWidth || 1)),
+      Math.max(1, Math.floor(canvas.clientHeight || 1)),
+      false
+    );
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020617);
+
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 8000);
+    camera.up.set(0, 0, 1);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.72);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xe2e8f0, 0.74);
+    directionalLight.position.set(-420, -520, 860);
+    scene.add(directionalLight);
+
+    const worldGroup = new THREE.Group();
+    scene.add(worldGroup);
+
+    threeRef.current = {
+      renderer,
+      scene,
+      camera,
+      worldGroup
+    };
+
+    return () => {
+      clearThreeGroup(worldGroup);
+      renderer.dispose();
+      threeRef.current = null;
+    };
+  }, [open]);
+
   useEffect(() => () => {
     if (cameraAnimRef.current) cancelAnimationFrame(cameraAnimRef.current);
     if (zoomAnimRef.current) cancelAnimationFrame(zoomAnimRef.current);
+    if (threeRef.current) {
+      clearThreeGroup(threeRef.current.worldGroup);
+      threeRef.current.renderer?.dispose?.();
+      threeRef.current = null;
+    }
     panDragRef.current = null;
     rotateDragRef.current = null;
   }, []);
@@ -1483,7 +1614,8 @@ const BattlefieldPreviewModal = ({
     setCameraYaw(CAMERA_YAW_DEFAULT);
     zoomTargetRef.current = DEFAULT_ZOOM;
     setZoom(DEFAULT_ZOOM);
-    setPan({ x: 0, y: 0 });
+    panWorldRef.current = { x: 0, y: 0 };
+    setPanWorld({ x: 0, y: 0 });
     setIsPanning(false);
     setIsRotating(false);
     rotateDragRef.current = null;
@@ -1553,6 +1685,238 @@ const BattlefieldPreviewModal = ({
   }, [cacheNeedsSync, editMode, effectiveCanEdit, layoutReady, open, persistBattlefieldLayout, walls]);
 
   useEffect(() => {
+    if (!open || !threeRef.current) return;
+    const { renderer, scene, camera, worldGroup } = threeRef.current;
+    if (!renderer || !scene || !camera || !worldGroup) return;
+
+    renderer.setPixelRatio(Math.min(2, (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1));
+    renderer.setSize(Math.max(1, Math.floor(viewport.width)), Math.max(1, Math.floor(viewport.height)), false);
+
+    clearThreeGroup(worldGroup);
+
+    const fieldMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(fieldWidth, fieldHeight),
+      new THREE.MeshStandardMaterial({
+        color: 0x1f2937,
+        roughness: 0.9,
+        metalness: 0.04,
+        side: THREE.DoubleSide
+      })
+    );
+    fieldMesh.position.set(0, 0, 0);
+    worldGroup.add(fieldMesh);
+
+    const fieldTint = new THREE.Mesh(
+      new THREE.PlaneGeometry(fieldWidth * 0.98, fieldHeight * 0.98),
+      new THREE.MeshBasicMaterial({
+        color: 0x334155,
+        transparent: true,
+        opacity: 0.2,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    fieldTint.position.set(0, 0, 0.12);
+    worldGroup.add(fieldTint);
+
+    const deployZoneWidth = Math.max(10, fieldWidth * DEPLOY_ZONE_RATIO);
+    const deployZoneCenterOffset = (fieldWidth - deployZoneWidth) / 2;
+    const deployZoneZ = 0.16;
+    const friendlyZone = new THREE.Mesh(
+      new THREE.PlaneGeometry(deployZoneWidth, fieldHeight * 0.98),
+      new THREE.MeshBasicMaterial({
+        color: 0x60a5fa,
+        transparent: true,
+        opacity: 0.2,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    friendlyZone.position.set(deployZoneCenterOffset, 0, deployZoneZ);
+    worldGroup.add(friendlyZone);
+
+    const enemyZone = new THREE.Mesh(
+      new THREE.PlaneGeometry(deployZoneWidth, fieldHeight * 0.98),
+      new THREE.MeshBasicMaterial({
+        color: 0xf87171,
+        transparent: true,
+        opacity: 0.2,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    enemyZone.position.set(-deployZoneCenterOffset, 0, deployZoneZ);
+    worldGroup.add(enemyZone);
+
+    const borderGeometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-fieldWidth / 2, -fieldHeight / 2, 0.4),
+      new THREE.Vector3(fieldWidth / 2, -fieldHeight / 2, 0.4),
+      new THREE.Vector3(fieldWidth / 2, fieldHeight / 2, 0.4),
+      new THREE.Vector3(-fieldWidth / 2, fieldHeight / 2, 0.4)
+    ]);
+    const borderLine = new THREE.LineLoop(
+      borderGeometry,
+      new THREE.LineBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.72
+      })
+    );
+    worldGroup.add(borderLine);
+
+    const gridPoints = [];
+    const gridStep = 70;
+    for (let x = -fieldWidth / 2; x <= fieldWidth / 2; x += gridStep) {
+      gridPoints.push(new THREE.Vector3(x, -fieldHeight / 2, 0.2));
+      gridPoints.push(new THREE.Vector3(x, fieldHeight / 2, 0.2));
+    }
+    for (let y = -fieldHeight / 2; y <= fieldHeight / 2; y += gridStep) {
+      gridPoints.push(new THREE.Vector3(-fieldWidth / 2, y, 0.2));
+      gridPoints.push(new THREE.Vector3(fieldWidth / 2, y, 0.2));
+    }
+    const gridLines = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(gridPoints),
+      new THREE.LineBasicMaterial({
+        color: 0x64748b,
+        transparent: true,
+        opacity: 0.28
+      })
+    );
+    worldGroup.add(gridLines);
+
+    const pickableWallMeshes = [];
+    const buildWallMesh = (wallLike, options = {}) => {
+      const safeHeight = Math.max(14, Number(wallLike.height) || WALL_HEIGHT);
+      const baseZ = getWallBaseZ(wallLike);
+      const selected = !!options.selected;
+      const ghostMode = !!options.ghost;
+      const blocked = !!options.blocked;
+      const color = ghostMode
+        ? (blocked ? 0xb91c1c : 0xf59e0b)
+        : (selected ? 0x60a5fa : 0xc2783c);
+      const wallMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          Math.max(20, Number(wallLike.width) || WALL_WIDTH),
+          Math.max(12, Number(wallLike.depth) || WALL_DEPTH),
+          safeHeight
+        ),
+        new THREE.MeshStandardMaterial({
+          color,
+          transparent: ghostMode,
+          opacity: ghostMode ? 0.46 : 1,
+          roughness: ghostMode ? 0.5 : 0.82,
+          metalness: ghostMode ? 0.12 : 0.05,
+          side: THREE.DoubleSide,
+          depthWrite: true
+        })
+      );
+      wallMesh.position.set(
+        Number(wallLike.x) || 0,
+        Number(wallLike.y) || 0,
+        baseZ + (safeHeight / 2)
+      );
+      wallMesh.rotation.set(0, 0, degToRad(wallLike.rotation || 0));
+      worldGroup.add(wallMesh);
+      if (!ghostMode && typeof wallLike.id === 'string') {
+        wallMesh.userData.wallId = wallLike.id;
+        pickableWallMeshes.push(wallMesh);
+      }
+
+      const edgeMesh = new THREE.LineSegments(
+        new THREE.EdgesGeometry(wallMesh.geometry),
+        new THREE.LineBasicMaterial({
+          color: selected ? 0xbfdbfe : 0x0f172a,
+          transparent: true,
+          opacity: selected ? 0.96 : 0.68
+        })
+      );
+      edgeMesh.position.copy(wallMesh.position);
+      edgeMesh.rotation.copy(wallMesh.rotation);
+      worldGroup.add(edgeMesh);
+    };
+
+    walls.forEach((wall) => {
+      const isSelected = editMode && effectiveCanEdit && !ghost && selectedWallId && wall.id === selectedWallId;
+      buildWallMesh(wall, { selected: isSelected });
+    });
+
+    if (ghost) {
+      buildWallMesh(ghost, { ghost: true, blocked: ghostBlocked });
+    }
+    if (threeRef.current) {
+      threeRef.current.pickableWallMeshes = pickableWallMeshes;
+    }
+
+    if (snapState?.anchorId) {
+      const anchor = walls.find((item) => item.id === snapState.anchorId);
+      if (anchor) {
+        const topHighlight = new THREE.Mesh(
+          new THREE.PlaneGeometry(anchor.width, anchor.depth),
+          new THREE.MeshBasicMaterial({
+            color: 0x38bdf8,
+            transparent: true,
+            opacity: 0.12,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          })
+        );
+        topHighlight.position.set(anchor.x, anchor.y, getWallTopZ(anchor) + 0.8);
+        topHighlight.rotation.set(0, 0, degToRad(anchor.rotation || 0));
+        worldGroup.add(topHighlight);
+      }
+    }
+
+    const safeScale = Math.max(0.0001, worldScale || 1);
+    const halfW = Math.max(1, viewport.width / (2 * safeScale));
+    const halfH = Math.max(1, viewport.height / (2 * safeScale));
+    camera.left = -halfW;
+    camera.right = halfW;
+    camera.top = halfH;
+    camera.bottom = -halfH;
+
+    const target = new THREE.Vector3(
+      Number(panWorld.x) || 0,
+      Number(panWorld.y) || 0,
+      0
+    );
+    const yawRad = degToRad(cameraYaw);
+    const tiltRad = degToRad(cameraAngle);
+    const distance = Math.max(fieldWidth, fieldHeight, 500) * 2.4;
+    const planarDistance = distance * Math.cos(tiltRad);
+    const heightDistance = distance * Math.sin(tiltRad);
+    camera.position.set(
+      target.x - (Math.sin(yawRad) * planarDistance),
+      target.y - (Math.cos(yawRad) * planarDistance),
+      target.z + heightDistance
+    );
+    camera.up.set(0, 0, 1);
+    camera.lookAt(target);
+    camera.near = 1;
+    camera.far = Math.max(12000, distance * 5);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+
+    renderer.render(scene, camera);
+  }, [
+    open,
+    walls,
+    ghost,
+    ghostBlocked,
+    snapState?.anchorId,
+    viewport,
+    cameraAngle,
+    cameraYaw,
+    worldScale,
+    fieldHeight,
+    fieldWidth,
+    editMode,
+    effectiveCanEdit,
+    selectedWallId,
+    panWorld.x,
+    panWorld.y
+  ]);
+
+  useEffect(() => {
     if (!open || !canvasRef.current) return;
     const canvas = canvasRef.current;
     canvas.width = Math.max(1, Math.floor(viewport.width));
@@ -1580,130 +1944,32 @@ const BattlefieldPreviewModal = ({
       }
     };
 
-    const shade = (base, light, alpha = 1) => {
-      const intensity = Math.max(0.48, Math.min(1.08, 0.62 + (0.38 * light)));
-      const r = Math.max(0, Math.min(255, Math.round(base[0] * intensity)));
-      const g = Math.max(0, Math.min(255, Math.round(base[1] * intensity)));
-      const b = Math.max(0, Math.min(255, Math.round(base[2] * intensity)));
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    const projectOverlayPoint = (x, y, z = 0) => {
+      const camera = threeRef.current?.camera;
+      if (camera) {
+        const p = new THREE.Vector3(x, y, z).project(camera);
+        return {
+          x: ((p.x + 1) * 0.5) * canvas.width,
+          y: ((1 - p.y) * 0.5) * canvas.height,
+          depth: p.z
+        };
+      }
+      return projectWorld(x, y, z, viewport, cameraAngle, cameraYaw, worldScale);
     };
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = 'rgba(2, 6, 23, 0.76)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const fieldCorners = [
-      { x: -fieldWidth / 2, y: -fieldHeight / 2 },
-      { x: fieldWidth / 2, y: -fieldHeight / 2 },
-      { x: fieldWidth / 2, y: fieldHeight / 2 },
-      { x: -fieldWidth / 2, y: fieldHeight / 2 }
-    ].map((item) => projectWorld(item.x, item.y, 0, viewport, cameraAngle, cameraYaw, worldScale));
-
-    drawPolygon(
-      fieldCorners,
-      'rgba(15, 23, 42, 0.9)',
-      'rgba(56, 189, 248, 0.35)'
-    );
-
-    const gridStep = 70;
-    ctx.strokeStyle = 'rgba(100, 116, 139, 0.22)';
-    ctx.lineWidth = 1;
-    for (let x = -fieldWidth / 2; x <= fieldWidth / 2; x += gridStep) {
-      const p1 = projectWorld(x, -fieldHeight / 2, 0, viewport, cameraAngle, cameraYaw, worldScale);
-      const p2 = projectWorld(x, fieldHeight / 2, 0, viewport, cameraAngle, cameraYaw, worldScale);
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-      ctx.stroke();
-    }
-    for (let y = -fieldHeight / 2; y <= fieldHeight / 2; y += gridStep) {
-      const p1 = projectWorld(-fieldWidth / 2, y, 0, viewport, cameraAngle, cameraYaw, worldScale);
-      const p2 = projectWorld(fieldWidth / 2, y, 0, viewport, cameraAngle, cameraYaw, worldScale);
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-      ctx.stroke();
-    }
-
-    const lightDir = { x: -0.35, y: -0.45, z: 0.82 };
-    const normalLen = Math.hypot(lightDir.x, lightDir.y, lightDir.z) || 1;
-    lightDir.x /= normalLen;
-    lightDir.y /= normalLen;
-    lightDir.z /= normalLen;
-
-    const buildWallFaces = (wall, options = {}) => {
-      const baseZ = getWallBaseZ(wall);
-      const topZ = getWallTopZ(wall);
-      const hw = wall.width / 2;
-      const hd = wall.depth / 2;
-      const widthAxis = rotate2D(1, 0, wall.rotation);
-      const depthAxis = rotate2D(0, 1, wall.rotation);
-      const cornerSigns = [
-        { u: -1, v: -1 },
-        { u: 1, v: -1 },
-        { u: 1, v: 1 },
-        { u: -1, v: 1 }
-      ];
-      const base = cornerSigns.map((sign) => ({
-        x: wall.x + (widthAxis.x * hw * sign.u) + (depthAxis.x * hd * sign.v),
-        y: wall.y + (widthAxis.y * hw * sign.u) + (depthAxis.y * hd * sign.v),
-        z: baseZ
-      }));
-      const top = base.map((point) => ({ ...point, z: topZ }));
-      const faces = [
-        { points: [top[0], top[1], top[2], top[3]], normal: { x: 0, y: 0, z: 1 }, key: 'top' },
-        { points: [base[0], base[1], top[1], top[0]], normal: { x: -depthAxis.x, y: -depthAxis.y, z: 0 }, key: 'side-a' },
-        { points: [base[1], base[2], top[2], top[1]], normal: { x: widthAxis.x, y: widthAxis.y, z: 0 }, key: 'side-b' },
-        { points: [base[2], base[3], top[3], top[2]], normal: { x: depthAxis.x, y: depthAxis.y, z: 0 }, key: 'side-c' },
-        { points: [base[3], base[0], top[0], top[3]], normal: { x: -widthAxis.x, y: -widthAxis.y, z: 0 }, key: 'side-d' }
-      ];
-      const palette = options.ghost
-        ? (options.blocked
-          ? { top: [220, 38, 38], side: [185, 28, 28], alpha: 0.42 }
-          : { top: [245, 158, 11], side: [217, 119, 6], alpha: 0.38 })
-        : options.selected
-          ? { top: [191, 219, 254], side: [96, 165, 250], alpha: 0.94 }
-        : { top: [194, 120, 60], side: [120, 74, 35], alpha: 0.94 };
-      return faces.map((face) => {
-        const projected = face.points.map((p) => projectWorld(p.x, p.y, p.z, viewport, cameraAngle, cameraYaw, worldScale));
-        const depth = projected.reduce((sum, p) => sum + p.depth, 0) / projected.length;
-        const light = Math.max(0, (face.normal.x * lightDir.x) + (face.normal.y * lightDir.y) + (face.normal.z * lightDir.z));
-        const baseColor = face.key === 'top' ? palette.top : palette.side;
-        return {
-          projected,
-          depth,
-          fill: shade(baseColor, light, palette.alpha),
-          stroke: options.ghost
-            ? (options.blocked ? 'rgba(252, 165, 165, 0.82)' : 'rgba(251, 191, 36, 0.82)')
-            : (options.selected ? 'rgba(191, 219, 254, 0.98)' : 'rgba(15, 23, 42, 0.55)')
-        };
-      });
-    };
-
-    const surfaces = [];
-    walls.forEach((wall) => {
-      const isWallSelected = editMode && effectiveCanEdit && !ghost && selectedWallId && wall.id === selectedWallId;
-      surfaces.push(...buildWallFaces(wall, { selected: isWallSelected }));
-    });
-    if (ghost) {
-      surfaces.push(...buildWallFaces(ghost, { ghost: true, blocked: ghostBlocked }));
-    }
-    surfaces.sort((a, b) => a.depth - b.depth);
-    surfaces.forEach((face) => {
-      drawPolygon(face.projected, face.fill, face.stroke);
-    });
 
     if (snapState?.anchorId) {
       const anchor = walls.find((item) => item.id === snapState.anchorId);
       if (anchor) {
         const topCorners = getRectCorners(anchor.x, anchor.y, anchor.width, anchor.depth, anchor.rotation)
-          .map((point) => projectWorld(point.x, point.y, getWallTopZ(anchor), viewport, cameraAngle, cameraYaw, worldScale));
+          .map((point) => projectOverlayPoint(point.x, point.y, getWallTopZ(anchor)));
         drawPolygon(topCorners, 'rgba(56, 189, 248, 0.08)', 'rgba(56, 189, 248, 0.82)');
       }
     }
 
     wallGroups.forEach((group) => {
-      const pos = projectWorld(group.center.x, group.center.y, group.center.z, viewport, cameraAngle, cameraYaw, worldScale);
+      const pos = projectOverlayPoint(group.center.x, group.center.y, group.center.z);
       const label = `${group.hp} / ${group.defense}`;
       ctx.font = '12px sans-serif';
       const textWidth = ctx.measureText(label).width;
@@ -1747,14 +2013,10 @@ const BattlefieldPreviewModal = ({
     if (editMode && effectiveCanEdit && !ghost && selectedWallId) {
       const selectedWall = walls.find((item) => item.id === selectedWallId);
       if (selectedWall) {
-        const anchor = projectWorld(
+        const anchor = projectOverlayPoint(
           selectedWall.x,
           selectedWall.y,
-          getWallTopZ(selectedWall) + (WALL_HEIGHT * 0.45),
-          viewport,
-          cameraAngle,
-          cameraYaw,
-          worldScale
+          getWallTopZ(selectedWall) + (WALL_HEIGHT * 0.45)
         );
         const centerY = anchor.y - WALL_ACTION_ICON_RISE;
         const buttons = [
@@ -1807,7 +2069,7 @@ const BattlefieldPreviewModal = ({
       ctx.fillStyle = '#fecaca';
       ctx.fillText(text, 21, y + 14);
     }
-  }, [open, walls, ghost, ghostBlocked, snapState, viewport, cameraAngle, cameraYaw, wallGroups, worldScale, fieldHeight, fieldWidth, invalidReason, editMode, effectiveCanEdit, selectedWallId]);
+  }, [open, walls, ghost, ghostBlocked, snapState, viewport, cameraAngle, cameraYaw, wallGroups, worldScale, fieldHeight, fieldWidth, invalidReason, editMode, effectiveCanEdit, selectedWallId, panWorld.x, panWorld.y]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1839,12 +2101,24 @@ const BattlefieldPreviewModal = ({
     };
   }, [cancelGhostPlacement, ghost, open]);
 
-  const startPanDrag = (event, buttonMask = 1) => {
+  const getPanDeltaFromScreenPoints = useCallback((from, to) => {
+    const start = getWorldFromScreenPoint(from.x, from.y);
+    const current = getWorldFromScreenPoint(to.x, to.y);
+    return {
+      x: (Number(start.x) || 0) - (Number(current.x) || 0),
+      y: (Number(start.y) || 0) - (Number(current.y) || 0)
+    };
+  }, [getWorldFromScreenPoint]);
+
+  const startPanDrag = (event, startScreen, buttonMask = 1) => {
+    if (!startScreen) return;
+    event.preventDefault();
+    const pan = panWorldRef.current;
     panDragRef.current = {
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: pan.x,
-      originY: pan.y,
+      startScreenX: Number(startScreen.x) || 0,
+      startScreenY: Number(startScreen.y) || 0,
+      startPanX: Number(pan.x) || 0,
+      startPanY: Number(pan.y) || 0,
       buttonMask
     };
     setIsPanning(true);
@@ -1872,7 +2146,7 @@ const BattlefieldPreviewModal = ({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     };
-    const world = unprojectScreen(point.x, point.y, viewport, cameraAngle, cameraYaw, worldScale);
+    const world = getWorldFromScreenPoint(point.x, point.y);
     mouseWorldRef.current = world;
 
     if (event.button === 2) {
@@ -1888,15 +2162,14 @@ const BattlefieldPreviewModal = ({
     }
 
     if (event.button === 1) {
-      event.preventDefault();
-      startPanDrag(event, 4);
+      startPanDrag(event, point, 4);
       return;
     }
 
     if (event.button !== 0) return;
 
     if (spacePressedRef.current) {
-      startPanDrag(event, 1);
+      startPanDrag(event, point, 1);
       return;
     }
 
@@ -1947,14 +2220,19 @@ const BattlefieldPreviewModal = ({
         }
         return;
       }
-      const pickedWall = findTopWallByScreenPoint({
-        screenPoint: point,
-        walls,
-        viewport,
-        cameraAngle,
-        cameraYaw,
-        worldScale
-      }) || findTopWallAtPoint(world, walls);
+      const hasThreeCamera = !!threeRef.current?.camera;
+      const pickedWall = pickWallFromScreenPoint(point.x, point.y)
+        || (!hasThreeCamera
+          ? findTopWallByScreenPoint({
+            screenPoint: point,
+            walls,
+            viewport,
+            cameraAngle,
+            cameraYaw,
+            worldScale
+          })
+          : null)
+        || findTopWallAtPoint(world, walls);
       if (pickedWall) {
         setSelectedWallId(pickedWall.id);
         cancelGhostPlacement('');
@@ -1966,7 +2244,7 @@ const BattlefieldPreviewModal = ({
       }
     }
 
-    startPanDrag(event, 1);
+    startPanDrag(event, point, 1);
   };
 
   const handleMouseMove = (event) => {
@@ -1979,7 +2257,7 @@ const BattlefieldPreviewModal = ({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     };
-    const world = unprojectScreen(point.x, point.y, viewport, cameraAngle, cameraYaw, worldScale);
+    const world = getWorldFromScreenPoint(point.x, point.y);
     mouseWorldRef.current = world;
 
     if (ghost) {
@@ -2017,12 +2295,23 @@ const BattlefieldPreviewModal = ({
         clearPanDragging();
         return;
       }
-      const dx = event.clientX - drag.startX;
-      const dy = event.clientY - drag.startY;
-      setPan({
-        x: drag.originX + dx,
-        y: drag.originY + dy
-      });
+      const canvas = canvasRef.current;
+      const rect = canvas?.getBoundingClientRect();
+      if (!rect) return;
+      const sx = event.clientX - rect.left;
+      const sy = event.clientY - rect.top;
+      const world = getWorldFromScreenPoint(sx, sy);
+      mouseWorldRef.current = world;
+      const delta = getPanDeltaFromScreenPoints(
+        { x: drag.startScreenX, y: drag.startScreenY },
+        { x: sx, y: sy }
+      );
+      const nextPan = {
+        x: drag.startPanX + delta.x,
+        y: drag.startPanY + delta.y
+      };
+      panWorldRef.current = nextPan;
+      setPanWorld(nextPan);
     };
     const handleWindowMouseUp = () => {
       const rotateDrag = rotateDragRef.current;
@@ -2045,7 +2334,7 @@ const BattlefieldPreviewModal = ({
       window.removeEventListener('mouseup', handleWindowMouseUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [cancelGhostPlacement, clearPanDragging, clearRotateDragging, ghost, open]);
+  }, [cancelGhostPlacement, clearPanDragging, clearRotateDragging, getPanDeltaFromScreenPoints, getWorldFromScreenPoint, ghost, open]);
 
   const handleWheel = (event) => {
     event.preventDefault();
@@ -2174,8 +2463,12 @@ const BattlefieldPreviewModal = ({
 
           <div className="battlefield-canvas-wrap" ref={wrapperRef}>
             <canvas
+              ref={sceneCanvasRef}
+              className="battlefield-scene-canvas"
+            />
+            <canvas
               ref={canvasRef}
-              className={`battlefield-canvas ${isPanning ? 'is-panning' : ''} ${isRotating ? 'is-rotating' : ''}`}
+              className={`battlefield-canvas battlefield-overlay-canvas ${isPanning ? 'is-panning' : ''} ${isRotating ? 'is-rotating' : ''}`}
               onPointerDown={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
               onMouseDown={handleMouseDown}
