@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './BattlefieldPreviewModal.css';
 
 const CAMERA_ANGLE_PREVIEW = 45;
-const CAMERA_ANGLE_EDIT = 75;
-const CAMERA_YAW_DEFAULT = 45;
+const CAMERA_ANGLE_EDIT = 45;
+const CAMERA_YAW_DEFAULT = 0;
 const CAMERA_TWEEN_MS = 260;
 const CAMERA_ROTATE_SENSITIVITY = 0.38;
 const CAMERA_ROTATE_CLICK_THRESHOLD = 4;
@@ -22,6 +22,12 @@ const MAX_ZOOM = 1.5;
 const DEFAULT_ZOOM = 1;
 const ZOOM_STEP = 0.08;
 const BASELINE_FIELD_COVERAGE = 0.85;
+const DEFAULT_VIEWPORT_WIDTH = 920;
+const DEFAULT_VIEWPORT_HEIGHT = 620;
+const WALL_ACTION_ICON_RADIUS = 12;
+const WALL_ACTION_ICON_GAP = 34;
+const WALL_ACTION_ICON_RISE = 32;
+const SCREEN_HIT_TOLERANCE_PX = 4;
 const API_BASE = 'http://localhost:5000';
 const TOTAL_WOOD_WALL_STOCK = 10;
 const SNAP_EPSILON = 1.2;
@@ -184,6 +190,10 @@ const sanitizeWalls = (rawWalls = []) => {
   });
   return out;
 };
+
+const cloneWalls = (sourceWalls = []) => (
+  sanitizeWalls(sourceWalls).map((item) => ({ ...item }))
+);
 
 const parseApiResponse = async (response) => {
   const raw = await response.text();
@@ -729,6 +739,97 @@ const findTopWallAtPoint = (worldPoint, walls = []) => {
   return matches[0] || null;
 };
 
+const pointToSegmentDistance2D = (point, a, b) => {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = (dx * dx) + (dy * dy);
+  if (lenSq <= 1e-9) return Math.hypot(point.x - a.x, point.y - a.y);
+  const t = Math.max(0, Math.min(1, (((point.x - a.x) * dx) + ((point.y - a.y) * dy)) / lenSq));
+  const px = a.x + (dx * t);
+  const py = a.y + (dy * t);
+  return Math.hypot(point.x - px, point.y - py);
+};
+
+const pointInScreenPolygon = (point, polygon = [], edgeTolerancePx = SCREEN_HIT_TOLERANCE_PX) => {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    if (pointToSegmentDistance2D(point, a, b) <= edgeTolerancePx) return true;
+  }
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const xi = polygon[i].x;
+    const yi = polygon[i].y;
+    const xj = polygon[j].x;
+    const yj = polygon[j].y;
+    const intersects = ((yi > point.y) !== (yj > point.y))
+      && (point.x < (((xj - xi) * (point.y - yi)) / ((yj - yi) || 1e-9)) + xi);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+};
+
+const buildWallFacePoints = (wall) => {
+  const baseZ = getWallBaseZ(wall);
+  const topZ = getWallTopZ(wall);
+  const hw = wall.width / 2;
+  const hd = wall.depth / 2;
+  const widthAxis = rotate2D(1, 0, wall.rotation);
+  const depthAxis = rotate2D(0, 1, wall.rotation);
+  const cornerSigns = [
+    { u: -1, v: -1 },
+    { u: 1, v: -1 },
+    { u: 1, v: 1 },
+    { u: -1, v: 1 }
+  ];
+  const base = cornerSigns.map((sign) => ({
+    x: wall.x + (widthAxis.x * hw * sign.u) + (depthAxis.x * hd * sign.v),
+    y: wall.y + (widthAxis.y * hw * sign.u) + (depthAxis.y * hd * sign.v),
+    z: baseZ
+  }));
+  const top = base.map((point) => ({ ...point, z: topZ }));
+  return [
+    [top[0], top[1], top[2], top[3]],
+    [base[0], base[1], top[1], top[0]],
+    [base[1], base[2], top[2], top[1]],
+    [base[2], base[3], top[3], top[2]],
+    [base[3], base[0], top[0], top[3]]
+  ];
+};
+
+const findTopWallByScreenPoint = ({
+  screenPoint,
+  walls = [],
+  viewport,
+  cameraAngle,
+  cameraYaw,
+  worldScale
+}) => {
+  if (!screenPoint || !Array.isArray(walls) || walls.length === 0) return null;
+  let best = null;
+  walls.forEach((wall) => {
+    const faces = buildWallFacePoints(wall);
+    faces.forEach((face) => {
+      const projected = face.map((p) => projectWorld(
+        p.x,
+        p.y,
+        p.z,
+        viewport,
+        cameraAngle,
+        cameraYaw,
+        worldScale
+      ));
+      if (!pointInScreenPolygon(screenPoint, projected)) return;
+      const depth = projected.reduce((sum, p) => sum + p.depth, 0) / projected.length;
+      if (!best || depth > best.depth || (Math.abs(depth - best.depth) <= 1e-6 && wall.z > best.wall.z)) {
+        best = { wall, depth };
+      }
+    });
+  });
+  return best?.wall || null;
+};
+
 const isPhysicallyConnected = (a, b) => {
   const za = Math.max(0, Math.floor(Number(a?.z) || 0));
   const zb = Math.max(0, Math.floor(Number(b?.z) || 0));
@@ -821,8 +922,9 @@ const BattlefieldPreviewModal = ({
   const wrapperRef = useRef(null);
   const panDragRef = useRef(null);
   const rotateDragRef = useRef(null);
+  const wallActionButtonsRef = useRef([]);
   const mouseWorldRef = useRef({ x: 0, y: 0 });
-  const pendingPersistRef = useRef(false);
+  const editSessionWallsRef = useRef(null);
   const pendingCacheSyncRef = useRef(null);
   const cameraAnimRef = useRef(null);
   const cameraAngleRef = useRef(CAMERA_ANGLE_PREVIEW);
@@ -836,6 +938,11 @@ const BattlefieldPreviewModal = ({
   const [cameraYaw, setCameraYaw] = useState(CAMERA_YAW_DEFAULT);
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [viewportSize, setViewportSize] = useState({
+    width: DEFAULT_VIEWPORT_WIDTH,
+    height: DEFAULT_VIEWPORT_HEIGHT
+  });
+  const [hasDraftChanges, setHasDraftChanges] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
   const [ghost, setGhost] = useState(null);
@@ -851,6 +958,7 @@ const BattlefieldPreviewModal = ({
   const [message, setMessage] = useState('');
   const [selectedPaletteItem, setSelectedPaletteItem] = useState('');
   const [itemCatalog, setItemCatalog] = useState(normalizeItemCatalog([]));
+  const [selectedWallId, setSelectedWallId] = useState('');
   const [activeLayoutMeta, setActiveLayoutMeta] = useState({
     layoutId: '',
     name: '',
@@ -875,10 +983,46 @@ const BattlefieldPreviewModal = ({
     [activeLayoutMeta?.fieldHeight]
   );
 
+  const syncViewportSize = useCallback(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const rect = wrapper.getBoundingClientRect();
+    const width = Math.max(1, Math.floor(rect?.width || DEFAULT_VIEWPORT_WIDTH));
+    const height = Math.max(1, Math.floor(rect?.height || DEFAULT_VIEWPORT_HEIGHT));
+    setViewportSize((prev) => (
+      prev.width === width && prev.height === height
+        ? prev
+        : { width, height }
+    ));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    syncViewportSize();
+  }, [open, syncViewportSize]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    let resizeObserver = null;
+    const rafId = requestAnimationFrame(syncViewportSize);
+    const wrapper = wrapperRef.current;
+    if (typeof ResizeObserver !== 'undefined' && wrapper) {
+      resizeObserver = new ResizeObserver(() => {
+        syncViewportSize();
+      });
+      resizeObserver.observe(wrapper);
+    }
+    window.addEventListener('resize', syncViewportSize);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', syncViewportSize);
+      if (resizeObserver) resizeObserver.disconnect();
+    };
+  }, [open, syncViewportSize]);
+
   const viewport = useMemo(() => {
-    const rect = wrapperRef.current?.getBoundingClientRect();
-    const width = rect?.width || 920;
-    const height = rect?.height || 620;
+    const width = viewportSize.width;
+    const height = viewportSize.height;
     return {
       width,
       height,
@@ -887,7 +1031,7 @@ const BattlefieldPreviewModal = ({
       panX: pan.x,
       panY: pan.y
     };
-  }, [pan.x, pan.y]);
+  }, [pan.x, pan.y, viewportSize.height, viewportSize.width]);
 
   const wallGroups = useMemo(() => getWallGroupMetrics(walls), [walls]);
   const maxItemsPerType = Math.max(
@@ -1025,6 +1169,7 @@ const BattlefieldPreviewModal = ({
       rotation: 0
     });
     const evaluated = evaluateGhostPlacement(nextGhost, walls, mouseWorldRef.current, fieldWidth, fieldHeight);
+    setSelectedWallId('');
     setSelectedPaletteItem(itemType);
     setGhost({
       ...evaluated.ghost,
@@ -1035,6 +1180,32 @@ const BattlefieldPreviewModal = ({
     setInvalidReason(evaluated.reason || '');
     setMessage('已选中木墙：左键放置，右键或 ESC 取消，滚轮旋转，Space+左键平移');
   }, [effectiveCanEdit, editMode, wallStockRemaining, itemCatalog, woodWallItem, walls, fieldWidth, fieldHeight]);
+
+  const startMoveWall = useCallback((wallLike) => {
+    if (!wallLike) return;
+    const movingGhostSeed = {
+      ...createWallFromLike(wallLike, { id: wallLike.id }),
+      _mode: 'move',
+      _sourceId: wallLike.id
+    };
+    const evaluated = evaluateGhostPlacement(movingGhostSeed, walls, mouseWorldRef.current, fieldWidth, fieldHeight);
+    setGhost({ ...evaluated.ghost, _mode: 'move', _sourceId: wallLike.id });
+    setGhostBlocked(evaluated.blocked);
+    setSnapState(evaluated.snap);
+    setInvalidReason(evaluated.reason || '');
+    setSelectedWallId('');
+    setSelectedPaletteItem(wallLike.itemType || 'wood_wall');
+    setMessage('移动模式：左键确认位置，右键或 ESC 取消');
+  }, [fieldHeight, fieldWidth, walls]);
+
+  const recycleWallToPalette = useCallback((wallId) => {
+    if (!wallId) return;
+    setWalls((prev) => prev.filter((item) => item.id !== wallId));
+    setHasDraftChanges(true);
+    setSelectedWallId('');
+    cancelGhostPlacement('');
+    setMessage('木墙已回收到物品栏');
+  }, [cancelGhostPlacement]);
 
   const persistBattlefieldLayout = useCallback(async (nextWalls = [], options = {}) => {
     if (!open || !nodeId) return { ok: false };
@@ -1117,6 +1288,51 @@ const BattlefieldPreviewModal = ({
       if (!silent) setSavingLayout(false);
     }
   }, [activeLayoutMeta, effectiveCanEdit, gateKey, itemCatalog, nodeId, open]);
+
+  const startLayoutEditing = useCallback(() => {
+    if (!effectiveCanEdit) return;
+    editSessionWallsRef.current = cloneWalls(walls);
+    setHasDraftChanges(false);
+    setEditMode(true);
+    setSelectedWallId('');
+    animateCameraAngle(CAMERA_ANGLE_EDIT);
+    cancelGhostPlacement('');
+    setMessage('布置模式已开启：完成后请点击“保存布置”');
+  }, [animateCameraAngle, cancelGhostPlacement, effectiveCanEdit, walls]);
+
+  const cancelLayoutEditing = useCallback(() => {
+    const snapshotWalls = editSessionWallsRef.current;
+    if (Array.isArray(snapshotWalls)) {
+      setWalls(cloneWalls(snapshotWalls));
+    }
+    editSessionWallsRef.current = null;
+    setHasDraftChanges(false);
+    setEditMode(false);
+    setSelectedWallId('');
+    animateCameraAngle(CAMERA_ANGLE_PREVIEW);
+    cancelGhostPlacement('');
+    setMessage('已取消布置，已恢复到上一次战场布置状态');
+  }, [animateCameraAngle, cancelGhostPlacement]);
+
+  const saveLayoutEditing = useCallback(async () => {
+    if (!effectiveCanEdit) return;
+    cancelGhostPlacement('');
+    if (!hasDraftChanges) {
+      editSessionWallsRef.current = null;
+      setEditMode(false);
+      setSelectedWallId('');
+      animateCameraAngle(CAMERA_ANGLE_PREVIEW);
+      setMessage('布置内容无变化');
+      return;
+    }
+    const result = await persistBattlefieldLayout(walls, { silent: false });
+    if (!result?.ok) return;
+    editSessionWallsRef.current = null;
+    setHasDraftChanges(false);
+    setEditMode(false);
+    setSelectedWallId('');
+    animateCameraAngle(CAMERA_ANGLE_PREVIEW);
+  }, [animateCameraAngle, cancelGhostPlacement, effectiveCanEdit, hasDraftChanges, persistBattlefieldLayout, walls]);
 
   useEffect(() => {
     if (!open || !nodeId) return;
@@ -1253,8 +1469,9 @@ const BattlefieldPreviewModal = ({
       }
     };
 
-    pendingPersistRef.current = false;
+    editSessionWallsRef.current = null;
     pendingCacheSyncRef.current = null;
+    setHasDraftChanges(false);
     setEditMode(false);
     if (cameraAnimRef.current) cancelAnimationFrame(cameraAnimRef.current);
     if (zoomAnimRef.current) cancelAnimationFrame(zoomAnimRef.current);
@@ -1276,6 +1493,7 @@ const BattlefieldPreviewModal = ({
     setSnapState(null);
     setInvalidReason('');
     setSelectedPaletteItem('');
+    setSelectedWallId('');
     setMessage('');
     loadLayout();
 
@@ -1283,12 +1501,6 @@ const BattlefieldPreviewModal = ({
       cancelled = true;
     };
   }, [canEdit, defaultLayoutMeta, gateKey, open, nodeId]);
-
-  useEffect(() => {
-    if (!open || !layoutReady || !pendingPersistRef.current) return;
-    pendingPersistRef.current = false;
-    persistBattlefieldLayout(walls, { silent: false });
-  }, [layoutReady, open, persistBattlefieldLayout, walls]);
 
   useEffect(() => {
     if (!open || !layoutReady || !pendingCacheSyncRef.current) return;
@@ -1307,7 +1519,14 @@ const BattlefieldPreviewModal = ({
   }, [effectiveCanEdit, layoutReady, open, persistBattlefieldLayout]);
 
   useEffect(() => {
+    if (!selectedWallId) return;
+    const exists = walls.some((item) => item.id === selectedWallId);
+    if (!exists) setSelectedWallId('');
+  }, [selectedWallId, walls]);
+
+  useEffect(() => {
     if (!open || !layoutReady || !cacheNeedsSync || !effectiveCanEdit) return undefined;
+    if (editMode) return undefined;
     let syncing = false;
     const trySync = async () => {
       if (syncing) return;
@@ -1331,18 +1550,16 @@ const BattlefieldPreviewModal = ({
     return () => {
       window.removeEventListener('online', handleOnline);
     };
-  }, [cacheNeedsSync, effectiveCanEdit, layoutReady, open, persistBattlefieldLayout, walls]);
+  }, [cacheNeedsSync, editMode, effectiveCanEdit, layoutReady, open, persistBattlefieldLayout, walls]);
 
   useEffect(() => {
     if (!open || !canvasRef.current) return;
     const canvas = canvasRef.current;
-    const wrapper = wrapperRef.current;
-    if (!wrapper) return;
-    const rect = wrapper.getBoundingClientRect();
-    canvas.width = Math.max(1, Math.floor(rect.width));
-    canvas.height = Math.max(1, Math.floor(rect.height));
+    canvas.width = Math.max(1, Math.floor(viewport.width));
+    canvas.height = Math.max(1, Math.floor(viewport.height));
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    wallActionButtonsRef.current = [];
 
     const drawPolygon = (points, fill, stroke) => {
       if (!points || points.length === 0) return;
@@ -1444,6 +1661,8 @@ const BattlefieldPreviewModal = ({
         ? (options.blocked
           ? { top: [220, 38, 38], side: [185, 28, 28], alpha: 0.42 }
           : { top: [245, 158, 11], side: [217, 119, 6], alpha: 0.38 })
+        : options.selected
+          ? { top: [191, 219, 254], side: [96, 165, 250], alpha: 0.94 }
         : { top: [194, 120, 60], side: [120, 74, 35], alpha: 0.94 };
       return faces.map((face) => {
         const projected = face.points.map((p) => projectWorld(p.x, p.y, p.z, viewport, cameraAngle, cameraYaw, worldScale));
@@ -1454,14 +1673,17 @@ const BattlefieldPreviewModal = ({
           projected,
           depth,
           fill: shade(baseColor, light, palette.alpha),
-          stroke: options.ghost ? (options.blocked ? 'rgba(252, 165, 165, 0.82)' : 'rgba(251, 191, 36, 0.82)') : 'rgba(15, 23, 42, 0.55)'
+          stroke: options.ghost
+            ? (options.blocked ? 'rgba(252, 165, 165, 0.82)' : 'rgba(251, 191, 36, 0.82)')
+            : (options.selected ? 'rgba(191, 219, 254, 0.98)' : 'rgba(15, 23, 42, 0.55)')
         };
       });
     };
 
     const surfaces = [];
     walls.forEach((wall) => {
-      surfaces.push(...buildWallFaces(wall));
+      const isWallSelected = editMode && effectiveCanEdit && !ghost && selectedWallId && wall.id === selectedWallId;
+      surfaces.push(...buildWallFaces(wall, { selected: isWallSelected }));
     });
     if (ghost) {
       surfaces.push(...buildWallFaces(ghost, { ghost: true, blocked: ghostBlocked }));
@@ -1505,6 +1727,65 @@ const BattlefieldPreviewModal = ({
       ctx.fillText(label, pos.x - textWidth / 2, pos.y - 2);
     });
 
+    const drawActionButton = (button) => {
+      ctx.beginPath();
+      ctx.arc(button.cx, button.cy, button.radius, 0, Math.PI * 2);
+      ctx.fillStyle = button.type === 'move' ? 'rgba(30, 64, 175, 0.92)' : 'rgba(153, 27, 27, 0.92)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(226, 232, 240, 0.85)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillStyle = '#f8fafc';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(button.type === 'move' ? '✥' : '✕', button.cx, button.cy + 0.5);
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+    };
+
+    if (editMode && effectiveCanEdit && !ghost && selectedWallId) {
+      const selectedWall = walls.find((item) => item.id === selectedWallId);
+      if (selectedWall) {
+        const anchor = projectWorld(
+          selectedWall.x,
+          selectedWall.y,
+          getWallTopZ(selectedWall) + (WALL_HEIGHT * 0.45),
+          viewport,
+          cameraAngle,
+          cameraYaw,
+          worldScale
+        );
+        const centerY = anchor.y - WALL_ACTION_ICON_RISE;
+        const buttons = [
+          {
+            type: 'move',
+            wallId: selectedWall.id,
+            cx: anchor.x - (WALL_ACTION_ICON_GAP / 2),
+            cy: centerY,
+            radius: WALL_ACTION_ICON_RADIUS
+          },
+          {
+            type: 'remove',
+            wallId: selectedWall.id,
+            cx: anchor.x + (WALL_ACTION_ICON_GAP / 2),
+            cy: centerY,
+            radius: WALL_ACTION_ICON_RADIUS
+          }
+        ];
+        wallActionButtonsRef.current = buttons;
+
+        ctx.beginPath();
+        ctx.moveTo(anchor.x, anchor.y - 4);
+        ctx.lineTo(anchor.x, centerY + WALL_ACTION_ICON_RADIUS + 4);
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.75)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        buttons.forEach(drawActionButton);
+      }
+    }
+
     if (snapState?.type) {
       const tip = snapState.type === 'top'
         ? '吸附: 上方堆叠'
@@ -1526,21 +1807,7 @@ const BattlefieldPreviewModal = ({
       ctx.fillStyle = '#fecaca';
       ctx.fillText(text, 21, y + 14);
     }
-  }, [open, walls, ghost, ghostBlocked, snapState, viewport, cameraAngle, cameraYaw, wallGroups, worldScale, fieldHeight, fieldWidth, invalidReason]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleResize = () => {
-      const wrapper = wrapperRef.current;
-      const canvas = canvasRef.current;
-      if (!wrapper || !canvas) return;
-      const rect = wrapper.getBoundingClientRect();
-      canvas.width = Math.max(1, Math.floor(rect.width));
-      canvas.height = Math.max(1, Math.floor(rect.height));
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [open]);
+  }, [open, walls, ghost, ghostBlocked, snapState, viewport, cameraAngle, cameraYaw, wallGroups, worldScale, fieldHeight, fieldWidth, invalidReason, editMode, effectiveCanEdit, selectedWallId]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1582,6 +1849,18 @@ const BattlefieldPreviewModal = ({
     };
     setIsPanning(true);
   };
+
+  const findWallActionButton = useCallback((sx, sy) => {
+    const buttons = Array.isArray(wallActionButtonsRef.current) ? wallActionButtonsRef.current : [];
+    for (const button of buttons) {
+      const dx = sx - button.cx;
+      const dy = sy - button.cy;
+      if (Math.hypot(dx, dy) <= (button.radius + 2)) {
+        return button;
+      }
+    }
+    return null;
+  }, []);
 
   const handleMouseDown = (event) => {
     if (!open) return;
@@ -1643,13 +1922,14 @@ const BattlefieldPreviewModal = ({
       const nextWall = createWallFromLike(evaluated.ghost, {
         id: ghost?._sourceId || undefined
       });
-      pendingPersistRef.current = true;
       if (ghost?._mode === 'move' && ghost?._sourceId) {
         setWalls((prev) => prev.map((item) => (item.id === ghost._sourceId ? nextWall : item)));
+        setHasDraftChanges(true);
         cancelGhostPlacement('');
         setMessage('木墙位置已更新');
       } else {
         setWalls((prev) => [...prev, nextWall]);
+        setHasDraftChanges(true);
         cancelGhostPlacement('');
         setMessage('木墙已放置');
       }
@@ -1657,21 +1937,32 @@ const BattlefieldPreviewModal = ({
     }
 
     if (editMode && effectiveCanEdit) {
-      const pickedWall = findTopWallAtPoint(world, walls);
-      if (pickedWall) {
-        const movingGhostSeed = {
-          ...createWallFromLike(pickedWall, { id: pickedWall.id }),
-          _mode: 'move',
-          _sourceId: pickedWall.id
-        };
-        const evaluated = evaluateGhostPlacement(movingGhostSeed, walls, mouseWorldRef.current, fieldWidth, fieldHeight);
-        setGhost({ ...evaluated.ghost, _mode: 'move', _sourceId: pickedWall.id });
-        setGhostBlocked(evaluated.blocked);
-        setSnapState(evaluated.snap);
-        setInvalidReason(evaluated.reason || '');
-        setSelectedPaletteItem(pickedWall.itemType || 'wood_wall');
-        setMessage('移动模式：左键确认位置，右键或 ESC 取消');
+      const actionButton = findWallActionButton(point.x, point.y);
+      if (actionButton) {
+        if (actionButton.type === 'move') {
+          const targetWall = walls.find((item) => item.id === actionButton.wallId);
+          if (targetWall) startMoveWall(targetWall);
+        } else if (actionButton.type === 'remove') {
+          recycleWallToPalette(actionButton.wallId);
+        }
         return;
+      }
+      const pickedWall = findTopWallByScreenPoint({
+        screenPoint: point,
+        walls,
+        viewport,
+        cameraAngle,
+        cameraYaw,
+        worldScale
+      }) || findTopWallAtPoint(world, walls);
+      if (pickedWall) {
+        setSelectedWallId(pickedWall.id);
+        cancelGhostPlacement('');
+        setMessage('已选中木墙：点击头顶图标可移动或回收');
+        return;
+      }
+      if (selectedWallId) {
+        setSelectedWallId('');
       }
     }
 
@@ -1812,21 +2103,41 @@ const BattlefieldPreviewModal = ({
             <span>{loadingLayout ? '正在加载战场配置...' : 'RTS 俯视战场：右键按住旋转视角，Space+左键或中键平移，滚轮缩放/旋转'}</span>
           </div>
           <div className="battlefield-modal-actions">
-            <button
-              type="button"
-              className={`btn btn-small ${editMode ? 'btn-warning' : 'btn-primary'}`}
-              disabled={!effectiveCanEdit || loadingLayout || savingLayout}
-              onClick={() => {
-                if (!effectiveCanEdit) return;
-                const nextEdit = !editMode;
-                setEditMode(nextEdit);
-                animateCameraAngle(nextEdit ? CAMERA_ANGLE_EDIT : CAMERA_ANGLE_PREVIEW);
-                cancelGhostPlacement('');
-                setMessage(nextEdit ? '编辑模式已开启（从左侧物品栏选中后放置）' : '已切回预览模式');
-              }}
-            >
-              {!effectiveCanEdit ? '仅预览' : (editMode ? '退出编辑' : '编辑战场')}
-            </button>
+            {!effectiveCanEdit && (
+              <button type="button" className="btn btn-small btn-secondary" disabled>
+                仅预览
+              </button>
+            )}
+            {effectiveCanEdit && !editMode && (
+              <button
+                type="button"
+                className="btn btn-small btn-primary"
+                disabled={loadingLayout || savingLayout}
+                onClick={startLayoutEditing}
+              >
+                布置战场
+              </button>
+            )}
+            {effectiveCanEdit && editMode && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-small btn-warning"
+                  disabled={savingLayout}
+                  onClick={cancelLayoutEditing}
+                >
+                  取消布置
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small btn-primary"
+                  disabled={savingLayout || loadingLayout}
+                  onClick={saveLayoutEditing}
+                >
+                  保存布置
+                </button>
+              </>
+            )}
             <button type="button" className="btn btn-small btn-secondary" onClick={onClose}>
               关闭
             </button>
@@ -1834,13 +2145,10 @@ const BattlefieldPreviewModal = ({
         </div>
 
         <div className="battlefield-toolbar">
-          <span>{`视角 ${roundTo(cameraAngle, 1)}°`}</span>
-          <span>{`航向 ${roundTo(cameraYaw, 1)}°`}</span>
-          <span>{`缩放 ${Math.round(zoom * 100)}%`}</span>
           <span>{`已放置木墙 ${walls.length}`}</span>
           <span>{`木墙库存 ${wallStockRemaining}/${maxItemsPerType}`}</span>
           <span>{`堆叠上限 ${MAX_STACK_LEVEL} 层`}</span>
-          <span>{cacheNeedsSync ? '离线缓存待同步' : '已与服务端同步'}</span>
+          <span>{editMode && hasDraftChanges ? '布置中：有未保存改动' : (cacheNeedsSync ? '离线缓存待同步' : '已与服务端同步')}</span>
           <span>{savingLayout ? '保存中...' : '群组数值显示: 血量 / 防御'}</span>
         </div>
 
@@ -1860,7 +2168,7 @@ const BattlefieldPreviewModal = ({
             <div className="battlefield-sidebar-tip">
               {!effectiveCanEdit
                 ? '当前仅预览'
-                : (!editMode ? '开启编辑后可选择物品' : '点选物品后跟随鼠标，左键放置；点已放置木墙可移动')}
+                : (!editMode ? '点击“布置战场”后可选择物品' : '点已放置木墙会出现“移动/回收(X)”图标；点选物品后左键放置')}
             </div>
           </aside>
 
