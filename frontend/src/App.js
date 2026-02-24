@@ -5509,6 +5509,7 @@ const App = () => {
                         key={`admin-${adminEntryTab}`}
                         initialTab={adminEntryTab}
                         onPendingMasterApplyHandled={() => fetchNotifications(true)}
+                        onCreateNode={openCreateNodeModal}
                     />
                 )}
                 {view === "profile" && (

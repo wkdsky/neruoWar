@@ -511,45 +511,60 @@
 }
 
 .admin-domain-sense-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+    display: flex;
+    flex-direction: column;
     padding: 0.65rem 0.9rem 0.95rem;
-    gap: 0.7rem;
+    gap: 0.4rem;
 }
 
 .admin-domain-sense-item {
     border: 1px solid rgba(99, 102, 241, 0.24);
     background: rgba(15, 23, 42, 0.5);
     border-radius: 8px;
-    padding: 0.7rem 0.75rem;
+    padding: 0.42rem 0.6rem;
     display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    min-height: 128px;
+    align-items: center;
+    gap: 0.6rem;
 }
 
 .admin-domain-sense-item.is-editing {
     border-color: rgba(59, 130, 246, 0.52);
     background: rgba(15, 23, 42, 0.72);
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.68rem;
+    padding: 0.7rem 0.75rem;
+}
+
+.admin-domain-sense-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
 }
 
 .admin-domain-sense-title-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.7rem;
+    gap: 0.45rem;
+    width: 100%;
 }
 
 .admin-domain-sense-title {
     margin: 0;
     color: #e2e8f0;
-    font-size: 0.9rem;
+    font-size: 0.84rem;
     font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .admin-domain-sense-count {
     color: #93c5fd;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
+    white-space: nowrap;
 }
 
 .admin-domain-sense-actions {
@@ -557,8 +572,17 @@
     align-items: center;
     justify-content: flex-end;
     gap: 0.4rem;
+    flex-wrap: nowrap;
+    margin-top: 0;
+}
+
+.admin-domain-sense-actions .btn-action {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.72rem;
+}
+
+.admin-domain-sense-item.is-editing .admin-domain-sense-actions {
     flex-wrap: wrap;
-    margin-top: auto;
 }
 
 .admin-domain-sense-edit-textarea {

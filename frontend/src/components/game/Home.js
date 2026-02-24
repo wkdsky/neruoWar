@@ -201,13 +201,15 @@ const Home = ({
                                     </button>
                                 )}
                             </div>
-                            <button
-                                onClick={onCreateNode}
-                                className="btn btn-success create-node-btn"
-                            >
-                                <Plus size={18} />
-                                创建新知识域
-                            </button>
+                            {!isAdmin && (
+                                <button
+                                    onClick={onCreateNode}
+                                    className="btn btn-success create-node-btn"
+                                >
+                                    <Plus size={18} />
+                                    创建新知识域
+                                </button>
+                            )}
                         </div>
                     </div>
 

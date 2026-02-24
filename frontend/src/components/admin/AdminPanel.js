@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Users, Zap, Bell, Shield, Check, X, Search, Plus, AlertTriangle, ArrowRight, ChevronDown, ChevronUp, Settings } from 'lucide-react';
+import { Users, Zap, Bell, Shield, Check, X, Search, Plus, AlertTriangle, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 import MiniPreviewRenderer from '../modals/MiniPreviewRenderer';
 import AssociationAddFlowEditor from '../shared/AssociationAddFlowEditor';
 import {
@@ -37,12 +37,6 @@ const createEmptyUnitTypeForm = () => ({
     sortOrder: '0'
 });
 
-const NEW_SENSE_RELATION_OPTIONS = [
-    { value: ASSOC_RELATION_TYPES.CONTAINS, label: REL_SYMBOL_SUBSET },
-    { value: ASSOC_RELATION_TYPES.EXTENDS, label: REL_SYMBOL_SUPERSET },
-    { value: ASSOC_RELATION_TYPES.INSERT, label: '插入' }
-];
-
 const createLocalId = (prefix = 'id') => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const buildSenseKey = (nodeId = '', senseId = '') => {
     const safeNodeId = String(nodeId || '').trim();
@@ -62,6 +56,23 @@ const createEmptyNewSenseForm = () => ({
     insertDirectionLocked: false,
     insertDirectionHint: '先选择左右释义，再确认插入关系。',
     relations: []
+});
+
+const createEmptyNewSenseAssocFlow = () => ({
+    currentStep: null,
+    searchKeyword: '',
+    searchAppliedKeyword: '',
+    searchLoading: false,
+    searchResults: [],
+    selectedNodeA: null,
+    selectedNodeASenseId: '',
+    selectedRelationType: '',
+    selectedNodeB: null,
+    selectedNodeBSenseId: '',
+    nodeBCandidates: { parents: [], children: [] },
+    nodeBSearchAppliedKeyword: '',
+    insertDirection: 'aToB',
+    insertDirectionLocked: false
 });
 
 const normalizeSenseSearchTarget = (item = {}) => ({
@@ -84,7 +95,7 @@ const matchKeywordByDomainAndSense = (item = {}, textKeyword = '') => {
     return keywords.every((keyword) => haystack.includes(keyword));
 };
 
-const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
+const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreateNode }) => {
     const [adminTab, setAdminTab] = useState(initialTab);
     
     // User Management State
@@ -147,10 +158,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     const [showAddSenseModal, setShowAddSenseModal] = useState(false);
     const [addingSenseNode, setAddingSenseNode] = useState(null);
     const [newSenseForm, setNewSenseForm] = useState(createEmptyNewSenseForm);
-    const [newSenseTargetSide, setNewSenseTargetSide] = useState('single');
-    const [newSenseSearchKeyword, setNewSenseSearchKeyword] = useState('');
-    const [newSenseSearchResults, setNewSenseSearchResults] = useState([]);
-    const [newSenseSearchLoading, setNewSenseSearchLoading] = useState(false);
+    const [newSenseAssocFlow, setNewSenseAssocFlow] = useState(createEmptyNewSenseAssocFlow);
+    const newSenseAssocPreviewCanvasRef = useRef(null);
+    const newSenseAssocPreviewRendererRef = useRef(null);
     const [isSavingNewSense, setIsSavingNewSense] = useState(false);
     const [isSavingNodeEdit, setIsSavingNodeEdit] = useState(false);
     const [editingSenseToken, setEditingSenseToken] = useState('');
@@ -1007,44 +1017,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         `${sourceDisplay} ${getUiRelationSymbol(uiRelationType)} ${targetDisplay}`
     ), [getUiRelationSymbol]);
 
-    const isSameDirectionInsertAssociation = useCallback((association) => {
-        if (!association || association.type !== ASSOC_RELATION_TYPES.INSERT) return false;
-        const sourceSenseId = String(association?.sourceSenseId || '').trim();
-        const relationList = (Array.isArray(association?.actualAssociations) ? association.actualAssociations : [])
-            .filter((item) => {
-                const relationType = item?.relationType;
-                if (relationType !== ASSOC_RELATION_TYPES.CONTAINS && relationType !== ASSOC_RELATION_TYPES.EXTENDS) return false;
-                if (!sourceSenseId) return true;
-                return String(item?.sourceSenseId || '').trim() === sourceSenseId;
-            });
-        if (relationList.length !== 2) return false;
-        const containsItem = relationList.find((item) => item?.relationType === ASSOC_RELATION_TYPES.CONTAINS);
-        const extendsItem = relationList.find((item) => item?.relationType === ASSOC_RELATION_TYPES.EXTENDS);
-        if (!containsItem || !extendsItem) return false;
-        const containsTargetKey = `${String(containsItem?.targetNode || '')}:${String(containsItem?.targetSenseId || '').trim()}`;
-        const extendsTargetKey = `${String(extendsItem?.targetNode || '')}:${String(extendsItem?.targetSenseId || '').trim()}`;
-        if (!containsTargetKey || !extendsTargetKey) return false;
-        if (containsTargetKey === extendsTargetKey) return false;
-        return true;
-    }, []);
-
     const resolveAssociationDisplayType = useCallback((association) => {
         if (!association) return '';
-        if (association?.type !== ASSOC_RELATION_TYPES.INSERT) {
-            return association?.type || '';
-        }
-        if (isSameDirectionInsertAssociation(association)) {
-            return ASSOC_RELATION_TYPES.INSERT;
-        }
-        const fallbackActual = (Array.isArray(association?.actualAssociations) ? association.actualAssociations : [])
-            .find((item) => (
-                item?.relationType === ASSOC_RELATION_TYPES.CONTAINS
-                || item?.relationType === ASSOC_RELATION_TYPES.EXTENDS
-            )) || null;
-        return fallbackActual?.relationType === ASSOC_RELATION_TYPES.CONTAINS
-            ? ASSOC_RELATION_TYPES.EXTENDS
-            : ASSOC_RELATION_TYPES.CONTAINS;
-    }, [isSameDirectionInsertAssociation]);
+        return association?.type || '';
+    }, []);
 
     const getSenseTitleById = useCallback((node, senseId) => {
         const key = typeof senseId === 'string' ? senseId.trim() : '';
@@ -1367,6 +1343,51 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         return map;
     }, [allNodes]);
 
+    const resolveDecisionRefDisplay = useCallback((ref = null) => {
+        const explicitDisplayName = String(ref?.displayName || '').trim();
+        if (explicitDisplayName) return explicitDisplayName;
+
+        const refNodeId = String(ref?.nodeId || ref?._id || '').trim();
+        const refSenseId = String(ref?.senseId || '').trim();
+        const mappedNode = refNodeId ? nodeByIdMap.get(refNodeId) : null;
+        if (mappedNode) {
+            const mappedNodeName = String(mappedNode?.name || '').trim() || '未知标题';
+            const mappedSenseId = refSenseId || resolveNodeSenseId(mappedNode, '');
+            const mappedSenseTitle = getSenseTitleById(mappedNode, mappedSenseId);
+            if (mappedSenseTitle) return `${mappedNodeName}-${mappedSenseTitle}`;
+            if (mappedSenseId) return `${mappedNodeName}-${mappedSenseId}`;
+            return `${mappedNodeName}-未知释义`;
+        }
+
+        const nodeName = String(ref?.nodeName || ref?.name || '').trim() || '未知标题';
+        const senseTitle = String(ref?.senseTitle || '').trim();
+        if (senseTitle) return `${nodeName}-${senseTitle}`;
+        return `${nodeName}-${refSenseId || '未知释义'}`;
+    }, [getSenseTitleById, nodeByIdMap, resolveNodeSenseId]);
+
+    const resolveDecisionCurrentDisplay = useCallback((sourceNode, sourceSenseId = '', fallbackNodeName = '当前标题') => {
+        const nodeName = String(sourceNode?.name || fallbackNodeName || '当前标题').trim() || '当前标题';
+        const normalizedSenseId = String(sourceSenseId || '').trim();
+        if (sourceNode) {
+            const effectiveSenseId = normalizedSenseId || resolveNodeSenseId(sourceNode, '');
+            const senseTitle = getSenseTitleById(sourceNode, effectiveSenseId);
+            if (senseTitle) return `${nodeName}-${senseTitle}`;
+            if (effectiveSenseId) return `${nodeName}-${effectiveSenseId}`;
+        }
+        return `${nodeName}-${normalizedSenseId || '未知释义'}`;
+    }, [getSenseTitleById, resolveNodeSenseId]);
+
+    const resolveDecisionPairSideDisplay = useCallback((pair = {}, side = 'upper') => {
+        const normalizedSide = side === 'lower' ? 'lower' : 'upper';
+        const embeddedRef = pair?.[normalizedSide];
+        if (embeddedRef && typeof embeddedRef === 'object') {
+            return resolveDecisionRefDisplay(embeddedRef);
+        }
+        const nodeId = String(pair?.[`${normalizedSide}NodeId`] || '').trim();
+        const senseId = String(pair?.[`${normalizedSide}SenseId`] || '').trim();
+        return resolveDecisionRefDisplay({ nodeId, senseId });
+    }, [resolveDecisionRefDisplay]);
+
     const incomingAssociationMap = useMemo(() => {
         const map = new Map();
         allNodes.forEach((sourceNode) => {
@@ -1412,93 +1433,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         const targetSenseTitle = getSenseTitleById(targetNode, targetSenseId);
         return targetSenseTitle ? `${targetNodeName}-${targetSenseTitle}` : targetNodeName;
     }, [getSenseTitleById, nodeByIdMap]);
-
-    const resolveAssociationNodeWithAssociations = useCallback((nodeLike, fallbackNodeId = '') => {
-        const directNodeId = resolveAssociationNodeId(nodeLike);
-        const expectedNodeId = String(fallbackNodeId || directNodeId || '').trim();
-        if (!expectedNodeId) return null;
-        if (
-            nodeLike
-            && typeof nodeLike === 'object'
-            && Array.isArray(nodeLike.associations)
-            && (!directNodeId || directNodeId === expectedNodeId)
-        ) {
-            return nodeLike;
-        }
-        return nodeByIdMap.get(expectedNodeId) || null;
-    }, [nodeByIdMap, resolveAssociationNodeId]);
-
-    const hasDirectedSenseAssociation = useCallback(({
-        sourceNodeLike = null,
-        sourceNodeId = '',
-        sourceSenseId = '',
-        relationType = '',
-        targetNodeId = '',
-        targetSenseId = ''
-    } = {}) => {
-        const normalizedRelationType = relationType === ASSOC_RELATION_TYPES.CONTAINS
-            ? ASSOC_RELATION_TYPES.CONTAINS
-            : (relationType === ASSOC_RELATION_TYPES.EXTENDS ? ASSOC_RELATION_TYPES.EXTENDS : '');
-        const normalizedSourceSenseId = String(sourceSenseId || '').trim();
-        const normalizedTargetNodeId = String(targetNodeId || '').trim();
-        const normalizedTargetSenseId = String(targetSenseId || '').trim();
-        if (!normalizedRelationType || !normalizedSourceSenseId || !normalizedTargetNodeId || !normalizedTargetSenseId) {
-            return false;
-        }
-        const sourceNode = resolveAssociationNodeWithAssociations(sourceNodeLike, sourceNodeId);
-        const relationList = Array.isArray(sourceNode?.associations) ? sourceNode.associations : [];
-        return relationList.some((assoc) => (
-            String(assoc?.targetNode?._id || assoc?.targetNode || '').trim() === normalizedTargetNodeId
-            && String(assoc?.relationType || '').trim() === normalizedRelationType
-            && String(assoc?.sourceSenseId || '').trim() === normalizedSourceSenseId
-            && String(assoc?.targetSenseId || '').trim() === normalizedTargetSenseId
-        ));
-    }, [resolveAssociationNodeWithAssociations]);
-
-    const canMergeAssociationPairAsInsert = useCallback((candidate, pairCandidate) => {
-        if (!candidate || !pairCandidate) return false;
-        if (candidate?.sourceSenseId !== pairCandidate?.sourceSenseId) return false;
-
-        const typeSet = new Set([candidate?.relationType, pairCandidate?.relationType]);
-        const isContainsExtendsPair = (
-            typeSet.has(ASSOC_RELATION_TYPES.CONTAINS)
-            && typeSet.has(ASSOC_RELATION_TYPES.EXTENDS)
-            && typeSet.size === 2
-        );
-        if (!isContainsExtendsPair) return false;
-
-        const upperRelation = candidate.relationType === ASSOC_RELATION_TYPES.EXTENDS ? candidate : pairCandidate;
-        const lowerRelation = candidate.relationType === ASSOC_RELATION_TYPES.CONTAINS ? candidate : pairCandidate;
-
-        const upperNodeId = String(upperRelation?.targetNodeId || '').trim();
-        const upperSenseId = String(upperRelation?.targetSenseId || '').trim();
-        const lowerNodeId = String(lowerRelation?.targetNodeId || '').trim();
-        const lowerSenseId = String(lowerRelation?.targetSenseId || '').trim();
-        if (!upperNodeId || !upperSenseId || !lowerNodeId || !lowerSenseId) return false;
-        if (upperNodeId === lowerNodeId && upperSenseId === lowerSenseId) return false;
-
-        // 同一标题下不同释义不得通过“自动归并”显示成插入，需保持为独立关系。
-        if (upperNodeId === lowerNodeId) return false;
-
-        // 仅当两端本来就存在与“上级-当前-下级”方向一致的直接链路时，才自动合并为插入。
-        const hasUpperContainsLower = hasDirectedSenseAssociation({
-            sourceNodeLike: upperRelation?.targetNode,
-            sourceNodeId: upperNodeId,
-            sourceSenseId: upperSenseId,
-            relationType: ASSOC_RELATION_TYPES.CONTAINS,
-            targetNodeId: lowerNodeId,
-            targetSenseId: lowerSenseId
-        });
-        const hasLowerExtendsUpper = hasDirectedSenseAssociation({
-            sourceNodeLike: lowerRelation?.targetNode,
-            sourceNodeId: lowerNodeId,
-            sourceSenseId: lowerSenseId,
-            relationType: ASSOC_RELATION_TYPES.EXTENDS,
-            targetNodeId: upperNodeId,
-            targetSenseId: upperSenseId
-        });
-        return hasUpperContainsLower || hasLowerExtendsUpper;
-    }, [hasDirectedSenseAssociation]);
 
     const getPendingRelationBadgeMeta = useCallback((relationType = '', insertSide = '') => {
         if (relationType === ASSOC_RELATION_TYPES.CONTAINS) {
@@ -1605,58 +1539,22 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             });
         });
 
-        // 2. 对 contains/extends 做与关联管理一致的插入归并（同源释义 + 一条 contains + 一条 extends）。
+        // 2. contains/extends 逐条展示，不再自动识别并归并为插入关系。
         const mergeCandidates = normalizedAssociations
             .filter((item) => !consumedIndexSet.has(item.index))
             .filter((item) => (
                 item.relationType === ASSOC_RELATION_TYPES.CONTAINS
                 || item.relationType === ASSOC_RELATION_TYPES.EXTENDS
             ));
-        const consumedCandidateIndexSet = new Set();
-        mergeCandidates.forEach((candidate, candidateIndex) => {
-            if (consumedCandidateIndexSet.has(candidateIndex)) return;
-            const oppositeRelationType = candidate.relationType === ASSOC_RELATION_TYPES.CONTAINS
-                ? ASSOC_RELATION_TYPES.EXTENDS
-                : ASSOC_RELATION_TYPES.CONTAINS;
-            const pairIndex = mergeCandidates.findIndex((target, targetIndex) => {
-                if (targetIndex <= candidateIndex) return false;
-                if (consumedCandidateIndexSet.has(targetIndex)) return false;
-                if (target.sourceSenseId !== candidate.sourceSenseId) return false;
-                if (target.relationType !== oppositeRelationType) return false;
-                if (target.targetKey === candidate.targetKey) return false;
-                return canMergeAssociationPairAsInsert(candidate, target);
-            });
-
-            if (pairIndex < 0) {
-                consumedIndexSet.add(candidate.index);
-                consumedCandidateIndexSet.add(candidateIndex);
-                const relationMeta = getPendingRelationBadgeMeta(candidate.relationType, '');
-                markDisplaySlot(candidate.index, {
-                    id: `pending_assoc_${node?._id || 'node'}_${normalizedSenseId}_single_${candidate.index}`,
-                    relationType: candidate.relationType,
-                    relationClassName: relationMeta.className,
-                    relationLabel: relationMeta.label,
-                    displayText: formatBackendRelationExpression(sourceDisplay, candidate.relationType, candidate.targetDisplay)
-                });
-                return;
-            }
-
-            const pair = mergeCandidates[pairIndex];
-            const upperRelation = candidate.relationType === ASSOC_RELATION_TYPES.EXTENDS ? candidate : pair;
-            const lowerRelation = candidate.relationType === ASSOC_RELATION_TYPES.CONTAINS ? candidate : pair;
+        mergeCandidates.forEach((candidate) => {
             consumedIndexSet.add(candidate.index);
-            consumedIndexSet.add(pair.index);
-            consumedCandidateIndexSet.add(candidateIndex);
-            consumedCandidateIndexSet.add(pairIndex);
-            const relationMeta = getPendingRelationBadgeMeta(ASSOC_RELATION_TYPES.INSERT, '');
-            const upperDisplay = formatNodeSenseDisplay(upperRelation.targetNode, upperRelation.targetSenseId);
-            const lowerDisplay = formatNodeSenseDisplay(lowerRelation.targetNode, lowerRelation.targetSenseId);
+            const relationMeta = getPendingRelationBadgeMeta(candidate.relationType, '');
             markDisplaySlot(candidate.index, {
-                id: `pending_assoc_${node?._id || 'node'}_${normalizedSenseId}_merged_insert_${candidate.index}_${pair.index}`,
-                relationType: ASSOC_RELATION_TYPES.INSERT,
+                id: `pending_assoc_${node?._id || 'node'}_${normalizedSenseId}_single_${candidate.index}`,
+                relationType: candidate.relationType,
                 relationClassName: relationMeta.className,
                 relationLabel: relationMeta.label,
-                displayText: `${upperDisplay} ${REL_SYMBOL_SUPERSET} ${sourceDisplay} ${REL_SYMBOL_SUPERSET} ${lowerDisplay}`
+                displayText: formatBackendRelationExpression(sourceDisplay, candidate.relationType, candidate.targetDisplay)
             });
         });
 
@@ -1675,7 +1573,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
         return displaySlots.filter(Boolean);
     }, [
-        canMergeAssociationPairAsInsert,
         formatBackendRelationExpression,
         formatNodeSenseDisplay,
         getPendingRelationBadgeMeta,
@@ -1736,6 +1633,48 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             all: [...outgoing, ...incoming]
         };
     }, [formatBackendRelationExpression, formatNodeSenseDisplay, incomingAssociationMap, resolveAssociationTargetDisplay]);
+
+    const getEditableSenseAssociationCount = useCallback((node, senseId) => {
+        const normalizedSenseId = String(senseId || '').trim();
+        if (!node || !normalizedSenseId) return 0;
+
+        const sourceAssociations = (Array.isArray(node?.associations) ? node.associations : [])
+            .filter((assoc) => {
+                const targetNodeId = String(assoc?.targetNode?._id || assoc?.targetNode || '').trim();
+                const targetNodeName = String(assoc?.targetNode?.name || '').trim();
+                const targetSenseId = String(assoc?.targetSenseId || '').trim();
+                const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+                const relationType = assoc?.relationType;
+                const isSimpleRelation = (
+                    relationType === ASSOC_RELATION_TYPES.CONTAINS
+                    || relationType === ASSOC_RELATION_TYPES.EXTENDS
+                );
+                return (
+                    sourceSenseId === normalizedSenseId
+                    && !!targetNodeId
+                    && !!targetNodeName
+                    && !!targetSenseId
+                    && isSimpleRelation
+                );
+            });
+
+        if (sourceAssociations.length > 0) {
+            return sourceAssociations.length;
+        }
+
+        const rawAssociations = Array.isArray(node?.associations) ? node.associations : [];
+        if (rawAssociations.length > 0) return 0;
+
+        const nodeNameMap = new Map((Array.isArray(allNodes) ? allNodes : [])
+            .map((item) => [String(item?.name || '').trim(), item]));
+        const fallbackParentCount = (Array.isArray(node?.relatedParentDomains) ? node.relatedParentDomains : [])
+            .filter((name) => nodeNameMap.has(String(name || '').trim()))
+            .length;
+        const fallbackChildCount = (Array.isArray(node?.relatedChildDomains) ? node.relatedChildDomains : [])
+            .filter((name) => nodeNameMap.has(String(name || '').trim()))
+            .length;
+        return fallbackParentCount + fallbackChildCount;
+    }, [allNodes]);
 
     const buildNodeDeletePreview = useCallback((node) => {
         if (!node?._id) {
@@ -1857,10 +1796,11 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
     const resetNewSenseEditor = () => {
         setNewSenseForm(createEmptyNewSenseForm());
-        setNewSenseTargetSide('single');
-        setNewSenseSearchKeyword('');
-        setNewSenseSearchResults([]);
-        setNewSenseSearchLoading(false);
+        setNewSenseAssocFlow(createEmptyNewSenseAssocFlow());
+        if (newSenseAssocPreviewRendererRef.current) {
+            newSenseAssocPreviewRendererRef.current.destroy();
+            newSenseAssocPreviewRendererRef.current = null;
+        }
     };
 
     const openAddSenseModal = (node) => {
@@ -1914,272 +1854,401 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         };
     }, [allNodes]);
 
-    const refreshNewSenseInsertDirection = useCallback((nextForm) => {
-        const left = nextForm?.insertLeftTarget || null;
-        const right = nextForm?.insertRightTarget || null;
-        if (!left || !right) {
-            return {
-                ...nextForm,
-                insertDirectionLocked: false,
-                insertDirectionHint: '先选择左右释义，再确认插入关系。'
-            };
+    const fetchNodeDetailForNewSenseAssoc = useCallback(async (nodeId = '') => {
+        const safeNodeId = String(nodeId || '').trim();
+        if (!safeNodeId) return null;
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${safeNodeId}`);
+            if (!response.ok) return null;
+            const data = await response.json();
+            return data?.node || null;
+        } catch (error) {
+            console.error('获取释义目标详情失败:', error);
+            return null;
         }
-        const leftName = left.displayName || `${left.nodeId}:${left.senseId}`;
-        const rightName = right.displayName || `${right.nodeId}:${right.senseId}`;
-        const relationStatus = getDirectRelationBetweenTargets(left, right);
-        if (relationStatus?.relationExists) {
-            const lockedDirection = relationStatus.lockedDirection === ASSOC_RELATION_TYPES.EXTENDS
-                ? ASSOC_RELATION_TYPES.EXTENDS
-                : ASSOC_RELATION_TYPES.CONTAINS;
-            return {
-                ...nextForm,
-                insertDirection: lockedDirection,
-                insertDirectionLocked: true,
-                insertDirectionHint: `当前释义将插入到「${leftName}」和「${rightName}」之间，「${leftName}」和「${rightName}」原来的关联将改为「${leftName}-当前释义-${rightName}」。`
-            };
-        }
+    }, []);
+
+    const buildNewSenseAssocTarget = useCallback((nodeLike, fallbackSenseId = '') => {
+        const normalized = normalizeAssociationCandidate(nodeLike);
+        if (!normalized) return null;
+        const senseId = resolveAssociationSenseId(normalized, fallbackSenseId || normalized.senseId || '');
+        const nodeId = String(normalized.nodeId || normalized._id || '').trim();
+        const searchKey = buildSenseKey(nodeId, senseId);
+        if (!nodeId || !senseId || !searchKey) return null;
         return {
-            ...nextForm,
-            insertDirectionLocked: false,
-            insertDirectionHint: `当前释义将插入到「${leftName}」和「${rightName}」之间，「${leftName}」和「${rightName}」新建关联为「${leftName}-当前释义-${rightName}」。`
+            ...normalized,
+            _id: nodeId,
+            nodeId,
+            senseId,
+            activeSenseId: senseId,
+            searchKey,
+            displayName: normalized.displayName || formatNodeSenseDisplay(normalized, senseId)
         };
-    }, [getDirectRelationBetweenTargets]);
+    }, [formatNodeSenseDisplay, normalizeAssociationCandidate, resolveAssociationSenseId]);
 
-    const searchTargetsForNewSense = async (keyword = newSenseSearchKeyword) => {
-        const normalizedKeyword = String(keyword || '').trim();
-        const keywordMeta = parseAssociationKeyword(normalizedKeyword);
+    const syncNewSenseAssocInsertDirection = useCallback((nodeA, nodeASenseId, nodeB, nodeBSenseId, fallbackDirection = 'aToB') => {
+        const targetA = buildNewSenseAssocTarget(nodeA, nodeASenseId);
+        const targetB = buildNewSenseAssocTarget(nodeB, nodeBSenseId);
+        if (!targetA || !targetB) {
+            setNewSenseAssocFlow((prev) => ({ ...prev, insertDirectionLocked: false }));
+            return;
+        }
+        const relationStatus = getDirectRelationBetweenTargets(targetA, targetB);
+        if (!relationStatus?.relationExists) {
+            setNewSenseAssocFlow((prev) => ({
+                ...prev,
+                insertDirection: prev.insertDirection || fallbackDirection,
+                insertDirectionLocked: false
+            }));
+            return;
+        }
+        const nextDirection = relationStatus.lockedDirection === ASSOC_RELATION_TYPES.EXTENDS ? 'bToA' : 'aToB';
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            insertDirection: nextDirection,
+            insertDirectionLocked: true
+        }));
+    }, [buildNewSenseAssocTarget, getDirectRelationBetweenTargets]);
+
+    const loadNewSenseAssocNodeBCandidatesBySense = useCallback(async (
+        nodeA = newSenseAssocFlow.selectedNodeA,
+        nodeASenseId = newSenseAssocFlow.selectedNodeASenseId
+    ) => {
         const currentNodeId = String(addingSenseNode?._id || '').trim();
-        if (!keywordMeta.textKeyword && !keywordMeta.mode) {
-            setNewSenseSearchResults([]);
+        const targetA = buildNewSenseAssocTarget(nodeA, nodeASenseId);
+        if (!targetA?.searchKey) {
+            setNewSenseAssocFlow((prev) => ({ ...prev, nodeBCandidates: { parents: [], children: [] } }));
             return;
         }
-
-        const isInsertMode = newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT;
-        const anchorTarget = isInsertMode
-            ? (newSenseTargetSide === 'left'
-                ? (newSenseForm.insertRightTarget || null)
-                : (newSenseTargetSide === 'right' ? (newSenseForm.insertLeftTarget || null) : null))
-            : null;
-        const oppositeTargetSearchKey = isInsertMode
-            ? (newSenseTargetSide === 'left'
-                ? (newSenseForm.insertRightTarget?.searchKey || '')
-                : (newSenseTargetSide === 'right' ? (newSenseForm.insertLeftTarget?.searchKey || '') : ''))
-            : '';
-
-        if (keywordMeta.mode && isInsertMode && anchorTarget?.searchKey) {
-            setNewSenseSearchLoading(true);
-            try {
-                const anchorContext = await fetchSenseRelationContext(anchorTarget);
-                const baseList = keywordMeta.mode === 'include'
-                    ? anchorContext.parentTargets
-                    : anchorContext.childTargets;
-                const filtered = baseList
-                    .filter((item) => String(item?.nodeId || '').trim() !== currentNodeId)
-                    .filter((item) => item.searchKey !== oppositeTargetSearchKey)
-                    .filter((item) => matchKeywordByDomainAndSense(item, keywordMeta.textKeyword))
-                    .map((item) => ({
-                        ...item,
-                        relationToAnchor: keywordMeta.mode === 'include' ? '上级' : '下级'
-                    }));
-                setNewSenseSearchResults(filtered);
-            } finally {
-                setNewSenseSearchLoading(false);
+        const context = await fetchSenseRelationContext(targetA);
+        const dedupe = (list = []) => {
+            const seen = new Set();
+            return (Array.isArray(list) ? list : [])
+                .map((item) => buildNewSenseAssocTarget(item))
+                .filter(Boolean)
+                .filter((item) => String(item.nodeId || '').trim() !== currentNodeId)
+                .filter((item) => item.searchKey !== targetA.searchKey)
+                .filter((item) => {
+                    if (!item.searchKey || seen.has(item.searchKey)) return false;
+                    seen.add(item.searchKey);
+                    return true;
+                });
+        };
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            nodeBCandidates: {
+                parents: dedupe(context?.parentTargets || []),
+                children: dedupe(context?.childTargets || [])
             }
-            return;
-        }
+        }));
+    }, [
+        addingSenseNode,
+        buildNewSenseAssocTarget,
+        fetchSenseRelationContext,
+        newSenseAssocFlow.selectedNodeA,
+        newSenseAssocFlow.selectedNodeASenseId
+    ]);
 
-        if (keywordMeta.mode && isInsertMode && !anchorTarget?.searchKey && !keywordMeta.textKeyword) {
-            setNewSenseSearchResults([]);
-            return;
-        }
+    const startNewSenseRelationEditor = useCallback(() => {
+        setNewSenseAssocFlow({
+            ...createEmptyNewSenseAssocFlow(),
+            currentStep: ASSOC_STEPS.SELECT_NODE_A
+        });
+    }, []);
 
-        if (!keywordMeta.textKeyword) {
-            setNewSenseSearchResults([]);
-            return;
-        }
+    const searchNewSenseAssocNodeA = useCallback(async (rawKeyword = newSenseAssocFlow.searchKeyword) => {
+        const currentNodeId = String(addingSenseNode?._id || '').trim();
+        const keyword = String(rawKeyword || '').trim();
+        const keywordMeta = parseAssociationKeyword(keyword);
         const effectiveKeyword = keywordMeta.textKeyword;
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            searchKeyword: keyword,
+            searchAppliedKeyword: keyword
+        }));
         if (!effectiveKeyword) {
-            setNewSenseSearchResults([]);
+            setNewSenseAssocFlow((prev) => ({ ...prev, searchResults: [], searchLoading: false }));
             return;
         }
-
         const token = localStorage.getItem('token');
-        setNewSenseSearchLoading(true);
+        setNewSenseAssocFlow((prev) => ({ ...prev, searchLoading: true }));
         try {
             const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
-                headers: { 'Authorization': `Bearer ${token}` }
+                headers: { Authorization: `Bearer ${token}` }
             });
             if (!response.ok) {
-                setNewSenseSearchResults([]);
+                setNewSenseAssocFlow((prev) => ({ ...prev, searchResults: [], searchLoading: false }));
                 return;
             }
             const data = await response.json();
-            let results = (Array.isArray(data) ? data : [])
-                .map((item) => normalizeSenseSearchTarget(item))
-                .filter((item) => item.nodeId && item.senseId && item.searchKey)
+            const seen = new Set();
+            const results = (Array.isArray(data) ? data : [])
+                .map((item) => buildNewSenseAssocTarget(item))
+                .filter(Boolean)
                 .filter((item) => String(item.nodeId || '').trim() !== currentNodeId)
-                .filter((item) => matchKeywordByDomainAndSense(item, keywordMeta.textKeyword));
-
-            if (isInsertMode && anchorTarget?.searchKey) {
-                const anchorContext = await fetchSenseRelationContext(anchorTarget);
-                results = results
-                    .filter((item) => item.searchKey !== oppositeTargetSearchKey)
-                    .map((item) => {
-                        let relationToAnchor = '无关';
-                        if (anchorContext.parentKeySet.has(item.searchKey)) relationToAnchor = '上级';
-                        if (anchorContext.childKeySet.has(item.searchKey)) relationToAnchor = '下级';
-                        return { ...item, relationToAnchor };
-                    });
-                if (keywordMeta.mode === 'include') {
-                    results = results.filter((item) => item.relationToAnchor === '上级');
-                } else if (keywordMeta.mode === 'expand') {
-                    results = results.filter((item) => item.relationToAnchor === '下级');
-                }
-            }
-            setNewSenseSearchResults(results);
+                .filter((item) => matchKeywordByDomainAndSense(item, effectiveKeyword))
+                .filter((item) => {
+                    if (!item.searchKey || seen.has(item.searchKey)) return false;
+                    seen.add(item.searchKey);
+                    return true;
+                });
+            setNewSenseAssocFlow((prev) => ({ ...prev, searchResults: results, searchLoading: false }));
         } catch (error) {
             console.error('搜索释义失败:', error);
-            setNewSenseSearchResults([]);
-        } finally {
-            setNewSenseSearchLoading(false);
+            setNewSenseAssocFlow((prev) => ({ ...prev, searchResults: [], searchLoading: false }));
         }
-    };
+    }, [addingSenseNode, buildNewSenseAssocTarget, newSenseAssocFlow.searchKeyword]);
 
-    const chooseNewSenseTarget = (target) => {
-        const normalized = normalizeSenseSearchTarget(target);
-        if (!normalized.nodeId || !normalized.senseId) {
+    const clearNewSenseAssocNodeASearch = useCallback(() => {
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            searchKeyword: '',
+            searchAppliedKeyword: '',
+            searchLoading: false,
+            searchResults: []
+        }));
+    }, []);
+
+    const selectNewSenseAssocNodeA = useCallback(async (candidate) => {
+        const currentNodeId = String(addingSenseNode?._id || '').trim();
+        const normalized = buildNewSenseAssocTarget(candidate);
+        if (!normalized) {
+            alert('无效目标释义');
             return;
         }
-        if (String(normalized.nodeId || '').trim() === String(addingSenseNode?._id || '').trim()) {
+        if (String(normalized.nodeId || '').trim() === currentNodeId) {
             alert('同一标题下不同释义不能建立关联关系');
             return;
         }
-        setNewSenseForm((prev) => {
-            if (prev.relationType === ASSOC_RELATION_TYPES.INSERT) {
-                if (newSenseTargetSide === 'left') {
-                    return refreshNewSenseInsertDirection({
-                        ...prev,
-                        insertLeftTarget: normalized
-                    });
-                }
-                if (newSenseTargetSide === 'right') {
-                    return refreshNewSenseInsertDirection({
-                        ...prev,
-                        insertRightTarget: normalized
-                    });
-                }
-                return prev;
+        const nodeDetail = await fetchNodeDetailForNewSenseAssoc(normalized.nodeId);
+        const targetNode = buildNewSenseAssocTarget(nodeDetail || normalized, normalized.senseId) || normalized;
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            currentStep: ASSOC_STEPS.SELECT_RELATION,
+            selectedNodeA: targetNode,
+            selectedNodeASenseId: targetNode.senseId,
+            selectedRelationType: '',
+            selectedNodeB: null,
+            selectedNodeBSenseId: '',
+            nodeBCandidates: { parents: [], children: [] },
+            nodeBSearchAppliedKeyword: '',
+            insertDirection: 'aToB',
+            insertDirectionLocked: false
+        }));
+        loadNewSenseAssocNodeBCandidatesBySense(targetNode, targetNode.senseId);
+    }, [addingSenseNode, buildNewSenseAssocTarget, fetchNodeDetailForNewSenseAssoc, loadNewSenseAssocNodeBCandidatesBySense]);
+
+    const selectNewSenseAssocRelationType = useCallback((relationType = '') => {
+        if (!relationType) return;
+        const nextStep = resolveAssociationNextStep(relationType);
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            selectedRelationType: relationType,
+            currentStep: nextStep,
+            selectedNodeB: nextStep === ASSOC_STEPS.SELECT_NODE_B ? null : prev.selectedNodeB,
+            selectedNodeBSenseId: nextStep === ASSOC_STEPS.SELECT_NODE_B ? '' : prev.selectedNodeBSenseId,
+            nodeBSearchAppliedKeyword: '',
+            insertDirection: 'aToB',
+            insertDirectionLocked: false
+        }));
+        if (nextStep === ASSOC_STEPS.SELECT_NODE_B) {
+            loadNewSenseAssocNodeBCandidatesBySense(newSenseAssocFlow.selectedNodeA, newSenseAssocFlow.selectedNodeASenseId);
+        }
+    }, [loadNewSenseAssocNodeBCandidatesBySense, newSenseAssocFlow.selectedNodeA, newSenseAssocFlow.selectedNodeASenseId]);
+
+    const submitNewSenseAssocNodeBSearch = useCallback((rawKeyword = '') => {
+        const keyword = String(rawKeyword || '').trim();
+        const keywordMeta = parseAssociationKeyword(keyword);
+        const normalizedKeyword = keywordMeta.mode === 'include'
+            ? '#include'
+            : (keywordMeta.mode === 'expand' ? '#expand' : '');
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            nodeBSearchAppliedKeyword: normalizedKeyword
+        }));
+    }, []);
+
+    const selectNewSenseAssocNodeB = useCallback(async (candidate, fromParents = false) => {
+        const currentNodeId = String(addingSenseNode?._id || '').trim();
+        const nodeAKey = buildSenseKey(newSenseAssocFlow.selectedNodeA?.nodeId || newSenseAssocFlow.selectedNodeA?._id || '', newSenseAssocFlow.selectedNodeASenseId);
+        const normalized = buildNewSenseAssocTarget(candidate);
+        if (!normalized) {
+            alert('无效目标释义');
+            return;
+        }
+        if (normalized.searchKey === nodeAKey) {
+            alert('左右两侧不能选择同一个释义');
+            return;
+        }
+        if (String(normalized.nodeId || '').trim() === currentNodeId) {
+            alert('同一标题下不同释义不能建立关联关系');
+            return;
+        }
+        const nodeDetail = await fetchNodeDetailForNewSenseAssoc(normalized.nodeId);
+        const targetNode = buildNewSenseAssocTarget(nodeDetail || normalized, normalized.senseId) || normalized;
+        const preferredDirection = fromParents ? 'bToA' : 'aToB';
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            selectedNodeB: targetNode,
+            selectedNodeBSenseId: targetNode.senseId,
+            insertDirection: preferredDirection,
+            insertDirectionLocked: false,
+            currentStep: ASSOC_STEPS.PREVIEW
+        }));
+        syncNewSenseAssocInsertDirection(
+            newSenseAssocFlow.selectedNodeA,
+            newSenseAssocFlow.selectedNodeASenseId,
+            targetNode,
+            targetNode.senseId,
+            preferredDirection
+        );
+    }, [
+        addingSenseNode,
+        buildNewSenseAssocTarget,
+        fetchNodeDetailForNewSenseAssoc,
+        newSenseAssocFlow.selectedNodeA,
+        newSenseAssocFlow.selectedNodeASenseId,
+        syncNewSenseAssocInsertDirection
+    ]);
+
+    const handleNewSenseAssocNodeASenseChange = useCallback((senseId = '') => {
+        const nextSenseId = String(senseId || '').trim();
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            selectedNodeASenseId: nextSenseId
+        }));
+        loadNewSenseAssocNodeBCandidatesBySense(newSenseAssocFlow.selectedNodeA, nextSenseId);
+        syncNewSenseAssocInsertDirection(
+            newSenseAssocFlow.selectedNodeA,
+            nextSenseId,
+            newSenseAssocFlow.selectedNodeB,
+            newSenseAssocFlow.selectedNodeBSenseId,
+            newSenseAssocFlow.insertDirection || 'aToB'
+        );
+    }, [
+        loadNewSenseAssocNodeBCandidatesBySense,
+        newSenseAssocFlow.insertDirection,
+        newSenseAssocFlow.selectedNodeA,
+        newSenseAssocFlow.selectedNodeB,
+        newSenseAssocFlow.selectedNodeBSenseId,
+        syncNewSenseAssocInsertDirection
+    ]);
+
+    const goBackNewSenseAssocStep = useCallback(() => {
+        const previousStep = resolveAssociationBackStep(
+            newSenseAssocFlow.currentStep,
+            newSenseAssocFlow.selectedRelationType
+        );
+        if (!previousStep) {
+            setNewSenseAssocFlow(createEmptyNewSenseAssocFlow());
+            return;
+        }
+        setNewSenseAssocFlow((prev) => ({
+            ...prev,
+            currentStep: previousStep
+        }));
+    }, [newSenseAssocFlow.currentStep, newSenseAssocFlow.selectedRelationType]);
+
+    const cancelNewSenseAssocFlow = useCallback(() => {
+        setNewSenseAssocFlow(createEmptyNewSenseAssocFlow());
+    }, []);
+
+    const confirmNewSenseAssocRelation = useCallback(() => {
+        const relationType = newSenseAssocFlow.selectedRelationType;
+        if (!relationType) {
+            alert('请先选择关系类型');
+            return;
+        }
+        if (relationType === ASSOC_RELATION_TYPES.INSERT) {
+            const leftTarget = buildNewSenseAssocTarget(newSenseAssocFlow.selectedNodeA, newSenseAssocFlow.selectedNodeASenseId);
+            const rightTarget = buildNewSenseAssocTarget(newSenseAssocFlow.selectedNodeB, newSenseAssocFlow.selectedNodeBSenseId);
+            if (!leftTarget || !rightTarget) {
+                alert('请先选择两个目标释义');
+                return;
             }
-            return {
+            if (leftTarget.searchKey === rightTarget.searchKey) {
+                alert('左右两侧不能选择同一个目标释义');
+                return;
+            }
+            const direction = newSenseAssocFlow.insertDirection === 'bToA'
+                ? ASSOC_RELATION_TYPES.EXTENDS
+                : ASSOC_RELATION_TYPES.CONTAINS;
+            const relationList = Array.isArray(newSenseForm.relations) ? newSenseForm.relations : [];
+            const duplicated = relationList.some((item) => (
+                item.kind === ASSOC_RELATION_TYPES.INSERT
+                && item.direction === direction
+                && item.leftTarget?.searchKey === leftTarget.searchKey
+                && item.rightTarget?.searchKey === rightTarget.searchKey
+            ));
+            if (duplicated) {
+                alert('该插入关系已存在');
+                return;
+            }
+            setNewSenseForm((prev) => ({
                 ...prev,
-                selectedTarget: normalized
-            };
-        });
-    };
+                relations: [
+                    ...(Array.isArray(prev.relations) ? prev.relations : []),
+                    {
+                        id: createLocalId('rel'),
+                        kind: ASSOC_RELATION_TYPES.INSERT,
+                        relationType: ASSOC_RELATION_TYPES.INSERT,
+                        direction,
+                        leftTarget,
+                        rightTarget
+                    }
+                ]
+            }));
+            setNewSenseAssocFlow(createEmptyNewSenseAssocFlow());
+            return;
+        }
+
+        const target = buildNewSenseAssocTarget(newSenseAssocFlow.selectedNodeA, newSenseAssocFlow.selectedNodeASenseId);
+        if (!target) {
+            alert('请先选择目标释义');
+            return;
+        }
+        const relationList = Array.isArray(newSenseForm.relations) ? newSenseForm.relations : [];
+        const duplicated = relationList.some((item) => (
+            item.kind === 'single'
+            && item.relationType === relationType
+            && item.target?.searchKey === target.searchKey
+        ));
+        if (duplicated) {
+            alert('该关联关系已存在');
+            return;
+        }
+        const oppositeType = relationType === ASSOC_RELATION_TYPES.CONTAINS
+            ? ASSOC_RELATION_TYPES.EXTENDS
+            : ASSOC_RELATION_TYPES.CONTAINS;
+        const hasOpposite = relationList.some((item) => (
+            item.kind === 'single'
+            && item.relationType === oppositeType
+            && item.target?.searchKey === target.searchKey
+        ));
+        if (hasOpposite) {
+            alert(`同一个释义不能同时使用 ${REL_SYMBOL_SUPERSET} 与 ${REL_SYMBOL_SUBSET} 指向同一目标释义`);
+            return;
+        }
+        setNewSenseForm((prev) => ({
+            ...prev,
+            relations: [
+                ...(Array.isArray(prev.relations) ? prev.relations : []),
+                {
+                    id: createLocalId('rel'),
+                    kind: 'single',
+                    relationType,
+                    target
+                }
+            ]
+        }));
+        setNewSenseAssocFlow(createEmptyNewSenseAssocFlow());
+    }, [buildNewSenseAssocTarget, newSenseAssocFlow, newSenseForm.relations]);
 
     const removeRelationFromNewSense = (relationId) => {
         setNewSenseForm((prev) => ({
             ...prev,
             relations: (Array.isArray(prev.relations) ? prev.relations : []).filter((item) => item.id !== relationId)
         }));
-    };
-
-    const addRelationToNewSense = () => {
-        const currentNodeId = String(addingSenseNode?._id || '').trim();
-        setNewSenseForm((prev) => {
-            const relationList = Array.isArray(prev.relations) ? prev.relations : [];
-            if (prev.relationType === ASSOC_RELATION_TYPES.INSERT) {
-                if (!prev.insertLeftTarget?.searchKey || !prev.insertRightTarget?.searchKey) {
-                    alert('请先选择插入关系的左右释义');
-                    return prev;
-                }
-                if (
-                    String(prev.insertLeftTarget?.nodeId || '').trim() === currentNodeId
-                    || String(prev.insertRightTarget?.nodeId || '').trim() === currentNodeId
-                ) {
-                    alert('同一标题下不同释义不能建立关联关系');
-                    return prev;
-                }
-                if (prev.insertLeftTarget.searchKey === prev.insertRightTarget.searchKey) {
-                    alert('插入关系的左右释义不能是同一个');
-                    return prev;
-                }
-                const insertDirection = prev.insertDirection === ASSOC_RELATION_TYPES.EXTENDS
-                    ? ASSOC_RELATION_TYPES.EXTENDS
-                    : ASSOC_RELATION_TYPES.CONTAINS;
-                const duplicated = relationList.some((item) => (
-                    item.kind === ASSOC_RELATION_TYPES.INSERT
-                    && item.direction === insertDirection
-                    && item.leftTarget?.searchKey === prev.insertLeftTarget.searchKey
-                    && item.rightTarget?.searchKey === prev.insertRightTarget.searchKey
-                ));
-                if (duplicated) {
-                    alert('该插入关系已存在');
-                    return prev;
-                }
-                return {
-                    ...prev,
-                    relations: [
-                        ...relationList,
-                        {
-                            id: createLocalId('rel'),
-                            kind: ASSOC_RELATION_TYPES.INSERT,
-                            relationType: ASSOC_RELATION_TYPES.INSERT,
-                            direction: insertDirection,
-                            leftTarget: prev.insertLeftTarget,
-                            rightTarget: prev.insertRightTarget
-                        }
-                    ],
-                    insertLeftTarget: null,
-                    insertRightTarget: null,
-                    insertDirectionLocked: false,
-                    insertDirection: ASSOC_RELATION_TYPES.CONTAINS,
-                    insertDirectionHint: '先选择左右释义，再确认插入关系。'
-                };
-            }
-            if (!prev.selectedTarget?.searchKey) {
-                alert('请先选择目标释义');
-                return prev;
-            }
-            if (String(prev.selectedTarget?.nodeId || '').trim() === currentNodeId) {
-                alert('同一标题下不同释义不能建立关联关系');
-                return prev;
-            }
-            const duplicated = relationList.some((item) => (
-                item.kind === 'single'
-                && item.relationType === prev.relationType
-                && item.target?.searchKey === prev.selectedTarget.searchKey
-            ));
-            if (duplicated) {
-                alert('该关联关系已存在');
-                return prev;
-            }
-            const oppositeType = prev.relationType === ASSOC_RELATION_TYPES.CONTAINS
-                ? ASSOC_RELATION_TYPES.EXTENDS
-                : ASSOC_RELATION_TYPES.CONTAINS;
-            const hasOpposite = relationList.some((item) => (
-                item.kind === 'single'
-                && item.relationType === oppositeType
-                && item.target?.searchKey === prev.selectedTarget.searchKey
-            ));
-            if (hasOpposite) {
-                alert(`同一个释义不能同时使用 ${REL_SYMBOL_SUPERSET} 与 ${REL_SYMBOL_SUBSET} 指向同一目标释义`);
-                return prev;
-            }
-            return {
-                ...prev,
-                relations: [
-                    ...relationList,
-                    {
-                        id: createLocalId('rel'),
-                        kind: 'single',
-                        relationType: prev.relationType,
-                        target: prev.selectedTarget
-                    }
-                ],
-                selectedTarget: null
-            };
-        });
     };
 
     const saveNewSense = async () => {
@@ -2202,10 +2271,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             return;
         }
         const relationList = Array.isArray(newSenseForm.relations) ? newSenseForm.relations : [];
-        if (relationList.length < 1) {
-            alert('每个释义至少需要 1 条关联关系');
-            return;
-        }
         const associations = [];
         relationList.forEach((relation) => {
             if (relation.kind === 'single' && relation?.target?.nodeId && relation?.target?.senseId) {
@@ -2238,10 +2303,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 });
             }
         });
-        if (associations.length < 1) {
-            alert('请至少添加 1 条有效关联关系');
-            return;
-        }
         const token = localStorage.getItem('token');
         setIsSavingNewSense(true);
         try {
@@ -2657,16 +2718,133 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             })
             .filter(Boolean)
     ), [deleteSenseBridgeDecisions, deleteSenseLostBridgePairs]);
-    const newSenseKeywordMeta = useMemo(
-        () => parseAssociationKeyword(newSenseSearchKeyword),
-        [newSenseSearchKeyword]
+    const newSenseAssocSourceDisplay = useMemo(
+        () => String(newSenseForm.title || '').trim() || '当前释义',
+        [newSenseForm.title]
     );
-    const newSenseAnchorTarget = useMemo(() => {
-        if (newSenseForm.relationType !== ASSOC_RELATION_TYPES.INSERT) return null;
-        if (newSenseTargetSide === 'left') return newSenseForm.insertRightTarget || null;
-        if (newSenseTargetSide === 'right') return newSenseForm.insertLeftTarget || null;
-        return null;
-    }, [newSenseForm, newSenseTargetSide]);
+    const newSenseAssocTargetDisplay = useMemo(
+        () => formatNodeSenseDisplay(newSenseAssocFlow.selectedNodeA, newSenseAssocFlow.selectedNodeASenseId),
+        [formatNodeSenseDisplay, newSenseAssocFlow.selectedNodeA, newSenseAssocFlow.selectedNodeASenseId]
+    );
+    const newSenseAssocSecondTargetDisplay = useMemo(
+        () => formatNodeSenseDisplay(newSenseAssocFlow.selectedNodeB, newSenseAssocFlow.selectedNodeBSenseId),
+        [formatNodeSenseDisplay, newSenseAssocFlow.selectedNodeB, newSenseAssocFlow.selectedNodeBSenseId]
+    );
+    const newSenseAssocNodeASenseOptions = useMemo(() => {
+        const nodeA = newSenseAssocFlow.selectedNodeA;
+        if (!nodeA) return [];
+        const list = normalizeNodeSenses(nodeA);
+        const hasSelected = list.some((item) => item.senseId === newSenseAssocFlow.selectedNodeASenseId);
+        if (hasSelected) return list;
+        const selectedSense = String(newSenseAssocFlow.selectedNodeASenseId || '').trim();
+        if (!selectedSense) return list;
+        return [...list, { senseId: selectedSense, title: selectedSense, content: '' }];
+    }, [newSenseAssocFlow.selectedNodeA, newSenseAssocFlow.selectedNodeASenseId, normalizeNodeSenses]);
+    const newSenseAssocNodeBCandidateView = useMemo(() => {
+        const keywordMeta = parseAssociationKeyword(newSenseAssocFlow.nodeBSearchAppliedKeyword);
+        const mode = keywordMeta.mode;
+        const textKeyword = keywordMeta.textKeyword;
+        const filterByKeyword = (list = []) => (Array.isArray(list) ? list : [])
+            .filter((item) => matchKeywordByDomainAndSense(item, textKeyword));
+        const normalizedParents = filterByKeyword(newSenseAssocFlow.nodeBCandidates?.parents || []);
+        const normalizedChildren = filterByKeyword(newSenseAssocFlow.nodeBCandidates?.children || []);
+        if (!mode) {
+            return { parents: [], children: [] };
+        }
+        if (mode === 'include') {
+            return { parents: normalizedParents, children: [] };
+        }
+        if (mode === 'expand') {
+            return { parents: [], children: normalizedChildren };
+        }
+        return { parents: normalizedParents, children: normalizedChildren };
+    }, [newSenseAssocFlow.nodeBCandidates, newSenseAssocFlow.nodeBSearchAppliedKeyword]);
+    const newSenseAssocInsertRelationAvailable = useMemo(() => {
+        const candidateParents = Array.isArray(newSenseAssocFlow.nodeBCandidates?.parents)
+            ? newSenseAssocFlow.nodeBCandidates.parents.length
+            : 0;
+        const candidateChildren = Array.isArray(newSenseAssocFlow.nodeBCandidates?.children)
+            ? newSenseAssocFlow.nodeBCandidates.children.length
+            : 0;
+        return candidateParents + candidateChildren > 0;
+    }, [newSenseAssocFlow.nodeBCandidates]);
+    const newSenseAssocInsertRelationUnavailableReason = useMemo(() => (
+        newSenseAssocInsertRelationAvailable
+            ? ''
+            : '该目标释义当前无可用的插入链路候选'
+    ), [newSenseAssocInsertRelationAvailable]);
+    const newSenseAssocPreviewInfoText = useMemo(() => {
+        if (newSenseAssocFlow.selectedRelationType === ASSOC_RELATION_TYPES.EXTENDS) {
+            return `${newSenseAssocSourceDisplay} ${REL_SYMBOL_SUPERSET} ${newSenseAssocTargetDisplay}`;
+        }
+        if (newSenseAssocFlow.selectedRelationType === ASSOC_RELATION_TYPES.CONTAINS) {
+            return `${newSenseAssocSourceDisplay} ${REL_SYMBOL_SUBSET} ${newSenseAssocTargetDisplay}`;
+        }
+        if (newSenseAssocFlow.selectedRelationType === ASSOC_RELATION_TYPES.INSERT) {
+            const relationSymbol = newSenseAssocFlow.insertDirection === 'bToA' ? REL_SYMBOL_SUBSET : REL_SYMBOL_SUPERSET;
+            const lockHint = newSenseAssocFlow.insertDirectionLocked ? '（方向已锁定）' : '';
+            return `${newSenseAssocTargetDisplay} ${relationSymbol} ${newSenseAssocSourceDisplay} ${relationSymbol} ${newSenseAssocSecondTargetDisplay}${lockHint}`;
+        }
+        return '';
+    }, [
+        newSenseAssocFlow.insertDirection,
+        newSenseAssocFlow.insertDirectionLocked,
+        newSenseAssocFlow.selectedRelationType,
+        newSenseAssocSecondTargetDisplay,
+        newSenseAssocSourceDisplay,
+        newSenseAssocTargetDisplay
+    ]);
+
+    useEffect(() => {
+        if (newSenseAssocFlow.currentStep === ASSOC_STEPS.PREVIEW && newSenseAssocPreviewCanvasRef.current) {
+            const canvas = newSenseAssocPreviewCanvasRef.current;
+            const shouldRecreateRenderer = (
+                !newSenseAssocPreviewRendererRef.current
+                || newSenseAssocPreviewRendererRef.current.canvas !== canvas
+            );
+            if (shouldRecreateRenderer) {
+                if (newSenseAssocPreviewRendererRef.current) {
+                    newSenseAssocPreviewRendererRef.current.destroy();
+                }
+                newSenseAssocPreviewRendererRef.current = new MiniPreviewRenderer(canvas);
+            }
+            newSenseAssocPreviewRendererRef.current.setPreviewScene({
+                nodeA: newSenseAssocFlow.selectedNodeA,
+                nodeB: newSenseAssocFlow.selectedNodeB,
+                relationType: newSenseAssocFlow.selectedRelationType,
+                newNodeName: addingSenseNode?.name || '当前节点',
+                insertDirection: newSenseAssocFlow.insertDirection || 'aToB',
+                nodeALabel: formatNodeSenseDisplay(newSenseAssocFlow.selectedNodeA, newSenseAssocFlow.selectedNodeASenseId),
+                nodeBLabel: formatNodeSenseDisplay(newSenseAssocFlow.selectedNodeB, newSenseAssocFlow.selectedNodeBSenseId),
+                newNodeLabel: newSenseAssocSourceDisplay,
+                showPendingTag: false
+            });
+        }
+        return () => {
+            if (newSenseAssocFlow.currentStep !== ASSOC_STEPS.PREVIEW && newSenseAssocPreviewRendererRef.current) {
+                newSenseAssocPreviewRendererRef.current.destroy();
+                newSenseAssocPreviewRendererRef.current = null;
+            }
+        };
+    }, [
+        addingSenseNode,
+        formatNodeSenseDisplay,
+        newSenseAssocFlow.currentStep,
+        newSenseAssocFlow.insertDirection,
+        newSenseAssocFlow.selectedNodeA,
+        newSenseAssocFlow.selectedNodeASenseId,
+        newSenseAssocFlow.selectedNodeB,
+        newSenseAssocFlow.selectedNodeBSenseId,
+        newSenseAssocFlow.selectedRelationType,
+        newSenseAssocSourceDisplay
+    ]);
+
+    useEffect(() => () => {
+        if (newSenseAssocPreviewRendererRef.current) {
+            newSenseAssocPreviewRendererRef.current.destroy();
+            newSenseAssocPreviewRendererRef.current = null;
+        }
+    }, []);
 
     const resolveDeleteBridgePairMode = useCallback((pair, beforeRelations = []) => {
         const sourceSenseId = String(pair?.sourceSenseId || '').trim();
@@ -2788,9 +2966,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                         const pairKey = String(pair?.pairKey || '').trim();
                         const mode = resolveDeleteBridgePairMode(pair, beforeRelations);
                         const selectedAction = pairKey ? (decisionMap?.[pairKey] || '') : '';
-                        const upperDisplay = pair?.upper?.displayName || '未知上级释义';
-                        const sourceDisplay = getSenseTitleById(sourceNode, pair?.sourceSenseId || '') || '当前释义';
-                        const lowerDisplay = pair?.lower?.displayName || '未知下级释义';
+                        const upperDisplay = resolveDecisionPairSideDisplay(pair, 'upper');
+                        const sourceDisplay = resolveDecisionCurrentDisplay(sourceNode, pair?.sourceSenseId || '', sourceNode?.name || '当前标题');
+                        const lowerDisplay = resolveDecisionPairSideDisplay(pair, 'lower');
                         const afterClassName = selectedAction === 'reconnect'
                             ? 'reconnect'
                             : (selectedAction === 'disconnect' ? 'disconnect' : 'pending');
@@ -2874,7 +3052,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 </div>
             </div>
         );
-    }, [getSenseTitleById, resolveDeleteBridgePairMode]);
+    }, [resolveDecisionCurrentDisplay, resolveDecisionPairSideDisplay, resolveDeleteBridgePairMode]);
 
     // --- Association Management Functions ---
     const toBackendRelationType = (uiRelationType) => (
@@ -3034,181 +3212,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         };
     };
 
-    const buildGroupedInsertAssociation = ({
-        currentNode,
-        sourceSenseId,
-        upperRelation,
-        lowerRelation,
-        isNewDraft = false,
-        mergedDraftMembers = null
-    }) => {
-        const upperNode = upperRelation?.targetNode || {
-            _id: upperRelation?.targetNodeId,
-            name: upperRelation?.targetNodeName
-        };
-        const lowerNode = lowerRelation?.targetNode || {
-            _id: lowerRelation?.targetNodeId,
-            name: lowerRelation?.targetNodeName
-        };
-        const sourceDisplay = formatNodeSenseDisplay(currentNode, sourceSenseId);
-        const upperDisplay = formatNodeSenseDisplay(upperNode, upperRelation?.targetSenseId || '');
-        const lowerDisplay = formatNodeSenseDisplay(lowerNode, lowerRelation?.targetSenseId || '');
-        return {
-            type: ASSOC_RELATION_TYPES.INSERT,
-            nodeA: upperNode,
-            nodeB: lowerNode,
-            direction: 'aToB',
-            sourceSenseId,
-            nodeASenseId: upperRelation?.targetSenseId || '',
-            nodeBSenseId: lowerRelation?.targetSenseId || '',
-            actualAssociations: [
-                {
-                    targetNode: upperRelation?.targetNodeId,
-                    relationType: ASSOC_RELATION_TYPES.EXTENDS,
-                    nodeName: upperRelation?.targetNodeName || '',
-                    sourceSenseId,
-                    targetSenseId: upperRelation?.targetSenseId || ''
-                },
-                {
-                    targetNode: lowerRelation?.targetNodeId,
-                    relationType: ASSOC_RELATION_TYPES.CONTAINS,
-                    nodeName: lowerRelation?.targetNodeName || '',
-                    sourceSenseId,
-                    targetSenseId: lowerRelation?.targetSenseId || ''
-                }
-            ],
-            // 扫描到的上下级链路归并为一条显示记录，提交时仍保持普通 contains/extends。
-            serializeAsInsert: false,
-            displayText: `${upperDisplay} ${REL_SYMBOL_SUPERSET} ${sourceDisplay} ${REL_SYMBOL_SUPERSET} ${lowerDisplay}`,
-            pendingRemoval: false,
-            pendingDecisionLines: [],
-            isNewDraft: !!isNewDraft,
-            mergedDraftMembers: Array.isArray(mergedDraftMembers) ? mergedDraftMembers : undefined
-        };
-    };
-
-    const normalizeAssociationDraftList = (draftList = [], options = {}) => {
-        const currentNode = options?.currentNode || editingAssociationNode;
-        const currentSenseId = String(options?.currentSenseId || editingAssociationSenseId || '').trim();
-        const sourceDraftList = Array.isArray(draftList) ? draftList : [];
-        const normalizedList = [];
-        const mergeCandidates = [];
-        const candidateByOriginalIndex = new Map();
-
-        sourceDraftList.forEach((assoc, originalIndex) => {
-            if (!assoc || assoc?.pendingRemoval || assoc?.type === ASSOC_RELATION_TYPES.INSERT) {
-                normalizedList[originalIndex] = assoc;
-                return;
-            }
-            const actualList = Array.isArray(assoc?.actualAssociations) ? assoc.actualAssociations : [];
-            if (actualList.length !== 1) {
-                normalizedList[originalIndex] = assoc;
-                return;
-            }
-            const actual = actualList[0] || {};
-            const relationType = actual?.relationType;
-            if (relationType !== ASSOC_RELATION_TYPES.CONTAINS && relationType !== ASSOC_RELATION_TYPES.EXTENDS) {
-                normalizedList[originalIndex] = assoc;
-                return;
-            }
-            const targetNodeId = resolveAssociationNodeId(
-                actual?.targetNode && typeof actual.targetNode === 'object'
-                    ? actual.targetNode
-                    : (assoc?.nodeA || { _id: actual?.targetNode })
-            );
-            const targetSenseId = String(actual?.targetSenseId || assoc?.nodeASenseId || '').trim();
-            const sourceSenseId = String(
-                actual?.sourceSenseId
-                || assoc?.sourceSenseId
-                || resolveNodeSenseId(currentNode, currentSenseId)
-                || ''
-            ).trim();
-            if (!targetNodeId || !targetSenseId || !sourceSenseId) {
-                normalizedList[originalIndex] = assoc;
-                return;
-            }
-            const targetNode = (
-                actual?.targetNode && typeof actual.targetNode === 'object'
-                    ? actual.targetNode
-                    : (assoc?.nodeA || { _id: targetNodeId, name: actual?.nodeName || '' })
-            );
-            const candidate = {
-                originalIndex,
-                association: assoc,
-                relationType,
-                sourceSenseId,
-                targetNodeId,
-                targetSenseId,
-                targetKey: `${targetNodeId}:${targetSenseId}`,
-                targetNode,
-                targetNodeName: targetNode?.name || actual?.nodeName || ''
-            };
-            const candidateIndex = mergeCandidates.push(candidate) - 1;
-            candidateByOriginalIndex.set(originalIndex, candidateIndex);
-        });
-
-        const consumedCandidateIndexes = new Set();
-        mergeCandidates.forEach((candidate, candidateIndex) => {
-            if (consumedCandidateIndexes.has(candidateIndex)) return;
-            const oppositeRelationType = candidate.relationType === ASSOC_RELATION_TYPES.CONTAINS
-                ? ASSOC_RELATION_TYPES.EXTENDS
-                : ASSOC_RELATION_TYPES.CONTAINS;
-            const pairedCandidateIndex = mergeCandidates.findIndex((target, targetIndex) => {
-                if (targetIndex <= candidateIndex) return false;
-                if (consumedCandidateIndexes.has(targetIndex)) return false;
-                if (target?.sourceSenseId !== candidate.sourceSenseId) return false;
-                if (target?.relationType !== oppositeRelationType) return false;
-                if (target?.targetKey === candidate.targetKey) return false;
-                return canMergeAssociationPairAsInsert(candidate, target);
-            });
-
-            if (pairedCandidateIndex < 0) {
-                normalizedList[candidate.originalIndex] = candidate.association;
-                consumedCandidateIndexes.add(candidateIndex);
-                return;
-            }
-
-            const pairedCandidate = mergeCandidates[pairedCandidateIndex];
-            const upperRelation = candidate.relationType === ASSOC_RELATION_TYPES.EXTENDS ? candidate : pairedCandidate;
-            const lowerRelation = candidate.relationType === ASSOC_RELATION_TYPES.CONTAINS ? candidate : pairedCandidate;
-            const mergedMembers = [candidate.association, pairedCandidate.association].map((member) => ({
-                ...member,
-                pendingRemoval: false,
-                pendingDecisionLines: [],
-                pendingReassignPlan: null
-            }));
-            const mergedHasNewDraft = mergedMembers.some((member) => !!member?.isNewDraft);
-            normalizedList[candidate.originalIndex] = buildGroupedInsertAssociation({
-                currentNode,
-                sourceSenseId: candidate.sourceSenseId,
-                upperRelation: {
-                    targetNode: upperRelation.targetNode,
-                    targetNodeId: upperRelation.targetNodeId,
-                    targetNodeName: upperRelation.targetNodeName,
-                    targetSenseId: upperRelation.targetSenseId
-                },
-                lowerRelation: {
-                    targetNode: lowerRelation.targetNode,
-                    targetNodeId: lowerRelation.targetNodeId,
-                    targetNodeName: lowerRelation.targetNodeName,
-                    targetSenseId: lowerRelation.targetSenseId
-                },
-                isNewDraft: mergedHasNewDraft,
-                mergedDraftMembers: mergedMembers
-            });
-            consumedCandidateIndexes.add(candidateIndex);
-            consumedCandidateIndexes.add(pairedCandidateIndex);
-            normalizedList[pairedCandidate.originalIndex] = null;
-        });
-
-        sourceDraftList.forEach((assoc, originalIndex) => {
-            if (normalizedList[originalIndex] !== undefined) return;
-            if (candidateByOriginalIndex.has(originalIndex)) return;
-            normalizedList[originalIndex] = assoc;
-        });
-
-        return normalizedList.filter((item) => !!item);
-    };
+    const normalizeAssociationDraftList = (draftList = []) => (
+        (Array.isArray(draftList) ? draftList : []).filter(Boolean)
+    );
 
     const openEditAssociationModal = (node, sourceSense = null) => {
         setEditingAssociationNode(node);
@@ -3257,53 +3263,16 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 });
             });
 
-            const consumedIndexSet = new Set();
-            sourceAssociations.forEach((item, itemIndex) => {
-                if (consumedIndexSet.has(itemIndex)) return;
-                const oppositeRelationType = item.backendRelationType === ASSOC_RELATION_TYPES.CONTAINS
-                    ? ASSOC_RELATION_TYPES.EXTENDS
-                    : ASSOC_RELATION_TYPES.CONTAINS;
-                const itemTargetKey = `${item.targetNodeId}:${item.targetSenseId}`;
-                const pairIndex = sourceAssociations.findIndex((candidate, candidateIndex) => {
-                    if (candidateIndex <= itemIndex || consumedIndexSet.has(candidateIndex)) return false;
-                    if (candidate.sourceSenseId !== item.sourceSenseId) return false;
-                    if (candidate.backendRelationType !== oppositeRelationType) return false;
-                    const candidateTargetKey = `${candidate.targetNodeId}:${candidate.targetSenseId}`;
-                    if (!candidateTargetKey || candidateTargetKey === itemTargetKey) return false;
-                    return canMergeAssociationPairAsInsert({
-                        ...item,
-                        relationType: item.backendRelationType
-                    }, {
-                        ...candidate,
-                        relationType: candidate.backendRelationType
-                    });
-                });
-
-                if (pairIndex < 0) {
-                    rebuiltAssociations.push(buildSimpleAssociation({
-                        currentNode: node,
-                        sourceSenseId: item.sourceSenseId,
-                        targetNode: item.targetNode,
-                        targetNodeId: item.targetNodeId,
-                        targetNodeName: item.targetNodeName,
-                        targetSenseId: item.targetSenseId,
-                        backendRelationType: item.backendRelationType
-                    }));
-                    consumedIndexSet.add(itemIndex);
-                    return;
-                }
-
-                const pairItem = sourceAssociations[pairIndex];
-                const upperRelation = item.backendRelationType === ASSOC_RELATION_TYPES.EXTENDS ? item : pairItem;
-                const lowerRelation = item.backendRelationType === ASSOC_RELATION_TYPES.CONTAINS ? item : pairItem;
-                rebuiltAssociations.push(buildGroupedInsertAssociation({
+            sourceAssociations.forEach((item) => {
+                rebuiltAssociations.push(buildSimpleAssociation({
                     currentNode: node,
                     sourceSenseId: item.sourceSenseId,
-                    upperRelation,
-                    lowerRelation
+                    targetNode: item.targetNode,
+                    targetNodeId: item.targetNodeId,
+                    targetNodeName: item.targetNodeName,
+                    targetSenseId: item.targetSenseId,
+                    backendRelationType: item.backendRelationType
                 }));
-                consumedIndexSet.add(itemIndex);
-                consumedIndexSet.add(pairIndex);
             });
         }
 
@@ -3617,11 +3586,55 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     ]);
 
     const confirmEditAssociation = () => {
-        let associationData;
         const editingDraft = assocEditingIndex !== null ? (Array.isArray(editAssociations) ? editAssociations[assocEditingIndex] : null) : null;
         const shouldMarkAsNewDraft = assocEditingIndex === null ? true : !!editingDraft?.isNewDraft;
         const effectiveSourceSenseId = resolveNodeSenseId(editingAssociationNode, assocSelectedSourceSenseId || editingAssociationSenseId);
         const sourceDisplay = formatNodeSenseDisplay(editingAssociationNode, effectiveSourceSenseId);
+        const resolveDraftRelationMode = (draft = {}) => {
+            const insertGroupId = String(draft?.insertGroupId || '').trim();
+            const insertSide = String(draft?.insertSide || '').trim();
+            if (insertGroupId && (insertSide === 'left' || insertSide === 'right')) {
+                return `insert:${insertSide}`;
+            }
+            return 'direct';
+        };
+        const buildSimpleDraft = ({
+            targetNode,
+            targetSenseId,
+            backendRelationType,
+            insertGroupId = '',
+            insertSide = ''
+        }) => {
+            const safeTargetNode = targetNode || null;
+            const safeTargetNodeId = String(safeTargetNode?._id || safeTargetNode?.nodeId || '').trim();
+            const safeTargetSenseId = String(targetSenseId || '').trim();
+            if (!safeTargetNodeId || !safeTargetSenseId) return null;
+            const uiRelationType = backendRelationType === ASSOC_RELATION_TYPES.CONTAINS
+                ? ASSOC_RELATION_TYPES.EXTENDS
+                : ASSOC_RELATION_TYPES.CONTAINS;
+            const targetDisplay = formatNodeSenseDisplay(safeTargetNode, safeTargetSenseId);
+            return {
+                type: uiRelationType,
+                nodeA: safeTargetNode,
+                nodeB: null,
+                direction: null,
+                sourceSenseId: effectiveSourceSenseId,
+                nodeASenseId: safeTargetSenseId,
+                actualAssociations: [{
+                    targetNode: safeTargetNodeId,
+                    relationType: backendRelationType,
+                    nodeName: safeTargetNode?.name || '',
+                    sourceSenseId: effectiveSourceSenseId,
+                    targetSenseId: safeTargetSenseId
+                }],
+                displayText: formatUiRelationExpression(sourceDisplay, uiRelationType, targetDisplay),
+                isNewDraft: shouldMarkAsNewDraft,
+                insertGroupId: String(insertGroupId || '').trim(),
+                insertSide: (insertSide === 'left' || insertSide === 'right') ? insertSide : ''
+            };
+        };
+
+        let associationDataList = [];
 
         if (assocSelectedRelationType === ASSOC_RELATION_TYPES.INSERT) {
             if (!assocSelectedNodeA?._id || !assocSelectedNodeB?._id) {
@@ -3633,86 +3646,67 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 return;
             }
             const effectiveInsertDirection = assocInsertDirection === 'bToA' ? 'bToA' : 'aToB';
-            associationData = {
-                type: ASSOC_RELATION_TYPES.INSERT,
-                nodeA: assocSelectedNodeA,
-                nodeB: assocSelectedNodeB,
-                direction: effectiveInsertDirection,
-                serializeAsInsert: true,
-                sourceSenseId: effectiveSourceSenseId,
-                nodeASenseId: assocSelectedNodeASenseId,
-                nodeBSenseId: assocSelectedNodeBSenseId,
-                actualAssociations: effectiveInsertDirection === 'aToB'
-                    ? [
-                        {
-                            targetNode: assocSelectedNodeA._id,
-                            relationType: ASSOC_RELATION_TYPES.EXTENDS,
-                            nodeName: assocSelectedNodeA.name,
-                            sourceSenseId: effectiveSourceSenseId,
-                            targetSenseId: assocSelectedNodeASenseId
-                        },
-                        {
-                            targetNode: assocSelectedNodeB._id,
-                            relationType: ASSOC_RELATION_TYPES.CONTAINS,
-                            nodeName: assocSelectedNodeB.name,
-                            sourceSenseId: effectiveSourceSenseId,
-                            targetSenseId: assocSelectedNodeBSenseId
-                        }
-                    ]
-                    : [
-                        {
-                            targetNode: assocSelectedNodeB._id,
-                            relationType: ASSOC_RELATION_TYPES.EXTENDS,
-                            nodeName: assocSelectedNodeB.name,
-                            sourceSenseId: effectiveSourceSenseId,
-                            targetSenseId: assocSelectedNodeBSenseId
-                        },
-                        {
-                            targetNode: assocSelectedNodeA._id,
-                            relationType: ASSOC_RELATION_TYPES.CONTAINS,
-                            nodeName: assocSelectedNodeA.name,
-                            sourceSenseId: effectiveSourceSenseId,
-                            targetSenseId: assocSelectedNodeASenseId
-                        }
-                    ],
-                displayText: buildInsertNarrative(
-                    editingAssociationNode,
-                    effectiveSourceSenseId,
-                    assocSelectedNodeA,
-                    assocSelectedNodeASenseId,
-                    assocSelectedNodeB,
-                    assocSelectedNodeBSenseId,
-                    effectiveInsertDirection
-                ),
-                isNewDraft: shouldMarkAsNewDraft
-            };
+            const upperNode = effectiveInsertDirection === 'aToB' ? assocSelectedNodeA : assocSelectedNodeB;
+            const upperSenseId = effectiveInsertDirection === 'aToB' ? assocSelectedNodeASenseId : assocSelectedNodeBSenseId;
+            const lowerNode = effectiveInsertDirection === 'aToB' ? assocSelectedNodeB : assocSelectedNodeA;
+            const lowerSenseId = effectiveInsertDirection === 'aToB' ? assocSelectedNodeBSenseId : assocSelectedNodeASenseId;
+            const insertGroupId = createLocalId('insert');
+            const upperRelation = buildSimpleDraft({
+                targetNode: upperNode,
+                targetSenseId: upperSenseId,
+                backendRelationType: ASSOC_RELATION_TYPES.EXTENDS,
+                insertGroupId,
+                insertSide: 'left'
+            });
+            const lowerRelation = buildSimpleDraft({
+                targetNode: lowerNode,
+                targetSenseId: lowerSenseId,
+                backendRelationType: ASSOC_RELATION_TYPES.CONTAINS,
+                insertGroupId,
+                insertSide: 'right'
+            });
+            associationDataList = [upperRelation, lowerRelation].filter(Boolean);
         } else {
             if (!assocSelectedNodeA?._id || !effectiveSourceSenseId || !assocSelectedNodeASenseId) {
                 alert('请先选择当前释义与目标释义');
                 return;
             }
             const backendRelationType = toBackendRelationType(assocSelectedRelationType);
-            const targetDisplay = formatNodeSenseDisplay(assocSelectedNodeA, assocSelectedNodeASenseId);
-            associationData = {
-                type: assocSelectedRelationType,
-                nodeA: assocSelectedNodeA,
-                nodeB: null,
-                direction: null,
-                sourceSenseId: effectiveSourceSenseId,
-                nodeASenseId: assocSelectedNodeASenseId,
-                actualAssociations: [{
-                    targetNode: assocSelectedNodeA._id,
-                    relationType: backendRelationType,
-                    nodeName: assocSelectedNodeA.name,
-                    sourceSenseId: effectiveSourceSenseId,
-                    targetSenseId: assocSelectedNodeASenseId
-                }],
-                displayText: formatUiRelationExpression(sourceDisplay, assocSelectedRelationType, targetDisplay),
-                isNewDraft: shouldMarkAsNewDraft
-            };
+            const singleAssociation = buildSimpleDraft({
+                targetNode: assocSelectedNodeA,
+                targetSenseId: assocSelectedNodeASenseId,
+                backendRelationType
+            });
+            associationDataList = singleAssociation ? [singleAssociation] : [];
+        }
+
+        if (associationDataList.length < 1) {
+            alert('未生成有效关联关系，请检查目标释义');
+            return;
         }
 
         let duplicateReason = null;
+        const nextActualKeySet = new Set();
+        const dedupedAssociationDataList = associationDataList.filter((item) => {
+            const key = (Array.isArray(item?.actualAssociations) ? item.actualAssociations : [])
+                .map((actual) => [
+                    String(actual?.targetNode || '').trim(),
+                    String(actual?.relationType || '').trim(),
+                    String(actual?.sourceSenseId || '').trim(),
+                    String(actual?.targetSenseId || '').trim(),
+                    resolveDraftRelationMode(item)
+                ].join('|'))
+                .filter(Boolean)[0] || '';
+            if (!key) return false;
+            if (nextActualKeySet.has(key)) return false;
+            nextActualKeySet.add(key);
+            return true;
+        });
+        if (dedupedAssociationDataList.length < 1) {
+            alert('该关联关系已存在');
+            return;
+        }
+
         const isDuplicate = editAssociations.some((assoc, index) => {
             if (assocEditingIndex !== null && index === assocEditingIndex) {
                 return false;
@@ -3720,56 +3714,21 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             if (assoc?.pendingRemoval) {
                 return false;
             }
-
-            if (assoc.type === ASSOC_RELATION_TYPES.INSERT && associationData.type === ASSOC_RELATION_TYPES.INSERT) {
-                const existingPair = [
-                    `${assoc.nodeA._id}:${assoc.nodeASenseId || ''}`,
-                    `${assoc.nodeB._id}:${assoc.nodeBSenseId || ''}`,
-                    assoc.sourceSenseId || ''
-                ].sort();
-                const newPair = [
-                    `${associationData.nodeA._id}:${associationData.nodeASenseId || ''}`,
-                    `${associationData.nodeB._id}:${associationData.nodeBSenseId || ''}`,
-                    associationData.sourceSenseId || ''
-                ].sort();
-                if (JSON.stringify(existingPair) === JSON.stringify(newPair)) {
-                    duplicateReason = `该释义插入关系已存在：${assoc.displayText}`;
-                    return true;
-                }
-                return false;
-            }
-
-            if (assoc.type !== ASSOC_RELATION_TYPES.INSERT && associationData.type !== ASSOC_RELATION_TYPES.INSERT) {
-                const found = assoc.actualAssociations.some(aa =>
-                    associationData.actualAssociations.some(ba =>
-                        aa.targetNode.toString() === ba.targetNode.toString()
-                        && aa.relationType === ba.relationType
-                        && (aa.sourceSenseId || '') === (ba.sourceSenseId || '')
-                        && (aa.targetSenseId || '') === (ba.targetSenseId || '')
-                    )
-                );
-                if (found) {
-                    duplicateReason = `该释义关系已存在：${assoc.displayText}`;
-                    return true;
-                }
-                return false;
-            }
-
-            const insertAssoc = assoc.type === ASSOC_RELATION_TYPES.INSERT ? assoc : associationData;
-            const simpleAssoc = assoc.type === ASSOC_RELATION_TYPES.INSERT ? associationData : assoc;
-            const conflict = insertAssoc.actualAssociations.find(ia =>
-                simpleAssoc.actualAssociations.some(sa =>
-                    ia.targetNode.toString() === sa.targetNode.toString()
-                    && ia.relationType === sa.relationType
-                    && (ia.sourceSenseId || '') === (sa.sourceSenseId || '')
-                    && (ia.targetSenseId || '') === (sa.targetSenseId || '')
-                )
-            );
-            if (conflict) {
-                duplicateReason = `与现有关联冲突：${sourceDisplay} 对 ${formatNodeSenseDisplay({ name: conflict.nodeName }, conflict.targetSenseId)} 已存在同向关系`;
-                return true;
-            }
-            return false;
+            const existingActualList = Array.isArray(assoc?.actualAssociations) ? assoc.actualAssociations : [];
+            const found = existingActualList.some((existingActual) => (
+                dedupedAssociationDataList.some((nextAssoc) => (
+                    (Array.isArray(nextAssoc?.actualAssociations) ? nextAssoc.actualAssociations : []).some((nextActual) => (
+                        String(existingActual?.targetNode || '').trim() === String(nextActual?.targetNode || '').trim()
+                        && String(existingActual?.relationType || '').trim() === String(nextActual?.relationType || '').trim()
+                        && String(existingActual?.sourceSenseId || '').trim() === String(nextActual?.sourceSenseId || '').trim()
+                        && String(existingActual?.targetSenseId || '').trim() === String(nextActual?.targetSenseId || '').trim()
+                        && resolveDraftRelationMode(assoc) === resolveDraftRelationMode(nextAssoc)
+                    ))
+                ))
+            ));
+            if (!found) return false;
+            duplicateReason = `该释义关系已存在：${assoc.displayText}`;
+            return true;
         });
 
         if (isDuplicate) {
@@ -3777,32 +3736,25 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             return;
         }
 
-        associationData = {
-            ...associationData,
+        const readyAssociations = dedupedAssociationDataList.map((item) => ({
+            ...item,
             pendingRemoval: false,
-            pendingDecisionLines: []
-        };
+            pendingDecisionLines: [],
+            pendingReassignPlan: null
+        }));
 
         if (assocEditingIndex !== null) {
             setEditAssociations(prev => {
                 const next = [...prev];
-                next[assocEditingIndex] = associationData;
+                next.splice(assocEditingIndex, 1, ...readyAssociations);
                 return normalizeAssociationDraftList(next);
             });
         } else {
-            setEditAssociations(prev => normalizeAssociationDraftList([...prev, associationData]));
+            setEditAssociations(prev => normalizeAssociationDraftList([...prev, ...readyAssociations]));
         }
 
         resetAssociationEditor();
     };
-
-    const resolveEditingSenseTitle = useCallback((senseId) => {
-        const sourceList = Array.isArray(editingAssociationNode?.synonymSenses) ? editingAssociationNode.synonymSenses : [];
-        const key = (senseId || '').trim();
-        if (!key) return '';
-        const matched = sourceList.find((sense) => (sense?.senseId || '').trim() === key);
-        return matched?.title || key;
-    }, [editingAssociationNode]);
 
     const closeAssocDeleteDecisionModal = useCallback(() => {
         if (assocDeleteApplying) return;
@@ -3891,7 +3843,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
     }) => {
         const removedAssociation = Array.isArray(editAssociations) ? editAssociations[index] : null;
         if (!removedAssociation) return;
-        const isStrictInsertAssociation = isSameDirectionInsertAssociation(removedAssociation);
         const resolvedAssociationType = String(effectiveAssociationType || removedAssociation?.type || '').trim();
 
         const normalizedAction = decisionAction === 'reconnect' ? 'reconnect' : 'disconnect';
@@ -3906,17 +3857,20 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             removedAssociation?.nodeASenseId || removedAssociation?.targetSenseId || ''
         );
         const isUpperRelationDeletion = resolvedAssociationType === ASSOC_RELATION_TYPES.EXTENDS;
-        const isInsertRelationDeletion = resolvedAssociationType === ASSOC_RELATION_TYPES.INSERT && isStrictInsertAssociation;
 
         (Array.isArray(bridgeItems) ? bridgeItems : []).forEach((item) => {
             const pairKey = item?.pairKey || '';
             if (!pairKey) return;
             nextBridgeDecisions[pairKey] = normalizedAction;
-            const sourceTitle = resolveEditingSenseTitle(item?.sourceSenseId || '');
-            const upperDisplay = item?.upper?.displayName || '上级释义';
-            const lowerDisplay = item?.lower?.displayName || '下级释义';
+            const sourceDisplay = resolveDecisionCurrentDisplay(
+                editingAssociationNode,
+                item?.sourceSenseId || '',
+                editingAssociationNode?.name || '当前标题'
+            );
+            const upperDisplay = resolveDecisionPairSideDisplay(item, 'upper');
+            const lowerDisplay = resolveDecisionPairSideDisplay(item, 'lower');
             if (normalizedAction === 'reconnect') {
-                pendingDecisionLines.push(`恢复：${upperDisplay} → ${sourceTitle || '当前释义'} → ${lowerDisplay}`);
+                pendingDecisionLines.push(`恢复：${upperDisplay} → ${sourceDisplay} → ${lowerDisplay}`);
             }
         });
 
@@ -3963,13 +3917,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }
 
         if (resolvedAssociationType === ASSOC_RELATION_TYPES.CONTAINS) {
-            pendingDecisionLines.push(`${sourceDisplay} 作为下级，删除后保持独立`);
+            pendingDecisionLines.push(`${sourceDisplay} 作为下级，可直接删除该关联`);
         }
         if (isUpperRelationDeletion && decisionAction === 'reassign_upper' && !pendingReassignPlan) {
             pendingDecisionLines.push('未选择可用上级，暂不改接');
-        }
-        if (isInsertRelationDeletion && pendingDecisionLines.length < 2) {
-            pendingDecisionLines.push('该插入关系将在应用更改后移除');
         }
         if (isUpperRelationDeletion && decisionAction !== 'reassign_upper' && pendingDecisionLines.length < 2) {
             pendingDecisionLines.push(`${targetDisplay} 与 ${sourceDisplay} 解绑后将保持独立`);
@@ -4069,31 +4020,16 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
             return;
         }
 
-        const stagedProbe = editAssociations.map((assoc, i) => (
-            i === index
-                ? { ...assoc, pendingRemoval: true, pendingDecisionLines: [] }
-                : assoc
-        ));
-        const previewData = await previewAssociationEdit(assocBridgeDecisions, stagedProbe, { silent: true });
-        const bridgeItems = Array.isArray(previewData?.bridgeDecisionItems) ? previewData.bridgeDecisionItems : [];
-        const existingActions = bridgeItems
-            .map((item) => assocBridgeDecisions[item?.pairKey || ''])
-            .filter(Boolean);
-        const deleteDecisionMode = effectiveAssociationType === ASSOC_RELATION_TYPES.INSERT ? 'insert' : 'upper';
-        const defaultAction = deleteDecisionMode === 'insert'
-            ? (
-                existingActions.length > 0 && existingActions.every((action) => action === 'reconnect')
-                    ? 'reconnect'
-                    : 'disconnect'
-            )
-            : 'disconnect';
+        const defaultAction = 'disconnect';
 
         setAssocDeleteDecisionContext({
             index,
             association: removedAssociation,
-            bridgeItems,
+            // 删除“当前释义包含下级释义”仅影响当前与下级这一对双向关系。
+            // 不在二级决策弹窗中展示与其他上级/下级的衍生承接 pair。
+            bridgeItems: [],
             effectiveAssociationType,
-            mode: deleteDecisionMode
+            mode: 'upper'
         });
         setAssocDeleteDecisionAction(defaultAction);
         setAssocDeleteSearchKeyword('');
@@ -4324,84 +4260,148 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                 insertSide: '',
                 insertGroupId: ''
             }))
-            .filter((assoc) => !!assoc.targetNode && !!assoc.relationType && !!assoc.sourceSenseId && !!assoc.targetSenseId);
+            .filter((assoc) => (
+                !!assoc.targetNode
+                && !!assoc.relationType
+                && !!assoc.sourceSenseId
+                && !!assoc.targetSenseId
+                && (
+                    assoc.relationType === ASSOC_RELATION_TYPES.CONTAINS
+                    || assoc.relationType === ASSOC_RELATION_TYPES.EXTENDS
+                )
+            ));
 
         const safeDraftList = Array.isArray(associationDraftList) ? associationDraftList : [];
         const activeDraftList = safeDraftList.filter((assoc) => !assoc?.pendingRemoval);
-        const editedAssociations = activeDraftList.flatMap((assoc, index) => {
-            if (assoc.type === ASSOC_RELATION_TYPES.INSERT) {
-                if (assoc?.serializeAsInsert === false) {
-                    return (Array.isArray(assoc?.actualAssociations) ? assoc.actualAssociations : [])
-                        .map((actual) => {
-                            const targetNodeId = String(actual?.targetNode?._id || actual?.targetNode || '').trim();
-                            const relationType = actual?.relationType;
-                            const sourceSenseId = String(
-                                actual?.sourceSenseId
-                                || assoc?.sourceSenseId
-                                || effectiveEditingSenseId
-                                || ''
-                            ).trim();
-                            const targetSenseId = String(actual?.targetSenseId || '').trim();
-                            const isAllowedRelationType = (
-                                relationType === ASSOC_RELATION_TYPES.CONTAINS
-                                || relationType === ASSOC_RELATION_TYPES.EXTENDS
-                            );
-                            if (!targetNodeId || !sourceSenseId || !targetSenseId || !isAllowedRelationType) return null;
-                            return {
-                                targetNode: targetNodeId,
-                                relationType,
-                                sourceSenseId,
-                                targetSenseId,
-                                insertSide: '',
-                                insertGroupId: ''
-                            };
-                        })
-                        .filter(Boolean);
-                }
-                const direction = assoc.direction === 'bToA' ? 'bToA' : 'aToB';
-                const upperNode = direction === 'aToB' ? assoc.nodeA : assoc.nodeB;
-                const lowerNode = direction === 'aToB' ? assoc.nodeB : assoc.nodeA;
-                const upperNodeId = upperNode?._id;
-                const lowerNodeId = lowerNode?._id;
-                const sourceSenseId = assoc.sourceSenseId || effectiveEditingSenseId;
-                const upperSenseId = direction === 'aToB'
-                    ? (assoc.nodeASenseId || resolveNodeSenseId(upperNode))
-                    : (assoc.nodeBSenseId || resolveNodeSenseId(upperNode));
-                const lowerSenseId = direction === 'aToB'
-                    ? (assoc.nodeBSenseId || resolveNodeSenseId(lowerNode))
-                    : (assoc.nodeASenseId || resolveNodeSenseId(lowerNode));
-                if (!upperNodeId || !lowerNodeId) return [];
-                if (!sourceSenseId || !upperSenseId || !lowerSenseId) return [];
-                const insertGroupId = `admin_insert_${index}_${upperNodeId}_${lowerNodeId}_${direction}`;
-                return [
-                    {
-                        targetNode: upperNodeId,
-                        relationType: ASSOC_RELATION_TYPES.INSERT,
-                        sourceSenseId,
-                        targetSenseId: upperSenseId,
-                        insertSide: 'left',
-                        insertGroupId
-                    },
-                    {
-                        targetNode: lowerNodeId,
-                        relationType: ASSOC_RELATION_TYPES.INSERT,
-                        sourceSenseId,
-                        targetSenseId: lowerSenseId,
-                        insertSide: 'right',
-                        insertGroupId
-                    }
-                ];
-            }
+        const toNormalizedDirectAssociation = (actual = {}, fallbackSourceSenseId = '') => {
+            const targetNodeId = String(actual?.targetNode?._id || actual?.targetNode || '').trim();
+            const relationType = actual?.relationType;
+            const sourceSenseId = String(actual?.sourceSenseId || fallbackSourceSenseId || '').trim();
+            const targetSenseId = String(actual?.targetSenseId || '').trim();
+            const isAllowedRelationType = (
+                relationType === ASSOC_RELATION_TYPES.CONTAINS
+                || relationType === ASSOC_RELATION_TYPES.EXTENDS
+            );
+            if (!targetNodeId || !sourceSenseId || !targetSenseId || !isAllowedRelationType) return null;
+            return {
+                targetNode: targetNodeId,
+                relationType,
+                sourceSenseId,
+                targetSenseId,
+                insertSide: '',
+                insertGroupId: ''
+            };
+        };
 
-            return assoc.actualAssociations.map((actual) => {
-                return {
-                    targetNode: actual.targetNode,
-                    relationType: actual.relationType,
-                    sourceSenseId: actual.sourceSenseId || effectiveEditingSenseId,
-                    targetSenseId: actual.targetSenseId || ''
-                };
+        const extractSingleDirectAssociationFromDraft = (assoc = {}) => {
+            const fallbackSourceSenseId = String(assoc?.sourceSenseId || effectiveEditingSenseId || '').trim();
+            const sourceActualList = Array.isArray(assoc?.actualAssociations) ? assoc.actualAssociations : [];
+            for (const actual of sourceActualList) {
+                const normalized = toNormalizedDirectAssociation(actual, fallbackSourceSenseId);
+                if (normalized) return normalized;
+            }
+            return null;
+        };
+
+        const insertGroupMap = new Map();
+        activeDraftList.forEach((assoc, index) => {
+            const insertGroupId = String(assoc?.insertGroupId || '').trim();
+            const insertSide = String(assoc?.insertSide || '').trim();
+            if (!insertGroupId || (insertSide !== 'left' && insertSide !== 'right')) return;
+            const sourceSenseId = String(assoc?.sourceSenseId || effectiveEditingSenseId || '').trim();
+            if (!sourceSenseId) return;
+            const normalizedDirect = extractSingleDirectAssociationFromDraft(assoc);
+            if (!normalizedDirect) return;
+
+            const groupKey = `${sourceSenseId}|${insertGroupId}`;
+            const group = insertGroupMap.get(groupKey) || {
+                sourceSenseId,
+                insertGroupId,
+                left: null,
+                leftIndex: -1,
+                right: null,
+                rightIndex: -1
+            };
+            if (insertSide === 'left' && !group.left) {
+                group.left = normalizedDirect;
+                group.leftIndex = index;
+            }
+            if (insertSide === 'right' && !group.right) {
+                group.right = normalizedDirect;
+                group.rightIndex = index;
+            }
+            insertGroupMap.set(groupKey, group);
+        });
+
+        const consumedInsertDraftIndexSet = new Set();
+        const editedAssociations = [];
+
+        insertGroupMap.forEach((group) => {
+            if (!group?.left || !group?.right) return;
+            consumedInsertDraftIndexSet.add(group.leftIndex);
+            consumedInsertDraftIndexSet.add(group.rightIndex);
+            editedAssociations.push({
+                targetNode: group.left.targetNode,
+                relationType: ASSOC_RELATION_TYPES.INSERT,
+                sourceSenseId: group.sourceSenseId,
+                targetSenseId: group.left.targetSenseId,
+                insertSide: 'left',
+                insertGroupId: group.insertGroupId
+            });
+            editedAssociations.push({
+                targetNode: group.right.targetNode,
+                relationType: ASSOC_RELATION_TYPES.INSERT,
+                sourceSenseId: group.sourceSenseId,
+                targetSenseId: group.right.targetSenseId,
+                insertSide: 'right',
+                insertGroupId: group.insertGroupId
             });
         });
+
+        activeDraftList.forEach((assoc, index) => {
+            if (consumedInsertDraftIndexSet.has(index)) return;
+
+            const fallbackSourceSenseId = String(assoc?.sourceSenseId || effectiveEditingSenseId || '').trim();
+            const fallbackActualAssociations = (assoc.type === ASSOC_RELATION_TYPES.INSERT)
+                ? (() => {
+                    const direction = assoc.direction === 'bToA' ? 'bToA' : 'aToB';
+                    const upperNode = direction === 'aToB' ? assoc.nodeA : assoc.nodeB;
+                    const lowerNode = direction === 'aToB' ? assoc.nodeB : assoc.nodeA;
+                    const upperNodeId = String(upperNode?._id || '').trim();
+                    const lowerNodeId = String(lowerNode?._id || '').trim();
+                    const sourceSenseId = String(assoc.sourceSenseId || effectiveEditingSenseId || '').trim();
+                    const upperSenseId = direction === 'aToB'
+                        ? (assoc.nodeASenseId || resolveNodeSenseId(upperNode))
+                        : (assoc.nodeBSenseId || resolveNodeSenseId(upperNode));
+                    const lowerSenseId = direction === 'aToB'
+                        ? (assoc.nodeBSenseId || resolveNodeSenseId(lowerNode))
+                        : (assoc.nodeASenseId || resolveNodeSenseId(lowerNode));
+                    if (!upperNodeId || !lowerNodeId || !sourceSenseId || !upperSenseId || !lowerSenseId) return [];
+                    return [
+                        {
+                            targetNode: upperNodeId,
+                            relationType: ASSOC_RELATION_TYPES.EXTENDS,
+                            sourceSenseId,
+                            targetSenseId: upperSenseId
+                        },
+                        {
+                            targetNode: lowerNodeId,
+                            relationType: ASSOC_RELATION_TYPES.CONTAINS,
+                            sourceSenseId,
+                            targetSenseId: lowerSenseId
+                        }
+                    ];
+                })()
+                : [];
+            const sourceActualAssociations = Array.isArray(assoc?.actualAssociations) && assoc.actualAssociations.length > 0
+                ? assoc.actualAssociations
+                : fallbackActualAssociations;
+            sourceActualAssociations.forEach((actual) => {
+                const normalized = toNormalizedDirectAssociation(actual, fallbackSourceSenseId);
+                if (normalized) editedAssociations.push(normalized);
+            });
+        });
+
         return [...untouchedAssociations, ...editedAssociations];
     }, [editAssociations, editingAssociationNode, editingAssociationSenseId, nodeByIdMap, resolveNodeSenseId]);
 
@@ -4989,10 +4989,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
         }
     };
 
-    const assocDeleteMode = assocDeleteDecisionContext?.mode || 'upper';
-    const isAssocDeleteInsertMode = assocDeleteMode === 'insert';
-    const isAssocDeleteUpperMode = assocDeleteMode === 'upper';
-    const shouldShowAssocDeleteSearch = isAssocDeleteUpperMode && assocDeleteDecisionAction === 'reassign_upper';
+    const shouldShowAssocDeleteSearch = assocDeleteDecisionAction === 'reassign_upper';
     const assocDeleteReplacementDisplay = assocDeleteSelectedTarget
         ? formatNodeSenseDisplay(assocDeleteSelectedTarget, assocDeleteSelectedTarget?.senseId || '')
         : '新上级释义';
@@ -5869,6 +5866,18 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                             </select>
                         </div>
                         <div className="admin-toolbar-right">
+                            <button
+                                type="button"
+                                className="btn btn-success create-node-btn"
+                                onClick={() => {
+                                    if (typeof onCreateNode === 'function') {
+                                        onCreateNode();
+                                    }
+                                }}
+                            >
+                                <Plus className="icon-small" />
+                                新增知识域
+                            </button>
                             <div className="admin-search-group">
                                 <div className="admin-search-input-wrap">
                                     <input
@@ -6004,7 +6013,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                         <h4 className="admin-domain-sense-title">{sense.title}</h4>
                                                     )}
                                                     <span className="admin-domain-sense-count">
-                                                        关联 {sense.associationSummary.all.length}
+                                                        关联 {getEditableSenseAssociationCount(node, sense.senseId)}
                                                     </span>
                                                 </div>
                                                 {editingSenseToken === getSenseEditToken(node._id, sense.senseId) && (
@@ -6534,229 +6543,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
 
                             <div className="admin-add-sense-relations">
                                 <div className="admin-add-sense-relations-header">
-                                    <h4>关联关系（至少 1 条）</h4>
+                                    <h4>关联管理</h4>
                                     <span>已添加 {newSenseForm.relations.length} 条</span>
                                 </div>
-
-                                <div className="admin-assoc-relation-cards">
-                                    {NEW_SENSE_RELATION_OPTIONS.map((option) => {
-                                        const isActive = newSenseForm.relationType === option.value;
-                                        const iconClass = option.value === ASSOC_RELATION_TYPES.CONTAINS
-                                            ? 'contains'
-                                            : (option.value === ASSOC_RELATION_TYPES.EXTENDS ? 'extends' : 'insert');
-                                        const iconText = option.value === ASSOC_RELATION_TYPES.CONTAINS
-                                            ? '↓'
-                                            : (option.value === ASSOC_RELATION_TYPES.EXTENDS ? '↑' : '⇄');
-                                        const hintText = option.value === ASSOC_RELATION_TYPES.CONTAINS
-                                            ? `当前释义 ${REL_SYMBOL_SUBSET} 目标释义`
-                                            : (option.value === ASSOC_RELATION_TYPES.EXTENDS
-                                                ? `当前释义 ${REL_SYMBOL_SUPERSET} 目标释义`
-                                                : '当前释义插入在两个释义之间');
-                                        return (
-                                            <div
-                                                key={`new_sense_relation_${option.value}`}
-                                                className={`admin-assoc-relation-card ${isActive ? 'active' : ''}`}
-                                                onClick={() => {
-                                                    setNewSenseTargetSide(option.value === ASSOC_RELATION_TYPES.INSERT ? 'left' : 'single');
-                                                    setNewSenseForm((prev) => (
-                                                        prev.relationType === option.value
-                                                            ? prev
-                                                            : {
-                                                                ...prev,
-                                                                relationType: option.value,
-                                                                selectedTarget: null,
-                                                                insertLeftTarget: null,
-                                                                insertRightTarget: null,
-                                                                insertDirection: ASSOC_RELATION_TYPES.CONTAINS,
-                                                                insertDirectionLocked: false,
-                                                                insertDirectionHint: '先选择左右释义，再确认插入关系。'
-                                                            }
-                                                    ));
-                                                }}
-                                                role="button"
-                                                tabIndex={0}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter' || e.key === ' ') {
-                                                        e.preventDefault();
-                                                        e.currentTarget.click();
-                                                    }
-                                                }}
-                                            >
-                                                <div className={`admin-assoc-relation-icon ${iconClass}`}>{iconText}</div>
-                                                <div className="admin-assoc-relation-content">
-                                                    <h6>{option.label}</h6>
-                                                    <p>{hintText}</p>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-
-                                {newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT && (
-                                    <>
-                                        <div className="admin-add-sense-insert-targets">
-                                            <button
-                                                type="button"
-                                                className={`btn-action ${newSenseTargetSide === 'left' ? 'btn-primary-small' : 'btn-view'}`}
-                                                onClick={() => setNewSenseTargetSide('left')}
-                                            >
-                                                左侧：{newSenseForm.insertLeftTarget?.displayName || '未选择'}
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className={`btn-action ${newSenseTargetSide === 'right' ? 'btn-primary-small' : 'btn-view'}`}
-                                                onClick={() => setNewSenseTargetSide('right')}
-                                            >
-                                                右侧：{newSenseForm.insertRightTarget?.displayName || '未选择'}
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className="btn-action btn-secondary"
-                                                onClick={() => {
-                                                    if (newSenseForm.insertDirectionLocked) return;
-                                                    setNewSenseForm((prev) => ({
-                                                        ...prev,
-                                                        insertDirection: prev.insertDirection === ASSOC_RELATION_TYPES.EXTENDS
-                                                            ? ASSOC_RELATION_TYPES.CONTAINS
-                                                            : ASSOC_RELATION_TYPES.EXTENDS
-                                                    }));
-                                                }}
-                                                disabled={newSenseForm.insertDirectionLocked}
-                                            >
-                                                方向：{newSenseForm.insertDirection === ASSOC_RELATION_TYPES.EXTENDS
-                                                    ? `左 ${REL_SYMBOL_SUBSET} 当前释义 ${REL_SYMBOL_SUBSET} 右`
-                                                    : `左 ${REL_SYMBOL_SUPERSET} 当前释义 ${REL_SYMBOL_SUPERSET} 右`}
-                                            </button>
-                                        </div>
-                                        <p className={`admin-add-sense-insert-hint ${newSenseForm.insertDirectionLocked ? 'locked' : ''}`}>
-                                            {newSenseForm.insertDirectionHint}
-                                        </p>
-                                    </>
-                                )}
-
-                                {newSenseForm.relationType !== ASSOC_RELATION_TYPES.INSERT && (
-                                    <p className="admin-add-sense-selected-target">
-                                        当前目标：{newSenseForm.selectedTarget?.displayName || '未选择'}
-                                    </p>
-                                )}
-
-                                {newSenseForm.relationType !== ASSOC_RELATION_TYPES.INSERT && (
-                                    <div className="search-input-group">
-                                        <input
-                                            type="text"
-                                            className="form-input"
-                                            value={newSenseSearchKeyword}
-                                            onChange={(e) => setNewSenseSearchKeyword(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                    e.preventDefault();
-                                                    searchTargetsForNewSense();
-                                                }
-                                            }}
-                                            placeholder="搜索标题或释义题目"
-                                        />
-                                        <button
-                                            className="btn btn-primary"
-                                            onClick={() => searchTargetsForNewSense()}
-                                            disabled={newSenseSearchLoading}
-                                        >
-                                            {newSenseSearchLoading ? '搜索中...' : '搜索'}
-                                        </button>
-                                    </div>
-                                )}
-
-                                {newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT && !newSenseAnchorTarget && (
-                                    <>
-                                        <div className="search-input-group">
-                                            <input
-                                                type="text"
-                                                className="form-input"
-                                                value={newSenseSearchKeyword}
-                                                onChange={(e) => setNewSenseSearchKeyword(e.target.value)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') {
-                                                        e.preventDefault();
-                                                        searchTargetsForNewSense();
-                                                    }
-                                                }}
-                                                placeholder="先搜索并选择一侧释义（标题或释义题目）"
-                                            />
-                                            <button
-                                                className="btn btn-primary"
-                                                onClick={() => searchTargetsForNewSense()}
-                                                disabled={newSenseSearchLoading}
-                                            >
-                                                {newSenseSearchLoading ? '搜索中...' : '搜索'}
-                                            </button>
-                                        </div>
-                                        <p className="admin-assoc-step-description" style={{ marginTop: '0.45rem', marginBottom: '0.45rem' }}>
-                                            先确定一侧释义后，另一侧只能通过 <code>#include</code> / <code>#expand</code> 命令选择。
-                                        </p>
-                                    </>
-                                )}
-
-                                {newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT && !!newSenseAnchorTarget && (
-                                    <>
-                                        <div className="admin-assoc-command-buttons" style={{ marginTop: '0.1rem', marginBottom: '0.45rem' }}>
-                                            <button
-                                                type="button"
-                                                className="admin-assoc-command-btn"
-                                                onClick={() => {
-                                                    setNewSenseSearchKeyword('#include');
-                                                    searchTargetsForNewSense('#include');
-                                                }}
-                                            >
-                                                #include
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className="admin-assoc-command-btn"
-                                                onClick={() => {
-                                                    setNewSenseSearchKeyword('#expand');
-                                                    searchTargetsForNewSense('#expand');
-                                                }}
-                                            >
-                                                #expand
-                                            </button>
-                                        </div>
-                                        <p className="admin-assoc-step-description" style={{ marginTop: '0.2rem', marginBottom: '0.45rem' }}>
-                                            <code>#include</code>：仅显示另一侧释义的上级链路候选；<code>#expand</code>：仅显示另一侧释义的下级链路候选。
-                                        </p>
-                                    </>
-                                )}
-
-                                {newSenseSearchResults.length > 0 && (
-                                    <div className="admin-add-sense-search-results admin-assoc-candidate-list">
-                                        {newSenseSearchResults.map((item) => (
-                                            <button
-                                                key={item.searchKey}
-                                                type="button"
-                                                className="search-result-item selectable admin-assoc-candidate-item"
-                                                onClick={() => chooseNewSenseTarget(item)}
-                                            >
-                                                <div className="node-info">
-                                                    <div className="node-title-row">
-                                                        {newSenseForm.relationType === ASSOC_RELATION_TYPES.INSERT && !!item.relationToAnchor && (
-                                                            <span className={`relation-prefix relation-${item.relationToAnchor || 'none'}`}>
-                                                                {item.relationToAnchor}
-                                                            </span>
-                                                        )}
-                                                        <strong>{item.displayName}</strong>
-                                                    </div>
-                                                    <span className="node-description">{item.description || '无释义内容'}</span>
-                                                </div>
-                                                <ArrowRight className="icon-small" />
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                                {newSenseSearchResults.length === 0 && (newSenseKeywordMeta.textKeyword || newSenseKeywordMeta.mode) && !newSenseSearchLoading && (
-                                    <p className="admin-assoc-step-description" style={{ marginTop: '0.45rem' }}>没有匹配结果</p>
-                                )}
-
-                                <button type="button" className="btn btn-success admin-add-sense-add-relation-btn" onClick={addRelationToNewSense}>
-                                    添加当前关系
-                                </button>
 
                                 <div className="admin-add-sense-added-relations">
                                     {newSenseForm.relations.length > 0 ? (
@@ -6784,6 +6573,57 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                         <p className="admin-add-sense-empty-relations">当前还没有关联关系</p>
                                     )}
                                 </div>
+
+                                {newSenseAssocFlow.currentStep ? (
+                                    <AssociationAddFlowEditor
+                                        steps={ASSOC_STEPS}
+                                        relationTypes={ASSOC_RELATION_TYPES}
+                                        relSymbolSubset={REL_SYMBOL_SUBSET}
+                                        relSymbolSuperset={REL_SYMBOL_SUPERSET}
+                                        currentStep={newSenseAssocFlow.currentStep}
+                                        selectedRelationType={newSenseAssocFlow.selectedRelationType}
+                                        sourceDisplay={newSenseAssocSourceDisplay}
+                                        targetDisplay={newSenseAssocTargetDisplay}
+                                        secondTargetDisplay={newSenseAssocSecondTargetDisplay}
+                                        nodeASenseOptions={newSenseAssocNodeASenseOptions}
+                                        selectedNodeASenseId={newSenseAssocFlow.selectedNodeASenseId}
+                                        insertDirection={newSenseAssocFlow.insertDirection}
+                                        insertRelationAvailable={newSenseAssocInsertRelationAvailable}
+                                        insertRelationUnavailableReason={newSenseAssocInsertRelationUnavailableReason}
+                                        nodeASearchKeyword={newSenseAssocFlow.searchKeyword}
+                                        nodeASearchAppliedKeyword={newSenseAssocFlow.searchAppliedKeyword}
+                                        nodeASearchLoading={newSenseAssocFlow.searchLoading}
+                                        nodeASearchResults={newSenseAssocFlow.searchResults}
+                                        nodeBSearchAppliedKeyword={newSenseAssocFlow.nodeBSearchAppliedKeyword}
+                                        nodeBSearchLoading={false}
+                                        nodeBCandidatesParents={newSenseAssocNodeBCandidateView.parents}
+                                        nodeBCandidatesChildren={newSenseAssocNodeBCandidateView.children}
+                                        previewCanvasRef={newSenseAssocPreviewCanvasRef}
+                                        previewInfoText={newSenseAssocPreviewInfoText}
+                                        onNodeASearchKeywordChange={(keyword) => {
+                                            setNewSenseAssocFlow((prev) => ({ ...prev, searchKeyword: keyword }));
+                                        }}
+                                        onSubmitNodeASearch={() => searchNewSenseAssocNodeA(newSenseAssocFlow.searchKeyword)}
+                                        onClearNodeASearch={clearNewSenseAssocNodeASearch}
+                                        onSelectNodeA={selectNewSenseAssocNodeA}
+                                        onChangeNodeASenseId={handleNewSenseAssocNodeASenseChange}
+                                        onSelectRelationType={selectNewSenseAssocRelationType}
+                                        onSubmitNodeBSearch={submitNewSenseAssocNodeBSearch}
+                                        onSelectNodeBParent={(node) => selectNewSenseAssocNodeB(node, true)}
+                                        onSelectNodeBChild={(node) => selectNewSenseAssocNodeB(node, false)}
+                                        onConfirm={confirmNewSenseAssocRelation}
+                                        onBack={goBackNewSenseAssocStep}
+                                        onCancel={cancelNewSenseAssocFlow}
+                                    />
+                                ) : (
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary admin-add-association-btn"
+                                        onClick={startNewSenseRelationEditor}
+                                    >
+                                        <Plus className="icon-small" /> 添加关联
+                                    </button>
+                                )}
                             </div>
                         </div>
                         <div className="modal-footer">
@@ -6869,9 +6709,13 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                         const modeText = mode === ASSOC_RELATION_TYPES.EXTENDS
                                                             ? '上级关系'
                                                             : (mode === ASSOC_RELATION_TYPES.CONTAINS ? '下级关系' : '插入关系');
-                                                        const upperDisplay = pair?.upper?.displayName || '未知上级释义';
-                                                        const sourceDisplay = getSenseTitleById(deletingSenseContext.node, pair?.sourceSenseId || '') || '当前释义';
-                                                        const lowerDisplay = pair?.lower?.displayName || '未知下级释义';
+                                                        const upperDisplay = resolveDecisionPairSideDisplay(pair, 'upper');
+                                                        const sourceDisplay = resolveDecisionCurrentDisplay(
+                                                            deletingSenseContext.node,
+                                                            pair?.sourceSenseId || '',
+                                                            deletingSenseContext?.node?.name || '当前标题'
+                                                        );
+                                                        const lowerDisplay = resolveDecisionPairSideDisplay(pair, 'lower');
                                                         return (
                                                             <button
                                                                 key={pairKey || `del_sense_pending_${index}`}
@@ -6903,9 +6747,13 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                                         const modeText = mode === ASSOC_RELATION_TYPES.EXTENDS
                                                             ? '上级关系'
                                                             : (mode === ASSOC_RELATION_TYPES.CONTAINS ? '下级关系' : '插入关系');
-                                                        const upperDisplay = pair?.upper?.displayName || '未知上级释义';
-                                                        const sourceDisplay = getSenseTitleById(deletingSenseContext.node, pair?.sourceSenseId || '') || '当前释义';
-                                                        const lowerDisplay = pair?.lower?.displayName || '未知下级释义';
+                                                        const upperDisplay = resolveDecisionPairSideDisplay(pair, 'upper');
+                                                        const sourceDisplay = resolveDecisionCurrentDisplay(
+                                                            deletingSenseContext.node,
+                                                            pair?.sourceSenseId || '',
+                                                            deletingSenseContext?.node?.name || '当前标题'
+                                                        );
+                                                        const lowerDisplay = resolveDecisionPairSideDisplay(pair, 'lower');
                                                         const afterText = pair.action === 'reconnect'
                                                             ? `${upperDisplay} ⇢ ${lowerDisplay}`
                                                             : `${upperDisplay} ✕ ${lowerDisplay}`;
@@ -6980,9 +6828,13 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                         <div className="modal-body">
                             {(() => {
                                 const mode = resolveDeleteBridgePairMode(deleteSenseDecisionPair, deleteSenseBeforeRelations);
-                                const upperDisplay = deleteSenseDecisionPair?.upper?.displayName || '未知上级释义';
-                                const sourceDisplay = getSenseTitleById(deletingSenseContext.node, deleteSenseDecisionPair?.sourceSenseId || '') || '当前释义';
-                                const lowerDisplay = deleteSenseDecisionPair?.lower?.displayName || '未知下级释义';
+                                const upperDisplay = resolveDecisionPairSideDisplay(deleteSenseDecisionPair, 'upper');
+                                const sourceDisplay = resolveDecisionCurrentDisplay(
+                                    deletingSenseContext.node,
+                                    deleteSenseDecisionPair?.sourceSenseId || '',
+                                    deletingSenseContext?.node?.name || '当前标题'
+                                );
+                                const lowerDisplay = resolveDecisionPairSideDisplay(deleteSenseDecisionPair, 'lower');
                                 const reconnectTitle = mode === ASSOC_RELATION_TYPES.INSERT ? '两端直连' : '保留承接';
                                 const reconnectHint = mode === ASSOC_RELATION_TYPES.INSERT
                                     ? '删除后，原上下级释义恢复直接关联'
@@ -7364,49 +7216,26 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                 即将删除：<strong>{assocDeleteDecisionContext?.association?.displayText || ''}</strong>
                             </p>
                             <div className="admin-assoc-delete-option-grid">
-                                {isAssocDeleteInsertMode ? (
-                                    <>
-                                        <button
-                                            type="button"
-                                            className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'reconnect' ? 'active reconnect' : ''}`}
-                                            onClick={() => setAssocDeleteDecisionAction('reconnect')}
-                                            disabled={assocDeleteApplying}
-                                        >
-                                            <strong>两端直连</strong>
-                                            <small>删除插入后，原两端释义恢复直接关联</small>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'disconnect' ? 'active disconnect' : ''}`}
-                                            onClick={() => setAssocDeleteDecisionAction('disconnect')}
-                                            disabled={assocDeleteApplying}
-                                        >
-                                            <strong>两端不连</strong>
-                                            <small>删除插入后，原两端释义不再直接关联</small>
-                                        </button>
-                                    </>
-                                ) : (
-                                    <>
-                                        <button
-                                            type="button"
-                                            className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'disconnect' ? 'active disconnect' : ''}`}
-                                            onClick={() => setAssocDeleteDecisionAction('disconnect')}
-                                            disabled={assocDeleteApplying}
-                                        >
-                                            <strong>直接删除</strong>
-                                            <small>删除后，下级释义不改接新上级</small>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'reassign_upper' ? 'active reconnect' : ''}`}
-                                            onClick={() => setAssocDeleteDecisionAction('reassign_upper')}
-                                            disabled={assocDeleteApplying}
-                                        >
-                                            <strong>改接新上级</strong>
-                                            <small>删除后，为该下级释义指定新的上级</small>
-                                        </button>
-                                    </>
-                                )}
+                                <>
+                                    <button
+                                        type="button"
+                                        className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'disconnect' ? 'active disconnect' : ''}`}
+                                        onClick={() => setAssocDeleteDecisionAction('disconnect')}
+                                        disabled={assocDeleteApplying}
+                                    >
+                                        <strong>直接删除</strong>
+                                        <small>删除后，下级释义不改接新上级</small>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`admin-assoc-delete-option ${assocDeleteDecisionAction === 'reassign_upper' ? 'active reconnect' : ''}`}
+                                        onClick={() => setAssocDeleteDecisionAction('reassign_upper')}
+                                        disabled={assocDeleteApplying}
+                                    >
+                                        <strong>改接新上级</strong>
+                                        <small>删除后，为该下级释义指定新的上级</small>
+                                    </button>
+                                </>
                             </div>
 
                             {Array.isArray(assocDeleteDecisionContext?.bridgeItems) && assocDeleteDecisionContext.bridgeItems.length > 0 ? (
@@ -7414,36 +7243,27 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled }) => {
                                     {assocDeleteDecisionContext.bridgeItems.map((item, index) => (
                                         <div key={item?.pairKey || `assoc_delete_bridge_${index}`} className="admin-assoc-delete-impact-item">
                                             {(() => {
-                                                const upperDisplay = item?.upper?.displayName || '上级释义';
-                                                const sourceDisplay = resolveEditingSenseTitle(item?.sourceSenseId || '') || '当前释义';
-                                                const lowerDisplay = item?.lower?.displayName || '下级释义';
-                                                const isReconnect = assocDeleteDecisionAction === 'reconnect';
+                                                const upperDisplay = resolveDecisionPairSideDisplay(item, 'upper');
+                                                const sourceDisplay = resolveDecisionCurrentDisplay(
+                                                    editingAssociationNode,
+                                                    item?.sourceSenseId || '',
+                                                    editingAssociationNode?.name || '当前标题'
+                                                );
+                                                const lowerDisplay = resolveDecisionPairSideDisplay(item, 'lower');
                                                 const isReassignUpper = assocDeleteDecisionAction === 'reassign_upper';
-                                                const afterClassName = isAssocDeleteInsertMode
-                                                    ? (isReconnect ? 'reconnect' : 'disconnect')
-                                                    : (isReassignUpper
-                                                        ? (assocDeleteSelectedTarget ? 'reconnect' : 'pending')
-                                                        : 'disconnect');
-                                                const afterText = isAssocDeleteInsertMode
+                                                const afterClassName = isReassignUpper
+                                                    ? (assocDeleteSelectedTarget ? 'reconnect' : 'pending')
+                                                    : 'disconnect';
+                                                const afterText = isReassignUpper
                                                     ? (
-                                                        isReconnect
-                                                            ? `${upperDisplay} ⇢ ${lowerDisplay}`
-                                                            : `${upperDisplay} ✕ ${lowerDisplay}`
+                                                        assocDeleteSelectedTarget
+                                                            ? `${assocDeleteReplacementDisplay} ⇢ ${lowerDisplay}`
+                                                            : `待改接：${lowerDisplay}`
                                                     )
-                                                    : (
-                                                        isReassignUpper
-                                                            ? (
-                                                                assocDeleteSelectedTarget
-                                                                    ? `${assocDeleteReplacementDisplay} ⇢ ${lowerDisplay}`
-                                                                    : `待改接：${lowerDisplay}`
-                                                            )
-                                                            : `${upperDisplay} ✕ ${lowerDisplay}`
-                                                    );
-                                                const afterHint = isAssocDeleteInsertMode
-                                                    ? (isReconnect ? '删除后两端直连' : '删除后两端断开')
-                                                    : (isReassignUpper
-                                                        ? (assocDeleteSelectedTarget ? '删除后改接新上级' : '请先选择新的上级释义')
-                                                        : '删除后不改接，保持断开');
+                                                    : `${upperDisplay} ✕ ${lowerDisplay}`;
+                                                const afterHint = isReassignUpper
+                                                    ? (assocDeleteSelectedTarget ? '删除后改接新上级' : '请先选择新的上级释义')
+                                                    : '删除后不改接，保持断开';
                                                 return (
                                                     <>
                                                         <div className="admin-assoc-delete-impact-line before">

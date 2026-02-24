@@ -1574,18 +1574,33 @@ const applyInsertAssociationRewire = async ({ insertPlans = [], newNodeId = '', 
     const upperNodeName = typeof upperNode?.name === 'string' ? upperNode.name.trim() : '';
     const lowerNodeName = typeof lowerNode?.name === 'string' ? lowerNode.name.trim() : '';
 
-    const removedUpperToLower = removeDirectedContainsOrExtendsAssociation(
+    const removedUpperToLowerByDirectOrder = removeDirectedContainsOrExtendsAssociation(
       upperNode,
       lowerNode._id,
       plan.upperSenseId,
       plan.lowerSenseId
     );
-    const removedLowerToUpper = removeDirectedContainsOrExtendsAssociation(
+    const removedUpperToLowerByReverseOrder = removeDirectedContainsOrExtendsAssociation(
+      upperNode,
+      lowerNode._id,
+      plan.lowerSenseId,
+      plan.upperSenseId
+    );
+    const removedUpperToLower = removedUpperToLowerByDirectOrder || removedUpperToLowerByReverseOrder;
+
+    const removedLowerToUpperByDirectOrder = removeDirectedContainsOrExtendsAssociation(
       lowerNode,
       upperNode._id,
       plan.lowerSenseId,
       plan.upperSenseId
     );
+    const removedLowerToUpperByReverseOrder = removeDirectedContainsOrExtendsAssociation(
+      lowerNode,
+      upperNode._id,
+      plan.upperSenseId,
+      plan.lowerSenseId
+    );
+    const removedLowerToUpper = removedLowerToUpperByDirectOrder || removedLowerToUpperByReverseOrder;
 
     const addedUpperToNew = addAssociationIfMissing(upperNode, {
       targetNode: currentNodeId,
@@ -4067,7 +4082,7 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
-// 管理员新增释义（必须至少包含1条关联）
+// 管理员新增释义（可不含关联）
 router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { nodeId } = req.params;
@@ -4102,80 +4117,86 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
 
     const nextSenseId = allocateNextSenseId(existingSenses);
     const rawAssociations = Array.isArray(associations) ? associations : [];
-    if (rawAssociations.length === 0) {
-      return res.status(400).json({ error: '每个释义至少需要1条关联关系' });
-    }
-
-    const localSenseIdSet = new Set([...existingSenses.map((item) => item.senseId), nextSenseId]);
-    const injectedAssociations = rawAssociations.map((assoc) => ({
-      ...assoc,
-      sourceSenseId: nextSenseId
-    }));
-    const normalizedAssociations = normalizeAssociationDraftList(injectedAssociations, localSenseIdSet);
-    if (normalizedAssociations.length === 0) {
-      return res.status(400).json({ error: '新增释义必须至少包含1条有效关联关系' });
-    }
-
-    const targetNodeIds = Array.from(new Set(normalizedAssociations.map((item) => item.targetNode)));
-    const targetNodes = targetNodeIds.length > 0
-      ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
-          .select('_id name synonymSenses description')
-          .lean()
-      : [];
-    await hydrateNodeSensesForNodes(targetNodes);
-    const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
-    if (targetNodes.length !== targetNodeIds.length) {
-      return res.status(400).json({ error: '存在无效的关联目标知识域' });
-    }
-
-    for (const assoc of normalizedAssociations) {
-      const targetNode = targetNodeMap.get(assoc.targetNode);
-      if (!targetNode) {
-        return res.status(400).json({ error: '存在无效的关联目标知识域' });
-      }
-      const matched = normalizeNodeSenseList(targetNode).some((sense) => sense.senseId === assoc.targetSenseId);
-      if (!matched) {
-        return res.status(400).json({ error: `目标知识域「${targetNode.name}」不存在指定释义` });
-      }
-    }
-
-    const relationRuleValidation = validateAssociationRuleSet({
-      currentNodeId: node._id,
-      associations: normalizedAssociations
-    });
-    if (relationRuleValidation.error) {
-      return res.status(400).json({ error: relationRuleValidation.error });
-    }
-
-    const {
-      error: associationResolveError,
-      effectiveAssociations,
-      insertPlans
-    } = resolveAssociationsWithInsertPlans(normalizedAssociations);
-    if (associationResolveError) {
-      return res.status(400).json({ error: associationResolveError });
-    }
-
-    const coveredSourceSenseSet = new Set(effectiveAssociations.map((item) => item.sourceSenseId).filter(Boolean));
-    if (!coveredSourceSenseSet.has(nextSenseId)) {
-      return res.status(400).json({ error: '新增释义必须至少包含1条有效关联关系' });
-    }
-
     const oldAssociations = Array.isArray(node.associations) ? node.associations : [];
     const oldRelationAssociations = normalizeRelationAssociationList(oldAssociations);
-    const nextAssociations = dedupeAssociationList([...oldRelationAssociations, ...effectiveAssociations]);
-    const mergedRuleValidation = validateAssociationRuleSet({
-      currentNodeId: node._id,
-      associations: nextAssociations
-    });
-    if (mergedRuleValidation.error) {
-      return res.status(400).json({ error: mergedRuleValidation.error });
+    let effectiveAssociations = [];
+    let insertPlans = [];
+    let nextAssociations = oldRelationAssociations;
+
+    if (rawAssociations.length > 0) {
+      const localSenseIdSet = new Set([...existingSenses.map((item) => item.senseId), nextSenseId]);
+      const injectedAssociations = rawAssociations.map((assoc) => ({
+        ...assoc,
+        sourceSenseId: nextSenseId
+      }));
+      const normalizedAssociations = normalizeAssociationDraftList(injectedAssociations, localSenseIdSet);
+      if (normalizedAssociations.length === 0) {
+        return res.status(400).json({ error: '新增释义必须至少包含1条有效关联关系' });
+      }
+
+      const targetNodeIds = Array.from(new Set(normalizedAssociations.map((item) => item.targetNode)));
+      const targetNodes = targetNodeIds.length > 0
+        ? await Node.find({ _id: { $in: targetNodeIds }, status: 'approved' })
+            .select('_id name synonymSenses description')
+            .lean()
+        : [];
+      await hydrateNodeSensesForNodes(targetNodes);
+      const targetNodeMap = new Map(targetNodes.map((item) => [getIdString(item._id), item]));
+      if (targetNodes.length !== targetNodeIds.length) {
+        return res.status(400).json({ error: '存在无效的关联目标知识域' });
+      }
+
+      for (const assoc of normalizedAssociations) {
+        const targetNode = targetNodeMap.get(assoc.targetNode);
+        if (!targetNode) {
+          return res.status(400).json({ error: '存在无效的关联目标知识域' });
+        }
+        const matched = normalizeNodeSenseList(targetNode).some((sense) => sense.senseId === assoc.targetSenseId);
+        if (!matched) {
+          return res.status(400).json({ error: `目标知识域「${targetNode.name}」不存在指定释义` });
+        }
+      }
+
+      const relationRuleValidation = validateAssociationRuleSet({
+        currentNodeId: node._id,
+        associations: normalizedAssociations
+      });
+      if (relationRuleValidation.error) {
+        return res.status(400).json({ error: relationRuleValidation.error });
+      }
+
+      const {
+        error: associationResolveError,
+        effectiveAssociations: resolvedAssociations,
+        insertPlans: resolvedInsertPlans
+      } = resolveAssociationsWithInsertPlans(normalizedAssociations);
+      if (associationResolveError) {
+        return res.status(400).json({ error: associationResolveError });
+      }
+      effectiveAssociations = resolvedAssociations;
+      insertPlans = resolvedInsertPlans;
+
+      const coveredSourceSenseSet = new Set(effectiveAssociations.map((item) => item.sourceSenseId).filter(Boolean));
+      if (!coveredSourceSenseSet.has(nextSenseId)) {
+        return res.status(400).json({ error: '新增释义必须至少包含1条有效关联关系' });
+      }
+
+      nextAssociations = dedupeAssociationList([...oldRelationAssociations, ...effectiveAssociations]);
+      const mergedRuleValidation = validateAssociationRuleSet({
+        currentNodeId: node._id,
+        associations: nextAssociations
+      });
+      if (mergedRuleValidation.error) {
+        return res.status(400).json({ error: mergedRuleValidation.error });
+      }
     }
 
     const nextSenses = [...existingSenses, { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent }];
-    node.associations = nextAssociations;
-    await rebuildRelatedDomainNamesForNodes([node]);
-    await node.save();
+    if (rawAssociations.length > 0) {
+      node.associations = nextAssociations;
+      await rebuildRelatedDomainNamesForNodes([node]);
+      await node.save();
+    }
     await saveNodeSenses({
       nodeId: node._id,
       senses: nextSenses,
@@ -4192,11 +4213,13 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
       });
     }
 
-    await syncReciprocalAssociationsForNode({
-      nodeDoc: node,
-      oldAssociations,
-      nextAssociations
-    });
+    if (rawAssociations.length > 0) {
+      await syncReciprocalAssociationsForNode({
+        nodeDoc: node,
+        oldAssociations,
+        nextAssociations
+      });
+    }
     const canonicalNode = await loadCanonicalNodeResponseById(node._id);
     const canonicalSense = Array.isArray(canonicalNode?.synonymSenses)
       ? canonicalNode.synonymSenses.find((sense) => sense?.senseId === nextSenseId) || null
