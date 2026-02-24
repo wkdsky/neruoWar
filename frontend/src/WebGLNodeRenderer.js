@@ -1405,6 +1405,7 @@ class WebGLNodeRenderer {
 
     for (const line of this.lines) {
       if (capCount >= capLimit) break;
+      if (line?.noCaps) continue;
       const fromNode = this.nodes.get(line?.from);
       const toNode = this.nodes.get(line?.to);
       if (!fromNode || !toNode || !fromNode.visible || !toNode.visible) continue;

@@ -41,6 +41,38 @@
     background: rgba(15, 23, 42, 0.45);
 }
 
+.create-node-submit-wrap {
+    position: relative;
+}
+
+.create-node-modal .btn-primary.is-disabled {
+    opacity: 0.58;
+    cursor: not-allowed;
+    filter: saturate(0.75);
+}
+
+.create-node-modal .btn-primary.is-disabled:hover {
+    transform: none;
+}
+
+.create-node-submit-light-tip {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    max-width: 320px;
+    padding: 0.35rem 0.55rem;
+    border-radius: 7px;
+    border: 1px solid rgba(250, 204, 21, 0.55);
+    background: rgba(15, 23, 42, 0.95);
+    color: #fde68a;
+    font-size: 0.76rem;
+    line-height: 1.3;
+    white-space: normal;
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.38);
+    pointer-events: none;
+    z-index: 4;
+}
+
 .create-node-modal .form-group {
     margin-bottom: 1rem;
 }

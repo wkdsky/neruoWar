@@ -2,20 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { X, Plus, Trash2 } from 'lucide-react';
 import CreateNodeAssociationManager from './CreateNodeAssociationManager';
 import MiniPreviewRenderer from './MiniPreviewRenderer';
+import {
+  ASSOC_STEPS,
+  ASSOC_RELATION_TYPES,
+  parseAssociationKeyword,
+  resolveAssociationNextStep,
+  resolveAssociationBackStep
+} from '../shared/associationFlowShared';
 import './CreateNodeModal.css';
-
-const ASSOC_STEPS = {
-  SELECT_NODE_A: 'select_node_a',
-  SELECT_RELATION: 'select_relation',
-  SELECT_NODE_B: 'select_node_b',
-  PREVIEW: 'preview'
-};
-
-const ASSOC_RELATION_TYPES = {
-  EXTENDS: 'extends',
-  CONTAINS: 'contains',
-  INSERT: 'insert'
-};
 
 const REL_SYMBOL_SUPERSET = '⊇';
 const REL_SYMBOL_SUBSET = '⊆';
@@ -62,32 +56,6 @@ const normalizeSearchResult = (item = {}) => ({
   searchKey: item?.searchKey || `${item?.nodeId || item?._id || ''}:${item?.senseId || item?.activeSenseId || ''}`,
   relationToAnchor: item?.relationToAnchor || ''
 });
-
-const parseSelectorKeyword = (rawKeyword = '') => {
-  const tokens = String(rawKeyword || '')
-    .trim()
-    .split(/\s+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  let mode = '';
-  const textTokens = [];
-  tokens.forEach((token) => {
-    const lowered = token.toLowerCase().replace(/[，,;；。！!？?]+$/g, '');
-    if (lowered === '#include' || lowered.startsWith('#include')) {
-      mode = 'include';
-      return;
-    }
-    if (lowered === '#expand' || lowered.startsWith('#expand')) {
-      mode = 'expand';
-      return;
-    }
-    textTokens.push(token);
-  });
-  return {
-    mode,
-    textKeyword: textTokens.join(' ').trim()
-  };
-};
 
 const matchesKeywordByTitleAndSense = (item = {}, textKeyword = '') => {
   const normalizedKeyword = String(textKeyword || '').trim().toLowerCase();
@@ -180,6 +148,7 @@ const CreateNodeModal = ({
   const [description, setDescription] = useState('');
   const [senses, setSenses] = useState([createSenseDraft()]);
   const [relationManager, setRelationManager] = useState(createRelationManagerState());
+  const [submitLightTip, setSubmitLightTip] = useState('');
 
   const relationContextCacheRef = useRef(new Map());
   const nodeASearchRequestIdRef = useRef(0);
@@ -188,6 +157,7 @@ const CreateNodeModal = ({
   const insertDirectionResolveRequestIdRef = useRef(0);
   const previewCanvasRef = useRef(null);
   const previewRendererRef = useRef(null);
+  const submitLightTipTimerRef = useRef(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -195,6 +165,7 @@ const CreateNodeModal = ({
     setDescription('');
     setSenses([createSenseDraft()]);
     setRelationManager(createRelationManagerState());
+    setSubmitLightTip('');
     relationContextCacheRef.current = new Map();
   }, [isOpen]);
 
@@ -202,6 +173,10 @@ const CreateNodeModal = ({
     if (previewRendererRef.current) {
       previewRendererRef.current.destroy();
       previewRendererRef.current = null;
+    }
+    if (submitLightTipTimerRef.current) {
+      clearTimeout(submitLightTipTimerRef.current);
+      submitLightTipTimerRef.current = null;
     }
   }, []);
 
@@ -524,7 +499,7 @@ const CreateNodeModal = ({
     if (!relationManager.isOpen || !relationManager.senseLocalId) return;
 
     const keyword = String(rawKeyword || '').trim();
-    const keywordMeta = parseSelectorKeyword(keyword);
+    const keywordMeta = parseAssociationKeyword(keyword);
     const effectiveKeyword = keywordMeta.textKeyword;
     setRelationManager((prev) => ({
       ...prev,
@@ -631,11 +606,7 @@ const CreateNodeModal = ({
       nodeBExtraSearchResults: [],
       nodeBExtraSearchLoading: false,
       insertDirection: 'aToB',
-      insertDirectionLocked: false,
-      searchKeyword: '',
-      searchAppliedKeyword: '',
-      searchLoading: false,
-      searchResults: []
+      insertDirectionLocked: false
     }));
     loadManagedNodeBCandidatesBySense(nextNodeA, nextSenseId, relationManager.senseLocalId);
   };
@@ -643,11 +614,12 @@ const CreateNodeModal = ({
   const selectManagedRelationType = (type) => {
     if (!relationManager.selectedNodeA) return;
 
-    if (type === ASSOC_RELATION_TYPES.INSERT) {
+    const nextStep = resolveAssociationNextStep(type);
+    if (nextStep === ASSOC_STEPS.SELECT_NODE_B) {
       setRelationManager((prev) => ({
         ...prev,
         selectedRelationType: type,
-        currentStep: ASSOC_STEPS.SELECT_NODE_B,
+        currentStep: nextStep,
         nodeBSearchKeyword: '',
         nodeBSearchAppliedKeyword: '',
         nodeBExtraSearchResults: [],
@@ -668,7 +640,7 @@ const CreateNodeModal = ({
     setRelationManager((prev) => ({
       ...prev,
       selectedRelationType: type,
-      currentStep: ASSOC_STEPS.PREVIEW,
+      currentStep: nextStep,
       selectedNodeB: null,
       selectedNodeBSenseId: '',
       insertDirection: 'aToB',
@@ -678,7 +650,7 @@ const CreateNodeModal = ({
 
   const submitManagedNodeBSearch = useCallback(async (rawKeyword = relationManager.nodeBSearchKeyword) => {
     const keyword = String(rawKeyword || '').trim();
-    const keywordMeta = parseSelectorKeyword(keyword);
+    const keywordMeta = parseAssociationKeyword(keyword);
     const effectiveKeyword = keywordMeta.textKeyword;
 
     setRelationManager((prev) => ({
@@ -926,15 +898,6 @@ const CreateNodeModal = ({
     recheckManagedInsertDirectionLock
   ]);
 
-  const handleManagedNodeBSenseChange = useCallback((senseId = '') => {
-    const nextSenseId = String(senseId || '').trim();
-    setRelationManager((prev) => ({
-      ...prev,
-      selectedNodeBSenseId: nextSenseId
-    }));
-    recheckManagedInsertDirectionLock(relationManager.selectedNodeASenseId, nextSenseId);
-  }, [relationManager.selectedNodeASenseId, recheckManagedInsertDirectionLock]);
-
   useEffect(() => {
     recheckManagedInsertDirectionLock(
       relationManager.selectedNodeASenseId,
@@ -968,38 +931,22 @@ const CreateNodeModal = ({
   ]);
 
   const goBackManagedRelationStep = () => {
-    switch (relationManager.currentStep) {
-      case ASSOC_STEPS.SELECT_RELATION:
-        setRelationManager((prev) => ({
-          ...prev,
-          currentStep: ASSOC_STEPS.SELECT_NODE_A,
-          selectedRelationType: ''
-        }));
-        break;
-      case ASSOC_STEPS.SELECT_NODE_B:
-        setRelationManager((prev) => ({
-          ...prev,
-          currentStep: ASSOC_STEPS.SELECT_RELATION,
-          selectedNodeB: null,
-          selectedNodeBSenseId: '',
-          insertDirection: 'aToB',
-          insertDirectionLocked: false,
-          nodeBSearchKeyword: '',
-          nodeBSearchAppliedKeyword: '',
-          nodeBExtraSearchLoading: false,
-          nodeBExtraSearchResults: []
-        }));
-        break;
-      case ASSOC_STEPS.PREVIEW:
-        if (relationManager.selectedRelationType === ASSOC_RELATION_TYPES.INSERT) {
-          setRelationManager((prev) => ({ ...prev, currentStep: ASSOC_STEPS.SELECT_NODE_B }));
-        } else {
-          setRelationManager((prev) => ({ ...prev, currentStep: ASSOC_STEPS.SELECT_RELATION }));
-        }
-        break;
-      default:
-        resetRelationManagerAddFlow();
+    const currentStep = relationManager.currentStep;
+    const previousStep = resolveAssociationBackStep(
+      currentStep,
+      relationManager.selectedRelationType
+    );
+    if (!previousStep) {
+      resetRelationManagerAddFlow();
+      return;
     }
+
+    setRelationManager((prev) => {
+      return {
+        ...prev,
+        currentStep: previousStep
+      };
+    });
   };
 
   const cancelManagedRelationFlow = () => {
@@ -1178,6 +1125,29 @@ const CreateNodeModal = ({
     if (validation.hasDuplicateSenseTitle || validation.hasIncompleteSense || validation.hasMissingRelation) return false;
     return validation.readySenses.length === senses.length;
   }, [isTitleDuplicated, title, description, senses.length, validation]);
+  const submitBlockedReason = useMemo(() => {
+    if (isTitleDuplicated) return '标题已存在，请更换后再提交';
+    if (!title.trim()) return '请先填写标题';
+    if (!description.trim()) return '请先填写概述';
+    if (senses.length === 0) return '请至少添加一个释义';
+    if (validation.hasDuplicateSenseTitle) return '释义题目有重复，请先修改';
+    if (validation.hasIncompleteSense) return '请先补全释义题目和内容';
+    if (validation.hasMissingRelation) return '请先为每个释义设置至少 1 条关联';
+    return '请完成所有必填信息后再提交';
+  }, [isTitleDuplicated, title, description, senses.length, validation]);
+
+  const showSubmitLightHint = useCallback((message = '') => {
+    const nextText = String(message || submitBlockedReason || '请完成所有必填信息后再提交').trim();
+    if (!nextText) return;
+    setSubmitLightTip(nextText);
+    if (submitLightTipTimerRef.current) {
+      clearTimeout(submitLightTipTimerRef.current);
+    }
+    submitLightTipTimerRef.current = setTimeout(() => {
+      setSubmitLightTip('');
+      submitLightTipTimerRef.current = null;
+    }, 1800);
+  }, [submitBlockedReason]);
 
   const submitNodeCreation = async () => {
     if (!canSubmit) {
@@ -1269,6 +1239,19 @@ const CreateNodeModal = ({
     }
   };
 
+  const handleSubmitAction = () => {
+    if (!canSubmit) {
+      showSubmitLightHint();
+      return;
+    }
+    setSubmitLightTip('');
+    if (submitLightTipTimerRef.current) {
+      clearTimeout(submitLightTipTimerRef.current);
+      submitLightTipTimerRef.current = null;
+    }
+    submitNodeCreation();
+  };
+
   const managedSense = relationManager.isOpen
     ? (senses.find((sense) => sense.localId === relationManager.senseLocalId) || null)
     : null;
@@ -1286,7 +1269,7 @@ const CreateNodeModal = ({
   const selectedNodeAKey = toSenseKey(relationManager.selectedNodeA, relationManager.selectedNodeASenseId);
 
   const managedNodeBView = (() => {
-    const keywordMeta = parseSelectorKeyword(relationManager.nodeBSearchAppliedKeyword);
+    const keywordMeta = parseAssociationKeyword(relationManager.nodeBSearchAppliedKeyword);
     const keywordText = keywordMeta.textKeyword;
     const keywordMode = keywordMeta.mode;
     const hasSubmittedSearch = !!String(relationManager.nodeBSearchAppliedKeyword || '').trim();
@@ -1360,17 +1343,23 @@ const CreateNodeModal = ({
       return true;
     });
 
-  const nodeBSenseOptions = normalizeNodeSenses(relationManager.selectedNodeB, relationManager.selectedNodeBSenseId)
-    .filter((sense) => {
-      const key = toSenseKey(relationManager.selectedNodeB, sense.senseId);
-      return key !== selectedNodeAKey;
-    });
-
   const insertRelationAvailable = (
     Array.isArray(relationManager.nodeBCandidates.parents) && relationManager.nodeBCandidates.parents.length > 0
   ) || (
     Array.isArray(relationManager.nodeBCandidates.children) && relationManager.nodeBCandidates.children.length > 0
   );
+  const hasSelectedNodeA = !!String(
+    relationManager.selectedNodeA?._id
+    || relationManager.selectedNodeA?.nodeId
+    || ''
+  ).trim();
+  const insertRelationUnavailableReason = (
+    hasSelectedNodeA
+    && relationManager.selectedNodeASenseId
+    && !insertRelationAvailable
+  )
+    ? '当前目标释义在释义层没有可用的 #include / #expand 链路，无法创建插入关系。'
+    : '';
 
   const previewInfoText = (() => {
     if (relationManager.selectedRelationType === ASSOC_RELATION_TYPES.EXTENDS) {
@@ -1549,9 +1538,18 @@ const CreateNodeModal = ({
 
         <div className="modal-footer">
           <button onClick={onClose} className="btn btn-secondary">取消</button>
-          <button onClick={submitNodeCreation} className="btn btn-primary" disabled={!canSubmit}>
-            {isAdmin ? '确认创建新知识域' : '提交新知识域申请'}
-          </button>
+          <div className="create-node-submit-wrap">
+            <button
+              onClick={handleSubmitAction}
+              className={`btn btn-primary ${!canSubmit ? 'is-disabled' : ''}`}
+              aria-disabled={!canSubmit}
+            >
+              {isAdmin ? '确认创建新知识域' : '提交新知识域申请'}
+            </button>
+            {!canSubmit && !!submitLightTip && (
+              <span className="create-node-submit-light-tip">{submitLightTip}</span>
+            )}
+          </div>
         </div>
 
         <CreateNodeAssociationManager
@@ -1569,13 +1567,13 @@ const CreateNodeModal = ({
           targetDisplay={targetDisplay}
           secondTargetDisplay={secondTargetDisplay}
           nodeASenseOptions={nodeASenseOptions}
-          nodeBSenseOptions={nodeBSenseOptions}
           nodeBCandidatesParents={managedNodeBView.parents}
           nodeBCandidatesChildren={managedNodeBView.children}
           nodeBCandidatesExtra={managedNodeBView.extra}
           previewCanvasRef={previewCanvasRef}
           previewInfoText={previewInfoText}
           insertRelationAvailable={insertRelationAvailable}
+          insertRelationUnavailableReason={insertRelationUnavailableReason}
           onClose={closeRelationManager}
           onRequestDeleteRelation={requestRemoveManagedRelation}
           onConfirmDeleteRelation={confirmRemoveManagedRelation}
@@ -1593,16 +1591,6 @@ const CreateNodeModal = ({
           onSelectNodeBParent={(node) => selectManagedNodeB(node, true)}
           onSelectNodeBChild={(node) => selectManagedNodeB(node, false)}
           onSelectNodeBExtra={(node) => selectManagedNodeB(node, false)}
-          onChangeNodeBSenseId={handleManagedNodeBSenseChange}
-          onToggleInsertDirection={() => {
-            setRelationManager((prev) => {
-              if (prev.insertDirectionLocked) return prev;
-              return {
-                ...prev,
-                insertDirection: prev.insertDirection === 'aToB' ? 'bToA' : 'aToB'
-              };
-            });
-          }}
           onConfirmManagedRelationAdd={confirmManagedRelationAdd}
           onGoBackFlow={goBackManagedRelationStep}
           onCancelFlow={cancelManagedRelationFlow}

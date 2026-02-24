@@ -18,13 +18,13 @@ const CreateNodeAssociationManager = ({
   targetDisplay,
   secondTargetDisplay,
   nodeASenseOptions,
-  nodeBSenseOptions,
   nodeBCandidatesParents,
   nodeBCandidatesChildren,
   nodeBCandidatesExtra,
   previewCanvasRef,
   previewInfoText,
   insertRelationAvailable,
+  insertRelationUnavailableReason,
 
   onClose,
   onRequestDeleteRelation,
@@ -45,8 +45,6 @@ const CreateNodeAssociationManager = ({
   onSelectNodeBParent,
   onSelectNodeBChild,
   onSelectNodeBExtra,
-  onChangeNodeBSenseId,
-  onToggleInsertDirection,
 
   onConfirmManagedRelationAdd,
   onGoBackFlow,
@@ -152,11 +150,9 @@ const CreateNodeAssociationManager = ({
                     secondTargetDisplay={secondTargetDisplay}
                     nodeASenseOptions={nodeASenseOptions}
                     selectedNodeASenseId={relationManager.selectedNodeASenseId}
-                    nodeBSenseOptions={nodeBSenseOptions}
-                    selectedNodeBSenseId={relationManager.selectedNodeBSenseId}
                     insertDirection={relationManager.insertDirection}
-                    insertDirectionLocked={relationManager.insertDirectionLocked}
                     insertRelationAvailable={insertRelationAvailable}
+                    insertRelationUnavailableReason={insertRelationUnavailableReason}
                     nodeASearchKeyword={relationManager.searchKeyword}
                     nodeASearchAppliedKeyword={relationManager.searchAppliedKeyword}
                     nodeASearchLoading={relationManager.searchLoading}
@@ -181,8 +177,6 @@ const CreateNodeAssociationManager = ({
                     onSelectNodeBParent={onSelectNodeBParent}
                     onSelectNodeBChild={onSelectNodeBChild}
                     onSelectNodeBExtra={onSelectNodeBExtra}
-                    onChangeNodeBSenseId={onChangeNodeBSenseId}
-                    onToggleInsertDirection={onToggleInsertDirection}
                     onConfirm={onConfirmManagedRelationAdd}
                     onBack={onGoBackFlow}
                     onCancel={onCancelFlow}

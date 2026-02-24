@@ -861,6 +861,131 @@
     padding: 0.55rem;
 }
 
+.admin-delete-bridge-impact-item {
+    margin-top: 0.45rem;
+    margin-bottom: 0.55rem;
+}
+
+.admin-delete-bridge-option-grid {
+    margin: 0;
+}
+
+.admin-delete-bridge-option-grid .admin-assoc-delete-option {
+    padding: 0.55rem 0.65rem;
+}
+
+.admin-delete-sense-decision-workspace {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+}
+
+.admin-delete-sense-decision-column {
+    border: 1px solid rgba(100, 116, 139, 0.35);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.45);
+    min-height: 190px;
+    display: flex;
+    flex-direction: column;
+}
+
+.admin-delete-sense-decision-column.confirmed {
+    border-color: rgba(74, 222, 128, 0.35);
+}
+
+.admin-delete-sense-decision-column-header {
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid rgba(100, 116, 139, 0.28);
+    color: #cbd5e1;
+    font-size: 0.78rem;
+}
+
+.admin-delete-sense-decision-list {
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.admin-delete-sense-decision-empty {
+    color: #94a3b8;
+    font-size: 0.78rem;
+    padding: 0.45rem 0.2rem;
+}
+
+.admin-delete-sense-decision-item {
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.55);
+    padding: 0.5rem 0.55rem;
+    color: #e2e8f0;
+    text-align: left;
+}
+
+.admin-delete-sense-decision-item.pending {
+    cursor: pointer;
+}
+
+.admin-delete-sense-decision-item.pending.active {
+    border-color: rgba(96, 165, 250, 0.72);
+    background: rgba(30, 64, 175, 0.25);
+}
+
+.admin-delete-sense-decision-item .line {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
+.admin-delete-sense-decision-item.confirmed {
+    border-color: rgba(74, 222, 128, 0.35);
+    background: rgba(22, 101, 52, 0.18);
+}
+
+.admin-delete-sense-decision-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.admin-delete-sense-decision-result {
+    margin: 0.42rem 0;
+    font-size: 0.76rem;
+    line-height: 1.4;
+}
+
+.admin-delete-sense-decision-result.reconnect {
+    color: #86efac;
+}
+
+.admin-delete-sense-decision-result.disconnect {
+    color: #fca5a5;
+}
+
+.admin-delete-sense-decision-panel {
+    margin-top: 0.65rem;
+    border: 1px solid rgba(96, 165, 250, 0.32);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.35);
+    padding: 0.6rem;
+}
+
+.admin-delete-sense-decision-actions {
+    margin-top: 0.5rem;
+    display: flex;
+    justify-content: flex-end;
+}
+
+@media (max-width: 960px) {
+    .admin-delete-sense-decision-workspace {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
 .admin-bridge-decision-line {
     display: flex;
     align-items: center;
@@ -2087,6 +2212,12 @@
     font-size: 0.84rem;
 }
 
+.admin-assoc-step-warning {
+    margin: 0.2rem 0 0 0;
+    color: #f87171;
+    font-size: 0.8rem;
+}
+
 .admin-assoc-sense-selector-row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -2542,6 +2673,154 @@
     display: flex;
     gap: 1rem;
     margin-top: 1.5rem;
+}
+
+.alliance-member-edit-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.alliance-member-edit-count {
+    color: #cbd5e1;
+    font-size: 0.9rem;
+}
+
+.alliance-member-edit-list {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.alliance-member-edit-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.22rem 0.52rem;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    background: rgba(15, 23, 42, 0.45);
+}
+
+.alliance-member-edit-chip.is-founder {
+    border-color: rgba(250, 204, 21, 0.5);
+    color: #fde68a;
+}
+
+.alliance-member-modal {
+    width: min(760px, 92vw);
+    max-height: min(84vh, 780px);
+}
+
+.alliance-member-modal-section {
+    margin-bottom: 1rem;
+}
+
+.alliance-member-modal-section:last-child {
+    margin-bottom: 0;
+}
+
+.alliance-member-modal-section > label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #a5b4fc;
+    font-weight: 500;
+}
+
+.alliance-member-selected-list {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.35);
+    max-height: 230px;
+    overflow-y: auto;
+}
+
+.alliance-member-selected-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.6rem 0.72rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.alliance-member-selected-item:last-child {
+    border-bottom: none;
+}
+
+.alliance-member-selected-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.alliance-member-selected-name {
+    color: #e2e8f0;
+    font-weight: 500;
+    word-break: break-word;
+}
+
+.alliance-member-selected-meta {
+    color: #94a3b8;
+    font-size: 0.82rem;
+    word-break: break-word;
+}
+
+.alliance-member-empty {
+    padding: 0.8rem;
+    color: #94a3b8;
+    text-align: center;
+    font-size: 0.86rem;
+}
+
+.alliance-member-search-results {
+    margin-top: 0.65rem;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.35);
+    max-height: 250px;
+    overflow-y: auto;
+}
+
+.alliance-member-search-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.62rem 0.75rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.alliance-member-search-item:last-child {
+    border-bottom: none;
+}
+
+.alliance-member-search-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.alliance-member-search-name {
+    color: #e2e8f0;
+    font-weight: 500;
+    word-break: break-word;
+}
+
+.alliance-member-search-meta {
+    color: #94a3b8;
+    font-size: 0.82rem;
+    word-break: break-word;
+}
+
+.alliance-member-search-status {
+    padding: 0.78rem;
+    color: #94a3b8;
+    text-align: center;
+    font-size: 0.86rem;
 }
 
 .empty-alliances-admin {

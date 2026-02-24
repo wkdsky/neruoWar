@@ -771,6 +771,51 @@ const normalizeTitleRelationAssociationList = (associations = []) => (
     ))
 );
 
+// 删除标题门控：只要标题下任一释义仍存在关联（本标题发出或被其他标题指向），禁止删除标题。
+const countNodeSenseAssociationRefs = async (node = null) => {
+  if (!node?._id) {
+    return { outgoingCount: 0, incomingCount: 0, totalCount: 0 };
+  }
+
+  await hydrateNodeSensesForNodes([node]);
+  const nodeId = getIdString(node._id);
+  const localSenseIdSet = new Set(
+    normalizeNodeSenseList(node).map((sense) => (typeof sense?.senseId === 'string' ? sense.senseId.trim() : '')).filter(Boolean)
+  );
+
+  const outgoingCount = normalizeTitleRelationAssociationList(node.associations || [])
+    .filter((assoc) => {
+      const sourceSenseId = typeof assoc?.sourceSenseId === 'string' ? assoc.sourceSenseId.trim() : '';
+      if (!sourceSenseId) return true;
+      if (localSenseIdSet.size < 1) return true;
+      return localSenseIdSet.has(sourceSenseId);
+    }).length;
+
+  const incomingRows = await Node.find({
+    _id: { $ne: node._id },
+    'associations.targetNode': node._id
+  })
+    .select('associations')
+    .lean();
+
+  let incomingCount = 0;
+  incomingRows.forEach((row) => {
+    normalizeTitleRelationAssociationList(row?.associations || []).forEach((assoc) => {
+      if (assoc.targetNode !== nodeId) return;
+      const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
+      if (!targetSenseId || localSenseIdSet.size < 1 || localSenseIdSet.has(targetSenseId)) {
+        incomingCount += 1;
+      }
+    });
+  });
+
+  return {
+    outgoingCount,
+    incomingCount,
+    totalCount: outgoingCount + incomingCount
+  };
+};
+
 const mapProjectionRowToNodeLike = (row = {}) => ({
   _id: row?.nodeId || row?._id || null,
   owner: row?.owner || null,
@@ -2643,7 +2688,7 @@ const buildSiegePayloadForUser = ({
   const supportDisabledReason = canSupportSameBattlefield
     ? ''
     : (!userAllianceId
-        ? '未加入熵盟，无法支援'
+        ? '未加入熵盟，无法请求支援'
         : (userActiveAttacker ? '你已在该战场中' : '当前无可支援的同盟围城战场'));
   const canRetreat = !!userActiveAttacker && !!userActiveAttacker.isInitiator;
   const retreatDisabledReason = canRetreat
@@ -4260,10 +4305,6 @@ router.post('/:nodeId/admin/senses/:senseId/delete-preview', authenticateToken, 
     if (!targetSense) {
       return res.status(404).json({ error: '释义不存在' });
     }
-    if (sourceSenses.length <= 1) {
-      return res.status(400).json({ error: '知识域至少保留1个释义，不能删除最后一个释义' });
-    }
-
     const oldRelationAssociations = normalizeRelationAssociationList(node.associations || []);
     const nextRelationAssociations = oldRelationAssociations.filter((assoc) => assoc.sourceSenseId !== targetSenseId);
     const previewData = await buildAssociationMutationPreviewData({
@@ -4315,10 +4356,6 @@ router.delete('/:nodeId/admin/senses/:senseId', authenticateToken, isAdmin, asyn
     if (!targetSense) {
       return res.status(404).json({ error: '释义不存在' });
     }
-    if (sourceSenses.length <= 1) {
-      return res.status(400).json({ error: '知识域至少保留1个释义，不能删除最后一个释义' });
-    }
-
     const oldAssociations = Array.isArray(node.associations) ? node.associations : [];
     const oldRelationAssociations = normalizeRelationAssociationList(oldAssociations);
     const nextAssociations = oldRelationAssociations.filter((assoc) => assoc.sourceSenseId !== targetSenseId);
@@ -4385,6 +4422,15 @@ router.post('/:nodeId/delete-preview', authenticateToken, isAdmin, async (req, r
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
+
+    const relationRefStats = await countNodeSenseAssociationRefs(node);
+    if (relationRefStats.totalCount > 0) {
+      return res.status(400).json({
+        error: '请先删除该标题下释义的所有关联关系，再删除标题',
+        stats: relationRefStats
+      });
+    }
+
     await hydrateNodeSensesForNodes([node]);
 
     const oldRelationAssociations = normalizeRelationAssociationList(node.associations || []);
@@ -4434,6 +4480,14 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
     const node = await Node.findById(nodeId);
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
+    }
+
+    const relationRefStats = await countNodeSenseAssociationRefs(node);
+    if (relationRefStats.totalCount > 0) {
+      return res.status(400).json({
+        error: '请先删除该标题下释义的所有关联关系，再删除标题',
+        stats: relationRefStats
+      });
     }
 
     const nodeName = node.name;
@@ -7198,7 +7252,7 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
 
     const userAllianceId = getIdString(user.allianceId);
     if (!userAllianceId) {
-      return res.status(403).json({ error: '未加入熵盟，无法支援同盟战场' });
+      return res.status(403).json({ error: '未加入熵盟，无法支援其他熵盟' });
     }
     await hydrateNodeTitleStatesForNodes([node], {
       includeDefenseLayout: true,

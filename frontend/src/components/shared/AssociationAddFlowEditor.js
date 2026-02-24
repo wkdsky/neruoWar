@@ -16,11 +16,9 @@ const AssociationAddFlowEditor = ({
   secondTargetDisplay,
   nodeASenseOptions,
   selectedNodeASenseId,
-  nodeBSenseOptions,
-  selectedNodeBSenseId,
   insertDirection,
-  insertDirectionLocked,
   insertRelationAvailable = true,
+  insertRelationUnavailableReason = '',
 
   // step1 search
   nodeASearchKeyword,
@@ -28,13 +26,11 @@ const AssociationAddFlowEditor = ({
   nodeASearchLoading,
   nodeASearchResults,
 
-  // step3 search/candidates
-  nodeBSearchKeyword,
+  // step3 candidates
   nodeBSearchAppliedKeyword,
   nodeBSearchLoading,
   nodeBCandidatesParents,
   nodeBCandidatesChildren,
-  nodeBCandidatesExtra,
 
   // preview
   previewCanvasRef,
@@ -47,14 +43,9 @@ const AssociationAddFlowEditor = ({
   onSelectNodeA,
   onChangeNodeASenseId,
   onSelectRelationType,
-  onNodeBSearchKeywordChange,
   onSubmitNodeBSearch,
-  onClearNodeBSearch,
   onSelectNodeBParent,
   onSelectNodeBChild,
-  onSelectNodeBExtra,
-  onChangeNodeBSenseId,
-  onToggleInsertDirection,
   onConfirm,
   onBack,
   onCancel
@@ -68,6 +59,20 @@ const AssociationAddFlowEditor = ({
     { key: steps.PREVIEW, label: '预览确认' }
   ];
   const currentIndex = stepItems.findIndex((item) => item.key === currentStep);
+  const insertRelationSymbol = insertDirection === 'bToA' ? relSymbolSubset : relSymbolSuperset;
+  const previewRelationHint = (
+    selectedRelationType === relationTypes.EXTENDS
+      ? `${relSymbolSuperset}（当前释义在左）`
+      : (
+        selectedRelationType === relationTypes.CONTAINS
+          ? `${relSymbolSubset}（当前释义在左）`
+          : (
+            selectedRelationType === relationTypes.INSERT
+              ? `左侧释义 ${insertRelationSymbol} 当前释义 ${insertRelationSymbol} 右侧释义`
+              : ''
+          )
+      )
+  );
 
   return (
     <div className="admin-assoc-editor">
@@ -207,6 +212,9 @@ const AssociationAddFlowEditor = ({
               </div>
             </div>
           </div>
+          {!insertRelationAvailable && !!insertRelationUnavailableReason && (
+            <p className="admin-assoc-step-warning">{insertRelationUnavailableReason}</p>
+          )}
         </div>
       )}
 
@@ -217,35 +225,9 @@ const AssociationAddFlowEditor = ({
             选择要与 <strong>{targetDisplay || '-'}</strong> 之间插入当前释义的另一侧释义
           </p>
           <p className="admin-assoc-step-description">
-            搜索支持 <code>#include</code>（只看上级）和 <code>#expand</code>（只看下级）
+            请仅使用命令选择候选：<code>#include</code>（查看与左侧释义存在上级链路的候选）、
+            <code>#expand</code>（查看与左侧释义存在下级链路的候选）
           </p>
-
-          <div className="search-input-group admin-assoc-node-b-search">
-            <div className="admin-assoc-search-input-wrap">
-              <input
-                type="text"
-                value={nodeBSearchKeyword || ''}
-                onChange={(e) => onNodeBSearchKeywordChange?.(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    onSubmitNodeBSearch?.();
-                  }
-                }}
-                placeholder="搜索候选释义（回车或点击搜索）"
-                className="form-input"
-              />
-              {!!nodeBSearchKeyword && (
-                <button type="button" className="admin-assoc-search-clear" onClick={onClearNodeBSearch} aria-label="清空搜索">
-                  X
-                </button>
-              )}
-            </div>
-            <button type="button" className="btn btn-primary" onClick={onSubmitNodeBSearch} disabled={nodeBSearchLoading}>
-              <Search className="icon-small" />
-              {nodeBSearchLoading ? '...' : '搜索'}
-            </button>
-          </div>
 
           <div className="admin-assoc-command-buttons">
             <button type="button" className="admin-assoc-command-btn" onClick={() => onSubmitNodeBSearch?.('#include')}>#include</button>
@@ -282,25 +264,10 @@ const AssociationAddFlowEditor = ({
             </div>
           )}
 
-          {nodeBCandidatesExtra.length > 0 && (
-            <div className="admin-assoc-candidate-section">
-              <h6 className="admin-assoc-candidate-header child">
-                <span className="admin-assoc-candidate-icon">+</span> 其它可插入节点（将新建承接关系）
-              </h6>
-              <div className="admin-assoc-candidate-list">
-                {nodeBCandidatesExtra.map((node) => (
-                  <div key={node.searchKey || node._id} className="admin-assoc-candidate-item" onClick={() => onSelectNodeBExtra?.(node)}>
-                    <span className="admin-assoc-candidate-name">{node.displayName || node.name}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {!nodeBSearchAppliedKeyword && (
-            <p className="admin-assoc-step-description">输入关键词后按回车或点击搜索，或点击下方命令按钮。</p>
+            <p className="admin-assoc-step-description">点击上方命令按钮后展示候选释义。</p>
           )}
-          {!!nodeBSearchAppliedKeyword && nodeBCandidatesParents.length === 0 && nodeBCandidatesChildren.length === 0 && nodeBCandidatesExtra.length === 0 && !nodeBSearchLoading && (
+          {!!nodeBSearchAppliedKeyword && nodeBCandidatesParents.length === 0 && nodeBCandidatesChildren.length === 0 && !nodeBSearchLoading && (
             <p className="admin-assoc-step-description">未找到匹配释义</p>
           )}
         </div>
@@ -309,48 +276,24 @@ const AssociationAddFlowEditor = ({
       {currentStep === steps.PREVIEW && (
         <div className="admin-assoc-step admin-assoc-preview-step">
           <h5>步骤 {selectedRelationType === relationTypes.INSERT ? '4' : '3'}：预览确认</h5>
-          <p className="admin-assoc-step-description">查看释义关联关系生效后的结构变化</p>
-          <p className="admin-assoc-step-description">
-            当前释义固定为：<strong>{sourceDisplay || '-'}</strong>
-          </p>
+          {!!previewRelationHint && (
+            <p className="admin-assoc-step-description" style={{ textAlign: 'center' }}>
+              <strong>{previewRelationHint}</strong>
+            </p>
+          )}
 
-          <div className="admin-assoc-sense-selector-row">
-            <label className="admin-assoc-sense-selector">
-              {selectedRelationType === relationTypes.INSERT ? '左侧释义' : '目标释义'}
-              <select value={selectedNodeASenseId || ''} onChange={(e) => onChangeNodeASenseId?.(e.target.value)} className="edit-input">
-                {nodeASenseOptions.length < 1 ? (
-                  <option value="">无可选释义</option>
-                ) : nodeASenseOptions.map((sense) => (
-                  <option key={`preview_target_a_${sense.senseId}`} value={sense.senseId}>{sense.title}</option>
-                ))}
-              </select>
-            </label>
-            {selectedRelationType === relationTypes.INSERT && (
+          {selectedRelationType !== relationTypes.INSERT && (
+            <div className="admin-assoc-sense-selector-row">
               <label className="admin-assoc-sense-selector">
-                右侧释义
-                <select value={selectedNodeBSenseId || ''} onChange={(e) => onChangeNodeBSenseId?.(e.target.value)} className="edit-input">
-                  {nodeBSenseOptions.length < 1 ? (
+                目标释义
+                <select value={selectedNodeASenseId || ''} onChange={(e) => onChangeNodeASenseId?.(e.target.value)} className="edit-input">
+                  {nodeASenseOptions.length < 1 ? (
                     <option value="">无可选释义</option>
-                  ) : nodeBSenseOptions.map((sense) => (
-                    <option key={`preview_target_b_${sense.senseId}`} value={sense.senseId}>{sense.title}</option>
+                  ) : nodeASenseOptions.map((sense) => (
+                    <option key={`preview_target_a_${sense.senseId}`} value={sense.senseId}>{sense.title}</option>
                   ))}
                 </select>
               </label>
-            )}
-          </div>
-
-          {selectedRelationType === relationTypes.INSERT && (
-            <div className="admin-assoc-step-description" style={{ marginBottom: '0.65rem' }}>
-              {insertDirectionLocked ? '插入方向已按原有关联自动锁定。' : '当前两侧释义无直接上下级，插入方向可切换。'}
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                style={{ marginLeft: '0.6rem' }}
-                onClick={onToggleInsertDirection}
-                disabled={insertDirectionLocked}
-              >
-                切换方向
-              </button>
             </div>
           )}
 

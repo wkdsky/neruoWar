@@ -23,6 +23,24 @@ const getIdString = (value) => {
   return '';
 };
 
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const normalizeObjectIdArray = (source) => {
+  const values = Array.isArray(source) ? source : [];
+  const normalized = [];
+  const seen = new Set();
+  for (const item of values) {
+    const id = getIdString(item).trim();
+    if (!id || seen.has(id)) continue;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return { ids: [], invalidId: id };
+    }
+    normalized.push(id);
+    seen.add(id);
+  }
+  return { ids: normalized, invalidId: '' };
+};
+
 const buildNotificationPayload = (payload = {}) => ({
   ...payload,
   _id: payload?._id && mongoose.Types.ObjectId.isValid(String(payload._id))
@@ -1326,19 +1344,119 @@ router.get('/admin/all', authenticateToken, async (req, res) => {
   }
 });
 
-// 管理员：更新熵盟信息
-router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
+// 管理员：获取熵盟成员（用于编辑）
+router.get('/admin/:allianceId/members', authenticateToken, async (req, res) => {
   try {
-    // 检查是否是管理员
-    const adminUser = await User.findById(req.user.userId);
+    const adminUser = await User.findById(req.user.userId).select('_id role');
     if (!adminUser || adminUser.role !== 'admin') {
       return res.status(403).json({ error: '无权限执行此操作' });
     }
 
     const { allianceId } = req.params;
-    const { name, flag, declaration, announcement } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(allianceId)) {
+      return res.status(400).json({ error: '熵盟ID无效' });
+    }
 
-    const alliance = await EntropyAlliance.findById(allianceId);
+    const alliance = await EntropyAlliance.findById(allianceId).select('_id founder');
+    if (!alliance) {
+      return res.status(404).json({ error: '熵盟不存在' });
+    }
+
+    const founderId = getIdString(alliance.founder);
+    const members = await User.find({ allianceId: alliance._id })
+      .select('_id username profession level allianceId')
+      .sort({ username: 1, _id: 1 })
+      .lean();
+
+    res.json({
+      success: true,
+      members: members.map((member) => ({
+        _id: member._id,
+        username: member.username || '',
+        profession: member.profession || '',
+        level: Number.isFinite(Number(member.level)) ? Number(member.level) : 0,
+        allianceId: getIdString(member.allianceId),
+        isFounder: founderId && founderId === getIdString(member._id)
+      }))
+    });
+  } catch (error) {
+    console.error('获取熵盟成员失败:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 管理员：搜索可编辑成员候选
+router.get('/admin/member-candidates', authenticateToken, async (req, res) => {
+  try {
+    const adminUser = await User.findById(req.user.userId).select('_id role');
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: '无权限执行此操作' });
+    }
+
+    const keyword = typeof req.query?.keyword === 'string' ? req.query.keyword.trim() : '';
+    const limit = parsePositiveInt(req.query?.limit, 30, { min: 1, max: 100 });
+
+    const query = { role: { $ne: 'admin' } };
+    if (keyword) {
+      const keywordRegex = new RegExp(escapeRegex(keyword), 'i');
+      query.$or = [
+        { username: keywordRegex },
+        { profession: keywordRegex }
+      ];
+    }
+
+    const users = await User.find(query)
+      .select('_id username profession level allianceId')
+      .populate('allianceId', 'name')
+      .sort({ username: 1, _id: 1 })
+      .limit(limit)
+      .lean();
+
+    res.json({
+      success: true,
+      users: users.map((user) => {
+        const allianceObj = user?.allianceId && typeof user.allianceId === 'object' ? user.allianceId : null;
+        return {
+          _id: user._id,
+          username: user.username || '',
+          profession: user.profession || '',
+          level: Number.isFinite(Number(user.level)) ? Number(user.level) : 0,
+          allianceId: getIdString(allianceObj?._id || user?.allianceId),
+          allianceName: allianceObj?.name || ''
+        };
+      })
+    });
+  } catch (error) {
+    console.error('搜索成员候选失败:', error);
+    res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+// 管理员：更新熵盟信息
+router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
+  try {
+    // 检查是否是管理员
+    const adminUser = await User.findById(req.user.userId).select('_id role username');
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: '无权限执行此操作' });
+    }
+
+    const { allianceId } = req.params;
+    const {
+      name,
+      flag,
+      declaration,
+      announcement,
+      knowledgeReserve,
+      memberIds
+    } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(allianceId)) {
+      return res.status(400).json({ error: '熵盟ID无效' });
+    }
+
+    const alliance = await EntropyAlliance.findById(allianceId)
+      .populate('founder', 'username profession');
     if (!alliance) {
       return res.status(404).json({ error: '熵盟不存在' });
     }
@@ -1348,25 +1466,54 @@ router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
     let hasPersistentChanges = false;
     let pendingAnnouncement = '';
     let announcementTaskId = '';
+    let hasMemberChanges = false;
 
     // 如果更改名称，检查是否已被使用
-    if (name && name !== alliance.name) {
-      const existing = await EntropyAlliance.findOne({ name, _id: { $ne: allianceId } });
-      if (existing) {
-        return res.status(400).json({ error: '熵盟名称已被使用' });
+    if (typeof name === 'string') {
+      const normalizedName = name.trim();
+      if (!normalizedName) {
+        return res.status(400).json({ error: '熵盟名称不能为空' });
       }
-      alliance.name = name;
-      hasPersistentChanges = true;
+      if (normalizedName !== alliance.name) {
+        const existing = await EntropyAlliance.findOne({ name: normalizedName, _id: { $ne: allianceId } });
+        if (existing) {
+          return res.status(400).json({ error: '熵盟名称已被使用' });
+        }
+        alliance.name = normalizedName;
+        hasPersistentChanges = true;
+      }
     }
 
-    if (flag) {
-      alliance.flag = flag;
-      hasPersistentChanges = true;
+    if (typeof flag === 'string') {
+      const normalizedFlag = flag.trim();
+      if (normalizedFlag && normalizedFlag !== alliance.flag) {
+        alliance.flag = normalizedFlag;
+        hasPersistentChanges = true;
+      }
     }
-    if (declaration) {
-      alliance.declaration = declaration;
-      hasPersistentChanges = true;
+
+    if (typeof declaration === 'string') {
+      const normalizedDeclaration = declaration.trim();
+      if (!normalizedDeclaration) {
+        return res.status(400).json({ error: '熵盟号召不能为空' });
+      }
+      if (normalizedDeclaration !== alliance.declaration) {
+        alliance.declaration = normalizedDeclaration;
+        hasPersistentChanges = true;
+      }
     }
+
+    if (knowledgeReserve !== undefined) {
+      const parsedReserve = Number(knowledgeReserve);
+      if (!Number.isFinite(parsedReserve) || parsedReserve < 0) {
+        return res.status(400).json({ error: '知识点储备必须是大于等于 0 的数字' });
+      }
+      if (parsedReserve !== alliance.knowledgeReserve) {
+        alliance.knowledgeReserve = parsedReserve;
+        hasPersistentChanges = true;
+      }
+    }
+
     if (typeof announcement === 'string') {
       const normalizedAnnouncement = announcement.trim();
       shouldBroadcastAllianceAnnouncement = Boolean(normalizedAnnouncement) && normalizedAnnouncement !== previousAnnouncement;
@@ -1379,9 +1526,109 @@ router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
       }
     }
 
+    if (memberIds !== undefined) {
+      if (!Array.isArray(memberIds)) {
+        return res.status(400).json({ error: 'memberIds 必须是数组' });
+      }
+
+      const { ids: normalizedMemberIds, invalidId } = normalizeObjectIdArray(memberIds);
+      if (invalidId) {
+        return res.status(400).json({ error: `memberIds 包含无效ID: ${invalidId}` });
+      }
+
+      const founderId = getIdString(alliance?.founder?._id || alliance?.founder);
+      if (founderId && !normalizedMemberIds.includes(founderId)) {
+        normalizedMemberIds.unshift(founderId);
+      }
+
+      if (normalizedMemberIds.length === 0) {
+        return res.status(400).json({ error: '熵盟至少需要 1 名成员' });
+      }
+
+      const [targetUsers, currentMembers] = await Promise.all([
+        User.find({
+          _id: { $in: normalizedMemberIds },
+          role: { $ne: 'admin' }
+        }).select('_id allianceId'),
+        User.find({ allianceId: alliance._id }).select('_id')
+      ]);
+
+      const targetUserIdSet = new Set(targetUsers.map((item) => getIdString(item._id)));
+      const missingIds = normalizedMemberIds.filter((id) => !targetUserIdSet.has(id));
+      if (missingIds.length > 0) {
+        return res.status(400).json({ error: `部分成员不存在或不可加入熵盟: ${missingIds.slice(0, 5).join(', ')}` });
+      }
+
+      const currentMemberIds = currentMembers.map((member) => getIdString(member._id));
+      const currentSet = new Set(currentMemberIds);
+      const targetSet = new Set(normalizedMemberIds);
+      const removeMemberIds = currentMemberIds.filter((id) => !targetSet.has(id));
+      const addUsers = targetUsers.filter((user) => !currentSet.has(getIdString(user._id)));
+      const addMemberIds = addUsers.map((user) => getIdString(user._id));
+
+      if (removeMemberIds.length > 0) {
+        await User.updateMany(
+          { _id: { $in: removeMemberIds } },
+          { $set: { allianceId: null } }
+        );
+      }
+
+      if (addMemberIds.length > 0) {
+        await User.updateMany(
+          { _id: { $in: addMemberIds } },
+          { $set: { allianceId: alliance._id } }
+        );
+      }
+
+      if (removeMemberIds.length > 0 || addMemberIds.length > 0) {
+        hasMemberChanges = true;
+        const syncTasks = [];
+        for (const memberId of removeMemberIds) {
+          syncTasks.push(syncMasterDomainsAlliance({ userId: memberId, allianceId: null }));
+        }
+        for (const memberId of addMemberIds) {
+          syncTasks.push(syncMasterDomainsAlliance({ userId: memberId, allianceId: alliance._id }));
+        }
+        if (syncTasks.length > 0) {
+          await Promise.all(syncTasks);
+        }
+      }
+
+      const affectedAllianceIds = new Set([getIdString(alliance._id)]);
+      for (const user of addUsers) {
+        const fromAllianceId = getIdString(user?.allianceId);
+        if (fromAllianceId && fromAllianceId !== getIdString(alliance._id)) {
+          affectedAllianceIds.add(fromAllianceId);
+        }
+      }
+
+      const affectedObjectIds = Array.from(affectedAllianceIds)
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+        .map((id) => new mongoose.Types.ObjectId(id));
+
+      if (affectedObjectIds.length > 0) {
+        const countRows = await User.aggregate([
+          { $match: { allianceId: { $in: affectedObjectIds } } },
+          { $group: { _id: '$allianceId', count: { $sum: 1 } } }
+        ]);
+        const countMap = new Map(
+          countRows.map((item) => [getIdString(item?._id), Math.max(0, parseInt(item?.count, 10) || 0)])
+        );
+
+        await Promise.all(
+          Array.from(affectedAllianceIds).map((id) => (
+            mongoose.Types.ObjectId.isValid(id)
+              ? EntropyAlliance.updateOne({ _id: id }, { $set: { memberCount: countMap.get(id) || 0 } })
+              : Promise.resolve()
+          ))
+        );
+      }
+    }
+
     if (hasPersistentChanges) {
       await alliance.save();
     }
+
     if (shouldBroadcastAllianceAnnouncement) {
       announcementTaskId = await broadcastAllianceAnnouncement({
         allianceId: alliance._id,
@@ -1393,15 +1640,18 @@ router.put('/admin/:allianceId', authenticateToken, async (req, res) => {
       alliance.announcementUpdatedAt = new Date();
     }
 
-    const updatedAlliance = hasPersistentChanges
-      ? await EntropyAlliance.findById(allianceId)
-          .populate('founder', 'username profession')
-      : alliance;
+    const updatedAlliance = await EntropyAlliance.findById(allianceId)
+      .populate('founder', 'username profession');
+    if (updatedAlliance && shouldBroadcastAllianceAnnouncement) {
+      updatedAlliance.announcement = alliance.announcement;
+      updatedAlliance.announcementUpdatedAt = alliance.announcementUpdatedAt;
+    }
 
     res.json({
       success: true,
       message: announcementTaskId ? '熵盟信息已更新，公告广播任务已提交' : '熵盟信息已更新',
       announcementTaskId: announcementTaskId || null,
+      hasMemberChanges,
       alliance: buildAlliancePayload(updatedAlliance || alliance)
     });
   } catch (error) {

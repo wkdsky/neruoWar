@@ -5,6 +5,52 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#000000" />
     <meta name="description" content="多节点策略经营游戏" />
+    <script>
+      (function () {
+        var NOISE_PATTERNS = [
+          'ResizeObserver loop completed with undelivered notifications',
+          'ResizeObserver loop limit exceeded'
+        ];
+
+        var isResizeObserverNoise = function (message) {
+          if (typeof message !== 'string') return false;
+          for (var i = 0; i < NOISE_PATTERNS.length; i += 1) {
+            if (message.indexOf(NOISE_PATTERNS[i]) >= 0) return true;
+          }
+          return false;
+        };
+
+        var resolveMessage = function (input) {
+          if (!input) return '';
+          if (typeof input === 'string') return input;
+          if (typeof input.message === 'string') return input.message;
+          return '';
+        };
+
+        var shouldSuppress = function (event) {
+          var message = resolveMessage(event && event.message);
+          if (!message) {
+            message = resolveMessage(event && event.error);
+          }
+          if (!message) {
+            message = resolveMessage(event && event.reason);
+          }
+          return isResizeObserverNoise(message);
+        };
+
+        window.addEventListener('error', function (event) {
+          if (!shouldSuppress(event)) return;
+          if (typeof event.preventDefault === 'function') event.preventDefault();
+          if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+        }, true);
+
+        window.addEventListener('unhandledrejection', function (event) {
+          if (!shouldSuppress(event)) return;
+          if (typeof event.preventDefault === 'function') event.preventDefault();
+          if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+        }, true);
+      })();
+    </script>
     <title>策略经营游戏</title>
   </head>
   <body>

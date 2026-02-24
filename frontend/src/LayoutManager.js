@@ -59,6 +59,10 @@ class LayoutManager {
     const rootCols = Math.min(3, rootNodes.length);
     const rootSpacingX = Math.min(250, this.width * 0.25);
     const rootSpacingY = 180;
+    const rootRows = rootCols > 0 ? Math.ceil(rootNodes.length / rootCols) : 0;
+    const rootAreaBottomY = rootRows > 0
+      ? (rootStartY + (rootRows - 1) * rootSpacingY + 70)
+      : rootStartY;
 
     rootNodes.forEach((node, index) => {
       const row = Math.floor(index / rootCols);
@@ -82,8 +86,10 @@ class LayoutManager {
       });
     });
 
-    // 热门节点：横向排列
-    const featuredY = this.height * 0.70 + yOffset;
+    // 热门节点：横向排列，至少与根节点区域保持一段清晰的视觉间隔
+    const baseFeaturedY = this.height * 0.70 + yOffset;
+    const minFeaturedY = rootAreaBottomY + Math.max(120, this.height * 0.08);
+    const featuredY = Math.min(Math.max(baseFeaturedY, minFeaturedY), this.height - 90);
     const featuredSpacing = 150;
     const featuredStartX = this.centerX - (featuredNodes.length - 1) * featuredSpacing / 2;
 
@@ -103,6 +109,46 @@ class LayoutManager {
         visible: true
       });
     });
+
+    if (rootNodes.length > 0 && featuredNodes.length > 0) {
+      const dividerY = rootAreaBottomY + (featuredY - rootAreaBottomY) * 0.5;
+      const dividerInsetLeft = Math.max(96, this.width * 0.16);
+      const dividerInsetRight = Math.max(36, this.width * 0.06);
+      const dividerLeftId = 'home-divider-anchor-left';
+      const dividerRightId = 'home-divider-anchor-right';
+
+      layout.nodes.push({
+        id: dividerLeftId,
+        x: dividerInsetLeft,
+        y: dividerY,
+        radius: 0,
+        scale: 1,
+        opacity: 1,
+        type: 'home-divider-anchor',
+        label: '',
+        data: null,
+        visible: true
+      });
+      layout.nodes.push({
+        id: dividerRightId,
+        x: this.width - dividerInsetRight,
+        y: dividerY,
+        radius: 0,
+        scale: 1,
+        opacity: 1,
+        type: 'home-divider-anchor',
+        label: '',
+        data: null,
+        visible: true
+      });
+      layout.lines.push({
+        id: 'home-root-featured-divider',
+        from: dividerLeftId,
+        to: dividerRightId,
+        color: [0.62, 0.67, 0.78, 0.5],
+        noCaps: true
+      });
+    }
 
     return layout;
   }

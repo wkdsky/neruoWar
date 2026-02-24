@@ -515,6 +515,7 @@ const App = () => {
     const [nodeInfoModalTarget, setNodeInfoModalTarget] = useState(null);
     const [titleRelationInfo, setTitleRelationInfo] = useState(null);
     const [senseSelectorSourceNode, setSenseSelectorSourceNode] = useState(null);
+    const [senseSelectorSourceSceneNodeId, setSenseSelectorSourceSceneNodeId] = useState('');
     const [senseSelectorAnchor, setSenseSelectorAnchor] = useState({ x: 0, y: 0, visible: false });
     const [isSenseSelectorVisible, setIsSenseSelectorVisible] = useState(false);
     const [showNodeInfoModal, setShowNodeInfoModal] = useState(false);
@@ -664,6 +665,7 @@ const App = () => {
                 if (view === 'home') {
                     setTitleRelationInfo(null);
                     setSenseSelectorSourceNode(node.data);
+                    setSenseSelectorSourceSceneNodeId(String(node?.id || ''));
                     updateSenseSelectorAnchorBySceneNode(node);
                     setIsSenseSelectorVisible(true);
                     return;
@@ -673,6 +675,7 @@ const App = () => {
                     setTitleRelationInfo(null);
                     if (node.type === 'center') {
                         setSenseSelectorSourceNode(currentTitleDetail || node.data);
+                        setSenseSelectorSourceSceneNodeId('');
                         updateSenseSelectorAnchorBySceneNode(node);
                         setIsSenseSelectorVisible((prev) => !prev);
                         return;
@@ -687,6 +690,7 @@ const App = () => {
                     setTitleRelationInfo(null);
                     if (node.type === 'center') {
                         setSenseSelectorSourceNode(currentNodeDetail || node.data);
+                        setSenseSelectorSourceSceneNodeId('');
                         updateSenseSelectorAnchorBySceneNode(node);
                         setIsSenseSelectorVisible((prev) => !prev);
                         return;
@@ -3687,6 +3691,7 @@ const App = () => {
             if (view === 'home') {
                 setTitleRelationInfo(null);
                 setSenseSelectorSourceNode(node.data);
+                setSenseSelectorSourceSceneNodeId(String(node?.id || ''));
                 updateSenseSelectorAnchorBySceneNode(node);
                 setIsSenseSelectorVisible(true);
                 return;
@@ -3696,6 +3701,7 @@ const App = () => {
                 setTitleRelationInfo(null);
                 if (node.type === 'center') {
                     setSenseSelectorSourceNode(currentTitleDetail || node.data);
+                    setSenseSelectorSourceSceneNodeId('');
                     updateSenseSelectorAnchorBySceneNode(node);
                     setIsSenseSelectorVisible((prev) => !prev);
                     return;
@@ -3710,6 +3716,7 @@ const App = () => {
                 setTitleRelationInfo(null);
                 if (node.type === 'center') {
                     setSenseSelectorSourceNode(currentNodeDetail || node.data);
+                    setSenseSelectorSourceSceneNodeId('');
                     updateSenseSelectorAnchorBySceneNode(node);
                     setIsSenseSelectorVisible((prev) => !prev);
                     return;
@@ -3863,12 +3870,14 @@ const App = () => {
         if (!isWebGLReady) {
             setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
             senseSelectorAnchorRef.current = { x: 0, y: 0, visible: false };
+            setSenseSelectorSourceSceneNodeId('');
             setIsSenseSelectorVisible(false);
             return undefined;
         }
         if (!isKnowledgeDetailView(view) && view !== 'home') {
             setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
             senseSelectorAnchorRef.current = { x: 0, y: 0, visible: false };
+            setSenseSelectorSourceSceneNodeId('');
             setIsSenseSelectorVisible(false);
             return undefined;
         }
@@ -3878,11 +3887,19 @@ const App = () => {
         const updateAnchor = () => {
             const sceneManager = sceneManagerRef.current;
             const renderer = sceneManager?.renderer;
+            const sceneNodes = Array.isArray(sceneManager?.currentLayout?.nodes)
+                ? sceneManager.currentLayout.nodes
+                : [];
             const targetNode = view === 'home'
-                ? sceneManager?.currentLayout?.nodes?.find((item) => (
-                    normalizeObjectId(item?.data?._id) === normalizeObjectId(senseSelectorSourceNode?._id)
-                ))
-                : sceneManager?.currentLayout?.nodes?.find((item) => item?.type === 'center');
+                ? (
+                    sceneNodes.find((item) => (
+                        String(item?.id || '') === String(senseSelectorSourceSceneNodeId || '')
+                    ))
+                    || sceneNodes.find((item) => (
+                        normalizeObjectId(item?.data?._id) === normalizeObjectId(senseSelectorSourceNode?._id)
+                    ))
+                )
+                : sceneNodes.find((item) => item?.type === 'center');
             const canvas = webglCanvasRef.current;
             if (renderer && targetNode && canvas) {
                 const screenPos = renderer.worldToScreen(targetNode.x, targetNode.y);
@@ -3912,6 +3929,7 @@ const App = () => {
         currentNodeDetail?.activeSenseId,
         currentTitleDetail?._id,
         senseSelectorSourceNode?._id,
+        senseSelectorSourceSceneNodeId,
         isSenseSelectorVisible,
         isWebGLReady
     ]);
