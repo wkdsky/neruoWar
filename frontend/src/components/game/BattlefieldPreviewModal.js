@@ -3,6 +3,10 @@ import './BattlefieldPreviewModal.css';
 
 const CAMERA_ANGLE_PREVIEW = 45;
 const CAMERA_ANGLE_EDIT = 75;
+const CAMERA_YAW_DEFAULT = 45;
+const CAMERA_TWEEN_MS = 260;
+const CAMERA_ROTATE_SENSITIVITY = 0.38;
+const CAMERA_ROTATE_CLICK_THRESHOLD = 4;
 const FIELD_WIDTH = 900;
 const FIELD_HEIGHT = 620;
 const MAX_STACK_LEVEL = 5;
@@ -11,8 +15,8 @@ const BASE_HP = 240;
 const WALL_WIDTH = 104;
 const WALL_DEPTH = 24;
 const WALL_HEIGHT = 42;
-const STACK_PROJECTION_HEIGHT = 40;
-const ROTATE_STEP = 15;
+const STACK_LAYER_HEIGHT = WALL_HEIGHT;
+const ROTATE_STEP = 7.5;
 const MIN_ZOOM = 0.75;
 const MAX_ZOOM = 1.5;
 const DEFAULT_ZOOM = 1;
@@ -20,6 +24,9 @@ const ZOOM_STEP = 0.08;
 const BASELINE_FIELD_COVERAGE = 0.85;
 const API_BASE = 'http://localhost:5000';
 const TOTAL_WOOD_WALL_STOCK = 10;
+const SNAP_EPSILON = 1.2;
+const CACHE_VERSION = 1;
+const CACHE_PREFIX = 'battlefield_layout_cache_v1';
 const PALETTE_WALL_TEMPLATE = {
   itemType: 'wood_wall',
   width: WALL_WIDTH,
@@ -45,36 +52,104 @@ const roundTo = (value, digits = 2) => {
   return Math.round(n * p) / p;
 };
 
-const getCameraBlend = (angleDeg) => Math.max(
-  0,
-  Math.min(1, (Number(angleDeg) - CAMERA_ANGLE_PREVIEW) / (CAMERA_ANGLE_EDIT - CAMERA_ANGLE_PREVIEW))
-);
+const lerp = (a, b, t) => (a + ((b - a) * t));
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+const easeOutCubic = (t) => (1 - ((1 - t) ** 3));
 
-const getGroundYScale = (angleDeg) => {
-  const blend = getCameraBlend(angleDeg);
-  return 0.68 - (blend * 0.36);
+const getGroundProjectionScale = (tiltDeg) => {
+  const tilt = (Math.max(1, Number(tiltDeg) || CAMERA_ANGLE_PREVIEW) * Math.PI) / 180;
+  return Math.max(0.15, Math.sin(tilt));
 };
 
-const buildDefaultWalls = () => {
+const getCameraConfig = (tiltDeg, yawDeg = CAMERA_YAW_DEFAULT) => {
+  const yaw = degToRad(yawDeg);
+  const tilt = degToRad(tiltDeg);
+  return {
+    yawCos: Math.cos(yaw),
+    yawSin: Math.sin(yaw),
+    tiltSin: Math.sin(tilt),
+    tiltCos: Math.cos(tilt)
+  };
+};
+
+const getWallBaseZ = (wall = {}) => (
+  Math.max(0, Math.floor(Number(wall?.z) || 0)) * STACK_LAYER_HEIGHT
+);
+
+const getWallTopZ = (wall = {}) => (
+  getWallBaseZ(wall) + Math.max(10, Number(wall?.height) || WALL_HEIGHT)
+);
+
+const buildDefaultWalls = (
+  fieldWidth = FIELD_WIDTH,
+  fieldHeight = FIELD_HEIGHT,
+  template = {}
+) => {
+  const safeWidth = Math.max(200, Number(fieldWidth) || FIELD_WIDTH);
+  const safeHeight = Math.max(200, Number(fieldHeight) || FIELD_HEIGHT);
+  const width = Math.max(20, Number(template?.width) || WALL_WIDTH);
+  const depth = Math.max(12, Number(template?.depth) || WALL_DEPTH);
+  const height = Math.max(14, Number(template?.height) || WALL_HEIGHT);
+  const hp = Math.max(1, Math.floor(Number(template?.hp) || BASE_HP));
+  const defense = Math.max(0.1, Number(template?.defense) || BASE_DEFENSE);
   const walls = [];
-  for (let i = 0; i < 10; i += 1) {
-    const row = Math.floor(i / 5);
-    const col = i % 5;
+  const columns = 5;
+  const rows = 2;
+  const marginX = Math.max(40, width * 0.6);
+  const marginY = Math.max(40, depth * 1.5);
+  const usableWidth = Math.max(width * (columns - 1), safeWidth - (marginX * 2));
+  const usableHeight = Math.max(depth * (rows - 1), Math.min(safeHeight * 0.6, safeHeight - (marginY * 2)));
+  for (let i = 0; i < TOTAL_WOOD_WALL_STOCK; i += 1) {
+    const row = Math.floor(i / columns);
+    const col = i % columns;
     walls.push({
       id: `wall_${i + 1}`,
       itemType: 'wood_wall',
-      x: -240 + (col * 120),
-      y: -78 + (row * 170),
+      x: roundTo((-usableWidth / 2) + ((usableWidth / (columns - 1)) * col), 3),
+      y: roundTo((-usableHeight / 2) + ((usableHeight / (rows - 1)) * row), 3),
       z: 0,
       rotation: row % 2 === 0 ? 0 : 90,
-      width: WALL_WIDTH,
-      depth: WALL_DEPTH,
-      height: WALL_HEIGHT,
-      hp: BASE_HP,
-      defense: BASE_DEFENSE
+      width,
+      depth,
+      height,
+      hp,
+      defense
     });
   }
   return walls;
+};
+
+const getBattlefieldCacheKey = (nodeId, gateKey) => (
+  `${CACHE_PREFIX}:${nodeId || ''}:${gateKey || 'cheng'}`
+);
+
+const readBattlefieldCache = (nodeId, gateKey) => {
+  if (!nodeId) return null;
+  try {
+    const raw = localStorage.getItem(getBattlefieldCacheKey(nodeId, gateKey));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch (error) {
+    return null;
+  }
+};
+
+const writeBattlefieldCache = (nodeId, gateKey, payload = {}) => {
+  if (!nodeId) return;
+  const cachePayload = {
+    version: CACHE_VERSION,
+    nodeId,
+    gateKey: gateKey || 'cheng',
+    needsSync: !!payload.needsSync,
+    updatedAt: new Date().toISOString(),
+    layoutMeta: payload.layoutMeta && typeof payload.layoutMeta === 'object' ? payload.layoutMeta : null,
+    itemCatalog: normalizeItemCatalog(payload.itemCatalog),
+    walls: sanitizeWalls(payload.walls),
+    message: typeof payload.message === 'string' ? payload.message : ''
+  };
+  localStorage.setItem(getBattlefieldCacheKey(nodeId, gateKey), JSON.stringify(cachePayload));
 };
 
 const createWallFromLike = (wallLike = {}, overrides = {}) => ({
@@ -187,26 +262,6 @@ const mapLayoutBundleToWalls = (layoutBundle = {}) => {
   }));
 };
 
-const isLegacyDefaultDeployment = (walls = []) => {
-  const current = sanitizeWalls(walls);
-  const defaults = buildDefaultWalls();
-  if (current.length !== defaults.length) return false;
-
-  const byIdCurrent = new Map(current.map((item) => [item.id, item]));
-  for (const item of defaults) {
-    const target = byIdCurrent.get(item.id);
-    if (!target) return false;
-    if (roundTo(target.x, 1) !== roundTo(item.x, 1)) return false;
-    if (roundTo(target.y, 1) !== roundTo(item.y, 1)) return false;
-    if (target.z !== item.z) return false;
-    if (roundTo(target.rotation, 1) !== roundTo(item.rotation, 1)) return false;
-    if (roundTo(target.width, 1) !== roundTo(item.width, 1)) return false;
-    if (roundTo(target.depth, 1) !== roundTo(item.depth, 1)) return false;
-    if (roundTo(target.height, 1) !== roundTo(item.height, 1)) return false;
-  }
-  return true;
-};
-
 const buildLayoutPayload = ({ walls = [], layoutMeta = {}, itemCatalog = [], gateKey = '' } = {}) => ({
   gateKey,
   layout: {
@@ -215,7 +270,7 @@ const buildLayoutPayload = ({ walls = [], layoutMeta = {}, itemCatalog = [], gat
     fieldWidth: Number.isFinite(Number(layoutMeta?.fieldWidth)) ? Number(layoutMeta.fieldWidth) : FIELD_WIDTH,
     fieldHeight: Number.isFinite(Number(layoutMeta?.fieldHeight)) ? Number(layoutMeta.fieldHeight) : FIELD_HEIGHT,
     maxItemsPerType: Number.isFinite(Number(layoutMeta?.maxItemsPerType))
-      ? Math.max(0, Math.floor(Number(layoutMeta.maxItemsPerType)))
+      ? Math.max(TOTAL_WOOD_WALL_STOCK, Math.floor(Number(layoutMeta.maxItemsPerType)))
       : TOTAL_WOOD_WALL_STOCK
   },
   itemCatalog: normalizeItemCatalog(itemCatalog).map((item) => ({
@@ -237,41 +292,59 @@ const buildLayoutPayload = ({ walls = [], layoutMeta = {}, itemCatalog = [], gat
   }))
 });
 
-const projectWorld = (x, y, z, viewport, angleDeg, worldScale) => {
-  const xr = x;
-  const yr = y;
-  const blend = getCameraBlend(angleDeg);
-  const groundYScale = getGroundYScale(angleDeg);
-  const stackHeight = STACK_PROJECTION_HEIGHT + (blend * 18);
+const rotate2D = (x, y, deg) => {
+  const rad = degToRad(deg);
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
   return {
-    x: viewport.centerX + viewport.panX + (xr * worldScale),
-    y: viewport.centerY + viewport.panY + (yr * worldScale * groundYScale) - (z * stackHeight)
+    x: (x * cos) - (y * sin),
+    y: (x * sin) + (y * cos)
   };
 };
 
-const unprojectScreen = (sx, sy, viewport, angleDeg, worldScale) => {
-  const groundYScale = getGroundYScale(angleDeg);
-  const x = (sx - viewport.centerX - viewport.panX) / (worldScale || 1);
-  const y = (sy - viewport.centerY - viewport.panY) / ((worldScale * groundYScale) || 1);
-  return { x, y };
+const dot2 = (a, b) => ((a.x * b.x) + (a.y * b.y));
+
+const projectWorld = (x, y, z, viewport, tiltDeg, yawDeg, worldScale) => {
+  const camera = getCameraConfig(tiltDeg, yawDeg);
+  const yawX = (x * camera.yawCos) - (y * camera.yawSin);
+  const yawY = (x * camera.yawSin) + (y * camera.yawCos);
+  const viewY = (yawY * camera.tiltSin) - (z * camera.tiltCos);
+  const depth = (yawY * camera.tiltCos) + (z * camera.tiltSin);
+  return {
+    x: viewport.centerX + viewport.panX + (yawX * worldScale),
+    y: viewport.centerY + viewport.panY + (viewY * worldScale),
+    depth
+  };
+};
+
+const unprojectScreen = (sx, sy, viewport, tiltDeg, yawDeg, worldScale) => {
+  const camera = getCameraConfig(tiltDeg, yawDeg);
+  const safeScale = Math.max(0.0001, worldScale || 1);
+  const safeGroundScale = Math.max(0.0001, camera.tiltSin);
+  const yawX = (sx - viewport.centerX - viewport.panX) / safeScale;
+  const yawY = (sy - viewport.centerY - viewport.panY) / (safeScale * safeGroundScale);
+  return {
+    x: (yawX * camera.yawCos) + (yawY * camera.yawSin),
+    y: (-yawX * camera.yawSin) + (yawY * camera.yawCos)
+  };
 };
 
 const getRectCorners = (centerX, centerY, width, depth, rotationDeg) => {
   const hw = width / 2;
   const hd = depth / 2;
-  const rad = degToRad(rotationDeg);
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
   const pts = [
     { x: -hw, y: -hd },
     { x: hw, y: -hd },
     { x: hw, y: hd },
     { x: -hw, y: hd }
   ];
-  return pts.map((p) => ({
-    x: centerX + (p.x * cos) - (p.y * sin),
-    y: centerY + (p.x * sin) + (p.y * cos)
-  }));
+  return pts.map((p) => {
+    const rotated = rotate2D(p.x, p.y, rotationDeg);
+    return {
+      x: centerX + rotated.x,
+      y: centerY + rotated.y
+    };
+  });
 };
 
 const buildAxesFromCorners = (corners) => {
@@ -286,59 +359,83 @@ const buildAxesFromCorners = (corners) => {
   return axes;
 };
 
-const projectOnAxis = (point, axis) => ((point.x * axis.x) + (point.y * axis.y));
-
 const getProjectionRange = (corners, axis) => {
   let min = Infinity;
   let max = -Infinity;
-  corners.forEach((p) => {
-    const v = projectOnAxis(p, axis);
-    min = Math.min(min, v);
-    max = Math.max(max, v);
+  corners.forEach((point) => {
+    const value = dot2(point, axis);
+    min = Math.min(min, value);
+    max = Math.max(max, value);
   });
   return { min, max };
 };
 
-const isRectOverlap = (rectA, rectB, epsilon = 0.4) => {
+const getRectContactMetrics = (rectA, rectB) => {
   const cornersA = getRectCorners(rectA.x, rectA.y, rectA.width, rectA.depth, rectA.rotation);
   const cornersB = getRectCorners(rectB.x, rectB.y, rectB.width, rectB.depth, rectB.rotation);
   const axes = [...buildAxesFromCorners(cornersA), ...buildAxesFromCorners(cornersB)];
-  for (const axis of axes) {
-    const a = getProjectionRange(cornersA, axis);
-    const b = getProjectionRange(cornersB, axis);
-    if (a.max <= b.min + epsilon || b.max <= a.min + epsilon) {
-      return false;
-    }
-  }
-  return true;
-};
-
-const toLocalByWall = (point, wall) => {
-  const rad = degToRad(wall.rotation);
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  const dx = point.x - wall.x;
-  const dy = point.y - wall.y;
+  const overlaps = [];
+  let minOverlap = Infinity;
+  axes.forEach((axis) => {
+    const rangeA = getProjectionRange(cornersA, axis);
+    const rangeB = getProjectionRange(cornersB, axis);
+    const overlap = Math.min(rangeA.max, rangeB.max) - Math.max(rangeA.min, rangeB.min);
+    overlaps.push(overlap);
+    minOverlap = Math.min(minOverlap, overlap);
+  });
   return {
-    x: (dx * cos) + (dy * sin),
-    y: (-dx * sin) + (dy * cos)
+    cornersA,
+    cornersB,
+    overlaps,
+    minOverlap
   };
 };
 
-const getNearestRotation = (current, candidates) => {
-  const normalizedCurrent = normalizeDeg(current);
-  let best = normalizeDeg(candidates[0] || 0);
-  let bestDiff = Infinity;
-  candidates.forEach((item) => {
-    const normalized = normalizeDeg(item);
-    const diffRaw = Math.abs(normalizedCurrent - normalized);
-    const diff = Math.min(diffRaw, 360 - diffRaw);
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      best = normalized;
-    }
-  });
-  return best;
+const isRectOverlap = (rectA, rectB, epsilon = 0.4) => {
+  const metrics = getRectContactMetrics(rectA, rectB);
+  return metrics.minOverlap > epsilon;
+};
+
+const toLocalByWall = (point, wall) => {
+  const rotated = rotate2D(point.x - wall.x, point.y - wall.y, -wall.rotation);
+  return {
+    x: rotated.x,
+    y: rotated.y
+  };
+};
+
+const pointInWallFootprint = (point, wall, padding = 0) => {
+  const local = toLocalByWall(point, wall);
+  return (
+    Math.abs(local.x) <= ((wall.width / 2) + padding)
+    && Math.abs(local.y) <= ((wall.depth / 2) + padding)
+  );
+};
+
+const getGhostNormalsByYaw = (rotation) => {
+  const widthAxis = rotate2D(1, 0, rotation);
+  const depthAxis = rotate2D(0, 1, rotation);
+  return [
+    widthAxis,
+    { x: -widthAxis.x, y: -widthAxis.y },
+    depthAxis,
+    { x: -depthAxis.x, y: -depthAxis.y }
+  ];
+};
+
+const getProjectedHalfExtent = (wallLike, normal) => {
+  const widthAxis = rotate2D(1, 0, wallLike.rotation || 0);
+  const depthAxis = rotate2D(0, 1, wallLike.rotation || 0);
+  const hw = (wallLike.width || WALL_WIDTH) / 2;
+  const hd = (wallLike.depth || WALL_DEPTH) / 2;
+  return (Math.abs(dot2(widthAxis, normal)) * hw) + (Math.abs(dot2(depthAxis, normal)) * hd);
+};
+
+const angleDistanceDeg = (a, b) => {
+  const da = normalizeDeg(a);
+  const db = normalizeDeg(b);
+  const diff = Math.abs(da - db);
+  return Math.min(diff, 360 - diff);
 };
 
 const clampGhostInsideField = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight = FIELD_HEIGHT) => {
@@ -371,159 +468,302 @@ const clampGhostInsideField = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight 
   return next;
 };
 
+const isOutOfBounds = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight = FIELD_HEIGHT) => {
+  const safeFieldWidth = Math.max(200, Number(fieldWidth) || FIELD_WIDTH);
+  const safeFieldHeight = Math.max(200, Number(fieldHeight) || FIELD_HEIGHT);
+  const corners = getRectCorners(ghostLike.x, ghostLike.y, ghostLike.width, ghostLike.depth, ghostLike.rotation);
+  return corners.some((point) => (
+    point.x < (-safeFieldWidth / 2) - SNAP_EPSILON
+    || point.x > (safeFieldWidth / 2) + SNAP_EPSILON
+    || point.y < (-safeFieldHeight / 2) - SNAP_EPSILON
+    || point.y > (safeFieldHeight / 2) + SNAP_EPSILON
+  ));
+};
+
+const hasCollision = (ghostLike, walls = []) => {
+  for (const wall of walls) {
+    if (wall.id === ghostLike.id) continue;
+    if (wall.z !== ghostLike.z) continue;
+    if (isRectOverlap(ghostLike, wall, 0.2)) return true;
+  }
+  return false;
+};
+
+const buildYawCandidatesFromGhost = (ghostYaw) => {
+  const yaw = normalizeDeg(ghostYaw);
+  return [yaw, yaw + 90, yaw - 90, yaw + 180, yaw - 180];
+};
+
+const buildYawCandidatesFromTarget = (targetYaw) => {
+  const yaw = normalizeDeg(targetYaw);
+  return [yaw, yaw + 90, yaw + 180, yaw + 270];
+};
+
+const getPlacementReasonText = (reason) => {
+  if (reason === 'stack_limit') return `堆叠上限为 ${MAX_STACK_LEVEL} 层`;
+  if (reason === 'collision') return '当前位置发生碰撞，无法放置';
+  if (reason === 'out_of_bounds') return '当前位置超出战场边界';
+  return '';
+};
+
+const solveMagneticSnap = ({
+  candidateGhost,
+  walls,
+  mouseWorld,
+  fieldWidth,
+  fieldHeight
+}) => {
+  const ghostBase = {
+    ...candidateGhost,
+    z: Math.max(0, Math.min(MAX_STACK_LEVEL - 1, Math.floor(Number(candidateGhost?.z) || 0))),
+    rotation: normalizeDeg(candidateGhost?.rotation || 0)
+  };
+  const sortedWalls = [...walls].sort((a, b) => (b.z - a.z));
+  let stackLimitHit = false;
+
+  for (const wall of sortedWalls) {
+    if (!pointInWallFootprint(mouseWorld, wall, 0.2)) continue;
+    if (wall.z >= MAX_STACK_LEVEL - 1) {
+      stackLimitHit = true;
+      continue;
+    }
+    const topGhost = {
+      ...ghostBase,
+      x: wall.x,
+      y: wall.y,
+      z: wall.z + 1,
+      rotation: normalizeDeg(wall.rotation)
+    };
+    if (isOutOfBounds(topGhost, fieldWidth, fieldHeight)) {
+      return {
+        ghost: topGhost,
+        snap: { type: 'top', anchorId: wall.id },
+        blocked: true,
+        reason: 'out_of_bounds'
+      };
+    }
+    if (hasCollision(topGhost, walls)) {
+      return {
+        ghost: topGhost,
+        snap: { type: 'top', anchorId: wall.id },
+        blocked: true,
+        reason: 'collision'
+      };
+    }
+    return {
+      ghost: topGhost,
+      snap: { type: 'top', anchorId: wall.id },
+      blocked: false,
+      reason: ''
+    };
+  }
+
+  let best = null;
+  const minSize = Math.max(20, Math.min(ghostBase.width, ghostBase.depth));
+  const snapRadius = minSize * 1.4;
+  const sideDefs = [
+    { side: 'right', localNormal: { x: 1, y: 0 }, halfKey: 'width' },
+    { side: 'left', localNormal: { x: -1, y: 0 }, halfKey: 'width' },
+    { side: 'front', localNormal: { x: 0, y: 1 }, halfKey: 'depth' },
+    { side: 'back', localNormal: { x: 0, y: -1 }, halfKey: 'depth' }
+  ];
+
+  walls.forEach((anchor) => {
+    sideDefs.forEach((face) => {
+      const normal = rotate2D(face.localNormal.x, face.localNormal.y, anchor.rotation);
+      const anchorHalf = face.halfKey === 'width' ? (anchor.width / 2) : (anchor.depth / 2);
+      const contactPoint = {
+        x: anchor.x + (normal.x * anchorHalf),
+        y: anchor.y + (normal.y * anchorHalf)
+      };
+      const mouseDist = Math.hypot(mouseWorld.x - contactPoint.x, mouseWorld.y - contactPoint.y);
+      if (mouseDist > snapRadius) return;
+
+      const yawCandidates = Array.from(new Set(
+        [...buildYawCandidatesFromGhost(ghostBase.rotation), ...buildYawCandidatesFromTarget(anchor.rotation)]
+          .map((yaw) => normalizeDeg(yaw))
+      ));
+
+      yawCandidates.forEach((yaw) => {
+        const ghostLike = {
+          ...ghostBase,
+          rotation: normalizeDeg(yaw),
+          z: anchor.z
+        };
+        const ghostHalf = getProjectedHalfExtent(ghostLike, normal);
+        const candidate = {
+          ...ghostLike,
+          x: anchor.x + (normal.x * (anchorHalf + ghostHalf)),
+          y: anchor.y + (normal.y * (anchorHalf + ghostHalf))
+        };
+
+        if (isOutOfBounds(candidate, fieldWidth, fieldHeight)) return;
+        if (hasCollision(candidate, walls)) return;
+
+        const requiredNormal = { x: -normal.x, y: -normal.y };
+        const faceNormals = getGhostNormalsByYaw(candidate.rotation);
+        let bestAlign = -1;
+        faceNormals.forEach((testNormal) => {
+          bestAlign = Math.max(bestAlign, dot2(testNormal, requiredNormal));
+        });
+        const alignErr = 1 - Math.max(-1, Math.min(1, bestAlign));
+        if (alignErr > 0.2) return;
+
+        const rotateCost = angleDistanceDeg(candidate.rotation, ghostBase.rotation) / 180;
+        const mouseCost = Math.min(1, mouseDist / snapRadius);
+        const score = (0.45 * alignErr) + (0.40 * rotateCost) + (0.15 * mouseCost);
+        const row = {
+          ghost: candidate,
+          snap: { type: `side-${face.side}`, anchorId: anchor.id },
+          rotateCost,
+          score
+        };
+        if (!best) {
+          best = row;
+          return;
+        }
+        if (row.rotateCost < (best.rotateCost - 1e-6)) {
+          best = row;
+          return;
+        }
+        if (Math.abs(row.rotateCost - best.rotateCost) <= 1e-6 && row.score < best.score) {
+          best = row;
+        }
+      });
+    });
+  });
+
+  if (best) {
+    return {
+      ghost: best.ghost,
+      snap: best.snap,
+      blocked: false,
+      reason: ''
+    };
+  }
+
+  const clamped = clampGhostInsideField({ ...ghostBase, z: 0 }, fieldWidth, fieldHeight);
+  const moved = Math.hypot(clamped.x - ghostBase.x, clamped.y - ghostBase.y);
+  if (moved > 0.01) {
+    const safeFieldWidth = Math.max(200, Number(fieldWidth) || FIELD_WIDTH);
+    const safeFieldHeight = Math.max(200, Number(fieldHeight) || FIELD_HEIGHT);
+    const edgeDistances = [
+      { side: 'edge-left', dist: clamped.x + (safeFieldWidth / 2) },
+      { side: 'edge-right', dist: (safeFieldWidth / 2) - clamped.x },
+      { side: 'edge-top', dist: clamped.y + (safeFieldHeight / 2) },
+      { side: 'edge-bottom', dist: (safeFieldHeight / 2) - clamped.y }
+    ];
+    const edge = edgeDistances.reduce((acc, item) => (item.dist < acc.dist ? item : acc), edgeDistances[0]);
+    if (hasCollision(clamped, walls)) {
+      return {
+        ghost: clamped,
+        snap: { type: edge.side, anchorId: '' },
+        blocked: true,
+        reason: 'collision'
+      };
+    }
+    return {
+      ghost: clamped,
+      snap: { type: edge.side, anchorId: '' },
+      blocked: false,
+      reason: ''
+    };
+  }
+
+  const freeGhost = { ...ghostBase, z: 0 };
+  if (stackLimitHit) {
+    return {
+      ghost: freeGhost,
+      snap: null,
+      blocked: true,
+      reason: 'stack_limit'
+    };
+  }
+  if (isOutOfBounds(freeGhost, fieldWidth, fieldHeight)) {
+    return {
+      ghost: freeGhost,
+      snap: null,
+      blocked: true,
+      reason: 'out_of_bounds'
+    };
+  }
+  if (hasCollision(freeGhost, walls)) {
+    return {
+      ghost: freeGhost,
+      snap: null,
+      blocked: true,
+      reason: 'collision'
+    };
+  }
+  return {
+    ghost: freeGhost,
+    snap: null,
+    blocked: false,
+    reason: ''
+  };
+};
+
 const evaluateGhostPlacement = (
   candidateGhost,
   walls,
   mouseWorld,
   fieldWidth = FIELD_WIDTH,
   fieldHeight = FIELD_HEIGHT
-) => {
-  const minSize = Math.min(candidateGhost.width, candidateGhost.depth);
-  const threshold = minSize;
-  let nextGhost = { ...candidateGhost };
-  let snap = null;
+) => solveMagneticSnap({
+  candidateGhost,
+  walls,
+  mouseWorld,
+  fieldWidth,
+  fieldHeight
+});
 
-  const sortedWalls = [...walls].sort((a, b) => b.z - a.z);
-  for (const wall of sortedWalls) {
-    const local = toLocalByWall(mouseWorld, wall);
-    const insideTop = Math.abs(local.x) <= wall.width / 2 && Math.abs(local.y) <= wall.depth / 2;
-    if (insideTop && wall.z < MAX_STACK_LEVEL - 1) {
-      nextGhost = {
-        ...nextGhost,
-        x: wall.x,
-        y: wall.y,
-        z: wall.z + 1,
-        rotation: wall.rotation
-      };
-      snap = { type: 'top', anchorId: wall.id };
-      break;
-    }
+const findTopWallAtPoint = (worldPoint, walls = []) => {
+  const matches = walls.filter((wall) => pointInWallFootprint(worldPoint, wall, 0.2));
+  if (matches.length === 0) return null;
+  matches.sort((a, b) => {
+    if (b.z !== a.z) return b.z - a.z;
+    const da = Math.hypot(worldPoint.x - a.x, worldPoint.y - a.y);
+    const db = Math.hypot(worldPoint.x - b.x, worldPoint.y - b.y);
+    return da - db;
+  });
+  return matches[0] || null;
+};
+
+const isPhysicallyConnected = (a, b) => {
+  const za = Math.max(0, Math.floor(Number(a?.z) || 0));
+  const zb = Math.max(0, Math.floor(Number(b?.z) || 0));
+  const zDelta = Math.abs(za - zb);
+  if (zDelta > 1) return false;
+  const metrics = getRectContactMetrics(a, b);
+  if (metrics.minOverlap < -SNAP_EPSILON) return false;
+  const minDim = Math.min(a.width, a.depth, b.width, b.depth);
+  if (zDelta === 1) {
+    const required = Math.max(4, minDim * 0.16);
+    return metrics.overlaps.every((item) => item > required);
   }
-
-  if (!snap) {
-    let bestSide = null;
-    walls.forEach((wall) => {
-      const local = toLocalByWall(mouseWorld, wall);
-      const dx = Math.max(0, Math.abs(local.x) - (wall.width / 2));
-      const dy = Math.max(0, Math.abs(local.y) - (wall.depth / 2));
-      const dist = Math.hypot(dx, dy);
-      if (dist > threshold) return;
-      const nearX = Math.abs(local.x) - (wall.width / 2);
-      const nearY = Math.abs(local.y) - (wall.depth / 2);
-      const chooseX = Math.abs(nearX) >= Math.abs(nearY);
-      const side = chooseX
-        ? (local.x >= 0 ? 'right' : 'left')
-        : (local.y >= 0 ? 'front' : 'back');
-      if (!bestSide || dist < bestSide.dist) {
-        bestSide = { wall, side, dist };
-      }
-    });
-
-    if (bestSide) {
-      const anchor = bestSide.wall;
-      const baseRotation = normalizeDeg(anchor.rotation);
-      const rotationAligned = getNearestRotation(nextGhost.rotation, [baseRotation, baseRotation + 90]);
-      let offsetLocalX = 0;
-      let offsetLocalY = 0;
-      if (bestSide.side === 'right') {
-        offsetLocalX = (anchor.width / 2) + (nextGhost.width / 2);
-      } else if (bestSide.side === 'left') {
-        offsetLocalX = -((anchor.width / 2) + (nextGhost.width / 2));
-      } else if (bestSide.side === 'front') {
-        offsetLocalY = (anchor.depth / 2) + (nextGhost.depth / 2);
-      } else {
-        offsetLocalY = -((anchor.depth / 2) + (nextGhost.depth / 2));
-      }
-      const rad = degToRad(anchor.rotation);
-      const cos = Math.cos(rad);
-      const sin = Math.sin(rad);
-      const worldX = anchor.x + (offsetLocalX * cos) - (offsetLocalY * sin);
-      const worldY = anchor.y + (offsetLocalX * sin) + (offsetLocalY * cos);
-      nextGhost = {
-        ...nextGhost,
-        x: worldX,
-        y: worldY,
-        z: anchor.z,
-        rotation: rotationAligned
-      };
-      snap = { type: bestSide.side, anchorId: anchor.id };
-    }
-  }
-
-  if (!snap) {
-    const safeFieldWidth = Math.max(200, Number(fieldWidth) || FIELD_WIDTH);
-    const safeFieldHeight = Math.max(200, Number(fieldHeight) || FIELD_HEIGHT);
-    const nearLeft = (nextGhost.x + safeFieldWidth / 2) < threshold;
-    const nearRight = (safeFieldWidth / 2 - nextGhost.x) < threshold;
-    const nearTop = (nextGhost.y + safeFieldHeight / 2) < threshold;
-    const nearBottom = (safeFieldHeight / 2 - nextGhost.y) < threshold;
-    if (nearLeft || nearRight || nearTop || nearBottom) {
-      const distances = [
-        { side: 'edge-left', dist: nextGhost.x + safeFieldWidth / 2 },
-        { side: 'edge-right', dist: safeFieldWidth / 2 - nextGhost.x },
-        { side: 'edge-top', dist: nextGhost.y + safeFieldHeight / 2 },
-        { side: 'edge-bottom', dist: safeFieldHeight / 2 - nextGhost.y }
-      ];
-      const best = distances.reduce((acc, item) => (item.dist < acc.dist ? item : acc), distances[0]);
-      const clamped = clampGhostInsideField(nextGhost, safeFieldWidth, safeFieldHeight);
-      nextGhost = {
-        ...nextGhost,
-        x: clamped.x,
-        y: clamped.y,
-        z: 0
-      };
-      snap = { type: best.side, anchorId: '' };
-    }
-  }
-
-  if (!snap) {
-    nextGhost = clampGhostInsideField(nextGhost, fieldWidth, fieldHeight);
-  }
-
-  let blocked = false;
-  for (const wall of walls) {
-    if (wall.id === nextGhost.id) continue;
-    if (wall.z !== nextGhost.z) continue;
-    if (isRectOverlap(nextGhost, wall)) {
-      blocked = true;
-      break;
-    }
-  }
-
-  return {
-    ghost: nextGhost,
-    snap,
-    blocked
-  };
+  if (metrics.overlaps.every((item) => item > 0.6)) return true;
+  const touchingAxis = metrics.overlaps.some((item) => Math.abs(item) <= SNAP_EPSILON);
+  const strongOverlap = metrics.overlaps.some((item) => item > Math.max(5, minDim * 0.22));
+  return touchingAxis && strongOverlap;
 };
 
 const getWallGroupMetrics = (walls) => {
   const source = Array.isArray(walls) ? walls : [];
   if (source.length === 0) return [];
   const adjacency = new Map();
-  source.forEach((wall) => adjacency.set(wall.id, new Set()));
-
-  const isConnected = (a, b) => {
-    const zDelta = Math.abs((a.z || 0) - (b.z || 0));
-    if (zDelta > 1) return false;
-    if (zDelta === 1) {
-      const overlap2D = isRectOverlap(a, b, 0.2);
-      return overlap2D;
-    }
-
-    if (isRectOverlap(a, b, -2)) return true;
-    const dist = Math.hypot(a.x - b.x, a.y - b.y);
-    return dist <= ((Math.max(a.width, a.depth) + Math.max(b.width, b.depth)) * 0.55);
-  };
+  const byId = new Map();
+  source.forEach((wall) => {
+    adjacency.set(wall.id, new Set());
+    byId.set(wall.id, wall);
+  });
 
   for (let i = 0; i < source.length; i += 1) {
     for (let j = i + 1; j < source.length; j += 1) {
       const a = source[i];
       const b = source[j];
-      if (isConnected(a, b)) {
-        adjacency.get(a.id)?.add(b.id);
-        adjacency.get(b.id)?.add(a.id);
-      }
+      if (!isPhysicallyConnected(a, b)) continue;
+      adjacency.get(a.id)?.add(b.id);
+      adjacency.get(b.id)?.add(a.id);
     }
   }
 
@@ -532,37 +772,36 @@ const getWallGroupMetrics = (walls) => {
   source.forEach((wall) => {
     if (visited.has(wall.id)) return;
     const queue = [wall.id];
-    const ids = [];
+    const members = [];
     visited.add(wall.id);
     while (queue.length > 0) {
       const id = queue.shift();
-      ids.push(id);
+      const current = byId.get(id);
+      if (!current) continue;
+      members.push(current);
       (adjacency.get(id) || []).forEach((nextId) => {
         if (visited.has(nextId)) return;
         visited.add(nextId);
         queue.push(nextId);
       });
     }
-    const members = ids
-      .map((id) => source.find((item) => item.id === id))
-      .filter(Boolean);
+    if (members.length === 0) return;
     const hp = members.reduce((sum, item) => sum + Math.max(0, Number(item.hp) || 0), 0);
     const defenseBase = Number(members[0]?.defense) || BASE_DEFENSE;
     const defense = members.length > 1 ? (defenseBase * 1.1) : defenseBase;
     const center = members.reduce((acc, item) => ({
       x: acc.x + item.x,
-      y: acc.y + item.y,
-      z: Math.max(acc.z, item.z)
-    }), { x: 0, y: 0, z: 0 });
-
+      y: acc.y + item.y
+    }), { x: 0, y: 0 });
+    const topZ = members.reduce((max, item) => Math.max(max, getWallTopZ(item)), 0);
     groups.push({
-      ids,
+      ids: members.map((item) => item.id),
       hp: Math.round(hp),
       defense: roundTo(defense, 2),
       center: {
-        x: center.x / (members.length || 1),
-        y: center.y / (members.length || 1),
-        z: center.z + 1
+        x: center.x / members.length,
+        y: center.y / members.length,
+        z: topZ + 14
       }
     });
   });
@@ -581,18 +820,31 @@ const BattlefieldPreviewModal = ({
   const canvasRef = useRef(null);
   const wrapperRef = useRef(null);
   const panDragRef = useRef(null);
+  const rotateDragRef = useRef(null);
   const mouseWorldRef = useRef({ x: 0, y: 0 });
   const pendingPersistRef = useRef(false);
+  const pendingCacheSyncRef = useRef(null);
+  const cameraAnimRef = useRef(null);
+  const cameraAngleRef = useRef(CAMERA_ANGLE_PREVIEW);
+  const cameraYawRef = useRef(CAMERA_YAW_DEFAULT);
+  const zoomAnimRef = useRef(null);
+  const zoomTargetRef = useRef(DEFAULT_ZOOM);
+  const spacePressedRef = useRef(false);
   const [walls, setWalls] = useState([]);
   const [editMode, setEditMode] = useState(false);
   const [cameraAngle, setCameraAngle] = useState(CAMERA_ANGLE_PREVIEW);
+  const [cameraYaw, setCameraYaw] = useState(CAMERA_YAW_DEFAULT);
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
   const [ghost, setGhost] = useState(null);
   const [ghostBlocked, setGhostBlocked] = useState(false);
   const [snapState, setSnapState] = useState(null);
+  const [invalidReason, setInvalidReason] = useState('');
   const [loadingLayout, setLoadingLayout] = useState(false);
   const [savingLayout, setSavingLayout] = useState(false);
+  const [cacheNeedsSync, setCacheNeedsSync] = useState(false);
   const [serverCanEdit, setServerCanEdit] = useState(!!canEdit);
   const [layoutReady, setLayoutReady] = useState(false);
   const [errorText, setErrorText] = useState('');
@@ -606,6 +858,13 @@ const BattlefieldPreviewModal = ({
     fieldHeight: FIELD_HEIGHT,
     maxItemsPerType: TOTAL_WOOD_WALL_STOCK
   });
+  const defaultLayoutMeta = useMemo(() => ({
+    layoutId: `${gateKey || 'cheng'}_default`,
+    name: '',
+    fieldWidth: FIELD_WIDTH,
+    fieldHeight: FIELD_HEIGHT,
+    maxItemsPerType: TOTAL_WOOD_WALL_STOCK
+  }), [gateKey]);
   const effectiveCanEdit = !!canEdit && !!serverCanEdit;
   const fieldWidth = useMemo(
     () => Math.max(200, Number(activeLayoutMeta?.fieldWidth) || FIELD_WIDTH),
@@ -632,7 +891,7 @@ const BattlefieldPreviewModal = ({
 
   const wallGroups = useMemo(() => getWallGroupMetrics(walls), [walls]);
   const maxItemsPerType = Math.max(
-    0,
+    TOTAL_WOOD_WALL_STOCK,
     Math.floor(Number(activeLayoutMeta?.maxItemsPerType) || TOTAL_WOOD_WALL_STOCK)
   );
   const wallStockRemaining = useMemo(
@@ -645,17 +904,81 @@ const BattlefieldPreviewModal = ({
   }, [itemCatalog]);
   const worldScale = useMemo(() => {
     const widthBase = (viewport.width * BASELINE_FIELD_COVERAGE) / fieldWidth;
-    const heightBase = (viewport.height * BASELINE_FIELD_COVERAGE) / (fieldHeight * getGroundYScale(cameraAngle));
+    const heightBase = (viewport.height * BASELINE_FIELD_COVERAGE) / (fieldHeight * getGroundProjectionScale(cameraAngle));
     const baseScale = Math.max(0.01, Math.min(widthBase, heightBase));
     return baseScale * zoom;
   }, [cameraAngle, fieldHeight, fieldWidth, viewport.height, viewport.width, zoom]);
 
-  const clearPanDragging = useCallback(() => {
+  useEffect(() => {
+    cameraAngleRef.current = cameraAngle;
+  }, [cameraAngle]);
+
+  useEffect(() => {
+    cameraYawRef.current = cameraYaw;
+  }, [cameraYaw]);
+
+  useEffect(() => () => {
+    if (cameraAnimRef.current) cancelAnimationFrame(cameraAnimRef.current);
+    if (zoomAnimRef.current) cancelAnimationFrame(zoomAnimRef.current);
     panDragRef.current = null;
+    rotateDragRef.current = null;
   }, []);
 
-  const syncGhostByMouse = (sourceGhost = ghost) => {
-    if (!sourceGhost) return;
+  const clearPanDragging = useCallback(() => {
+    panDragRef.current = null;
+    setIsPanning(false);
+  }, []);
+
+  const clearRotateDragging = useCallback(() => {
+    rotateDragRef.current = null;
+    setIsRotating(false);
+  }, []);
+
+  const animateCameraAngle = useCallback((targetAngle, durationMs = CAMERA_TWEEN_MS) => {
+    const start = cameraAngleRef.current;
+    const target = Number(targetAngle) || CAMERA_ANGLE_PREVIEW;
+    if (Math.abs(start - target) < 0.001) {
+      setCameraAngle(target);
+      cameraAngleRef.current = target;
+      return;
+    }
+    if (cameraAnimRef.current) cancelAnimationFrame(cameraAnimRef.current);
+    const startedAt = performance.now();
+    const tick = (now) => {
+      const t = clamp01((now - startedAt) / Math.max(1, durationMs));
+      const eased = easeOutCubic(t);
+      const next = lerp(start, target, eased);
+      cameraAngleRef.current = next;
+      setCameraAngle(next);
+      if (t < 1) {
+        cameraAnimRef.current = requestAnimationFrame(tick);
+      } else {
+        cameraAnimRef.current = null;
+      }
+    };
+    cameraAnimRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const animateZoomTo = useCallback((targetZoom) => {
+    zoomTargetRef.current = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, roundTo(targetZoom, 3)));
+    if (zoomAnimRef.current) return;
+    const tick = () => {
+      setZoom((prev) => {
+        const target = zoomTargetRef.current;
+        const next = prev + ((target - prev) * 0.24);
+        if (Math.abs(target - next) < 0.001) {
+          zoomAnimRef.current = null;
+          return target;
+        }
+        zoomAnimRef.current = requestAnimationFrame(tick);
+        return roundTo(next, 4);
+      });
+    };
+    zoomAnimRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const syncGhostByMouse = useCallback((sourceGhost = ghost) => {
+    if (!sourceGhost) return null;
     const candidate = {
       ...sourceGhost,
       x: mouseWorldRef.current.x,
@@ -666,9 +989,20 @@ const BattlefieldPreviewModal = ({
     setGhost(evaluated.ghost);
     setGhostBlocked(evaluated.blocked);
     setSnapState(evaluated.snap);
-  };
+    setInvalidReason(evaluated.reason || '');
+    return evaluated;
+  }, [fieldHeight, fieldWidth, ghost, walls]);
 
-  const pickPaletteItem = (itemType) => {
+  const cancelGhostPlacement = useCallback((tip = '已取消放置') => {
+    setGhost(null);
+    setGhostBlocked(false);
+    setSnapState(null);
+    setInvalidReason('');
+    setSelectedPaletteItem('');
+    if (tip) setMessage(tip);
+  }, []);
+
+  const pickPaletteItem = useCallback((itemType) => {
     if (!effectiveCanEdit || !editMode) return;
     if (!itemType) return;
     if (wallStockRemaining <= 0) {
@@ -692,17 +1026,40 @@ const BattlefieldPreviewModal = ({
     });
     const evaluated = evaluateGhostPlacement(nextGhost, walls, mouseWorldRef.current, fieldWidth, fieldHeight);
     setSelectedPaletteItem(itemType);
-    setGhost(evaluated.ghost);
+    setGhost({
+      ...evaluated.ghost,
+      _mode: 'create'
+    });
     setGhostBlocked(evaluated.blocked);
     setSnapState(evaluated.snap);
-    setMessage('已选中木墙：移动鼠标后左键放置，右键取消');
-  };
+    setInvalidReason(evaluated.reason || '');
+    setMessage('已选中木墙：左键放置，右键或 ESC 取消，滚轮旋转，Space+左键平移');
+  }, [effectiveCanEdit, editMode, wallStockRemaining, itemCatalog, woodWallItem, walls, fieldWidth, fieldHeight]);
 
   const persistBattlefieldLayout = useCallback(async (nextWalls = [], options = {}) => {
-    if (!open || !nodeId || !effectiveCanEdit) return { ok: false };
+    if (!open || !nodeId) return { ok: false };
     const silent = options?.silent !== false;
+    const layoutMetaForSave = options?.layoutMeta || activeLayoutMeta;
+    const itemCatalogForSave = options?.itemCatalog || itemCatalog;
+    const sanitizedWalls = sanitizeWalls(nextWalls);
+    writeBattlefieldCache(nodeId, gateKey, {
+      walls: sanitizedWalls,
+      layoutMeta: layoutMetaForSave,
+      itemCatalog: itemCatalogForSave,
+      needsSync: true
+    });
+    setCacheNeedsSync(true);
+
+    if (!effectiveCanEdit) {
+      if (!silent) setMessage('离线缓存已保存，待网络恢复后同步');
+      return { ok: true, cached: true };
+    }
+
     const token = localStorage.getItem('token');
-    if (!token) return { ok: false };
+    if (!token) {
+      if (!silent) setMessage('离线缓存已保存，待登录后同步');
+      return { ok: true, cached: true };
+    }
 
     if (!silent) setSavingLayout(true);
     try {
@@ -713,9 +1070,9 @@ const BattlefieldPreviewModal = ({
           Authorization: `Bearer ${token}`
         },
         body: JSON.stringify(buildLayoutPayload({
-          walls: nextWalls,
-          layoutMeta: activeLayoutMeta,
-          itemCatalog,
+          walls: sanitizedWalls,
+          layoutMeta: layoutMetaForSave,
+          itemCatalog: itemCatalogForSave,
           gateKey
         }))
       });
@@ -723,13 +1080,38 @@ const BattlefieldPreviewModal = ({
       if (!response.ok || !data) {
         const error = getApiError(data, '保存战场布局失败');
         setErrorText(error);
+        writeBattlefieldCache(nodeId, gateKey, {
+          walls: sanitizedWalls,
+          layoutMeta: layoutMetaForSave,
+          itemCatalog: itemCatalogForSave,
+          needsSync: true,
+          message: error
+        });
+        setCacheNeedsSync(true);
         return { ok: false, error };
       }
+      writeBattlefieldCache(nodeId, gateKey, {
+        walls: sanitizedWalls,
+        layoutMeta: layoutMetaForSave,
+        itemCatalog: itemCatalogForSave,
+        needsSync: false,
+        message: ''
+      });
+      setCacheNeedsSync(false);
       setErrorText('');
       if (!silent) setMessage(data.message || '战场布局已保存');
       return { ok: true };
     } catch (error) {
       setErrorText(`保存战场布局失败: ${error.message}`);
+      writeBattlefieldCache(nodeId, gateKey, {
+        walls: sanitizedWalls,
+        layoutMeta: layoutMetaForSave,
+        itemCatalog: itemCatalogForSave,
+        needsSync: true,
+        message: error.message
+      });
+      setCacheNeedsSync(true);
+      if (!silent) setMessage('网络异常，已写入本地缓存，待自动同步');
       return { ok: false, error: error.message };
     } finally {
       if (!silent) setSavingLayout(false);
@@ -740,26 +1122,57 @@ const BattlefieldPreviewModal = ({
     if (!open || !nodeId) return;
     let cancelled = false;
     const token = localStorage.getItem('token');
+    const localCache = readBattlefieldCache(nodeId, gateKey);
+
+    const resolveCacheSnapshot = () => {
+      const cachedCatalog = normalizeItemCatalog(localCache?.itemCatalog);
+      const cachedMeta = localCache?.layoutMeta && typeof localCache.layoutMeta === 'object'
+        ? {
+          layoutId: typeof localCache.layoutMeta.layoutId === 'string' ? localCache.layoutMeta.layoutId : defaultLayoutMeta.layoutId,
+          name: typeof localCache.layoutMeta.name === 'string' ? localCache.layoutMeta.name : '',
+          fieldWidth: Number.isFinite(Number(localCache.layoutMeta.fieldWidth))
+            ? Number(localCache.layoutMeta.fieldWidth)
+            : defaultLayoutMeta.fieldWidth,
+          fieldHeight: Number.isFinite(Number(localCache.layoutMeta.fieldHeight))
+            ? Number(localCache.layoutMeta.fieldHeight)
+            : defaultLayoutMeta.fieldHeight,
+          maxItemsPerType: Number.isFinite(Number(localCache.layoutMeta.maxItemsPerType))
+            ? Math.max(TOTAL_WOOD_WALL_STOCK, Math.floor(Number(localCache.layoutMeta.maxItemsPerType)))
+            : TOTAL_WOOD_WALL_STOCK
+        }
+        : defaultLayoutMeta;
+      const cachedWallsRaw = sanitizeWalls(localCache?.walls);
+      const defaultTemplate = cachedCatalog.find((item) => item.itemType === 'wood_wall') || PALETTE_WALL_TEMPLATE;
+      const cachedWalls = cachedWallsRaw.length > 0
+        ? cachedWallsRaw
+        : buildDefaultWalls(cachedMeta.fieldWidth, cachedMeta.fieldHeight, defaultTemplate);
+      return {
+        walls: cachedWalls,
+        itemCatalog: cachedCatalog,
+        layoutMeta: cachedMeta,
+        needsSync: !!localCache?.needsSync
+      };
+    };
+
     const loadLayout = async () => {
       setLoadingLayout(true);
       setLayoutReady(false);
       setErrorText('');
-      const fallbackWalls = [];
+      const cacheSnapshot = resolveCacheSnapshot();
       if (!token) {
         if (!cancelled) {
-          setWalls(fallbackWalls);
-          setItemCatalog(normalizeItemCatalog([]));
-          setActiveLayoutMeta({
-            layoutId: `${gateKey || 'cheng'}_default`,
-            name: '',
-            fieldWidth: FIELD_WIDTH,
-            fieldHeight: FIELD_HEIGHT,
-            maxItemsPerType: TOTAL_WOOD_WALL_STOCK
-          });
-          setServerCanEdit(false);
+          setWalls(cacheSnapshot.walls);
+          setItemCatalog(cacheSnapshot.itemCatalog);
+          setActiveLayoutMeta(cacheSnapshot.layoutMeta);
+          setServerCanEdit(!!canEdit);
+          setCacheNeedsSync(cacheSnapshot.needsSync);
           setLoadingLayout(false);
           setLayoutReady(true);
-          setErrorText('未登录，无法加载战场布局');
+          if (cacheSnapshot.needsSync) {
+            setMessage('本地存在待同步布局，登录后将自动同步');
+          } else {
+            setErrorText('未登录，已加载本地战场布局');
+          }
         }
         return;
       }
@@ -770,17 +1183,12 @@ const BattlefieldPreviewModal = ({
         const data = await parseApiResponse(response);
         if (!response.ok || !data) {
           if (cancelled) return;
-          setWalls(fallbackWalls);
-          setItemCatalog(normalizeItemCatalog([]));
-          setActiveLayoutMeta({
-            layoutId: `${gateKey || 'cheng'}_default`,
-            name: '',
-            fieldWidth: FIELD_WIDTH,
-            fieldHeight: FIELD_HEIGHT,
-            maxItemsPerType: TOTAL_WOOD_WALL_STOCK
-          });
-          setServerCanEdit(false);
-          setErrorText(getApiError(data, '加载战场布局失败'));
+          setWalls(cacheSnapshot.walls);
+          setItemCatalog(cacheSnapshot.itemCatalog);
+          setActiveLayoutMeta(cacheSnapshot.layoutMeta);
+          setServerCanEdit(!!canEdit);
+          setCacheNeedsSync(cacheSnapshot.needsSync);
+          setErrorText(getApiError(data, '加载战场布局失败，已使用本地缓存'));
           setLoadingLayout(false);
           setLayoutReady(true);
           return;
@@ -788,37 +1196,56 @@ const BattlefieldPreviewModal = ({
         if (cancelled) return;
         const layoutBundle = (data?.layoutBundle && typeof data.layoutBundle === 'object') ? data.layoutBundle : {};
         const nextCatalog = normalizeItemCatalog(layoutBundle.itemCatalog);
-        const loadedWalls = mapLayoutBundleToWalls(layoutBundle);
-        const shouldConvertLegacyDefault = isLegacyDefaultDeployment(loadedWalls);
-        setWalls(shouldConvertLegacyDefault ? [] : loadedWalls);
-        setItemCatalog(nextCatalog);
-        setActiveLayoutMeta({
+        const serverLayoutMeta = {
           layoutId: typeof layoutBundle?.activeLayout?.layoutId === 'string' ? layoutBundle.activeLayout.layoutId : `${gateKey || 'cheng'}_default`,
           name: typeof layoutBundle?.activeLayout?.name === 'string' ? layoutBundle.activeLayout.name : '',
           fieldWidth: Number.isFinite(Number(layoutBundle?.activeLayout?.fieldWidth)) ? Number(layoutBundle.activeLayout.fieldWidth) : FIELD_WIDTH,
           fieldHeight: Number.isFinite(Number(layoutBundle?.activeLayout?.fieldHeight)) ? Number(layoutBundle.activeLayout.fieldHeight) : FIELD_HEIGHT,
           maxItemsPerType: Number.isFinite(Number(layoutBundle?.activeLayout?.maxItemsPerType))
-            ? Number(layoutBundle.activeLayout.maxItemsPerType)
+            ? Math.max(TOTAL_WOOD_WALL_STOCK, Number(layoutBundle.activeLayout.maxItemsPerType))
             : TOTAL_WOOD_WALL_STOCK
-        });
-        setServerCanEdit(!!data.canEdit);
-        setErrorText('');
-        if (shouldConvertLegacyDefault && !!data.canEdit) {
-          pendingPersistRef.current = true;
+        };
+        const serverWallsRaw = mapLayoutBundleToWalls(layoutBundle);
+        const defaultTemplate = nextCatalog.find((item) => item.itemType === 'wood_wall') || PALETTE_WALL_TEMPLATE;
+        const serverWalls = serverWallsRaw.length > 0
+          ? serverWallsRaw
+          : buildDefaultWalls(serverLayoutMeta.fieldWidth, serverLayoutMeta.fieldHeight, defaultTemplate);
+        const canEditByServer = !!data.canEdit;
+        setServerCanEdit(canEditByServer);
+
+        if (cacheSnapshot.needsSync && canEditByServer) {
+          setWalls(cacheSnapshot.walls);
+          setItemCatalog(cacheSnapshot.itemCatalog);
+          setActiveLayoutMeta(cacheSnapshot.layoutMeta);
+          setCacheNeedsSync(true);
+          pendingCacheSyncRef.current = {
+            walls: cacheSnapshot.walls,
+            layoutMeta: cacheSnapshot.layoutMeta,
+            itemCatalog: cacheSnapshot.itemCatalog
+          };
+          setMessage('检测到离线改动，正在尝试回写服务端');
+        } else {
+          setWalls(serverWalls);
+          setItemCatalog(nextCatalog);
+          setActiveLayoutMeta(serverLayoutMeta);
+          setCacheNeedsSync(false);
+          writeBattlefieldCache(nodeId, gateKey, {
+            walls: serverWalls,
+            itemCatalog: nextCatalog,
+            layoutMeta: serverLayoutMeta,
+            needsSync: false
+          });
         }
+        setErrorText('');
       } catch (error) {
         if (cancelled) return;
-        setWalls(fallbackWalls);
-        setItemCatalog(normalizeItemCatalog([]));
-        setActiveLayoutMeta({
-          layoutId: `${gateKey || 'cheng'}_default`,
-          name: '',
-          fieldWidth: FIELD_WIDTH,
-          fieldHeight: FIELD_HEIGHT,
-          maxItemsPerType: TOTAL_WOOD_WALL_STOCK
-        });
-        setServerCanEdit(false);
-        setErrorText(`加载战场布局失败: ${error.message}`);
+        const cacheSnapshot = resolveCacheSnapshot();
+        setWalls(cacheSnapshot.walls);
+        setItemCatalog(cacheSnapshot.itemCatalog);
+        setActiveLayoutMeta(cacheSnapshot.layoutMeta);
+        setServerCanEdit(!!canEdit);
+        setCacheNeedsSync(cacheSnapshot.needsSync);
+        setErrorText(`加载战场布局失败: ${error.message}，已使用本地缓存`);
       } finally {
         if (cancelled) return;
         setLoadingLayout(false);
@@ -827,13 +1254,27 @@ const BattlefieldPreviewModal = ({
     };
 
     pendingPersistRef.current = false;
+    pendingCacheSyncRef.current = null;
     setEditMode(false);
+    if (cameraAnimRef.current) cancelAnimationFrame(cameraAnimRef.current);
+    if (zoomAnimRef.current) cancelAnimationFrame(zoomAnimRef.current);
+    cameraAnimRef.current = null;
+    zoomAnimRef.current = null;
+    cameraAngleRef.current = CAMERA_ANGLE_PREVIEW;
     setCameraAngle(CAMERA_ANGLE_PREVIEW);
+    cameraYawRef.current = CAMERA_YAW_DEFAULT;
+    setCameraYaw(CAMERA_YAW_DEFAULT);
+    zoomTargetRef.current = DEFAULT_ZOOM;
     setZoom(DEFAULT_ZOOM);
     setPan({ x: 0, y: 0 });
+    setIsPanning(false);
+    setIsRotating(false);
+    rotateDragRef.current = null;
+    panDragRef.current = null;
     setGhost(null);
     setGhostBlocked(false);
     setSnapState(null);
+    setInvalidReason('');
     setSelectedPaletteItem('');
     setMessage('');
     loadLayout();
@@ -841,13 +1282,56 @@ const BattlefieldPreviewModal = ({
     return () => {
       cancelled = true;
     };
-  }, [gateKey, open, nodeId]);
+  }, [canEdit, defaultLayoutMeta, gateKey, open, nodeId]);
 
   useEffect(() => {
     if (!open || !layoutReady || !pendingPersistRef.current) return;
     pendingPersistRef.current = false;
     persistBattlefieldLayout(walls, { silent: false });
   }, [layoutReady, open, persistBattlefieldLayout, walls]);
+
+  useEffect(() => {
+    if (!open || !layoutReady || !pendingCacheSyncRef.current) return;
+    if (!effectiveCanEdit) return;
+    const payload = pendingCacheSyncRef.current;
+    pendingCacheSyncRef.current = null;
+    persistBattlefieldLayout(payload.walls, {
+      silent: true,
+      layoutMeta: payload.layoutMeta,
+      itemCatalog: payload.itemCatalog
+    }).then((result) => {
+      if (result?.ok && !result?.cached) {
+        setMessage('离线缓存已同步到服务端');
+      }
+    });
+  }, [effectiveCanEdit, layoutReady, open, persistBattlefieldLayout]);
+
+  useEffect(() => {
+    if (!open || !layoutReady || !cacheNeedsSync || !effectiveCanEdit) return undefined;
+    let syncing = false;
+    const trySync = async () => {
+      if (syncing) return;
+      syncing = true;
+      try {
+        const result = await persistBattlefieldLayout(walls, { silent: true });
+        if (result?.ok && !result?.cached) {
+          setMessage('离线缓存已同步到服务端');
+        }
+      } finally {
+        syncing = false;
+      }
+    };
+    const handleOnline = () => {
+      trySync();
+    };
+    window.addEventListener('online', handleOnline);
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      trySync();
+    }
+    return () => {
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [cacheNeedsSync, effectiveCanEdit, layoutReady, open, persistBattlefieldLayout, walls]);
 
   useEffect(() => {
     if (!open || !canvasRef.current) return;
@@ -879,6 +1363,14 @@ const BattlefieldPreviewModal = ({
       }
     };
 
+    const shade = (base, light, alpha = 1) => {
+      const intensity = Math.max(0.48, Math.min(1.08, 0.62 + (0.38 * light)));
+      const r = Math.max(0, Math.min(255, Math.round(base[0] * intensity)));
+      const g = Math.max(0, Math.min(255, Math.round(base[1] * intensity)));
+      const b = Math.max(0, Math.min(255, Math.round(base[2] * intensity)));
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    };
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = 'rgba(2, 6, 23, 0.76)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -888,7 +1380,7 @@ const BattlefieldPreviewModal = ({
       { x: fieldWidth / 2, y: -fieldHeight / 2 },
       { x: fieldWidth / 2, y: fieldHeight / 2 },
       { x: -fieldWidth / 2, y: fieldHeight / 2 }
-    ].map((item) => projectWorld(item.x, item.y, 0, viewport, cameraAngle, worldScale));
+    ].map((item) => projectWorld(item.x, item.y, 0, viewport, cameraAngle, cameraYaw, worldScale));
 
     drawPolygon(
       fieldCorners,
@@ -900,69 +1392,96 @@ const BattlefieldPreviewModal = ({
     ctx.strokeStyle = 'rgba(100, 116, 139, 0.22)';
     ctx.lineWidth = 1;
     for (let x = -fieldWidth / 2; x <= fieldWidth / 2; x += gridStep) {
-      const p1 = projectWorld(x, -fieldHeight / 2, 0, viewport, cameraAngle, worldScale);
-      const p2 = projectWorld(x, fieldHeight / 2, 0, viewport, cameraAngle, worldScale);
+      const p1 = projectWorld(x, -fieldHeight / 2, 0, viewport, cameraAngle, cameraYaw, worldScale);
+      const p2 = projectWorld(x, fieldHeight / 2, 0, viewport, cameraAngle, cameraYaw, worldScale);
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
     }
     for (let y = -fieldHeight / 2; y <= fieldHeight / 2; y += gridStep) {
-      const p1 = projectWorld(-fieldWidth / 2, y, 0, viewport, cameraAngle, worldScale);
-      const p2 = projectWorld(fieldWidth / 2, y, 0, viewport, cameraAngle, worldScale);
+      const p1 = projectWorld(-fieldWidth / 2, y, 0, viewport, cameraAngle, cameraYaw, worldScale);
+      const p2 = projectWorld(fieldWidth / 2, y, 0, viewport, cameraAngle, cameraYaw, worldScale);
       ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
     }
 
-    const drawWall = (wall, options = {}) => {
-      const corners = getRectCorners(wall.x, wall.y, wall.width, wall.depth, wall.rotation);
-      const base = corners.map((item) => projectWorld(item.x, item.y, wall.z, viewport, cameraAngle, worldScale));
-      const top = corners.map((item) => projectWorld(item.x, item.y, wall.z + 1, viewport, cameraAngle, worldScale));
-      const colorTop = options.ghost
-        ? (options.blocked ? 'rgba(248, 113, 113, 0.45)' : 'rgba(251, 191, 36, 0.42)')
-        : 'rgba(194, 120, 60, 0.92)';
-      const colorSideA = options.ghost
-        ? (options.blocked ? 'rgba(239, 68, 68, 0.35)' : 'rgba(251, 146, 60, 0.3)')
-        : 'rgba(120, 74, 35, 0.95)';
-      const colorSideB = options.ghost
-        ? (options.blocked ? 'rgba(220, 38, 38, 0.35)' : 'rgba(180, 105, 48, 0.3)')
-        : 'rgba(96, 58, 28, 0.95)';
+    const lightDir = { x: -0.35, y: -0.45, z: 0.82 };
+    const normalLen = Math.hypot(lightDir.x, lightDir.y, lightDir.z) || 1;
+    lightDir.x /= normalLen;
+    lightDir.y /= normalLen;
+    lightDir.z /= normalLen;
 
-      const side1 = [base[1], base[2], top[2], top[1]];
-      const side2 = [base[2], base[3], top[3], top[2]];
-
-      drawPolygon(side2, colorSideB, 'rgba(30, 41, 59, 0.45)');
-      drawPolygon(side1, colorSideA, 'rgba(30, 41, 59, 0.45)');
-      drawPolygon(top, colorTop, options.ghost ? 'rgba(251, 191, 36, 0.7)' : 'rgba(15, 23, 42, 0.7)');
-
-      if (!options.ghost) {
-        ctx.strokeStyle = 'rgba(15, 23, 42, 0.4)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(top[0].x, top[0].y);
-        ctx.lineTo(top[2].x, top[2].y);
-        ctx.moveTo(top[1].x, top[1].y);
-        ctx.lineTo(top[3].x, top[3].y);
-        ctx.stroke();
-      }
+    const buildWallFaces = (wall, options = {}) => {
+      const baseZ = getWallBaseZ(wall);
+      const topZ = getWallTopZ(wall);
+      const hw = wall.width / 2;
+      const hd = wall.depth / 2;
+      const widthAxis = rotate2D(1, 0, wall.rotation);
+      const depthAxis = rotate2D(0, 1, wall.rotation);
+      const cornerSigns = [
+        { u: -1, v: -1 },
+        { u: 1, v: -1 },
+        { u: 1, v: 1 },
+        { u: -1, v: 1 }
+      ];
+      const base = cornerSigns.map((sign) => ({
+        x: wall.x + (widthAxis.x * hw * sign.u) + (depthAxis.x * hd * sign.v),
+        y: wall.y + (widthAxis.y * hw * sign.u) + (depthAxis.y * hd * sign.v),
+        z: baseZ
+      }));
+      const top = base.map((point) => ({ ...point, z: topZ }));
+      const faces = [
+        { points: [top[0], top[1], top[2], top[3]], normal: { x: 0, y: 0, z: 1 }, key: 'top' },
+        { points: [base[0], base[1], top[1], top[0]], normal: { x: -depthAxis.x, y: -depthAxis.y, z: 0 }, key: 'side-a' },
+        { points: [base[1], base[2], top[2], top[1]], normal: { x: widthAxis.x, y: widthAxis.y, z: 0 }, key: 'side-b' },
+        { points: [base[2], base[3], top[3], top[2]], normal: { x: depthAxis.x, y: depthAxis.y, z: 0 }, key: 'side-c' },
+        { points: [base[3], base[0], top[0], top[3]], normal: { x: -widthAxis.x, y: -widthAxis.y, z: 0 }, key: 'side-d' }
+      ];
+      const palette = options.ghost
+        ? (options.blocked
+          ? { top: [220, 38, 38], side: [185, 28, 28], alpha: 0.42 }
+          : { top: [245, 158, 11], side: [217, 119, 6], alpha: 0.38 })
+        : { top: [194, 120, 60], side: [120, 74, 35], alpha: 0.94 };
+      return faces.map((face) => {
+        const projected = face.points.map((p) => projectWorld(p.x, p.y, p.z, viewport, cameraAngle, cameraYaw, worldScale));
+        const depth = projected.reduce((sum, p) => sum + p.depth, 0) / projected.length;
+        const light = Math.max(0, (face.normal.x * lightDir.x) + (face.normal.y * lightDir.y) + (face.normal.z * lightDir.z));
+        const baseColor = face.key === 'top' ? palette.top : palette.side;
+        return {
+          projected,
+          depth,
+          fill: shade(baseColor, light, palette.alpha),
+          stroke: options.ghost ? (options.blocked ? 'rgba(252, 165, 165, 0.82)' : 'rgba(251, 191, 36, 0.82)') : 'rgba(15, 23, 42, 0.55)'
+        };
+      });
     };
 
-    const renderOrder = [...walls].sort((a, b) => {
-      const da = a.x + a.y + (a.z * 300);
-      const db = b.x + b.y + (b.z * 300);
-      return da - db;
+    const surfaces = [];
+    walls.forEach((wall) => {
+      surfaces.push(...buildWallFaces(wall));
+    });
+    if (ghost) {
+      surfaces.push(...buildWallFaces(ghost, { ghost: true, blocked: ghostBlocked }));
+    }
+    surfaces.sort((a, b) => a.depth - b.depth);
+    surfaces.forEach((face) => {
+      drawPolygon(face.projected, face.fill, face.stroke);
     });
 
-    renderOrder.forEach((wall) => drawWall(wall));
-
-    if (ghost) {
-      drawWall(ghost, { ghost: true, blocked: ghostBlocked });
+    if (snapState?.anchorId) {
+      const anchor = walls.find((item) => item.id === snapState.anchorId);
+      if (anchor) {
+        const topCorners = getRectCorners(anchor.x, anchor.y, anchor.width, anchor.depth, anchor.rotation)
+          .map((point) => projectWorld(point.x, point.y, getWallTopZ(anchor), viewport, cameraAngle, cameraYaw, worldScale));
+        drawPolygon(topCorners, 'rgba(56, 189, 248, 0.08)', 'rgba(56, 189, 248, 0.82)');
+      }
     }
 
     wallGroups.forEach((group) => {
-      const pos = projectWorld(group.center.x, group.center.y, group.center.z + 0.18, viewport, cameraAngle, worldScale);
+      const pos = projectWorld(group.center.x, group.center.y, group.center.z, viewport, cameraAngle, cameraYaw, worldScale);
       const label = `${group.hp} / ${group.defense}`;
       ctx.font = '12px sans-serif';
       const textWidth = ctx.measureText(label).width;
@@ -997,7 +1516,17 @@ const BattlefieldPreviewModal = ({
       ctx.fillStyle = '#93c5fd';
       ctx.fillText(tip, 21, 28);
     }
-  }, [open, walls, ghost, ghostBlocked, snapState, viewport, cameraAngle, wallGroups, worldScale, fieldHeight, fieldWidth]);
+    if (invalidReason) {
+      const text = `不可放置: ${getPlacementReasonText(invalidReason) || invalidReason}`;
+      ctx.font = '12px sans-serif';
+      const w = ctx.measureText(text).width;
+      const y = 40;
+      ctx.fillStyle = 'rgba(127, 29, 29, 0.8)';
+      ctx.fillRect(14, y, w + 14, 20);
+      ctx.fillStyle = '#fecaca';
+      ctx.fillText(text, 21, y + 14);
+    }
+  }, [open, walls, ghost, ghostBlocked, snapState, viewport, cameraAngle, cameraYaw, wallGroups, worldScale, fieldHeight, fieldWidth, invalidReason]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1013,6 +1542,47 @@ const BattlefieldPreviewModal = ({
     return () => window.removeEventListener('resize', handleResize);
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === ' ') {
+        spacePressedRef.current = true;
+        event.preventDefault();
+      }
+      if (event.key === 'Escape' && ghost) {
+        event.preventDefault();
+        cancelGhostPlacement('已取消放置');
+      }
+    };
+    const handleKeyUp = (event) => {
+      if (event.key === ' ') {
+        spacePressedRef.current = false;
+      }
+    };
+    const handleBlur = () => {
+      spacePressedRef.current = false;
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [cancelGhostPlacement, ghost, open]);
+
+  const startPanDrag = (event, buttonMask = 1) => {
+    panDragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: pan.x,
+      originY: pan.y,
+      buttonMask
+    };
+    setIsPanning(true);
+  };
+
   const handleMouseDown = (event) => {
     if (!open) return;
     const canvas = canvasRef.current;
@@ -1023,57 +1593,89 @@ const BattlefieldPreviewModal = ({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     };
-    const world = unprojectScreen(point.x, point.y, viewport, cameraAngle, worldScale);
+    const world = unprojectScreen(point.x, point.y, viewport, cameraAngle, cameraYaw, worldScale);
     mouseWorldRef.current = world;
 
     if (event.button === 2) {
-      if (ghost) {
-        event.preventDefault();
-        setGhost(null);
-        setGhostBlocked(false);
-        setSnapState(null);
-        setSelectedPaletteItem('');
-        setMessage('已取消放置');
-      }
+      event.preventDefault();
+      rotateDragRef.current = {
+        startX: event.clientX,
+        startY: event.clientY,
+        startYaw: cameraYawRef.current,
+        moved: false
+      };
+      setIsRotating(true);
+      return;
+    }
+
+    if (event.button === 1) {
+      event.preventDefault();
+      startPanDrag(event, 4);
       return;
     }
 
     if (event.button !== 0) return;
 
+    if (spacePressedRef.current) {
+      startPanDrag(event, 1);
+      return;
+    }
+
     if (ghost) {
       const evaluated = evaluateGhostPlacement({ ...ghost, x: world.x, y: world.y }, walls, world, fieldWidth, fieldHeight);
       if (evaluated.blocked) {
-        setMessage('当前位置已被占用，无法放置');
+        const reasonText = getPlacementReasonText(evaluated.reason) || '当前位置无法放置';
+        setMessage(reasonText);
         setGhost(evaluated.ghost);
         setGhostBlocked(true);
         setSnapState(evaluated.snap);
+        setInvalidReason(evaluated.reason || '');
         return;
       }
       if (!effectiveCanEdit) {
         setMessage('当前仅可预览，不可编辑战场');
         return;
       }
-      if (wallStockRemaining <= 0) {
+      if (ghost?._mode !== 'move' && wallStockRemaining <= 0) {
         setMessage('木墙库存不足，无法放置');
         return;
       }
-      const nextWall = createWallFromLike(evaluated.ghost);
+      const nextWall = createWallFromLike(evaluated.ghost, {
+        id: ghost?._sourceId || undefined
+      });
       pendingPersistRef.current = true;
-      setWalls((prev) => [...prev, nextWall]);
-      setGhost(null);
-      setGhostBlocked(false);
-      setSnapState(null);
-      setSelectedPaletteItem('');
-      setMessage('木墙已放置');
+      if (ghost?._mode === 'move' && ghost?._sourceId) {
+        setWalls((prev) => prev.map((item) => (item.id === ghost._sourceId ? nextWall : item)));
+        cancelGhostPlacement('');
+        setMessage('木墙位置已更新');
+      } else {
+        setWalls((prev) => [...prev, nextWall]);
+        cancelGhostPlacement('');
+        setMessage('木墙已放置');
+      }
       return;
     }
 
-    panDragRef.current = {
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: pan.x,
-      originY: pan.y
-    };
+    if (editMode && effectiveCanEdit) {
+      const pickedWall = findTopWallAtPoint(world, walls);
+      if (pickedWall) {
+        const movingGhostSeed = {
+          ...createWallFromLike(pickedWall, { id: pickedWall.id }),
+          _mode: 'move',
+          _sourceId: pickedWall.id
+        };
+        const evaluated = evaluateGhostPlacement(movingGhostSeed, walls, mouseWorldRef.current, fieldWidth, fieldHeight);
+        setGhost({ ...evaluated.ghost, _mode: 'move', _sourceId: pickedWall.id });
+        setGhostBlocked(evaluated.blocked);
+        setSnapState(evaluated.snap);
+        setInvalidReason(evaluated.reason || '');
+        setSelectedPaletteItem(pickedWall.itemType || 'wood_wall');
+        setMessage('移动模式：左键确认位置，右键或 ESC 取消');
+        return;
+      }
+    }
+
+    startPanDrag(event, 1);
   };
 
   const handleMouseMove = (event) => {
@@ -1086,11 +1688,13 @@ const BattlefieldPreviewModal = ({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     };
-    const world = unprojectScreen(point.x, point.y, viewport, cameraAngle, worldScale);
+    const world = unprojectScreen(point.x, point.y, viewport, cameraAngle, cameraYaw, worldScale);
     mouseWorldRef.current = world;
 
     if (ghost) {
-      syncGhostByMouse(ghost);
+      if (!panDragRef.current && !rotateDragRef.current) {
+        syncGhostByMouse(ghost);
+      }
       return;
     }
   };
@@ -1098,9 +1702,27 @@ const BattlefieldPreviewModal = ({
   useEffect(() => {
     if (!open) return undefined;
     const handleWindowMouseMove = (event) => {
+      const rotateDrag = rotateDragRef.current;
+      if (rotateDrag) {
+        if ((event.buttons & 2) !== 2) {
+          if (!rotateDrag.moved && ghost) {
+            cancelGhostPlacement('已取消放置');
+          }
+          clearRotateDragging();
+        } else {
+          const dx = event.clientX - rotateDrag.startX;
+          const nextYaw = normalizeDeg(rotateDrag.startYaw + (dx * CAMERA_ROTATE_SENSITIVITY));
+          if (Math.abs(dx) >= CAMERA_ROTATE_CLICK_THRESHOLD) {
+            rotateDrag.moved = true;
+          }
+          cameraYawRef.current = nextYaw;
+          setCameraYaw(nextYaw);
+        }
+      }
+
       const drag = panDragRef.current;
       if (!drag) return;
-      if ((event.buttons & 1) !== 1) {
+      if ((event.buttons & drag.buttonMask) !== drag.buttonMask) {
         clearPanDragging();
         return;
       }
@@ -1112,9 +1734,15 @@ const BattlefieldPreviewModal = ({
       });
     };
     const handleWindowMouseUp = () => {
+      const rotateDrag = rotateDragRef.current;
+      if (rotateDrag && !rotateDrag.moved && ghost) {
+        cancelGhostPlacement('已取消放置');
+      }
+      clearRotateDragging();
       clearPanDragging();
     };
     const handleWindowBlur = () => {
+      clearRotateDragging();
       clearPanDragging();
     };
 
@@ -1126,17 +1754,14 @@ const BattlefieldPreviewModal = ({
       window.removeEventListener('mouseup', handleWindowMouseUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [clearPanDragging, open]);
+  }, [cancelGhostPlacement, clearPanDragging, clearRotateDragging, ghost, open]);
 
   const handleWheel = (event) => {
     event.preventDefault();
     if (!ghost) {
-      setZoom((prev) => {
-        const delta = event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
-        const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, roundTo(prev + delta, 3)));
-        setMessage(`缩放 ${Math.round(next * 100)}%`);
-        return next;
-      });
+      const delta = event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+      animateZoomTo((zoomTargetRef.current || zoom) + delta);
+      setMessage(`缩放 ${Math.round(zoomTargetRef.current * 100)}%`);
       return;
     }
     if (!effectiveCanEdit) return;
@@ -1164,7 +1789,7 @@ const BattlefieldPreviewModal = ({
     if (!ghost) return;
     syncGhostByMouse(ghost);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fieldHeight, fieldWidth, ghost?.rotation, walls]);
+  }, [fieldHeight, fieldWidth, ghost?.rotation, walls, cameraAngle, cameraYaw]);
 
   if (!open) return null;
 
@@ -1184,7 +1809,7 @@ const BattlefieldPreviewModal = ({
         <div className="battlefield-modal-header">
           <div className="battlefield-modal-title">
             <strong>{gateLabel ? `${gateLabel} 战场预览` : '战场预览'}</strong>
-            <span>{loadingLayout ? '正在加载战场配置...' : '俯视矩形战场，可拖拽平移'}</span>
+            <span>{loadingLayout ? '正在加载战场配置...' : 'RTS 俯视战场：右键按住旋转视角，Space+左键或中键平移，滚轮缩放/旋转'}</span>
           </div>
           <div className="battlefield-modal-actions">
             <button
@@ -1195,11 +1820,8 @@ const BattlefieldPreviewModal = ({
                 if (!effectiveCanEdit) return;
                 const nextEdit = !editMode;
                 setEditMode(nextEdit);
-                setCameraAngle(nextEdit ? CAMERA_ANGLE_EDIT : CAMERA_ANGLE_PREVIEW);
-                setGhost(null);
-                setGhostBlocked(false);
-                setSnapState(null);
-                setSelectedPaletteItem('');
+                animateCameraAngle(nextEdit ? CAMERA_ANGLE_EDIT : CAMERA_ANGLE_PREVIEW);
+                cancelGhostPlacement('');
                 setMessage(nextEdit ? '编辑模式已开启（从左侧物品栏选中后放置）' : '已切回预览模式');
               }}
             >
@@ -1212,11 +1834,13 @@ const BattlefieldPreviewModal = ({
         </div>
 
         <div className="battlefield-toolbar">
-          <span>{`视角 ${cameraAngle}°`}</span>
+          <span>{`视角 ${roundTo(cameraAngle, 1)}°`}</span>
+          <span>{`航向 ${roundTo(cameraYaw, 1)}°`}</span>
           <span>{`缩放 ${Math.round(zoom * 100)}%`}</span>
           <span>{`已放置木墙 ${walls.length}`}</span>
           <span>{`木墙库存 ${wallStockRemaining}/${maxItemsPerType}`}</span>
           <span>{`堆叠上限 ${MAX_STACK_LEVEL} 层`}</span>
+          <span>{cacheNeedsSync ? '离线缓存待同步' : '已与服务端同步'}</span>
           <span>{savingLayout ? '保存中...' : '群组数值显示: 血量 / 防御'}</span>
         </div>
 
@@ -1236,14 +1860,14 @@ const BattlefieldPreviewModal = ({
             <div className="battlefield-sidebar-tip">
               {!effectiveCanEdit
                 ? '当前仅预览'
-                : (!editMode ? '开启编辑后可选择物品' : '点选物品后跟随鼠标，左键放置')}
+                : (!editMode ? '开启编辑后可选择物品' : '点选物品后跟随鼠标，左键放置；点已放置木墙可移动')}
             </div>
           </aside>
 
           <div className="battlefield-canvas-wrap" ref={wrapperRef}>
             <canvas
               ref={canvasRef}
-              className="battlefield-canvas"
+              className={`battlefield-canvas ${isPanning ? 'is-panning' : ''} ${isRotating ? 'is-rotating' : ''}`}
               onPointerDown={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
               onMouseDown={handleMouseDown}
@@ -1256,7 +1880,7 @@ const BattlefieldPreviewModal = ({
         </div>
 
         <div className="battlefield-footer">
-          <span>{errorText || message || '提示: 左键按住拖拽平移；滚轮缩放；物品需先从左侧栏选中'}</span>
+          <span>{errorText || message || getPlacementReasonText(invalidReason) || '提示: 右键按住并拖动可旋转战场；右键点击可取消放置；Space+左键或中键平移；滚轮缩放/旋转'}</span>
         </div>
       </div>
     </div>

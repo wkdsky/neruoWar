@@ -2115,7 +2115,7 @@ const serializeBattlefieldLayoutMeta = (layout = {}) => ({
   gateKey: CITY_GATE_KEYS.includes(layout?.gateKey) ? layout.gateKey : '',
   fieldWidth: round3(layout?.fieldWidth, 900),
   fieldHeight: round3(layout?.fieldHeight, 620),
-  maxItemsPerType: Math.max(0, Math.floor(Number(layout?.maxItemsPerType) || 10)),
+  maxItemsPerType: Math.max(10, Math.floor(Number(layout?.maxItemsPerType) || 10)),
   updatedAt: layout?.updatedAt || null
 });
 

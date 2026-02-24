@@ -40,6 +40,27 @@ const createDefaultBattlefieldItems = () => ([
   }
 ]);
 
+const createDefaultBattlefieldObjects = () => {
+  const objects = [];
+  BATTLEFIELD_GATE_KEYS.forEach((gateKey) => {
+    const layoutId = `${gateKey}_default`;
+    for (let i = 0; i < 10; i += 1) {
+      const row = Math.floor(i / 5);
+      const col = i % 5;
+      objects.push({
+        layoutId,
+        objectId: `${layoutId}_seed_${i + 1}`,
+        itemType: BATTLEFIELD_WALL_DEFAULT.type,
+        x: -240 + (col * 120),
+        y: -78 + (row * 170),
+        z: 0,
+        rotation: row % 2 === 0 ? 0 : 90
+      });
+    }
+  });
+  return objects;
+};
+
 const CityBuildingSchema = new mongoose.Schema({
   buildingId: {
     type: String,
@@ -314,7 +335,7 @@ const DomainDefenseLayoutSchema = new mongoose.Schema({
   },
   battlefieldObjects: {
     type: [BattlefieldObjectSchema],
-    default: []
+    default: () => createDefaultBattlefieldObjects()
   },
   battlefieldItems: {
     type: [BattlefieldItemSchema],

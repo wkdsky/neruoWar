@@ -22,6 +22,7 @@ const BATTLEFIELD_OBJECT_DEFAULTS = {
   hp: 240,
   defense: 1.1
 };
+const BATTLEFIELD_DEFAULT_OBJECT_COUNT_PER_GATE = 10;
 const SIEGE_EMBEDDED_PREVIEW_LIMIT = Math.max(1, parseInt(process.env.SIEGE_EMBEDDED_PREVIEW_LIMIT, 10) || 50);
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -90,13 +91,127 @@ const createDefaultBattlefieldItems = () => ([
   }
 ]);
 
-const createDefaultBattlefieldState = () => ({
-  version: BATTLEFIELD_VERSION,
-  layouts: createDefaultBattlefieldLayouts(),
-  items: createDefaultBattlefieldItems(),
-  objects: [],
-  updatedAt: new Date()
-});
+const normalizeBattlefieldMaxItemsPerType = (value, fallback = BATTLEFIELD_DEFAULT_MAX_ITEMS_PER_TYPE) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(
+    BATTLEFIELD_DEFAULT_MAX_ITEMS_PER_TYPE,
+    Math.min(9999, Math.floor(num))
+  );
+};
+
+const buildSeedWallPlacement = (index, layout = {}, itemDef = {}) => {
+  const columns = 5;
+  const rows = 2;
+  const row = Math.floor(index / columns);
+  const col = index % columns;
+  const width = Math.max(12, Number(itemDef?.width) || BATTLEFIELD_OBJECT_DEFAULTS.width);
+  const depth = Math.max(12, Number(itemDef?.depth) || BATTLEFIELD_OBJECT_DEFAULTS.depth);
+  const fieldWidth = Math.max(200, Number(layout?.fieldWidth) || BATTLEFIELD_FIELD_WIDTH);
+  const fieldHeight = Math.max(200, Number(layout?.fieldHeight) || BATTLEFIELD_FIELD_HEIGHT);
+  const marginX = Math.max(40, width * 0.6);
+  const marginY = Math.max(40, depth * 1.5);
+  const usableWidth = Math.max(width * (columns - 1), fieldWidth - (marginX * 2));
+  const usableHeight = Math.max(depth * (rows - 1), Math.min(fieldHeight * 0.6, fieldHeight - (marginY * 2)));
+  const startX = -usableWidth / 2;
+  const startY = -usableHeight / 2;
+  const x = columns > 1 ? startX + ((usableWidth / (columns - 1)) * col) : 0;
+  const y = rows > 1 ? startY + ((usableHeight / (rows - 1)) * row) : 0;
+  return { x: round3(x, 0), y: round3(y, 0) };
+};
+
+const createDefaultBattlefieldObjectsForLayout = (layout = {}, itemCatalog = []) => {
+  const itemDef = (Array.isArray(itemCatalog) ? itemCatalog : []).find((item) => item?.itemType === BATTLEFIELD_OBJECT_DEFAULTS.itemType) || {
+    width: BATTLEFIELD_OBJECT_DEFAULTS.width,
+    depth: BATTLEFIELD_OBJECT_DEFAULTS.depth
+  };
+  const layoutId = typeof layout?.layoutId === 'string' && layout.layoutId.trim()
+    ? layout.layoutId.trim()
+    : 'cheng_default';
+  const objects = [];
+  for (let i = 0; i < BATTLEFIELD_DEFAULT_OBJECT_COUNT_PER_GATE; i += 1) {
+    const placement = buildSeedWallPlacement(i, layout, itemDef);
+    const row = Math.floor(i / 5);
+    objects.push({
+      layoutId,
+      objectId: `${layoutId}_seed_${i + 1}`,
+      itemType: BATTLEFIELD_OBJECT_DEFAULTS.itemType,
+      x: placement.x,
+      y: placement.y,
+      z: 0,
+      rotation: row % 2 === 0 ? 0 : 90
+    });
+  }
+  return objects;
+};
+
+const seedDefaultBattlefieldObjects = (objects = [], layouts = [], items = []) => {
+  const sourceObjects = Array.isArray(objects) ? objects : [];
+  const sourceLayouts = Array.isArray(layouts) ? layouts : [];
+  const seedLayouts = sourceLayouts.filter((layout) => CITY_GATE_KEYS.includes(layout?.gateKey));
+  if (seedLayouts.length === 0) return sourceObjects;
+  const existingByLayout = new Map();
+  sourceObjects.forEach((item) => {
+    if (!item?.layoutId) return;
+    existingByLayout.set(item.layoutId, (existingByLayout.get(item.layoutId) || 0) + 1);
+  });
+  const seeded = [...sourceObjects];
+  seedLayouts.forEach((layout) => {
+    const count = existingByLayout.get(layout.layoutId) || 0;
+    if (count > 0) return;
+    seeded.push(...createDefaultBattlefieldObjectsForLayout(layout, items));
+  });
+  return seeded;
+};
+
+const ensureBattlefieldLayoutsByGate = (layouts = []) => {
+  const source = Array.isArray(layouts) ? layouts : [];
+  const out = [];
+  const seenLayoutId = new Set();
+  const gateHasLayout = new Set();
+  source.forEach((layout) => {
+    if (!layout || typeof layout !== 'object') return;
+    const layoutId = typeof layout.layoutId === 'string' ? layout.layoutId.trim() : '';
+    if (!layoutId || seenLayoutId.has(layoutId)) return;
+    seenLayoutId.add(layoutId);
+    const normalizedGate = CITY_GATE_KEYS.includes(layout.gateKey) ? layout.gateKey : '';
+    if (normalizedGate) gateHasLayout.add(normalizedGate);
+    out.push({
+      ...layout,
+      layoutId,
+      gateKey: normalizedGate,
+      maxItemsPerType: normalizeBattlefieldMaxItemsPerType(
+        layout.maxItemsPerType,
+        BATTLEFIELD_DEFAULT_MAX_ITEMS_PER_TYPE
+      )
+    });
+  });
+  CITY_GATE_KEYS.forEach((gateKey) => {
+    if (gateHasLayout.has(gateKey)) return;
+    out.push({
+      layoutId: `${gateKey}_default`,
+      name: gateKey === 'cheng' ? '承门战场' : '启门战场',
+      gateKey,
+      fieldWidth: BATTLEFIELD_FIELD_WIDTH,
+      fieldHeight: BATTLEFIELD_FIELD_HEIGHT,
+      maxItemsPerType: BATTLEFIELD_DEFAULT_MAX_ITEMS_PER_TYPE,
+      updatedAt: new Date()
+    });
+  });
+  return out;
+};
+
+const createDefaultBattlefieldState = () => {
+  const layouts = ensureBattlefieldLayoutsByGate(createDefaultBattlefieldLayouts());
+  const items = createDefaultBattlefieldItems();
+  return {
+    version: BATTLEFIELD_VERSION,
+    layouts,
+    items,
+    objects: seedDefaultBattlefieldObjects([], layouts, items),
+    updatedAt: new Date()
+  };
+};
 
 const createDefaultDefenseLayout = () => ({
   buildings: [{
@@ -264,15 +379,15 @@ const normalizeBattlefieldLayouts = (sourceLayouts = []) => {
       gateKey,
       fieldWidth: Math.max(200, Math.min(5000, round3(item?.fieldWidth, BATTLEFIELD_FIELD_WIDTH))),
       fieldHeight: Math.max(200, Math.min(5000, round3(item?.fieldHeight, BATTLEFIELD_FIELD_HEIGHT))),
-      maxItemsPerType: Math.max(0, Math.min(9999, Math.floor(Number(item?.maxItemsPerType) || BATTLEFIELD_DEFAULT_MAX_ITEMS_PER_TYPE))),
+      maxItemsPerType: normalizeBattlefieldMaxItemsPerType(item?.maxItemsPerType, BATTLEFIELD_DEFAULT_MAX_ITEMS_PER_TYPE),
       updatedAt: toValidDateOrNull(item?.updatedAt) || new Date()
     });
     if (layouts.length >= BATTLEFIELD_LAYOUT_LIMIT) break;
   }
   if (layouts.length === 0) {
-    return createDefaultBattlefieldLayouts();
+    return ensureBattlefieldLayoutsByGate(createDefaultBattlefieldLayouts());
   }
-  return layouts;
+  return ensureBattlefieldLayoutsByGate(layouts);
 };
 
 const normalizeBattlefieldObjects = (sourceObjects = [], options = {}) => {
@@ -361,7 +476,7 @@ const normalizeBattlefieldState = (source = {}) => {
         version: Math.max(1, Math.floor(Number(source?.version) || BATTLEFIELD_VERSION)),
         layouts: defaults.layouts,
         items: defaults.items,
-        objects,
+        objects: seedDefaultBattlefieldObjects(objects, defaults.layouts, defaults.items),
         updatedAt: toValidDateOrNull(source?.updatedAt) || new Date()
       };
     }
@@ -378,7 +493,7 @@ const normalizeBattlefieldState = (source = {}) => {
     version: Math.max(1, Math.floor(Number(source?.version) || BATTLEFIELD_VERSION)),
     layouts,
     items,
-    objects,
+    objects: seedDefaultBattlefieldObjects(objects, layouts, items),
     updatedAt: toValidDateOrNull(source?.updatedAt) || new Date()
   };
 };
