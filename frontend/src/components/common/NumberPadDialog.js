@@ -23,6 +23,7 @@ const NumberPadDialog = ({
   min = 1,
   max = 1,
   initialValue = 1,
+  allowEmptyInitial = false,
   confirmLabel = '确认',
   cancelLabel = '取消',
   onConfirm,
@@ -33,18 +34,18 @@ const NumberPadDialog = ({
     () => Math.max(safeMin, Math.floor(Number(max) || safeMin)),
     [max, safeMin]
   );
-  const safeInitial = useMemo(
-    () => clampInteger(initialValue, safeMin, safeMax),
-    [initialValue, safeMax, safeMin]
+  const safeInitialText = useMemo(
+    () => (allowEmptyInitial ? '' : String(clampInteger(initialValue, safeMin, safeMax))),
+    [allowEmptyInitial, initialValue, safeMax, safeMin]
   );
-  const [valueText, setValueText] = useState(String(safeInitial));
+  const [valueText, setValueText] = useState(safeInitialText);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (!open) return;
-    setValueText(String(safeInitial));
+    setValueText(safeInitialText);
     setError('');
-  }, [open, safeInitial]);
+  }, [open, safeInitialText]);
 
   if (!open) return null;
 

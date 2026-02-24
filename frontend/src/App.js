@@ -568,6 +568,7 @@ const App = () => {
     const notificationsWrapperRef = useRef(null);
     const relatedDomainsWrapperRef = useRef(null);
     const senseSelectorAnchorRef = useRef({ x: 0, y: 0, visible: false });
+    const knowledgeDomainReturnContextRef = useRef(null);
     const [knowledgeHeaderOffset, setKnowledgeHeaderOffset] = useState(92);
 
     useLayoutEffect(() => {
@@ -2460,6 +2461,7 @@ const App = () => {
             setKnowledgeDomainNode(null);
             setKnowledgeDomainMode('normal');
             setClickedNodeForTransition(null);
+            knowledgeDomainReturnContextRef.current = null;
         }
         if (showDistributionPanel) {
             setShowDistributionPanel(false);
@@ -3983,6 +3985,31 @@ const App = () => {
             mode: recentVisitMode,
             senseId: recentVisitSenseId
         });
+        knowledgeDomainReturnContextRef.current = (() => {
+            const currentNodeId = normalizeObjectId(currentNodeDetail?._id);
+            const currentTitleId = normalizeObjectId(currentTitleDetail?._id);
+            const targetNodeId = normalizeObjectId(node?._id);
+            if (view === 'nodeDetail' && currentNodeId) {
+                return {
+                    view: 'nodeDetail',
+                    nodeId: currentNodeId,
+                    senseId: typeof currentNodeDetail?.activeSenseId === 'string' ? currentNodeDetail.activeSenseId : ''
+                };
+            }
+            if (view === 'titleDetail' && currentTitleId) {
+                return {
+                    view: 'titleDetail',
+                    nodeId: currentTitleId,
+                    senseId: ''
+                };
+            }
+            if (!targetNodeId) return null;
+            return {
+                view: 'nodeDetail',
+                nodeId: targetNodeId,
+                senseId: typeof node?.activeSenseId === 'string' ? node.activeSenseId : ''
+            };
+        })();
         setKnowledgeDomainMode(mode);
         setKnowledgeDomainNode(node);
         setIsTransitioningToDomain(true);
@@ -4009,11 +4036,25 @@ const App = () => {
     const handleExitKnowledgeDomain = (options = {}) => {
         const exitReason = options?.reason || '';
         const exitMessage = typeof options?.message === 'string' ? options.message : '';
+        const returnContext = knowledgeDomainReturnContextRef.current;
+        const restoreKnowledgeDomainView = async () => {
+            if (!returnContext?.nodeId) return;
+            if (returnContext.view === 'titleDetail') {
+                await fetchTitleDetail(returnContext.nodeId, null, { silent: true });
+                return;
+            }
+            await fetchNodeDetail(returnContext.nodeId, null, {
+                silent: true,
+                activeSenseId: typeof returnContext.senseId === 'string' ? returnContext.senseId : ''
+            });
+        };
         if (!sceneManagerRef.current) {
             setShowKnowledgeDomain(false);
             setDomainTransitionProgress(0);
             setKnowledgeDomainNode(null);
             setKnowledgeDomainMode('normal');
+            knowledgeDomainReturnContextRef.current = null;
+            restoreKnowledgeDomainView();
             if (exitMessage) {
                 window.alert(exitMessage);
             } else if (exitReason === 'intel-timeout') {
@@ -4040,6 +4081,8 @@ const App = () => {
                 setDomainTransitionProgress(0);
                 setKnowledgeDomainNode(null);
                 setKnowledgeDomainMode('normal');
+                knowledgeDomainReturnContextRef.current = null;
+                restoreKnowledgeDomainView();
                 if (exitMessage) {
                     window.alert(exitMessage);
                 } else if (exitReason === 'intel-timeout') {

@@ -83,8 +83,8 @@
     position: absolute;
     right: 20px;
     bottom: 20px;
-    width: 340px;
-    max-height: min(58vh, 520px);
+    width: min(680px, calc(100vw - 24px));
+    max-height: min(66vh, 560px);
     overflow: auto;
     z-index: 7;
     border: 1px solid rgba(100, 116, 139, 0.5);
@@ -94,6 +94,38 @@
     display: flex;
     flex-direction: column;
     gap: 0.55rem;
+}
+
+.gate-deploy-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+}
+
+.gate-deploy-overview-item {
+    border: 1px solid rgba(100, 116, 139, 0.45);
+    border-radius: 8px;
+    background: rgba(30, 41, 59, 0.8);
+    padding: 0.42rem 0.48rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+}
+
+.gate-deploy-overview-item span {
+    color: #94a3b8;
+    font-size: 0.74rem;
+}
+
+.gate-deploy-overview-item strong {
+    color: #f8fafc;
+    font-size: 0.95rem;
+}
+
+.gate-deploy-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .gate-deploy-header {
@@ -153,6 +185,19 @@
     gap: 0.42rem;
 }
 
+.gate-deploy-columns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+}
+
+.gate-deploy-column {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
 .gate-deploy-roster-card {
     border: 1px solid rgba(100, 116, 139, 0.45);
     border-radius: 8px;
@@ -186,6 +231,16 @@
     color: #94a3b8;
     font-size: 0.74rem;
     font-style: normal;
+}
+
+@media (max-width: 980px) {
+    .gate-deploy-overview-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .gate-deploy-columns {
+        grid-template-columns: 1fr;
+    }
 }
 
 .domain-return-top-btn {

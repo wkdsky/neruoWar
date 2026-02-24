@@ -5025,7 +5025,7 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
         .lean()
         .then((row) => (row ? mapProjectionRowToNodeLike(row) : null))
       : await Node.findById(nodeId)
-        .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId status associations')
+        .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId status associations relatedParentDomains relatedChildDomains')
         .lean();
     if (!center) {
       return res.status(404).json({ error: '节点不存在' });
@@ -5075,7 +5075,7 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
           status: 'approved',
           _id: { $in: directNeighborObjectIds }
         })
-          .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId associations')
+          .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId associations relatedParentDomains relatedChildDomains')
           .lean())
       : [];
     await hydrateNodeSensesForNodes(directNeighborDocs);
@@ -5255,6 +5255,8 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
       name: nodeDoc?.name || '',
       description: nodeDoc?.description || '',
       synonymSenses: normalizeNodeSenseList(nodeDoc),
+      relatedParentDomains: Array.isArray(nodeDoc?.relatedParentDomains) ? nodeDoc.relatedParentDomains : [],
+      relatedChildDomains: Array.isArray(nodeDoc?.relatedChildDomains) ? nodeDoc.relatedChildDomains : [],
       knowledgePoint: nodeDoc?.knowledgePoint || null,
       contentScore: nodeDoc?.contentScore,
       domainMaster: nodeDoc?.domainMaster || null,
