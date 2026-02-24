@@ -5229,7 +5229,10 @@ const App = () => {
     return (
         <div
             className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''}`}
-            style={{ '--knowledge-header-offset': `${knowledgeHeaderOffset}px` }}
+            style={{
+              '--knowledge-header-offset': `${knowledgeHeaderOffset}px`,
+              '--knowledge-domain-top-offset': isKnowledgeDomainActive ? `${knowledgeHeaderOffset}px` : '0px'
+            }}
         >
             <div className="game-content">
                 {/* 头部 */}

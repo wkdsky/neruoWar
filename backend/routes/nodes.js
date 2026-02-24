@@ -43,8 +43,11 @@ const {
   isDomainTitleStateCollectionReadEnabled,
   hydrateNodeTitleStatesForNodes,
   resolveNodeDefenseLayout,
+  resolveNodeBattlefieldLayout,
   resolveNodeSiegeState,
   upsertNodeDefenseLayout,
+  upsertNodeBattlefieldLayout,
+  normalizeBattlefieldLayout,
   upsertNodeSiegeState,
   deleteNodeTitleStatesByNodeIds
 } = require('../services/domainTitleStateStore');
@@ -2071,6 +2074,163 @@ const serializeDefenseLayout = (layout = {}) => {
     }, { cheng: [], qi: [] }),
     gateDefenseViewAdminIds: normalizeGateDefenseViewerAdminIds(normalized.gateDefenseViewAdminIds)
   };
+};
+
+const normalizeBattlefieldGateKey = (value = '') => (
+  CITY_GATE_KEYS.includes(value) ? value : CITY_GATE_KEYS[0]
+);
+
+const normalizeBattlefieldLayoutId = (value = '') => (
+  typeof value === 'string' ? value.trim() : ''
+);
+
+const normalizeBattlefieldStateInput = (input = {}) => (
+  normalizeBattlefieldLayout(input || {})
+);
+
+const findBattlefieldLayoutByGate = (battlefieldState = {}, gateKey = '', preferredLayoutId = '') => {
+  const layouts = Array.isArray(battlefieldState?.layouts) ? battlefieldState.layouts : [];
+  const targetLayoutId = normalizeBattlefieldLayoutId(preferredLayoutId);
+  if (targetLayoutId) {
+    const matched = layouts.find((item) => item?.layoutId === targetLayoutId);
+    if (matched) return matched;
+  }
+
+  const targetGate = normalizeBattlefieldGateKey(gateKey);
+  const gateLayouts = layouts.filter((item) => item?.gateKey === targetGate);
+  if (gateLayouts.length > 0) {
+    gateLayouts.sort((a, b) => {
+      const aTime = new Date(a?.updatedAt || 0).getTime();
+      const bTime = new Date(b?.updatedAt || 0).getTime();
+      return bTime - aTime;
+    });
+    return gateLayouts[0];
+  }
+  return layouts[0] || null;
+};
+
+const serializeBattlefieldLayoutMeta = (layout = {}) => ({
+  layoutId: typeof layout?.layoutId === 'string' ? layout.layoutId : '',
+  name: typeof layout?.name === 'string' ? layout.name : '',
+  gateKey: CITY_GATE_KEYS.includes(layout?.gateKey) ? layout.gateKey : '',
+  fieldWidth: round3(layout?.fieldWidth, 900),
+  fieldHeight: round3(layout?.fieldHeight, 620),
+  maxItemsPerType: Math.max(0, Math.floor(Number(layout?.maxItemsPerType) || 10)),
+  updatedAt: layout?.updatedAt || null
+});
+
+const serializeBattlefieldItemCatalog = (items = []) => (
+  (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      itemType: typeof item?.itemType === 'string' ? item.itemType : 'wood_wall',
+      name: typeof item?.name === 'string' ? item.name : '',
+      width: round3(item?.width, 104),
+      depth: round3(item?.depth, 24),
+      height: round3(item?.height, 42),
+      hp: Math.max(1, Math.floor(Number(item?.hp) || 240)),
+      defense: round3(item?.defense, 1.1)
+    }))
+    .filter((item) => !!item.itemType)
+);
+
+const serializeBattlefieldObjectsForLayout = (battlefieldState = {}, layoutId = '') => (
+  (Array.isArray(battlefieldState?.objects) ? battlefieldState.objects : [])
+    .filter((item) => !layoutId || item?.layoutId === layoutId)
+    .map((item) => ({
+      id: typeof item?.objectId === 'string' ? item.objectId : '',
+      objectId: typeof item?.objectId === 'string' ? item.objectId : '',
+      layoutId: typeof item?.layoutId === 'string' ? item.layoutId : '',
+      itemType: typeof item?.itemType === 'string' ? item.itemType : 'wood_wall',
+      x: round3(item?.x, 0),
+      y: round3(item?.y, 0),
+      z: Math.max(0, Math.floor(Number(item?.z) || 0)),
+      rotation: round3(item?.rotation, 0)
+    }))
+    .filter((item) => !!item.id)
+);
+
+const serializeBattlefieldStateForGate = (battlefieldState = {}, gateKey = '', preferredLayoutId = '') => {
+  const normalized = normalizeBattlefieldStateInput(battlefieldState);
+  const activeLayout = findBattlefieldLayoutByGate(normalized, gateKey, preferredLayoutId);
+  const activeLayoutId = activeLayout?.layoutId || '';
+  return {
+    version: Math.max(1, Math.floor(Number(normalized?.version) || 1)),
+    activeLayout: activeLayout ? serializeBattlefieldLayoutMeta(activeLayout) : null,
+    layouts: (Array.isArray(normalized?.layouts) ? normalized.layouts : []).map((layout) => serializeBattlefieldLayoutMeta(layout)),
+    itemCatalog: serializeBattlefieldItemCatalog(normalized?.items),
+    objects: serializeBattlefieldObjectsForLayout(normalized, activeLayoutId),
+    updatedAt: normalized?.updatedAt || null
+  };
+};
+
+const mergeBattlefieldStateByGate = (currentState = {}, gateKey = '', payload = {}) => {
+  const normalizedCurrent = normalizeBattlefieldStateInput(currentState);
+  const targetGate = normalizeBattlefieldGateKey(gateKey);
+  const sourceLayout = payload?.layout && typeof payload.layout === 'object'
+    ? payload.layout
+    : payload;
+  const requestedLayoutId = normalizeBattlefieldLayoutId(payload?.layoutId || sourceLayout?.layoutId);
+  const sourceObjects = Array.isArray(payload?.objects)
+    ? payload.objects
+    : (Array.isArray(sourceLayout?.objects) ? sourceLayout.objects : []);
+  const sourceItems = Array.isArray(payload?.itemCatalog) ? payload.itemCatalog : null;
+
+  const currentLayouts = Array.isArray(normalizedCurrent.layouts) ? normalizedCurrent.layouts : [];
+  const currentItems = Array.isArray(normalizedCurrent.items) ? normalizedCurrent.items : [];
+  const currentObjects = Array.isArray(normalizedCurrent.objects) ? normalizedCurrent.objects : [];
+  const existingLayout = findBattlefieldLayoutByGate(normalizedCurrent, targetGate, requestedLayoutId);
+  const fallbackLayoutId = requestedLayoutId || existingLayout?.layoutId || `${targetGate}_default`;
+
+  const targetLayout = {
+    ...(existingLayout || {}),
+    layoutId: typeof sourceLayout?.layoutId === 'string' && sourceLayout.layoutId.trim()
+      ? sourceLayout.layoutId.trim()
+      : fallbackLayoutId,
+    name: typeof sourceLayout?.name === 'string' && sourceLayout.name.trim()
+      ? sourceLayout.name.trim()
+      : (existingLayout?.name || (targetGate === 'cheng' ? '承门战场' : '启门战场')),
+    gateKey: targetGate,
+    fieldWidth: Number.isFinite(Number(sourceLayout?.fieldWidth)) ? Number(sourceLayout.fieldWidth) : existingLayout?.fieldWidth,
+    fieldHeight: Number.isFinite(Number(sourceLayout?.fieldHeight)) ? Number(sourceLayout.fieldHeight) : existingLayout?.fieldHeight,
+    maxItemsPerType: Number.isFinite(Number(sourceLayout?.maxItemsPerType)) ? Number(sourceLayout.maxItemsPerType) : existingLayout?.maxItemsPerType,
+    updatedAt: new Date()
+  };
+
+  const nextLayoutsRaw = [];
+  const seenLayoutIds = new Set();
+  const targetLayoutId = targetLayout.layoutId;
+  currentLayouts.forEach((layout) => {
+    if (!layout || typeof layout !== 'object') return;
+    if (layout.layoutId === targetLayoutId) return;
+    if (seenLayoutIds.has(layout.layoutId)) return;
+    seenLayoutIds.add(layout.layoutId);
+    nextLayoutsRaw.push(layout);
+  });
+  nextLayoutsRaw.push(targetLayout);
+
+  const incomingObjectsRaw = sourceObjects.map((item, index) => ({
+    layoutId: targetLayoutId,
+    objectId: (typeof item?.objectId === 'string' && item.objectId.trim())
+      ? item.objectId.trim()
+      : ((typeof item?.id === 'string' && item.id.trim()) ? item.id.trim() : `obj_${index + 1}`),
+    itemType: (typeof item?.itemType === 'string' && item.itemType.trim())
+      ? item.itemType.trim()
+      : (typeof item?.type === 'string' && item.type.trim() ? item.type.trim() : 'wood_wall'),
+    x: item?.x,
+    y: item?.y,
+    z: item?.z,
+    rotation: item?.rotation
+  }));
+  const retainedObjects = currentObjects.filter((item) => item?.layoutId !== targetLayoutId);
+  const nextObjectsRaw = [...retainedObjects, ...incomingObjectsRaw];
+
+  return normalizeBattlefieldStateInput({
+    version: normalizedCurrent.version,
+    layouts: nextLayoutsRaw,
+    items: sourceItems || currentItems,
+    objects: nextObjectsRaw,
+    updatedAt: new Date()
+  });
 };
 
 const getArmyUnitTypeId = (unit) => {
@@ -6821,6 +6981,116 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
     if (error?.statusCode) {
       return res.status(error.statusCode).json({ error: error.message || '请求参数错误' });
     }
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
+  }
+});
+
+// 获取知识域战场布局（域主可编辑，已授权域相可查看）
+router.get('/:nodeId/battlefield-layout', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const gateKey = normalizeBattlefieldGateKey(req.query?.gateKey);
+    const layoutId = normalizeBattlefieldLayoutId(req.query?.layoutId);
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
+      includeSiegeState: false
+    });
+
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+
+    const canEdit = isDomainMaster(node, requestUserId);
+    const defenseLayout = resolveNodeDefenseLayout(node, {});
+    const gateDefenseViewerAdminIds = normalizeGateDefenseViewerAdminIds(
+      defenseLayout?.gateDefenseViewAdminIds,
+      (node.domainAdmins || []).map((id) => getIdString(id))
+    );
+    const canView = canEdit || gateDefenseViewerAdminIds.includes(requestUserId);
+    if (!canView) {
+      return res.status(403).json({ error: '仅域主或已授权域相可查看战场布局' });
+    }
+
+    const battlefieldState = resolveNodeBattlefieldLayout(node, {});
+    res.json({
+      success: true,
+      nodeId: getIdString(node._id),
+      nodeName: node.name,
+      gateKey,
+      layoutId,
+      canEdit,
+      canView,
+      layoutBundle: serializeBattlefieldStateForGate(battlefieldState, gateKey, layoutId)
+    });
+  } catch (error) {
+    console.error('获取知识域战场布局错误:', error);
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
+  }
+});
+
+// 保存知识域战场布局（仅域主）
+router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const gateKey = normalizeBattlefieldGateKey(req.body?.gateKey || req.query?.gateKey);
+    const layoutId = normalizeBattlefieldLayoutId(
+      req.body?.layoutId || req.query?.layoutId || req.body?.layout?.layoutId
+    );
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
+      includeSiegeState: false
+    });
+
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isDomainMaster(node, requestUserId)) {
+      return res.status(403).json({ error: '只有域主可以保存战场布局' });
+    }
+
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const currentState = resolveNodeBattlefieldLayout(node, {});
+    const nextBattlefieldState = mergeBattlefieldStateByGate(currentState, gateKey, {
+      ...payload,
+      layoutId
+    });
+
+    await upsertNodeBattlefieldLayout({
+      nodeId: node._id,
+      battlefieldLayout: nextBattlefieldState,
+      actorUserId: requestUserId
+    });
+
+    res.json({
+      success: true,
+      message: '战场布局已保存',
+      nodeId: getIdString(node._id),
+      gateKey,
+      layoutId,
+      layoutBundle: serializeBattlefieldStateForGate(nextBattlefieldState, gateKey, layoutId)
+    });
+  } catch (error) {
+    console.error('保存知识域战场布局错误:', error);
     sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });

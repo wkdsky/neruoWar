@@ -1,9 +1,9 @@
 .knowledge-domain-container {
     position: fixed;
-    top: 0;
+    top: var(--knowledge-domain-top-offset, 0px);
     left: 0;
     width: 100vw;
-    height: 100vh;
+    height: calc(100vh - var(--knowledge-domain-top-offset, 0px));
     z-index: 100;
     background: #1a1f35;
 }
@@ -628,7 +628,7 @@
     top: 20px;
     right: 20px;
     width: 380px;
-    max-height: calc(100vh - 40px);
+    max-height: calc(100% - 40px);
     overflow-y: auto;
     background: rgba(30, 41, 59, 0.95);
     border-radius: 12px;
@@ -1787,7 +1787,7 @@
 @media (max-width: 768px) {
     .domain-info-panel {
         width: calc(100% - 40px);
-        max-height: calc(100vh - 40px);
+        max-height: calc(100% - 40px);
         top: auto;
         bottom: 20px;
         right: 20px;

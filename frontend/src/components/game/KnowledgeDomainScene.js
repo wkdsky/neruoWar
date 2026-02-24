@@ -13,6 +13,7 @@ import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
 import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
 import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
 import NumberPadDialog from '../common/NumberPadDialog';
+import BattlefieldPreviewModal from './BattlefieldPreviewModal';
 import './KnowledgeDomainScene.css';
 
 const avatarMap = {
@@ -952,6 +953,10 @@ const KnowledgeDomainScene = ({
     unitName: '',
     max: 1
   });
+  const [battlefieldPreviewState, setBattlefieldPreviewState] = useState({
+    open: false,
+    gateKey: ''
+  });
   const [sceneSize, setSceneSize] = useState({ width: 0, height: 0 });
   const [isScenePanning, setIsScenePanning] = useState(false);
   const [cameraAngleDeg, setCameraAngleDeg] = useState(CITY_CAMERA_DEFAULT_ANGLE_DEG);
@@ -1059,6 +1064,21 @@ const KnowledgeDomainScene = ({
       unitTypeId: '',
       unitName: '',
       max: 1
+    });
+  };
+
+  const openBattlefieldPreview = (gateKey) => {
+    if (!CITY_GATE_KEYS.includes(gateKey)) return;
+    setBattlefieldPreviewState({
+      open: true,
+      gateKey
+    });
+  };
+
+  const closeBattlefieldPreview = () => {
+    setBattlefieldPreviewState({
+      open: false,
+      gateKey: ''
     });
   };
 
@@ -1255,6 +1275,7 @@ const KnowledgeDomainScene = ({
   const handleScenePointerDown = (event) => {
     if (event.button !== 0) return;
     if (!isVisible || displayOpacity <= 0.5) return;
+    if (battlefieldPreviewState.open) return;
     if (defenseLayoutState.draggingBuildingId) return;
     const target = event.target;
     if (
@@ -1272,6 +1293,8 @@ const KnowledgeDomainScene = ({
       || target?.closest('.intel-heist-exit-confirm-card')
       || target?.closest('.intel-heist-timeout-overlay')
       || target?.closest('.intel-heist-timeout-card')
+      || target?.closest('.battlefield-modal-overlay')
+      || target?.closest('.battlefield-modal')
       || target?.closest('.city-defense-building.editable')
       || target?.closest('.city-defense-building.intel-heist-searchable')
     ) {
@@ -2799,6 +2822,10 @@ const KnowledgeDomainScene = ({
     setHasUnsavedDistributionDraft(false);
     setDefenseLayoutState(createDefaultDefenseLayoutState());
     setGateDeployState(createDefaultGateDeployState());
+    setBattlefieldPreviewState({
+      open: false,
+      gateKey: ''
+    });
     closeGateDeployDialog();
     resetIntelHeistState();
     buildingDragRef.current = null;
@@ -3118,6 +3145,12 @@ const KnowledgeDomainScene = ({
   }, [isIntelHeistMode, intelHeistState.active, isIntelHeistExitConfirmOpen]);
 
   useEffect(() => {
+    if (!battlefieldPreviewState.open) return;
+    scenePanDragRef.current = null;
+    setIsScenePanning(false);
+  }, [battlefieldPreviewState.open]);
+
+  useEffect(() => {
     if (!isVisible || !isIntelHeistMode) {
       resetIntelHeistState();
       return;
@@ -3157,6 +3190,10 @@ const KnowledgeDomainScene = ({
       draggingUnitTypeId: '',
       editMode: false
     }));
+    setBattlefieldPreviewState({
+      open: false,
+      gateKey: ''
+    });
     setIsDistributionRuleModalOpen(false);
     closeGateDeployDialog();
   }, [isVisible, isIntelHeistMode, node?._id, defenseLayoutState.loading, defenseLayoutState.savedLayout]);
@@ -3594,13 +3631,22 @@ const KnowledgeDomainScene = ({
                 </div>
               </div>
               {!isGateDeployEditing ? (
-                <button
-                  type="button"
-                  className="btn btn-small btn-primary"
-                  onClick={startGateDeployEdit}
-                >
-                  布防
-                </button>
+                <div className="gate-deploy-actions">
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    onClick={startGateDeployEdit}
+                  >
+                    布防
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-secondary"
+                    onClick={() => openBattlefieldPreview(activeGateKey)}
+                  >
+                    战场预览
+                  </button>
+                </div>
               ) : (
                 <div className="gate-deploy-actions">
                   <button
@@ -3619,12 +3665,31 @@ const KnowledgeDomainScene = ({
                   >
                     取消
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-secondary"
+                    onClick={() => openBattlefieldPreview(activeGateKey)}
+                    disabled={defenseLayoutState.saving}
+                  >
+                    战场预览
+                  </button>
                 </div>
               )}
             </>
           )}
           {!canEditGateDefense && (
-            <div className="domain-manage-tip">仅可查看承口/启口驻防配置，不可编辑。</div>
+            <>
+              <div className="domain-manage-tip">仅可查看承口/启口驻防配置，不可编辑。</div>
+              <div className="gate-deploy-actions">
+                <button
+                  type="button"
+                  className="btn btn-small btn-secondary"
+                  onClick={() => openBattlefieldPreview(activeGateKey)}
+                >
+                  战场预览
+                </button>
+              </div>
+            </>
           )}
           {isGateDeployEditing ? (
             <>
@@ -4275,6 +4340,17 @@ const KnowledgeDomainScene = ({
           {isDomainInfoDockExpanded ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>
       </div>
+      )}
+
+      {showGateLayer && (
+      <BattlefieldPreviewModal
+        open={battlefieldPreviewState.open}
+        nodeId={node?._id || ''}
+        gateKey={battlefieldPreviewState.gateKey}
+        gateLabel={CITY_GATE_LABELS[battlefieldPreviewState.gateKey] || ''}
+        canEdit={canEditGateDefense}
+        onClose={closeBattlefieldPreview}
+      />
       )}
 
       {showGateLayer && (

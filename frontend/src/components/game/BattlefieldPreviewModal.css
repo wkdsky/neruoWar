@@ -1,0 +1,218 @@
+.battlefield-modal-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 23, 0.62);
+  pointer-events: auto;
+}
+
+.battlefield-modal {
+  width: min(1120px, calc(100vw - 30px));
+  height: min(760px, calc(100vh - 40px));
+  border: 1px solid rgba(100, 116, 139, 0.62);
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.95));
+  box-shadow: 0 24px 52px rgba(2, 6, 23, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 0.58rem;
+  padding: 0.8rem;
+}
+
+.battlefield-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.battlefield-modal-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+}
+
+.battlefield-modal-title strong {
+  color: #f8fafc;
+  font-size: 0.96rem;
+}
+
+.battlefield-modal-title span {
+  color: #94a3b8;
+  font-size: 0.77rem;
+}
+
+.battlefield-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.battlefield-toolbar {
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.54);
+  padding: 0.46rem 0.55rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.9rem;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+}
+
+.battlefield-main {
+  flex: 1;
+  min-height: 360px;
+  display: flex;
+  gap: 0.58rem;
+}
+
+.battlefield-sidebar {
+  width: 220px;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.68);
+  padding: 0.58rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.battlefield-sidebar-title {
+  color: #e2e8f0;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.battlefield-item-card {
+  border: 1px solid rgba(100, 116, 139, 0.56);
+  border-radius: 10px;
+  background: linear-gradient(160deg, rgba(30, 41, 59, 0.96), rgba(51, 65, 85, 0.9));
+  color: #e2e8f0;
+  padding: 0.48rem 0.52rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.22rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.battlefield-item-card strong {
+  font-size: 0.82rem;
+}
+
+.battlefield-item-card span {
+  font-size: 0.74rem;
+  color: #cbd5e1;
+}
+
+.battlefield-item-card:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.72);
+}
+
+.battlefield-item-card.selected {
+  border-color: rgba(251, 191, 36, 0.84);
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.48);
+}
+
+.battlefield-item-card:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.battlefield-sidebar-tip {
+  margin-top: auto;
+  color: #94a3b8;
+  font-size: 0.74rem;
+  line-height: 1.3;
+}
+
+.battlefield-canvas-wrap {
+  flex: 1;
+  min-height: 360px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.09), transparent 40%),
+    radial-gradient(circle at 76% 80%, rgba(16, 185, 129, 0.08), transparent 44%),
+    rgba(2, 6, 23, 0.66);
+}
+
+.battlefield-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.battlefield-canvas:active {
+  cursor: grabbing;
+}
+
+.battlefield-footer {
+  border: 1px solid rgba(100, 116, 139, 0.4);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.48);
+  color: #cbd5e1;
+  font-size: 0.77rem;
+  padding: 0.45rem 0.55rem;
+}
+
+@media (max-width: 960px) {
+  .battlefield-modal {
+    width: calc(100vw - 14px);
+    height: calc(100vh - 18px);
+    border-radius: 12px;
+    padding: 0.62rem;
+  }
+
+  .battlefield-modal-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .battlefield-modal-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .battlefield-toolbar {
+    font-size: 0.74rem;
+    gap: 0.34rem 0.6rem;
+  }
+
+  .battlefield-main {
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .battlefield-sidebar {
+    width: 100%;
+    flex-direction: row;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0.38rem;
+  }
+
+  .battlefield-sidebar-title {
+    width: 100%;
+  }
+
+  .battlefield-item-card {
+    flex: 1;
+    min-width: 164px;
+  }
+
+  .battlefield-sidebar-tip {
+    width: 100%;
+    margin-top: 0.12rem;
+  }
+}

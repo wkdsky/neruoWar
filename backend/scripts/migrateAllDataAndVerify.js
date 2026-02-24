@@ -14,10 +14,14 @@ const DomainTitleRelation = require('../models/DomainTitleRelation');
 const { normalizeSenseList } = require('../services/nodeSenseStore');
 const {
   createDefaultDefenseLayout,
+  createDefaultBattlefieldState,
   createDefaultSiegeState,
   hasLegacyDefenseLayoutData,
+  hasLegacyBattlefieldLayoutData,
   hasLegacySiegeStateData,
   normalizeDefenseLayout,
+  normalizeBattlefieldState,
+  toLegacyBattlefieldLayoutFromState,
   normalizeSiegeState
 } = require('../services/domainTitleStateStore');
 const {
@@ -590,6 +594,7 @@ const migrateDomainTitleStates = async ({ nodeBatchSize, bulkOpLimit }) => {
   const metrics = {
     nodesScanned: 0,
     nodesWithLegacyDefenseLayout: 0,
+    nodesWithLegacyBattlefieldLayout: 0,
     nodesWithLegacySiegeState: 0,
     defenseUpserts: 0,
     defenseUpdates: 0,
@@ -617,7 +622,7 @@ const migrateDomainTitleStates = async ({ nodeBatchSize, bulkOpLimit }) => {
     const nodeIds = nodeBatch.map((item) => item?._id).filter(Boolean);
     const [existingDefenseRows, existingSiegeRows] = await Promise.all([
       DomainDefenseLayout.find({ nodeId: { $in: nodeIds } })
-        .select('nodeId buildings intelBuildingId gateDefense gateDefenseViewAdminIds updatedAt')
+        .select('nodeId buildings intelBuildingId gateDefense gateDefenseViewAdminIds battlefieldLayouts battlefieldItems battlefieldObjects battlefieldLayout updatedAt')
         .lean(),
       DomainSiegeState.find({ nodeId: { $in: nodeIds } })
         .select('nodeId cheng qi')
@@ -645,6 +650,18 @@ const migrateDomainTitleStates = async ({ nodeBatchSize, bulkOpLimit }) => {
       } else {
         nextDefenseLayout = createDefaultDefenseLayout();
       }
+
+      let nextBattlefieldState;
+      if (hasLegacyBattlefieldLayoutData(node)) {
+        metrics.nodesWithLegacyBattlefieldLayout += 1;
+        nextBattlefieldState = normalizeBattlefieldState(node?.cityDefenseLayout?.battlefieldLayout);
+      } else if (existingDefenseMap.has(key)) {
+        nextBattlefieldState = normalizeBattlefieldState(existingDefenseMap.get(key) || {});
+      } else {
+        nextBattlefieldState = createDefaultBattlefieldState();
+      }
+      const legacyBattlefieldLayout = toLegacyBattlefieldLayoutFromState(nextBattlefieldState, 'cheng');
+
       defenseOps.push({
         updateOne: {
           filter: { nodeId },
@@ -654,6 +671,10 @@ const migrateDomainTitleStates = async ({ nodeBatchSize, bulkOpLimit }) => {
               intelBuildingId: nextDefenseLayout.intelBuildingId,
               gateDefense: nextDefenseLayout.gateDefense,
               gateDefenseViewAdminIds: nextDefenseLayout.gateDefenseViewAdminIds,
+              battlefieldLayouts: nextBattlefieldState.layouts,
+              battlefieldItems: nextBattlefieldState.items,
+              battlefieldObjects: nextBattlefieldState.objects,
+              battlefieldLayout: legacyBattlefieldLayout,
               updatedAt: nextDefenseLayout.updatedAt || new Date(),
               updatedBy: actorId
             }
@@ -1194,6 +1215,62 @@ const normalizeDefenseLayoutForCompare = (source = {}) => {
   };
 };
 
+const normalizeBattlefieldLayoutForCompare = (source = {}) => {
+  const normalized = normalizeBattlefieldState(source || {});
+  const layouts = (Array.isArray(normalized?.layouts) ? normalized.layouts : [])
+    .map((item) => ({
+      layoutId: String(item?.layoutId || ''),
+      name: String(item?.name || ''),
+      gateKey: String(item?.gateKey || ''),
+      fieldWidth: Number(Number(item?.fieldWidth || 0).toFixed(3)),
+      fieldHeight: Number(Number(item?.fieldHeight || 0).toFixed(3)),
+      maxItemsPerType: Math.max(0, Math.floor(Number(item?.maxItemsPerType) || 0))
+    }))
+    .filter((item) => item.layoutId)
+    .sort((a, b) => a.layoutId.localeCompare(b.layoutId));
+
+  const items = (Array.isArray(normalized?.items) ? normalized.items : [])
+    .map((item) => ({
+      itemType: String(item?.itemType || ''),
+      name: String(item?.name || ''),
+      width: Number(Number(item?.width || 0).toFixed(3)),
+      depth: Number(Number(item?.depth || 0).toFixed(3)),
+      height: Number(Number(item?.height || 0).toFixed(3)),
+      hp: Math.max(1, Math.floor(Number(item?.hp) || 0)),
+      defense: Number(Number(item?.defense || 0).toFixed(3))
+    }))
+    .filter((item) => item.itemType)
+    .sort((a, b) => a.itemType.localeCompare(b.itemType));
+
+  const objects = (Array.isArray(normalized?.objects) ? normalized.objects : [])
+    .map((item) => ({
+      layoutId: String(item?.layoutId || ''),
+      objectId: String(item?.objectId || ''),
+      itemType: String(item?.itemType || ''),
+      x: Number(Number(item?.x || 0).toFixed(3)),
+      y: Number(Number(item?.y || 0).toFixed(3)),
+      z: Math.max(0, Math.floor(Number(item?.z) || 0)),
+      rotation: Number(Number(item?.rotation || 0).toFixed(3))
+    }))
+    .filter((item) => item.layoutId && item.objectId)
+    .sort((a, b) => (
+      `${a.layoutId}:${a.objectId}`.localeCompare(`${b.layoutId}:${b.objectId}`)
+    ));
+
+  return {
+    version: Math.max(1, Math.floor(Number(normalized?.version) || 1)),
+    layouts,
+    items,
+    objects
+  };
+};
+
+const isBattlefieldStateValidForCompare = (state = {}) => {
+  const layouts = Array.isArray(state?.layouts) ? state.layouts : [];
+  const items = Array.isArray(state?.items) ? state.items : [];
+  return layouts.length > 0 && items.length > 0;
+};
+
 const normalizeSiegeStateForCompare = (source = {}) => {
   const normalized = normalizeSiegeState(source || {});
   const normalizeGate = (gate = {}) => ({
@@ -1251,28 +1328,33 @@ const buildLegacyTitleStateGlobalSummary = async () => {
 
   let nodes = 0;
   let defenseRows = 0;
+  let battlefieldRows = 0;
   let siegeRows = 0;
 
   for await (const node of cursor) {
     nodes += 1;
     if (hasLegacyDefenseLayoutData(node)) defenseRows += 1;
+    if (hasLegacyBattlefieldLayoutData(node)) battlefieldRows += 1;
     if (hasLegacySiegeStateData(node)) siegeRows += 1;
   }
 
   return {
     nodes,
     defenseRows,
+    battlefieldRows,
     siegeRows
   };
 };
 
 const buildNewTitleStateGlobalSummary = async () => {
-  const [defenseRows, siegeRows] = await Promise.all([
+  const [defenseRows, battlefieldRows, siegeRows] = await Promise.all([
     DomainDefenseLayout.countDocuments({}),
+    DomainDefenseLayout.countDocuments({ 'battlefieldLayouts.0': { $exists: true } }),
     DomainSiegeState.countDocuments({})
   ]);
   return {
     defenseRows,
+    battlefieldRows,
     siegeRows
   };
 };
@@ -1305,7 +1387,7 @@ const verifyTitleStateSamples = async ({ sampleSize }) => {
     const nodeId = toObjectIdOrNull(node?._id);
     if (!nodeId) continue;
     const [defenseRow, siegeRow] = await Promise.all([
-      DomainDefenseLayout.findOne({ nodeId }).select('buildings intelBuildingId gateDefense gateDefenseViewAdminIds updatedAt').lean(),
+      DomainDefenseLayout.findOne({ nodeId }).select('buildings intelBuildingId gateDefense gateDefenseViewAdminIds battlefieldLayouts battlefieldItems battlefieldObjects battlefieldLayout updatedAt').lean(),
       DomainSiegeState.findOne({ nodeId }).select('cheng qi').lean()
     ]);
 
@@ -1320,6 +1402,21 @@ const verifyTitleStateSamples = async ({ sampleSize }) => {
         if (JSON.stringify(legacyDefense) !== JSON.stringify(migratedDefense)) {
           localMismatch.push('城防布局不一致');
         }
+      }
+    }
+
+    if (!defenseRow) {
+      localMismatch.push('缺失战场布局集合行');
+    } else if (hasLegacyBattlefieldLayoutData(node)) {
+      const legacyBattlefield = normalizeBattlefieldLayoutForCompare(node?.cityDefenseLayout?.battlefieldLayout || {});
+      const migratedBattlefield = normalizeBattlefieldLayoutForCompare(defenseRow || {});
+      if (JSON.stringify(legacyBattlefield) !== JSON.stringify(migratedBattlefield)) {
+        localMismatch.push('战场布局不一致');
+      }
+    } else {
+      const migratedBattlefield = normalizeBattlefieldLayoutForCompare(defenseRow || {});
+      if (!isBattlefieldStateValidForCompare(migratedBattlefield)) {
+        localMismatch.push('战场布局元数据异常');
       }
     }
 
@@ -1353,7 +1450,7 @@ const verifyTitleStateSamples = async ({ sampleSize }) => {
 
 const verifyTitleStateSamplesNewOnly = async ({ sampleSize }) => {
   const [defenseNodeRows, siegeNodeRows] = await Promise.all([
-    DomainDefenseLayout.find({}).sort({ nodeId: 1 }).limit(sampleSize).select('nodeId buildings intelBuildingId gateDefense gateDefenseViewAdminIds').lean(),
+    DomainDefenseLayout.find({}).sort({ nodeId: 1 }).limit(sampleSize).select('nodeId buildings intelBuildingId gateDefense gateDefenseViewAdminIds battlefieldLayouts battlefieldItems battlefieldObjects battlefieldLayout').lean(),
     DomainSiegeState.find({}).sort({ nodeId: 1 }).limit(sampleSize).select('nodeId cheng qi').lean()
   ]);
 
@@ -1374,7 +1471,7 @@ const verifyTitleStateSamplesNewOnly = async ({ sampleSize }) => {
     const nodeId = toObjectIdOrNull(nodeIdText);
     if (!nodeId) continue;
     const [defenseRow, siegeRow] = await Promise.all([
-      DomainDefenseLayout.findOne({ nodeId }).select('buildings intelBuildingId gateDefense gateDefenseViewAdminIds').lean(),
+      DomainDefenseLayout.findOne({ nodeId }).select('buildings intelBuildingId gateDefense gateDefenseViewAdminIds battlefieldLayouts battlefieldItems battlefieldObjects battlefieldLayout').lean(),
       DomainSiegeState.findOne({ nodeId }).select('cheng qi').lean()
     ]);
     const localMismatch = [];
@@ -1388,6 +1485,10 @@ const verifyTitleStateSamplesNewOnly = async ({ sampleSize }) => {
       }
       if (!compared.buildings.some((item) => item.buildingId === compared.intelBuildingId)) {
         localMismatch.push('情报建筑未命中任一建筑');
+      }
+      const battlefield = normalizeBattlefieldLayoutForCompare(defenseRow || {});
+      if (!isBattlefieldStateValidForCompare(battlefield)) {
+        localMismatch.push('战场布局元数据异常');
       }
     }
 
@@ -2021,6 +2122,7 @@ const verifyMigrationConsistency = async ({
   const hasLegacyNodeSenseData = legacyNodeSenseSummary.rows > 0;
   const hasLegacyTitleStateData = (
     legacyTitleStateSummary.defenseRows > 0
+    || legacyTitleStateSummary.battlefieldRows > 0
     || legacyTitleStateSummary.siegeRows > 0
   );
   const resolvedBaseline = verifyBaseline === 'auto'
@@ -2138,6 +2240,12 @@ const verifyMigrationConsistency = async ({
     }
   } else if (titleStateSampleCheck.mismatchedNodes > 0) {
     errors.push(`新标题状态抽样存在不一致 mismatchedNodes=${titleStateSampleCheck.mismatchedNodes}`);
+  }
+
+  if (newTitleStateSummary.battlefieldRows < newTitleStateSummary.defenseRows) {
+    errors.push(
+      `标题战场布局总量异常 battlefieldRows=${newTitleStateSummary.battlefieldRows} defenseRows=${newTitleStateSummary.defenseRows}`
+    );
   }
 
   if (legacyTitleProjectionSummary.projectionRows !== newTitleProjectionSummary.projectionRows) {

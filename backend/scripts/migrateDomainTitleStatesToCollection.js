@@ -6,10 +6,14 @@ const DomainDefenseLayout = require('../models/DomainDefenseLayout');
 const DomainSiegeState = require('../models/DomainSiegeState');
 const {
   createDefaultDefenseLayout,
+  createDefaultBattlefieldState,
   createDefaultSiegeState,
   hasLegacyDefenseLayoutData,
+  hasLegacyBattlefieldLayoutData,
   hasLegacySiegeStateData,
   normalizeDefenseLayout,
+  normalizeBattlefieldState,
+  toLegacyBattlefieldLayoutFromState,
   normalizeSiegeState
 } = require('../services/domainTitleStateStore');
 
@@ -30,7 +34,7 @@ const processBatch = async (nodes = [], metrics) => {
   const nodeIds = nodes.map((item) => item?._id).filter(Boolean);
   const [existingDefenseRows, existingSiegeRows] = await Promise.all([
     DomainDefenseLayout.find({ nodeId: { $in: nodeIds } })
-      .select('nodeId buildings intelBuildingId gateDefense gateDefenseViewAdminIds updatedAt')
+      .select('nodeId buildings intelBuildingId gateDefense gateDefenseViewAdminIds battlefieldLayouts battlefieldItems battlefieldObjects battlefieldLayout updatedAt')
       .lean(),
     DomainSiegeState.find({ nodeId: { $in: nodeIds } })
       .select('nodeId cheng qi')
@@ -58,6 +62,18 @@ const processBatch = async (nodes = [], metrics) => {
     } else {
       nextDefenseLayout = createDefaultDefenseLayout();
     }
+
+    let nextBattlefieldState;
+    if (hasLegacyBattlefieldLayoutData(node)) {
+      metrics.nodesWithLegacyBattlefield += 1;
+      nextBattlefieldState = normalizeBattlefieldState(node.cityDefenseLayout?.battlefieldLayout);
+    } else if (existingDefenseMap.has(key)) {
+      nextBattlefieldState = normalizeBattlefieldState(existingDefenseMap.get(key) || {});
+    } else {
+      nextBattlefieldState = createDefaultBattlefieldState();
+    }
+    const legacyBattlefieldLayout = toLegacyBattlefieldLayoutFromState(nextBattlefieldState, 'cheng');
+
     defenseOps.push({
       updateOne: {
         filter: { nodeId },
@@ -67,6 +83,10 @@ const processBatch = async (nodes = [], metrics) => {
             intelBuildingId: nextDefenseLayout.intelBuildingId,
             gateDefense: nextDefenseLayout.gateDefense,
             gateDefenseViewAdminIds: nextDefenseLayout.gateDefenseViewAdminIds,
+            battlefieldLayouts: nextBattlefieldState.layouts,
+            battlefieldItems: nextBattlefieldState.items,
+            battlefieldObjects: nextBattlefieldState.objects,
+            battlefieldLayout: legacyBattlefieldLayout,
             updatedAt: nextDefenseLayout.updatedAt || new Date(),
             updatedBy: actorUserId
           }
@@ -116,6 +136,7 @@ async function migrateDomainTitleStates() {
   const metrics = {
     nodesScanned: 0,
     nodesWithLegacyDefense: 0,
+    nodesWithLegacyBattlefield: 0,
     nodesWithLegacySiege: 0,
     defenseUpserts: 0,
     defenseUpdates: 0,
@@ -157,6 +178,7 @@ async function migrateDomainTitleStates() {
 
     console.log(`扫描节点数: ${metrics.nodesScanned}`);
     console.log(`含旧城防布局节点数: ${metrics.nodesWithLegacyDefense}`);
+    console.log(`含旧战场布局节点数: ${metrics.nodesWithLegacyBattlefield}`);
     console.log(`含旧围城状态节点数: ${metrics.nodesWithLegacySiege}`);
     console.log(`城防集合新增行: ${metrics.defenseUpserts}`);
     console.log(`城防集合更新行: ${metrics.defenseUpdates}`);

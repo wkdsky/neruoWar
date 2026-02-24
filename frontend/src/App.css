@@ -99,8 +99,8 @@ body {
     background: rgba(30, 41, 59, 0.9);
     border-radius: 12px;
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-    padding: 0.68rem 0.85rem;
-    margin-bottom: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.6rem;
     border: 1px solid rgba(168, 85, 247, 0.3);
     animation: slideDown 0.5s ease-out;
 }
@@ -113,26 +113,26 @@ body {
 
 @media (min-width: 769px) {
     .knowledge-domain-active .knowledge-domain-container .domain-info-panel {
-        top: 92px;
-        max-height: calc(100vh - 112px);
+        top: 20px;
+        max-height: calc(100% - 40px);
     }
 
     .knowledge-domain-active .knowledge-domain-container .domain-right-dock-toggle {
-        top: 92px;
+        top: 20px;
     }
 
     .knowledge-domain-active .knowledge-domain-container .domain-return-top-btn {
-        top: 92px;
+        top: 20px;
     }
 
     .knowledge-domain-active .knowledge-domain-container .intel-heist-hud {
-        top: calc(var(--knowledge-header-offset, 92px) + 8px);
+        top: 20px;
     }
 }
 
 @media (max-width: 768px) {
     .knowledge-domain-active .knowledge-domain-container .intel-heist-hud {
-        top: calc(var(--knowledge-header-offset, 80px) + 6px);
+        top: 12px;
     }
 }
 
@@ -152,11 +152,11 @@ body {
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: 0.65rem;
+    gap: 0.5rem;
 }
 
 .header-title {
-    font-size: 1.3rem;
+    font-size: 1.18rem;
     font-weight: 700;
     color: white;
     display: flex;
@@ -166,8 +166,8 @@ body {
 }
 
 .header-title .icon {
-    width: 1.22rem;
-    height: 1.22rem;
+    width: 1.08rem;
+    height: 1.08rem;
 }
 
 .header-buttons {
@@ -187,8 +187,8 @@ body {
 .user-avatar-container {
     display: flex;
     align-items: center;
-    gap: 0.55rem;
-    padding: 0.32rem 0.62rem;
+    gap: 0.45rem;
+    padding: 0.22rem 0.52rem;
     background: rgba(15, 23, 42, 0.72);
     border: 1px solid rgba(148, 163, 184, 0.35);
     border-radius: 12px;
@@ -203,8 +203,8 @@ body {
 }
 
 .user-avatar-small {
-    width: 48px;
-    height: 48px;
+    width: 42px;
+    height: 42px;
     border-radius: 8px;
     border: 2px solid rgba(168, 85, 247, 0.5);
     background: #0a0a15;
@@ -212,7 +212,7 @@ body {
 }
 
 .user-avatar-main {
-    min-width: 204px;
+    min-width: 190px;
     display: flex;
     flex-direction: column;
     gap: 0.22rem;
@@ -1570,21 +1570,21 @@ body {
 
 
     .header-title {
-        font-size: 1.25rem;
+        font-size: 1.08rem;
     }
 
     .user-avatar-container {
-        padding: 0.4rem 0.55rem;
-        gap: 0.5rem;
+        padding: 0.2rem 0.45rem;
+        gap: 0.4rem;
     }
 
     .user-avatar-small {
-        width: 36px;
-        height: 36px;
+        width: 34px;
+        height: 34px;
     }
 
     .user-avatar-main {
-        min-width: 170px;
+        min-width: 150px;
     }
 
     .user-resource-item {
