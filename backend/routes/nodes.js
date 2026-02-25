@@ -5527,8 +5527,13 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
         .filter((id) => isValidObjectId(id))
     ));
 
-    const nodeNameFallbackParents = (Array.isArray(node.relatedParentDomains) ? node.relatedParentDomains : []).filter(Boolean);
-    const nodeNameFallbackChildren = (Array.isArray(node.relatedChildDomains) ? node.relatedChildDomains : []).filter(Boolean);
+    const shouldUseNameFallback = relationAssociations.length === 0;
+    const nodeNameFallbackParents = shouldUseNameFallback
+      ? (Array.isArray(node.relatedParentDomains) ? node.relatedParentDomains : []).filter(Boolean)
+      : [];
+    const nodeNameFallbackChildren = shouldUseNameFallback
+      ? (Array.isArray(node.relatedChildDomains) ? node.relatedChildDomains : []).filter(Boolean)
+      : [];
 
     const parentNodes = parentTargetIds.length > 0
       ? await Node.find({
@@ -5552,18 +5557,25 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
     await hydrateNodeSensesForNodes(parentNodes);
     await hydrateNodeSensesForNodes(childNodes);
 
-    const relationByTargetNodeId = relationAssociations.reduce((acc, assoc) => {
+    const relationByTypeAndTargetNodeId = relationAssociations.reduce((acc, assoc) => {
       const key = getIdString(assoc?.targetNode);
-      if (!key || acc.has(key)) return acc;
-      acc.set(key, assoc);
+      const relationType = normalizeAssociationRelationType(assoc?.relationType);
+      if (!key) return acc;
+      if (relationType !== 'contains' && relationType !== 'extends') return acc;
+      const relationKey = `${relationType}:${key}`;
+      if (acc.has(relationKey)) return acc;
+      acc.set(relationKey, assoc);
       return acc;
     }, new Map());
 
-    const decorateNodeWithSense = (rawNode) => {
+    const decorateNodeWithSense = (rawNode, relationType = '') => {
       const source = rawNode && typeof rawNode.toObject === 'function' ? rawNode.toObject() : rawNode;
       const normalizedSenses = normalizeNodeSenseList(rawNode);
       const targetNodeId = getIdString(source?._id);
-      const assoc = relationByTargetNodeId.get(targetNodeId);
+      const safeRelationType = relationType === 'contains' || relationType === 'extends' ? relationType : '';
+      const assoc = safeRelationType
+        ? relationByTypeAndTargetNodeId.get(`${safeRelationType}:${targetNodeId}`)
+        : null;
       const targetSenseId = typeof assoc?.targetSenseId === 'string' ? assoc.targetSenseId.trim() : '';
       const pickedSense = pickNodeSenseById({ ...source, synonymSenses: normalizedSenses }, targetSenseId);
       return {
@@ -5623,8 +5635,8 @@ router.get('/public/node-detail/:nodeId', async (req, res) => {
       nodeObj.favoriteUserCount = Number(favoriteUserCount) || 0;
     }
     const [styledNode] = await attachVisualStyleToNodeList([nodeObj]);
-    const decoratedParentNodes = parentNodes.map((item) => applyProjectedKnowledgePoint(decorateNodeWithSense(item)));
-    const decoratedChildNodes = childNodes.map((item) => applyProjectedKnowledgePoint(decorateNodeWithSense(item)));
+    const decoratedParentNodes = parentNodes.map((item) => applyProjectedKnowledgePoint(decorateNodeWithSense(item, 'extends')));
+    const decoratedChildNodes = childNodes.map((item) => applyProjectedKnowledgePoint(decorateNodeWithSense(item, 'contains')));
     const styledParentNodes = await attachVisualStyleToNodeList(decoratedParentNodes);
     const styledChildNodes = await attachVisualStyleToNodeList(decoratedChildNodes);
 
