@@ -518,6 +518,9 @@ const App = () => {
     const [senseSelectorSourceSceneNodeId, setSenseSelectorSourceSceneNodeId] = useState('');
     const [senseSelectorAnchor, setSenseSelectorAnchor] = useState({ x: 0, y: 0, visible: false });
     const [isSenseSelectorVisible, setIsSenseSelectorVisible] = useState(false);
+    const [senseSelectorOverviewNode, setSenseSelectorOverviewNode] = useState(null);
+    const [senseSelectorOverviewLoading, setSenseSelectorOverviewLoading] = useState(false);
+    const [senseSelectorOverviewError, setSenseSelectorOverviewError] = useState('');
     const [showNodeInfoModal, setShowNodeInfoModal] = useState(false);
     const [isApplyingDomainMaster, setIsApplyingDomainMaster] = useState(false);
     const [intelHeistStatus, setIntelHeistStatus] = useState(createEmptyIntelHeistStatus);
@@ -3191,8 +3194,8 @@ const App = () => {
         const rect = canvas.getBoundingClientRect();
         const screenPos = renderer.worldToScreen(sceneNode.x, sceneNode.y);
         const next = {
-            x: rect.left + screenPos.x,
-            y: rect.top + screenPos.y,
+            x: Math.round(rect.left + screenPos.x),
+            y: Math.round(rect.top + screenPos.y),
             visible: true
         };
         senseSelectorAnchorRef.current = next;
@@ -3885,7 +3888,6 @@ const App = () => {
         }
         if (view === 'home' && !isSenseSelectorVisible) return undefined;
 
-        let rafId = 0;
         const updateAnchor = () => {
             const sceneManager = sceneManagerRef.current;
             const renderer = sceneManager?.renderer;
@@ -3907,23 +3909,23 @@ const App = () => {
                 const screenPos = renderer.worldToScreen(targetNode.x, targetNode.y);
                 const rect = canvas.getBoundingClientRect();
                 const next = {
-                    x: rect.left + screenPos.x,
-                    y: rect.top + screenPos.y,
+                    x: Math.round(rect.left + screenPos.x),
+                    y: Math.round(rect.top + screenPos.y),
                     visible: true
                 };
                 const prev = senseSelectorAnchorRef.current || { x: 0, y: 0, visible: false };
-                const moved = Math.abs(prev.x - next.x) > 0.5 || Math.abs(prev.y - next.y) > 0.5 || prev.visible !== next.visible;
+                const moved = Math.abs(prev.x - next.x) > 1 || Math.abs(prev.y - next.y) > 1 || prev.visible !== next.visible;
                 if (moved) {
                     senseSelectorAnchorRef.current = next;
                     setSenseSelectorAnchor(next);
                 }
             }
-            rafId = window.requestAnimationFrame(updateAnchor);
         };
 
-        rafId = window.requestAnimationFrame(updateAnchor);
+        updateAnchor();
+        window.addEventListener('resize', updateAnchor);
         return () => {
-            window.cancelAnimationFrame(rafId);
+            window.removeEventListener('resize', updateAnchor);
         };
     }, [
         view,
@@ -3961,6 +3963,98 @@ const App = () => {
             canvas.removeEventListener('click', handleMapClick);
         };
     }, [isSenseSelectorVisible, view, currentNodeDetail?._id, currentTitleDetail?._id]);
+
+    useEffect(() => {
+        if (!isSenseSelectorVisible || (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail')) {
+            setSenseSelectorOverviewLoading(false);
+            setSenseSelectorOverviewError('');
+            return undefined;
+        }
+
+        const selectorNode = (
+            (view === 'titleDetail' && currentTitleDetail)
+            || (view === 'nodeDetail' && currentNodeDetail)
+            || senseSelectorSourceNode
+            || null
+        );
+        const nodeId = normalizeObjectId(selectorNode?._id);
+        if (!nodeId) {
+            setSenseSelectorOverviewNode(null);
+            setSenseSelectorOverviewLoading(false);
+            setSenseSelectorOverviewError('');
+            return undefined;
+        }
+
+        const detailNodeId = normalizeObjectId(currentNodeDetail?._id);
+        const requestedSenseId = (
+            view === 'nodeDetail'
+            && detailNodeId
+            && detailNodeId === nodeId
+            && typeof currentNodeDetail?.activeSenseId === 'string'
+        )
+            ? currentNodeDetail.activeSenseId.trim()
+            : (typeof selectorNode?.activeSenseId === 'string' ? selectorNode.activeSenseId.trim() : '');
+        if (
+            view === 'nodeDetail'
+            && detailNodeId
+            && detailNodeId === nodeId
+            && currentNodeDetail
+        ) {
+            setSenseSelectorOverviewNode(currentNodeDetail);
+            setSenseSelectorOverviewLoading(false);
+            setSenseSelectorOverviewError('');
+            return undefined;
+        }
+
+        setSenseSelectorOverviewNode((prev) => (
+            normalizeObjectId(prev?._id) === nodeId
+                ? prev
+                : selectorNode
+        ));
+        setSenseSelectorOverviewLoading(true);
+        setSenseSelectorOverviewError('');
+
+        let cancelled = false;
+        (async () => {
+            try {
+                const detailUrl = requestedSenseId
+                    ? `http://localhost:5000/api/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
+                    : `http://localhost:5000/api/nodes/public/node-detail/${nodeId}`;
+                const response = await fetch(detailUrl);
+                const rawText = await response.text();
+                let data = null;
+                try {
+                    data = rawText ? JSON.parse(rawText) : null;
+                } catch (error) {
+                    data = null;
+                }
+                if (cancelled) return;
+                if (!response.ok || !data?.node) {
+                    const fallback = `读取标题总览失败（HTTP ${response.status}）`;
+                    setSenseSelectorOverviewError(data?.error || data?.message || fallback);
+                    setSenseSelectorOverviewLoading(false);
+                    return;
+                }
+                setSenseSelectorOverviewNode(data.node);
+                setSenseSelectorOverviewLoading(false);
+                setSenseSelectorOverviewError('');
+            } catch (error) {
+                if (cancelled) return;
+                setSenseSelectorOverviewLoading(false);
+                setSenseSelectorOverviewError(error?.message ? `读取标题总览失败: ${error.message}` : '读取标题总览失败');
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        isSenseSelectorVisible,
+        view,
+        currentNodeDetail,
+        currentTitleDetail,
+        senseSelectorSourceNode
+    ]);
 
 
     // 新节点创建相关函数
@@ -5004,20 +5098,86 @@ const App = () => {
         const selectorNode = resolveSenseSelectorNode();
         if (!selectorNode) return null;
         if (!isSenseSelectorVisible || !senseSelectorAnchor.visible) return null;
-        const senses = Array.isArray(selectorNode?.synonymSenses) && selectorNode.synonymSenses.length > 0
-            ? selectorNode.synonymSenses
+        const selectorNodeId = normalizeObjectId(selectorNode?._id);
+        const overviewNode = normalizeObjectId(senseSelectorOverviewNode?._id) === selectorNodeId
+            ? senseSelectorOverviewNode
+            : selectorNode;
+        const senses = Array.isArray(overviewNode?.synonymSenses) && overviewNode.synonymSenses.length > 0
+            ? overviewNode.synonymSenses
             : [{
-                senseId: selectorNode?.activeSenseId || 'sense_1',
-                title: selectorNode?.activeSenseTitle || '基础释义',
-                content: selectorNode?.activeSenseContent || selectorNode?.description || ''
+                senseId: overviewNode?.activeSenseId || 'sense_1',
+                title: overviewNode?.activeSenseTitle || '基础释义',
+                content: overviewNode?.activeSenseContent || overviewNode?.description || ''
             }];
         const activeSenseId = (
             view === 'nodeDetail'
-            && normalizeObjectId(currentNodeDetail?._id) === normalizeObjectId(selectorNode?._id)
+            && normalizeObjectId(currentNodeDetail?._id) === selectorNodeId
         )
             ? (currentNodeDetail?.activeSenseId || '')
             : '';
-        const style = selectorNode?.visualStyle || {};
+        const style = overviewNode?.visualStyle || selectorNode?.visualStyle || {};
+        const overviewName = typeof overviewNode?.name === 'string' && overviewNode.name.trim()
+            ? overviewNode.name.trim()
+            : (typeof selectorNode?.name === 'string' ? selectorNode.name.trim() : '');
+        const overviewDescription = typeof overviewNode?.description === 'string'
+            ? overviewNode.description.trim()
+            : '';
+        const showSenseRelations = view === 'nodeDetail';
+        const relationNameFromItem = (item) => {
+            if (typeof item === 'string') return item.trim();
+            if (!item || typeof item !== 'object') return '';
+            if (typeof item?.displayName === 'string' && item.displayName.trim()) return item.displayName.trim();
+            const title = typeof item?.name === 'string' ? item.name.trim() : '';
+            const senseTitle = typeof item?.activeSenseTitle === 'string'
+                ? item.activeSenseTitle.trim()
+                : (typeof item?.senseTitle === 'string' ? item.senseTitle.trim() : '');
+            if (title && senseTitle) return `${title}-${senseTitle}`;
+            if (title) return title;
+            return '';
+        };
+        const uniqueRelationNames = (items = []) => Array.from(new Set(
+            (Array.isArray(items) ? items : [])
+                .map(relationNameFromItem)
+                .filter(Boolean)
+        ));
+        const includes = showSenseRelations
+            ? uniqueRelationNames(overviewNode?.childNodesInfo)
+            : [];
+        const extendsTo = showSenseRelations
+            ? uniqueRelationNames(overviewNode?.parentNodesInfo)
+            : [];
+        const managerIdOf = (user) => normalizeObjectId(user?._id || user?.id || user);
+        const domainMasterRaw = overviewNode?.domainMaster;
+        const domainMaster = (
+            domainMasterRaw
+            && typeof domainMasterRaw === 'object'
+            && managerIdOf(domainMasterRaw)
+        ) ? domainMasterRaw : null;
+        const masterId = managerIdOf(domainMaster);
+        const domainAdmins = Array.isArray(overviewNode?.domainAdmins)
+            ? overviewNode.domainAdmins
+                .filter((admin) => admin && typeof admin === 'object')
+                .filter((admin, index, arr) => {
+                    const adminId = managerIdOf(admin);
+                    if (!adminId) return true;
+                    if (adminId === masterId) return false;
+                    return arr.findIndex((item) => managerIdOf(item) === adminId) === index;
+                })
+            : [];
+        const masterAllianceRaw = domainMaster?.alliance || domainMaster?.allianceId;
+        const masterAllianceName = typeof masterAllianceRaw?.name === 'string'
+            ? masterAllianceRaw.name.trim()
+            : '';
+        const allianceName = (
+            typeof style?.allianceName === 'string' && style.allianceName.trim()
+                ? style.allianceName.trim()
+                : masterAllianceName
+        ) || '';
+        const allianceFlag = (
+            typeof masterAllianceRaw?.flag === 'string' && masterAllianceRaw.flag.trim()
+                ? masterAllianceRaw.flag.trim()
+                : ''
+        );
         const panelStyle = {
             left: `${senseSelectorAnchor.x}px`,
             top: `${senseSelectorAnchor.y}px`,
@@ -5028,13 +5188,20 @@ const App = () => {
 
         return (
             <div className="sense-selector-panel" style={panelStyle}>
-                <button
-                    type="button"
-                    className="sense-selector-title sense-selector-title-btn"
-                    onClick={handleSwitchTitleView}
-                >
-                    {selectorNode?.name || '未命名知识域'}
-                </button>
+                <div className="sense-selector-overview-header">
+                    <button
+                        type="button"
+                        className="sense-selector-title sense-selector-title-btn"
+                        onClick={handleSwitchTitleView}
+                    >
+                        {overviewName || '未命名知识域'}
+                    </button>
+                    <div className="sense-selector-overview-mode">
+                        {view === 'titleDetail' ? '当前：标题主视角' : '点击标题切换到标题主视角'}
+                    </div>
+                </div>
+
+                <div className="sense-selector-list-title">释义选择</div>
                 <div className="sense-selector-list">
                     {senses.map((sense) => {
                         const isActive = !!activeSenseId && sense?.senseId === activeSenseId;
@@ -5050,6 +5217,100 @@ const App = () => {
                         );
                     })}
                 </div>
+
+                <div className="sense-selector-overview-grid">
+                    <div className="sense-selector-overview-field">
+                        <span className="sense-selector-overview-label">概述</span>
+                        <span className="sense-selector-overview-desc-content single-line">
+                            {overviewDescription}
+                        </span>
+                    </div>
+                    <div className="sense-selector-overview-field alliance">
+                        <span className="sense-selector-overview-label">所属熵盟</span>
+                        <span className="sense-selector-overview-alliance">
+                            {allianceFlag ? (
+                                <span className="sense-selector-overview-alliance-flag" style={{ backgroundColor: allianceFlag }} />
+                            ) : null}
+                            <span className="sense-selector-overview-value">{allianceName}</span>
+                        </span>
+                    </div>
+                </div>
+
+                <div className="sense-selector-overview-managers">
+                    <div className="sense-selector-overview-people-row">
+                        <div className="sense-selector-overview-people-group">
+                            <span className="sense-selector-overview-label">域主</span>
+                            <div className="sense-selector-overview-people-list">
+                                {domainMaster ? (
+                                    <div
+                                        className="sense-selector-manager-chip master"
+                                        title={`域主：${domainMaster.username || '未命名用户'}`}
+                                    >
+                                        <img
+                                            src={resolveAvatarSrc(domainMaster.avatar)}
+                                            alt={domainMaster.username || '域主'}
+                                            className="sense-selector-manager-avatar"
+                                        />
+                                        <span className="sense-selector-manager-name">{domainMaster.username || '未设置域主'}</span>
+                                    </div>
+                                ) : null}
+                            </div>
+                        </div>
+                        <div className="sense-selector-overview-people-group">
+                            <span className="sense-selector-overview-label">域相</span>
+                            <div className="sense-selector-overview-people-list">
+                                {domainAdmins.length > 0 ? (
+                                    domainAdmins.map((admin, index) => (
+                                        <div
+                                            key={managerIdOf(admin) || `sense-selector-admin-${index}`}
+                                            className="sense-selector-manager-chip"
+                                            title={`域相：${admin?.username || '未命名用户'}`}
+                                        >
+                                            <img
+                                                src={resolveAvatarSrc(admin?.avatar)}
+                                                alt={admin?.username || '域相'}
+                                                className="sense-selector-manager-avatar"
+                                            />
+                                            <span className="sense-selector-manager-name">{admin?.username || '未命名'}</span>
+                                        </div>
+                                    ))
+                                ) : null}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {showSenseRelations && (
+                    <div className="sense-selector-overview-relations">
+                        <div className="sense-selector-overview-relation-block">
+                            <div className="sense-selector-overview-label">包含</div>
+                            <div className="sense-selector-overview-tag-list">
+                                {includes.length > 0 ? includes.map((item) => (
+                                    <span key={`contain-${item}`} className="sense-selector-overview-tag">
+                                        {item}
+                                    </span>
+                                )) : null}
+                            </div>
+                        </div>
+                        <div className="sense-selector-overview-relation-block">
+                            <div className="sense-selector-overview-label">扩展</div>
+                            <div className="sense-selector-overview-tag-list">
+                                {extendsTo.length > 0 ? extendsTo.map((item) => (
+                                    <span key={`extend-${item}`} className="sense-selector-overview-tag">
+                                        {item}
+                                    </span>
+                                )) : null}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {senseSelectorOverviewLoading && (
+                    <div className="sense-selector-overview-hint">正在加载标题总览...</div>
+                )}
+                {!senseSelectorOverviewLoading && senseSelectorOverviewError && (
+                    <div className="sense-selector-overview-hint error">{senseSelectorOverviewError}</div>
+                )}
             </div>
         );
     };
