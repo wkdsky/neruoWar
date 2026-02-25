@@ -1,0 +1,390 @@
+.pve-battle-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1700;
+  background: radial-gradient(circle at 20% 16%, rgba(12, 74, 110, 0.28), transparent 46%),
+    radial-gradient(circle at 86% 8%, rgba(185, 28, 28, 0.2), transparent 38%),
+    linear-gradient(180deg, #0a1120 0%, #091521 48%, #0b1522 100%);
+  color: #dbe7f4;
+  display: flex;
+  flex-direction: column;
+}
+
+.pve-battle-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  gap: 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(8, 15, 26, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.pve-battle-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pve-battle-title strong {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pve-battle-title span {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.pve-battle-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pve-battle-time {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 13px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.pve-battle-main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.pve-battle-canvas-wrap {
+  position: absolute;
+  inset: 0;
+  padding: 34px 18px 12px;
+}
+
+.pve-battle-canvas {
+  width: 100%;
+  height: 100%;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: linear-gradient(180deg, rgba(14, 22, 37, 0.95), rgba(11, 18, 31, 0.95));
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.8), 0 16px 38px rgba(2, 6, 23, 0.38);
+}
+
+.pve-battle-card-strip {
+  position: absolute;
+  top: 10px;
+  width: min(35vw, 560px);
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px;
+}
+
+.pve-battle-card-strip.left {
+  left: 20px;
+}
+
+.pve-battle-card-strip.right {
+  right: 20px;
+  justify-content: flex-end;
+}
+
+.pve-squad-card {
+  width: 98px;
+  min-width: 98px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(40, 13, 13, 0.76);
+  padding: 6px;
+  cursor: pointer;
+  transition: border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+}
+
+.pve-squad-card.enemy {
+  background: rgba(10, 22, 38, 0.78);
+}
+
+.pve-squad-card:hover {
+  border-color: rgba(248, 113, 113, 0.65);
+}
+
+.pve-squad-card.enemy:hover {
+  border-color: rgba(125, 211, 252, 0.6);
+}
+
+.pve-squad-card.selected {
+  border-color: rgba(248, 113, 113, 0.95);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.72), 0 0 18px rgba(239, 68, 68, 0.35);
+  transform: translateY(-1px);
+}
+
+.pve-squad-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  margin-bottom: 4px;
+  color: #bfdbfe;
+}
+
+.pve-squad-card-head strong {
+  font-size: 11px;
+  max-width: 58px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pve-card-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.pve-card-row {
+  font-size: 10px;
+  color: #cbd5e1;
+  margin-bottom: 2px;
+  line-height: 1.2;
+}
+
+.pve-bar {
+  width: 100%;
+  height: 5px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.9);
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.pve-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 6px;
+}
+
+.pve-bar.hp > i {
+  background: linear-gradient(90deg, #22c55e, #86efac);
+}
+
+.pve-bar.stamina > i {
+  background: linear-gradient(90deg, #f59e0b, #fcd34d);
+}
+
+.pve-bar.stamina.low > i {
+  background: linear-gradient(90deg, #dc2626, #f87171);
+}
+
+.pve-bar.morale > i {
+  background: linear-gradient(90deg, #0ea5e9, #7dd3fc);
+}
+
+.pve-card-action {
+  margin-top: 3px;
+  font-size: 10px;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pve-compose-panel {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 16px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(280px, 1fr);
+  gap: 10px;
+  pointer-events: none;
+}
+
+.pve-compose-box {
+  pointer-events: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(8, 15, 26, 0.84);
+  padding: 10px;
+}
+
+.pve-compose-box h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #93c5fd;
+}
+
+.pve-compose-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  max-height: 166px;
+  overflow: auto;
+}
+
+.pve-compose-group {
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  padding: 6px;
+  font-size: 11px;
+  background: rgba(15, 23, 42, 0.56);
+  cursor: pointer;
+}
+
+.pve-compose-group.selected {
+  border-color: rgba(34, 211, 238, 0.95);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.5);
+}
+
+.pve-compose-group.empty {
+  opacity: 0.65;
+}
+
+.pve-compose-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.pve-compose-line button {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.9);
+  color: #dbeafe;
+  cursor: pointer;
+}
+
+.pve-compose-actions {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.pve-compose-tip {
+  font-size: 11px;
+  color: #cbd5e1;
+  margin-top: 6px;
+}
+
+.pve-floating-actions {
+  position: absolute;
+  display: flex;
+  gap: 4px;
+  transform: translate(-50%, -130%);
+  pointer-events: auto;
+}
+
+.pve-floating-actions button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.7);
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.pve-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 9px;
+}
+
+.pve-result-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.6);
+  display: grid;
+  place-items: center;
+}
+
+.pve-result-card {
+  width: min(420px, calc(100vw - 36px));
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(8, 15, 26, 0.92);
+  padding: 14px;
+}
+
+.pve-result-card h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.pve-result-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.pve-result-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pve-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: #cbd5e1;
+}
+
+@media (max-width: 1180px) {
+  .pve-compose-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .pve-battle-card-strip {
+    width: min(47vw, 520px);
+  }
+}
+
+@media (max-width: 860px) {
+  .pve-battle-canvas-wrap {
+    padding: 78px 10px 8px;
+  }
+
+  .pve-battle-card-strip {
+    width: calc(100vw - 20px);
+    left: 10px;
+    right: 10px;
+    top: 40px;
+  }
+
+  .pve-battle-card-strip.right {
+    top: 146px;
+    justify-content: flex-start;
+  }
+
+  .pve-squad-card {
+    width: 88px;
+    min-width: 88px;
+  }
+}

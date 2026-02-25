@@ -15,6 +15,7 @@ import LocationSelectionModal from './LocationSelectionModal';
 import AssociationModal from './components/modals/AssociationModal';
 import NodeInfoModal from './components/modals/NodeInfoModal';
 import CreateNodeModal from './components/modals/CreateNodeModal';
+import PveBattleModal from './components/game/PveBattleModal';
 
 // 导入头像
 import defaultMale1 from './assets/avatars/default_male_1.svg';
@@ -547,6 +548,14 @@ const App = () => {
         units: {}
     });
     const [siegeSupportStatuses, setSiegeSupportStatuses] = useState([]);
+    const [pveBattleState, setPveBattleState] = useState({
+        open: false,
+        loading: false,
+        error: '',
+        nodeId: '',
+        gateKey: '',
+        data: null
+    });
 
 
     // 导航路径相关状态
@@ -2947,6 +2956,81 @@ const App = () => {
         }
     };
 
+    const closeSiegePveBattle = () => {
+        setPveBattleState({
+            open: false,
+            loading: false,
+            error: '',
+            nodeId: '',
+            gateKey: '',
+            data: null
+        });
+    };
+
+    const handleOpenSiegePveBattle = async () => {
+        const token = localStorage.getItem('token');
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        const gateKey = (
+            (siegeStatus.compareGate && (siegeStatus.activeGateKeys || []).includes(siegeStatus.compareGate) ? siegeStatus.compareGate : '')
+            || (siegeStatus.activeGateKeys || [])[0]
+            || ''
+        );
+        if (!token || !nodeId || !gateKey) return;
+
+        setPveBattleState({
+            open: true,
+            loading: true,
+            error: '',
+            nodeId,
+            gateKey,
+            data: null
+        });
+
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/pve/battle-init?gateKey=${encodeURIComponent(gateKey)}`, {
+                headers: {
+                    Authorization: `Bearer ${token}`
+                }
+            });
+            const parsed = await parseApiResponse(response);
+            if (!response.ok || !parsed.data) {
+                setPveBattleState({
+                    open: true,
+                    loading: false,
+                    error: getApiErrorMessage(parsed, '初始化战斗失败'),
+                    nodeId,
+                    gateKey,
+                    data: null
+                });
+                return;
+            }
+            setPveBattleState({
+                open: true,
+                loading: false,
+                error: '',
+                nodeId,
+                gateKey,
+                data: parsed.data
+            });
+        } catch (error) {
+            setPveBattleState({
+                open: true,
+                loading: false,
+                error: `初始化战斗失败: ${error.message}`,
+                nodeId,
+                gateKey,
+                data: null
+            });
+        }
+    };
+
+    const handlePveBattleFinished = async () => {
+        const nodeId = normalizeObjectId(pveBattleState.nodeId || siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        if (nodeId) {
+            await fetchSiegeStatus(nodeId, { silent: false });
+        }
+    };
+
     // 获取标题主视角详情
     const fetchTitleDetail = async (nodeId, clickedNode = null, navOptions = {}) => {
         const shouldAlert = navOptions?.silent !== true;
@@ -3499,6 +3583,22 @@ const App = () => {
             };
         })
         .filter((item) => !!item.gateKey);
+    const isCurrentUserActiveSiegeAttacker = siegeActiveGateRows.some((row) => (
+        (row.attackers || []).some((item) => item?.username === username)
+    ));
+    const siegePreferredBattleGate = (
+        (siegeStatus.compareGate && (siegeStatus.activeGateKeys || []).includes(siegeStatus.compareGate) ? siegeStatus.compareGate : '')
+        || (siegeStatus.activeGateKeys || [])[0]
+        || ''
+    );
+    const canLaunchSiegePveBattle = (
+        !isAdmin
+        && !isSiegeReadonlyViewer
+        && siegeStatus.viewerRole === 'common'
+        && siegeStatus.hasActiveSiege
+        && !!siegePreferredBattleGate
+        && isCurrentUserActiveSiegeAttacker
+    );
 
     const handleOpenRelatedDomain = async (node, sectionType = 'default') => {
         const nodeId = normalizeObjectId(node?._id);
@@ -6212,7 +6312,13 @@ const App = () => {
                                 )}
                                 {!siegeDialog.loading && siegeStatus.hasActiveSiege && !isSiegeReadonlyViewer && (
                                     <>
-                                        <button type="button" className="btn btn-warning" disabled>
+                                        <button
+                                            type="button"
+                                            className="btn btn-warning"
+                                            onClick={handleOpenSiegePveBattle}
+                                            disabled={!canLaunchSiegePveBattle}
+                                            title={canLaunchSiegePveBattle ? '' : '仅当前门向参战攻方可进入战斗'}
+                                        >
                                             进攻
                                         </button>
                                         <button
@@ -6230,6 +6336,15 @@ const App = () => {
                         </div>
                     </div>
                 )}
+
+                <PveBattleModal
+                    open={pveBattleState.open}
+                    loading={pveBattleState.loading}
+                    error={pveBattleState.error}
+                    battleInitData={pveBattleState.data}
+                    onClose={closeSiegePveBattle}
+                    onBattleFinished={handlePveBattleFinished}
+                />
                 
                 <AssociationModal 
                     isOpen={showAssociationModal}

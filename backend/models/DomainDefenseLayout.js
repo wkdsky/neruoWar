@@ -143,6 +143,70 @@ const BattlefieldObjectSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const BattlefieldDefenderDeploymentSchema = new mongoose.Schema({
+  layoutId: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  deployId: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  name: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  sortOrder: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  units: {
+    type: [new mongoose.Schema({
+      unitTypeId: {
+        type: String,
+        required: true,
+        trim: true
+      },
+      count: {
+        type: Number,
+        default: 1,
+        min: 1
+      }
+    }, { _id: false })],
+    default: []
+  },
+  unitTypeId: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  count: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+  x: {
+    type: Number,
+    required: true,
+    min: -(BATTLEFIELD_FIELD_LIMIT / 2),
+    max: BATTLEFIELD_FIELD_LIMIT / 2
+  },
+  y: {
+    type: Number,
+    required: true,
+    min: -(BATTLEFIELD_FIELD_LIMIT / 2),
+    max: BATTLEFIELD_FIELD_LIMIT / 2
+  },
+  placed: {
+    type: Boolean,
+    default: true
+  }
+}, { _id: false });
+
 const BattlefieldLayoutMetaSchema = new mongoose.Schema({
   layoutId: {
     type: String,
@@ -292,6 +356,27 @@ const DomainDefenseLayoutSchema = new mongoose.Schema({
         }, { _id: false })],
         default: []
       },
+      defenderDeployments: {
+        type: [new mongoose.Schema({
+          layoutId: { type: String, default: '' },
+          deployId: { type: String, required: true, trim: true },
+          name: { type: String, default: '', trim: true },
+          sortOrder: { type: Number, default: 0, min: 0 },
+          units: {
+            type: [new mongoose.Schema({
+              unitTypeId: { type: String, required: true, trim: true },
+              count: { type: Number, default: 1, min: 1 }
+            }, { _id: false })],
+            default: []
+          },
+          unitTypeId: { type: String, default: '', trim: true },
+          count: { type: Number, default: 1, min: 1 },
+          x: { type: Number, default: 0 },
+          y: { type: Number, default: 0 },
+          placed: { type: Boolean, default: true }
+        }, { _id: false })],
+        default: []
+      },
       updatedAt: {
         type: Date,
         default: Date.now
@@ -305,6 +390,10 @@ const DomainDefenseLayoutSchema = new mongoose.Schema({
   },
   battlefieldObjects: {
     type: [BattlefieldObjectSchema],
+    default: []
+  },
+  battlefieldDefenderDeployments: {
+    type: [BattlefieldDefenderDeploymentSchema],
     default: []
   },
   battlefieldItems: {

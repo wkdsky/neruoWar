@@ -12,7 +12,6 @@ import defaultMale3 from '../../assets/avatars/default_male_3.svg';
 import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
 import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
 import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
-import NumberPadDialog from '../common/NumberPadDialog';
 import BattlefieldPreviewModal from './BattlefieldPreviewModal';
 import './KnowledgeDomainScene.css';
 
@@ -3917,14 +3916,14 @@ const KnowledgeDomainScene = ({
           {hasParentEntrance && (
             <button
               type="button"
-              className={`city-gate-trigger cheng ${canOpenGateDeployPanel ? 'editable' : ''}`}
+              className={`city-gate-trigger cheng ${canInspectGateDefense ? 'editable' : ''}`}
               style={{
                 left: `${gatePositions.cheng.x - 84}px`,
                 top: `${gatePositions.cheng.y - 34}px`
               }}
               title={`${CITY_GATE_LABELS.cheng}：${CITY_GATE_TOOLTIPS.cheng}`}
-              onClick={() => openGateDeployPanel('cheng')}
-              disabled={!canOpenGateDeployPanel}
+              onClick={() => openBattlefieldPreview('cheng')}
+              disabled={!canInspectGateDefense}
             >
               <span className="city-gate-name">{CITY_GATE_LABELS.cheng}</span>
               {canInspectGateDefense && (
@@ -3935,14 +3934,14 @@ const KnowledgeDomainScene = ({
           {hasChildEntrance && (
             <button
               type="button"
-              className={`city-gate-trigger qi ${canOpenGateDeployPanel ? 'editable' : ''}`}
+              className={`city-gate-trigger qi ${canInspectGateDefense ? 'editable' : ''}`}
               style={{
                 left: `${gatePositions.qi.x - 84}px`,
                 top: `${gatePositions.qi.y - 34}px`
               }}
               title={`${CITY_GATE_LABELS.qi}：${CITY_GATE_TOOLTIPS.qi}`}
-              onClick={() => openGateDeployPanel('qi')}
-              disabled={!canOpenGateDeployPanel}
+              onClick={() => openBattlefieldPreview('qi')}
+              disabled={!canInspectGateDefense}
             >
               <span className="city-gate-name">{CITY_GATE_LABELS.qi}</span>
               {canInspectGateDefense && (
@@ -3952,181 +3951,7 @@ const KnowledgeDomainScene = ({
           )}
         </div>
       )}
-      {showGateLayer && canOpenGateDeployPanel && activeGateKey && (
-        <div className="gate-deploy-panel">
-          <div className="gate-deploy-header">
-            <strong>{`${CITY_GATE_LABELS[activeGateKey]}布防`}</strong>
-            <button
-              type="button"
-              className="btn btn-small btn-secondary"
-              onClick={closeGateDeployPanel}
-            >
-              关闭
-            </button>
-          </div>
-          <div className="domain-manage-tip">{CITY_GATE_TOOLTIPS[activeGateKey]}</div>
-          {canEditGateDefense && (
-            <>
-              <div className="gate-deploy-overview-grid">
-                <div className="gate-deploy-overview-item">
-                  <span>总兵力</span>
-                  <strong>{gateDeployOverview.roster}</strong>
-                </div>
-                <div className="gate-deploy-overview-item">
-                  <span>已布防</span>
-                  <strong>{gateDeployOverview.deployed}</strong>
-                </div>
-                <div className="gate-deploy-overview-item">
-                  <span>可用兵力</span>
-                  <strong>{gateDeployOverview.available}</strong>
-                </div>
-              </div>
-              {!isGateDeployEditing ? (
-                <div className="gate-deploy-actions">
-                  <button
-                    type="button"
-                    className="btn btn-small btn-primary"
-                    onClick={startGateDeployEdit}
-                  >
-                    布防
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-small btn-secondary"
-                    onClick={() => openBattlefieldPreview(activeGateKey)}
-                  >
-                    战场预览
-                  </button>
-                </div>
-              ) : (
-                <div className="gate-deploy-actions">
-                  <button
-                    type="button"
-                    className="btn btn-small btn-warning"
-                    onClick={saveGateDeployment}
-                    disabled={defenseLayoutState.saving}
-                  >
-                    {defenseLayoutState.saving ? '保存中...' : '保存布防'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-small btn-secondary"
-                    onClick={cancelGateDeployEdit}
-                    disabled={defenseLayoutState.saving}
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-small btn-secondary"
-                    onClick={() => openBattlefieldPreview(activeGateKey)}
-                    disabled={defenseLayoutState.saving}
-                  >
-                    战场预览
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-          {!canEditGateDefense && (
-            <>
-              <div className="domain-manage-tip">仅可查看承口/启口驻防配置，不可编辑。</div>
-              <div className="gate-deploy-actions">
-                <button
-                  type="button"
-                  className="btn btn-small btn-secondary"
-                  onClick={() => openBattlefieldPreview(activeGateKey)}
-                >
-                  战场预览
-                </button>
-              </div>
-            </>
-          )}
-          {isGateDeployEditing ? (
-            <>
-              {hasGateDeployChanges && (
-                <div className="domain-manage-tip">当前有未保存的布防改动</div>
-              )}
-              {gateDeployState.error && <div className="domain-manage-error">{gateDeployState.error}</div>}
-              {gateDeployState.loading ? (
-                <div className="domain-manage-tip">加载兵力中...</div>
-              ) : (
-                <div className="gate-deploy-columns">
-                  <div className="gate-deploy-column">
-                    <div className="gate-deploy-section-title">域主兵力（左侧）</div>
-                    <div className="gate-deploy-roster-list">
-                      {rosterItems.length === 0 ? (
-                        <div className="domain-manage-tip">你当前没有可布防兵力</div>
-                      ) : rosterItems.map((item) => (
-                        <div
-                          key={item.unitTypeId}
-                          className={`gate-deploy-roster-card ${item.availableCount > 0 ? 'draggable' : 'disabled'} ${gateDeployState.draggingUnitTypeId === item.unitTypeId ? 'dragging' : ''}`}
-                          draggable={item.availableCount > 0}
-                          onDragStart={(event) => {
-                            event.dataTransfer.setData('text/plain', item.unitTypeId);
-                            setGateDeployState((prev) => ({ ...prev, draggingUnitTypeId: item.unitTypeId }));
-                          }}
-                          onDragEnd={() => setGateDeployState((prev) => ({ ...prev, draggingUnitTypeId: '' }))}
-                        >
-                          <span>{item.name}</span>
-                          <em>{`总 ${item.totalCount} / 已派 ${item.deployedCount} / 可用 ${item.availableCount}`}</em>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="gate-deploy-column">
-                    <div className="gate-deploy-section-title">当前布防（右侧）</div>
-                    <div
-                      className="gate-deploy-dropzone"
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        const unitTypeId = event.dataTransfer.getData('text/plain');
-                        handleGateDeployDrop(activeGateKey, unitTypeId);
-                        setGateDeployState((prev) => ({ ...prev, draggingUnitTypeId: '' }));
-                      }}
-                    >
-                      拖拽左侧兵种到此处布防
-                    </div>
-                    <div className="gate-deploy-current-list">
-                      {activeGateEntries.length === 0 ? (
-                        <div className="domain-manage-tip">当前无驻防兵力</div>
-                      ) : activeGateEntries.map((entry) => (
-                        <div key={entry.unitTypeId} className="gate-deploy-current-row">
-                          <span>{armyUnitTypeMap.get(entry.unitTypeId)?.name || entry.unitTypeId}</span>
-                          <strong>{entry.count}</strong>
-                          <button
-                            type="button"
-                            className="btn btn-small btn-danger"
-                            onClick={() => removeGateDefenseUnit(activeGateKey, entry.unitTypeId)}
-                          >
-                            移除
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              {gateDeployState.error && <div className="domain-manage-error">{gateDeployState.error}</div>}
-              <div className="gate-deploy-section-title">当前布防</div>
-              <div className="gate-deploy-current-list">
-                {activeGateEntries.length === 0 ? (
-                  <div className="domain-manage-tip">当前无驻防兵力</div>
-                ) : activeGateEntries.map((entry) => (
-                  <div key={entry.unitTypeId} className="gate-deploy-current-row">
-                    <span>{armyUnitTypeMap.get(entry.unitTypeId)?.name || entry.unitTypeId}</span>
-                    <strong>{entry.count}</strong>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+
 
       {showRightDock && (
       <div className={`domain-right-dock ${isDomainInfoDockExpanded ? 'expanded' : 'collapsed'}`}>
@@ -4240,8 +4065,8 @@ const KnowledgeDomainScene = ({
                 )}
                 <div className="domain-manage-tip">
                   {defenseLayoutState.buildMode
-                    ? '请先退出建造模式，再点击承口/启口进行布防。'
-                    : '点击城区上方承口或下方启口，可直接打开布防面板。'}
+                    ? '请先退出建造模式，再点击承口/启口进入战场布置。'
+                    : '点击城区上方承口或下方启口，可直接进入战场布置。'}
                 </div>
                 {defenseLayoutState.error && <div className="domain-manage-error">{defenseLayoutState.error}</div>}
                 {defenseLayoutState.feedback && <div className="domain-manage-feedback">{defenseLayoutState.feedback}</div>}
@@ -4725,21 +4550,6 @@ const KnowledgeDomainScene = ({
         gateLabel={CITY_GATE_LABELS[battlefieldPreviewState.gateKey] || ''}
         canEdit={canEditGateDefense}
         onClose={closeBattlefieldPreview}
-      />
-      )}
-
-      {showGateLayer && (
-      <NumberPadDialog
-        open={gateDeployDialogState.open}
-        title={gateDeployDialogState.unitName ? `派遣「${gateDeployDialogState.unitName}」` : '派遣兵力'}
-        description={`${CITY_GATE_LABELS[gateDeployDialogState.gateKey] || '口位'} 可用兵力 ${Math.max(1, Math.floor(Number(gateDeployDialogState.max) || 1))}`}
-        min={1}
-        max={Math.max(1, Math.floor(Number(gateDeployDialogState.max) || 1))}
-        allowEmptyInitial
-        confirmLabel="确认派遣"
-        cancelLabel="取消"
-        onCancel={closeGateDeployDialog}
-        onConfirm={confirmGateDeployQuantity}
       />
       )}
 

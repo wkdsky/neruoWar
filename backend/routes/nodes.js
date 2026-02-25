@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const { randomUUID } = require('crypto');
 const Node = require('../models/Node');
 const NodeSense = require('../models/NodeSense');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
+const SiegeBattleRecord = require('../models/SiegeBattleRecord');
 const DistributionParticipant = require('../models/DistributionParticipant');
 const DistributionResult = require('../models/DistributionResult');
 const EntropyAlliance = require('../models/EntropyAlliance');
@@ -1778,6 +1780,9 @@ const SIEGE_SUPPORT_UNIT_DURATION_SECONDS = 60;
 const SIEGE_PARTICIPANT_PREVIEW_LIMIT = Math.max(1, parseInt(process.env.SIEGE_PARTICIPANT_PREVIEW_LIMIT, 10) || 50);
 const SIEGE_PARTICIPANT_RESULT_LIMIT_MAX = Math.max(10, parseInt(process.env.SIEGE_PARTICIPANT_RESULT_LIMIT_MAX, 10) || 200);
 const SIEGE_MIGRATE_EMBEDDED_ATTACKERS_ON_READ = process.env.SIEGE_MIGRATE_EMBEDDED_ATTACKERS_ON_READ !== 'false';
+const SIEGE_PVE_UNITS_PER_SOLDIER = Math.max(1, parseInt(process.env.SIEGE_PVE_UNITS_PER_SOLDIER, 10) || 10);
+const SIEGE_PVE_TIME_LIMIT_SEC = Math.max(60, parseInt(process.env.SIEGE_PVE_TIME_LIMIT_SEC, 10) || 240);
+const BATTLEFIELD_DEPLOY_ZONE_RATIO = 0.2;
 const READ_LEGACY_RESULTUSERREWARDS = process.env.READ_LEGACY_RESULTUSERREWARDS !== 'false';
 
 const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
@@ -2152,6 +2157,46 @@ const serializeBattlefieldObjectsForLayout = (battlefieldState = {}, layoutId = 
     .filter((item) => !!item.id)
 );
 
+const normalizeDefenderDeploymentUnits = (row = {}) => {
+  const sourceUnits = Array.isArray(row?.units)
+    ? row.units
+    : [{ unitTypeId: row?.unitTypeId, count: row?.count }];
+  const unitMap = new Map();
+  sourceUnits.forEach((entry) => {
+    const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+    const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+    if (!unitTypeId || count <= 0) return;
+    unitMap.set(unitTypeId, (unitMap.get(unitTypeId) || 0) + count);
+  });
+  return Array.from(unitMap.entries())
+    .map(([unitTypeId, count]) => ({ unitTypeId, count }))
+    .sort((a, b) => b.count - a.count);
+};
+
+const serializeBattlefieldDefenderDeploymentsForLayout = (battlefieldState = {}, layoutId = '') => (
+  (Array.isArray(battlefieldState?.defenderDeployments) ? battlefieldState.defenderDeployments : [])
+    .filter((item) => !layoutId || item?.layoutId === layoutId)
+    .map((item) => {
+      const units = normalizeDefenderDeploymentUnits(item);
+      if (units.length <= 0) return null;
+      const primary = units[0];
+      return {
+        id: typeof item?.deployId === 'string' ? item.deployId : '',
+        deployId: typeof item?.deployId === 'string' ? item.deployId : '',
+        layoutId: typeof item?.layoutId === 'string' ? item.layoutId : '',
+        name: typeof item?.name === 'string' ? item.name : '',
+        sortOrder: Math.max(0, Math.floor(Number(item?.sortOrder) || 0)),
+        placed: item?.placed !== false,
+        units,
+        unitTypeId: primary.unitTypeId,
+        count: primary.count,
+        x: round3(item?.x, 0),
+        y: round3(item?.y, 0)
+      };
+    })
+    .filter((item) => !!item?.id)
+);
+
 const serializeBattlefieldStateForGate = (battlefieldState = {}, gateKey = '', preferredLayoutId = '') => {
   const normalized = normalizeBattlefieldStateInput(battlefieldState);
   const rawItemCatalog = Array.isArray(battlefieldState?.items) ? battlefieldState.items : [];
@@ -2164,6 +2209,7 @@ const serializeBattlefieldStateForGate = (battlefieldState = {}, gateKey = '', p
     layouts: (Array.isArray(normalized?.layouts) ? normalized.layouts : []).map((layout) => serializeBattlefieldLayoutMeta(layout)),
     itemCatalog: serializeBattlefieldItemCatalog(itemCatalogSource),
     objects: serializeBattlefieldObjectsForLayout(normalized, activeLayoutId),
+    defenderDeployments: serializeBattlefieldDefenderDeploymentsForLayout(normalized, activeLayoutId),
     updatedAt: normalized?.updatedAt || null
   };
 };
@@ -2178,11 +2224,15 @@ const mergeBattlefieldStateByGate = (currentState = {}, gateKey = '', payload = 
   const sourceObjects = Array.isArray(payload?.objects)
     ? payload.objects
     : (Array.isArray(sourceLayout?.objects) ? sourceLayout.objects : []);
+  const sourceDefenderDeployments = Array.isArray(payload?.defenderDeployments)
+    ? payload.defenderDeployments
+    : (Array.isArray(sourceLayout?.defenderDeployments) ? sourceLayout.defenderDeployments : []);
   const sourceItems = Array.isArray(payload?.itemCatalog) ? payload.itemCatalog : null;
 
   const currentLayouts = Array.isArray(normalizedCurrent.layouts) ? normalizedCurrent.layouts : [];
   const currentItems = Array.isArray(normalizedCurrent.items) ? normalizedCurrent.items : [];
   const currentObjects = Array.isArray(normalizedCurrent.objects) ? normalizedCurrent.objects : [];
+  const currentDefenderDeployments = Array.isArray(normalizedCurrent.defenderDeployments) ? normalizedCurrent.defenderDeployments : [];
   const existingLayout = findBattlefieldLayoutByGate(normalizedCurrent, targetGate, requestedLayoutId);
   const fallbackLayoutId = requestedLayoutId || existingLayout?.layoutId || `${targetGate}_default`;
 
@@ -2231,11 +2281,34 @@ const mergeBattlefieldStateByGate = (currentState = {}, gateKey = '', payload = 
   const retainedObjects = currentObjects.filter((item) => item?.layoutId !== targetLayoutId);
   const nextObjectsRaw = [...retainedObjects, ...incomingObjectsRaw];
 
+  const incomingDefenderDeploymentsRaw = sourceDefenderDeployments.map((item, index) => {
+    const units = normalizeDefenderDeploymentUnits(item);
+    if (units.length <= 0) return null;
+    const primary = units[0];
+    return {
+      layoutId: targetLayoutId,
+      deployId: (typeof item?.deployId === 'string' && item.deployId.trim())
+        ? item.deployId.trim()
+        : ((typeof item?.id === 'string' && item.id.trim()) ? item.id.trim() : `deploy_${index + 1}`),
+      name: typeof item?.name === 'string' ? item.name.trim() : '',
+      sortOrder: Math.max(0, Math.floor(Number(item?.sortOrder) || 0)),
+      placed: item?.placed !== false,
+      units,
+      unitTypeId: primary.unitTypeId,
+      count: primary.count,
+      x: item?.x,
+      y: item?.y
+    };
+  }).filter((item) => !!item?.deployId);
+  const retainedDefenderDeployments = currentDefenderDeployments.filter((item) => item?.layoutId !== targetLayoutId);
+  const nextDefenderDeploymentsRaw = [...retainedDefenderDeployments, ...incomingDefenderDeploymentsRaw];
+
   return normalizeBattlefieldStateInput({
     version: normalizedCurrent.version,
     layouts: nextLayoutsRaw,
     items: sourceItems || currentItems,
     objects: nextObjectsRaw,
+    defenderDeployments: nextDefenderDeploymentsRaw,
     updatedAt: new Date()
   });
 };
@@ -2939,6 +3012,114 @@ const buildSiegePayloadForUser = ({
     node,
     userId
   });
+};
+
+const createRouteExposeError = (statusCode = 400, message = '请求参数错误', code = '') => {
+  const error = new Error(message || '请求参数错误');
+  error.statusCode = Number(statusCode) || 400;
+  error.expose = true;
+  if (code) error.code = code;
+  return error;
+};
+
+const normalizeBattleResultSide = (raw = {}) => {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    start: Math.max(0, Math.floor(Number(source.start) || 0)),
+    remain: Math.max(0, Math.floor(Number(source.remain) || 0)),
+    kills: Math.max(0, Math.floor(Number(source.kills) || 0))
+  };
+};
+
+const sanitizeBattleResultDetails = (raw = {}) => {
+  if (!raw || typeof raw !== 'object') return {};
+  const details = { ...raw };
+  if (details.byUnitType && typeof details.byUnitType === 'object') {
+    const nextByUnitType = {};
+    Object.entries(details.byUnitType).forEach(([unitTypeId, item]) => {
+      if (typeof unitTypeId !== 'string' || !unitTypeId.trim()) return;
+      if (!item || typeof item !== 'object') return;
+      nextByUnitType[unitTypeId.trim()] = {
+        start: Math.max(0, Math.floor(Number(item.start) || 0)),
+        remain: Math.max(0, Math.floor(Number(item.remain) || 0)),
+        kills: Math.max(0, Math.floor(Number(item.kills) || 0))
+      };
+    });
+    details.byUnitType = nextByUnitType;
+  }
+  if (details.buildingsDestroyed !== undefined) {
+    details.buildingsDestroyed = Math.max(0, Math.floor(Number(details.buildingsDestroyed) || 0));
+  }
+  return details;
+};
+
+const resolveSiegePveBattleContext = async ({ nodeId = '', requestUserId = '', gateKey = '' } = {}) => {
+  const safeNodeId = getIdString(nodeId);
+  const safeUserId = getIdString(requestUserId);
+  if (!isValidObjectId(safeUserId)) {
+    throw createRouteExposeError(401, '无效的用户身份');
+  }
+  if (!isValidObjectId(safeNodeId)) {
+    throw createRouteExposeError(400, '无效的知识域ID');
+  }
+  if (!CITY_GATE_KEYS.includes(gateKey)) {
+    throw createRouteExposeError(400, 'gateKey 必须为 cheng 或 qi');
+  }
+
+  const [node, user, unitTypes] = await Promise.all([
+    Node.findById(safeNodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
+    User.findById(safeUserId).select('username role allianceId intelDomainSnapshots'),
+    fetchArmyUnitTypes()
+  ]);
+  if (!node || node.status !== 'approved') {
+    throw createRouteExposeError(404, '知识域不存在或不可操作');
+  }
+  if (!user) {
+    throw createRouteExposeError(404, '用户不存在');
+  }
+  if (user.role !== 'common') {
+    throw createRouteExposeError(403, '仅普通用户可进入围城战斗');
+  }
+
+  await hydrateNodeTitleStatesForNodes([node], {
+    includeDefenseLayout: true,
+    includeBattlefieldLayout: true,
+    includeSiegeState: true
+  });
+
+  const settled = await settleNodeSiegeState(node, new Date());
+  if (settled.changed) {
+    await upsertNodeSiegeState({
+      nodeId: node._id,
+      siegeState: settled.siegeState,
+      actorUserId: safeUserId
+    });
+  }
+
+  const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
+  const gateSummaryMap = CITY_GATE_KEYS.reduce((acc, key) => {
+    acc[key] = buildSiegeGateSummary(node, key, unitTypeMap);
+    return acc;
+  }, { cheng: null, qi: null });
+  const activeGateKeys = CITY_GATE_KEYS.filter((key) => !!gateSummaryMap[key]?.active);
+  if (!activeGateKeys.includes(gateKey)) {
+    throw createRouteExposeError(403, '该门当前无有效围城战斗');
+  }
+  const gateSummary = gateSummaryMap[gateKey];
+  const participant = (gateSummary?.activeAttackers || []).find((item) => item.userId === safeUserId) || null;
+  if (!participant) {
+    throw createRouteExposeError(403, '仅该门围城攻方参战者可进入战斗');
+  }
+
+  return {
+    node,
+    user,
+    unitTypes,
+    unitTypeMap,
+    gateSummary,
+    participant,
+    activeGateKeys
+  };
 };
 
 const toPlainObject = (value) => (
@@ -7065,12 +7246,33 @@ router.get('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       return res.status(403).json({ error: '仅域主或已授权域相可查看战场布局' });
     }
 
-    const battlefieldItemCatalog = await fetchBattlefieldItems({ enabledOnly: true });
+    const domainMasterId = getIdString(node?.domainMaster);
+    const [battlefieldItemCatalog, unitTypes, domainMasterUser] = await Promise.all([
+      fetchBattlefieldItems({ enabledOnly: true }),
+      fetchArmyUnitTypes(),
+      isValidObjectId(domainMasterId)
+        ? User.findById(domainMasterId).select('armyRoster')
+        : null
+    ]);
+    const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
     const battlefieldState = resolveNodeBattlefieldLayout(node, {});
     const mergedBattlefieldState = {
       ...battlefieldState,
       items: battlefieldItemCatalog
     };
+    const defenderRoster = normalizeUnitCountEntries(Array.isArray(domainMasterUser?.armyRoster) ? domainMasterUser.armyRoster : [])
+      .map((entry) => {
+        const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+        const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+        if (!unitTypeId || count <= 0) return null;
+        return {
+          unitTypeId,
+          unitName: unitTypeMap.get(unitTypeId)?.name || unitTypeId,
+          roleTag: unitTypeMap.get(unitTypeId)?.roleTag === '远程' ? '远程' : '近战',
+          count
+        };
+      })
+      .filter(Boolean);
     res.json({
       success: true,
       nodeId: getIdString(node._id),
@@ -7079,7 +7281,8 @@ router.get('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       layoutId,
       canEdit,
       canView,
-      layoutBundle: serializeBattlefieldStateForGate(mergedBattlefieldState, gateKey, layoutId)
+      layoutBundle: serializeBattlefieldStateForGate(mergedBattlefieldState, gateKey, layoutId),
+      defenderRoster
     });
   } catch (error) {
     console.error('获取知识域战场布局错误:', error);
@@ -7148,6 +7351,56 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       if (count > stockLimit) {
         return res.status(400).json({
           error: `物品数量超限：${itemId} 可放置 ${stockLimit}，当前 ${count}`
+        });
+      }
+    }
+
+    const requestUser = await User.findById(requestUserId).select('armyRoster');
+    if (!requestUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    const targetLayout = findBattlefieldLayoutByGate(nextBattlefieldState, gateKey, layoutId);
+    const targetLayoutId = typeof targetLayout?.layoutId === 'string' ? targetLayout.layoutId : '';
+    const targetFieldWidth = Math.max(200, Number(targetLayout?.fieldWidth) || 900);
+    const defenderZoneMinX = (targetFieldWidth / 2) - (targetFieldWidth * BATTLEFIELD_DEPLOY_ZONE_RATIO);
+    const defenseUnitLimitMap = new Map(
+      normalizeUnitCountEntries(Array.isArray(requestUser?.armyRoster) ? requestUser.armyRoster : [])
+        .map((entry) => ([
+          typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '',
+          Math.max(0, Math.floor(Number(entry?.count) || 0))
+        ]))
+        .filter(([unitTypeId]) => !!unitTypeId)
+    );
+    const defenderDeployments = (Array.isArray(nextBattlefieldState?.defenderDeployments) ? nextBattlefieldState.defenderDeployments : [])
+      .filter((item) => item?.placed !== false)
+      .filter((item) => !targetLayoutId || item?.layoutId === targetLayoutId);
+    const deployedUnitCounter = new Map();
+    for (const deployment of defenderDeployments) {
+      const x = Number(deployment?.x) || 0;
+      if (x < defenderZoneMinX - 0.001) {
+        const deployName = (typeof deployment?.name === 'string' && deployment.name.trim())
+          ? deployment.name.trim()
+          : (typeof deployment?.deployId === 'string' ? deployment.deployId : 'unknown');
+        return res.status(400).json({ error: `守军布置越界：${deployName} 仅可放置在守方区域` });
+      }
+      const deploymentUnits = normalizeDefenderDeploymentUnits(deployment);
+      if (deploymentUnits.length <= 0) {
+        return res.status(400).json({ error: '守军布置存在空部队，请重新编组后保存' });
+      }
+      for (const unitEntry of deploymentUnits) {
+        const unitTypeId = typeof unitEntry?.unitTypeId === 'string' ? unitEntry.unitTypeId.trim() : '';
+        const count = Math.max(1, Math.floor(Number(unitEntry?.count) || 1));
+        if (!unitTypeId || !defenseUnitLimitMap.has(unitTypeId)) {
+          return res.status(400).json({ error: `守军布置存在无效兵种：${unitTypeId || 'empty'}` });
+        }
+        deployedUnitCounter.set(unitTypeId, (deployedUnitCounter.get(unitTypeId) || 0) + count);
+      }
+    }
+    for (const [unitTypeId, deployedCount] of deployedUnitCounter.entries()) {
+      const limit = defenseUnitLimitMap.get(unitTypeId) || 0;
+      if (deployedCount > limit) {
+        return res.status(400).json({
+          error: `守军布置数量超限：${unitTypeId} 可布置 ${limit}，当前 ${deployedCount}`
         });
       }
     }
@@ -7261,6 +7514,177 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('获取围城状态错误:', error);
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
+  }
+});
+
+// 初始化围城 PVE 战斗数据（仅该门围城攻方参战者）
+router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    const gateKeyRaw = typeof req.query?.gateKey === 'string' ? req.query.gateKey.trim() : '';
+    const gateKey = CITY_GATE_KEYS.includes(gateKeyRaw) ? gateKeyRaw : '';
+    if (!gateKey) {
+      return res.status(400).json({ error: 'gateKey 必须为 cheng 或 qi' });
+    }
+
+    const {
+      node,
+      user,
+      unitTypes,
+      unitTypeMap,
+      gateSummary
+    } = await resolveSiegePveBattleContext({
+      nodeId,
+      requestUserId,
+      gateKey
+    });
+
+    const battlefieldItemCatalog = await fetchBattlefieldItems({ enabledOnly: true });
+    const battlefieldState = resolveNodeBattlefieldLayout(node, {});
+    const mergedBattlefieldState = {
+      ...battlefieldState,
+      items: battlefieldItemCatalog
+    };
+    const layoutBundle = serializeBattlefieldStateForGate(mergedBattlefieldState, gateKey, '');
+    const defenderDeployments = Array.isArray(layoutBundle?.defenderDeployments) ? layoutBundle.defenderDeployments : [];
+    const defenderUnitCountMap = new Map();
+    defenderDeployments.forEach((entry) => {
+      if (entry?.placed === false) return;
+      normalizeDefenderDeploymentUnits(entry).forEach((unitEntry) => {
+        const unitTypeId = typeof unitEntry?.unitTypeId === 'string' ? unitEntry.unitTypeId.trim() : '';
+        const count = Math.max(0, Math.floor(Number(unitEntry?.count) || 0));
+        if (!unitTypeId || count <= 0) return;
+        defenderUnitCountMap.set(unitTypeId, (defenderUnitCountMap.get(unitTypeId) || 0) + count);
+      });
+    });
+    const defenderUnits = mapToUnitCountEntries(defenderUnitCountMap, unitTypeMap);
+    const intelSnapshot = findUserIntelSnapshotByNodeId(user, node._id);
+    const hasIntelBattlefieldVision = !!intelSnapshot;
+
+    const now = new Date();
+    return res.json({
+      success: true,
+      battleId: randomUUID(),
+      nodeId: getIdString(node._id),
+      nodeName: node.name || '',
+      gateKey,
+      gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
+      serverTime: now.toISOString(),
+      timeLimitSec: SIEGE_PVE_TIME_LIMIT_SEC,
+      unitsPerSoldier: SIEGE_PVE_UNITS_PER_SOLDIER,
+      unitTypes,
+      attacker: {
+        totalCount: Math.max(0, Math.floor(Number(gateSummary?.totalCount) || 0)),
+        units: Array.isArray(gateSummary?.aggregateUnits) ? gateSummary.aggregateUnits : []
+      },
+      defender: {
+        totalCount: defenderUnits.reduce((sum, item) => sum + item.count, 0),
+        units: defenderUnits
+      },
+      battlefield: {
+        version: Math.max(1, Math.floor(Number(layoutBundle?.version) || 1)),
+        gateKey,
+        gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
+        intelVisible: hasIntelBattlefieldVision,
+        layoutMeta: layoutBundle?.activeLayout || null,
+        layouts: Array.isArray(layoutBundle?.layouts) ? layoutBundle.layouts : [],
+        itemCatalog: hasIntelBattlefieldVision
+          ? (Array.isArray(layoutBundle?.itemCatalog) ? layoutBundle.itemCatalog : [])
+          : [],
+        objects: hasIntelBattlefieldVision
+          ? (Array.isArray(layoutBundle?.objects) ? layoutBundle.objects : [])
+          : [],
+        defenderDeployments: hasIntelBattlefieldVision
+          ? (Array.isArray(layoutBundle?.defenderDeployments) ? layoutBundle.defenderDeployments : [])
+          : [],
+        updatedAt: layoutBundle?.updatedAt || null
+      }
+    });
+  } catch (error) {
+    if (error?.statusCode) {
+      return res.status(error.statusCode).json({ error: error.message || '请求参数错误' });
+    }
+    console.error('初始化围城 PVE 战斗错误:', error);
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
+  }
+});
+
+// 记录围城 PVE 战斗结果（仅该门围城攻方参战者）
+router.post('/:nodeId/siege/pve/battle-result', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const gateKeyRaw = typeof payload?.gateKey === 'string' ? payload.gateKey.trim() : '';
+    const gateKey = CITY_GATE_KEYS.includes(gateKeyRaw) ? gateKeyRaw : '';
+    if (!gateKey) {
+      return res.status(400).json({ error: 'gateKey 必须为 cheng 或 qi' });
+    }
+
+    const {
+      node,
+      user
+    } = await resolveSiegePveBattleContext({
+      nodeId,
+      requestUserId,
+      gateKey
+    });
+
+    const battleId = typeof payload?.battleId === 'string' ? payload.battleId.trim() : '';
+    if (!battleId) {
+      return res.status(400).json({ error: 'battleId 不能为空' });
+    }
+    const durationSec = Math.max(0, Math.floor(Number(payload?.durationSec) || 0));
+    const attacker = normalizeBattleResultSide(payload?.attacker);
+    const defender = normalizeBattleResultSide(payload?.defender);
+    const details = sanitizeBattleResultDetails(payload?.details);
+    const startedAtMs = new Date(payload?.startedAt || 0).getTime();
+    const startedAt = Number.isFinite(startedAtMs) && startedAtMs > 0 ? new Date(startedAtMs) : null;
+    const endedAt = new Date();
+
+    const existing = await SiegeBattleRecord.findOne({ battleId }).select('_id battleId').lean();
+    if (existing) {
+      return res.json({
+        success: true,
+        battleId: existing.battleId,
+        recorded: true,
+        duplicate: true
+      });
+    }
+
+    await SiegeBattleRecord.create({
+      nodeId: node._id,
+      gateKey,
+      battleId,
+      attackerUserId: requestUserId,
+      attackerAllianceId: user?.allianceId || null,
+      startedAt,
+      endedAt,
+      durationSec,
+      attacker,
+      defender,
+      details
+    });
+
+    return res.json({
+      success: true,
+      battleId,
+      recorded: true
+    });
+  } catch (error) {
+    if (error?.statusCode) {
+      return res.status(error.statusCode).json({ error: error.message || '请求参数错误' });
+    }
+    if (error?.code === 11000) {
+      return res.json({
+        success: true,
+        recorded: true,
+        duplicate: true
+      });
+    }
+    console.error('记录围城 PVE 战斗结果错误:', error);
     return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });
