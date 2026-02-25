@@ -286,17 +286,8 @@ const cloneDefenseLayout = (layout = {}) => ({
 });
 
 const createDefaultDefenseLayout = () => ({
-  buildings: [{
-    buildingId: 'core',
-    name: '建筑1',
-    x: 0,
-    y: 0,
-    radius: CITY_BUILDING_DEFAULT_RADIUS,
-    level: 1,
-    nextUnitTypeId: '',
-    upgradeCostKP: null
-  }],
-  intelBuildingId: 'core',
+  buildings: [],
+  intelBuildingId: '',
   gateDefense: {
     cheng: [],
     qi: []
@@ -321,6 +312,7 @@ const normalizeDefenseLayoutFromApi = (rawLayout = {}) => {
     const parsedName = typeof item.name === 'string' ? item.name.trim() : '';
     normalizedBuildings.push({
       buildingId,
+      buildingTypeId: typeof item.buildingTypeId === 'string' ? item.buildingTypeId.trim() : '',
       name: parsedName || `建筑${normalizedBuildings.length + 1}`,
       x: Number.isFinite(parsedX) ? Math.max(-1, Math.min(1, parsedX)) : 0,
       y: Number.isFinite(parsedY) ? Math.max(-1, Math.min(1, parsedY)) : 0,
@@ -371,6 +363,31 @@ const normalizeDefenseLayoutFromApi = (rawLayout = {}) => {
   };
 };
 
+const normalizeBuildingCatalogFromApi = (rawCatalog = []) => {
+  const source = Array.isArray(rawCatalog) ? rawCatalog : [];
+  const out = [];
+  const seen = new Set();
+  for (let index = 0; index < source.length; index += 1) {
+    const item = source[index] || {};
+    const buildingTypeId = typeof item.buildingTypeId === 'string' ? item.buildingTypeId.trim() : '';
+    if (!buildingTypeId || seen.has(buildingTypeId)) continue;
+    seen.add(buildingTypeId);
+    out.push({
+      buildingTypeId,
+      name: (typeof item.name === 'string' && item.name.trim()) ? item.name.trim() : `建筑类型${out.length + 1}`,
+      initialCount: Math.max(0, Math.floor(Number(item.initialCount) || 0)),
+      radius: Number.isFinite(Number(item.radius))
+        ? Math.max(0.1, Math.min(0.24, Number(item.radius)))
+        : CITY_BUILDING_DEFAULT_RADIUS,
+      level: Math.max(1, Math.floor(Number(item.level) || 1)),
+      nextUnitTypeId: typeof item.nextUnitTypeId === 'string' ? item.nextUnitTypeId.trim() : '',
+      upgradeCostKP: Number.isFinite(Number(item.upgradeCostKP)) ? Number(item.upgradeCostKP) : null,
+      style: item.style && typeof item.style === 'object' ? item.style : {}
+    });
+  }
+  return out;
+};
+
 const createDefaultDefenseLayoutState = () => ({
   loading: false,
   saving: false,
@@ -379,7 +396,9 @@ const createDefaultDefenseLayoutState = () => ({
   canEdit: false,
   canViewGateDefense: false,
   maxBuildings: CITY_BUILDING_LIMIT,
-  minBuildings: 1,
+  minBuildings: 0,
+  buildingCatalog: [],
+  selectedBuildingTypeId: '',
   buildMode: false,
   isDirty: false,
   selectedBuildingId: '',
@@ -460,6 +479,7 @@ const clampScenePanOffset = (offset = { x: 0, y: 0 }, width = 0, height = 0) => 
 const defenseLayoutToPayload = (layout = {}) => ({
   buildings: (layout.buildings || []).map((item) => ({
     buildingId: item.buildingId,
+    buildingTypeId: typeof item.buildingTypeId === 'string' ? item.buildingTypeId.trim() : '',
     name: (typeof item.name === 'string' && item.name.trim()) ? item.name.trim() : '',
     x: Number(Number(item.x).toFixed(3)),
     y: Number(Number(item.y).toFixed(3)),
@@ -977,6 +997,7 @@ const KnowledgeDomainScene = ({
   });
   const [intelHeistClockMs, setIntelHeistClockMs] = useState(Date.now());
   const [isIntelHeistExitConfirmOpen, setIsIntelHeistExitConfirmOpen] = useState(false);
+  const [draggingBuildingTypeId, setDraggingBuildingTypeId] = useState('');
   const buildingDragRef = useRef(null);
   const scenePanOffsetRef = useRef({ x: 0, y: 0 });
   const scenePanDragRef = useRef(null);
@@ -1295,6 +1316,7 @@ const KnowledgeDomainScene = ({
       || target?.closest('.intel-heist-timeout-card')
       || target?.closest('.battlefield-modal-overlay')
       || target?.closest('.battlefield-modal')
+      || target?.closest('.city-build-palette')
       || target?.closest('.city-defense-building.editable')
       || target?.closest('.city-defense-building.intel-heist-searchable')
     ) {
@@ -1342,6 +1364,8 @@ const KnowledgeDomainScene = ({
           ...prev,
           loading: false,
           canViewGateDefense: false,
+          buildingCatalog: [],
+          selectedBuildingTypeId: '',
           error: getApiError(parsed, '获取城防配置失败'),
           feedback: ''
         }));
@@ -1349,6 +1373,27 @@ const KnowledgeDomainScene = ({
       }
 
       const layout = normalizeDefenseLayoutFromApi(data.layout || {});
+      const buildingCatalog = normalizeBuildingCatalogFromApi(data.buildingCatalog);
+      const fallbackBuildingTypeId = buildingCatalog[0]?.buildingTypeId || '';
+      if (fallbackBuildingTypeId && Array.isArray(layout.buildings) && layout.buildings.length > 0) {
+        layout.buildings = layout.buildings.map((building) => {
+          if (building?.buildingTypeId) return building;
+          const fallbackType = buildingCatalog.find((item) => (
+            item.name && building?.name && item.name === building.name
+          ));
+          const buildingTypeId = fallbackType?.buildingTypeId || fallbackBuildingTypeId;
+          const typeDef = buildingCatalog.find((item) => item.buildingTypeId === buildingTypeId) || null;
+          return {
+            ...building,
+            buildingTypeId,
+            name: typeDef?.name || building.name,
+            radius: typeDef?.radius || building.radius,
+            level: typeDef?.level || building.level,
+            nextUnitTypeId: typeDef?.nextUnitTypeId || building.nextUnitTypeId,
+            upgradeCostKP: typeDef?.upgradeCostKP ?? building.upgradeCostKP
+          };
+        });
+      }
       setDefenseLayoutState((prev) => ({
         ...prev,
         loading: false,
@@ -1357,8 +1402,10 @@ const KnowledgeDomainScene = ({
         feedback: '',
         canEdit: !!data.canEdit,
         canViewGateDefense: !!data.canViewGateDefense || !!data.canEdit,
-        maxBuildings: Number.isFinite(Number(data.maxBuildings)) ? Math.max(1, Number(data.maxBuildings)) : CITY_BUILDING_LIMIT,
-        minBuildings: Number.isFinite(Number(data.minBuildings)) ? Math.max(1, Number(data.minBuildings)) : 1,
+        maxBuildings: Number.isFinite(Number(data.maxBuildings)) ? Math.max(0, Number(data.maxBuildings)) : CITY_BUILDING_LIMIT,
+        minBuildings: Number.isFinite(Number(data.minBuildings)) ? Math.max(0, Number(data.minBuildings)) : 0,
+        buildingCatalog,
+        selectedBuildingTypeId: prev.selectedBuildingTypeId || fallbackBuildingTypeId,
         buildMode: false,
         isDirty: false,
         selectedBuildingId: '',
@@ -1379,6 +1426,8 @@ const KnowledgeDomainScene = ({
         ...prev,
         loading: false,
         canViewGateDefense: false,
+        buildingCatalog: [],
+        selectedBuildingTypeId: '',
         error: `获取城防配置失败: ${error.message}`,
         feedback: ''
       }));
@@ -1661,6 +1710,7 @@ const KnowledgeDomainScene = ({
           buildMode: false,
           isDirty: false,
           selectedBuildingId: '',
+          selectedBuildingTypeId: prev.selectedBuildingTypeId || (prev.buildingCatalog[0]?.buildingTypeId || ''),
           draggingBuildingId: '',
           error: '',
           feedback: '',
@@ -1676,6 +1726,7 @@ const KnowledgeDomainScene = ({
         buildMode: true,
         isDirty: false,
         selectedBuildingId: '',
+        selectedBuildingTypeId: prev.selectedBuildingTypeId || (prev.buildingCatalog[0]?.buildingTypeId || ''),
         draggingBuildingId: '',
         error: '',
         feedback: '',
@@ -1690,16 +1741,46 @@ const KnowledgeDomainScene = ({
       editMode: false
     }));
     closeGateDeployDialog();
+    setDraggingBuildingTypeId('');
   };
 
   const addDefenseBuilding = () => {
     setDefenseLayoutState((prev) => {
       if (!prev.canEdit || !prev.buildMode) return prev;
       const currentBuildings = prev.draftLayout?.buildings || [];
+      const buildingCatalog = Array.isArray(prev.buildingCatalog) ? prev.buildingCatalog : [];
       if (currentBuildings.length >= prev.maxBuildings) {
         return {
           ...prev,
           feedback: `建筑上限为 ${prev.maxBuildings} 个`,
+          error: ''
+        };
+      }
+      if (buildingCatalog.length === 0) {
+        return {
+          ...prev,
+          feedback: '当前未配置可用建筑类型，请先到管理员面板配置建筑目录',
+          error: ''
+        };
+      }
+
+      const selectedType = buildingCatalog.find((item) => item.buildingTypeId === prev.selectedBuildingTypeId)
+        || buildingCatalog[0];
+      if (!selectedType?.buildingTypeId) {
+        return {
+          ...prev,
+          feedback: '建筑类型配置无效，请检查建筑目录',
+          error: ''
+        };
+      }
+
+      const selectedTypeId = selectedType.buildingTypeId;
+      const typeLimit = Math.max(0, Number(selectedType.initialCount) || 0);
+      const typeUsedCount = currentBuildings.filter((item) => item.buildingTypeId === selectedTypeId).length;
+      if (typeUsedCount >= typeLimit) {
+        return {
+          ...prev,
+          feedback: `建筑类型「${selectedType.name}」库存不足`,
           error: ''
         };
       }
@@ -1719,19 +1800,195 @@ const KnowledgeDomainScene = ({
       const nextLayout = cloneDefenseLayout(prev.draftLayout);
       nextLayout.buildings.push({
         buildingId: newId,
-        name: `建筑${nextLayout.buildings.length + 1}`,
+        buildingTypeId: selectedTypeId,
+        name: selectedType.name || `建筑${nextLayout.buildings.length + 1}`,
         x: foundPosition.x,
         y: foundPosition.y,
-        radius: CITY_BUILDING_DEFAULT_RADIUS,
-        level: 1,
-        nextUnitTypeId: '',
-        upgradeCostKP: null
+        radius: Number.isFinite(Number(selectedType.radius))
+          ? Math.max(0.1, Math.min(0.24, Number(selectedType.radius)))
+          : CITY_BUILDING_DEFAULT_RADIUS,
+        level: Math.max(1, Math.floor(Number(selectedType.level) || 1)),
+        nextUnitTypeId: selectedType.nextUnitTypeId || '',
+        upgradeCostKP: Number.isFinite(Number(selectedType.upgradeCostKP)) ? Number(selectedType.upgradeCostKP) : null
       });
       return {
         ...prev,
         draftLayout: nextLayout,
+        selectedBuildingTypeId: selectedTypeId,
         isDirty: true,
         selectedBuildingId: newId,
+        feedback: '',
+        error: ''
+      };
+    });
+  };
+
+  const handleBuildingPaletteDragStart = (event, buildingTypeId) => {
+    const safeTypeId = typeof buildingTypeId === 'string' ? buildingTypeId.trim() : '';
+    if (!safeTypeId) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.setData('application/x-city-building-type', safeTypeId);
+    event.dataTransfer.setData('text/plain', safeTypeId);
+    event.dataTransfer.effectAllowed = 'copy';
+    setDraggingBuildingTypeId(safeTypeId);
+    updateSelectedBuildingType(safeTypeId);
+  };
+
+  const handleBuildingPaletteDragEnd = () => {
+    setDraggingBuildingTypeId('');
+  };
+
+  const handleCityBuildDragOver = (event) => {
+    if (!defenseLayoutState.canEdit || !defenseLayoutState.buildMode) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleCityBuildDrop = (event) => {
+    if (!defenseLayoutState.canEdit || !defenseLayoutState.buildMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDraggingBuildingTypeId('');
+    const droppedBuildingTypeId = (
+      event.dataTransfer.getData('application/x-city-building-type')
+      || event.dataTransfer.getData('text/plain')
+      || ''
+    ).trim();
+    if (!droppedBuildingTypeId) return;
+    const nextPosition = getPointerNormPosition(event.clientX, event.clientY);
+    if (!nextPosition) return;
+
+    setDefenseLayoutState((prev) => {
+      if (!prev.canEdit || !prev.buildMode) return prev;
+      const currentBuildings = Array.isArray(prev.draftLayout?.buildings) ? prev.draftLayout.buildings : [];
+      const buildingCatalog = Array.isArray(prev.buildingCatalog) ? prev.buildingCatalog : [];
+      if (currentBuildings.length >= prev.maxBuildings) {
+        return {
+          ...prev,
+          feedback: `建筑上限为 ${prev.maxBuildings} 个`,
+          error: ''
+        };
+      }
+      const targetType = buildingCatalog.find((item) => item.buildingTypeId === droppedBuildingTypeId) || null;
+      if (!targetType?.buildingTypeId) {
+        return {
+          ...prev,
+          feedback: '未找到对应建筑类型，请刷新后重试',
+          error: ''
+        };
+      }
+      const typeLimit = Math.max(0, Math.floor(Number(targetType.initialCount) || 0));
+      const typeUsedCount = currentBuildings.filter((item) => item.buildingTypeId === targetType.buildingTypeId).length;
+      if (typeUsedCount >= typeLimit) {
+        return {
+          ...prev,
+          feedback: `建筑类型「${targetType.name}」库存不足`,
+          error: ''
+        };
+      }
+      const clampedPosition = clampPositionInsideCity(nextPosition);
+      const newId = `building_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      if (!isValidPlacement(clampedPosition, currentBuildings, newId)) {
+        return {
+          ...prev,
+          feedback: '当前位置无法放置，请与其他建筑保持间距',
+          error: ''
+        };
+      }
+      const nextLayout = cloneDefenseLayout(prev.draftLayout);
+      nextLayout.buildings.push({
+        buildingId: newId,
+        buildingTypeId: targetType.buildingTypeId,
+        name: targetType.name || `建筑${nextLayout.buildings.length + 1}`,
+        x: clampedPosition.x,
+        y: clampedPosition.y,
+        radius: Number.isFinite(Number(targetType.radius))
+          ? Math.max(0.1, Math.min(0.24, Number(targetType.radius)))
+          : CITY_BUILDING_DEFAULT_RADIUS,
+        level: Math.max(1, Math.floor(Number(targetType.level) || 1)),
+        nextUnitTypeId: targetType.nextUnitTypeId || '',
+        upgradeCostKP: Number.isFinite(Number(targetType.upgradeCostKP)) ? Number(targetType.upgradeCostKP) : null
+      });
+      return {
+        ...prev,
+        draftLayout: nextLayout,
+        selectedBuildingId: newId,
+        selectedBuildingTypeId: targetType.buildingTypeId,
+        isDirty: true,
+        feedback: '',
+        error: ''
+      };
+    });
+  };
+
+  const updateSelectedBuildingType = (nextBuildingTypeId) => {
+    const safeTypeId = typeof nextBuildingTypeId === 'string' ? nextBuildingTypeId.trim() : '';
+    setDefenseLayoutState((prev) => {
+      const catalog = Array.isArray(prev.buildingCatalog) ? prev.buildingCatalog : [];
+      const targetType = catalog.find((item) => item.buildingTypeId === safeTypeId) || null;
+      if (!targetType) {
+        return {
+          ...prev,
+          selectedBuildingTypeId: ''
+        };
+      }
+
+      if (!prev.buildMode || !prev.selectedBuildingId) {
+        return {
+          ...prev,
+          selectedBuildingTypeId: targetType.buildingTypeId,
+          feedback: '',
+          error: ''
+        };
+      }
+
+      const currentBuildings = Array.isArray(prev.draftLayout?.buildings) ? prev.draftLayout.buildings : [];
+      const targetBuilding = currentBuildings.find((item) => item.buildingId === prev.selectedBuildingId);
+      if (!targetBuilding) {
+        return {
+          ...prev,
+          selectedBuildingTypeId: targetType.buildingTypeId
+        };
+      }
+
+      const usedCount = currentBuildings.filter((item) => (
+        item.buildingTypeId === targetType.buildingTypeId && item.buildingId !== prev.selectedBuildingId
+      )).length;
+      const typeLimit = Math.max(0, Math.floor(Number(targetType.initialCount) || 0));
+      if (usedCount >= typeLimit) {
+        return {
+          ...prev,
+          selectedBuildingTypeId: targetType.buildingTypeId,
+          feedback: `建筑类型「${targetType.name}」库存不足`,
+          error: ''
+        };
+      }
+
+      const nextDraft = cloneDefenseLayout(prev.draftLayout);
+      nextDraft.buildings = nextDraft.buildings.map((item) => {
+        if (item.buildingId !== prev.selectedBuildingId) return item;
+        return {
+          ...item,
+          buildingTypeId: targetType.buildingTypeId,
+          name: targetType.name || item.name,
+          radius: Number.isFinite(Number(targetType.radius))
+            ? Math.max(0.1, Math.min(0.24, Number(targetType.radius)))
+            : item.radius,
+          level: Math.max(1, Math.floor(Number(targetType.level) || item.level || 1)),
+          nextUnitTypeId: targetType.nextUnitTypeId || '',
+          upgradeCostKP: Number.isFinite(Number(targetType.upgradeCostKP))
+            ? Number(targetType.upgradeCostKP)
+            : null
+        };
+      });
+
+      return {
+        ...prev,
+        draftLayout: nextDraft,
+        selectedBuildingTypeId: targetType.buildingTypeId,
+        isDirty: true,
         feedback: '',
         error: ''
       };
@@ -1780,6 +2037,11 @@ const KnowledgeDomainScene = ({
       const nextIntelBuildingId = prev.draftLayout.intelBuildingId === prev.selectedBuildingId
         ? nextBuildings[0]?.buildingId || ''
         : prev.draftLayout.intelBuildingId;
+      const nextSelectedBuildingId = nextBuildings[0]?.buildingId || '';
+      const nextSelectedBuildingTypeId = nextBuildings.find((item) => item.buildingId === nextSelectedBuildingId)?.buildingTypeId
+        || prev.selectedBuildingTypeId
+        || (Array.isArray(prev.buildingCatalog) ? prev.buildingCatalog[0]?.buildingTypeId : '')
+        || '';
       return {
         ...prev,
         draftLayout: {
@@ -1788,7 +2050,8 @@ const KnowledgeDomainScene = ({
           intelBuildingId: nextIntelBuildingId
         },
         isDirty: true,
-        selectedBuildingId: nextBuildings[0]?.buildingId || '',
+        selectedBuildingId: nextSelectedBuildingId,
+        selectedBuildingTypeId: nextSelectedBuildingTypeId,
         feedback: '',
         error: ''
       };
@@ -1844,13 +2107,19 @@ const KnowledgeDomainScene = ({
         return { ok: false, message: errorMessage };
       }
       const layout = normalizeDefenseLayoutFromApi(data.layout || snapshot.draftLayout);
+      const latestBuildingCatalog = normalizeBuildingCatalogFromApi(
+        Array.isArray(data.buildingCatalog) ? data.buildingCatalog : snapshot.buildingCatalog
+      );
+      const fallbackBuildingTypeId = latestBuildingCatalog[0]?.buildingTypeId || '';
       setDefenseLayoutState((prev) => ({
         ...prev,
         saving: false,
         buildMode: keepBuildModeOnSuccess ? prev.buildMode : false,
         isDirty: false,
         selectedBuildingId: '',
+        selectedBuildingTypeId: prev.selectedBuildingTypeId || fallbackBuildingTypeId,
         draggingBuildingId: '',
+        buildingCatalog: latestBuildingCatalog,
         error: '',
         feedback: data.message || successFallbackMessage,
         savedLayout: cloneDefenseLayout(layout),
@@ -1910,6 +2179,11 @@ const KnowledgeDomainScene = ({
     setDefenseLayoutState((prev) => ({
       ...prev,
       selectedBuildingId: buildingId,
+      selectedBuildingTypeId: (
+        (Array.isArray(prev.draftLayout?.buildings) ? prev.draftLayout.buildings : [])
+          .find((item) => item.buildingId === buildingId)?.buildingTypeId
+          || prev.selectedBuildingTypeId
+      ),
       draggingBuildingId: buildingId,
       feedback: '',
       error: ''
@@ -2826,6 +3100,7 @@ const KnowledgeDomainScene = ({
       open: false,
       gateKey: ''
     });
+    setDraggingBuildingTypeId('');
     closeGateDeployDialog();
     resetIntelHeistState();
     buildingDragRef.current = null;
@@ -3009,6 +3284,20 @@ const KnowledgeDomainScene = ({
       window.removeEventListener('pointercancel', stopDragging);
     };
   }, [isVisible, defenseLayoutState.draggingBuildingId, defenseLayoutState.buildMode, defenseLayoutState.canEdit]);
+
+  useEffect(() => {
+    if (!isVisible) return;
+    setDefenseLayoutState((prev) => {
+      const catalog = Array.isArray(prev.buildingCatalog) ? prev.buildingCatalog : [];
+      if (catalog.length === 0) {
+        if (!prev.selectedBuildingTypeId) return prev;
+        return { ...prev, selectedBuildingTypeId: '' };
+      }
+      const hasSelected = catalog.some((item) => item.buildingTypeId === prev.selectedBuildingTypeId);
+      if (hasSelected) return prev;
+      return { ...prev, selectedBuildingTypeId: catalog[0]?.buildingTypeId || '' };
+    });
+  }, [isVisible, defenseLayoutState.buildingCatalog]);
 
   useEffect(() => {
     if (!isVisible || !isScenePanning) return undefined;
@@ -3323,12 +3612,24 @@ const KnowledgeDomainScene = ({
 
   const canEditGateDefense = !!defenseLayoutState.canEdit;
   const isGateDeployEditing = canEditGateDefense && gateDeployState.editMode;
+  const buildingCatalog = Array.isArray(defenseLayoutState.buildingCatalog) ? defenseLayoutState.buildingCatalog : [];
+  const buildingTypeMap = new Map(
+    buildingCatalog
+      .map((item) => [item?.buildingTypeId || '', item])
+      .filter(([id]) => !!id)
+  );
+  const buildingTypeUsageMap = new Map();
   const activeDefenseLayout = (defenseLayoutState.buildMode || isGateDeployEditing)
     ? defenseLayoutState.draftLayout
     : defenseLayoutState.savedLayout;
   const defenseBuildings = Array.isArray(activeDefenseLayout?.buildings)
     ? activeDefenseLayout.buildings
     : [];
+  defenseBuildings.forEach((item) => {
+    const buildingTypeId = typeof item?.buildingTypeId === 'string' ? item.buildingTypeId : '';
+    if (!buildingTypeId) return;
+    buildingTypeUsageMap.set(buildingTypeId, (buildingTypeUsageMap.get(buildingTypeId) || 0) + 1);
+  });
   const defenseMetrics = getCityMetrics(
     sceneSize.width || containerRef.current?.clientWidth || 1280,
     sceneSize.height || containerRef.current?.clientHeight || 720,
@@ -3354,11 +3655,23 @@ const KnowledgeDomainScene = ({
     ? (defenseLayoutState.draftLayout?.buildings || [])
     : defenseBuildings
   ).find((item) => item.buildingId === defenseLayoutState.selectedBuildingId) || null;
+  const selectedBuildingTypeForAdd = buildingTypeMap.get(defenseLayoutState.selectedBuildingTypeId)
+    || buildingCatalog[0]
+    || null;
+  const selectedBuildingTypeUsedCount = selectedBuildingTypeForAdd?.buildingTypeId
+    ? (buildingTypeUsageMap.get(selectedBuildingTypeForAdd.buildingTypeId) || 0)
+    : 0;
+  const selectedBuildingTypeRemainingCount = selectedBuildingTypeForAdd
+    ? Math.max(0, Math.floor(Number(selectedBuildingTypeForAdd.initialCount) || 0) - selectedBuildingTypeUsedCount)
+    : 0;
   const canAddDefenseBuilding = (
     defenseLayoutState.canEdit
     && defenseLayoutState.buildMode
     && (defenseLayoutState.draftLayout?.buildings || []).length < defenseLayoutState.maxBuildings
+    && !!selectedBuildingTypeForAdd
+    && selectedBuildingTypeRemainingCount > 0
   );
+  const showBuildingPalette = defenseLayoutState.canEdit && defenseLayoutState.buildMode && !isIntelHeistMode;
   const masterFromNode = normalizeDomainManagerUser(infoPanelDomainNode?.domainMaster);
   const masterFromAdminState = normalizeDomainManagerUser(domainAdminState.domainMaster);
   const displayMaster = masterFromNode || masterFromAdminState || null;
@@ -3386,6 +3699,7 @@ const KnowledgeDomainScene = ({
   const showDefenseManagerCard = defenseLayoutState.canEdit;
   const displayDefenseBuildings = defenseBuildings.map((building, index) => ({
     ...building,
+    displayName: buildingTypeMap.get(building?.buildingTypeId)?.name || building.name,
     ordinal: index + 1,
     isIntel: defenseLayoutState.canEdit && activeDefenseLayout?.intelBuildingId === building.buildingId
   }));
@@ -3492,6 +3806,8 @@ const KnowledgeDomainScene = ({
       <div
         ref={cityDefenseLayerRef}
         className={`city-defense-layer ${defenseLayoutState.buildMode ? 'build-mode' : ''}`}
+        onDragOver={handleCityBuildDragOver}
+        onDrop={handleCityBuildDrop}
       >
         {displayDefenseBuildings.map((building) => {
           const px = defenseMetrics.centerX + building.x * defenseMetrics.radiusX;
@@ -3541,14 +3857,18 @@ const KnowledgeDomainScene = ({
                   return;
                 }
                 if (!canEditBuilding) return;
-                setDefenseLayoutState((prev) => ({ ...prev, selectedBuildingId: building.buildingId }));
+                setDefenseLayoutState((prev) => ({
+                  ...prev,
+                  selectedBuildingId: building.buildingId,
+                  selectedBuildingTypeId: building.buildingTypeId || prev.selectedBuildingTypeId
+                }));
               }}
               disabled={intelBuildingDisabled}
             >
               <span className="city-defense-building-top" />
               <span className="city-defense-building-body" />
               {building.isIntel && <span className="city-defense-intel-badge">情报文件</span>}
-              <span className="city-defense-building-label">{building.name || `建筑${building.ordinal}`}</span>
+              <span className="city-defense-building-label">{building.displayName || `建筑${building.ordinal}`}</span>
               {isIntelActive && (
                 <span className="intel-heist-building-progress">
                   <span
@@ -3561,6 +3881,37 @@ const KnowledgeDomainScene = ({
           );
         })}
       </div>
+      {showBuildingPalette && (
+        <aside className="city-build-palette">
+          <div className="city-build-palette-title">建筑物（左侧拖拽）</div>
+          <div className="city-build-palette-list">
+            {buildingCatalog.length === 0 && (
+              <div className="city-build-palette-tip">暂无可用建筑类型，请先在管理员面板配置建筑目录。</div>
+            )}
+            {buildingCatalog.map((item) => {
+              const used = buildingTypeUsageMap.get(item.buildingTypeId) || 0;
+              const limit = Math.max(0, Math.floor(Number(item.initialCount) || 0));
+              const remaining = Math.max(0, limit - used);
+              return (
+                <button
+                  key={item.buildingTypeId}
+                  type="button"
+                  draggable={remaining > 0}
+                  disabled={remaining <= 0}
+                  className={`city-build-palette-card ${defenseLayoutState.selectedBuildingTypeId === item.buildingTypeId ? 'selected' : ''} ${draggingBuildingTypeId === item.buildingTypeId ? 'dragging' : ''}`}
+                  onClick={() => updateSelectedBuildingType(item.buildingTypeId)}
+                  onDragStart={(event) => handleBuildingPaletteDragStart(event, item.buildingTypeId)}
+                  onDragEnd={handleBuildingPaletteDragEnd}
+                >
+                  <strong>{item.name}</strong>
+                  <span>{`库存 ${remaining}/${limit}`}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="city-build-palette-tip">拖拽建筑到城市地图空位放置</div>
+        </aside>
+      )}
       {showGateLayer && (
         <div ref={cityGateLayerRef} className="city-gate-layer">
           {hasParentEntrance && (
@@ -3894,6 +4245,30 @@ const KnowledgeDomainScene = ({
                 </div>
                 {defenseLayoutState.error && <div className="domain-manage-error">{defenseLayoutState.error}</div>}
                 {defenseLayoutState.feedback && <div className="domain-manage-feedback">{defenseLayoutState.feedback}</div>}
+                {defenseLayoutState.buildMode && (
+                  <div className="domain-manage-tip">
+                    <label htmlFor="domainDefenseBuildingTypeSelect">
+                      建筑类型：
+                      <select
+                        id="domainDefenseBuildingTypeSelect"
+                        className="edit-input"
+                        style={{ marginLeft: 8, minWidth: 180 }}
+                        value={defenseLayoutState.selectedBuildingTypeId}
+                        onChange={(event) => updateSelectedBuildingType(event.target.value)}
+                      >
+                        {buildingCatalog.length === 0 && <option value="">暂无可用建筑类型</option>}
+                        {buildingCatalog.map((item) => {
+                          const used = buildingTypeUsageMap.get(item.buildingTypeId) || 0;
+                          return (
+                            <option key={item.buildingTypeId} value={item.buildingTypeId}>
+                              {`${item.name}（${used}/${item.initialCount}）`}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
+                  </div>
+                )}
                 <div className="domain-defense-actions">
                   <button
                     type="button"
@@ -3927,7 +4302,7 @@ const KnowledgeDomainScene = ({
                 {defenseLayoutState.buildMode && selectedDefenseBuilding && (
                   <div className="domain-defense-selected-card">
                     <div className="domain-manage-tip">
-                      当前选中：{selectedDefenseBuilding.name || '未命名建筑'}
+                      当前选中：{buildingTypeMap.get(selectedDefenseBuilding.buildingTypeId)?.name || selectedDefenseBuilding.name || '未命名建筑'}
                     </div>
                     <div className="domain-defense-actions">
                       <button

@@ -324,6 +324,11 @@ const CityBuildingSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  buildingTypeId: {
+    type: String,
+    default: '',
+    trim: true
+  },
   name: {
     type: String,
     default: '',
@@ -548,19 +553,9 @@ const createCityBuildingId = (prefix = 'building') => (
 );
 
 const createDefaultCityDefenseLayout = () => {
-  const coreId = 'core';
   return {
-    buildings: [{
-      buildingId: coreId,
-      name: '建筑1',
-      x: 0,
-      y: 0,
-      radius: CITY_BUILDING_DEFAULT_RADIUS,
-      level: 1,
-      nextUnitTypeId: '',
-      upgradeCostKP: null
-    }],
-    intelBuildingId: coreId,
+    buildings: [],
+    intelBuildingId: '',
     gateDefense: {
       cheng: [],
       qi: []
@@ -1067,6 +1062,7 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
   const sanitizeBuilding = (item, index) => {
     const sourceId = typeof item?.buildingId === 'string' ? item.buildingId.trim() : '';
     const buildingId = sourceId || createCityBuildingId(`building_${index + 1}`);
+    const buildingTypeId = typeof item?.buildingTypeId === 'string' ? item.buildingTypeId.trim() : '';
     const sourceName = typeof item?.name === 'string' ? item.name.trim() : '';
     const name = sourceName || `建筑${index + 1}`;
     const x = Math.max(-1, Math.min(1, parseNumber(item?.x, 0)));
@@ -1084,6 +1080,7 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
       : null;
     return {
       buildingId,
+      buildingTypeId,
       name,
       x,
       y,
@@ -1128,9 +1125,6 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
     }
 
     let normalizedBuildings = dedupedBuildings;
-    if (normalizedBuildings.length === 0) {
-      normalizedBuildings = createDefaultCityDefenseLayout().buildings;
-    }
 
     const validatePosition = (building, buildingList, selfIndex) => {
       const centerDistance = Math.sqrt((building.x ** 2) + (building.y ** 2));
@@ -1174,7 +1168,7 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
       : '';
     const intelBuildingId = buildingIdSet.has(sourceIntelBuildingId)
       ? sourceIntelBuildingId
-      : normalizedBuildings[0].buildingId;
+      : (normalizedBuildings[0]?.buildingId || '');
 
     const sourceGateDefense = sourceLayout.gateDefense && typeof sourceLayout.gateDefense === 'object'
       ? sourceLayout.gateDefense

@@ -15,14 +15,13 @@ const BATTLEFIELD_ITEM_LIMIT = 12;
 const BATTLEFIELD_DEFAULT_MAX_ITEMS_PER_TYPE = 10;
 const BATTLEFIELD_OBJECT_LIMIT = 600;
 const BATTLEFIELD_OBJECT_DEFAULTS = {
-  itemType: 'wood_wall',
+  itemId: '',
   width: 104,
   depth: 24,
   height: 42,
   hp: 240,
   defense: 1.1
 };
-const BATTLEFIELD_DEFAULT_OBJECT_COUNT_PER_GATE = 10;
 const SIEGE_EMBEDDED_PREVIEW_LIMIT = Math.max(1, parseInt(process.env.SIEGE_EMBEDDED_PREVIEW_LIMIT, 10) || 50);
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -79,17 +78,7 @@ const createDefaultBattlefieldLayouts = () => ([
   }
 ]);
 
-const createDefaultBattlefieldItems = () => ([
-  {
-    itemType: BATTLEFIELD_OBJECT_DEFAULTS.itemType,
-    name: '木墙',
-    width: BATTLEFIELD_OBJECT_DEFAULTS.width,
-    depth: BATTLEFIELD_OBJECT_DEFAULTS.depth,
-    height: BATTLEFIELD_OBJECT_DEFAULTS.height,
-    hp: BATTLEFIELD_OBJECT_DEFAULTS.hp,
-    defense: BATTLEFIELD_OBJECT_DEFAULTS.defense
-  }
-]);
+const createDefaultBattlefieldItems = () => ([]);
 
 const normalizeBattlefieldMaxItemsPerType = (value, fallback = BATTLEFIELD_DEFAULT_MAX_ITEMS_PER_TYPE) => {
   const num = Number(value);
@@ -100,69 +89,9 @@ const normalizeBattlefieldMaxItemsPerType = (value, fallback = BATTLEFIELD_DEFAU
   );
 };
 
-const buildSeedWallPlacement = (index, layout = {}, itemDef = {}) => {
-  const columns = 5;
-  const rows = 2;
-  const row = Math.floor(index / columns);
-  const col = index % columns;
-  const width = Math.max(12, Number(itemDef?.width) || BATTLEFIELD_OBJECT_DEFAULTS.width);
-  const depth = Math.max(12, Number(itemDef?.depth) || BATTLEFIELD_OBJECT_DEFAULTS.depth);
-  const fieldWidth = Math.max(200, Number(layout?.fieldWidth) || BATTLEFIELD_FIELD_WIDTH);
-  const fieldHeight = Math.max(200, Number(layout?.fieldHeight) || BATTLEFIELD_FIELD_HEIGHT);
-  const marginX = Math.max(40, width * 0.6);
-  const marginY = Math.max(40, depth * 1.5);
-  const usableWidth = Math.max(width * (columns - 1), fieldWidth - (marginX * 2));
-  const usableHeight = Math.max(depth * (rows - 1), Math.min(fieldHeight * 0.6, fieldHeight - (marginY * 2)));
-  const startX = -usableWidth / 2;
-  const startY = -usableHeight / 2;
-  const x = columns > 1 ? startX + ((usableWidth / (columns - 1)) * col) : 0;
-  const y = rows > 1 ? startY + ((usableHeight / (rows - 1)) * row) : 0;
-  return { x: round3(x, 0), y: round3(y, 0) };
-};
-
-const createDefaultBattlefieldObjectsForLayout = (layout = {}, itemCatalog = []) => {
-  const itemDef = (Array.isArray(itemCatalog) ? itemCatalog : []).find((item) => item?.itemType === BATTLEFIELD_OBJECT_DEFAULTS.itemType) || {
-    width: BATTLEFIELD_OBJECT_DEFAULTS.width,
-    depth: BATTLEFIELD_OBJECT_DEFAULTS.depth
-  };
-  const layoutId = typeof layout?.layoutId === 'string' && layout.layoutId.trim()
-    ? layout.layoutId.trim()
-    : 'cheng_default';
-  const objects = [];
-  for (let i = 0; i < BATTLEFIELD_DEFAULT_OBJECT_COUNT_PER_GATE; i += 1) {
-    const placement = buildSeedWallPlacement(i, layout, itemDef);
-    const row = Math.floor(i / 5);
-    objects.push({
-      layoutId,
-      objectId: `${layoutId}_seed_${i + 1}`,
-      itemType: BATTLEFIELD_OBJECT_DEFAULTS.itemType,
-      x: placement.x,
-      y: placement.y,
-      z: 0,
-      rotation: row % 2 === 0 ? 0 : 90
-    });
-  }
-  return objects;
-};
-
-const seedDefaultBattlefieldObjects = (objects = [], layouts = [], items = []) => {
-  const sourceObjects = Array.isArray(objects) ? objects : [];
-  const sourceLayouts = Array.isArray(layouts) ? layouts : [];
-  const seedLayouts = sourceLayouts.filter((layout) => CITY_GATE_KEYS.includes(layout?.gateKey));
-  if (seedLayouts.length === 0) return sourceObjects;
-  const existingByLayout = new Map();
-  sourceObjects.forEach((item) => {
-    if (!item?.layoutId) return;
-    existingByLayout.set(item.layoutId, (existingByLayout.get(item.layoutId) || 0) + 1);
-  });
-  const seeded = [...sourceObjects];
-  seedLayouts.forEach((layout) => {
-    const count = existingByLayout.get(layout.layoutId) || 0;
-    if (count > 0) return;
-    seeded.push(...createDefaultBattlefieldObjectsForLayout(layout, items));
-  });
-  return seeded;
-};
+const seedDefaultBattlefieldObjects = (objects = []) => (
+  Array.isArray(objects) ? objects : []
+);
 
 const ensureBattlefieldLayoutsByGate = (layouts = []) => {
   const source = Array.isArray(layouts) ? layouts : [];
@@ -203,28 +132,18 @@ const ensureBattlefieldLayoutsByGate = (layouts = []) => {
 
 const createDefaultBattlefieldState = () => {
   const layouts = ensureBattlefieldLayoutsByGate(createDefaultBattlefieldLayouts());
-  const items = createDefaultBattlefieldItems();
   return {
     version: BATTLEFIELD_VERSION,
     layouts,
-    items,
-    objects: seedDefaultBattlefieldObjects([], layouts, items),
+    items: [],
+    objects: [],
     updatedAt: new Date()
   };
 };
 
 const createDefaultDefenseLayout = () => ({
-  buildings: [{
-    buildingId: 'core',
-    name: '建筑1',
-    x: 0,
-    y: 0,
-    radius: CITY_BUILDING_DEFAULT_RADIUS,
-    level: 1,
-    nextUnitTypeId: '',
-    upgradeCostKP: null
-  }],
-  intelBuildingId: 'core',
+  buildings: [],
+  intelBuildingId: '',
   gateDefense: {
     cheng: [],
     qi: []
@@ -283,6 +202,7 @@ const normalizeDefenseLayout = (source = {}) => {
     const radius = Math.max(0.1, Math.min(0.24, round3(item?.radius, CITY_BUILDING_DEFAULT_RADIUS)));
     buildings.push({
       buildingId,
+      buildingTypeId: typeof item?.buildingTypeId === 'string' ? item.buildingTypeId.trim() : '',
       name: (typeof item?.name === 'string' && item.name.trim()) ? item.name.trim() : `建筑${buildings.length + 1}`,
       x: Math.max(-1, Math.min(1, round3(item?.x, 0))),
       y: Math.max(-1, Math.min(1, round3(item?.y, 0))),
@@ -303,7 +223,7 @@ const normalizeDefenseLayout = (source = {}) => {
   const sourceIntelBuildingId = typeof source.intelBuildingId === 'string' ? source.intelBuildingId.trim() : '';
   const intelBuildingId = buildings.some((item) => item.buildingId === sourceIntelBuildingId)
     ? sourceIntelBuildingId
-    : buildings[0].buildingId;
+    : (buildings[0]?.buildingId || '');
 
   const sourceGateDefense = source.gateDefense && typeof source.gateDefense === 'object'
     ? source.gateDefense
@@ -340,23 +260,26 @@ const normalizeBattlefieldItems = (sourceItems = []) => {
   const items = [];
   for (let index = 0; index < source.length; index += 1) {
     const item = source[index] || {};
-    const rawType = typeof item?.itemType === 'string' ? item.itemType.trim() : '';
+    const rawItemId = typeof item?.itemId === 'string' ? item.itemId.trim() : '';
+    const rawItemType = typeof item?.itemType === 'string' ? item.itemType.trim() : '';
     const fallbackType = typeof item?.type === 'string' ? item.type.trim() : '';
-    const itemType = rawType || fallbackType || BATTLEFIELD_OBJECT_DEFAULTS.itemType;
-    if (itemType !== BATTLEFIELD_OBJECT_DEFAULTS.itemType || seen.has(itemType)) continue;
-    seen.add(itemType);
+    const itemId = rawItemId || rawItemType || fallbackType;
+    if (!itemId || seen.has(itemId)) continue;
+    seen.add(itemId);
     items.push({
-      itemType,
-      name: (typeof item?.name === 'string' && item.name.trim()) ? item.name.trim() : '木墙',
+      itemId,
+      name: (typeof item?.name === 'string' && item.name.trim()) ? item.name.trim() : itemId,
+      initialCount: Math.max(0, Math.floor(Number(item?.initialCount) || 0)),
       width: Math.max(12, Math.min(360, round3(item?.width, BATTLEFIELD_OBJECT_DEFAULTS.width))),
       depth: Math.max(12, Math.min(360, round3(item?.depth, BATTLEFIELD_OBJECT_DEFAULTS.depth))),
       height: Math.max(10, Math.min(360, round3(item?.height, BATTLEFIELD_OBJECT_DEFAULTS.height))),
       hp: Math.max(1, Math.floor(Number(item?.hp) || BATTLEFIELD_OBJECT_DEFAULTS.hp)),
-      defense: Math.max(0.1, round3(item?.defense, BATTLEFIELD_OBJECT_DEFAULTS.defense))
+      defense: Math.max(0.1, round3(item?.defense, BATTLEFIELD_OBJECT_DEFAULTS.defense)),
+      style: item?.style && typeof item.style === 'object' ? item.style : {}
     });
     if (items.length >= BATTLEFIELD_ITEM_LIMIT) break;
   }
-  return items.length > 0 ? items : createDefaultBattlefieldItems();
+  return items;
 };
 
 const normalizeBattlefieldLayouts = (sourceLayouts = []) => {
@@ -417,10 +340,11 @@ const normalizeBattlefieldObjects = (sourceObjects = [], options = {}) => {
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
 
+    const rawItemId = typeof item?.itemId === 'string' ? item.itemId.trim() : '';
     const rawItemType = typeof item?.itemType === 'string' ? item.itemType.trim() : '';
     const rawType = typeof item?.type === 'string' ? item.type.trim() : '';
-    const itemType = rawItemType || rawType || BATTLEFIELD_OBJECT_DEFAULTS.itemType;
-    if (itemType !== BATTLEFIELD_OBJECT_DEFAULTS.itemType) continue;
+    const itemId = rawItemId || rawItemType || rawType;
+    if (!itemId) continue;
 
     const minX = -(layout.fieldWidth / 2);
     const maxX = layout.fieldWidth / 2;
@@ -429,7 +353,7 @@ const normalizeBattlefieldObjects = (sourceObjects = [], options = {}) => {
     objects.push({
       layoutId,
       objectId: rawObjectId,
-      itemType,
+      itemId,
       x: Math.max(minX, Math.min(maxX, round3(item?.x, 0))),
       y: Math.max(minY, Math.min(maxY, round3(item?.y, 0))),
       z: Math.max(0, Math.min(BATTLEFIELD_MAX_STACK_LEVEL - 1, Math.floor(Number(item?.z) || 0))),
@@ -476,7 +400,7 @@ const normalizeBattlefieldState = (source = {}) => {
         version: Math.max(1, Math.floor(Number(source?.version) || BATTLEFIELD_VERSION)),
         layouts: defaults.layouts,
         items: defaults.items,
-        objects: seedDefaultBattlefieldObjects(objects, defaults.layouts, defaults.items),
+        objects,
         updatedAt: toValidDateOrNull(source?.updatedAt) || new Date()
       };
     }
@@ -512,11 +436,11 @@ const toLegacyBattlefieldLayoutFromState = (battlefieldState = {}, preferredGate
       updatedAt: state.updatedAt || new Date()
     };
   }
-  const itemByType = new Map(state.items.map((item) => [item.itemType, item]));
+  const itemById = new Map(state.items.map((item) => [item.itemId, item]));
   const objects = state.objects
     .filter((item) => item.layoutId === targetLayout.layoutId)
     .map((item) => {
-      const itemDef = itemByType.get(item.itemType) || {
+      const itemDef = itemById.get(item.itemId) || {
         width: BATTLEFIELD_OBJECT_DEFAULTS.width,
         depth: BATTLEFIELD_OBJECT_DEFAULTS.depth,
         height: BATTLEFIELD_OBJECT_DEFAULTS.height,
@@ -525,7 +449,8 @@ const toLegacyBattlefieldLayoutFromState = (battlefieldState = {}, preferredGate
       };
       return {
         objectId: item.objectId,
-        type: item.itemType,
+        type: item.itemId,
+        itemId: item.itemId,
         x: item.x,
         y: item.y,
         z: item.z,

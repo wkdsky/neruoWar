@@ -6,12 +6,20 @@ const Node = require('../models/Node');
 const EntropyAlliance = require('../models/EntropyAlliance');
 const GameSetting = require('../models/GameSetting');
 const ArmyUnitType = require('../models/ArmyUnitType');
+const BattlefieldItem = require('../models/BattlefieldItem');
+const CityBuildingType = require('../models/CityBuildingType');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
 const {
   fetchArmyUnitTypes,
   serializeArmyUnitType
 } = require('../services/armyUnitTypeService');
+const {
+  fetchBattlefieldItems,
+  fetchCityBuildingTypes,
+  serializeBattlefieldItem,
+  serializeCityBuildingType
+} = require('../services/placeableCatalogService');
 
 const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
   { key: 'global' },
@@ -20,6 +28,7 @@ const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
 );
 
 const UNIT_TYPE_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
+const CATALOG_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
 const ROLE_TAG_SET = new Set(['近战', '远程']);
 
 const parseNumberField = ({ body, key, required = false, integer = false, min = null }) => {
@@ -154,6 +163,145 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
     }
   }
 
+  return { parsed, errors };
+};
+
+const parseStyleField = (source = {}, parsed = {}, errors = []) => {
+  if (!Object.prototype.hasOwnProperty.call(source, 'style')) return;
+  const style = source.style;
+  if (style === null || style === undefined || style === '') {
+    parsed.style = {};
+    return;
+  }
+  if (typeof style !== 'object' || Array.isArray(style)) {
+    errors.push('style 必须是对象');
+    return;
+  }
+  parsed.style = style;
+};
+
+const parseBattlefieldItemPayload = (body, { create = false } = {}) => {
+  const source = body && typeof body === 'object' ? body : {};
+  const parsed = {};
+  const errors = [];
+
+  const parseStringField = (key, { required = false, maxLen = 64 } = {}) => {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      if (required) errors.push(`缺少字段：${key}`);
+      return;
+    }
+    const text = typeof source[key] === 'string' ? source[key].trim() : '';
+    if (!text) {
+      if (required) errors.push(`${key} 不能为空`);
+      return;
+    }
+    if (text.length > maxLen) {
+      errors.push(`${key} 过长`);
+      return;
+    }
+    parsed[key] = text;
+  };
+
+  parseStringField('name', { required: create, maxLen: 64 });
+  if (create) {
+    parseStringField('itemId', { required: true, maxLen: 64 });
+    if (parsed.itemId && !CATALOG_ID_RE.test(parsed.itemId)) {
+      errors.push('itemId 仅支持字母、数字、下划线、中划线，长度 2-64');
+    }
+  }
+
+  [
+    ['initialCount', true, 0],
+    ['width', false, 12],
+    ['depth', false, 12],
+    ['height', false, 10],
+    ['hp', true, 1],
+    ['defense', false, 0.1],
+    ['sortOrder', true, null]
+  ].forEach(([key, integer, min]) => {
+    const result = parseNumberField({
+      body: source,
+      key,
+      required: create && ['width', 'depth', 'height', 'hp', 'defense', 'initialCount'].includes(key),
+      integer,
+      min
+    });
+    if (result.error) {
+      errors.push(result.error);
+      return;
+    }
+    if (!result.skip) {
+      parsed[key] = result.value;
+    }
+  });
+
+  if (Object.prototype.hasOwnProperty.call(source, 'enabled')) {
+    parsed.enabled = source.enabled !== false;
+  }
+  parseStyleField(source, parsed, errors);
+  return { parsed, errors };
+};
+
+const parseCityBuildingTypePayload = (body, { create = false } = {}) => {
+  const source = body && typeof body === 'object' ? body : {};
+  const parsed = {};
+  const errors = [];
+
+  const parseStringField = (key, { required = false, maxLen = 64 } = {}) => {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      if (required) errors.push(`缺少字段：${key}`);
+      return;
+    }
+    const text = typeof source[key] === 'string' ? source[key].trim() : '';
+    if (!text) {
+      if (required) errors.push(`${key} 不能为空`);
+      return;
+    }
+    if (text.length > maxLen) {
+      errors.push(`${key} 过长`);
+      return;
+    }
+    parsed[key] = text;
+  };
+
+  parseStringField('name', { required: create, maxLen: 64 });
+  if (create) {
+    parseStringField('buildingTypeId', { required: true, maxLen: 64 });
+    if (parsed.buildingTypeId && !CATALOG_ID_RE.test(parsed.buildingTypeId)) {
+      errors.push('buildingTypeId 仅支持字母、数字、下划线、中划线，长度 2-64');
+    }
+  }
+
+  [
+    ['initialCount', true, 0],
+    ['radius', false, 0.1],
+    ['level', true, 1],
+    ['upgradeCostKP', false, 0],
+    ['sortOrder', true, null]
+  ].forEach(([key, integer, min]) => {
+    const result = parseNumberField({
+      body: source,
+      key,
+      required: create && ['initialCount', 'radius'].includes(key),
+      integer,
+      min
+    });
+    if (result.error) {
+      errors.push(result.error);
+      return;
+    }
+    if (!result.skip) {
+      parsed[key] = result.value;
+    }
+  });
+
+  if (Object.prototype.hasOwnProperty.call(source, 'nextUnitTypeId')) {
+    parsed.nextUnitTypeId = typeof source.nextUnitTypeId === 'string' ? source.nextUnitTypeId.trim() : '';
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'enabled')) {
+    parsed.enabled = source.enabled !== false;
+  }
+  parseStyleField(source, parsed, errors);
   return { parsed, errors };
 };
 
@@ -535,6 +683,194 @@ router.delete('/army/unit-types/:unitTypeId', authenticateToken, isAdmin, async 
     });
   } catch (error) {
     console.error('删除兵种失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.get('/catalog/items', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const items = await fetchBattlefieldItems();
+    return res.json({
+      success: true,
+      items
+    });
+  } catch (error) {
+    console.error('获取物品目录失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.post('/catalog/items', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { parsed, errors } = parseBattlefieldItemPayload(req.body, { create: true });
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0] });
+    }
+
+    const exists = await BattlefieldItem.findOne({ itemId: parsed.itemId }).select('_id').lean();
+    if (exists) {
+      return res.status(400).json({ error: 'itemId 已存在' });
+    }
+    if (!Object.prototype.hasOwnProperty.call(parsed, 'sortOrder')) {
+      parsed.sortOrder = await BattlefieldItem.countDocuments();
+    }
+
+    const created = await BattlefieldItem.create(parsed);
+    return res.status(201).json({
+      success: true,
+      item: serializeBattlefieldItem(created)
+    });
+  } catch (error) {
+    console.error('创建物品失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.put('/catalog/items/:itemId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const itemId = typeof req.params?.itemId === 'string' ? req.params.itemId.trim() : '';
+    if (!itemId) {
+      return res.status(400).json({ error: '无效的物品ID' });
+    }
+    const { parsed, errors } = parseBattlefieldItemPayload(req.body, { create: false });
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0] });
+    }
+    const updateKeys = Object.keys(parsed);
+    if (updateKeys.length === 0) {
+      return res.status(400).json({ error: '没有可更新的字段' });
+    }
+    const updated = await BattlefieldItem.findOneAndUpdate(
+      { itemId },
+      { $set: parsed },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(404).json({ error: '物品不存在' });
+    }
+    return res.json({
+      success: true,
+      item: serializeBattlefieldItem(updated)
+    });
+  } catch (error) {
+    console.error('更新物品失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.delete('/catalog/items/:itemId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const itemId = typeof req.params?.itemId === 'string' ? req.params.itemId.trim() : '';
+    if (!itemId) {
+      return res.status(400).json({ error: '无效的物品ID' });
+    }
+    const total = await BattlefieldItem.countDocuments();
+    if (total <= 1) {
+      return res.status(400).json({ error: '至少需要保留一个物品' });
+    }
+    const deleted = await BattlefieldItem.findOneAndDelete({ itemId });
+    if (!deleted) {
+      return res.status(404).json({ error: '物品不存在' });
+    }
+    return res.json({
+      success: true,
+      message: '物品已删除'
+    });
+  } catch (error) {
+    console.error('删除物品失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.get('/catalog/buildings', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const buildings = await fetchCityBuildingTypes();
+    return res.json({
+      success: true,
+      buildings
+    });
+  } catch (error) {
+    console.error('获取建筑目录失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.post('/catalog/buildings', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { parsed, errors } = parseCityBuildingTypePayload(req.body, { create: true });
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0] });
+    }
+    const exists = await CityBuildingType.findOne({ buildingTypeId: parsed.buildingTypeId }).select('_id').lean();
+    if (exists) {
+      return res.status(400).json({ error: 'buildingTypeId 已存在' });
+    }
+    if (!Object.prototype.hasOwnProperty.call(parsed, 'sortOrder')) {
+      parsed.sortOrder = await CityBuildingType.countDocuments();
+    }
+    const created = await CityBuildingType.create(parsed);
+    return res.status(201).json({
+      success: true,
+      building: serializeCityBuildingType(created)
+    });
+  } catch (error) {
+    console.error('创建建筑失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.put('/catalog/buildings/:buildingTypeId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const buildingTypeId = typeof req.params?.buildingTypeId === 'string' ? req.params.buildingTypeId.trim() : '';
+    if (!buildingTypeId) {
+      return res.status(400).json({ error: '无效的建筑ID' });
+    }
+    const { parsed, errors } = parseCityBuildingTypePayload(req.body, { create: false });
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0] });
+    }
+    const updateKeys = Object.keys(parsed);
+    if (updateKeys.length === 0) {
+      return res.status(400).json({ error: '没有可更新的字段' });
+    }
+    const updated = await CityBuildingType.findOneAndUpdate(
+      { buildingTypeId },
+      { $set: parsed },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(404).json({ error: '建筑不存在' });
+    }
+    return res.json({
+      success: true,
+      building: serializeCityBuildingType(updated)
+    });
+  } catch (error) {
+    console.error('更新建筑失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.delete('/catalog/buildings/:buildingTypeId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const buildingTypeId = typeof req.params?.buildingTypeId === 'string' ? req.params.buildingTypeId.trim() : '';
+    if (!buildingTypeId) {
+      return res.status(400).json({ error: '无效的建筑ID' });
+    }
+    const total = await CityBuildingType.countDocuments();
+    if (total <= 1) {
+      return res.status(400).json({ error: '至少需要保留一个建筑' });
+    }
+    const deleted = await CityBuildingType.findOneAndDelete({ buildingTypeId });
+    if (!deleted) {
+      return res.status(404).json({ error: '建筑不存在' });
+    }
+    return res.json({
+      success: true,
+      message: '建筑已删除'
+    });
+  } catch (error) {
+    console.error('删除建筑失败:', error);
     return res.status(500).json({ error: '服务器错误' });
   }
 });

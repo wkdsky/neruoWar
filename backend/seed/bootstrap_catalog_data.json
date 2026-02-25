@@ -1,0 +1,122 @@
+{
+  "armyUnitTypes": [
+    {
+      "unitTypeId": "ci_ren_zu",
+      "name": "词刃卒",
+      "roleTag": "近战",
+      "speed": 1.0,
+      "hp": 120,
+      "atk": 22,
+      "def": 28,
+      "range": 1,
+      "costKP": 10,
+      "level": 1,
+      "nextUnitTypeId": null,
+      "upgradeCostKP": null,
+      "sortOrder": 0
+    },
+    {
+      "unitTypeId": "ju_feng_qi",
+      "name": "句锋骑",
+      "roleTag": "近战",
+      "speed": 2.0,
+      "hp": 85,
+      "atk": 26,
+      "def": 16,
+      "range": 1,
+      "costKP": 12,
+      "level": 1,
+      "nextUnitTypeId": null,
+      "upgradeCostKP": null,
+      "sortOrder": 1
+    },
+    {
+      "unitTypeId": "yu_nu_shou",
+      "name": "语弩手",
+      "roleTag": "远程",
+      "speed": 1.1,
+      "hp": 75,
+      "atk": 30,
+      "def": 10,
+      "range": 4,
+      "costKP": 12,
+      "level": 1,
+      "nextUnitTypeId": null,
+      "upgradeCostKP": null,
+      "sortOrder": 2
+    },
+    {
+      "unitTypeId": "fu_ying_you",
+      "name": "符影游",
+      "roleTag": "远程",
+      "speed": 2.2,
+      "hp": 65,
+      "atk": 23,
+      "def": 9,
+      "range": 3,
+      "costKP": 11,
+      "level": 1,
+      "nextUnitTypeId": null,
+      "upgradeCostKP": null,
+      "sortOrder": 3
+    }
+  ],
+  "battlefieldItems": [
+    {
+      "itemId": "wood_wall",
+      "name": "木墙",
+      "initialCount": 10,
+      "width": 104,
+      "depth": 24,
+      "height": 42,
+      "hp": 240,
+      "defense": 1.1,
+      "style": {
+        "color": "#8b6a3f",
+        "material": "wood"
+      },
+      "sortOrder": 0,
+      "enabled": true
+    },
+    {
+      "itemId": "ju_ma",
+      "name": "拒马",
+      "initialCount": 4,
+      "width": 88,
+      "depth": 32,
+      "height": 38,
+      "hp": 180,
+      "defense": 1.05,
+      "style": {
+        "shape": "cheval_de_frise",
+        "color": "#8c6a44",
+        "spikeColor": "#9ca3af",
+        "material": "wood_iron",
+        "beamCount": 2,
+        "spikeCount": 8,
+        "spikeLengthRatio": 0.48,
+        "beamThicknessRatio": 0.13,
+        "beamSpreadDeg": 34
+      },
+      "sortOrder": 1,
+      "enabled": true
+    }
+  ],
+  "cityBuildingTypes": [
+    {
+      "buildingTypeId": "watch_tower",
+      "name": "哨塔",
+      "initialCount": 3,
+      "radius": 0.17,
+      "level": 1,
+      "nextUnitTypeId": "",
+      "upgradeCostKP": null,
+      "style": {
+        "color": "#94a3b8",
+        "icon": "tower"
+      },
+      "sortOrder": 0,
+      "enabled": true
+    }
+  ]
+}

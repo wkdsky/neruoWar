@@ -7,8 +7,8 @@ const BATTLEFIELD_FIELD_HEIGHT = 620;
 const BATTLEFIELD_FIELD_LIMIT = 5000;
 const BATTLEFIELD_MAX_STACK_LEVEL = 5;
 const BATTLEFIELD_GATE_KEYS = ['cheng', 'qi'];
-const BATTLEFIELD_WALL_DEFAULT = {
-  type: 'wood_wall',
+const BATTLEFIELD_OBJECT_DEFAULT = {
+  itemId: '',
   width: 104,
   depth: 24,
   height: 42,
@@ -28,43 +28,15 @@ const createDefaultBattlefieldLayouts = () => (
   }))
 );
 
-const createDefaultBattlefieldItems = () => ([
-  {
-    itemType: BATTLEFIELD_WALL_DEFAULT.type,
-    name: '木墙',
-    width: BATTLEFIELD_WALL_DEFAULT.width,
-    depth: BATTLEFIELD_WALL_DEFAULT.depth,
-    height: BATTLEFIELD_WALL_DEFAULT.height,
-    hp: BATTLEFIELD_WALL_DEFAULT.hp,
-    defense: BATTLEFIELD_WALL_DEFAULT.defense
-  }
-]);
-
-const createDefaultBattlefieldObjects = () => {
-  const objects = [];
-  BATTLEFIELD_GATE_KEYS.forEach((gateKey) => {
-    const layoutId = `${gateKey}_default`;
-    for (let i = 0; i < 10; i += 1) {
-      const row = Math.floor(i / 5);
-      const col = i % 5;
-      objects.push({
-        layoutId,
-        objectId: `${layoutId}_seed_${i + 1}`,
-        itemType: BATTLEFIELD_WALL_DEFAULT.type,
-        x: -240 + (col * 120),
-        y: -78 + (row * 170),
-        z: 0,
-        rotation: row % 2 === 0 ? 0 : 90
-      });
-    }
-  });
-  return objects;
-};
-
 const CityBuildingSchema = new mongoose.Schema({
   buildingId: {
     type: String,
     required: true,
+    trim: true
+  },
+  buildingTypeId: {
+    type: String,
+    default: '',
     trim: true
   },
   name: {
@@ -140,10 +112,10 @@ const BattlefieldObjectSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
-  itemType: {
+  itemId: {
     type: String,
-    enum: ['wood_wall'],
-    default: BATTLEFIELD_WALL_DEFAULT.type
+    required: true,
+    trim: true
   },
   x: {
     type: Number,
@@ -212,9 +184,8 @@ const BattlefieldLayoutMetaSchema = new mongoose.Schema({
 }, { _id: false });
 
 const BattlefieldItemSchema = new mongoose.Schema({
-  itemType: {
+  itemId: {
     type: String,
-    enum: ['wood_wall'],
     required: true,
     trim: true
   },
@@ -225,30 +196,30 @@ const BattlefieldItemSchema = new mongoose.Schema({
   },
   width: {
     type: Number,
-    default: BATTLEFIELD_WALL_DEFAULT.width,
+    default: BATTLEFIELD_OBJECT_DEFAULT.width,
     min: 12,
     max: 360
   },
   depth: {
     type: Number,
-    default: BATTLEFIELD_WALL_DEFAULT.depth,
+    default: BATTLEFIELD_OBJECT_DEFAULT.depth,
     min: 12,
     max: 360
   },
   height: {
     type: Number,
-    default: BATTLEFIELD_WALL_DEFAULT.height,
+    default: BATTLEFIELD_OBJECT_DEFAULT.height,
     min: 10,
     max: 360
   },
   hp: {
     type: Number,
-    default: BATTLEFIELD_WALL_DEFAULT.hp,
+    default: BATTLEFIELD_OBJECT_DEFAULT.hp,
     min: 1
   },
   defense: {
     type: Number,
-    default: BATTLEFIELD_WALL_DEFAULT.defense,
+    default: BATTLEFIELD_OBJECT_DEFAULT.defense,
     min: 0.1
   }
 }, { _id: false });
@@ -305,20 +276,19 @@ const DomainDefenseLayoutSchema = new mongoose.Schema({
             required: true,
             trim: true
           },
-          type: {
+          itemId: {
             type: String,
-            enum: ['wood_wall'],
-            default: BATTLEFIELD_WALL_DEFAULT.type
+            default: BATTLEFIELD_OBJECT_DEFAULT.itemId
           },
           x: { type: Number, default: 0 },
           y: { type: Number, default: 0 },
           z: { type: Number, default: 0 },
           rotation: { type: Number, default: 0 },
-          width: { type: Number, default: BATTLEFIELD_WALL_DEFAULT.width },
-          depth: { type: Number, default: BATTLEFIELD_WALL_DEFAULT.depth },
-          height: { type: Number, default: BATTLEFIELD_WALL_DEFAULT.height },
-          hp: { type: Number, default: BATTLEFIELD_WALL_DEFAULT.hp },
-          defense: { type: Number, default: BATTLEFIELD_WALL_DEFAULT.defense }
+          width: { type: Number, default: BATTLEFIELD_OBJECT_DEFAULT.width },
+          depth: { type: Number, default: BATTLEFIELD_OBJECT_DEFAULT.depth },
+          height: { type: Number, default: BATTLEFIELD_OBJECT_DEFAULT.height },
+          hp: { type: Number, default: BATTLEFIELD_OBJECT_DEFAULT.hp },
+          defense: { type: Number, default: BATTLEFIELD_OBJECT_DEFAULT.defense }
         }, { _id: false })],
         default: []
       },
@@ -335,11 +305,11 @@ const DomainDefenseLayoutSchema = new mongoose.Schema({
   },
   battlefieldObjects: {
     type: [BattlefieldObjectSchema],
-    default: () => createDefaultBattlefieldObjects()
+    default: []
   },
   battlefieldItems: {
     type: [BattlefieldItemSchema],
-    default: () => createDefaultBattlefieldItems()
+    default: []
   },
   updatedAt: {
     type: Date,

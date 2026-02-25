@@ -107,6 +107,7 @@ start_mongo() {
 inject_db() {
     echo "注入基础数据库数据..."
     cd "$BACKEND_DIR"
+    node scripts/initCatalogAndUnitData.js
     node scripts/createAdmin.js
     node scripts/initUserLevels.js
     node scripts/initUserDomainPreferences.js

@@ -31,12 +31,12 @@ const WALL_ACTION_ICON_RISE = 32;
 const SCREEN_HIT_TOLERANCE_PX = 4;
 const DEPLOY_ZONE_RATIO = 0.2;
 const API_BASE = 'http://localhost:5000';
-const TOTAL_WOOD_WALL_STOCK = 10;
+const DEFAULT_MAX_ITEMS_PER_TYPE = 10;
 const SNAP_EPSILON = 1.2;
-const CACHE_VERSION = 1;
-const CACHE_PREFIX = 'battlefield_layout_cache_v1';
+const CACHE_VERSION = 2;
+const CACHE_PREFIX = 'battlefield_layout_cache_v2';
 const PALETTE_WALL_TEMPLATE = {
-  itemType: 'wood_wall',
+  itemId: '',
   width: WALL_WIDTH,
   depth: WALL_DEPTH,
   height: WALL_HEIGHT,
@@ -85,6 +85,19 @@ const roundTo = (value, digits = 2) => {
   return Math.round(n * p) / p;
 };
 
+const parseHexColor = (value, fallback = 0xffffff) => {
+  if (typeof value !== 'string') return fallback;
+  const text = value.trim().replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(text)) return fallback;
+  return Number.parseInt(text, 16);
+};
+
+const clampStyleNumber = (value, fallback, min, max) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, num));
+};
+
 const lerp = (a, b, t) => (a + ((b - a) * t));
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const easeOutCubic = (t) => (1 - ((1 - t) ** 3));
@@ -112,45 +125,6 @@ const getWallBaseZ = (wall = {}) => (
 const getWallTopZ = (wall = {}) => (
   getWallBaseZ(wall) + Math.max(10, Number(wall?.height) || WALL_HEIGHT)
 );
-
-const buildDefaultWalls = (
-  fieldWidth = FIELD_WIDTH,
-  fieldHeight = FIELD_HEIGHT,
-  template = {}
-) => {
-  const safeWidth = Math.max(200, Number(fieldWidth) || FIELD_WIDTH);
-  const safeHeight = Math.max(200, Number(fieldHeight) || FIELD_HEIGHT);
-  const width = Math.max(20, Number(template?.width) || WALL_WIDTH);
-  const depth = Math.max(12, Number(template?.depth) || WALL_DEPTH);
-  const height = Math.max(14, Number(template?.height) || WALL_HEIGHT);
-  const hp = Math.max(1, Math.floor(Number(template?.hp) || BASE_HP));
-  const defense = Math.max(0.1, Number(template?.defense) || BASE_DEFENSE);
-  const walls = [];
-  const columns = 5;
-  const rows = 2;
-  const marginX = Math.max(40, width * 0.6);
-  const marginY = Math.max(40, depth * 1.5);
-  const usableWidth = Math.max(width * (columns - 1), safeWidth - (marginX * 2));
-  const usableHeight = Math.max(depth * (rows - 1), Math.min(safeHeight * 0.6, safeHeight - (marginY * 2)));
-  for (let i = 0; i < TOTAL_WOOD_WALL_STOCK; i += 1) {
-    const row = Math.floor(i / columns);
-    const col = i % columns;
-    walls.push({
-      id: `wall_${i + 1}`,
-      itemType: 'wood_wall',
-      x: roundTo((-usableWidth / 2) + ((usableWidth / (columns - 1)) * col), 3),
-      y: roundTo((-usableHeight / 2) + ((usableHeight / (rows - 1)) * row), 3),
-      z: 0,
-      rotation: row % 2 === 0 ? 0 : 90,
-      width,
-      depth,
-      height,
-      hp,
-      defense
-    });
-  }
-  return walls;
-};
 
 const getBattlefieldCacheKey = (nodeId, gateKey) => (
   `${CACHE_PREFIX}:${nodeId || ''}:${gateKey || 'cheng'}`
@@ -187,9 +161,9 @@ const writeBattlefieldCache = (nodeId, gateKey, payload = {}) => {
 
 const createWallFromLike = (wallLike = {}, overrides = {}) => ({
   id: overrides.id || `wall_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-  itemType: typeof (overrides.itemType ?? wallLike.itemType) === 'string'
-    ? String(overrides.itemType ?? wallLike.itemType).trim() || 'wood_wall'
-    : 'wood_wall',
+  itemId: typeof (overrides.itemId ?? wallLike.itemId ?? wallLike.itemType) === 'string'
+    ? String(overrides.itemId ?? wallLike.itemId ?? wallLike.itemType).trim()
+    : '',
   x: Number.isFinite(Number(overrides.x)) ? Number(overrides.x) : (Number(wallLike.x) || 0),
   y: Number.isFinite(Number(overrides.y)) ? Number(overrides.y) : (Number(wallLike.y) || 0),
   z: Number.isFinite(Number(overrides.z)) ? Math.max(0, Math.floor(Number(overrides.z))) : Math.max(0, Math.floor(Number(wallLike.z) || 0)),
@@ -208,14 +182,50 @@ const sanitizeWalls = (rawWalls = []) => {
   source.forEach((item, index) => {
     const next = createWallFromLike(item, {
       id: typeof item?.id === 'string' && item.id.trim() ? item.id.trim() : `wall_${index + 1}`,
-      itemType: typeof item?.itemType === 'string' ? item.itemType : (typeof item?.type === 'string' ? item.type : 'wood_wall'),
+      itemId: typeof item?.itemId === 'string'
+        ? item.itemId
+        : (typeof item?.itemType === 'string' ? item.itemType : (typeof item?.type === 'string' ? item.type : '')),
       z: Math.max(0, Math.min(MAX_STACK_LEVEL - 1, Math.floor(Number(item?.z) || 0)))
     });
+    if (!next.itemId) return;
     if (seen.has(next.id)) return;
     seen.add(next.id);
     out.push(next);
   });
   return out;
+};
+
+const LEGACY_WALL_ID_PATTERN = /^wall_\d+$/;
+const LEGACY_DEFAULT_ITEM_IDS = new Set(['wood_wall', 'woodwall', 'wall', 'wood']);
+
+const looksLikeLegacyDefaultWalls = (walls = []) => {
+  const source = Array.isArray(walls) ? walls : [];
+  if (source.length === 0) return false;
+  if (source.length > 24) return false;
+  const allLegacyIds = source.every((item) => {
+    const id = typeof item?.id === 'string' ? item.id.trim() : '';
+    return LEGACY_WALL_ID_PATTERN.test(id);
+  });
+  if (!allLegacyIds) return false;
+  const allLegacyItems = source.every((item) => {
+    const itemId = typeof item?.itemId === 'string' ? item.itemId.trim().toLowerCase() : '';
+    return !itemId || LEGACY_DEFAULT_ITEM_IDS.has(itemId);
+  });
+  return allLegacyItems;
+};
+
+const sanitizeWallsWithLegacyCleanup = (rawWalls = []) => {
+  const sanitized = sanitizeWalls(rawWalls);
+  if (!looksLikeLegacyDefaultWalls(sanitized)) {
+    return {
+      walls: sanitized,
+      clearedLegacy: false
+    };
+  }
+  return {
+    walls: [],
+    clearedLegacy: true
+  };
 };
 
 const cloneWalls = (sourceWalls = []) => (
@@ -240,32 +250,25 @@ const normalizeItemCatalog = (items = []) => {
   const out = [];
   const seen = new Set();
   source.forEach((item) => {
-    const itemType = typeof item?.itemType === 'string' && item.itemType.trim()
-      ? item.itemType.trim()
-      : (typeof item?.type === 'string' && item.type.trim() ? item.type.trim() : '');
-    if (!itemType || seen.has(itemType)) return;
-    seen.add(itemType);
+    const itemId = typeof item?.itemId === 'string' && item.itemId.trim()
+      ? item.itemId.trim()
+      : (typeof item?.itemType === 'string' && item.itemType.trim()
+        ? item.itemType.trim()
+        : (typeof item?.id === 'string' && item.id.trim() ? item.id.trim() : ''));
+    if (!itemId || seen.has(itemId)) return;
+    seen.add(itemId);
     out.push({
-      itemType,
-      name: (typeof item?.name === 'string' && item.name.trim()) ? item.name.trim() : itemType,
+      itemId,
+      name: (typeof item?.name === 'string' && item.name.trim()) ? item.name.trim() : itemId,
+      initialCount: Math.max(0, Math.floor(Number(item?.initialCount) || 0)),
       width: Math.max(12, Number(item?.width) || WALL_WIDTH),
       depth: Math.max(12, Number(item?.depth) || WALL_DEPTH),
       height: Math.max(10, Number(item?.height) || WALL_HEIGHT),
       hp: Math.max(1, Math.floor(Number(item?.hp) || BASE_HP)),
-      defense: Math.max(0.1, Number(item?.defense) || BASE_DEFENSE)
+      defense: Math.max(0.1, Number(item?.defense) || BASE_DEFENSE),
+      style: item?.style && typeof item.style === 'object' ? item.style : {}
     });
   });
-  if (out.length === 0) {
-    return [{
-      itemType: 'wood_wall',
-      name: '木墙',
-      width: WALL_WIDTH,
-      depth: WALL_DEPTH,
-      height: WALL_HEIGHT,
-      hp: BASE_HP,
-      defense: BASE_DEFENSE
-    }];
-  }
   return out;
 };
 
@@ -273,19 +276,21 @@ const mapLayoutBundleToWalls = (layoutBundle = {}) => {
   const sourceObjects = Array.isArray(layoutBundle?.objects) ? layoutBundle.objects : [];
   if (sourceObjects.length === 0) return [];
   const itemCatalog = normalizeItemCatalog(layoutBundle?.itemCatalog);
-  const itemDefByType = new Map(itemCatalog.map((item) => [item.itemType, item]));
+  const itemDefById = new Map(itemCatalog.map((item) => [item.itemId, item]));
   return sanitizeWalls(sourceObjects.map((item, index) => {
-    const itemType = typeof item?.itemType === 'string' && item.itemType.trim()
-      ? item.itemType.trim()
-      : (typeof item?.type === 'string' && item.type.trim() ? item.type.trim() : 'wood_wall');
-    const itemDef = itemDefByType.get(itemType) || itemCatalog[0];
+    const itemId = typeof item?.itemId === 'string' && item.itemId.trim()
+      ? item.itemId.trim()
+      : (typeof item?.itemType === 'string' && item.itemType.trim()
+        ? item.itemType.trim()
+        : (typeof item?.type === 'string' && item.type.trim() ? item.type.trim() : ''));
+    const itemDef = itemDefById.get(itemId) || null;
     return {
       id: typeof item?.id === 'string' && item.id.trim()
         ? item.id.trim()
         : (typeof item?.objectId === 'string' && item.objectId.trim()
           ? item.objectId.trim()
           : `wall_${index + 1}`),
-      itemType,
+      itemId,
       x: item?.x,
       y: item?.y,
       z: item?.z,
@@ -307,21 +312,23 @@ const buildLayoutPayload = ({ walls = [], layoutMeta = {}, itemCatalog = [], gat
     fieldWidth: Number.isFinite(Number(layoutMeta?.fieldWidth)) ? Number(layoutMeta.fieldWidth) : FIELD_WIDTH,
     fieldHeight: Number.isFinite(Number(layoutMeta?.fieldHeight)) ? Number(layoutMeta.fieldHeight) : FIELD_HEIGHT,
     maxItemsPerType: Number.isFinite(Number(layoutMeta?.maxItemsPerType))
-      ? Math.max(TOTAL_WOOD_WALL_STOCK, Math.floor(Number(layoutMeta.maxItemsPerType)))
-      : TOTAL_WOOD_WALL_STOCK
+      ? Math.max(DEFAULT_MAX_ITEMS_PER_TYPE, Math.floor(Number(layoutMeta.maxItemsPerType)))
+      : DEFAULT_MAX_ITEMS_PER_TYPE
   },
   itemCatalog: normalizeItemCatalog(itemCatalog).map((item) => ({
-    itemType: item.itemType,
+    itemId: item.itemId,
     name: item.name,
+    initialCount: Math.max(0, Math.floor(Number(item.initialCount) || 0)),
     width: roundTo(item.width, 3),
     depth: roundTo(item.depth, 3),
     height: roundTo(item.height, 3),
     hp: Math.max(1, Math.floor(Number(item.hp) || BASE_HP)),
-    defense: roundTo(Math.max(0.1, Number(item.defense) || BASE_DEFENSE), 3)
+    defense: roundTo(Math.max(0.1, Number(item.defense) || BASE_DEFENSE), 3),
+    style: item?.style && typeof item.style === 'object' ? item.style : {}
   })),
   objects: sanitizeWalls(walls).map((item) => ({
     objectId: item.id,
-    itemType: item.itemType || 'wood_wall',
+    itemId: item.itemId || '',
     x: roundTo(item.x, 3),
     y: roundTo(item.y, 3),
     z: Math.max(0, Math.floor(Number(item.z) || 0)),
@@ -996,14 +1003,14 @@ const BattlefieldPreviewModal = ({
     name: '',
     fieldWidth: FIELD_WIDTH,
     fieldHeight: FIELD_HEIGHT,
-    maxItemsPerType: TOTAL_WOOD_WALL_STOCK
+    maxItemsPerType: DEFAULT_MAX_ITEMS_PER_TYPE
   });
   const defaultLayoutMeta = useMemo(() => ({
     layoutId: `${gateKey || 'cheng'}_default`,
     name: '',
     fieldWidth: FIELD_WIDTH,
     fieldHeight: FIELD_HEIGHT,
-    maxItemsPerType: TOTAL_WOOD_WALL_STOCK
+    maxItemsPerType: DEFAULT_MAX_ITEMS_PER_TYPE
   }), [gateKey]);
   const effectiveCanEdit = !!canEdit && !!serverCanEdit;
   const fieldWidth = useMemo(
@@ -1066,18 +1073,41 @@ const BattlefieldPreviewModal = ({
   }, [viewportSize.height, viewportSize.width]);
 
   const wallGroups = useMemo(() => getWallGroupMetrics(walls), [walls]);
-  const maxItemsPerType = Math.max(
-    TOTAL_WOOD_WALL_STOCK,
-    Math.floor(Number(activeLayoutMeta?.maxItemsPerType) || TOTAL_WOOD_WALL_STOCK)
+  const normalizedItemCatalog = useMemo(() => normalizeItemCatalog(itemCatalog), [itemCatalog]);
+  const itemPlacedCountMap = useMemo(() => {
+    const map = new Map();
+    walls.forEach((item) => {
+      const itemId = typeof item?.itemId === 'string' ? item.itemId : '';
+      if (!itemId) return;
+      map.set(itemId, (map.get(itemId) || 0) + 1);
+    });
+    return map;
+  }, [walls]);
+  const itemStockMetaMap = useMemo(() => {
+    const map = new Map();
+    normalizedItemCatalog.forEach((item) => {
+      const limit = Math.max(0, Math.floor(Number(item?.initialCount) || 0));
+      const used = itemPlacedCountMap.get(item.itemId) || 0;
+      map.set(item.itemId, {
+        used,
+        limit,
+        remaining: Math.max(0, limit - used)
+      });
+    });
+    return map;
+  }, [itemPlacedCountMap, normalizedItemCatalog]);
+  const itemCatalogById = useMemo(
+    () => new Map(normalizedItemCatalog.map((item) => [item.itemId, item])),
+    [normalizedItemCatalog]
   );
-  const wallStockRemaining = useMemo(
-    () => Math.max(0, maxItemsPerType - walls.length),
-    [maxItemsPerType, walls.length]
+  const totalItemLimit = useMemo(
+    () => normalizedItemCatalog.reduce((sum, item) => sum + (itemStockMetaMap.get(item.itemId)?.limit || 0), 0),
+    [itemStockMetaMap, normalizedItemCatalog]
   );
-  const woodWallItem = useMemo(() => {
-    const list = normalizeItemCatalog(itemCatalog);
-    return list.find((item) => item.itemType === 'wood_wall') || list[0];
-  }, [itemCatalog]);
+  const totalItemRemaining = useMemo(
+    () => normalizedItemCatalog.reduce((sum, item) => sum + (itemStockMetaMap.get(item.itemId)?.remaining || 0), 0),
+    [itemStockMetaMap, normalizedItemCatalog]
+  );
   const worldScale = useMemo(() => {
     const widthBase = (viewport.width * BASELINE_FIELD_COVERAGE) / fieldWidth;
     const heightBase = (viewport.height * BASELINE_FIELD_COVERAGE) / (fieldHeight * getGroundProjectionScale(cameraAngle));
@@ -1277,17 +1307,18 @@ const BattlefieldPreviewModal = ({
     if (tip) setMessage(tip);
   }, []);
 
-  const pickPaletteItem = useCallback((itemType) => {
+  const pickPaletteItem = useCallback((itemId) => {
     if (!effectiveCanEdit || !editMode) return;
-    if (!itemType) return;
-    if (wallStockRemaining <= 0) {
-      setMessage('木墙库存不足，无法继续放置');
+    if (!itemId) return;
+    const itemDef = normalizedItemCatalog.find((item) => item.itemId === itemId) || null;
+    if (!itemDef) return;
+    const remaining = itemStockMetaMap.get(itemId)?.remaining ?? 0;
+    if (remaining <= 0) {
+      setMessage(`物品「${itemDef.name || itemId}」库存不足，无法继续放置`);
       return;
     }
-    const itemDef = normalizeItemCatalog(itemCatalog).find((item) => item.itemType === itemType) || woodWallItem;
-    if (!itemDef) return;
     const nextGhost = createWallFromLike(PALETTE_WALL_TEMPLATE, {
-      itemType,
+      itemId,
       width: itemDef.width,
       depth: itemDef.depth,
       height: itemDef.height,
@@ -1301,7 +1332,7 @@ const BattlefieldPreviewModal = ({
     });
     const evaluated = evaluateGhostPlacement(nextGhost, walls, mouseWorldRef.current, fieldWidth, fieldHeight);
     setSelectedWallId('');
-    setSelectedPaletteItem(itemType);
+    setSelectedPaletteItem(itemId);
     setGhost({
       ...evaluated.ghost,
       _mode: 'create'
@@ -1309,8 +1340,8 @@ const BattlefieldPreviewModal = ({
     setGhostBlocked(evaluated.blocked);
     setSnapState(evaluated.snap);
     setInvalidReason(evaluated.reason || '');
-    setMessage('已选中木墙：左键放置，右键或 ESC 取消，滚轮旋转，Space+左键平移');
-  }, [effectiveCanEdit, editMode, wallStockRemaining, itemCatalog, woodWallItem, walls, fieldWidth, fieldHeight]);
+    setMessage(`已选中${itemDef.name || '物品'}：左键放置，右键或 ESC 取消，滚轮旋转，Space+左键平移`);
+  }, [effectiveCanEdit, editMode, normalizedItemCatalog, itemStockMetaMap, walls, fieldWidth, fieldHeight]);
 
   const startMoveWall = useCallback((wallLike) => {
     if (!wallLike) return;
@@ -1325,7 +1356,7 @@ const BattlefieldPreviewModal = ({
     setSnapState(evaluated.snap);
     setInvalidReason(evaluated.reason || '');
     setSelectedWallId('');
-    setSelectedPaletteItem(wallLike.itemType || 'wood_wall');
+    setSelectedPaletteItem(wallLike.itemId || '');
     setMessage('移动模式：左键确认位置，右键或 ESC 取消');
   }, [fieldHeight, fieldWidth, walls]);
 
@@ -1335,7 +1366,7 @@ const BattlefieldPreviewModal = ({
     setHasDraftChanges(true);
     setSelectedWallId('');
     cancelGhostPlacement('');
-    setMessage('木墙已回收到物品栏');
+    setMessage('物品已回收到物品栏');
   }, [cancelGhostPlacement]);
 
   const persistBattlefieldLayout = useCallback(async (nextWalls = [], options = {}) => {
@@ -1484,20 +1515,17 @@ const BattlefieldPreviewModal = ({
             ? Number(localCache.layoutMeta.fieldHeight)
             : defaultLayoutMeta.fieldHeight,
           maxItemsPerType: Number.isFinite(Number(localCache.layoutMeta.maxItemsPerType))
-            ? Math.max(TOTAL_WOOD_WALL_STOCK, Math.floor(Number(localCache.layoutMeta.maxItemsPerType)))
-            : TOTAL_WOOD_WALL_STOCK
+            ? Math.max(DEFAULT_MAX_ITEMS_PER_TYPE, Math.floor(Number(localCache.layoutMeta.maxItemsPerType)))
+            : DEFAULT_MAX_ITEMS_PER_TYPE
         }
         : defaultLayoutMeta;
-      const cachedWallsRaw = sanitizeWalls(localCache?.walls);
-      const defaultTemplate = cachedCatalog.find((item) => item.itemType === 'wood_wall') || PALETTE_WALL_TEMPLATE;
-      const cachedWalls = cachedWallsRaw.length > 0
-        ? cachedWallsRaw
-        : buildDefaultWalls(cachedMeta.fieldWidth, cachedMeta.fieldHeight, defaultTemplate);
+      const cachedWallSnapshot = sanitizeWallsWithLegacyCleanup(localCache?.walls);
       return {
-        walls: cachedWalls,
+        walls: cachedWallSnapshot.walls,
         itemCatalog: cachedCatalog,
         layoutMeta: cachedMeta,
-        needsSync: !!localCache?.needsSync
+        needsSync: !!localCache?.needsSync || cachedWallSnapshot.clearedLegacy,
+        clearedLegacy: cachedWallSnapshot.clearedLegacy
       };
     };
 
@@ -1516,7 +1544,9 @@ const BattlefieldPreviewModal = ({
           setLoadingLayout(false);
           setLayoutReady(true);
           if (cacheSnapshot.needsSync) {
-            setMessage('本地存在待同步布局，登录后将自动同步');
+            setMessage(cacheSnapshot.clearedLegacy
+              ? '已清空旧版默认战场物体，登录后将自动同步到服务端'
+              : '本地存在待同步布局，登录后将自动同步');
           } else {
             setErrorText('未登录，已加载本地战场布局');
           }
@@ -1549,14 +1579,11 @@ const BattlefieldPreviewModal = ({
           fieldWidth: Number.isFinite(Number(layoutBundle?.activeLayout?.fieldWidth)) ? Number(layoutBundle.activeLayout.fieldWidth) : FIELD_WIDTH,
           fieldHeight: Number.isFinite(Number(layoutBundle?.activeLayout?.fieldHeight)) ? Number(layoutBundle.activeLayout.fieldHeight) : FIELD_HEIGHT,
           maxItemsPerType: Number.isFinite(Number(layoutBundle?.activeLayout?.maxItemsPerType))
-            ? Math.max(TOTAL_WOOD_WALL_STOCK, Number(layoutBundle.activeLayout.maxItemsPerType))
-            : TOTAL_WOOD_WALL_STOCK
+            ? Math.max(DEFAULT_MAX_ITEMS_PER_TYPE, Number(layoutBundle.activeLayout.maxItemsPerType))
+            : DEFAULT_MAX_ITEMS_PER_TYPE
         };
-        const serverWallsRaw = mapLayoutBundleToWalls(layoutBundle);
-        const defaultTemplate = nextCatalog.find((item) => item.itemType === 'wood_wall') || PALETTE_WALL_TEMPLATE;
-        const serverWalls = serverWallsRaw.length > 0
-          ? serverWallsRaw
-          : buildDefaultWalls(serverLayoutMeta.fieldWidth, serverLayoutMeta.fieldHeight, defaultTemplate);
+        const serverWallSnapshot = sanitizeWallsWithLegacyCleanup(mapLayoutBundleToWalls(layoutBundle));
+        const serverWalls = serverWallSnapshot.walls;
         const canEditByServer = !!data.canEdit;
         setServerCanEdit(canEditByServer);
 
@@ -1570,17 +1597,30 @@ const BattlefieldPreviewModal = ({
             layoutMeta: cacheSnapshot.layoutMeta,
             itemCatalog: cacheSnapshot.itemCatalog
           };
-          setMessage('检测到离线改动，正在尝试回写服务端');
+          setMessage(cacheSnapshot.clearedLegacy
+            ? '已清空旧版默认战场物体，正在回写服务端'
+            : '检测到离线改动，正在尝试回写服务端');
         } else {
+          const shouldSyncLegacyCleanup = serverWallSnapshot.clearedLegacy && canEditByServer;
           setWalls(serverWalls);
           setItemCatalog(nextCatalog);
           setActiveLayoutMeta(serverLayoutMeta);
-          setCacheNeedsSync(false);
+          setCacheNeedsSync(shouldSyncLegacyCleanup);
+          if (shouldSyncLegacyCleanup) {
+            pendingCacheSyncRef.current = {
+              walls: serverWalls,
+              layoutMeta: serverLayoutMeta,
+              itemCatalog: nextCatalog
+            };
+            setMessage('检测到旧版默认战场物体，已自动清空并准备同步');
+          } else if (serverWallSnapshot.clearedLegacy) {
+            setMessage('检测到旧版默认战场物体，已自动清空');
+          }
           writeBattlefieldCache(nodeId, gateKey, {
             walls: serverWalls,
             itemCatalog: nextCatalog,
             layoutMeta: serverLayoutMeta,
-            needsSync: false
+            needsSync: shouldSyncLegacyCleanup
           });
         }
         setErrorText('');
@@ -1787,19 +1827,119 @@ const BattlefieldPreviewModal = ({
     const pickableWallMeshes = [];
     const buildWallMesh = (wallLike, options = {}) => {
       const safeHeight = Math.max(14, Number(wallLike.height) || WALL_HEIGHT);
+      const safeWidth = Math.max(20, Number(wallLike.width) || WALL_WIDTH);
+      const safeDepth = Math.max(12, Number(wallLike.depth) || WALL_DEPTH);
       const baseZ = getWallBaseZ(wallLike);
       const selected = !!options.selected;
       const ghostMode = !!options.ghost;
       const blocked = !!options.blocked;
+      const itemId = typeof wallLike?.itemId === 'string' ? wallLike.itemId : '';
+      const itemStyle = itemCatalogById.get(itemId)?.style;
+      const style = itemStyle && typeof itemStyle === 'object' ? itemStyle : {};
+      const renderShape = typeof style.shape === 'string' ? style.shape.trim().toLowerCase() : '';
       const color = ghostMode
         ? (blocked ? 0xb91c1c : 0xf59e0b)
-        : (selected ? 0x60a5fa : 0xc2783c);
+        : (selected ? 0x60a5fa : parseHexColor(style.color, 0xc2783c));
+
+      if (renderShape === 'cheval_de_frise') {
+        const woodColor = ghostMode || selected ? color : parseHexColor(style.color, 0x8c6a44);
+        const spikeColor = ghostMode || selected ? color : parseHexColor(style.spikeColor, 0x9ca3af);
+        const beamCount = Math.round(clampStyleNumber(style.beamCount, 2, 2, 3));
+        const spikeCount = Math.round(clampStyleNumber(style.spikeCount, 8, 4, 14));
+        const beamSpreadDeg = clampStyleNumber(style.beamSpreadDeg, 34, 10, 60);
+        const beamThicknessRatio = clampStyleNumber(style.beamThicknessRatio, 0.13, 0.08, 0.24);
+        const spikeLengthRatio = clampStyleNumber(style.spikeLengthRatio, 0.48, 0.25, 0.8);
+
+        const group = new THREE.Group();
+        group.position.set(Number(wallLike.x) || 0, Number(wallLike.y) || 0, baseZ);
+        group.rotation.set(0, 0, degToRad(wallLike.rotation || 0));
+        worldGroup.add(group);
+
+        const beamLength = Math.max(safeWidth, safeDepth) * 1.08;
+        const beamRadius = Math.max(2.6, Math.min(10, Math.min(safeWidth, safeDepth) * beamThicknessRatio));
+        const beamZ = Math.max(beamRadius + 2, safeHeight * 0.3);
+        const beamGeometry = new THREE.CylinderGeometry(beamRadius, beamRadius, beamLength, 12);
+        const beamMaterial = new THREE.MeshStandardMaterial({
+          color: woodColor,
+          transparent: ghostMode,
+          opacity: ghostMode ? 0.52 : 1,
+          roughness: 0.86,
+          metalness: 0.04,
+          side: THREE.DoubleSide,
+          depthWrite: true
+        });
+
+        const beamAngles = [];
+        if (beamCount === 2) {
+          beamAngles.push(-beamSpreadDeg, beamSpreadDeg);
+        } else {
+          beamAngles.push(-beamSpreadDeg, 0, beamSpreadDeg);
+        }
+        beamAngles.forEach((angleDeg) => {
+          const beam = new THREE.Mesh(beamGeometry, beamMaterial);
+          beam.position.set(0, 0, beamZ);
+          beam.rotation.set(0, 0, degToRad(90 + angleDeg));
+          group.add(beam);
+          const beamEdges = new THREE.LineSegments(
+            new THREE.EdgesGeometry(beam.geometry),
+            new THREE.LineBasicMaterial({
+              color: selected ? 0xbfdbfe : 0x1f2937,
+              transparent: true,
+              opacity: selected ? 0.95 : 0.5
+            })
+          );
+          beamEdges.position.copy(beam.position);
+          beamEdges.rotation.copy(beam.rotation);
+          group.add(beamEdges);
+          if (!ghostMode && typeof wallLike.id === 'string') {
+            beam.userData.wallId = wallLike.id;
+            pickableWallMeshes.push(beam);
+          }
+        });
+
+        const spikeLength = Math.max(10, safeHeight * spikeLengthRatio);
+        const spikeRadius = Math.max(1.2, beamRadius * 0.45);
+        const spikeRingRadius = Math.max(beamLength * 0.32, Math.min(safeWidth, safeDepth) * 0.42);
+        const spikeGeometry = new THREE.ConeGeometry(spikeRadius, spikeLength, 10);
+        const spikeMaterial = new THREE.MeshStandardMaterial({
+          color: spikeColor,
+          transparent: ghostMode,
+          opacity: ghostMode ? 0.55 : 0.96,
+          roughness: 0.36,
+          metalness: 0.68,
+          side: THREE.DoubleSide,
+          depthWrite: true
+        });
+        for (let i = 0; i < spikeCount; i += 1) {
+          const angle = (Math.PI * 2 * i) / spikeCount;
+          const sx = Math.cos(angle) * spikeRingRadius;
+          const sy = Math.sin(angle) * spikeRingRadius;
+          const spike = new THREE.Mesh(spikeGeometry, spikeMaterial);
+          spike.position.set(sx, sy, beamZ + (spikeLength * 0.25));
+          spike.rotation.set(Math.PI / 2, 0, angle - (Math.PI / 2));
+          group.add(spike);
+          if (!ghostMode && typeof wallLike.id === 'string') {
+            spike.userData.wallId = wallLike.id;
+            pickableWallMeshes.push(spike);
+          }
+        }
+
+        // Invisible hitbox keeps click/selection reliable while preserving the visual shape.
+        const hitbox = new THREE.Mesh(
+          new THREE.BoxGeometry(safeWidth, safeDepth, safeHeight),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
+        );
+        hitbox.position.set(0, 0, safeHeight / 2);
+        group.add(hitbox);
+        if (!ghostMode && typeof wallLike.id === 'string') {
+          hitbox.userData.wallId = wallLike.id;
+          pickableWallMeshes.push(hitbox);
+        }
+        return;
+      }
+
       const wallMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          Math.max(20, Number(wallLike.width) || WALL_WIDTH),
-          Math.max(12, Number(wallLike.depth) || WALL_DEPTH),
-          safeHeight
-        ),
+        new THREE.BoxGeometry(safeWidth, safeDepth, safeHeight),
         new THREE.MeshStandardMaterial({
           color,
           transparent: ghostMode,
@@ -1810,11 +1950,7 @@ const BattlefieldPreviewModal = ({
           depthWrite: true
         })
       );
-      wallMesh.position.set(
-        Number(wallLike.x) || 0,
-        Number(wallLike.y) || 0,
-        baseZ + (safeHeight / 2)
-      );
+      wallMesh.position.set(Number(wallLike.x) || 0, Number(wallLike.y) || 0, baseZ + (safeHeight / 2));
       wallMesh.rotation.set(0, 0, degToRad(wallLike.rotation || 0));
       worldGroup.add(wallMesh);
       if (!ghostMode && typeof wallLike.id === 'string') {
@@ -1911,6 +2047,7 @@ const BattlefieldPreviewModal = ({
     fieldWidth,
     editMode,
     effectiveCanEdit,
+    itemCatalogById,
     selectedWallId,
     panWorld.x,
     panWorld.y
@@ -2188,8 +2325,11 @@ const BattlefieldPreviewModal = ({
         setMessage('当前仅可预览，不可编辑战场');
         return;
       }
-      if (ghost?._mode !== 'move' && wallStockRemaining <= 0) {
-        setMessage('木墙库存不足，无法放置');
+      const ghostItemId = typeof ghost?.itemId === 'string' ? ghost.itemId : '';
+      const ghostItemDef = itemCatalogById.get(ghostItemId) || null;
+      const ghostRemaining = itemStockMetaMap.get(ghostItemId)?.remaining ?? 0;
+      if (ghost?._mode !== 'move' && ghostRemaining <= 0) {
+        setMessage(`物品「${ghostItemDef?.name || ghostItemId || '未知'}」库存不足，无法放置`);
         return;
       }
       const nextWall = createWallFromLike(evaluated.ghost, {
@@ -2199,12 +2339,12 @@ const BattlefieldPreviewModal = ({
         setWalls((prev) => prev.map((item) => (item.id === ghost._sourceId ? nextWall : item)));
         setHasDraftChanges(true);
         cancelGhostPlacement('');
-        setMessage('木墙位置已更新');
+        setMessage('物品位置已更新');
       } else {
         setWalls((prev) => [...prev, nextWall]);
         setHasDraftChanges(true);
         cancelGhostPlacement('');
-        setMessage('木墙已放置');
+        setMessage('物品已放置');
       }
       return;
     }
@@ -2236,7 +2376,8 @@ const BattlefieldPreviewModal = ({
       if (pickedWall) {
         setSelectedWallId(pickedWall.id);
         cancelGhostPlacement('');
-        setMessage('已选中木墙：点击头顶图标可移动或回收');
+        const pickedItemName = itemCatalogById.get(pickedWall.itemId)?.name || '物品';
+        setMessage(`已选中${pickedItemName}：点击头顶图标可移动或回收`);
         return;
       }
       if (selectedWallId) {
@@ -2434,8 +2575,8 @@ const BattlefieldPreviewModal = ({
         </div>
 
         <div className="battlefield-toolbar">
-          <span>{`已放置木墙 ${walls.length}`}</span>
-          <span>{`木墙库存 ${wallStockRemaining}/${maxItemsPerType}`}</span>
+          <span>{`已放置物品 ${walls.length}`}</span>
+          <span>{`库存总计 ${totalItemRemaining}/${totalItemLimit}`}</span>
           <span>{`堆叠上限 ${MAX_STACK_LEVEL} 层`}</span>
           <span>{editMode && hasDraftChanges ? '布置中：有未保存改动' : (cacheNeedsSync ? '离线缓存待同步' : '已与服务端同步')}</span>
           <span>{savingLayout ? '保存中...' : '群组数值显示: 血量 / 防御'}</span>
@@ -2444,20 +2585,29 @@ const BattlefieldPreviewModal = ({
         <div className="battlefield-main">
           <aside className="battlefield-sidebar">
             <div className="battlefield-sidebar-title">战场物品</div>
-            <button
-              type="button"
-              className={`battlefield-item-card ${selectedPaletteItem === 'wood_wall' && ghost ? 'selected' : ''}`}
-              disabled={!effectiveCanEdit || !editMode || wallStockRemaining <= 0}
-              onClick={() => pickPaletteItem('wood_wall')}
-            >
-              <strong>木墙</strong>
-              <span>{`库存 ${wallStockRemaining}/${maxItemsPerType}`}</span>
-              <span>{`属性 ${woodWallItem?.hp || BASE_HP} / ${roundTo(woodWallItem?.defense || BASE_DEFENSE, 2)}`}</span>
-            </button>
+            {normalizedItemCatalog.length === 0 && (
+              <div className="battlefield-sidebar-tip">暂无可用战场物品，请先在管理员面板配置物品目录。</div>
+            )}
+            {normalizedItemCatalog.map((item) => {
+              const stockMeta = itemStockMetaMap.get(item.itemId) || { used: 0, limit: 0, remaining: 0 };
+              return (
+                <button
+                  key={item.itemId}
+                  type="button"
+                  className={`battlefield-item-card ${selectedPaletteItem === item.itemId && ghost ? 'selected' : ''}`}
+                  disabled={!effectiveCanEdit || !editMode || stockMeta.remaining <= 0}
+                  onClick={() => pickPaletteItem(item.itemId)}
+                >
+                  <strong>{item.name || item.itemId}</strong>
+                  <span>{`库存 ${stockMeta.remaining}/${stockMeta.limit}`}</span>
+                  <span>{`属性 ${item.hp} / ${roundTo(item.defense, 2)}`}</span>
+                </button>
+              );
+            })}
             <div className="battlefield-sidebar-tip">
               {!effectiveCanEdit
                 ? '当前仅预览'
-                : (!editMode ? '点击“布置战场”后可选择物品' : '点已放置木墙会出现“移动/回收(X)”图标；点选物品后左键放置')}
+                : (!editMode ? '点击“布置战场”后可选择物品' : '点已放置物品会出现“移动/回收(X)”图标；点选物品后左键放置')}
             </div>
           </aside>
 

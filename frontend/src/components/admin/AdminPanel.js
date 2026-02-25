@@ -15,6 +15,7 @@ const REL_SYMBOL_SUPERSET = '⊇';
 const REL_SYMBOL_SUBSET = '⊆';
 
 const UNIT_TYPE_ID_PATTERN = /^[a-zA-Z0-9_-]{2,64}$/;
+const CATALOG_ID_PATTERN = /^[a-zA-Z0-9_-]{2,64}$/;
 const ADMIN_ALLIANCE_PAGE_SIZE = 20;
 const ADMIN_USER_PAGE_SIZE = 50;
 const ADMIN_DOMAIN_PAGE_SIZE = 20;
@@ -35,6 +36,33 @@ const createEmptyUnitTypeForm = () => ({
     nextUnitTypeId: '',
     upgradeCostKP: '',
     sortOrder: '0'
+});
+
+const createEmptyBattlefieldItemForm = () => ({
+    itemId: '',
+    name: '',
+    initialCount: '0',
+    width: '104',
+    depth: '24',
+    height: '42',
+    hp: '240',
+    defense: '1.1',
+    sortOrder: '0',
+    enabled: true,
+    styleText: '{}'
+});
+
+const createEmptyCityBuildingTypeForm = () => ({
+    buildingTypeId: '',
+    name: '',
+    initialCount: '0',
+    radius: '0.17',
+    level: '1',
+    nextUnitTypeId: '',
+    upgradeCostKP: '',
+    sortOrder: '0',
+    enabled: true,
+    styleText: '{}'
 });
 
 const createLocalId = (prefix = 'id') => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -130,6 +158,16 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const [editingUnitTypeId, setEditingUnitTypeId] = useState('');
     const [unitTypeForm, setUnitTypeForm] = useState(createEmptyUnitTypeForm);
     const [unitTypeActionId, setUnitTypeActionId] = useState('');
+    const [battlefieldItems, setBattlefieldItems] = useState([]);
+    const [isCreatingBattlefieldItem, setIsCreatingBattlefieldItem] = useState(false);
+    const [editingBattlefieldItemId, setEditingBattlefieldItemId] = useState('');
+    const [battlefieldItemForm, setBattlefieldItemForm] = useState(createEmptyBattlefieldItemForm);
+    const [battlefieldItemActionId, setBattlefieldItemActionId] = useState('');
+    const [cityBuildingTypes, setCityBuildingTypes] = useState([]);
+    const [isCreatingCityBuildingType, setIsCreatingCityBuildingType] = useState(false);
+    const [editingCityBuildingTypeId, setEditingCityBuildingTypeId] = useState('');
+    const [cityBuildingTypeForm, setCityBuildingTypeForm] = useState(createEmptyCityBuildingTypeForm);
+    const [cityBuildingTypeActionId, setCityBuildingTypeActionId] = useState('');
 
     // Node Management State
     const [allNodes, setAllNodes] = useState([]);
@@ -349,6 +387,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         fetchAllNodes(1);
         fetchAdminSettings();
         fetchArmyUnitTypes();
+        fetchBattlefieldItemCatalog();
+        fetchCityBuildingTypeCatalog();
     }, []);
 
     // --- User Management Functions ---
@@ -758,6 +798,343 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
             alert('删除失败');
         } finally {
             setUnitTypeActionId('');
+        }
+    };
+
+    const parseStyleText = (styleTextRaw) => {
+        const styleText = String(styleTextRaw || '').trim();
+        if (!styleText) return {};
+        try {
+            const parsed = JSON.parse(styleText);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                throw new Error('style 必须是 JSON 对象');
+            }
+            return parsed;
+        } catch (error) {
+            throw new Error(`style 参数格式错误: ${error.message}`);
+        }
+    };
+
+    const fetchBattlefieldItemCatalog = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch('http://localhost:5000/api/admin/catalog/items', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            setBattlefieldItems(Array.isArray(data?.items) ? data.items : []);
+        } catch (error) {
+            console.error('获取物品目录失败:', error);
+        }
+    };
+
+    const resetBattlefieldItemEditor = () => {
+        setIsCreatingBattlefieldItem(false);
+        setEditingBattlefieldItemId('');
+        setBattlefieldItemForm(createEmptyBattlefieldItemForm());
+    };
+
+    const startCreateBattlefieldItem = () => {
+        setIsCreatingBattlefieldItem(true);
+        setEditingBattlefieldItemId('');
+        setBattlefieldItemForm(createEmptyBattlefieldItemForm());
+    };
+
+    const startEditBattlefieldItem = (item) => {
+        setIsCreatingBattlefieldItem(false);
+        setEditingBattlefieldItemId(item.itemId || '');
+        setBattlefieldItemForm({
+            itemId: item.itemId || '',
+            name: item.name || '',
+            initialCount: String(item.initialCount ?? 0),
+            width: String(item.width ?? 104),
+            depth: String(item.depth ?? 24),
+            height: String(item.height ?? 42),
+            hp: String(item.hp ?? 240),
+            defense: String(item.defense ?? 1.1),
+            sortOrder: String(item.sortOrder ?? 0),
+            enabled: item.enabled !== false,
+            styleText: JSON.stringify(item.style && typeof item.style === 'object' ? item.style : {}, null, 2)
+        });
+    };
+
+    const buildBattlefieldItemPayload = (form, includeItemId) => {
+        const payload = {
+            name: String(form.name || '').trim(),
+            initialCount: Number(form.initialCount),
+            width: Number(form.width),
+            depth: Number(form.depth),
+            height: Number(form.height),
+            hp: Number(form.hp),
+            defense: Number(form.defense),
+            sortOrder: Number(form.sortOrder),
+            enabled: form.enabled !== false,
+            style: parseStyleText(form.styleText)
+        };
+        if (includeItemId) payload.itemId = String(form.itemId || '').trim();
+        return payload;
+    };
+
+    const validateBattlefieldItemForm = (form, includeItemId) => {
+        const itemId = String(form.itemId || '').trim();
+        if (includeItemId && !CATALOG_ID_PATTERN.test(itemId)) {
+            return '物品ID格式不正确（2-64位字母/数字/下划线/中划线）';
+        }
+        if (!String(form.name || '').trim()) return '物品名称不能为空';
+        const numericChecks = [
+            ['initialCount', 0, true],
+            ['width', 12, false],
+            ['depth', 12, false],
+            ['height', 10, false],
+            ['hp', 1, true],
+            ['defense', 0.1, false],
+            ['sortOrder', Number.NEGATIVE_INFINITY, true]
+        ];
+        for (const [key, min, integer] of numericChecks) {
+            const value = Number(form[key]);
+            if (!Number.isFinite(value)) return `${key} 必须为数字`;
+            if (integer && !Number.isInteger(value)) return `${key} 必须为整数`;
+            if (value < min) return `${key} 不能小于 ${min}`;
+        }
+        try {
+            parseStyleText(form.styleText);
+        } catch (error) {
+            return error.message;
+        }
+        return '';
+    };
+
+    const saveBattlefieldItem = async () => {
+        const token = localStorage.getItem('token');
+        const isCreate = isCreatingBattlefieldItem;
+        const validationError = validateBattlefieldItemForm(battlefieldItemForm, isCreate);
+        if (validationError) {
+            alert(validationError);
+            return;
+        }
+        const payload = buildBattlefieldItemPayload(battlefieldItemForm, isCreate);
+        const actionId = isCreate ? '__create__' : editingBattlefieldItemId;
+        setBattlefieldItemActionId(actionId);
+        try {
+            const response = await fetch(
+                isCreate
+                    ? 'http://localhost:5000/api/admin/catalog/items'
+                    : `http://localhost:5000/api/admin/catalog/items/${editingBattlefieldItemId}`,
+                {
+                    method: isCreate ? 'POST' : 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`
+                    },
+                    body: JSON.stringify(payload)
+                }
+            );
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || '保存失败');
+                return;
+            }
+            alert(isCreate ? '物品创建成功' : '物品更新成功');
+            resetBattlefieldItemEditor();
+            fetchBattlefieldItemCatalog();
+        } catch (error) {
+            console.error('保存物品失败:', error);
+            alert('保存失败');
+        } finally {
+            setBattlefieldItemActionId('');
+        }
+    };
+
+    const deleteBattlefieldItem = async (item) => {
+        if (!window.confirm(`确定删除物品「${item.name}」吗？`)) return;
+        const token = localStorage.getItem('token');
+        setBattlefieldItemActionId(item.itemId);
+        try {
+            const response = await fetch(`http://localhost:5000/api/admin/catalog/items/${item.itemId}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || '删除失败');
+                return;
+            }
+            alert('物品已删除');
+            if (editingBattlefieldItemId === item.itemId) {
+                resetBattlefieldItemEditor();
+            }
+            fetchBattlefieldItemCatalog();
+        } catch (error) {
+            console.error('删除物品失败:', error);
+            alert('删除失败');
+        } finally {
+            setBattlefieldItemActionId('');
+        }
+    };
+
+    const fetchCityBuildingTypeCatalog = async () => {
+        const token = localStorage.getItem('token');
+        try {
+            const response = await fetch('http://localhost:5000/api/admin/catalog/buildings', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            setCityBuildingTypes(Array.isArray(data?.buildings) ? data.buildings : []);
+        } catch (error) {
+            console.error('获取建筑目录失败:', error);
+        }
+    };
+
+    const resetCityBuildingTypeEditor = () => {
+        setIsCreatingCityBuildingType(false);
+        setEditingCityBuildingTypeId('');
+        setCityBuildingTypeForm(createEmptyCityBuildingTypeForm());
+    };
+
+    const startCreateCityBuildingType = () => {
+        setIsCreatingCityBuildingType(true);
+        setEditingCityBuildingTypeId('');
+        setCityBuildingTypeForm(createEmptyCityBuildingTypeForm());
+    };
+
+    const startEditCityBuildingType = (buildingType) => {
+        setIsCreatingCityBuildingType(false);
+        setEditingCityBuildingTypeId(buildingType.buildingTypeId || '');
+        setCityBuildingTypeForm({
+            buildingTypeId: buildingType.buildingTypeId || '',
+            name: buildingType.name || '',
+            initialCount: String(buildingType.initialCount ?? 0),
+            radius: String(buildingType.radius ?? 0.17),
+            level: String(buildingType.level ?? 1),
+            nextUnitTypeId: buildingType.nextUnitTypeId || '',
+            upgradeCostKP: buildingType.upgradeCostKP === null || buildingType.upgradeCostKP === undefined
+                ? ''
+                : String(buildingType.upgradeCostKP),
+            sortOrder: String(buildingType.sortOrder ?? 0),
+            enabled: buildingType.enabled !== false,
+            styleText: JSON.stringify(buildingType.style && typeof buildingType.style === 'object' ? buildingType.style : {}, null, 2)
+        });
+    };
+
+    const buildCityBuildingTypePayload = (form, includeId) => {
+        const payload = {
+            name: String(form.name || '').trim(),
+            initialCount: Number(form.initialCount),
+            radius: Number(form.radius),
+            level: Number(form.level),
+            nextUnitTypeId: String(form.nextUnitTypeId || '').trim(),
+            sortOrder: Number(form.sortOrder),
+            enabled: form.enabled !== false,
+            style: parseStyleText(form.styleText)
+        };
+        if (String(form.upgradeCostKP || '').trim() === '') {
+            payload.upgradeCostKP = null;
+        } else {
+            payload.upgradeCostKP = Number(form.upgradeCostKP);
+        }
+        if (includeId) payload.buildingTypeId = String(form.buildingTypeId || '').trim();
+        return payload;
+    };
+
+    const validateCityBuildingTypeForm = (form, includeId) => {
+        const buildingTypeId = String(form.buildingTypeId || '').trim();
+        if (includeId && !CATALOG_ID_PATTERN.test(buildingTypeId)) {
+            return '建筑ID格式不正确（2-64位字母/数字/下划线/中划线）';
+        }
+        if (!String(form.name || '').trim()) return '建筑名称不能为空';
+        const numericChecks = [
+            ['initialCount', 0, true],
+            ['radius', 0.1, false],
+            ['level', 1, true],
+            ['sortOrder', Number.NEGATIVE_INFINITY, true]
+        ];
+        for (const [key, min, integer] of numericChecks) {
+            const value = Number(form[key]);
+            if (!Number.isFinite(value)) return `${key} 必须为数字`;
+            if (integer && !Number.isInteger(value)) return `${key} 必须为整数`;
+            if (value < min) return `${key} 不能小于 ${min}`;
+        }
+        if (String(form.upgradeCostKP || '').trim() !== '') {
+            const upgradeCostKP = Number(form.upgradeCostKP);
+            if (!Number.isFinite(upgradeCostKP) || upgradeCostKP < 0) {
+                return 'upgradeCostKP 必须为大于等于 0 的数字';
+            }
+        }
+        try {
+            parseStyleText(form.styleText);
+        } catch (error) {
+            return error.message;
+        }
+        return '';
+    };
+
+    const saveCityBuildingType = async () => {
+        const token = localStorage.getItem('token');
+        const isCreate = isCreatingCityBuildingType;
+        const validationError = validateCityBuildingTypeForm(cityBuildingTypeForm, isCreate);
+        if (validationError) {
+            alert(validationError);
+            return;
+        }
+        const payload = buildCityBuildingTypePayload(cityBuildingTypeForm, isCreate);
+        const actionId = isCreate ? '__create__' : editingCityBuildingTypeId;
+        setCityBuildingTypeActionId(actionId);
+        try {
+            const response = await fetch(
+                isCreate
+                    ? 'http://localhost:5000/api/admin/catalog/buildings'
+                    : `http://localhost:5000/api/admin/catalog/buildings/${editingCityBuildingTypeId}`,
+                {
+                    method: isCreate ? 'POST' : 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`
+                    },
+                    body: JSON.stringify(payload)
+                }
+            );
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || '保存失败');
+                return;
+            }
+            alert(isCreate ? '建筑创建成功' : '建筑更新成功');
+            resetCityBuildingTypeEditor();
+            fetchCityBuildingTypeCatalog();
+        } catch (error) {
+            console.error('保存建筑失败:', error);
+            alert('保存失败');
+        } finally {
+            setCityBuildingTypeActionId('');
+        }
+    };
+
+    const deleteCityBuildingType = async (buildingType) => {
+        if (!window.confirm(`确定删除建筑「${buildingType.name}」吗？`)) return;
+        const token = localStorage.getItem('token');
+        setCityBuildingTypeActionId(buildingType.buildingTypeId);
+        try {
+            const response = await fetch(`http://localhost:5000/api/admin/catalog/buildings/${buildingType.buildingTypeId}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || '删除失败');
+                return;
+            }
+            alert('建筑已删除');
+            if (editingCityBuildingTypeId === buildingType.buildingTypeId) {
+                resetCityBuildingTypeEditor();
+            }
+            fetchCityBuildingTypeCatalog();
+        } catch (error) {
+            console.error('删除建筑失败:', error);
+            alert('删除失败');
+        } finally {
+            setCityBuildingTypeActionId('');
         }
     };
 
@@ -5069,6 +5446,26 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                     <Shield className="icon-small" />
                     兵种管理
                 </button>
+                <button
+                    onClick={() => {
+                        setAdminTab('battlefieldItems');
+                        fetchBattlefieldItemCatalog();
+                    }}
+                    className={`admin-tab ${adminTab === 'battlefieldItems' ? 'active' : ''}`}
+                >
+                    <Settings className="icon-small" />
+                    物品管理
+                </button>
+                <button
+                    onClick={() => {
+                        setAdminTab('cityBuildingTypes');
+                        fetchCityBuildingTypeCatalog();
+                    }}
+                    className={`admin-tab ${adminTab === 'cityBuildingTypes' ? 'active' : ''}`}
+                >
+                    <Settings className="icon-small" />
+                    建筑管理
+                </button>
             </div>
 
             {/* 用户管理选项卡 */}
@@ -5567,6 +5964,392 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                 </button>
                                                 <button
                                                     onClick={() => deleteUnitType(unitType)}
+                                                    className="btn-action btn-delete"
+                                                    disabled={rowBusy}
+                                                >
+                                                    删除
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {adminTab === 'battlefieldItems' && (
+                <div className="users-table-container">
+                    <div className="table-info">
+                        <p>物品数量: <strong>{battlefieldItems.length}</strong></p>
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={fetchBattlefieldItemCatalog}
+                            style={{ marginLeft: '1rem' }}
+                        >
+                            刷新数据
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-success"
+                            onClick={startCreateBattlefieldItem}
+                            style={{ marginLeft: '0.5rem' }}
+                        >
+                            <Plus className="icon-small" />
+                            新增物品
+                        </button>
+                    </div>
+
+                    {(isCreatingBattlefieldItem || editingBattlefieldItemId) && (
+                        <div className="unit-type-editor-card">
+                            <h3>{isCreatingBattlefieldItem ? '新增物品' : `编辑物品：${battlefieldItemForm.name || editingBattlefieldItemId}`}</h3>
+                            <div className="unit-type-form-grid">
+                                <label>
+                                    物品ID
+                                    <input
+                                        type="text"
+                                        value={battlefieldItemForm.itemId}
+                                        disabled={!isCreatingBattlefieldItem}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, itemId: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    名称
+                                    <input
+                                        type="text"
+                                        value={battlefieldItemForm.name}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, name: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    初始数量
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        value={battlefieldItemForm.initialCount}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, initialCount: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    宽度
+                                    <input
+                                        type="number"
+                                        min="12"
+                                        value={battlefieldItemForm.width}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, width: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    深度
+                                    <input
+                                        type="number"
+                                        min="12"
+                                        value={battlefieldItemForm.depth}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, depth: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    高度
+                                    <input
+                                        type="number"
+                                        min="10"
+                                        value={battlefieldItemForm.height}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, height: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    生命
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={battlefieldItemForm.hp}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, hp: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    防御
+                                    <input
+                                        type="number"
+                                        min="0.1"
+                                        step="0.01"
+                                        value={battlefieldItemForm.defense}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, defense: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    排序
+                                    <input
+                                        type="number"
+                                        value={battlefieldItemForm.sortOrder}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, sortOrder: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={battlefieldItemForm.enabled}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, enabled: e.target.checked }))}
+                                    />
+                                    启用
+                                </label>
+                                <label style={{ gridColumn: '1 / -1' }}>
+                                    样式参数（JSON）
+                                    <textarea
+                                        value={battlefieldItemForm.styleText}
+                                        onChange={(e) => setBattlefieldItemForm((prev) => ({ ...prev, styleText: e.target.value }))}
+                                        className="edit-input"
+                                        rows={5}
+                                    />
+                                </label>
+                            </div>
+                            <div className="unit-type-form-actions">
+                                <button onClick={saveBattlefieldItem} className="btn btn-primary" disabled={Boolean(battlefieldItemActionId)}>
+                                    {battlefieldItemActionId ? '提交中...' : '保存'}
+                                </button>
+                                <button onClick={resetBattlefieldItemEditor} className="btn btn-secondary" disabled={Boolean(battlefieldItemActionId)}>
+                                    取消
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="table-responsive">
+                        <table className="users-table">
+                            <thead>
+                                <tr>
+                                    <th>物品ID</th>
+                                    <th>名称</th>
+                                    <th>初始数量</th>
+                                    <th>尺寸（宽/深/高）</th>
+                                    <th>生命/防御</th>
+                                    <th>排序</th>
+                                    <th>状态</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {battlefieldItems.map((item) => {
+                                    const rowBusy = battlefieldItemActionId === item.itemId || battlefieldItemActionId === '__create__';
+                                    return (
+                                        <tr key={item.itemId}>
+                                            <td className="id-cell">{item.itemId}</td>
+                                            <td className="username-cell">{item.name}</td>
+                                            <td>{item.initialCount}</td>
+                                            <td>{`${item.width} / ${item.depth} / ${item.height}`}</td>
+                                            <td>{`${item.hp} / ${item.defense}`}</td>
+                                            <td>{item.sortOrder}</td>
+                                            <td>{item.enabled === false ? '停用' : '启用'}</td>
+                                            <td className="action-cell">
+                                                <button
+                                                    onClick={() => startEditBattlefieldItem(item)}
+                                                    className="btn-action btn-edit"
+                                                    disabled={rowBusy}
+                                                >
+                                                    编辑
+                                                </button>
+                                                <button
+                                                    onClick={() => deleteBattlefieldItem(item)}
+                                                    className="btn-action btn-delete"
+                                                    disabled={rowBusy}
+                                                >
+                                                    删除
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {adminTab === 'cityBuildingTypes' && (
+                <div className="users-table-container">
+                    <div className="table-info">
+                        <p>建筑数量: <strong>{cityBuildingTypes.length}</strong></p>
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={fetchCityBuildingTypeCatalog}
+                            style={{ marginLeft: '1rem' }}
+                        >
+                            刷新数据
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-success"
+                            onClick={startCreateCityBuildingType}
+                            style={{ marginLeft: '0.5rem' }}
+                        >
+                            <Plus className="icon-small" />
+                            新增建筑
+                        </button>
+                    </div>
+
+                    {(isCreatingCityBuildingType || editingCityBuildingTypeId) && (
+                        <div className="unit-type-editor-card">
+                            <h3>{isCreatingCityBuildingType ? '新增建筑' : `编辑建筑：${cityBuildingTypeForm.name || editingCityBuildingTypeId}`}</h3>
+                            <div className="unit-type-form-grid">
+                                <label>
+                                    建筑ID
+                                    <input
+                                        type="text"
+                                        value={cityBuildingTypeForm.buildingTypeId}
+                                        disabled={!isCreatingCityBuildingType}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, buildingTypeId: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    名称
+                                    <input
+                                        type="text"
+                                        value={cityBuildingTypeForm.name}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, name: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    初始数量
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        value={cityBuildingTypeForm.initialCount}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, initialCount: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    半径
+                                    <input
+                                        type="number"
+                                        min="0.1"
+                                        step="0.01"
+                                        value={cityBuildingTypeForm.radius}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, radius: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    等级
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={cityBuildingTypeForm.level}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, level: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    下一级兵种ID
+                                    <input
+                                        type="text"
+                                        value={cityBuildingTypeForm.nextUnitTypeId}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, nextUnitTypeId: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label>
+                                    升级成本（KP）
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        value={cityBuildingTypeForm.upgradeCostKP}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, upgradeCostKP: e.target.value }))}
+                                        className="edit-input"
+                                        placeholder="留空表示未配置"
+                                    />
+                                </label>
+                                <label>
+                                    排序
+                                    <input
+                                        type="number"
+                                        value={cityBuildingTypeForm.sortOrder}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, sortOrder: e.target.value }))}
+                                        className="edit-input"
+                                    />
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={cityBuildingTypeForm.enabled}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, enabled: e.target.checked }))}
+                                    />
+                                    启用
+                                </label>
+                                <label style={{ gridColumn: '1 / -1' }}>
+                                    样式参数（JSON）
+                                    <textarea
+                                        value={cityBuildingTypeForm.styleText}
+                                        onChange={(e) => setCityBuildingTypeForm((prev) => ({ ...prev, styleText: e.target.value }))}
+                                        className="edit-input"
+                                        rows={5}
+                                    />
+                                </label>
+                            </div>
+                            <div className="unit-type-form-actions">
+                                <button onClick={saveCityBuildingType} className="btn btn-primary" disabled={Boolean(cityBuildingTypeActionId)}>
+                                    {cityBuildingTypeActionId ? '提交中...' : '保存'}
+                                </button>
+                                <button onClick={resetCityBuildingTypeEditor} className="btn btn-secondary" disabled={Boolean(cityBuildingTypeActionId)}>
+                                    取消
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="table-responsive">
+                        <table className="users-table">
+                            <thead>
+                                <tr>
+                                    <th>建筑ID</th>
+                                    <th>名称</th>
+                                    <th>初始数量</th>
+                                    <th>半径</th>
+                                    <th>等级</th>
+                                    <th>下一级兵种</th>
+                                    <th>升级成本</th>
+                                    <th>排序</th>
+                                    <th>状态</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {cityBuildingTypes.map((buildingType) => {
+                                    const rowBusy = cityBuildingTypeActionId === buildingType.buildingTypeId || cityBuildingTypeActionId === '__create__';
+                                    return (
+                                        <tr key={buildingType.buildingTypeId}>
+                                            <td className="id-cell">{buildingType.buildingTypeId}</td>
+                                            <td className="username-cell">{buildingType.name}</td>
+                                            <td>{buildingType.initialCount}</td>
+                                            <td>{buildingType.radius}</td>
+                                            <td>{buildingType.level}</td>
+                                            <td>{buildingType.nextUnitTypeId || '-'}</td>
+                                            <td>{buildingType.upgradeCostKP ?? '-'}</td>
+                                            <td>{buildingType.sortOrder}</td>
+                                            <td>{buildingType.enabled === false ? '停用' : '启用'}</td>
+                                            <td className="action-cell">
+                                                <button
+                                                    onClick={() => startEditCityBuildingType(buildingType)}
+                                                    className="btn-action btn-edit"
+                                                    disabled={rowBusy}
+                                                >
+                                                    编辑
+                                                </button>
+                                                <button
+                                                    onClick={() => deleteCityBuildingType(buildingType)}
                                                     className="btn-action btn-delete"
                                                     disabled={rowBusy}
                                                 >

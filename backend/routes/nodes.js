@@ -32,6 +32,10 @@ const {
   listApprovedNodesByNames
 } = require('../services/domainGraphTraversalService');
 const {
+  fetchBattlefieldItems,
+  fetchCityBuildingTypes
+} = require('../services/placeableCatalogService');
+const {
   isNodeSenseCollectionReadEnabled,
   isNodeSenseRepairEnabled,
   hydrateNodeSensesForNodes,
@@ -1945,17 +1949,8 @@ const normalizeGateDefenseViewerAdminIds = (viewerIds = [], allowedAdminIds = nu
 };
 
 const createDefaultDefenseLayout = () => ({
-  buildings: [{
-    buildingId: 'core',
-    name: '建筑1',
-    x: 0,
-    y: 0,
-    radius: CITY_BUILDING_DEFAULT_RADIUS,
-    level: 1,
-    nextUnitTypeId: '',
-    upgradeCostKP: null
-  }],
-  intelBuildingId: 'core',
+  buildings: [],
+  intelBuildingId: '',
   gateDefense: {
     cheng: [],
     qi: []
@@ -1976,6 +1971,7 @@ const normalizeDefenseLayoutInput = (input = {}) => {
     seen.add(buildingId);
     normalized.push({
       buildingId,
+      buildingTypeId: typeof item?.buildingTypeId === 'string' ? item.buildingTypeId.trim() : '',
       name: (typeof item.name === 'string' && item.name.trim()) ? item.name.trim() : `建筑${normalized.length + 1}`,
       x: Math.max(-1, Math.min(1, round3(item.x, 0))),
       y: Math.max(-1, Math.min(1, round3(item.y, 0))),
@@ -2011,7 +2007,7 @@ const normalizeDefenseLayoutInput = (input = {}) => {
   const sourceIntelBuildingId = typeof source.intelBuildingId === 'string' ? source.intelBuildingId.trim() : '';
   const intelBuildingId = normalized.some((item) => item.buildingId === sourceIntelBuildingId)
     ? sourceIntelBuildingId
-    : normalized[0].buildingId;
+    : (normalized[0]?.buildingId || '');
 
   const sourceGateDefense = source.gateDefense && typeof source.gateDefense === 'object'
     ? source.gateDefense
@@ -2053,6 +2049,7 @@ const serializeDefenseLayout = (layout = {}) => {
   return {
     buildings: normalized.buildings.map((item) => ({
       buildingId: item.buildingId,
+      buildingTypeId: typeof item?.buildingTypeId === 'string' ? item.buildingTypeId : '',
       name: item.name || '',
       x: round3(item.x, 0),
       y: round3(item.y, 0),
@@ -2122,15 +2119,19 @@ const serializeBattlefieldLayoutMeta = (layout = {}) => ({
 const serializeBattlefieldItemCatalog = (items = []) => (
   (Array.isArray(items) ? items : [])
     .map((item) => ({
-      itemType: typeof item?.itemType === 'string' ? item.itemType : 'wood_wall',
+      itemId: typeof item?.itemId === 'string'
+        ? item.itemId
+        : (typeof item?.itemType === 'string' ? item.itemType : ''),
       name: typeof item?.name === 'string' ? item.name : '',
+      initialCount: Math.max(0, Math.floor(Number(item?.initialCount) || 0)),
       width: round3(item?.width, 104),
       depth: round3(item?.depth, 24),
       height: round3(item?.height, 42),
       hp: Math.max(1, Math.floor(Number(item?.hp) || 240)),
-      defense: round3(item?.defense, 1.1)
+      defense: round3(item?.defense, 1.1),
+      style: item?.style && typeof item.style === 'object' ? item.style : {}
     }))
-    .filter((item) => !!item.itemType)
+    .filter((item) => !!item.itemId)
 );
 
 const serializeBattlefieldObjectsForLayout = (battlefieldState = {}, layoutId = '') => (
@@ -2140,7 +2141,9 @@ const serializeBattlefieldObjectsForLayout = (battlefieldState = {}, layoutId = 
       id: typeof item?.objectId === 'string' ? item.objectId : '',
       objectId: typeof item?.objectId === 'string' ? item.objectId : '',
       layoutId: typeof item?.layoutId === 'string' ? item.layoutId : '',
-      itemType: typeof item?.itemType === 'string' ? item.itemType : 'wood_wall',
+      itemId: typeof item?.itemId === 'string'
+        ? item.itemId
+        : (typeof item?.itemType === 'string' ? item.itemType : ''),
       x: round3(item?.x, 0),
       y: round3(item?.y, 0),
       z: Math.max(0, Math.floor(Number(item?.z) || 0)),
@@ -2151,13 +2154,15 @@ const serializeBattlefieldObjectsForLayout = (battlefieldState = {}, layoutId = 
 
 const serializeBattlefieldStateForGate = (battlefieldState = {}, gateKey = '', preferredLayoutId = '') => {
   const normalized = normalizeBattlefieldStateInput(battlefieldState);
+  const rawItemCatalog = Array.isArray(battlefieldState?.items) ? battlefieldState.items : [];
+  const itemCatalogSource = rawItemCatalog.length > 0 ? rawItemCatalog : normalized?.items;
   const activeLayout = findBattlefieldLayoutByGate(normalized, gateKey, preferredLayoutId);
   const activeLayoutId = activeLayout?.layoutId || '';
   return {
     version: Math.max(1, Math.floor(Number(normalized?.version) || 1)),
     activeLayout: activeLayout ? serializeBattlefieldLayoutMeta(activeLayout) : null,
     layouts: (Array.isArray(normalized?.layouts) ? normalized.layouts : []).map((layout) => serializeBattlefieldLayoutMeta(layout)),
-    itemCatalog: serializeBattlefieldItemCatalog(normalized?.items),
+    itemCatalog: serializeBattlefieldItemCatalog(itemCatalogSource),
     objects: serializeBattlefieldObjectsForLayout(normalized, activeLayoutId),
     updatedAt: normalized?.updatedAt || null
   };
@@ -2213,9 +2218,11 @@ const mergeBattlefieldStateByGate = (currentState = {}, gateKey = '', payload = 
     objectId: (typeof item?.objectId === 'string' && item.objectId.trim())
       ? item.objectId.trim()
       : ((typeof item?.id === 'string' && item.id.trim()) ? item.id.trim() : `obj_${index + 1}`),
-    itemType: (typeof item?.itemType === 'string' && item.itemType.trim())
-      ? item.itemType.trim()
-      : (typeof item?.type === 'string' && item.type.trim() ? item.type.trim() : 'wood_wall'),
+    itemId: (typeof item?.itemId === 'string' && item.itemId.trim())
+      ? item.itemId.trim()
+      : ((typeof item?.itemType === 'string' && item.itemType.trim())
+        ? item.itemType.trim()
+        : (typeof item?.type === 'string' && item.type.trim() ? item.type.trim() : '')),
     x: item?.x,
     y: item?.y,
     z: item?.z,
@@ -6853,6 +6860,7 @@ router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
     }
 
     const canEdit = isDomainMaster(node, requestUserId);
+    const buildingCatalog = await fetchCityBuildingTypes({ enabledOnly: true });
     const defenseLayout = resolveNodeDefenseLayout(node, {});
     const gateDefenseViewerAdminIds = normalizeGateDefenseViewerAdminIds(
       defenseLayout?.gateDefenseViewAdminIds,
@@ -6877,7 +6885,8 @@ router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
       canViewGateDefense,
       gateDefenseViewerAdminIds: canEdit ? gateDefenseViewerAdminIds : [],
       maxBuildings: CITY_BUILDING_LIMIT,
-      minBuildings: 1,
+      minBuildings: 0,
+      buildingCatalog,
       layout
     });
   } catch (error) {
@@ -6915,6 +6924,28 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
       ? req.body.layout
       : req.body;
     const normalizedLayout = normalizeDefenseLayoutInput(payload || {});
+    const buildingCatalog = await fetchCityBuildingTypes({ enabledOnly: true });
+    const buildingTypeMap = new Map(
+      buildingCatalog
+        .map((item) => [item?.buildingTypeId, item])
+        .filter(([id]) => !!id)
+    );
+    const buildingTypeCountMap = new Map();
+    for (const building of (Array.isArray(normalizedLayout?.buildings) ? normalizedLayout.buildings : [])) {
+      const buildingTypeId = typeof building?.buildingTypeId === 'string' ? building.buildingTypeId.trim() : '';
+      if (!buildingTypeId || !buildingTypeMap.has(buildingTypeId)) {
+        return res.status(400).json({ error: `存在无效建筑类型：${buildingTypeId || 'empty'}` });
+      }
+      buildingTypeCountMap.set(buildingTypeId, (buildingTypeCountMap.get(buildingTypeId) || 0) + 1);
+    }
+    for (const [buildingTypeId, count] of buildingTypeCountMap.entries()) {
+      const maxCount = Math.max(0, Math.floor(Number(buildingTypeMap.get(buildingTypeId)?.initialCount) || 0));
+      if (count > maxCount) {
+        return res.status(400).json({
+          error: `建筑数量超出上限：${buildingTypeId} 可放置 ${maxCount}，当前 ${count}`
+        });
+      }
+    }
 
     const requestUser = await User.findById(requestUserId).select('armyRoster');
     if (!requestUser) {
@@ -6974,7 +7005,8 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
       nodeId: getIdString(node._id),
       layout: serializeDefenseLayout(nextLayout),
       maxBuildings: CITY_BUILDING_LIMIT,
-      minBuildings: 1
+      minBuildings: 0,
+      buildingCatalog
     });
   } catch (error) {
     console.error('保存知识域城防配置错误:', error);
@@ -7021,7 +7053,12 @@ router.get('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       return res.status(403).json({ error: '仅域主或已授权域相可查看战场布局' });
     }
 
+    const battlefieldItemCatalog = await fetchBattlefieldItems({ enabledOnly: true });
     const battlefieldState = resolveNodeBattlefieldLayout(node, {});
+    const mergedBattlefieldState = {
+      ...battlefieldState,
+      items: battlefieldItemCatalog
+    };
     res.json({
       success: true,
       nodeId: getIdString(node._id),
@@ -7030,7 +7067,7 @@ router.get('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       layoutId,
       canEdit,
       canView,
-      layoutBundle: serializeBattlefieldStateForGate(battlefieldState, gateKey, layoutId)
+      layoutBundle: serializeBattlefieldStateForGate(mergedBattlefieldState, gateKey, layoutId)
     });
   } catch (error) {
     console.error('获取知识域战场布局错误:', error);
@@ -7070,10 +7107,38 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
 
     const payload = req.body && typeof req.body === 'object' ? req.body : {};
     const currentState = resolveNodeBattlefieldLayout(node, {});
+    const battlefieldItemCatalog = await fetchBattlefieldItems({ enabledOnly: true });
+    const itemById = new Map(
+      battlefieldItemCatalog
+        .map((item) => [item?.itemId, item])
+        .filter(([id]) => !!id)
+    );
     const nextBattlefieldState = mergeBattlefieldStateByGate(currentState, gateKey, {
       ...payload,
       layoutId
     });
+    nextBattlefieldState.items = battlefieldItemCatalog;
+
+    const counter = new Map();
+    for (const obj of (Array.isArray(nextBattlefieldState.objects) ? nextBattlefieldState.objects : [])) {
+      const itemId = typeof obj?.itemId === 'string' ? obj.itemId.trim() : '';
+      if (!itemId || !itemById.has(itemId)) {
+        return res.status(400).json({ error: `存在无效物品ID：${itemId || 'empty'}` });
+      }
+      const layoutIdKey = typeof obj?.layoutId === 'string' ? obj.layoutId.trim() : '';
+      const key = `${layoutIdKey}:${itemId}`;
+      counter.set(key, (counter.get(key) || 0) + 1);
+    }
+    for (const [key, count] of counter.entries()) {
+      const [, itemId] = key.split(':');
+      const item = itemById.get(itemId);
+      const stockLimit = Math.max(0, Math.floor(Number(item?.initialCount) || 0));
+      if (count > stockLimit) {
+        return res.status(400).json({
+          error: `物品数量超限：${itemId} 可放置 ${stockLimit}，当前 ${count}`
+        });
+      }
+    }
 
     await upsertNodeBattlefieldLayout({
       nodeId: node._id,
