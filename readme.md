@@ -46,6 +46,11 @@ pm2 start npm --name frontend -- start
 
 标题+释义选择浮层
 
+兵种：
+A. 词刃卒（近战/慢）：speed=1.0, hp=120, atk=22, def=28, range=1, costKP=10
+B. 句锋骑（近战/快）：speed=2.0, hp=85,  atk=26, def=16, range=1, costKP=12
+C. 语弩手（远程/慢）：speed=1.1, hp=75,  atk=30, def=10, range=4, costKP=12
+D. 符影游（远程/快）：speed=2.2, hp=65,  atk=23, def=9,  range=3, costKP=11
 
 ------------------------------
 脚本归档说明（2026-02-22）
@@ -71,3 +76,22 @@ codex --sandbox workspace-write \
   --ask-for-approval never \
   -c sandbox_workspace_write.network_access=true \
   -c features.use_linux_sandbox_bwrap=true
+
+codex支持：
+sandbox_mode = "workspace-write"   # 允许在当前项目内写文件/改代码
+# sandbox_mode = "read-only"       # 如果你只想让它读，不想改文件
+
+[sandbox_workspace_write]
+network_access = false             # 需要联网再改成 true
+
+[features]
+use_linux_sandbox_bwrap = false
+
+同时在~/.bashrc 加入：
+export codez=""
+
+------------------------------
+pm2命令：
+------------------------------
+./start.sh
+pm2 restart neurowar-backend neurowar-frontend
