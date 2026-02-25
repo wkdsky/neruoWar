@@ -16,6 +16,7 @@ import AssociationModal from './components/modals/AssociationModal';
 import NodeInfoModal from './components/modals/NodeInfoModal';
 import CreateNodeModal from './components/modals/CreateNodeModal';
 import PveBattleModal from './components/game/PveBattleModal';
+import BattlefieldPreviewModal from './components/game/BattlefieldPreviewModal';
 
 // 导入头像
 import defaultMale1 from './assets/avatars/default_male_1.svg';
@@ -555,6 +556,15 @@ const App = () => {
         nodeId: '',
         gateKey: '',
         data: null
+    });
+    const [siegeBattlefieldPreviewState, setSiegeBattlefieldPreviewState] = useState({
+        open: false,
+        loading: false,
+        error: '',
+        nodeId: '',
+        gateKey: '',
+        gateLabel: '',
+        layoutBundle: null
     });
 
 
@@ -2513,6 +2523,15 @@ const App = () => {
             error: '',
             message: ''
         });
+        setSiegeBattlefieldPreviewState({
+            open: false,
+            loading: false,
+            error: '',
+            nodeId: '',
+            gateKey: '',
+            gateLabel: '',
+            layoutBundle: null
+        });
     };
 
     const buildInitialSiegeSupportDraft = (status) => {
@@ -2965,6 +2984,74 @@ const App = () => {
             gateKey: '',
             data: null
         });
+    };
+
+    const closeSiegeBattlefieldPreview = () => {
+        setSiegeBattlefieldPreviewState({
+            open: false,
+            loading: false,
+            error: '',
+            nodeId: '',
+            gateKey: '',
+            gateLabel: '',
+            layoutBundle: null
+        });
+    };
+
+    const handleOpenSiegeBattlefieldPreview = async () => {
+        const token = localStorage.getItem('token');
+        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
+        const gateKey = (
+            (siegeStatus.compareGate && (siegeStatus.activeGateKeys || []).includes(siegeStatus.compareGate) ? siegeStatus.compareGate : '')
+            || (siegeStatus.activeGateKeys || [])[0]
+            || ''
+        );
+        if (!token || !nodeId || !gateKey) return;
+
+        setSiegeBattlefieldPreviewState({
+            open: false,
+            loading: true,
+            error: '',
+            nodeId,
+            gateKey,
+            gateLabel: CITY_GATE_LABEL_MAP[gateKey] || gateKey,
+            layoutBundle: null
+        });
+        try {
+            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/battlefield-preview?gateKey=${encodeURIComponent(gateKey)}`, {
+                headers: {
+                    Authorization: `Bearer ${token}`
+                }
+            });
+            const parsed = await parseApiResponse(response);
+            if (!response.ok || !parsed.data) {
+                setSiegeBattlefieldPreviewState((prev) => ({
+                    ...prev,
+                    open: false,
+                    loading: false,
+                    error: getApiErrorMessage(parsed, '加载战场预览失败')
+                }));
+                return;
+            }
+
+            const payload = parsed.data;
+            setSiegeBattlefieldPreviewState({
+                open: true,
+                loading: false,
+                error: '',
+                nodeId: payload.nodeId || nodeId,
+                gateKey: payload.gateKey || gateKey,
+                gateLabel: payload.gateLabel || CITY_GATE_LABEL_MAP[payload.gateKey || gateKey] || gateKey,
+                layoutBundle: payload.layoutBundle && typeof payload.layoutBundle === 'object' ? payload.layoutBundle : null
+            });
+        } catch (error) {
+            setSiegeBattlefieldPreviewState((prev) => ({
+                ...prev,
+                open: false,
+                loading: false,
+                error: `加载战场预览失败: ${error.message}`
+            }));
+        }
     };
 
     const handleOpenSiegePveBattle = async () => {
@@ -3598,6 +3685,14 @@ const App = () => {
         && siegeStatus.hasActiveSiege
         && !!siegePreferredBattleGate
         && isCurrentUserActiveSiegeAttacker
+    );
+    const canPreviewSiegeBattlefield = (
+        !isAdmin
+        && !isSiegeReadonlyViewer
+        && siegeStatus.viewerRole === 'common'
+        && siegeStatus.hasActiveSiege
+        && !!siegePreferredBattleGate
+        && siegeStatus.compare?.defender?.source === 'intel'
     );
 
     const handleOpenRelatedDomain = async (node, sectionType = 'default') => {
@@ -6159,6 +6254,22 @@ const App = () => {
                                                                 {`（${getElapsedMinutesText(siegeStatus.intelDeploymentUpdatedAt) || '未知时刻'}）`}
                                                             </div>
                                                         )}
+                                                        {siegeStatus.compare?.defender?.source === 'intel' && siegeStatus.hasActiveSiege && (
+                                                            <div className="siege-support-panel">
+                                                                <button
+                                                                    type="button"
+                                                                    className="btn btn-secondary"
+                                                                    onClick={handleOpenSiegeBattlefieldPreview}
+                                                                    disabled={!canPreviewSiegeBattlefield || siegeBattlefieldPreviewState.loading}
+                                                                    title={canPreviewSiegeBattlefield ? '' : '当前门位无可预览战场'}
+                                                                >
+                                                                    {siegeBattlefieldPreviewState.loading ? '预览加载中...' : '预览战场'}
+                                                                </button>
+                                                                {siegeBattlefieldPreviewState.error && (
+                                                                    <div className="intel-heist-tip">{siegeBattlefieldPreviewState.error}</div>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                         {siegeStatus.compare?.defender?.source === 'intel' ? (
                                                             <details className="siege-force-gates" open>
                                                                 <summary className="siege-force-source">展开驻防信息</summary>
@@ -6344,6 +6455,16 @@ const App = () => {
                     battleInitData={pveBattleState.data}
                     onClose={closeSiegePveBattle}
                     onBattleFinished={handlePveBattleFinished}
+                />
+
+                <BattlefieldPreviewModal
+                    open={siegeBattlefieldPreviewState.open}
+                    nodeId={siegeBattlefieldPreviewState.nodeId}
+                    gateKey={siegeBattlefieldPreviewState.gateKey || 'cheng'}
+                    gateLabel={siegeBattlefieldPreviewState.gateLabel}
+                    canEdit={false}
+                    layoutBundleOverride={siegeBattlefieldPreviewState.layoutBundle}
+                    onClose={closeSiegeBattlefieldPreview}
                 />
                 
                 <AssociationModal 

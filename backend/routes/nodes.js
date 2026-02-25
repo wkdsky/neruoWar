@@ -7518,6 +7518,95 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
   }
 });
 
+// 围城情报战场预览（仅有情报的普通用户可查看，且不返回守军布置）
+router.get('/:nodeId/siege/battlefield-preview', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    const gateKeyRaw = typeof req.query?.gateKey === 'string' ? req.query.gateKey.trim() : '';
+    const gateKey = CITY_GATE_KEYS.includes(gateKeyRaw) ? gateKeyRaw : '';
+    if (!gateKey) {
+      return res.status(400).json({ error: 'gateKey 必须为 cheng 或 qi' });
+    }
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const [node, user] = await Promise.all([
+      Node.findById(nodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
+      User.findById(requestUserId).select('role intelDomainSnapshots')
+    ]);
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    if (user.role !== 'common') {
+      return res.status(403).json({ error: '仅普通用户可预览围城战场' });
+    }
+
+    const intelSnapshot = findUserIntelSnapshotByNodeId(user, node._id);
+    if (!intelSnapshot) {
+      return res.status(403).json({ error: '暂无情报文件，无法预览守方战场' });
+    }
+
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
+      includeSiegeState: true
+    });
+
+    const settled = await settleNodeSiegeState(node, new Date());
+    if (settled.changed) {
+      await upsertNodeSiegeState({
+        nodeId: node._id,
+        siegeState: settled.siegeState,
+        actorUserId: requestUserId
+      });
+    }
+
+    const gateSummaryMap = CITY_GATE_KEYS.reduce((acc, key) => {
+      acc[key] = buildSiegeGateSummary(node, key, new Map());
+      return acc;
+    }, { cheng: null, qi: null });
+    const activeGateKeys = CITY_GATE_KEYS.filter((key) => !!gateSummaryMap[key]?.active);
+    if (!activeGateKeys.includes(gateKey)) {
+      return res.status(403).json({ error: '该门当前无有效围城战场' });
+    }
+
+    const battlefieldItemCatalog = await fetchBattlefieldItems({ enabledOnly: true });
+    const battlefieldState = resolveNodeBattlefieldLayout(node, {});
+    const mergedBattlefieldState = {
+      ...battlefieldState,
+      items: battlefieldItemCatalog
+    };
+    const layoutBundleRaw = serializeBattlefieldStateForGate(mergedBattlefieldState, gateKey, '');
+    const layoutBundle = {
+      ...layoutBundleRaw,
+      defenderDeployments: []
+    };
+
+    return res.json({
+      success: true,
+      nodeId: getIdString(node._id),
+      nodeName: node.name || '',
+      gateKey,
+      gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
+      canEdit: false,
+      canView: true,
+      intelVisible: true,
+      layoutBundle
+    });
+  } catch (error) {
+    console.error('读取围城战场情报预览错误:', error);
+    return sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
+  }
+});
+
 // 初始化围城 PVE 战斗数据（仅该门围城攻方参战者）
 router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res) => {
   try {
@@ -7540,6 +7629,10 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
       requestUserId,
       gateKey
     });
+    const domainMasterId = getIdString(node?.domainMaster);
+    const domainMasterUser = isValidObjectId(domainMasterId)
+      ? await User.findById(domainMasterId).select('username')
+      : null;
 
     const battlefieldItemCatalog = await fetchBattlefieldItems({ enabledOnly: true });
     const battlefieldState = resolveNodeBattlefieldLayout(node, {});
@@ -7576,10 +7669,12 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
       unitsPerSoldier: SIEGE_PVE_UNITS_PER_SOLDIER,
       unitTypes,
       attacker: {
+        username: typeof user?.username === 'string' ? user.username : '',
         totalCount: Math.max(0, Math.floor(Number(gateSummary?.totalCount) || 0)),
         units: Array.isArray(gateSummary?.aggregateUnits) ? gateSummary.aggregateUnits : []
       },
       defender: {
+        username: typeof domainMasterUser?.username === 'string' ? domainMasterUser.username : '',
         totalCount: defenderUnits.reduce((sum, item) => sum + item.count, 0),
         units: defenderUnits
       },

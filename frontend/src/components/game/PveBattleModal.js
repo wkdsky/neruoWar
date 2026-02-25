@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './pveBattle.css';
+import NumberPadDialog from '../common/NumberPadDialog';
 import {
   clamp,
   normalizeDeg,
@@ -11,6 +12,13 @@ import {
   lineIntersectsRotatedRect,
   clampPointToField
 } from './battleMath';
+import {
+  createFormationVisualState,
+  reconcileCounts,
+  renderFormation,
+  getFormationFootprint,
+  inferTroopCategory
+} from '../../game/formation/ArmyFormationRenderer';
 
 const API_BASE = 'http://localhost:5000';
 const DEFAULT_FIELD_WIDTH = 900;
@@ -20,6 +28,16 @@ const DEFAULT_PITCH = 45;
 const MIN_PITCH = 25;
 const MAX_PITCH = 70;
 const DEFAULT_YAW = 0;
+const CAMERA_ROTATE_SENSITIVITY = 0.38;
+const CAMERA_ROTATE_CLICK_THRESHOLD = 4;
+const DEFAULT_ZOOM = 1;
+const MIN_ZOOM = 0.75;
+const MAX_ZOOM = 2;
+const ZOOM_STEP = 0.08;
+const DEPLOY_ZONE_RATIO = 0.2;
+const FORMATION_METRIC_BUDGET = 48;
+const FORMATION_OVERLAP_RATIO = 0.82;
+const FORMATION_OVERLAP_ALLOWANCE = 4;
 const UNITS_PER_SOLDIER_FALLBACK = 10;
 const MORALE_MAX = 100;
 const STAMINA_MAX = 100;
@@ -28,8 +46,8 @@ const STAMINA_RECOVER = 12;
 const STAMINA_MOVE_THRESHOLD = 20;
 const CARD_UPDATE_MS = 120;
 const EDGE_GESTURE_THRESHOLD = 16;
-const SOLDIER_VISUAL_SCALE = 0.68;
-const COMPOSE_SOLDIER_VISUAL_SCALE = 0.66;
+const SOLDIER_VISUAL_SCALE = 1.18;
+const COMPOSE_SOLDIER_VISUAL_SCALE = 1.18;
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
@@ -41,16 +59,7 @@ const formatCountdown = (seconds) => {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 };
 
-const getUnitClass = (unitType = {}) => {
-  const name = typeof unitType?.name === 'string' ? unitType.name : '';
-  const roleTag = unitType?.roleTag === '近战' || unitType?.roleTag === '远程' ? unitType.roleTag : '';
-  if (/(骑|骑兵|铁骑)/.test(name)) return 'cavalry';
-  if (/(弓|弓兵|弩)/.test(name)) return 'archer';
-  if (/(炮|投石|火炮)/.test(name)) return 'artillery';
-  if (roleTag === '近战') return 'infantry';
-  if (roleTag === '远程') return 'archer';
-  return 'infantry';
-};
+const getUnitClass = (unitType = {}) => inferTroopCategory(unitType);
 
 const getUnitClassIcon = (unitClass) => {
   if (unitClass === 'cavalry') return '🐎';
@@ -58,10 +67,6 @@ const getUnitClassIcon = (unitClass) => {
   if (unitClass === 'artillery') return '💣';
   return '🛡';
 };
-
-const getTeamColor = (team) => (team === TEAM_ATTACKER
-  ? { body: '#fb7185', glow: 'rgba(251, 113, 133, 0.42)', flag: '#dc2626' }
-  : { body: '#22d3ee', glow: 'rgba(34, 211, 238, 0.42)', flag: '#0ea5e9' });
 
 const normalizeUnitsMap = (raw = {}) => {
   const out = {};
@@ -75,6 +80,47 @@ const normalizeUnitsMap = (raw = {}) => {
 };
 
 const sumUnitsMap = (map = {}) => Object.values(map || {}).reduce((sum, count) => sum + (Math.max(0, Number(count) || 0)), 0);
+
+const resolveFormationBudgetByZoom = (zoomValue) => {
+  const minZoom = Math.max(0.01, MIN_ZOOM);
+  const maxZoom = Math.max(minZoom + 0.01, MAX_ZOOM);
+  const safeZoom = Math.max(minZoom, Math.min(maxZoom, Number(zoomValue) || DEFAULT_ZOOM));
+  const t = (safeZoom - minZoom) / (maxZoom - minZoom);
+  const eased = Math.sqrt(Math.max(0, Math.min(1, t)));
+  return Math.max(32, Math.min(56, Math.round(32 + (eased * 24))));
+};
+
+const resolveFormationFootprintScaleByCount = (totalUnits) => {
+  const safeTotal = Math.max(1, Math.floor(Number(totalUnits) || 0));
+  const soldierEquivalent = safeTotal / 10;
+  const scale = 0.9 + (Math.log10(soldierEquivalent + 1) * 0.55);
+  return Math.max(0.9, Math.min(2.4, scale));
+};
+
+const resolveScaledFormationRadius = (rawRadius, totalUnits) => {
+  const safeRaw = Math.max(10, Number(rawRadius) || 16);
+  const scaleByCount = resolveFormationFootprintScaleByCount(totalUnits);
+  return Math.max(9, safeRaw * scaleByCount * 0.86);
+};
+
+const resolveClusterScale = (targetRadius, rawRadius) => (
+  Math.max(0.45, Math.min(1.25, Math.max(1, Number(targetRadius) || 1) / Math.max(1, Number(rawRadius) || 1)))
+);
+
+const unitsMapToRows = (unitsMap = {}, unitTypeMap = new Map()) => (
+  Object.entries(unitsMap || {})
+    .map(([unitTypeId, rawCount]) => {
+      const count = Math.max(0, Math.floor(Number(rawCount) || 0));
+      if (!unitTypeId || count <= 0) return null;
+      return {
+        unitTypeId,
+        unitName: unitTypeMap.get(unitTypeId)?.name || unitTypeId,
+        count
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.unitName.localeCompare(b.unitName, 'zh-Hans-CN'))
+);
 
 const buildUnitTypeMap = (unitTypes = []) => {
   const map = new Map();
@@ -145,43 +191,96 @@ const aggregateStats = (unitsMap = {}, unitTypeMap = new Map()) => {
   };
 };
 
-const computeFormationOffset = (index, total, radius = 18) => {
-  const rowCount = Math.max(1, Math.ceil(Math.sqrt(total)));
-  const col = index % rowCount;
-  const row = Math.floor(index / rowCount);
-  const gap = clamp(radius * 0.55, 5, 13);
-  return {
-    x: (col - ((rowCount - 1) / 2)) * gap,
-    y: (row - ((Math.ceil(total / rowCount) - 1) / 2)) * gap
-  };
-};
+const computeUnitsMapPower = (unitsMap = {}, unitTypeMap = new Map()) => (
+  Object.entries(unitsMap || {}).reduce((sum, [unitTypeId, rawCount]) => {
+    const count = Math.max(0, Math.floor(Number(rawCount) || 0));
+    if (!unitTypeId || count <= 0) return sum;
+    const unitType = unitTypeMap.get(unitTypeId);
+    if (!unitType) return sum;
+    const perUnit = (
+      (Math.max(1, Number(unitType.hp) || 0) * 0.38)
+      + (Math.max(0, Number(unitType.atk) || 0) * 3.2)
+      + (Math.max(0, Number(unitType.def) || 0) * 2.5)
+      + (Math.max(1, Number(unitType.range) || 1) * 5.5)
+      + (Math.max(0.2, Number(unitType.speed) || 1) * 8.5)
+    );
+    return sum + (perUnit * count);
+  }, 0)
+);
 
 const deepClone = (value) => JSON.parse(JSON.stringify(value));
 
-const buildInitialComposeGroups = (attackerUnits = []) => {
-  const source = Array.isArray(attackerUnits) ? attackerUnits : [];
-  const groups = source
-    .filter((entry) => (Number(entry?.count) || 0) > 0)
-    .map((entry, index) => ({
-      id: `grp_${index + 1}`,
-      name: `${entry?.unitName || entry?.unitTypeId || `部队${index + 1}`}`,
-      units: {
-        [entry.unitTypeId]: Math.max(0, Math.floor(Number(entry.count) || 0))
-      },
-      placed: false,
-      x: null,
-      y: null
-    }));
-  if (groups.length > 0) return groups;
-  return [{
-    id: 'grp_1',
-    name: '部队1',
-    units: {},
-    placed: false,
-    x: null,
-    y: null
-  }];
+const distributeUnitsByRatio = (unitsMap = {}, remain = 0, startCount = 0) => {
+  const source = Object.entries(unitsMap || {}).filter(([unitTypeId, count]) => unitTypeId && count > 0);
+  const totalStart = Math.max(1, Math.floor(Number(startCount) || source.reduce((sum, [, count]) => sum + count, 0)));
+  const targetRemain = Math.max(0, Math.floor(Number(remain) || 0));
+  if (source.length <= 0 || targetRemain <= 0) return {};
+  if (targetRemain >= totalStart) {
+    const full = {};
+    source.forEach(([unitTypeId, count]) => {
+      full[unitTypeId] = Math.max(0, Math.floor(Number(count) || 0));
+    });
+    return full;
+  }
+  const alloc = {};
+  const fractions = [];
+  let assigned = 0;
+  source.forEach(([unitTypeId, count]) => {
+    const c = Math.max(0, Math.floor(Number(count) || 0));
+    const exact = targetRemain * (c / totalStart);
+    const base = Math.floor(exact);
+    alloc[unitTypeId] = base;
+    assigned += base;
+    fractions.push({ unitTypeId, frac: exact - base, count: c });
+  });
+  let remainSlots = Math.max(0, targetRemain - assigned);
+  fractions.sort((a, b) => {
+    if (b.frac !== a.frac) return b.frac - a.frac;
+    if (b.count !== a.count) return b.count - a.count;
+    return a.unitTypeId.localeCompare(b.unitTypeId, 'zh-Hans-CN');
+  });
+  for (let i = 0; i < remainSlots; i += 1) {
+    const picked = fractions[i % fractions.length];
+    if (!picked) break;
+    alloc[picked.unitTypeId] = (alloc[picked.unitTypeId] || 0) + 1;
+  }
+  Object.keys(alloc).forEach((unitTypeId) => {
+    if ((alloc[unitTypeId] || 0) <= 0) delete alloc[unitTypeId];
+  });
+  return alloc;
 };
+
+const buildFormationCameraState = (view, pitch, yaw, overrides = {}) => {
+  const worldScale = Number(view?.worldScale) || 0.6;
+  const inferredDistance = 1100 / Math.max(0.18, worldScale);
+  return {
+    worldScale,
+    pitch: Number(pitch) || 45,
+    yaw: Number(yaw) || 0,
+    distance: inferredDistance,
+    ...overrides
+  };
+};
+
+const buildDefaultAttackerGroupName = (index) => `进攻第${Math.max(1, Number(index) || 1)}队`;
+
+const buildInitialComposeGroups = (attackerUnits = []) => {
+  void attackerUnits;
+  return [];
+};
+
+const normalizeComposeSortOrder = (raw, fallback = 1) => Math.max(1, Math.floor(Number(raw) || fallback));
+
+const sortComposeGroups = (groups = []) => (
+  [...(Array.isArray(groups) ? groups : [])].sort((a, b) => {
+    const aOrder = normalizeComposeSortOrder(a?.sortOrder, 1);
+    const bOrder = normalizeComposeSortOrder(b?.sortOrder, 1);
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    const aName = typeof a?.name === 'string' ? a.name : '';
+    const bName = typeof b?.name === 'string' ? b.name : '';
+    return aName.localeCompare(bName, 'zh-Hans-CN');
+  })
+);
 
 const buildRemainingPool = (allUnits = [], groups = []) => {
   const totalMap = {};
@@ -239,8 +338,8 @@ const computeFieldSize = (battlefield = {}) => ({
 });
 
 const getDeployRange = (fieldWidth) => ({
-  attackerMaxX: (-fieldWidth / 2) + (fieldWidth * 0.25),
-  defenderMinX: (fieldWidth / 2) - (fieldWidth * 0.25)
+  attackerMaxX: (-fieldWidth / 2) + (fieldWidth * DEPLOY_ZONE_RATIO),
+  defenderMinX: (fieldWidth / 2) - (fieldWidth * DEPLOY_ZONE_RATIO)
 });
 
 const toRallyPoint = (team, fieldWidth) => {
@@ -349,18 +448,21 @@ const buildDefenderGroupsFromDeployments = (defenderUnits = [], deployments = []
   return groups;
 };
 
-const canPlaceGroupAt = (group, nextPos, groups = [], fieldSize, team) => {
-  const radius = Math.max(18, 16 + (Math.sqrt(Math.max(1, sumUnitsMap(group?.units || {}))) * 2.4));
-  const safePoint = clampPointToField(nextPos, fieldSize.width, fieldSize.height, radius + 4);
+const canPlaceGroupAt = (group, nextPos, groups = [], fieldSize, team, resolveFootprint = null) => {
+  const selfFootprint = typeof resolveFootprint === 'function' ? resolveFootprint(group) : null;
+  const radius = Math.max(9, Number(selfFootprint?.radius) || Math.max(18, 16 + (Math.sqrt(Math.max(1, sumUnitsMap(group?.units || {}))) * 2.4)));
+  const safePoint = clampPointToField(nextPos, fieldSize.width, fieldSize.height, radius + 2);
   const deployRange = getDeployRange(fieldSize.width);
   if (team === TEAM_ATTACKER && safePoint.x > deployRange.attackerMaxX) return false;
   if (team === TEAM_DEFENDER && safePoint.x < deployRange.defenderMinX) return false;
 
   for (const other of (Array.isArray(groups) ? groups : [])) {
     if (!other || other.id === group.id || !other.placed) continue;
-    const otherRadius = Math.max(18, 16 + (Math.sqrt(Math.max(1, sumUnitsMap(other?.units || {}))) * 2.4));
+    const otherFootprint = typeof resolveFootprint === 'function' ? resolveFootprint(other) : null;
+    const otherRadius = Math.max(9, Number(otherFootprint?.radius) || Math.max(18, 16 + (Math.sqrt(Math.max(1, sumUnitsMap(other?.units || {}))) * 2.4)));
     const dist = Math.hypot((other.x || 0) - safePoint.x, (other.y || 0) - safePoint.y);
-    if (dist < (radius + otherRadius + 8)) return false;
+    const minDist = Math.max(8, ((radius + otherRadius) * FORMATION_OVERLAP_RATIO) - FORMATION_OVERLAP_ALLOWANCE);
+    if (dist < minDist) return false;
   }
   return true;
 };
@@ -371,13 +473,14 @@ const createSquadEntity = ({
   index,
   unitTypeMap,
   unitsPerSoldier,
-  fieldWidth
+  fieldWidth,
+  initialRadius = 24
 }) => {
   const units = normalizeUnitsMap(group?.units || {});
   const unitTotal = sumUnitsMap(units);
   const stats = aggregateStats(units, unitTypeMap);
   const health = Math.max(1, Math.round(unitTotal * stats.hpAvg));
-  const radius = clamp(16 + (Math.sqrt(Math.max(1, unitTotal)) * 2.2), 18, 48);
+  const radius = clamp(Number(initialRadius) || 24, 9, 108);
   return {
     id: `${team}_squad_${index + 1}`,
     name: group?.name || (team === TEAM_ATTACKER ? `我方${index + 1}` : `守军${index + 1}`),
@@ -415,18 +518,23 @@ const createSquadEntity = ({
   };
 };
 
-const getViewport = (canvas, fieldWidth, fieldHeight, pitchDeg) => {
+const getViewport = (canvas, fieldWidth, fieldHeight, pitchDeg, yawDeg = 0, zoom = DEFAULT_ZOOM, panWorld = { x: 0, y: 0 }) => {
   const width = Math.max(1, canvas.width);
   const height = Math.max(1, canvas.height);
   const tiltSin = Math.max(0.2, Math.sin((pitchDeg * Math.PI) / 180));
   const worldScaleX = width / (fieldWidth * 1.22);
   const worldScaleY = height / ((fieldHeight * tiltSin * 1.26) + 130);
+  const zoomValue = clamp(Number(zoom) || DEFAULT_ZOOM, MIN_ZOOM, MAX_ZOOM);
+  const safeScale = Math.max(0.2, Math.min(worldScaleX, worldScaleY)) * zoomValue;
+  const pan = panWorld && typeof panWorld === 'object' ? panWorld : { x: 0, y: 0 };
+  const panRot = rotate2D(Number(pan.x) || 0, Number(pan.y) || 0, yawDeg);
+  const panViewY = panRot.y * tiltSin;
   return {
     viewport: {
-      centerX: width / 2,
-      centerY: (height / 2) + 22
+      centerX: (width / 2) - (panRot.x * safeScale),
+      centerY: ((height / 2) + 22) - (panViewY * safeScale)
     },
-    worldScale: Math.max(0.2, Math.min(worldScaleX, worldScaleY))
+    worldScale: safeScale
   };
 };
 
@@ -449,7 +557,8 @@ const isPointBlockedBySquads = (point, radius, sim, selfId = '') => {
   for (const squad of (sim?.squads || [])) {
     if (!squad || squad.id === selfId || squad.remain <= 0) continue;
     const dist = Math.hypot(point.x - squad.x, point.y - squad.y);
-    if (dist < ((radius + squad.radius) * 0.7)) return true;
+    const minDist = Math.max(8, ((radius + squad.radius) * FORMATION_OVERLAP_RATIO) - FORMATION_OVERLAP_ALLOWANCE);
+    if (dist < minDist) return true;
   }
   return false;
 };
@@ -1252,7 +1361,7 @@ const drawEffects = (ctx, sim, view, pitch, yaw) => {
   (sim?.effects || []).forEach((effect) => {
     const center = projectWorld(effect.x, effect.y, 2, view.viewport, pitch, yaw, view.worldScale);
     const edge = projectWorld(effect.x + effect.radius, effect.y, 2, view.viewport, pitch, yaw, view.worldScale);
-    const radiusPx = Math.max(8, Math.hypot(edge.x - center.x, edge.y - center.y));
+    const radiusPx = Math.max(7, Math.hypot(edge.x - center.x, edge.y - center.y) * 0.78);
     const alpha = clamp(effect.ttl / (effect.type === 'artillery' ? 0.75 : 0.62), 0.12, 0.72);
 
     ctx.beginPath();
@@ -1270,52 +1379,145 @@ const drawEffects = (ctx, sim, view, pitch, yaw) => {
   });
 };
 
-const drawSquads = (ctx, sim, view, pitch, yaw, selectedId, hoverId) => {
+const drawFormationInstance = (ctx, projected, row, scale = 1, highlighted = false, ghost = false) => {
+  const safeScale = clamp(scale, 0.1, 4);
+  const alpha = ghost ? 0.45 : 1;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  const shadowW = clamp((6.2 + projected.worldScale * 0.22) * safeScale, 3.4, 12.5);
+  const shadowH = clamp((3.4 + projected.worldScale * 0.09) * safeScale, 2.0, 7.5);
+  ctx.beginPath();
+  ctx.ellipse(projected.x, projected.y + 2, shadowW, shadowH, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(2, 6, 23, 0.45)';
+  ctx.fill();
+
+  const bodyH = clamp((9.6 + projected.worldScale * 0.2) * safeScale, 4.8, 13);
+  const bodyW = clamp((6.3 + projected.worldScale * 0.14) * safeScale, 3.8, 9.8);
+  if (row.category === 'cavalry') {
+    ctx.beginPath();
+    ctx.ellipse(projected.x, projected.y, bodyW * 0.92, bodyH * 0.45, 0, 0, Math.PI * 2);
+    ctx.fillStyle = row.bodyColor || '#94a3b8';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(projected.x + (bodyW * 0.45), projected.y - (bodyH * 0.12));
+    ctx.lineTo(projected.x + (bodyW * 1.35), projected.y - (bodyH * 0.38));
+    ctx.strokeStyle = row.accentColor || '#dbeafe';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  } else if (row.category === 'artillery') {
+    ctx.beginPath();
+    ctx.rect(projected.x - bodyW * 0.58, projected.y - bodyH * 0.45, bodyW * 1.16, bodyH * 0.9);
+    ctx.fillStyle = row.bodyColor || '#94a3b8';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(projected.x + (bodyW * 0.18), projected.y - (bodyH * 0.12));
+    ctx.lineTo(projected.x + (bodyW * 0.92), projected.y - (bodyH * 0.38));
+    ctx.strokeStyle = row.accentColor || '#dbeafe';
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+  } else if (row.category === 'archer') {
+    ctx.beginPath();
+    ctx.ellipse(projected.x, projected.y, bodyW * 0.62, bodyH * 0.56, 0, 0, Math.PI * 2);
+    ctx.fillStyle = row.bodyColor || '#94a3b8';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(projected.x + (bodyW * 0.42), projected.y - (bodyH * 0.05), bodyW * 0.36, -Math.PI * 0.3, Math.PI * 0.78);
+    ctx.strokeStyle = row.accentColor || '#dbeafe';
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(projected.x, projected.y - bodyH * 0.72);
+    ctx.lineTo(projected.x + bodyW * 0.55, projected.y + bodyH * 0.24);
+    ctx.lineTo(projected.x - bodyW * 0.55, projected.y + bodyH * 0.24);
+    ctx.closePath();
+    ctx.fillStyle = row.bodyColor || '#94a3b8';
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.arc(projected.x, projected.y - (bodyH * 0.52), bodyW * 0.22, 0, Math.PI * 2);
+  ctx.fillStyle = row.accentColor || '#dbeafe';
+  ctx.fill();
+
+  if (highlighted) {
+    ctx.beginPath();
+    ctx.ellipse(projected.x, projected.y, bodyW * 1.02, bodyH * 0.9, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(186, 230, 253, 0.96)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+  ctx.restore();
+};
+
+const drawSquads = (ctx, sim, view, pitch, yaw, zoomValue, selectedId, hoverId, resolveFormationState) => {
   const drawRows = [];
   let selectedFlag = null;
+  const cameraState = buildFormationCameraState(view, pitch, yaw, {
+    renderBudget: resolveFormationBudgetByZoom(zoomValue),
+    shape: 'grid'
+  });
 
   (sim?.squads || []).forEach((squad) => {
     if (!squad || squad.remain <= 0) return;
-    const teamColor = getTeamColor(squad.team);
-    const soldierCount = Math.max(1, Math.ceil(squad.remain / Math.max(1, squad.unitsPerSoldier || 1)));
-    for (let index = 0; index < soldierCount; index += 1) {
-      const offset = computeFormationOffset(index, soldierCount, squad.radius * 0.62);
-      const sx = squad.x + offset.x;
-      const sy = squad.y + offset.y;
+    const isSelected = selectedId === squad.id;
+    const isHover = hoverId === squad.id;
+    const liveCountsByType = distributeUnitsByRatio(squad.units || {}, squad.remain || 0, squad.startCount || 0);
+    const formationState = typeof resolveFormationState === 'function'
+      ? resolveFormationState({
+        key: `battle_${squad.id}`,
+        teamId: squad.team,
+        countsByType: liveCountsByType,
+        cameraState
+      })
+      : null;
+    if (!formationState) return;
+    formationState.isHighlighted = isSelected || isHover;
+    formationState.isGhost = false;
+    const rendered = renderFormation(
+      formationState,
+      {
+        kind: 'descriptors',
+        center: { x: squad.x, y: squad.y }
+      },
+      cameraState,
+      0
+    );
+    const footprint = rendered?.footprint || { radius: squad.radius || 20 };
+    const rawRadius = Math.max(10, Number(footprint.radius) || squad.radius || 20);
+    const targetRadius = resolveScaledFormationRadius(rawRadius, squad.remain || squad.startCount || 1);
+    const clusterScale = resolveClusterScale(targetRadius, rawRadius);
+    squad.radius = clamp(targetRadius, 9, 108);
+
+    (rendered?.instances || []).forEach((row) => {
+      const sx = squad.x + ((row.x - squad.x) * clusterScale);
+      const sy = squad.y + ((row.y - squad.y) * clusterScale);
       const projected = projectWorld(sx, sy, 0, view.viewport, pitch, yaw, view.worldScale);
       drawRows.push({
         depth: projected.depth,
         draw: () => {
-          const isSelected = selectedId === squad.id;
-          const isHover = hoverId === squad.id;
-          const shadowW = clamp((6 + (squad.radius * 0.2)) * SOLDIER_VISUAL_SCALE, 3.5, 8);
-          const shadowH = clamp((3 + (squad.radius * 0.08)) * SOLDIER_VISUAL_SCALE, 2.1, 4.8);
-
-          ctx.beginPath();
-          ctx.ellipse(projected.x, projected.y + 2, shadowW, shadowH, 0, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(2, 6, 23, 0.45)';
-          ctx.fill();
-
-          const bodyH = clamp((10 + (view.worldScale * 0.4)) * SOLDIER_VISUAL_SCALE, 5.6, 9.4);
-          const bodyW = clamp((7 + (view.worldScale * 0.28)) * SOLDIER_VISUAL_SCALE, 4.2, 6.8);
-          ctx.beginPath();
-          ctx.moveTo(projected.x, projected.y - bodyH * 0.7);
-          ctx.lineTo(projected.x + bodyW * 0.55, projected.y + bodyH * 0.25);
-          ctx.lineTo(projected.x - bodyW * 0.55, projected.y + bodyH * 0.25);
-          ctx.closePath();
-          ctx.fillStyle = teamColor.body;
-          ctx.fill();
-
-          if (isSelected || isHover) {
-            ctx.beginPath();
-            ctx.ellipse(projected.x, projected.y, bodyW * 0.92, bodyH * 0.82, 0, 0, Math.PI * 2);
-            ctx.strokeStyle = isSelected ? 'rgba(186, 230, 253, 0.92)' : 'rgba(125, 211, 252, 0.78)';
-            ctx.lineWidth = isSelected ? 1.25 : 0.9;
-            ctx.stroke();
-          }
+          drawFormationInstance(ctx, {
+            ...projected,
+            worldScale: view.worldScale
+          }, row, SOLDIER_VISUAL_SCALE, isSelected || isHover, false);
         }
       });
-    }
+    });
+
+    const center = projectWorld(squad.x, squad.y, 0.2, view.viewport, pitch, yaw, view.worldScale);
+    const edge = projectWorld(squad.x + squad.radius, squad.y, 0.2, view.viewport, pitch, yaw, view.worldScale);
+    const radiusPx = Math.max(7, Math.hypot(edge.x - center.x, edge.y - center.y) * 0.78);
+    drawRows.push({
+      depth: center.depth - 0.02,
+      draw: () => {
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, radiusPx, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(125, 211, 252, 0.2)';
+        ctx.fill();
+        ctx.strokeStyle = isSelected ? 'rgba(186, 230, 253, 0.92)' : 'rgba(125, 211, 252, 0.58)';
+        ctx.lineWidth = isSelected ? 1.5 : 1;
+        ctx.stroke();
+      }
+    });
 
     const flagAnchor = projectWorld(squad.x, squad.y, 22, view.viewport, pitch, yaw, view.worldScale);
     drawRows.push({
@@ -1464,43 +1666,74 @@ const drawSkillAimOverlay = (ctx, overlay) => {
   ctx.restore();
 };
 
-const drawComposeGroups = (ctx, groups, view, pitch, yaw, selectedGroupId, team) => {
+const drawComposeGroups = (ctx, groups, view, pitch, yaw, zoomValue, selectedGroupId, team, resolveFormationState) => {
   const selectedFill = team === TEAM_DEFENDER ? 'rgba(34, 211, 238, 0.35)' : 'rgba(248, 113, 113, 0.35)';
   const normalFill = team === TEAM_DEFENDER ? 'rgba(14, 165, 233, 0.2)' : 'rgba(239, 68, 68, 0.2)';
   const selectedStroke = team === TEAM_DEFENDER ? 'rgba(103, 232, 249, 0.95)' : 'rgba(254, 202, 202, 0.95)';
   const normalStroke = team === TEAM_DEFENDER ? 'rgba(125, 211, 252, 0.65)' : 'rgba(252, 165, 165, 0.65)';
   const labelColor = team === TEAM_DEFENDER ? '#dbeafe' : '#fee2e2';
+  const cameraState = buildFormationCameraState(view, pitch, yaw, {
+    renderBudget: resolveFormationBudgetByZoom(zoomValue),
+    shape: 'grid'
+  });
+  let selectedAnchor = null;
 
   (Array.isArray(groups) ? groups : []).forEach((group) => {
     if (!group?.placed) return;
     const count = Math.max(1, sumUnitsMap(group.units));
-    const radius = clamp(16 + (Math.sqrt(count) * 2.4), 18, 45);
+    const groupKey = `${team}_compose_${group.id}`;
+    const formationState = typeof resolveFormationState === 'function'
+      ? resolveFormationState({
+        key: groupKey,
+        teamId: team,
+        countsByType: group.units || {},
+        cameraState
+      })
+      : null;
+    if (!formationState) return;
+    const isSelected = selectedGroupId === group.id;
+    formationState.isHighlighted = isSelected;
+    formationState.isGhost = false;
+    const rendered = renderFormation(
+      formationState,
+      {
+        kind: 'descriptors',
+        center: { x: group.x, y: group.y }
+      },
+      cameraState,
+      0
+    );
+    const footprint = rendered?.footprint || { radius: 20 };
+    const rawRadius = Math.max(10, Number(footprint.radius) || 20);
+    const radius = clamp(resolveScaledFormationRadius(rawRadius, count), 9, 108);
+    const clusterScale = resolveClusterScale(radius, rawRadius);
     const center = projectWorld(group.x, group.y, 0, view.viewport, pitch, yaw, view.worldScale);
     const edge = projectWorld(group.x + radius, group.y, 0, view.viewport, pitch, yaw, view.worldScale);
-    const radiusPx = Math.max(10, Math.hypot(edge.x - center.x, edge.y - center.y));
+    const radiusPx = Math.max(8, Math.hypot(edge.x - center.x, edge.y - center.y) * 0.78);
+
+    const drawRows = [];
+    (rendered?.instances || []).forEach((row) => {
+      const sx = group.x + ((row.x - group.x) * clusterScale);
+      const sy = group.y + ((row.y - group.y) * clusterScale);
+      const projected = projectWorld(sx, sy, 0, view.viewport, pitch, yaw, view.worldScale);
+      drawRows.push({
+        depth: projected.depth,
+        draw: () => drawFormationInstance(ctx, {
+          ...projected,
+          worldScale: view.worldScale
+        }, row, COMPOSE_SOLDIER_VISUAL_SCALE, isSelected, false)
+      });
+    });
+    drawRows.sort((a, b) => a.depth - b.depth);
+    drawRows.forEach((item) => item.draw());
 
     ctx.beginPath();
     ctx.arc(center.x, center.y, radiusPx, 0, Math.PI * 2);
-    ctx.fillStyle = selectedGroupId === group.id ? selectedFill : normalFill;
+    ctx.fillStyle = isSelected ? selectedFill : normalFill;
     ctx.fill();
-    ctx.strokeStyle = selectedGroupId === group.id ? selectedStroke : normalStroke;
-    ctx.lineWidth = selectedGroupId === group.id ? 1.8 : 1;
+    ctx.strokeStyle = isSelected ? selectedStroke : normalStroke;
+    ctx.lineWidth = isSelected ? 1.8 : 1;
     ctx.stroke();
-
-    const previewSoldiers = Math.max(3, Math.min(18, Math.ceil(count / 18)));
-    for (let index = 0; index < previewSoldiers; index += 1) {
-      const offset = computeFormationOffset(index, previewSoldiers, radius * 0.46);
-      const soldier = projectWorld(group.x + offset.x, group.y + offset.y, 0, view.viewport, pitch, yaw, view.worldScale);
-      const bodyH = clamp((8 + (view.worldScale * 0.25)) * COMPOSE_SOLDIER_VISUAL_SCALE, 4, 7);
-      const bodyW = clamp((5.8 + (view.worldScale * 0.18)) * COMPOSE_SOLDIER_VISUAL_SCALE, 3, 5.4);
-      ctx.beginPath();
-      ctx.moveTo(soldier.x, soldier.y - bodyH * 0.75);
-      ctx.lineTo(soldier.x + bodyW * 0.55, soldier.y + bodyH * 0.2);
-      ctx.lineTo(soldier.x - bodyW * 0.55, soldier.y + bodyH * 0.2);
-      ctx.closePath();
-      ctx.fillStyle = team === TEAM_DEFENDER ? 'rgba(56, 189, 248, 0.82)' : 'rgba(248, 113, 113, 0.82)';
-      ctx.fill();
-    }
 
     ctx.fillStyle = labelColor;
     ctx.font = '11px sans-serif';
@@ -1511,7 +1744,77 @@ const drawComposeGroups = (ctx, groups, view, pitch, yaw, selectedGroupId, team)
     ctx.fill();
     ctx.fillStyle = labelColor;
     ctx.fillText(label, center.x - (textW / 2), center.y - radiusPx - 8);
+
+    if (isSelected) {
+      selectedAnchor = {
+        groupId: group.id,
+        x: center.x,
+        y: center.y - radiusPx - 10
+      };
+    }
   });
+  return {
+    selectedAnchor
+  };
+};
+
+const drawComposeGhost = (ctx, group, ghostPoint, view, pitch, yaw, zoomValue, team, resolveFormationState) => {
+  if (!group || !ghostPoint) return;
+  const cameraState = buildFormationCameraState(view, pitch, yaw, {
+    renderBudget: resolveFormationBudgetByZoom(zoomValue),
+    shape: 'grid'
+  });
+  const state = typeof resolveFormationState === 'function'
+    ? resolveFormationState({
+      key: `${team}_compose_ghost_${group.id}`,
+      teamId: team,
+      countsByType: group.units || {},
+      cameraState,
+      highlighted: false,
+      ghost: true
+    })
+    : null;
+  if (!state) return;
+  const rendered = renderFormation(
+    state,
+    {
+      kind: 'descriptors',
+      center: { x: ghostPoint.x, y: ghostPoint.y }
+    },
+    cameraState,
+    0
+  );
+  const footprint = rendered?.footprint || { radius: 20 };
+  const totalCount = Math.max(1, sumUnitsMap(group.units || {}));
+  const rawRadius = Math.max(10, Number(footprint.radius) || 20);
+  const scaledRadius = clamp(resolveScaledFormationRadius(rawRadius, totalCount), 9, 108);
+  const clusterScale = resolveClusterScale(scaledRadius, rawRadius);
+  const drawRows = [];
+  (rendered?.instances || []).forEach((row) => {
+    const sx = ghostPoint.x + ((row.x - ghostPoint.x) * clusterScale);
+    const sy = ghostPoint.y + ((row.y - ghostPoint.y) * clusterScale);
+    const projected = projectWorld(sx, sy, 0, view.viewport, pitch, yaw, view.worldScale);
+    drawRows.push({
+      depth: projected.depth,
+      draw: () => drawFormationInstance(ctx, {
+        ...projected,
+        worldScale: view.worldScale
+      }, row, COMPOSE_SOLDIER_VISUAL_SCALE, false, true)
+    });
+  });
+  drawRows.sort((a, b) => a.depth - b.depth);
+  drawRows.forEach((item) => item.draw());
+
+  const center = projectWorld(ghostPoint.x, ghostPoint.y, 0.2, view.viewport, pitch, yaw, view.worldScale);
+  const edge = projectWorld(ghostPoint.x + scaledRadius, ghostPoint.y, 0.2, view.viewport, pitch, yaw, view.worldScale);
+  const radiusPx = Math.max(7, Math.hypot(edge.x - center.x, edge.y - center.y) * 0.78);
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, radiusPx, 0, Math.PI * 2);
+  ctx.fillStyle = ghostPoint.blocked ? 'rgba(248, 113, 113, 0.14)' : 'rgba(125, 211, 252, 0.14)';
+  ctx.fill();
+  ctx.strokeStyle = ghostPoint.blocked ? 'rgba(248, 113, 113, 0.82)' : 'rgba(125, 211, 252, 0.8)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
 };
 
 const PveBattleModal = ({
@@ -1530,14 +1833,25 @@ const PveBattleModal = ({
   const lastCardSyncRef = useRef(0);
   const middleDragRef = useRef(null);
   const rightDragRef = useRef(null);
+  const composePanDragRef = useRef(null);
+  const composeRotateDragRef = useRef(null);
+  const spacePressedRef = useRef(false);
+  const panWorldRef = useRef({ x: 0, y: 0 });
+  const composeDragUnitTypeRef = useRef('');
   const leftDownRef = useRef(false);
   const edgeWarnShownRef = useRef(false);
+  const formationStateRef = useRef(new Map());
+  const composeGhostRef = useRef(null);
 
   const [phase, setPhase] = useState('compose');
   const [composeGroups, setComposeGroups] = useState([]);
   const [selectedGroupId, setSelectedGroupId] = useState('');
+  const [activeComposeMoveId, setActiveComposeMoveId] = useState('');
   const [cameraPitch, setCameraPitch] = useState(DEFAULT_PITCH);
   const [cameraYaw, setCameraYaw] = useState(DEFAULT_YAW);
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
+  const [isPanning, setIsPanning] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
   const [selectedSquadId, setSelectedSquadId] = useState('');
   const [hoverSquadId, setHoverSquadId] = useState('');
   const [cardRows, setCardRows] = useState([]);
@@ -1545,13 +1859,87 @@ const PveBattleModal = ({
   const [toast, setToast] = useState('');
   const [pendingSkill, setPendingSkill] = useState(null);
   const [floatingActionsPos, setFloatingActionsPos] = useState(null);
+  const [composeGroupActionsPos, setComposeGroupActionsPos] = useState(null);
   const [battleResult, setBattleResult] = useState(null);
   const [postingResult, setPostingResult] = useState(false);
   const [resultSaveError, setResultSaveError] = useState('');
+  const [composeEditorOpen, setComposeEditorOpen] = useState(false);
+  const [composeEditorTargetGroupId, setComposeEditorTargetGroupId] = useState('');
+  const [composeEditorDraft, setComposeEditorDraft] = useState({ name: '', sortOrder: 1, units: {} });
+  const [composeEditorDropActive, setComposeEditorDropActive] = useState(false);
+  const [composeQuantityDialog, setComposeQuantityDialog] = useState({
+    open: false,
+    mode: 'add',
+    unitTypeId: '',
+    unitName: '',
+    max: 1,
+    current: 1
+  });
 
   const unitTypeMap = useMemo(() => buildUnitTypeMap(battleInitData?.unitTypes || []), [battleInitData?.unitTypes]);
+  const formationUnitTypes = useMemo(() => Array.from(unitTypeMap.values()), [unitTypeMap]);
   const fieldSize = useMemo(() => computeFieldSize(battleInitData?.battlefield || {}), [battleInitData?.battlefield]);
   const unitsPerSoldier = Math.max(1, Math.floor(Number(battleInitData?.unitsPerSoldier) || UNITS_PER_SOLDIER_FALLBACK));
+
+  const resolveFormationState = useCallback(({
+    key = '',
+    teamId = TEAM_ATTACKER,
+    countsByType = {},
+    cameraState = {},
+    highlighted = false,
+    ghost = false
+  } = {}) => {
+    const safeKey = typeof key === 'string' ? key.trim() : '';
+    if (!safeKey) return null;
+    const cache = formationStateRef.current;
+    const nextCameraState = {
+      ...cameraState,
+      unitTypes: formationUnitTypes
+    };
+    let state = cache.get(safeKey);
+    if (!state) {
+      state = createFormationVisualState({
+        teamId,
+        formationId: safeKey,
+        countsByType,
+        unitTypes: formationUnitTypes,
+        cameraState: nextCameraState
+      });
+      cache.set(safeKey, state);
+    } else {
+      state.teamId = teamId;
+      reconcileCounts(state, countsByType, nextCameraState, Date.now());
+    }
+    state.isHighlighted = !!highlighted;
+    state.isGhost = !!ghost;
+    return state;
+  }, [formationUnitTypes]);
+
+  const resolveGroupFootprint = useCallback((group, teamId = TEAM_ATTACKER) => {
+    if (!group) return { radius: 16, width: 24, depth: 24 };
+    const totalUnits = Math.max(1, sumUnitsMap(group.units || {}));
+    const state = resolveFormationState({
+      key: `${teamId}_compose_fp_${group.id}`,
+      teamId,
+      countsByType: group.units || {},
+      cameraState: {
+        worldScale: 1,
+        distance: 980,
+        renderBudget: FORMATION_METRIC_BUDGET,
+        shape: 'grid'
+      },
+      highlighted: false,
+      ghost: false
+    });
+    const rawFootprint = getFormationFootprint(state);
+    const scaleByCount = resolveFormationFootprintScaleByCount(totalUnits);
+    const rawRadius = Math.max(10, Number(rawFootprint?.radius || 16));
+    return {
+      radius: resolveScaledFormationRadius(rawRadius, totalUnits),
+      width: Math.max(12, Number(rawFootprint?.width || 24) * scaleByCount),
+      depth: Math.max(12, Number(rawFootprint?.depth || 24) * scaleByCount)
+    };
+  }, [resolveFormationState]);
 
   const defenderComposeGroups = useMemo(() => (
     buildDefenderGroupsFromDeployments(
@@ -1569,9 +1957,13 @@ const PveBattleModal = ({
 
   const canStartBattle = useMemo(() => (
     composeGroups.length > 0
-    && composeGroups.every((group) => sumUnitsMap(group.units) > 0 && group.placed)
+    && composeGroups.some((group) => sumUnitsMap(group.units) > 0)
+    && composeGroups
+      .filter((group) => sumUnitsMap(group.units) > 0)
+      .every((group) => group.placed)
     && Object.values(remainingPool).every((value) => value === 0)
-  ), [composeGroups, remainingPool]);
+    && !composeEditorOpen
+  ), [composeEditorOpen, composeGroups, remainingPool]);
 
   const showToast = useCallback((message) => {
     if (!message) return;
@@ -1591,6 +1983,7 @@ const PveBattleModal = ({
       setPhase('compose');
       setComposeGroups([]);
       setSelectedGroupId('');
+      setActiveComposeMoveId('');
       setSelectedSquadId('');
       selectedSquadIdRef.current = '';
       simRef.current = null;
@@ -1599,12 +1992,35 @@ const PveBattleModal = ({
       setResultSaveError('');
       setPendingSkill(null);
       setFloatingActionsPos(null);
+      setComposeGroupActionsPos(null);
+      composeGhostRef.current = null;
+      formationStateRef.current = new Map();
+      setComposeEditorOpen(false);
+      setComposeEditorTargetGroupId('');
+      setComposeEditorDraft({ name: '', sortOrder: 1, units: {} });
+      setComposeEditorDropActive(false);
+      setComposeQuantityDialog({
+        open: false,
+        mode: 'add',
+        unitTypeId: '',
+        unitName: '',
+        max: 1,
+        current: 1
+      });
+      composePanDragRef.current = null;
+      composeRotateDragRef.current = null;
+      composeDragUnitTypeRef.current = '';
+      panWorldRef.current = { x: 0, y: 0 };
+      setZoom(DEFAULT_ZOOM);
+      setIsPanning(false);
+      setIsRotating(false);
       return;
     }
 
     const nextGroups = buildInitialComposeGroups(battleInitData?.attacker?.units || []);
     setComposeGroups(nextGroups);
     setSelectedGroupId(nextGroups[0]?.id || '');
+    setActiveComposeMoveId('');
     setSelectedSquadId('');
     selectedSquadIdRef.current = '';
     setPhase('compose');
@@ -1612,11 +2028,71 @@ const PveBattleModal = ({
     setPostingResult(false);
     setResultSaveError('');
     setPendingSkill(null);
+    setComposeGroupActionsPos(null);
+    setComposeEditorOpen(false);
+    setComposeEditorTargetGroupId('');
+    setComposeEditorDraft({ name: '', sortOrder: 1, units: {} });
+    setComposeEditorDropActive(false);
+    setComposeQuantityDialog({
+      open: false,
+      mode: 'add',
+      unitTypeId: '',
+      unitName: '',
+      max: 1,
+      current: 1
+    });
     setBattleTimerSec(Math.max(30, Math.floor(Number(battleInitData?.timeLimitSec) || DEFAULT_TIME_LIMIT)));
     setCameraPitch(DEFAULT_PITCH);
     setCameraYaw(DEFAULT_YAW);
+    setZoom(DEFAULT_ZOOM);
+    panWorldRef.current = { x: 0, y: 0 };
+    setIsPanning(false);
+    setIsRotating(false);
+    composePanDragRef.current = null;
+    composeRotateDragRef.current = null;
+    composeDragUnitTypeRef.current = '';
     edgeWarnShownRef.current = false;
+    composeGhostRef.current = null;
+    formationStateRef.current = new Map();
   }, [open, battleInitData]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event) => {
+      if (event.code === 'Space') {
+        spacePressedRef.current = true;
+      }
+    };
+    const onKeyUp = (event) => {
+      if (event.code === 'Space') {
+        spacePressedRef.current = false;
+      }
+    };
+    const onBlur = () => {
+      spacePressedRef.current = false;
+      composePanDragRef.current = null;
+      composeRotateDragRef.current = null;
+      setIsPanning(false);
+      setIsRotating(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [open]);
 
   useEffect(() => {
     selectedSquadIdRef.current = selectedSquadId;
@@ -1683,13 +2159,15 @@ const PveBattleModal = ({
       return;
     }
 
-    const attackerSquads = composeGroups.map((group, index) => createSquadEntity({
+    const orderedComposeGroups = sortComposeGroups(composeGroups);
+    const attackerSquads = orderedComposeGroups.map((group, index) => createSquadEntity({
       group,
       team: TEAM_ATTACKER,
       index,
       unitTypeMap,
       unitsPerSoldier,
-      fieldWidth: fieldSize.width
+      fieldWidth: fieldSize.width,
+      initialRadius: resolveGroupFootprint(group, TEAM_ATTACKER)?.radius
     })).filter((squad) => squad.startCount > 0);
 
     const defenderSquads = defenderComposeGroups.map((group, index) => createSquadEntity({
@@ -1698,7 +2176,8 @@ const PveBattleModal = ({
       index,
       unitTypeMap,
       unitsPerSoldier,
-      fieldWidth: fieldSize.width
+      fieldWidth: fieldSize.width,
+      initialRadius: resolveGroupFootprint(group, TEAM_DEFENDER)?.radius
     })).filter((squad) => squad.startCount > 0);
 
     const sim = {
@@ -1732,11 +2211,13 @@ const PveBattleModal = ({
     selectedSquadIdRef.current = firstSelectable?.id || '';
     setHoverSquadId('');
     setPendingSkill(null);
+    setComposeGroupActionsPos(null);
     setBattleResult(null);
     setResultSaveError('');
+    setActiveComposeMoveId('');
     setPhase('battle');
     syncCardRowsFromSim(sim);
-  }, [battleInitData, canStartBattle, composeGroups, defenderComposeGroups, fieldSize.height, fieldSize.width, syncCardRowsFromSim, unitTypeMap, unitsPerSoldier, showToast]);
+  }, [battleInitData, canStartBattle, composeGroups, defenderComposeGroups, fieldSize.height, fieldSize.width, resolveGroupFootprint, syncCardRowsFromSim, unitTypeMap, unitsPerSoldier, showToast]);
 
   const finishBattleIfNeeded = useCallback((sim) => {
     if (!sim || !sim.ended || battleResult) return;
@@ -1756,24 +2237,33 @@ const PveBattleModal = ({
     const rect = canvas.getBoundingClientRect();
     const sx = event.clientX - rect.left;
     const sy = event.clientY - rect.top;
-    const { viewport, worldScale } = getViewport(canvas, fieldSize.width, fieldSize.height, cameraPitch);
+    const { viewport, worldScale } = getViewport(
+      canvas,
+      fieldSize.width,
+      fieldSize.height,
+      cameraPitch,
+      cameraYaw,
+      zoom,
+      panWorldRef.current
+    );
     return unprojectScreen(sx, sy, viewport, cameraPitch, cameraYaw, worldScale);
-  }, [cameraPitch, cameraYaw, fieldSize.height, fieldSize.width]);
+  }, [cameraPitch, cameraYaw, fieldSize.height, fieldSize.width, zoom]);
 
   const pickAttackerGroupByPoint = useCallback((worldPoint) => {
     let best = null;
     let bestDist = Infinity;
     composeGroups.forEach((group) => {
       if (!group.placed) return;
-      const radius = clamp(16 + (Math.sqrt(Math.max(1, sumUnitsMap(group.units))) * 2.4), 18, 45);
+      const footprint = resolveGroupFootprint(group, TEAM_ATTACKER);
+      const radius = clamp(Number(footprint?.radius) || 20, 9, 108);
       const dist = Math.hypot((group.x || 0) - worldPoint.x, (group.y || 0) - worldPoint.y);
-      if (dist <= radius && dist < bestDist) {
+      if (dist <= (radius * 0.95) && dist < bestDist) {
         bestDist = dist;
         best = group;
       }
     });
     return best;
-  }, [composeGroups]);
+  }, [composeGroups, resolveGroupFootprint]);
 
   const pickAttackerSquadByPoint = useCallback((worldPoint) => {
     const sim = simRef.current;
@@ -1783,7 +2273,7 @@ const PveBattleModal = ({
     let bestDist = Infinity;
     squads.forEach((squad) => {
       const dist = Math.hypot(squad.x - worldPoint.x, squad.y - worldPoint.y);
-      if (dist <= squad.radius * 1.2 && dist < bestDist) {
+      if (dist <= squad.radius * 0.95 && dist < bestDist) {
         bestDist = dist;
         best = squad;
       }
@@ -1791,11 +2281,73 @@ const PveBattleModal = ({
     return best;
   }, []);
 
+  const startComposePanDrag = useCallback((event, startScreen, buttonMask = 1) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !startScreen) return;
+    event.preventDefault();
+    const startPan = panWorldRef.current;
+    composePanDragRef.current = {
+      startScreenX: Number(startScreen.x) || 0,
+      startScreenY: Number(startScreen.y) || 0,
+      startPanX: Number(startPan?.x) || 0,
+      startPanY: Number(startPan?.y) || 0,
+      buttonMask
+    };
+    setIsPanning(true);
+  }, []);
+
+  const updateComposePanByScreenPoints = useCallback((startScreen, currentScreen, startPan) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return startPan;
+    const basePan = startPan || { x: 0, y: 0 };
+    const viewportWithStartPan = getViewport(
+      canvas,
+      fieldSize.width,
+      fieldSize.height,
+      cameraPitch,
+      cameraYaw,
+      zoom,
+      basePan
+    );
+    const worldStart = unprojectScreen(
+      Number(startScreen?.x) || 0,
+      Number(startScreen?.y) || 0,
+      viewportWithStartPan.viewport,
+      cameraPitch,
+      cameraYaw,
+      viewportWithStartPan.worldScale
+    );
+    const worldCurrent = unprojectScreen(
+      Number(currentScreen?.x) || 0,
+      Number(currentScreen?.y) || 0,
+      viewportWithStartPan.viewport,
+      cameraPitch,
+      cameraYaw,
+      viewportWithStartPan.worldScale
+    );
+    return {
+      x: (Number(basePan?.x) || 0) + ((Number(worldStart?.x) || 0) - (Number(worldCurrent?.x) || 0)),
+      y: (Number(basePan?.y) || 0) + ((Number(worldStart?.y) || 0) - (Number(worldCurrent?.y) || 0))
+    };
+  }, [cameraPitch, cameraYaw, fieldSize.height, fieldSize.width, zoom]);
+
   const handleCanvasPointerDown = useCallback((event) => {
+    const canvas = canvasRef.current;
+    const rect = canvas?.getBoundingClientRect();
+    if (!canvas || !rect) return;
+    const screenPoint = {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
+    };
+
     if (event.button === 0) {
       leftDownRef.current = true;
     }
     if (event.button === 1) {
+      if (phase === 'compose') {
+        startComposePanDrag(event, screenPoint, 4);
+        return;
+      }
       event.preventDefault();
       middleDragRef.current = {
         startX: event.clientX,
@@ -1806,6 +2358,16 @@ const PveBattleModal = ({
 
     if (event.button === 2) {
       event.preventDefault();
+      if (phase === 'compose') {
+        composeRotateDragRef.current = {
+          startX: event.clientX,
+          startY: event.clientY,
+          startYaw: cameraYaw,
+          moved: false
+        };
+        setIsRotating(true);
+        return;
+      }
       const worldPoint = getCanvasWorldPoint(event);
       mouseWorldRef.current = worldPoint;
 
@@ -1829,27 +2391,59 @@ const PveBattleModal = ({
 
     if (event.button !== 0) return;
 
+    if (phase === 'compose' && spacePressedRef.current) {
+      startComposePanDrag(event, screenPoint, 1);
+      return;
+    }
+
     const worldPoint = getCanvasWorldPoint(event);
     mouseWorldRef.current = worldPoint;
 
     if (phase === 'compose') {
-      const selected = composeGroups.find((group) => group.id === selectedGroupId) || null;
-      if (selected) {
-        const nextPos = clampPointToField(worldPoint, fieldSize.width, fieldSize.height, 20);
-        const canPlace = canPlaceGroupAt(selected, nextPos, composeGroups, fieldSize, TEAM_ATTACKER);
-        if (canPlace) {
-          setComposeGroups((prev) => prev.map((group) => (
-            group.id === selected.id
-              ? { ...group, x: nextPos.x, y: nextPos.y, placed: true }
-              : group
-          )));
+      const movingGroup = composeGroups.find((group) => group.id === activeComposeMoveId) || null;
+      if (!movingGroup) {
+        const picked = pickAttackerGroupByPoint(worldPoint);
+        if (picked) {
+          setSelectedGroupId(picked.id);
+          setActiveComposeMoveId('');
+          setComposeGroupActionsPos((prev) => (prev?.groupId === picked.id ? prev : null));
+          return;
+        }
+        startComposePanDrag(event, screenPoint, 1);
+        return;
+      }
+      if (sumUnitsMap(movingGroup.units) <= 0) {
+        showToast('该部队没有兵力，请先在左侧编辑兵种数量');
+        return;
+      }
+      const footprint = resolveGroupFootprint(movingGroup, TEAM_ATTACKER);
+      const radius = clamp(Number(footprint?.radius) || 20, 9, 108);
+      const nextPos = clampPointToField(worldPoint, fieldSize.width, fieldSize.height, radius + 2);
+      const canPlace = canPlaceGroupAt(
+        movingGroup,
+        nextPos,
+        composeGroups,
+        fieldSize,
+        TEAM_ATTACKER,
+        (group) => resolveGroupFootprint(group, TEAM_ATTACKER)
+      );
+      if (canPlace) {
+        setComposeGroups((prev) => prev.map((group) => (
+          group.id === movingGroup.id
+            ? { ...group, x: nextPos.x, y: nextPos.y, placed: true }
+            : group
+        )));
+        setSelectedGroupId(movingGroup.id);
+        setActiveComposeMoveId('');
+        composeGhostRef.current = null;
+      } else {
+        const picked = pickAttackerGroupByPoint(worldPoint);
+        if (picked) {
+          setSelectedGroupId(picked.id);
+          setActiveComposeMoveId('');
+          setComposeGroupActionsPos((prev) => (prev?.groupId === picked.id ? prev : null));
         } else {
-          const picked = pickAttackerGroupByPoint(worldPoint);
-          if (picked) {
-            setSelectedGroupId(picked.id);
-          } else {
-            showToast('放置失败：请在左侧部署区放置，且避免重叠');
-          }
+          showToast('放置失败：请在左侧部署区放置，且避免重叠');
         }
       }
       return;
@@ -1875,6 +2469,7 @@ const PveBattleModal = ({
       }
     }
   }, [
+    activeComposeMoveId,
     cameraYaw,
     composeGroups,
     fieldSize,
@@ -1883,13 +2478,74 @@ const PveBattleModal = ({
     phase,
     pickAttackerGroupByPoint,
     pickAttackerSquadByPoint,
-    selectedGroupId,
+    resolveGroupFootprint,
+    startComposePanDrag,
     showToast
   ]);
 
   const handleCanvasPointerMove = useCallback((event) => {
     const worldPoint = getCanvasWorldPoint(event);
     mouseWorldRef.current = worldPoint;
+    if (phase === 'compose') {
+      const panDrag = composePanDragRef.current;
+      if (panDrag) {
+        if ((event.buttons & panDrag.buttonMask) !== panDrag.buttonMask) {
+          composePanDragRef.current = null;
+          setIsPanning(false);
+        } else {
+          const canvas = canvasRef.current;
+          const rect = canvas?.getBoundingClientRect();
+          if (rect) {
+            const currentScreen = {
+              x: event.clientX - rect.left,
+              y: event.clientY - rect.top
+            };
+            const nextPan = updateComposePanByScreenPoints(
+              { x: panDrag.startScreenX, y: panDrag.startScreenY },
+              currentScreen,
+              { x: panDrag.startPanX, y: panDrag.startPanY }
+            );
+            panWorldRef.current = nextPan;
+          }
+        }
+      }
+      const rotateDrag = composeRotateDragRef.current;
+      if (rotateDrag) {
+        if ((event.buttons & 2) !== 2) {
+          composeRotateDragRef.current = null;
+          setIsRotating(false);
+        } else {
+          const dx = event.clientX - rotateDrag.startX;
+          const nextYaw = normalizeDeg(rotateDrag.startYaw + (dx * CAMERA_ROTATE_SENSITIVITY));
+          if (Math.abs(dx) >= CAMERA_ROTATE_CLICK_THRESHOLD) {
+            rotateDrag.moved = true;
+          }
+          setCameraYaw(nextYaw);
+        }
+      }
+      const movingGroup = composeGroups.find((group) => group.id === activeComposeMoveId) || null;
+      if (movingGroup && sumUnitsMap(movingGroup.units) > 0 && !panDrag && !rotateDrag) {
+        const footprint = resolveGroupFootprint(movingGroup, TEAM_ATTACKER);
+        const radius = clamp(Number(footprint?.radius) || 20, 9, 108);
+        const clampedPoint = clampPointToField(worldPoint, fieldSize.width, fieldSize.height, radius + 2);
+        const blocked = !canPlaceGroupAt(
+          movingGroup,
+          clampedPoint,
+          composeGroups,
+          fieldSize,
+          TEAM_ATTACKER,
+          (group) => resolveGroupFootprint(group, TEAM_ATTACKER)
+        );
+        composeGhostRef.current = {
+          x: clampedPoint.x,
+          y: clampedPoint.y,
+          blocked
+        };
+      } else {
+        composeGhostRef.current = null;
+      }
+      return;
+    }
 
     if (middleDragRef.current) {
       const dx = event.clientX - middleDragRef.current.startX;
@@ -1908,19 +2564,39 @@ const PveBattleModal = ({
         }
       }
     }
-  }, [getCanvasWorldPoint, showToast]);
+  }, [activeComposeMoveId, composeGroups, fieldSize, getCanvasWorldPoint, phase, resolveGroupFootprint, showToast, updateComposePanByScreenPoints]);
 
   const handleCanvasPointerUp = useCallback((event) => {
     if (event.button === 0) {
       leftDownRef.current = false;
+      if (composePanDragRef.current?.buttonMask === 1) {
+        composePanDragRef.current = null;
+        setIsPanning(false);
+      }
     }
     if (event.button === 1) {
-      middleDragRef.current = null;
+      if (phase === 'compose') {
+        composePanDragRef.current = null;
+        setIsPanning(false);
+      } else {
+        middleDragRef.current = null;
+      }
     }
     if (event.button === 2) {
-      rightDragRef.current = null;
+      if (phase === 'compose') {
+        const rotateDrag = composeRotateDragRef.current;
+        if (rotateDrag && !rotateDrag.moved && activeComposeMoveId) {
+          setActiveComposeMoveId('');
+          composeGhostRef.current = null;
+          showToast('已取消部队放置');
+        }
+        composeRotateDragRef.current = null;
+        setIsRotating(false);
+      } else {
+        rightDragRef.current = null;
+      }
     }
-  }, []);
+  }, [activeComposeMoveId, phase, showToast]);
 
   const cycleSelectedSquad = useCallback(() => {
     const sim = simRef.current;
@@ -2036,14 +2712,62 @@ const PveBattleModal = ({
       const dt = Math.min(0.05, Math.max(0.001, (ts - lastTs) / 1000));
       lastTs = ts;
 
-      const view = getViewport(canvas, fieldSize.width, fieldSize.height, cameraPitch);
+      const view = getViewport(
+        canvas,
+        fieldSize.width,
+        fieldSize.height,
+        cameraPitch,
+        cameraYaw,
+        zoom,
+        panWorldRef.current
+      );
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawGround(ctx, view, fieldSize, cameraPitch, cameraYaw);
 
       if (phase === 'compose') {
         drawDeployZones(ctx, view, fieldSize, cameraPitch, cameraYaw);
-        drawComposeGroups(ctx, composeGroups, view, cameraPitch, cameraYaw, selectedGroupId, TEAM_ATTACKER);
-        drawComposeGroups(ctx, defenderComposeGroups, view, cameraPitch, cameraYaw, '', TEAM_DEFENDER);
+        const attackerRender = drawComposeGroups(
+          ctx,
+          composeGroups,
+          view,
+          cameraPitch,
+          cameraYaw,
+          zoom,
+          selectedGroupId,
+          TEAM_ATTACKER,
+          resolveFormationState
+        );
+        drawComposeGroups(ctx, defenderComposeGroups, view, cameraPitch, cameraYaw, zoom, '', TEAM_DEFENDER, resolveFormationState);
+        const anchor = attackerRender?.selectedAnchor;
+        if (anchor && anchor.groupId && !activeComposeMoveId) {
+          setComposeGroupActionsPos((prev) => {
+            const next = {
+              groupId: anchor.groupId,
+              x: anchor.x,
+              y: anchor.y
+            };
+            if (!prev) return next;
+            if (prev.groupId !== next.groupId) return next;
+            if (Math.abs(prev.x - next.x) > 0.8 || Math.abs(prev.y - next.y) > 0.8) return next;
+            return prev;
+          });
+        } else {
+          setComposeGroupActionsPos((prev) => (prev ? null : prev));
+        }
+        const ghostGroup = composeGroups.find((group) => group.id === activeComposeMoveId) || null;
+        if (ghostGroup && sumUnitsMap(ghostGroup.units) > 0 && composeGhostRef.current) {
+          drawComposeGhost(
+            ctx,
+            ghostGroup,
+            composeGhostRef.current,
+            view,
+            cameraPitch,
+            cameraYaw,
+            zoom,
+            TEAM_ATTACKER,
+            resolveFormationState
+          );
+        }
       }
 
       if (phase === 'battle') {
@@ -2058,8 +2782,10 @@ const PveBattleModal = ({
             view,
             cameraPitch,
             cameraYaw,
+            zoom,
             selectedSquadIdRef.current,
-            hoverSquadIdRef.current
+            hoverSquadIdRef.current,
+            resolveFormationState
           );
 
           const selectedSquad = findSquadById(sim, selectedSquadIdRef.current);
@@ -2112,96 +2838,266 @@ const PveBattleModal = ({
     open,
     pendingSkill,
     phase,
+    resolveFormationState,
+    activeComposeMoveId,
     selectedGroupId,
-    syncCardRowsFromSim
+    syncCardRowsFromSim,
+    zoom
   ]);
 
   const handleWheel = useCallback((event) => {
     event.preventDefault();
-    setCameraPitch((prev) => clamp(prev - (event.deltaY * 0.02), MIN_PITCH, MAX_PITCH));
-  }, []);
-
-  const placeCurrentGroupRandomly = useCallback(() => {
-    const selected = composeGroups.find((group) => group.id === selectedGroupId) || null;
-    if (!selected) return;
-
-    const deploy = getDeployRange(fieldSize.width);
-    let placed = false;
-    for (let i = 0; i < 40; i += 1) {
-      const candidate = {
-        x: (-fieldSize.width / 2) + 25 + Math.random() * (deploy.attackerMaxX - (-fieldSize.width / 2) - 30),
-        y: (-fieldSize.height * 0.42) + (Math.random() * fieldSize.height * 0.84)
-      };
-      if (canPlaceGroupAt(selected, candidate, composeGroups, fieldSize, TEAM_ATTACKER)) {
-        setComposeGroups((prev) => prev.map((group) => (
-          group.id === selected.id ? { ...group, x: candidate.x, y: candidate.y, placed: true } : group
-        )));
-        placed = true;
-        break;
-      }
+    if (phase === 'compose') {
+      const delta = event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+      setZoom((prev) => clamp(prev + delta, MIN_ZOOM, MAX_ZOOM));
+      return;
     }
-    if (!placed) showToast('未找到可放置位置，请手动在战场左侧点击放置');
-  }, [composeGroups, fieldSize, selectedGroupId, showToast]);
+    setCameraPitch((prev) => clamp(prev - (event.deltaY * 0.02), MIN_PITCH, MAX_PITCH));
+  }, [phase]);
 
-  const addComposeGroup = useCallback(() => {
-    setComposeGroups((prev) => {
-      const next = [...prev, {
-        id: `grp_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-        name: `部队${prev.length + 1}`,
-        units: {},
+  const withdrawComposeGroupById = useCallback((groupId, { silent = false } = {}) => {
+    const safeId = typeof groupId === 'string' ? groupId.trim() : '';
+    if (!safeId) return false;
+    let found = false;
+    setComposeGroups((prev) => prev.map((group) => {
+      if (group.id !== safeId) return group;
+      found = true;
+      return {
+        ...group,
         placed: false,
         x: null,
         y: null
-      }];
-      return next;
+      };
+    }));
+    if (!found) return false;
+    if (activeComposeMoveId === safeId) {
+      setActiveComposeMoveId('');
+      composeGhostRef.current = null;
+    }
+    setComposeGroupActionsPos((prev) => (prev?.groupId === safeId ? null : prev));
+    if (!silent) showToast('部队已撤回到左侧列表');
+    return true;
+  }, [activeComposeMoveId, showToast]);
+
+  const openComposeEditorForNew = useCallback(() => {
+    const nextSortOrder = (composeGroups?.length || 0) + 1;
+    const nextName = buildDefaultAttackerGroupName(nextSortOrder);
+    setComposeEditorTargetGroupId('');
+    setComposeEditorDraft({
+      name: nextName,
+      sortOrder: nextSortOrder,
+      units: {}
     });
-  }, []);
+    setComposeEditorDropActive(false);
+    setComposeEditorOpen(true);
+  }, [composeGroups]);
+
+  const openComposeEditorForSelected = useCallback((groupId = '') => {
+    const safeGroupId = typeof groupId === 'string' && groupId.trim() ? groupId.trim() : selectedGroupId;
+    const target = composeGroups.find((group) => group.id === safeGroupId) || null;
+    if (!target) {
+      showToast('请先在左侧选择一个部队');
+      return;
+    }
+    if (target.placed) {
+      withdrawComposeGroupById(target.id, { silent: true });
+    }
+    setComposeEditorTargetGroupId(target.id);
+    setComposeEditorDraft({
+      name: target.name || buildDefaultAttackerGroupName(1),
+      sortOrder: normalizeComposeSortOrder(target.sortOrder, 1),
+      units: normalizeUnitsMap(target.units || {})
+    });
+    setComposeEditorDropActive(false);
+    setComposeEditorOpen(true);
+  }, [composeGroups, selectedGroupId, showToast, withdrawComposeGroupById]);
 
   const removeSelectedComposeGroup = useCallback(() => {
     setComposeGroups((prev) => {
-      if (prev.length <= 1) return prev;
+      if (prev.length <= 0) return prev;
       const next = prev.filter((group) => group.id !== selectedGroupId);
       setSelectedGroupId(next[0]?.id || '');
+      setActiveComposeMoveId('');
+      composeGhostRef.current = null;
+      setComposeGroupActionsPos(null);
       return next;
     });
   }, [selectedGroupId]);
 
-  const adjustSelectedGroupUnit = useCallback((unitTypeId, delta) => {
+  const composeEditorStockRows = useMemo(() => {
+    const attackerRows = Array.isArray(battleInitData?.attacker?.units) ? battleInitData.attacker.units : [];
+    const usedByOthers = {};
+    composeGroups.forEach((group) => {
+      if (composeEditorTargetGroupId && group.id === composeEditorTargetGroupId) return;
+      Object.entries(group.units || {}).forEach(([unitTypeId, rawCount]) => {
+        const count = Math.max(0, Math.floor(Number(rawCount) || 0));
+        if (!unitTypeId || count <= 0) return;
+        usedByOthers[unitTypeId] = (usedByOthers[unitTypeId] || 0) + count;
+      });
+    });
+    const draftUnits = normalizeUnitsMap(composeEditorDraft.units || {});
+    return attackerRows
+      .map((entry) => {
+        const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+        if (!unitTypeId) return null;
+        const total = Math.max(0, Math.floor(Number(entry?.count) || 0));
+        const maxAssignable = Math.max(0, total - (usedByOthers[unitTypeId] || 0));
+        const current = Math.max(0, Math.floor(Number(draftUnits[unitTypeId]) || 0));
+        return {
+          unitTypeId,
+          unitName: unitTypeMap.get(unitTypeId)?.name || unitTypeId,
+          total,
+          maxAssignable,
+          current,
+          remaining: Math.max(0, maxAssignable - current)
+        };
+      })
+      .filter(Boolean);
+  }, [battleInitData?.attacker?.units, composeEditorDraft.units, composeEditorTargetGroupId, composeGroups, unitTypeMap]);
+
+  const composeEditorSelectedRows = useMemo(
+    () => unitsMapToRows(composeEditorDraft.units || {}, unitTypeMap),
+    [composeEditorDraft.units, unitTypeMap]
+  );
+  const composeEditorTotalCount = useMemo(
+    () => sumUnitsMap(composeEditorDraft.units || {}),
+    [composeEditorDraft.units]
+  );
+
+  const openComposeQuantityDialog = useCallback((unitTypeId, mode = 'add') => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId) {
+      showToast('未识别到兵种，请重试拖拽或直接点击兵种');
+      return;
+    }
+    const stock = composeEditorStockRows.find((item) => item.unitTypeId === safeId);
+    if (!stock) {
+      showToast('该兵种当前不可分配');
+      return;
+    }
+    if (mode === 'add') {
+      if (stock.remaining <= 0) {
+        showToast('该兵种已无可分配数量');
+        return;
+      }
+      setComposeQuantityDialog({
+        open: true,
+        mode,
+        unitTypeId: safeId,
+        unitName: stock.unitName,
+        max: stock.remaining,
+        current: Math.min(stock.remaining, 1)
+      });
+      return;
+    }
+    if (stock.maxAssignable <= 0) {
+      showToast('该兵种当前不可编辑');
+      return;
+    }
+    setComposeQuantityDialog({
+      open: true,
+      mode: 'set',
+      unitTypeId: safeId,
+      unitName: stock.unitName,
+      max: stock.maxAssignable,
+      current: Math.max(1, stock.current || 1)
+    });
+  }, [composeEditorStockRows, showToast]);
+
+  const removeComposeEditorUnit = useCallback((unitTypeId) => {
     const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
     if (!safeId) return;
+    setComposeEditorDraft((prev) => {
+      const nextUnits = normalizeUnitsMap(prev.units || {});
+      delete nextUnits[safeId];
+      return { ...prev, units: nextUnits };
+    });
+  }, []);
 
-    setComposeGroups((prev) => prev.map((group) => {
-      if (group.id !== selectedGroupId) return group;
-      const current = Math.max(0, Math.floor(Number(group.units?.[safeId]) || 0));
-      if (delta > 0) {
-        const remain = buildRemainingPool(battleInitData?.attacker?.units || [], prev)[safeId] || 0;
-        if (remain <= 0) return group;
-        return {
-          ...group,
-          units: {
-            ...group.units,
-            [safeId]: current + 1
+  const confirmComposeQuantityDialog = useCallback((value) => {
+    const dialog = composeQuantityDialog;
+    const safeId = typeof dialog?.unitTypeId === 'string' ? dialog.unitTypeId.trim() : '';
+    if (!safeId) {
+      setComposeQuantityDialog((prev) => ({ ...prev, open: false }));
+      return;
+    }
+    const qty = Math.max(1, Math.floor(Number(value) || 1));
+    setComposeEditorDraft((prev) => {
+      const nextUnits = normalizeUnitsMap(prev.units || {});
+      if (dialog.mode === 'set') {
+        nextUnits[safeId] = qty;
+      } else {
+        nextUnits[safeId] = (nextUnits[safeId] || 0) + qty;
+      }
+      return {
+        ...prev,
+        units: nextUnits
+      };
+    });
+    setComposeQuantityDialog((prev) => ({ ...prev, open: false }));
+  }, [composeQuantityDialog]);
+
+  const submitComposeEditor = useCallback(() => {
+    const draftUnits = normalizeUnitsMap(composeEditorDraft.units || {});
+    if (sumUnitsMap(draftUnits) <= 0) {
+      showToast('请至少添加一种兵种并设置数量');
+      return;
+    }
+    const draftName = (typeof composeEditorDraft.name === 'string' && composeEditorDraft.name.trim())
+      ? composeEditorDraft.name.trim()
+      : buildDefaultAttackerGroupName((composeGroups?.length || 0) + 1);
+    const draftSortOrder = normalizeComposeSortOrder(
+      composeEditorDraft.sortOrder,
+      (composeGroups?.length || 0) + 1
+    );
+    const editingId = typeof composeEditorTargetGroupId === 'string' ? composeEditorTargetGroupId.trim() : '';
+
+    if (editingId) {
+      setComposeGroups((prev) => sortComposeGroups(prev.map((group) => (
+        group.id === editingId
+          ? {
+            ...group,
+            name: draftName,
+            sortOrder: draftSortOrder,
+            units: draftUnits,
+            placed: false,
+            x: null,
+            y: null
           }
-        };
-      }
-      if (delta < 0) {
-        if (current <= 0) return group;
-        const nextCount = current - 1;
-        const nextUnits = { ...group.units };
-        if (nextCount <= 0) {
-          delete nextUnits[safeId];
-        } else {
-          nextUnits[safeId] = nextCount;
-        }
-        return {
-          ...group,
-          units: nextUnits,
-          placed: nextCount > 0 ? group.placed : false
-        };
-      }
-      return group;
-    }));
-  }, [battleInitData?.attacker?.units, selectedGroupId]);
+          : group
+      ))));
+      setSelectedGroupId(editingId);
+      showToast('已更新部队编组');
+    } else {
+      const newGroupId = `grp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      setComposeGroups((prev) => sortComposeGroups([...prev, {
+        id: newGroupId,
+        name: draftName,
+        sortOrder: draftSortOrder,
+        units: draftUnits,
+        placed: false,
+        x: null,
+        y: null
+      }]));
+      setSelectedGroupId(newGroupId);
+      showToast('已新建攻方部队');
+    }
+
+    setActiveComposeMoveId('');
+    composeGhostRef.current = null;
+    setComposeGroupActionsPos(null);
+    setComposeEditorOpen(false);
+    setComposeEditorDropActive(false);
+    setComposeEditorTargetGroupId('');
+    setComposeEditorDraft({ name: '', sortOrder: 1, units: {} });
+  }, [composeEditorDraft.name, composeEditorDraft.sortOrder, composeEditorDraft.units, composeEditorTargetGroupId, composeGroups, showToast]);
+
+  const closeComposeEditor = useCallback(() => {
+    setComposeEditorOpen(false);
+    setComposeEditorDropActive(false);
+    setComposeEditorTargetGroupId('');
+    setComposeEditorDraft({ name: '', sortOrder: 1, units: {} });
+  }, []);
 
   const handleCardClick = useCallback((row) => {
     if (!row) return;
@@ -2222,6 +3118,11 @@ const PveBattleModal = ({
   const closeModal = useCallback(() => {
     setPendingSkill(null);
     setFloatingActionsPos(null);
+    setComposeGroupActionsPos(null);
+    setComposeEditorOpen(false);
+    setComposeEditorTargetGroupId('');
+    setComposeEditorDropActive(false);
+    setComposeQuantityDialog((prev) => ({ ...prev, open: false }));
     if (typeof onClose === 'function') {
       onClose();
     }
@@ -2229,19 +3130,68 @@ const PveBattleModal = ({
 
   const attackerCards = cardRows.filter((row) => row.team === TEAM_ATTACKER);
   const defenderCards = cardRows.filter((row) => row.team === TEAM_DEFENDER);
+  const orderedComposeGroups = useMemo(() => sortComposeGroups(composeGroups), [composeGroups]);
   const selectedComposeGroup = composeGroups.find((group) => group.id === selectedGroupId) || null;
+  const battleTitle = `${battleInitData?.nodeName || '知识域'}-${battleInitData?.gateLabel || '承门'} 围城攻防战`;
+  const attackerName = battleInitData?.attacker?.username || '进攻方';
+  const defenderName = battleInitData?.defender?.username || '守方域主';
+  const composeAttackerPower = orderedComposeGroups.reduce((sum, group) => (
+    group.placed
+      ? (sum + computeUnitsMapPower(group.units, unitTypeMap))
+      : sum
+  ), 0);
+  const composeDefenderPower = defenderComposeGroups.reduce((sum, group) => (
+    sum + computeUnitsMapPower(group.units, unitTypeMap)
+  ), 0);
+  const liveSim = simRef.current;
+  const battleAttackerPower = liveSim
+    ? liveSim.squads
+      .filter((squad) => squad.team === TEAM_ATTACKER && squad.remain > 0)
+      .reduce((sum, squad) => {
+        const remainUnits = squad.remainUnits && typeof squad.remainUnits === 'object'
+          ? squad.remainUnits
+          : distributeUnitsByRatio(squad.units, squad.remain, squad.startCount);
+        return sum + computeUnitsMapPower(remainUnits, unitTypeMap);
+      }, 0)
+    : 0;
+  const battleDefenderPower = liveSim
+    ? liveSim.squads
+      .filter((squad) => squad.team === TEAM_DEFENDER && squad.remain > 0)
+      .reduce((sum, squad) => {
+        const remainUnits = squad.remainUnits && typeof squad.remainUnits === 'object'
+          ? squad.remainUnits
+          : distributeUnitsByRatio(squad.units, squad.remain, squad.startCount);
+        return sum + computeUnitsMapPower(remainUnits, unitTypeMap);
+      }, 0)
+    : 0;
+  const attackerPowerText = Math.round(phase === 'compose' ? composeAttackerPower : battleAttackerPower);
+  const defenderPowerText = Math.round(phase === 'compose' ? composeDefenderPower : battleDefenderPower);
+  const composeMovingGroup = composeGroups.find((group) => group.id === activeComposeMoveId) || null;
 
   if (!open) return null;
 
   return (
     <div className="pve-battle-overlay">
       <div className="pve-battle-topbar">
-        <div className="pve-battle-title">
-          <strong>{`围城战斗 · ${(battleInitData?.nodeName || '知识域')} · ${(battleInitData?.gateLabel || '')}`}</strong>
-          <span>{phase === 'compose' ? '编组与部署阶段：左键点击战场放置部队，右键在战斗中下达移动命令' : '战斗进行中：滚轮调俯仰，中键左右拖动旋转，Tab切换部队'}</span>
+        <div className="pve-battle-title-wrap">
+          <div className="pve-battle-title">
+            <strong>{battleTitle}</strong>
+          </div>
+          <div className="pve-battle-sides">
+            <div className="pve-battle-side attacker">
+              <span className="label">进攻方</span>
+              <strong>{attackerName}</strong>
+              <em>{`战力 ${attackerPowerText}`}</em>
+            </div>
+            <div className="pve-battle-side defender">
+              <span className="label">守方</span>
+              <strong>{defenderName}</strong>
+              <em>{`战力 ${defenderPowerText}`}</em>
+            </div>
+          </div>
         </div>
         <div className="pve-battle-top-actions">
-          <div className="pve-battle-time">{formatCountdown(battleTimerSec)}</div>
+          {phase === 'battle' && <div className="pve-battle-time">{formatCountdown(battleTimerSec)}</div>}
           <button type="button" className="btn btn-secondary" onClick={closeModal}>退出</button>
         </div>
       </div>
@@ -2250,12 +3200,18 @@ const PveBattleModal = ({
         <div className="pve-empty">{loading ? '战斗初始化中...' : (error || '未能加载战斗数据')}</div>
       ) : (
         <div className="pve-battle-main">
+          {phase === 'compose' && (
+            <div className="pve-compose-start-slot">
+              <div className="pve-battle-time">{formatCountdown(battleTimerSec)}</div>
+              <button type="button" className="btn btn-warning" onClick={startBattle} disabled={!canStartBattle}>开战</button>
+            </div>
+          )}
           <div className="pve-battle-card-strip left">
-            {(phase === 'battle' ? attackerCards : composeGroups.map((group) => ({
+            {(phase === 'battle' ? attackerCards : orderedComposeGroups.map((group) => ({
               id: group.id,
               name: group.name,
               classTag: aggregateStats(group.units, unitTypeMap).classTag,
-              action: group.placed ? '已部署' : '待部署',
+              action: activeComposeMoveId === group.id ? '移动中' : (group.placed ? '已部署' : '待部署'),
               currentSoldiers: Math.max(0, Math.ceil(sumUnitsMap(group.units) / unitsPerSoldier)),
               maxSoldiers: Math.max(0, Math.ceil(sumUnitsMap(group.units) / unitsPerSoldier)),
               remain: sumUnitsMap(group.units),
@@ -2271,8 +3227,24 @@ const PveBattleModal = ({
                 type="button"
                 className={`pve-squad-card ${row.selected ? 'selected' : ''}`}
                 onClick={() => {
-                  if (phase === 'compose') setSelectedGroupId(row.id);
-                  else handleCardClick(row);
+                  if (phase === 'compose') {
+                    setSelectedGroupId(row.id);
+                    if (row.remain > 0) {
+                      setActiveComposeMoveId(row.id);
+                      showToast(`已拾取${row.name || '部队'}，鼠标左键放置到进攻区`);
+                    } else {
+                      setActiveComposeMoveId('');
+                      showToast('该部队暂无兵力，请先编辑编组');
+                    }
+                    return;
+                  }
+                  handleCardClick(row);
+                }}
+                onDoubleClick={() => {
+                  if (phase === 'compose') {
+                    setSelectedGroupId(row.id);
+                    openComposeEditorForSelected(row.id);
+                  }
                 }}
                 onMouseEnter={() => setHoverSquadId(row.id)}
                 onMouseLeave={() => setHoverSquadId('')}
@@ -2330,26 +3302,34 @@ const PveBattleModal = ({
           <div className="pve-battle-canvas-wrap">
             <canvas
               ref={canvasRef}
-              className="pve-battle-canvas"
+              className={`pve-battle-canvas ${isPanning ? 'is-panning' : ''} ${isRotating ? 'is-rotating' : ''}`}
               onWheel={handleWheel}
               onMouseDown={handleCanvasPointerDown}
               onMouseMove={handleCanvasPointerMove}
               onMouseUp={handleCanvasPointerUp}
               onMouseLeave={() => {
                 leftDownRef.current = false;
+                composePanDragRef.current = null;
+                composeRotateDragRef.current = null;
+                setIsPanning(false);
+                setIsRotating(false);
                 middleDragRef.current = null;
                 rightDragRef.current = null;
+                composeGhostRef.current = null;
               }}
               onContextMenu={(event) => event.preventDefault()}
             />
           </div>
 
           {phase === 'compose' && (
-            <div className="pve-compose-panel">
+            <aside className="pve-compose-sidebar">
               <div className="pve-compose-box">
-                <h4>我方编组</h4>
+                <h4>攻方部队</h4>
                 <div className="pve-compose-groups">
-                  {composeGroups.map((group) => {
+                  {orderedComposeGroups.length <= 0 && (
+                    <div className="pve-compose-tip">当前没有部队，请先新建部队。</div>
+                  )}
+                  {orderedComposeGroups.map((group) => {
                     const unitCount = sumUnitsMap(group.units);
                     return (
                       <div
@@ -2357,17 +3337,37 @@ const PveBattleModal = ({
                         className={`pve-compose-group ${selectedGroupId === group.id ? 'selected' : ''} ${unitCount <= 0 ? 'empty' : ''}`}
                         role="button"
                         tabIndex={0}
-                        onClick={() => setSelectedGroupId(group.id)}
+                        onClick={() => {
+                          setSelectedGroupId(group.id);
+                          if (unitCount <= 0) {
+                            setActiveComposeMoveId('');
+                            showToast('该部队暂无兵力，请先编辑编组');
+                          } else {
+                            setActiveComposeMoveId(group.id);
+                            showToast(`已拾取${group.name || '部队'}，鼠标左键放置到进攻区`);
+                          }
+                        }}
+                        onDoubleClick={() => {
+                          setSelectedGroupId(group.id);
+                          openComposeEditorForSelected(group.id);
+                        }}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault();
                             setSelectedGroupId(group.id);
+                            if (unitCount <= 0) {
+                              setActiveComposeMoveId('');
+                              showToast('该部队暂无兵力，请先编辑编组');
+                            } else {
+                              setActiveComposeMoveId(group.id);
+                              showToast(`已拾取${group.name || '部队'}，鼠标左键放置到进攻区`);
+                            }
                           }
                         }}
                       >
                         <div className="pve-compose-line">
                           <strong>{group.name}</strong>
-                          <span>{group.placed ? '已部署' : '待部署'}</span>
+                          <span>{activeComposeMoveId === group.id ? '移动中' : (group.placed ? '已部署' : '待部署')}</span>
                         </div>
                         <div className="pve-compose-line">
                           <span>{`兵力 ${unitCount}`}</span>
@@ -2378,39 +3378,176 @@ const PveBattleModal = ({
                   })}
                 </div>
                 <div className="pve-compose-actions">
-                  <button type="button" className="btn btn-secondary" onClick={addComposeGroup}>新建部队</button>
-                  <button type="button" className="btn btn-secondary" onClick={removeSelectedComposeGroup}>删除选中</button>
-                  <button type="button" className="btn btn-secondary" onClick={placeCurrentGroupRandomly}>自动放置</button>
+                  <button type="button" className="btn btn-secondary" onClick={openComposeEditorForNew}>新建部队</button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={openComposeEditorForSelected}
+                    disabled={!selectedComposeGroup}
+                  >编辑选中</button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={removeSelectedComposeGroup}
+                    disabled={!selectedComposeGroup}
+                  >删除选中</button>
                 </div>
                 <div className="pve-compose-tip">
-                  左键点击战场左侧部署区可放置选中部队；右侧为守军部署区。长按左键再右键，可给战斗中的部队追加路径点。
+                  {composeMovingGroup
+                    ? `正在放置：${composeMovingGroup.name || '部队'}。鼠标左键放到左侧进攻区，右键取消拾取。`
+                    : '点击部队卡片即可拾取并放置；双击部队卡片可编辑编组；右键拖动旋转，中键或 Space+左键拖动平移，滚轮缩放。'}
                 </div>
-              </div>
-
-              <div className="pve-compose-box">
-                <h4>兵种分配</h4>
-                {(battleInitData?.attacker?.units || []).map((entry) => {
-                  const unitTypeId = entry?.unitTypeId || '';
-                  const current = selectedComposeGroup?.units?.[unitTypeId] || 0;
-                  const remain = remainingPool?.[unitTypeId] || 0;
-                  return (
-                    <div key={unitTypeId} className="pve-compose-line" style={{ marginBottom: 6 }}>
-                      <span>{entry?.unitName || unitTypeId}</span>
-                      <span>{`剩余 ${remain}`}</span>
-                      <button type="button" onClick={() => adjustSelectedGroupUnit(unitTypeId, -1)}>-</button>
-                      <strong>{current}</strong>
-                      <button type="button" onClick={() => adjustSelectedGroupUnit(unitTypeId, 1)}>+</button>
-                    </div>
-                  );
-                })}
                 <div className="pve-compose-tip">
                   {Object.values(remainingPool).every((value) => value === 0)
-                    ? '已完成兵力分配，可点击开战'
+                    ? '兵力已分配完成，可点击上方开战。'
                     : `尚有未分配兵力：${Object.values(remainingPool).reduce((sum, value) => sum + value, 0)}`}
                 </div>
+              </div>
+            </aside>
+          )}
+
+          {phase === 'compose' && composeGroupActionsPos && (
+            <div className="pve-compose-group-actions" style={{ left: composeGroupActionsPos.x, top: composeGroupActionsPos.y }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = composeGroups.find((group) => group.id === composeGroupActionsPos.groupId);
+                  if (!target) return;
+                  if (sumUnitsMap(target.units) <= 0) {
+                    showToast('该部队暂无兵力，无法移动');
+                    return;
+                  }
+                  setSelectedGroupId(target.id);
+                  setActiveComposeMoveId(target.id);
+                  showToast(`已拾取${target.name || '部队'}，鼠标左键放置到进攻区`);
+                }}
+              >移动</button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = composeGroups.find((group) => group.id === composeGroupActionsPos.groupId);
+                  if (!target) return;
+                  setSelectedGroupId(target.id);
+                  withdrawComposeGroupById(target.id);
+                }}
+              >X</button>
+            </div>
+          )}
+
+          {phase === 'compose' && composeEditorOpen && (
+            <div className="pve-compose-editor" onClick={(event) => event.stopPropagation()}>
+              <div className="pve-compose-editor-head">
+                <strong>{composeEditorTargetGroupId ? '编辑部队' : '新建部队'}</strong>
                 <div className="pve-compose-actions">
-                  <button type="button" className="btn btn-warning" onClick={startBattle} disabled={!canStartBattle}>开战</button>
+                  <button type="button" className="btn btn-secondary" onClick={closeComposeEditor}>取消</button>
+                  <button
+                    type="button"
+                    className="btn btn-warning"
+                    onClick={submitComposeEditor}
+                    disabled={composeEditorTotalCount <= 0}
+                  >确定编组</button>
                 </div>
+              </div>
+              <div className="pve-compose-editor-grid">
+                <label>
+                  部队名称
+                  <input
+                    type="text"
+                    value={composeEditorDraft.name || ''}
+                    maxLength={24}
+                    placeholder="不填则自动命名"
+                    onChange={(event) => setComposeEditorDraft((prev) => ({ ...prev, name: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  排序
+                  <input
+                    type="number"
+                    min={1}
+                    max={9999}
+                    value={normalizeComposeSortOrder(composeEditorDraft.sortOrder, 1)}
+                    onChange={(event) => setComposeEditorDraft((prev) => ({
+                      ...prev,
+                      sortOrder: normalizeComposeSortOrder(event.target.value, 1)
+                    }))}
+                  />
+                </label>
+              </div>
+              <div className="pve-compose-editor-transfer">
+                <div className="pve-compose-editor-col">
+                  <div className="pve-compose-editor-col-title">可用兵种（左侧）</div>
+                  {composeEditorStockRows
+                    .filter((entry) => entry.remaining > 0)
+                    .map((entry) => (
+                      <button
+                        key={`pve-editor-stock-${entry.unitTypeId}`}
+                        type="button"
+                        className="pve-compose-editor-item"
+                        draggable={entry.remaining > 0}
+                        disabled={entry.remaining <= 0}
+                        onDragStart={(event) => {
+                          composeDragUnitTypeRef.current = entry.unitTypeId;
+                          event.dataTransfer?.setData('application/x-pve-unit-id', entry.unitTypeId);
+                          event.dataTransfer?.setData('text/plain', entry.unitTypeId);
+                          if (event.dataTransfer) {
+                            event.dataTransfer.effectAllowed = 'copyMove';
+                          }
+                        }}
+                        onDragEnd={() => {
+                          composeDragUnitTypeRef.current = '';
+                        }}
+                        onClick={() => openComposeQuantityDialog(entry.unitTypeId, 'add')}
+                      >
+                        <strong>{entry.unitName}</strong>
+                        <span>{`可用 ${entry.remaining}`}</span>
+                      </button>
+                    ))}
+                  {composeEditorStockRows.filter((entry) => entry.remaining > 0).length <= 0 && (
+                    <div className="pve-compose-tip">没有可继续分配的兵种。</div>
+                  )}
+                </div>
+                <div
+                  className={`pve-compose-editor-col is-dropzone ${composeEditorDropActive ? 'active' : ''}`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    if (event.dataTransfer) {
+                      event.dataTransfer.dropEffect = 'copy';
+                    }
+                    setComposeEditorDropActive(true);
+                  }}
+                  onDragLeave={(event) => {
+                    if (event.currentTarget.contains(event.relatedTarget)) return;
+                    setComposeEditorDropActive(false);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const droppedUnitTypeId = event.dataTransfer?.getData('application/x-pve-unit-id')
+                      || event.dataTransfer?.getData('text/plain')
+                      || composeDragUnitTypeRef.current
+                      || '';
+                    composeDragUnitTypeRef.current = '';
+                    setComposeEditorDropActive(false);
+                    openComposeQuantityDialog(droppedUnitTypeId, 'add');
+                  }}
+                >
+                  <div className="pve-compose-editor-col-title">部队编组（右侧）</div>
+                  {composeEditorSelectedRows.length <= 0 && (
+                    <div className="pve-compose-tip">把左侧兵种拖到这里，会弹出数量输入框。</div>
+                  )}
+                  {composeEditorSelectedRows.map((entry) => (
+                    <div key={`pve-editor-right-${entry.unitTypeId}`} className="pve-compose-line">
+                      <strong>{entry.unitName}</strong>
+                      <span>{`数量 ${entry.count}`}</span>
+                      <div className="pve-compose-line-actions">
+                        <button type="button" onClick={() => openComposeQuantityDialog(entry.unitTypeId, 'set')}>编辑</button>
+                        <button type="button" onClick={() => removeComposeEditorUnit(entry.unitTypeId)}>移除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="pve-compose-editor-tip">
+                {`总兵力 ${composeEditorTotalCount}。确定后会生成或更新攻方部队卡片；双击左侧攻方部队卡片可再次编辑，若该部队已部署会自动从战场撤回。`}
               </div>
             </div>
           )}
@@ -2426,6 +3563,20 @@ const PveBattleModal = ({
           )}
 
           {toast && <div className="pve-toast">{toast}</div>}
+
+          <NumberPadDialog
+            open={!!composeQuantityDialog?.open}
+            title={composeQuantityDialog?.mode === 'set' ? `设置${composeQuantityDialog?.unitName || '兵种'}数量` : `添加${composeQuantityDialog?.unitName || '兵种'}数量`}
+            description={composeQuantityDialog?.mode === 'set' ? '设置该兵种在当前部队中的总数量' : '设置本次添加数量'}
+            min={1}
+            max={Math.max(1, Math.floor(Number(composeQuantityDialog?.max) || 1))}
+            initialValue={Math.max(1, Math.floor(Number(composeQuantityDialog?.current) || 1))}
+            zIndex={31050}
+            confirmLabel="确定"
+            cancelLabel="取消"
+            onConfirm={confirmComposeQuantityDialog}
+            onCancel={() => setComposeQuantityDialog((prev) => ({ ...prev, open: false }))}
+          />
 
           {battleResult && (
             <div className="pve-result-mask">
@@ -2452,6 +3603,7 @@ const PveBattleModal = ({
                       setPendingSkill(null);
                       setFloatingActionsPos(null);
                       setCardRows([]);
+                      setActiveComposeMoveId('');
                     }}
                   >继续围城（重开）</button>
                 </div>

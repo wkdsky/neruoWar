@@ -2,6 +2,12 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import * as THREE from 'three';
 import NumberPadDialog from '../common/NumberPadDialog';
 import './BattlefieldPreviewModal.css';
+import {
+  createFormationVisualState,
+  reconcileCounts,
+  renderFormation,
+  getFormationFootprint
+} from '../../game/formation/ArmyFormationRenderer';
 
 const CAMERA_ANGLE_PREVIEW = 45;
 const CAMERA_ANGLE_EDIT = 45;
@@ -20,7 +26,7 @@ const WALL_HEIGHT = 42;
 const STACK_LAYER_HEIGHT = WALL_HEIGHT;
 const ROTATE_STEP = 7.5;
 const MIN_ZOOM = 0.75;
-const MAX_ZOOM = 1.5;
+const MAX_ZOOM = 2;
 const DEFAULT_ZOOM = 1;
 const ZOOM_STEP = 0.08;
 const BASELINE_FIELD_COVERAGE = 0.85;
@@ -36,9 +42,11 @@ const DEFAULT_MAX_ITEMS_PER_TYPE = 10;
 const SNAP_EPSILON = 1.2;
 const CACHE_VERSION = 2;
 const CACHE_PREFIX = 'battlefield_layout_cache_v2';
-const DEFENDER_SOLDIER_VISUAL_SCALE = 0.52;
-const DEFENDER_SOLDIER_MIN = 3;
-const DEFENDER_SOLDIER_MAX = 28;
+const DEFENDER_SOLDIER_VISUAL_SCALE = 3.52;
+const DEFENDER_FORMATION_METRIC_BUDGET = 48;
+const DEFENDER_DEFAULT_FACING_DEG = 90;
+const DEFENDER_OVERLAP_RATIO = 0.82;
+const DEFENDER_OVERLAP_ALLOWANCE = 4;
 const PALETTE_WALL_TEMPLATE = {
   itemId: '',
   width: WALL_WIDTH,
@@ -89,6 +97,23 @@ const roundTo = (value, digits = 2) => {
   return Math.round(n * p) / p;
 };
 
+const resolveFormationBudgetByZoom = (zoomValue) => {
+  const minZoom = Math.max(0.01, MIN_ZOOM);
+  const maxZoom = Math.max(minZoom + 0.01, MAX_ZOOM);
+  const safeZoom = Math.max(minZoom, Math.min(maxZoom, Number(zoomValue) || DEFAULT_ZOOM));
+  const t = (safeZoom - minZoom) / (maxZoom - minZoom);
+  // Keep zoom binding but avoid extreme soldier-count swings.
+  const eased = Math.sqrt(Math.max(0, Math.min(1, t)));
+  return Math.max(32, Math.min(56, Math.round(32 + (eased * 24))));
+};
+
+const resolveDefenderFootprintScaleByCount = (totalUnits) => {
+  const safeTotal = Math.max(1, Math.floor(Number(totalUnits) || 0));
+  const soldierEquivalent = safeTotal / 10;
+  const scale = 0.9 + (Math.log10(soldierEquivalent + 1) * 0.55);
+  return Math.max(0.9, Math.min(2.4, scale));
+};
+
 const parseHexColor = (value, fallback = 0xffffff) => {
   if (typeof value !== 'string') return fallback;
   const text = value.trim().replace(/^#/, '');
@@ -130,27 +155,6 @@ const getWallTopZ = (wall = {}) => (
   getWallBaseZ(wall) + Math.max(10, Number(wall?.height) || WALL_HEIGHT)
 );
 
-const computeMiniFormationOffset = (index, total, radius = 18) => {
-  const rowCount = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, total))));
-  const col = index % rowCount;
-  const row = Math.floor(index / rowCount);
-  const gap = Math.max(4, Math.min(12, radius * 0.46));
-  return {
-    x: (col - ((rowCount - 1) / 2)) * gap,
-    y: (row - ((Math.ceil(total / rowCount) - 1) / 2)) * gap
-  };
-};
-
-const hashStringToInt = (value = '') => {
-  const text = typeof value === 'string' ? value : '';
-  let hash = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = ((hash << 5) - hash) + text.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash);
-};
-
 const tintHexColor = (hex, hueShift = 0, satScale = 1, lightOffset = 0) => {
   const color = new THREE.Color(hex);
   const hsl = { h: 0, s: 0, l: 0 };
@@ -160,137 +164,6 @@ const tintHexColor = (hex, hueShift = 0, satScale = 1, lightOffset = 0) => {
   hsl.l = clamp01(hsl.l + lightOffset);
   color.setHSL(hsl.h, hsl.s, hsl.l);
   return color.getHex();
-};
-
-const inferDefenderUnitClass = (unitName = '', roleTag = '') => {
-  const name = typeof unitName === 'string' ? unitName : '';
-  const role = roleTag === '远程' || roleTag === '近战' ? roleTag : '';
-  if (/(骑|骑兵|铁骑)/.test(name)) return 'cavalry';
-  if (/(弓|弓兵|弩)/.test(name)) return 'archer';
-  if (/(炮|投石|火炮)/.test(name)) return 'artillery';
-  if (role === '远程') return 'archer';
-  if (role === '近战') return 'infantry';
-  return 'infantry';
-};
-
-const buildDefenderUnitVisual = (unitTypeId = '', unitName = '', roleTag = '', blocked = false) => {
-  const classTag = inferDefenderUnitClass(unitName || unitTypeId, roleTag);
-  const classBaseColor = classTag === 'cavalry'
-    ? 0xf59e0b
-    : (classTag === 'archer'
-      ? 0x34d399
-      : (classTag === 'artillery' ? 0xfb7185 : 0x60a5fa));
-  const classAccentColor = classTag === 'cavalry'
-    ? 0xfef3c7
-    : (classTag === 'archer'
-      ? 0xd1fae5
-      : (classTag === 'artillery' ? 0xffe4e6 : 0xdbeafe));
-  if (blocked) {
-    return {
-      classTag,
-      bodyColor: 0xf87171,
-      accentColor: 0xfee2e2
-    };
-  }
-  const seed = hashStringToInt(`${unitTypeId}|${unitName}`);
-  const hueShift = ((seed % 17) - 8) / 240;
-  const lightShift = ((Math.floor(seed / 17) % 9) - 4) / 100;
-  return {
-    classTag,
-    bodyColor: tintHexColor(classBaseColor, hueShift, 1.08, lightShift),
-    accentColor: tintHexColor(classAccentColor, hueShift * 0.6, 1, lightShift * 0.7)
-  };
-};
-
-const buildDefenderSoldierTokens = (units = [], soldierCount = 0, resolveMeta = () => null, blocked = false) => {
-  const safeCount = Math.max(0, Math.floor(Number(soldierCount) || 0));
-  if (safeCount <= 0) return [];
-  const source = normalizeDefenderUnits(units).filter((entry) => entry.count > 0);
-  if (source.length <= 0) return [];
-
-  const enriched = source.map((entry) => {
-    const unitTypeId = entry.unitTypeId;
-    const meta = (typeof resolveMeta === 'function' ? resolveMeta(unitTypeId) : null) || {};
-    const unitName = typeof meta?.unitName === 'string' && meta.unitName.trim()
-      ? meta.unitName.trim()
-      : unitTypeId;
-    const roleTag = meta?.roleTag === '远程' || meta?.roleTag === '近战' ? meta.roleTag : '';
-    const visual = buildDefenderUnitVisual(unitTypeId, unitName, roleTag, blocked);
-    return {
-      unitTypeId,
-      count: entry.count,
-      unitName,
-      roleTag,
-      ...visual,
-      slots: 0
-    };
-  });
-
-  if (safeCount <= enriched.length) {
-    return enriched
-      .sort((a, b) => {
-        if (b.count !== a.count) return b.count - a.count;
-        return a.unitTypeId.localeCompare(b.unitTypeId, 'zh-Hans-CN');
-      })
-      .slice(0, safeCount);
-  }
-
-  enriched.forEach((item) => {
-    item.slots = 1;
-  });
-  let remaining = safeCount - enriched.length;
-  const totalUnits = enriched.reduce((sum, item) => sum + item.count, 0);
-  let baseAssigned = 0;
-  const weighted = enriched.map((item, index) => {
-    const exact = remaining * (item.count / Math.max(1, totalUnits));
-    const base = Math.floor(exact);
-    enriched[index].slots += base;
-    baseAssigned += base;
-    return {
-      index,
-      frac: exact - base,
-      count: item.count,
-      unitTypeId: item.unitTypeId
-    };
-  });
-  remaining -= baseAssigned;
-  const ranking = [...weighted].sort((a, b) => {
-    if (b.frac !== a.frac) return b.frac - a.frac;
-    if (b.count !== a.count) return b.count - a.count;
-    return a.unitTypeId.localeCompare(b.unitTypeId, 'zh-Hans-CN');
-  });
-  for (let i = 0; i < remaining; i += 1) {
-    const picked = ranking[i % ranking.length];
-    if (picked) {
-      enriched[picked.index].slots += 1;
-    }
-  }
-
-  const buckets = enriched
-    .map((item) => ({ ...item, remaining: item.slots }))
-    .sort((a, b) => b.remaining - a.remaining);
-  const tokens = [];
-  while (tokens.length < safeCount) {
-    let progressed = false;
-    for (let i = 0; i < buckets.length; i += 1) {
-      const bucket = buckets[i];
-      if (!bucket || bucket.remaining <= 0) continue;
-      tokens.push({
-        unitTypeId: bucket.unitTypeId,
-        unitName: bucket.unitName,
-        roleTag: bucket.roleTag,
-        classTag: bucket.classTag,
-        bodyColor: bucket.bodyColor,
-        accentColor: bucket.accentColor
-      });
-      bucket.remaining -= 1;
-      progressed = true;
-      if (tokens.length >= safeCount) break;
-    }
-    if (!progressed) break;
-    buckets.sort((a, b) => b.remaining - a.remaining);
-  }
-  return tokens;
 };
 
 const getBattlefieldCacheKey = (nodeId, gateKey) => (
@@ -421,6 +294,12 @@ const getDeploymentTotalCount = (deployment = {}) => (
     .reduce((sum, entry) => sum + entry.count, 0)
 );
 
+const normalizeDefenderFacingDeg = (value) => {
+  const maybe = Number(value);
+  if (!Number.isFinite(maybe)) return DEFENDER_DEFAULT_FACING_DEG;
+  return normalizeDeg(maybe);
+};
+
 const sanitizeDefenderDeployments = (rawDeployments = []) => {
   const source = Array.isArray(rawDeployments) ? rawDeployments : [];
   const out = [];
@@ -439,6 +318,7 @@ const sanitizeDefenderDeployments = (rawDeployments = []) => {
       name: typeof item?.name === 'string' ? item.name.trim() : '',
       sortOrder: Math.max(0, Math.floor(Number(item?.sortOrder) || 0)),
       placed: item?.placed !== false,
+      rotation: normalizeDefenderFacingDeg(item?.rotation),
       units,
       unitTypeId: primary.unitTypeId,
       count: primary.count,
@@ -581,7 +461,8 @@ const buildLayoutPayload = ({ walls = [], defenderDeployments = [], layoutMeta =
     unitTypeId: item.unitTypeId,
     count: Math.max(1, Math.floor(Number(item.count) || 1)),
     x: roundTo(item.x, 3),
-    y: roundTo(item.y, 3)
+    y: roundTo(item.y, 3),
+    rotation: roundTo(normalizeDefenderFacingDeg(item?.rotation), 3)
   }))
 });
 
@@ -1199,6 +1080,7 @@ const BattlefieldPreviewModal = ({
   gateKey = 'cheng',
   gateLabel = '',
   canEdit = false,
+  layoutBundleOverride = null,
   onClose
 }) => {
   const sceneCanvasRef = useRef(null);
@@ -1223,6 +1105,7 @@ const BattlefieldPreviewModal = ({
   const zoomAnimRef = useRef(null);
   const zoomTargetRef = useRef(DEFAULT_ZOOM);
   const spacePressedRef = useRef(false);
+  const defenderFormationStateRef = useRef(new Map());
   const [walls, setWalls] = useState([]);
   const [editMode, setEditMode] = useState(false);
   const [cameraAngle, setCameraAngle] = useState(CAMERA_ANGLE_PREVIEW);
@@ -1256,6 +1139,7 @@ const BattlefieldPreviewModal = ({
   const [defenderDragPreview, setDefenderDragPreview] = useState(null);
   const [sidebarTab, setSidebarTab] = useState('items');
   const [defenderEditorOpen, setDefenderEditorOpen] = useState(false);
+  const [defenderEditingDeployId, setDefenderEditingDeployId] = useState('');
   const [defenderEditorDraft, setDefenderEditorDraft] = useState({
     name: '',
     sortOrder: 1,
@@ -1283,6 +1167,11 @@ const BattlefieldPreviewModal = ({
     fieldHeight: FIELD_HEIGHT,
     maxItemsPerType: DEFAULT_MAX_ITEMS_PER_TYPE
   }), [gateKey]);
+  const hasLayoutBundleOverride = !!(
+    layoutBundleOverride
+    && typeof layoutBundleOverride === 'object'
+    && !Array.isArray(layoutBundleOverride)
+  );
   const effectiveCanEdit = !!canEdit && !!serverCanEdit;
   const fieldWidth = useMemo(
     () => Math.max(200, Number(activeLayoutMeta?.fieldWidth) || FIELD_WIDTH),
@@ -1415,6 +1304,15 @@ const BattlefieldPreviewModal = ({
       };
     })
   ), [defenderRosterMap, deployedDefenderCountMap]);
+  const defenderUnitTypesForFormation = useMemo(() => (
+    Array.from(defenderRosterMap.values()).map((item) => ({
+      unitTypeId: item.unitTypeId,
+      name: item.unitName || item.unitTypeId,
+      roleTag: item.roleTag === '远程' ? '远程' : '近战',
+      speed: item.roleTag === '远程' ? 1.1 : 1.4,
+      range: item.roleTag === '远程' ? 3 : 1
+    }))
+  ), [defenderRosterMap]);
   const totalDefenderPlaced = useMemo(
     () => defenderStockRows.reduce((sum, item) => sum + item.used, 0),
     [defenderStockRows]
@@ -1744,6 +1642,55 @@ const BattlefieldPreviewModal = ({
     return Math.max(0, roster.count - deployed + draftCurrent);
   }, [defenderRosterMap, deployedDefenderCountMap]);
 
+  const resolveDefenderDeploymentFootprint = useCallback((deploymentLike) => {
+    const units = normalizeDefenderUnits(deploymentLike?.units, deploymentLike?.unitTypeId, deploymentLike?.count);
+    if (units.length <= 0) return { radius: 16, width: 24, depth: 24 };
+    const totalUnits = units.reduce((sum, entry) => sum + entry.count, 0);
+    const countsByType = {};
+    units.forEach((entry) => {
+      countsByType[entry.unitTypeId] = (countsByType[entry.unitTypeId] || 0) + entry.count;
+    });
+    const deployId = typeof deploymentLike?.deployId === 'string' ? deploymentLike.deployId.trim() : '';
+    const signature = Object.entries(countsByType)
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'zh-Hans-CN'))
+      .map(([unitTypeId, count]) => `${unitTypeId}:${count}`)
+      .join('|');
+    const cacheKey = `def_metric_${deployId || signature}`;
+    const cameraState = {
+      distance: 980,
+      worldScale: 1,
+      renderBudget: DEFENDER_FORMATION_METRIC_BUDGET,
+      shape: 'grid',
+      unitTypes: defenderUnitTypesForFormation
+    };
+    const cache = defenderFormationStateRef.current;
+    let formationState = cache.get(cacheKey);
+    if (!formationState) {
+      formationState = createFormationVisualState({
+        teamId: 'defender',
+        formationId: cacheKey,
+        countsByType,
+        unitTypes: defenderUnitTypesForFormation,
+        cameraState
+      });
+      cache.set(cacheKey, formationState);
+    } else {
+      reconcileCounts(formationState, countsByType, cameraState, Date.now());
+    }
+    const rawFootprint = getFormationFootprint(formationState);
+    const scaleByCount = resolveDefenderFootprintScaleByCount(totalUnits);
+    return {
+      radius: Math.max(10, Number(rawFootprint?.radius || 16) * scaleByCount),
+      width: Math.max(12, Number(rawFootprint?.width || 24) * scaleByCount),
+      depth: Math.max(12, Number(rawFootprint?.depth || 24) * scaleByCount)
+    };
+  }, [defenderUnitTypesForFormation]);
+
+  const resolveDefenderDeploymentRadius = useCallback((deploymentLike, fallback = 16) => {
+    const footprint = resolveDefenderDeploymentFootprint(deploymentLike);
+    return Math.max(9, (Number(footprint?.radius) || fallback) * 0.86);
+  }, [resolveDefenderDeploymentFootprint]);
+
   const findDeploymentAtWorld = useCallback((worldPoint) => {
     const source = (Array.isArray(defenderDeployments) ? defenderDeployments : []).filter((item) => item?.placed !== false);
     let best = null;
@@ -1752,25 +1699,34 @@ const BattlefieldPreviewModal = ({
       const dx = (Number(item?.x) || 0) - worldPoint.x;
       const dy = (Number(item?.y) || 0) - worldPoint.y;
       const dist = Math.hypot(dx, dy);
-      if (dist < bestDist && dist <= 28) {
+      const pickRadius = Math.max(14, resolveDefenderDeploymentRadius(item, 16) * 0.95);
+      if (dist < bestDist && dist <= pickRadius) {
         best = item;
         bestDist = dist;
       }
     });
     return best;
-  }, [defenderDeployments]);
+  }, [defenderDeployments, resolveDefenderDeploymentRadius]);
 
   const buildDefaultDefenderPoint = useCallback((excludeDeployId = '') => {
     const minX = defenderZoneMinX;
     const maxX = fieldWidth / 2;
+    const source = Array.isArray(defenderDeployments) ? defenderDeployments : [];
+    const movingTarget = excludeDeployId ? source.find((item) => item.deployId === excludeDeployId) : null;
+    const movingRadius = resolveDefenderDeploymentRadius(movingTarget, 16);
     for (let i = 0; i < 40; i += 1) {
       const point = {
         x: minX + 16 + (Math.random() * Math.max(16, (maxX - minX - 32))),
         y: (-fieldHeight * 0.42) + (Math.random() * fieldHeight * 0.84)
       };
-      const overlap = (Array.isArray(defenderDeployments) ? defenderDeployments : []).some((item) => {
+      const overlap = source.some((item) => {
         if (excludeDeployId && item.deployId === excludeDeployId) return false;
-        return Math.hypot((Number(item?.x) || 0) - point.x, (Number(item?.y) || 0) - point.y) < 20;
+        const otherRadius = resolveDefenderDeploymentRadius(item, 16);
+        const minDistance = Math.max(
+          8,
+          ((movingRadius + otherRadius) * DEFENDER_OVERLAP_RATIO) - DEFENDER_OVERLAP_ALLOWANCE
+        );
+        return Math.hypot((Number(item?.x) || 0) - point.x, (Number(item?.y) || 0) - point.y) < minDistance;
       });
       if (!overlap) return point;
     }
@@ -1778,7 +1734,7 @@ const BattlefieldPreviewModal = ({
       x: minX + ((maxX - minX) * 0.55),
       y: 0
     };
-  }, [defenderDeployments, defenderZoneMinX, fieldHeight, fieldWidth]);
+  }, [defenderDeployments, defenderZoneMinX, fieldHeight, fieldWidth, resolveDefenderDeploymentRadius]);
 
   const persistDefenderDeploymentsNow = useCallback((nextDeployments) => {
     const runner = persistBattlefieldLayoutRef.current;
@@ -1801,10 +1757,18 @@ const BattlefieldPreviewModal = ({
       x: Math.max(defenderZoneMinX, Math.min(fieldWidth / 2, worldPoint.x)),
       y: Math.max(-fieldHeight / 2, Math.min(fieldHeight / 2, worldPoint.y))
     };
+    const nextRotation = normalizeDefenderFacingDeg(
+      Number.isFinite(Number(worldPoint?.rotation)) ? Number(worldPoint.rotation) : target?.rotation
+    );
+    const targetRadius = resolveDefenderDeploymentRadius(target, 16);
     const overlap = (Array.isArray(defenderDeployments) ? defenderDeployments : []).some((item) => (
       item.deployId !== deployId
       && item?.placed !== false
-      && Math.hypot((Number(item?.x) || 0) - nextPoint.x, (Number(item?.y) || 0) - nextPoint.y) < 20
+      && Math.hypot((Number(item?.x) || 0) - nextPoint.x, (Number(item?.y) || 0) - nextPoint.y)
+        < Math.max(
+          8,
+          ((targetRadius + resolveDefenderDeploymentRadius(item, 16)) * DEFENDER_OVERLAP_RATIO) - DEFENDER_OVERLAP_ALLOWANCE
+        )
     ));
     if (overlap) {
       setMessage('守军部队点位过近，请稍微错开');
@@ -1832,7 +1796,7 @@ const BattlefieldPreviewModal = ({
     }
     const nextDeployments = sanitizeDefenderDeployments(defenderDeployments).map((item) => (
       item.deployId === deployId
-        ? { ...item, placed: true, x: nextPoint.x, y: nextPoint.y }
+        ? { ...item, placed: true, x: nextPoint.x, y: nextPoint.y, rotation: nextRotation }
         : item
     ));
     setDefenderDeployments(nextDeployments);
@@ -1844,7 +1808,7 @@ const BattlefieldPreviewModal = ({
       setMessage('守军部队位置已更新并保存');
     }
     return true;
-  }, [defenderDeployments, defenderRosterMap, defenderZoneMinX, editMode, effectiveCanEdit, fieldHeight, fieldWidth, persistDefenderDeploymentsNow]);
+  }, [defenderDeployments, defenderRosterMap, defenderZoneMinX, editMode, effectiveCanEdit, fieldHeight, fieldWidth, persistDefenderDeploymentsNow, resolveDefenderDeploymentRadius]);
 
   const resolveDefenderMovePreview = useCallback((deployId, worldPoint) => {
     if (!deployId || !worldPoint) return null;
@@ -1857,20 +1821,29 @@ const BattlefieldPreviewModal = ({
       x: Math.max(-fieldWidth / 2, Math.min(fieldWidth / 2, rawX)),
       y: Math.max(-fieldHeight / 2, Math.min(fieldHeight / 2, rawY))
     };
+    const nextRotation = normalizeDefenderFacingDeg(
+      Number.isFinite(Number(worldPoint?.rotation)) ? Number(worldPoint.rotation) : target?.rotation
+    );
+    const targetRadius = resolveDefenderDeploymentRadius(target, 16);
     const overlap = source.some((item) => (
       item.deployId !== deployId
       && item?.placed !== false
-      && Math.hypot((Number(item?.x) || 0) - nextPoint.x, (Number(item?.y) || 0) - nextPoint.y) < 20
+      && Math.hypot((Number(item?.x) || 0) - nextPoint.x, (Number(item?.y) || 0) - nextPoint.y)
+        < Math.max(
+          8,
+          ((targetRadius + resolveDefenderDeploymentRadius(item, 16)) * DEFENDER_OVERLAP_RATIO) - DEFENDER_OVERLAP_ALLOWANCE
+        )
     ));
     const outsideZone = rawX < defenderZoneMinX;
     return {
       deployId,
       x: nextPoint.x,
       y: nextPoint.y,
+      rotation: nextRotation,
       blocked: outsideZone || overlap,
       reason: outsideZone ? 'zone' : (overlap ? 'overlap' : '')
     };
-  }, [defenderDeployments, defenderZoneMinX, fieldHeight, fieldWidth]);
+  }, [defenderDeployments, defenderZoneMinX, fieldHeight, fieldWidth, resolveDefenderDeploymentRadius]);
 
   const openDefenderEditor = useCallback(() => {
     if (!effectiveCanEdit) return;
@@ -1888,12 +1861,54 @@ const BattlefieldPreviewModal = ({
       sortOrder: nextSortOrder,
       units: []
     });
+    setDefenderEditingDeployId('');
     setSidebarTab('defender');
     setDefenderEditorOpen(true);
   }, [defenderDeploymentRows, defenderEditorAvailableRows, effectiveCanEdit]);
 
+  const startEditDefenderDeployment = useCallback((deployId) => {
+    const safeDeployId = typeof deployId === 'string' ? deployId.trim() : '';
+    if (!effectiveCanEdit || !safeDeployId) return;
+    const source = sanitizeDefenderDeployments(defenderDeployments);
+    const target = source.find((item) => item.deployId === safeDeployId);
+    if (!target) return;
+    const wasPlaced = target.placed !== false;
+    const nextDeployments = source.map((item) => (
+      item.deployId === safeDeployId
+        ? { ...item, placed: false }
+        : item
+    ));
+    const draftUnits = normalizeDefenderUnits(target?.units, target?.unitTypeId, target?.count);
+    setDefenderDeployments(nextDeployments);
+    setSelectedDeploymentId(safeDeployId);
+    setActiveDefenderMoveId('');
+    setDefenderDragPreview(null);
+    setSelectedWallId('');
+    cancelGhostPlacement('');
+    setDefenderEditingDeployId(safeDeployId);
+    setDefenderEditorDraft({
+      name: typeof target?.name === 'string' ? target.name : '',
+      sortOrder: Math.max(1, Math.floor(Number(target?.sortOrder) || 1)),
+      units: draftUnits
+    });
+    setSidebarTab('defender');
+    setDefenderEditorOpen(true);
+    if (editMode) {
+      setHasDraftChanges(true);
+      setMessage(wasPlaced
+        ? '已从战场撤回该守军部队，可重新编辑编制'
+        : '已打开守军部队编辑');
+    } else {
+      persistDefenderDeploymentsNow(nextDeployments);
+      setMessage(wasPlaced
+        ? '已从战场撤回该守军部队并保存，可重新编辑编制'
+        : '已打开守军部队编辑');
+    }
+  }, [cancelGhostPlacement, defenderDeployments, editMode, effectiveCanEdit, persistDefenderDeploymentsNow]);
+
   const closeDefenderEditor = useCallback(() => {
     setDefenderEditorOpen(false);
+    setDefenderEditingDeployId('');
     setDefenderQuantityDialog({
       open: false,
       unitTypeId: '',
@@ -1977,11 +1992,48 @@ const BattlefieldPreviewModal = ({
       ? defenderEditorDraft.name.trim()
       : fallbackName;
     const sortOrder = Math.max(1, Math.floor(Number(defenderEditorDraft?.sortOrder) || (defenderDeploymentRows.length + 1)));
+    const editingDeployId = typeof defenderEditingDeployId === 'string' ? defenderEditingDeployId.trim() : '';
+    if (editingDeployId) {
+      const source = sanitizeDefenderDeployments(defenderDeployments);
+      const target = source.find((item) => item.deployId === editingDeployId);
+      if (target) {
+        const nextDeployments = source.map((item) => (
+          item.deployId === editingDeployId
+            ? {
+              ...item,
+              name: teamName,
+              sortOrder,
+              placed: false,
+              units: draftUnits,
+              unitTypeId: draftUnits[0].unitTypeId,
+              count: draftUnits[0].count
+            }
+            : item
+        ));
+        setDefenderDeployments(nextDeployments);
+        if (editMode) setHasDraftChanges(true);
+        else persistDefenderDeploymentsNow(nextDeployments);
+        setSelectedDeploymentId(editingDeployId);
+        setDefenderEditorOpen(false);
+        setDefenderEditingDeployId('');
+        setDefenderEditorDraft({
+          name: '',
+          sortOrder: sortOrder + 1,
+          units: []
+        });
+        setMessage(editMode
+          ? `已更新守军部队：${teamName}（${totalCount}）`
+          : `已更新守军部队并保存：${teamName}（${totalCount}）`);
+        return;
+      }
+      setDefenderEditingDeployId('');
+    }
     const nextDeployment = {
       deployId: `deploy_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       name: teamName,
       sortOrder,
       placed: false,
+      rotation: DEFENDER_DEFAULT_FACING_DEG,
       units: draftUnits,
       unitTypeId: draftUnits[0].unitTypeId,
       count: draftUnits[0].count,
@@ -1994,6 +2046,7 @@ const BattlefieldPreviewModal = ({
     else persistDefenderDeploymentsNow(nextDeployments);
     setSelectedDeploymentId(nextDeployment.deployId);
     setDefenderEditorOpen(false);
+    setDefenderEditingDeployId('');
     setDefenderEditorDraft({
       name: '',
       sortOrder: sortOrder + 1,
@@ -2005,6 +2058,7 @@ const BattlefieldPreviewModal = ({
   }, [
     defenderDeployments,
     buildDefaultDefenderPoint,
+    defenderEditingDeployId,
     defenderEditorDraft,
     defenderDeploymentRows.length,
     editMode,
@@ -2213,6 +2267,36 @@ const BattlefieldPreviewModal = ({
     let cancelled = false;
     const token = localStorage.getItem('token');
     const localCache = readBattlefieldCache(nodeId, gateKey);
+    const overrideBundle = hasLayoutBundleOverride ? layoutBundleOverride : null;
+
+    const resolveOverrideSnapshot = () => {
+      const sourceBundle = overrideBundle && typeof overrideBundle === 'object' ? overrideBundle : {};
+      const overrideCatalog = normalizeItemCatalog(sourceBundle.itemCatalog);
+      const overrideMeta = {
+        layoutId: typeof sourceBundle?.activeLayout?.layoutId === 'string'
+          ? sourceBundle.activeLayout.layoutId
+          : defaultLayoutMeta.layoutId,
+        name: typeof sourceBundle?.activeLayout?.name === 'string'
+          ? sourceBundle.activeLayout.name
+          : '',
+        fieldWidth: Number.isFinite(Number(sourceBundle?.activeLayout?.fieldWidth))
+          ? Number(sourceBundle.activeLayout.fieldWidth)
+          : defaultLayoutMeta.fieldWidth,
+        fieldHeight: Number.isFinite(Number(sourceBundle?.activeLayout?.fieldHeight))
+          ? Number(sourceBundle.activeLayout.fieldHeight)
+          : defaultLayoutMeta.fieldHeight,
+        maxItemsPerType: Number.isFinite(Number(sourceBundle?.activeLayout?.maxItemsPerType))
+          ? Math.max(DEFAULT_MAX_ITEMS_PER_TYPE, Math.floor(Number(sourceBundle.activeLayout.maxItemsPerType)))
+          : DEFAULT_MAX_ITEMS_PER_TYPE
+      };
+      const overrideWallSnapshot = sanitizeWallsWithLegacyCleanup(mapLayoutBundleToWalls(sourceBundle));
+      return {
+        walls: overrideWallSnapshot.walls,
+        defenderDeployments: [],
+        itemCatalog: overrideCatalog,
+        layoutMeta: overrideMeta
+      };
+    };
 
     const resolveCacheSnapshot = () => {
       const cachedCatalog = normalizeItemCatalog(localCache?.itemCatalog);
@@ -2251,6 +2335,22 @@ const BattlefieldPreviewModal = ({
       setLoadingLayout(true);
       setLayoutReady(false);
       setErrorText('');
+      if (overrideBundle) {
+        const overrideSnapshot = resolveOverrideSnapshot();
+        if (!cancelled) {
+          setWalls(overrideSnapshot.walls);
+          setDefenderDeployments(overrideSnapshot.defenderDeployments);
+          setItemCatalog(overrideSnapshot.itemCatalog);
+          setDefenderRoster([]);
+          setActiveLayoutMeta(overrideSnapshot.layoutMeta);
+          setServerCanEdit(false);
+          setCacheNeedsSync(false);
+          setMessage('');
+          setLoadingLayout(false);
+          setLayoutReady(true);
+        }
+        return;
+      }
       const cacheSnapshot = resolveCacheSnapshot();
       if (!token) {
         if (!cancelled) {
@@ -2403,8 +2503,10 @@ const BattlefieldPreviewModal = ({
     setSelectedDeploymentId('');
     setActiveDefenderMoveId('');
     setDefenderDragPreview(null);
+    defenderFormationStateRef.current = new Map();
     setSidebarTab('items');
     setDefenderEditorOpen(false);
+    setDefenderEditingDeployId('');
     setDefenderEditorDraft({
       name: '',
       sortOrder: 1,
@@ -2425,7 +2527,7 @@ const BattlefieldPreviewModal = ({
     return () => {
       cancelled = true;
     };
-  }, [canEdit, defaultLayoutMeta, gateKey, open, nodeId]);
+  }, [canEdit, defaultLayoutMeta, gateKey, hasLayoutBundleOverride, layoutBundleOverride, open, nodeId]);
 
   useEffect(() => {
     if (!open || !layoutReady || !pendingCacheSyncRef.current) return;
@@ -2759,43 +2861,57 @@ const BattlefieldPreviewModal = ({
       const isSelected = !!options.selected;
       const isPreview = !!options.preview;
       const isBlocked = !!options.blocked;
-      const opacity = isPreview ? (isBlocked ? 0.42 : 0.62) : 0.98;
-      const resolveUnitMeta = (unitTypeId) => {
-        const row = defenderRosterMap.get(unitTypeId) || null;
-        return {
-          unitName: row?.unitName || unitTypeId,
-          roleTag: row?.roleTag === '远程' ? '远程' : '近战'
-        };
-      };
-
       const squadGroup = new THREE.Group();
       squadGroup.position.set(0, 0, 0.24);
       worldGroup.add(squadGroup);
-
-      const soldierCount = Math.max(
-        DEFENDER_SOLDIER_MIN,
-        Math.min(DEFENDER_SOLDIER_MAX, Math.ceil(totalCount / 10))
-      );
-      const clusterRadius = Math.max(8, Math.min(24, 8 + (Math.sqrt(totalCount) * 0.75)));
       const centerX = Number(deployment?.x) || 0;
       const centerY = Number(deployment?.y) || 0;
-      const soldierTokens = buildDefenderSoldierTokens(units, soldierCount, resolveUnitMeta, isBlocked);
-      if (soldierTokens.length <= 0) return;
-      const infantryBodyGeometry = new THREE.ConeGeometry(1.35 * DEFENDER_SOLDIER_VISUAL_SCALE, 4.8 * DEFENDER_SOLDIER_VISUAL_SCALE, 6);
-      const infantryShieldGeometry = new THREE.BoxGeometry(1.2 * DEFENDER_SOLDIER_VISUAL_SCALE, 0.6 * DEFENDER_SOLDIER_VISUAL_SCALE, 1.8 * DEFENDER_SOLDIER_VISUAL_SCALE);
-      const cavalryMountGeometry = new THREE.BoxGeometry(2.5 * DEFENDER_SOLDIER_VISUAL_SCALE, 1.1 * DEFENDER_SOLDIER_VISUAL_SCALE, 1.1 * DEFENDER_SOLDIER_VISUAL_SCALE);
-      const cavalryRiderGeometry = new THREE.CylinderGeometry(0.58 * DEFENDER_SOLDIER_VISUAL_SCALE, 0.74 * DEFENDER_SOLDIER_VISUAL_SCALE, 2.4 * DEFENDER_SOLDIER_VISUAL_SCALE, 8);
-      const cavalryLanceGeometry = new THREE.CylinderGeometry(0.16 * DEFENDER_SOLDIER_VISUAL_SCALE, 0.16 * DEFENDER_SOLDIER_VISUAL_SCALE, 3.4 * DEFENDER_SOLDIER_VISUAL_SCALE, 7);
-      const archerBodyGeometry = new THREE.CylinderGeometry(0.64 * DEFENDER_SOLDIER_VISUAL_SCALE, 0.82 * DEFENDER_SOLDIER_VISUAL_SCALE, 2.9 * DEFENDER_SOLDIER_VISUAL_SCALE, 8);
-      const archerBowGeometry = new THREE.TorusGeometry(0.95 * DEFENDER_SOLDIER_VISUAL_SCALE, 0.16 * DEFENDER_SOLDIER_VISUAL_SCALE, 8, 20, Math.PI);
-      const artilleryBodyGeometry = new THREE.BoxGeometry(2.2 * DEFENDER_SOLDIER_VISUAL_SCALE, 1.4 * DEFENDER_SOLDIER_VISUAL_SCALE, 1.45 * DEFENDER_SOLDIER_VISUAL_SCALE);
-      const artilleryTubeGeometry = new THREE.CylinderGeometry(0.34 * DEFENDER_SOLDIER_VISUAL_SCALE, 0.42 * DEFENDER_SOLDIER_VISUAL_SCALE, 2.4 * DEFENDER_SOLDIER_VISUAL_SCALE, 9);
-      const headGeometry = new THREE.SphereGeometry(0.94 * DEFENDER_SOLDIER_VISUAL_SCALE, 9, 9);
-      const shadowGeometry = new THREE.CircleGeometry(Math.max(1.1, 2.2 * DEFENDER_SOLDIER_VISUAL_SCALE), 10);
+
+      const countsByType = {};
+      units.forEach((entry) => {
+        countsByType[entry.unitTypeId] = (countsByType[entry.unitTypeId] || 0) + entry.count;
+      });
+      const formationKey = `def_layout_${deployment?.deployId || `${centerX}_${centerY}`}`;
+      const deployRotation = normalizeDefenderFacingDeg(deployment?.rotation);
+      const cameraState = {
+        distance: Math.max(fieldWidth, fieldHeight, 500) * 2.4,
+        worldScale,
+        renderBudget: resolveFormationBudgetByZoom(zoom),
+        shape: 'grid'
+      };
+      const formationCache = defenderFormationStateRef.current;
+      let formationState = formationCache.get(formationKey);
+      if (!formationState) {
+        formationState = createFormationVisualState({
+          teamId: 'defender',
+          formationId: formationKey,
+          countsByType,
+          unitTypes: defenderUnitTypesForFormation,
+          cameraState
+        });
+        formationCache.set(formationKey, formationState);
+      } else {
+        reconcileCounts(formationState, countsByType, {
+          ...cameraState,
+          unitTypes: defenderUnitTypesForFormation
+        }, Date.now());
+      }
+      formationState.isHighlighted = isSelected;
+      formationState.isGhost = isPreview;
+
+      const infantryBodyGeometry = new THREE.ConeGeometry(1.35 * DEFENDER_SOLDIER_VISUAL_SCALE, 4.7 * DEFENDER_SOLDIER_VISUAL_SCALE, 6);
+      const archerBodyGeometry = new THREE.CylinderGeometry(0.7 * DEFENDER_SOLDIER_VISUAL_SCALE, 0.84 * DEFENDER_SOLDIER_VISUAL_SCALE, 2.8 * DEFENDER_SOLDIER_VISUAL_SCALE, 8);
+      const cavalryBodyGeometry = new THREE.BoxGeometry(2.2 * DEFENDER_SOLDIER_VISUAL_SCALE, 1.1 * DEFENDER_SOLDIER_VISUAL_SCALE, 1.05 * DEFENDER_SOLDIER_VISUAL_SCALE);
+      const cavalryLanceGeometry = new THREE.CylinderGeometry(0.16 * DEFENDER_SOLDIER_VISUAL_SCALE, 0.16 * DEFENDER_SOLDIER_VISUAL_SCALE, 3.2 * DEFENDER_SOLDIER_VISUAL_SCALE, 7);
+      const artilleryBodyGeometry = new THREE.BoxGeometry(2.18 * DEFENDER_SOLDIER_VISUAL_SCALE, 1.35 * DEFENDER_SOLDIER_VISUAL_SCALE, 1.4 * DEFENDER_SOLDIER_VISUAL_SCALE);
+      const artilleryTubeGeometry = new THREE.CylinderGeometry(0.34 * DEFENDER_SOLDIER_VISUAL_SCALE, 0.42 * DEFENDER_SOLDIER_VISUAL_SCALE, 2.28 * DEFENDER_SOLDIER_VISUAL_SCALE, 8);
+      const headGeometry = new THREE.SphereGeometry(0.92 * DEFENDER_SOLDIER_VISUAL_SCALE, 8, 8);
+      const shadowGeometry = new THREE.CircleGeometry(Math.max(1.1, 2.16 * DEFENDER_SOLDIER_VISUAL_SCALE), 10);
+      const opacity = isPreview ? (isBlocked ? 0.36 : 0.58) : 0.98;
       const shadowMaterial = new THREE.MeshBasicMaterial({
         color: 0x020617,
         transparent: true,
-        opacity: isPreview ? 0.18 : 0.24,
+        opacity: isPreview ? 0.16 : 0.24,
         side: THREE.DoubleSide,
         depthWrite: false
       });
@@ -2808,78 +2924,74 @@ const BattlefieldPreviewModal = ({
         roughness: 0.46,
         metalness: 0.12
       });
-      const addInfantrySoldier = (sx, sy, bodyColor, accentColor) => {
-        const body = new THREE.Mesh(infantryBodyGeometry, createLitMaterial(bodyColor, opacity, 0.18));
-        body.position.set(sx, sy, 1.26 * DEFENDER_SOLDIER_VISUAL_SCALE);
-        body.rotation.set(Math.PI / 2, 0, 0);
-        squadGroup.add(body);
-        const shield = new THREE.Mesh(infantryShieldGeometry, createLitMaterial(accentColor, isPreview ? opacity * 0.92 : 0.98, 0.1));
-        shield.position.set(sx + (0.92 * DEFENDER_SOLDIER_VISUAL_SCALE), sy, 1.2 * DEFENDER_SOLDIER_VISUAL_SCALE);
-        squadGroup.add(shield);
-      };
-      const addCavalrySoldier = (sx, sy, bodyColor, accentColor) => {
-        const mount = new THREE.Mesh(cavalryMountGeometry, createLitMaterial(bodyColor, opacity, 0.16));
-        mount.position.set(sx, sy, 0.96 * DEFENDER_SOLDIER_VISUAL_SCALE);
-        squadGroup.add(mount);
-        const rider = new THREE.Mesh(cavalryRiderGeometry, createLitMaterial(accentColor, isPreview ? opacity * 0.96 : 0.98, 0.12));
-        rider.position.set(sx, sy, 2.25 * DEFENDER_SOLDIER_VISUAL_SCALE);
-        rider.rotation.set(Math.PI / 2, 0, 0);
-        squadGroup.add(rider);
-        const lance = new THREE.Mesh(cavalryLanceGeometry, createLitMaterial(0xf8fafc, isPreview ? opacity * 0.9 : 0.95, 0.06));
-        lance.position.set(sx + (1.4 * DEFENDER_SOLDIER_VISUAL_SCALE), sy, 2.45 * DEFENDER_SOLDIER_VISUAL_SCALE);
-        lance.rotation.set(0, Math.PI / 2, Math.PI / 10);
-        squadGroup.add(lance);
-      };
-      const addArcherSoldier = (sx, sy, bodyColor, accentColor) => {
-        const body = new THREE.Mesh(archerBodyGeometry, createLitMaterial(bodyColor, opacity, 0.16));
-        body.position.set(sx, sy, 1.72 * DEFENDER_SOLDIER_VISUAL_SCALE);
-        body.rotation.set(Math.PI / 2, 0, 0);
-        squadGroup.add(body);
-        const bow = new THREE.Mesh(archerBowGeometry, createLitMaterial(accentColor, isPreview ? opacity * 0.92 : 0.95, 0.12));
-        bow.position.set(sx + (0.94 * DEFENDER_SOLDIER_VISUAL_SCALE), sy, 1.94 * DEFENDER_SOLDIER_VISUAL_SCALE);
-        bow.rotation.set(Math.PI / 2, 0, Math.PI / 2);
-        squadGroup.add(bow);
-      };
-      const addArtillerySoldier = (sx, sy, bodyColor, accentColor) => {
-        const body = new THREE.Mesh(artilleryBodyGeometry, createLitMaterial(bodyColor, opacity, 0.16));
-        body.position.set(sx, sy, 1.08 * DEFENDER_SOLDIER_VISUAL_SCALE);
-        squadGroup.add(body);
-        const tube = new THREE.Mesh(artilleryTubeGeometry, createLitMaterial(accentColor, isPreview ? opacity * 0.92 : 0.96, 0.12));
-        tube.position.set(sx + (0.92 * DEFENDER_SOLDIER_VISUAL_SCALE), sy, 2.06 * DEFENDER_SOLDIER_VISUAL_SCALE);
-        tube.rotation.set(0, Math.PI / 2, Math.PI / 5);
-        squadGroup.add(tube);
-      };
+      const rendered = renderFormation(
+        formationState,
+        {
+          kind: 'descriptors',
+          center: { x: centerX, y: centerY }
+        },
+        cameraState,
+        0
+      );
+      const fallbackFootprint = rendered?.footprint || getFormationFootprint(formationState);
+      const stableRadius = resolveDefenderDeploymentRadius(deployment, Number(fallbackFootprint?.radius) || 18);
+      const clusterRadius = Math.max(8, stableRadius);
+      const rawRadius = Math.max(1, Number(fallbackFootprint?.radius) || clusterRadius);
+      const clusterScale = Math.max(0.45, Math.min(1.25, clusterRadius / rawRadius));
 
-      for (let index = 0; index < soldierTokens.length; index += 1) {
-        const token = soldierTokens[index];
-        const offset = computeMiniFormationOffset(index, soldierCount, clusterRadius);
-        const sx = centerX + offset.x;
-        const sy = centerY + offset.y;
-        const bodyColor = isSelected
-          ? tintHexColor(token.bodyColor, 0, 1.12, 0.08)
-          : token.bodyColor;
-        const accentColor = isSelected
-          ? tintHexColor(token.accentColor, 0, 1.08, 0.06)
-          : token.accentColor;
+      (rendered?.instances || []).forEach((instance) => {
+        const bodyColor = isBlocked
+          ? 0xf87171
+          : parseHexColor(instance.bodyColor, 0x60a5fa);
+        const accentColor = isBlocked
+          ? 0xfee2e2
+          : parseHexColor(instance.accentColor, 0xdbeafe);
+        const rawX = Number(instance.x) || centerX;
+        const rawY = Number(instance.y) || centerY;
+        const rotatedOffset = rotate2D(
+          (rawX - centerX) * clusterScale,
+          (rawY - centerY) * clusterScale,
+          deployRotation
+        );
+        const sx = centerX + rotatedOffset.x;
+        const sy = centerY + rotatedOffset.y;
         const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
         shadow.position.set(sx, sy, 0.05);
         shadow.rotation.set(Math.PI / 2, 0, 0);
         squadGroup.add(shadow);
 
-        if (token.classTag === 'cavalry') {
-          addCavalrySoldier(sx, sy, bodyColor, accentColor);
-        } else if (token.classTag === 'archer') {
-          addArcherSoldier(sx, sy, bodyColor, accentColor);
-        } else if (token.classTag === 'artillery') {
-          addArtillerySoldier(sx, sy, bodyColor, accentColor);
+        if (instance.category === 'cavalry') {
+          const mount = new THREE.Mesh(cavalryBodyGeometry, createLitMaterial(bodyColor, opacity, 0.16));
+          mount.position.set(sx, sy, 0.98 * DEFENDER_SOLDIER_VISUAL_SCALE);
+          squadGroup.add(mount);
+          const lance = new THREE.Mesh(cavalryLanceGeometry, createLitMaterial(accentColor, isPreview ? opacity * 0.92 : 0.96, 0.1));
+          lance.position.set(sx + (1.3 * DEFENDER_SOLDIER_VISUAL_SCALE), sy, 2.3 * DEFENDER_SOLDIER_VISUAL_SCALE);
+          lance.rotation.set(0, Math.PI / 2, (Math.PI / 12) + degToRad(deployRotation));
+          squadGroup.add(lance);
+        } else if (instance.category === 'archer') {
+          const body = new THREE.Mesh(archerBodyGeometry, createLitMaterial(bodyColor, opacity, 0.16));
+          body.position.set(sx, sy, 1.68 * DEFENDER_SOLDIER_VISUAL_SCALE);
+          body.rotation.set(Math.PI / 2, 0, 0);
+          squadGroup.add(body);
+        } else if (instance.category === 'artillery') {
+          const body = new THREE.Mesh(artilleryBodyGeometry, createLitMaterial(bodyColor, opacity, 0.16));
+          body.position.set(sx, sy, 1.08 * DEFENDER_SOLDIER_VISUAL_SCALE);
+          squadGroup.add(body);
+          const tube = new THREE.Mesh(artilleryTubeGeometry, createLitMaterial(accentColor, isPreview ? opacity * 0.92 : 0.96, 0.12));
+          tube.position.set(sx + (0.9 * DEFENDER_SOLDIER_VISUAL_SCALE), sy, 2.0 * DEFENDER_SOLDIER_VISUAL_SCALE);
+          tube.rotation.set(0, Math.PI / 2, (Math.PI / 5) + degToRad(deployRotation));
+          squadGroup.add(tube);
         } else {
-          addInfantrySoldier(sx, sy, bodyColor, accentColor);
+          const body = new THREE.Mesh(infantryBodyGeometry, createLitMaterial(bodyColor, opacity, 0.18));
+          body.position.set(sx, sy, 1.22 * DEFENDER_SOLDIER_VISUAL_SCALE);
+          body.rotation.set(Math.PI / 2, 0, 0);
+          squadGroup.add(body);
         }
 
         const head = new THREE.Mesh(headGeometry, createLitMaterial(accentColor, isPreview ? opacity * 0.92 : 0.98, 0.13));
-        head.position.set(sx, sy, 3.06 * DEFENDER_SOLDIER_VISUAL_SCALE);
+        head.position.set(sx, sy, 3.0 * DEFENDER_SOLDIER_VISUAL_SCALE);
         squadGroup.add(head);
-      }
+      });
 
       const pole = new THREE.Mesh(
         new THREE.CylinderGeometry(0.22, 0.22, 8.5, 8),
@@ -2911,7 +3023,7 @@ const BattlefieldPreviewModal = ({
       squadGroup.add(banner);
 
       const plate = new THREE.Mesh(
-        new THREE.CircleGeometry(clusterRadius * 0.92, 44),
+        new THREE.CircleGeometry(Math.max(5.2, clusterRadius * 0.78), 44),
         new THREE.MeshBasicMaterial({
           color: isBlocked ? 0xfca5a5 : 0x7dd3fc,
           transparent: true,
@@ -2925,7 +3037,7 @@ const BattlefieldPreviewModal = ({
 
       if (isSelected) {
         const contourRing = new THREE.Mesh(
-          new THREE.TorusGeometry(Math.max(5.4, clusterRadius * 0.98), 0.52, 10, 44),
+          new THREE.TorusGeometry(Math.max(4.8, clusterRadius * 0.84), 0.54, 10, 44),
           new THREE.MeshBasicMaterial({
             color: 0xe0f2fe,
             transparent: true,
@@ -2938,7 +3050,7 @@ const BattlefieldPreviewModal = ({
         squadGroup.add(contourRing);
 
         const contourAura = new THREE.Mesh(
-          new THREE.CylinderGeometry(clusterRadius * 0.98, clusterRadius * 0.98, Math.max(2.8, 5.4 * DEFENDER_SOLDIER_VISUAL_SCALE), 30, 1, true),
+          new THREE.CylinderGeometry(clusterRadius * 0.84, clusterRadius * 0.84, Math.max(2.8, 5.4 * DEFENDER_SOLDIER_VISUAL_SCALE), 30, 1, true),
           new THREE.MeshBasicMaterial({
             color: 0x7dd3fc,
             transparent: true,
@@ -3046,6 +3158,7 @@ const BattlefieldPreviewModal = ({
     viewport,
     cameraAngle,
     cameraYaw,
+    zoom,
     worldScale,
     fieldHeight,
     fieldWidth,
@@ -3053,6 +3166,7 @@ const BattlefieldPreviewModal = ({
     effectiveCanEdit,
     itemCatalogById,
     defenderRosterMap,
+    defenderUnitTypesForFormation,
     selectedWallId,
     defenderDeployments,
     selectedDeploymentId,
@@ -3061,7 +3175,8 @@ const BattlefieldPreviewModal = ({
     defenderDragPreview?.y,
     defenderDragPreview?.blocked,
     panWorld.x,
-    panWorld.y
+    panWorld.y,
+    resolveDefenderDeploymentRadius
   ]);
 
   useEffect(() => {
@@ -3454,7 +3569,11 @@ const BattlefieldPreviewModal = ({
           const selectedDeployment = (Array.isArray(defenderDeployments) ? defenderDeployments : [])
             .find((item) => item?.deployId === defenderActionButton.deployId);
           const previewSeed = selectedDeployment
-            ? { x: Number(selectedDeployment?.x) || 0, y: Number(selectedDeployment?.y) || 0 }
+            ? {
+              x: Number(selectedDeployment?.x) || 0,
+              y: Number(selectedDeployment?.y) || 0,
+              rotation: normalizeDefenderFacingDeg(selectedDeployment?.rotation)
+            }
             : world;
           const nextPreview = resolveDefenderMovePreview(defenderActionButton.deployId, previewSeed);
           setDefenderDragPreview(nextPreview);
@@ -3575,6 +3694,14 @@ const BattlefieldPreviewModal = ({
     }
   };
 
+  const handleCanvasDoubleClick = useCallback((event) => {
+    if (editMode || !effectiveCanEdit) return;
+    event.preventDefault();
+    event.stopPropagation();
+    startLayoutEditing();
+    setMessage('已通过双击战场进入布置模式');
+  }, [editMode, effectiveCanEdit, startLayoutEditing]);
+
   const handleCanvasDragOver = useCallback((event) => {
     if (!effectiveCanEdit || !editMode || sidebarTab !== 'defender') return;
     event.preventDefault();
@@ -3599,9 +3726,12 @@ const BattlefieldPreviewModal = ({
       deployId,
       x: nextX,
       y: nextY,
+      rotation: normalizeDefenderFacingDeg(
+        (Array.isArray(defenderDeployments) ? defenderDeployments : []).find((item) => item?.deployId === deployId)?.rotation
+      ),
       blocked
     });
-  }, [defenderZoneMinX, editMode, effectiveCanEdit, fieldHeight, fieldWidth, getWorldFromScreenPoint, sidebarTab]);
+  }, [defenderDeployments, defenderZoneMinX, editMode, effectiveCanEdit, fieldHeight, fieldWidth, getWorldFromScreenPoint, sidebarTab]);
 
   const handleCanvasDragLeave = useCallback((event) => {
     if (event?.currentTarget !== event?.target) return;
@@ -3696,6 +3826,26 @@ const BattlefieldPreviewModal = ({
 
   const handleWheel = (event) => {
     event.preventDefault();
+    if (!ghost && editMode && effectiveCanEdit) {
+      const rotatingDeployId = activeDefenderMoveId || selectedDeploymentId;
+      if (rotatingDeployId) {
+        const delta = event.deltaY < 0 ? ROTATE_STEP : -ROTATE_STEP;
+        let nextDeg = DEFENDER_DEFAULT_FACING_DEG;
+        setDefenderDeployments((prev) => sanitizeDefenderDeployments(prev).map((item) => {
+          if (item.deployId !== rotatingDeployId) return item;
+          nextDeg = normalizeDefenderFacingDeg(item.rotation + delta);
+          return { ...item, rotation: nextDeg };
+        }));
+        setDefenderDragPreview((prev) => (
+          prev && prev.deployId === rotatingDeployId
+            ? { ...prev, rotation: nextDeg }
+            : prev
+        ));
+        setHasDraftChanges(true);
+        setMessage(`守军朝向 ${Math.round(nextDeg)}°`);
+        return;
+      }
+    }
     if (!ghost) {
       const delta = event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
       animateZoomTo((zoomTargetRef.current || zoom) + delta);
@@ -3907,7 +4057,7 @@ const BattlefieldPreviewModal = ({
                 </div>
               </div>
               <div className="battlefield-defender-editor-tip">
-                {`总兵力 ${defenderEditorTotalCount}。确定后会生成一个守军部队卡片，拖到战场右侧蓝区可部署；若要改编制请先删除已部署部队再重建。`}
+                {`总兵力 ${defenderEditorTotalCount}。确定后会生成或更新守军部队卡片；双击左侧守军部队卡片可再次编辑，若该部队已部署会自动从战场撤回。`}
               </div>
             </div>
           )}
@@ -3982,7 +4132,7 @@ const BattlefieldPreviewModal = ({
                       key={`def-deploy-${item.deployId}`}
                       type="button"
                       className={`battlefield-item-card ${selectedDeploymentId === item.deployId ? 'selected' : ''}`}
-                      draggable={effectiveCanEdit && editMode}
+                      draggable={false}
                       onDragStart={(event) => {
                         event.dataTransfer?.setData('application/x-defender-deploy-id', item.deployId);
                         event.dataTransfer?.setData('text/plain', item.deployId);
@@ -3990,6 +4140,7 @@ const BattlefieldPreviewModal = ({
                           deployId: item.deployId,
                           x: Number(item?.x) || 0,
                           y: Number(item?.y) || 0,
+                          rotation: normalizeDefenderFacingDeg(item?.rotation),
                           blocked: false
                         });
                       }}
@@ -3999,18 +4150,37 @@ const BattlefieldPreviewModal = ({
                       }}
                       onClick={() => {
                         setSelectedDeploymentId(item.deployId);
-                        setActiveDefenderMoveId('');
                         setSelectedWallId('');
                         cancelGhostPlacement('');
-                        setMessage(
-                          editMode
-                            ? (
-                              item.placed !== false
-                                ? `已选中守军部队：${item.teamName}，可拖拽到右侧蓝色区域部署/重定位`
-                                : `已选中守军部队：${item.teamName}（未部署），可拖拽到右侧蓝色区域部署`
-                            )
-                            : `已选中守军部队：${item.teamName}。请先点击“布置战场”再进行部署`
-                        );
+                        if (editMode && effectiveCanEdit) {
+                          const pickupPoint = {
+                            x: Number(mouseWorldRef.current?.x) || Number(item?.x) || 0,
+                            y: Number(mouseWorldRef.current?.y) || Number(item?.y) || 0,
+                            rotation: normalizeDefenderFacingDeg(item?.rotation)
+                          };
+                          const nextPreview = resolveDefenderMovePreview(item.deployId, pickupPoint) || {
+                            deployId: item.deployId,
+                            x: pickupPoint.x,
+                            y: pickupPoint.y,
+                            rotation: pickupPoint.rotation,
+                            blocked: pickupPoint.x < defenderZoneMinX,
+                            reason: pickupPoint.x < defenderZoneMinX ? 'zone' : ''
+                          };
+                          setActiveDefenderMoveId(item.deployId);
+                          setDefenderDragPreview(nextPreview);
+                          setMessage(
+                            item.placed !== false
+                              ? `已选中并拾取守军部队：${item.teamName}，鼠标左键在右侧蓝色区域放置`
+                              : `已拾取守军部队：${item.teamName}，鼠标左键在右侧蓝色区域放置`
+                          );
+                        } else {
+                          setActiveDefenderMoveId('');
+                          setDefenderDragPreview(null);
+                          setMessage(`已选中守军部队：${item.teamName}。请先点击“布置战场”再进行部署`);
+                        }
+                      }}
+                      onDoubleClick={() => {
+                        startEditDefenderDeployment(item.deployId);
                       }}
                     >
                       <strong>{`${item.teamName} · #${item.sortOrder}`}</strong>
@@ -4036,12 +4206,12 @@ const BattlefieldPreviewModal = ({
                         editMode
                           ? (
                             selectedDefenderDeployment.placed !== false
-                              ? `已选中：${selectedDefenderDeployment.teamName}（#${selectedDefenderDeployment.sortOrder}）。可拖卡片到地图或在右侧蓝色区域点击重定位。`
-                              : `已选中：${selectedDefenderDeployment.teamName}（未部署）。拖到地图或在右侧蓝色区域点击即可部署。`
+                              ? `已选中：${selectedDefenderDeployment.teamName}（#${selectedDefenderDeployment.sortOrder}）。点击卡片即可拾取，鼠标左键在右侧蓝色区域放置。`
+                              : `已选中：${selectedDefenderDeployment.teamName}（未部署）。点击卡片拾取后，鼠标左键在右侧蓝色区域放置。`
                           )
                           : `已选中：${selectedDefenderDeployment.teamName}。请先点击“布置战场”后再部署到地图。`
                       )
-                      : (editMode ? '先新建守军部队，再把部队卡片拖到右侧蓝色守方区域部署' : '先新建守军部队；进入“布置战场”后可拖拽部署')}
+                      : (editMode ? '先新建守军部队，再点击部队卡片拾取并放置到右侧蓝色守方区域' : '先新建守军部队；进入“布置战场”后可点击部队卡片进行部署')}
                   </div>
                   {selectedDefenderDeployment && (
                     <div className="battlefield-sidebar-row">
@@ -4075,6 +4245,7 @@ const BattlefieldPreviewModal = ({
               onDrop={handleCanvasDrop}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
+              onDoubleClick={handleCanvasDoubleClick}
               onMouseUp={clearPanDragging}
               onMouseLeave={clearPanDragging}
               onWheel={handleWheel}

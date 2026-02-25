@@ -26,6 +26,7 @@ const NumberPadDialog = ({
   allowEmptyInitial = false,
   confirmLabel = '确认',
   cancelLabel = '取消',
+  zIndex = 2100,
   onConfirm,
   onCancel
 }) => {
@@ -92,6 +93,7 @@ const NumberPadDialog = ({
   return createPortal(
     <div
       className="number-pad-dialog-overlay"
+      style={{ zIndex: Math.max(1000, Math.floor(Number(zIndex) || 2100)) }}
       onClick={(event) => {
         if (event.target === event.currentTarget && typeof onCancel === 'function') {
           onCancel();
