@@ -4,7 +4,8 @@ import {
   isInsideRotatedRect,
   pushOutOfRect,
   querySpatialNearby,
-  hasLineOfSight
+  hasLineOfSight,
+  raycastObstacles
 } from './crowdPhysics';
 import {
   acquireProjectile,
@@ -234,72 +235,176 @@ const applyShellKnockback = (sim, targetAgent, projectile) => {
   targetAgent.vy = (Number(targetAgent.vy) || 0) + (dir.y * impulse * 10);
 };
 
-const canProjectileHitWall = (proj, walls = []) => {
+const withinGroundTargetArea = (proj, x, y) => {
+  if (!proj || proj.targetShape !== 'ground_aoe') return true;
+  const radius = Math.max(0, Number(proj.targetRadius) || 0);
+  if (radius <= 0) return true;
+  const dx = (Number(x) || 0) - (Number(proj.targetCenterX) || 0);
+  const dy = (Number(y) || 0) - (Number(proj.targetCenterY) || 0);
+  return ((dx * dx) + (dy * dy)) <= ((radius + 0.8) ** 2);
+};
+
+const applyDamageToBuilding = (sim, wall, damage = 0) => {
+  if (!wall || wall.destroyed) return false;
+  const actual = Math.max(0.6, Number(damage) || 0);
+  wall.hp = Math.max(0, (Number(wall.hp) || 0) - actual);
+  if (wall.hp <= 0 && !wall.destroyed) {
+    wall.destroyed = true;
+    sim.destroyedBuildings = Math.max(0, Number(sim.destroyedBuildings) || 0) + 1;
+    return true;
+  }
+  return false;
+};
+
+const applyBlastDamageToWalls = (sim, projectile, center, walls = []) => {
+  const blastRadius = Math.max(0, Number(projectile?.blastRadius) || 0);
+  if (blastRadius <= 0.001) return;
+  walls.forEach((wall) => {
+    if (!wall || wall.destroyed) return;
+    const sizeBias = Math.max(2, Math.max(Number(wall.width) || 0, Number(wall.depth) || 0) * 0.38);
+    const dist = Math.max(0, Math.hypot((wall.x || 0) - center.x, (wall.y || 0) - center.y) - sizeBias);
+    if (dist > blastRadius) return;
+    const falloff = 1 - clamp(dist / Math.max(1, blastRadius), 0, 0.95);
+    const wallDamage = (Number(projectile?.damage) || 0) * Math.max(0.2, falloff) * Math.max(0.1, Number(projectile?.wallDamageMul) || 1);
+    applyDamageToBuilding(sim, wall, wallDamage);
+  });
+};
+
+const applyAreaDamageToAgents = (sim, crowd, projectile, center, walls = []) => {
+  const isShell = projectile?.type === 'shell';
+  const radius = isShell
+    ? Math.max(0.6, Number(projectile?.blastRadius) || Number(projectile?.impactRadius) || Number(projectile?.radius) || 1)
+    : Math.max(0.5, Number(projectile?.impactRadius) || Number(projectile?.radius) || 1);
+  const nearby = querySpatialNearby(crowd?.spatial, center.x, center.y, Math.max(6, radius + 4));
+  const targets = nearby
+    .filter((agent) => agent && !agent.dead && agent.team === projectile?.targetTeam)
+    .sort((a, b) => distanceSq(a, center) - distanceSq(b, center));
+  const maxHits = isShell ? 999 : Math.max(1, Math.floor(Number(projectile?.maxHits) || 1));
+  let hits = 0;
+  for (let i = 0; i < targets.length; i += 1) {
+    const target = targets[i];
+    if (!withinGroundTargetArea(projectile, target.x, target.y)) continue;
+    if (projectile?.blockedByWall && !hasLineOfSight(center, target, walls, 0.8)) continue;
+    const dist = Math.hypot((target.x || 0) - center.x, (target.y || 0) - center.y);
+    if (dist > (radius + Math.max(0.6, (Number(target.radius) || 2.2) * 0.35))) continue;
+    const falloff = isShell
+      ? Math.max(0.18, 1 - (dist / Math.max(1, radius)) * Math.max(0.2, Number(projectile?.blastFalloff) || 1))
+      : 1;
+    const dmg = Math.max(0.06, (Number(projectile?.damage) || 0) * falloff);
+    applyDamageToAgent(
+      sim,
+      crowd,
+      { squadId: projectile?.squadId, team: projectile?.team },
+      target,
+      dmg,
+      isShell ? 'explosion' : 'hit'
+    );
+    if (isShell && !target.dead) {
+      applyShellKnockback(sim, target, projectile);
+    }
+    hits += 1;
+    if (hits >= maxHits) break;
+  }
+  return hits;
+};
+
+const detectWallSweepHit = (projectile, prev, walls = []) => {
+  const curr = {
+    x: Number(projectile?.x) || 0,
+    y: Number(projectile?.y) || 0
+  };
+  const hit = raycastObstacles(
+    { x: Number(prev?.x) || 0, y: Number(prev?.y) || 0 },
+    curr,
+    walls,
+    Math.max(0.2, (Number(projectile?.radius) || 2.2) * 0.25)
+  );
+  if (hit) {
+    return {
+      wall: hit.obstacle,
+      x: hit.x,
+      y: hit.y,
+      t: hit.t
+    };
+  }
   for (let i = 0; i < walls.length; i += 1) {
     const wall = walls[i];
     if (!wall || wall.destroyed) continue;
-    if (isInsideRotatedRect({ x: proj.x, y: proj.y }, wall, proj.radius * 0.25)) {
-      return wall;
+    if (isInsideRotatedRect(curr, wall, Math.max(0.2, (Number(projectile?.radius) || 2.2) * 0.25))) {
+      return {
+        wall,
+        x: curr.x,
+        y: curr.y,
+        t: 1
+      };
     }
   }
   return null;
 };
 
+const detonateProjectile = (sim, crowd, projectile, center, walls, hitWall = null) => {
+  projectile.hit = true;
+  projectile.hitCount = Math.max(0, Number(projectile.hitCount) || 0) + 1;
+  if (hitWall) {
+    const wallDamage = Math.max(1, (Number(projectile.damage) || 1) * (projectile.type === 'shell' ? 0.68 : 0.22) * Math.max(0.1, Number(projectile.wallDamageMul) || 1));
+    applyDamageToBuilding(sim, hitWall, wallDamage);
+  }
+  if (projectile.type === 'shell') {
+    applyBlastDamageToWalls(sim, projectile, center, walls);
+  }
+  applyAreaDamageToAgents(sim, crowd, projectile, center, walls);
+  const effectRadius = projectile.type === 'shell'
+    ? Math.max(4, Number(projectile.blastRadius) || Number(projectile.impactRadius) || 9.5)
+    : Math.max(1.2, Number(projectile.impactRadius) || 2.8);
+  acquireHitEffect(crowd.effectsPool, {
+    type: projectile.type === 'shell' ? 'explosion' : 'hit',
+    x: center.x,
+    y: center.y,
+    z: projectile.type === 'shell' ? 1.2 : 0.9,
+    radius: effectRadius,
+    ttl: projectile.type === 'shell' ? 0.44 : 0.18,
+    team: projectile.team
+  });
+};
+
 const stepProjectiles = (sim, crowd, dt) => {
   const live = crowd.effectsPool?.projectileLive || [];
+  const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((wall) => wall && !wall.destroyed) : [];
   for (let i = 0; i < live.length; i += 1) {
     const p = live[i];
     if (!p || p.hit) continue;
+    const prev = {
+      x: Number(p.x) || 0,
+      y: Number(p.y) || 0,
+      z: Number(p.z) || 0
+    };
     p.x += (p.vx * dt);
     p.y += (p.vy * dt);
     p.z += (p.vz * dt);
     p.vz -= (p.gravity * dt);
+
+    const wallSweepHit = detectWallSweepHit(p, prev, walls);
+    if (wallSweepHit?.wall) {
+      p.x = wallSweepHit.x;
+      p.y = wallSweepHit.y;
+      p.z = prev.z + ((p.z - prev.z) * clamp(wallSweepHit.t, 0, 1));
+      detonateProjectile(sim, crowd, p, { x: p.x, y: p.y }, walls, wallSweepHit.wall);
+      continue;
+    }
+
     if (p.z <= 0) {
-      p.hit = true;
-      acquireHitEffect(crowd.effectsPool, {
-        type: p.type === 'shell' ? 'explosion' : 'hit',
-        x: p.x,
-        y: p.y,
-        z: 0.8,
-        radius: p.type === 'shell' ? 8 : 2.8,
-        ttl: p.type === 'shell' ? 0.34 : 0.14,
-        team: p.team
-      });
+      detonateProjectile(sim, crowd, p, { x: p.x, y: p.y }, walls, null);
       continue;
     }
-    const hitWall = canProjectileHitWall(p, sim?.buildings || []);
-    if (hitWall) {
-      p.hit = true;
-      if (p.type === 'shell') {
-        const wallDamage = Math.max(1, p.damage * 0.68);
-        hitWall.hp = Math.max(0, (Number(hitWall.hp) || 0) - wallDamage);
-        if (hitWall.hp <= 0 && !hitWall.destroyed) {
-          hitWall.destroyed = true;
-          sim.destroyedBuildings = Math.max(0, Number(sim.destroyedBuildings) || 0) + 1;
-        }
-      }
-      acquireHitEffect(crowd.effectsPool, {
-        type: p.type === 'shell' ? 'explosion' : 'hit',
-        x: p.x,
-        y: p.y,
-        z: 1.2,
-        radius: p.type === 'shell' ? 9.5 : 3.2,
-        ttl: p.type === 'shell' ? 0.36 : 0.16,
-        team: p.team
-      });
-      continue;
-    }
+
     const nearbyAgents = querySpatialNearby(crowd?.spatial, p.x, p.y, Math.max(8, (Number(p.radius) || 2) * 2.8));
     const targetAgents = nearbyAgents.filter((agent) => agent && agent.team === p.targetTeam && !agent.dead);
     for (let k = 0; k < targetAgents.length; k += 1) {
       const target = targetAgents[k];
+      if (!withinGroundTargetArea(p, target.x, target.y)) continue;
       const hitRadius = Math.max(1.6, (target.radius || 2.6) + (p.radius * 0.25));
       if (distanceSq(p, target) > (hitRadius * hitRadius)) continue;
-      p.hit = true;
-      applyDamageToAgent(sim, crowd, { squadId: p.squadId, team: p.team }, target, p.damage, p.type === 'shell' ? 'explosion' : 'hit');
-      if (p.type === 'shell' && !target.dead) {
-        applyShellKnockback(sim, target, p);
-      }
+      detonateProjectile(sim, crowd, p, { x: target.x || p.x, y: target.y || p.y }, walls, null);
       break;
     }
   }
@@ -320,6 +425,7 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     if ((Number(squad?.skillRush?.ttl) || 0) > 0) return;
     const behavior = typeof squad.behavior === 'string' ? squad.behavior : 'auto';
     if (behavior === 'retreat') return;
+    if (squad.activeSkill && (squad.classTag === 'archer' || squad.classTag === 'artillery')) return;
     const enemySquads = squad.team === TEAM_ATTACKER ? defenders : attackers;
     const enemyTeam = toEnemyTeam(squad.team);
     if (enemySquads.length <= 0) return;

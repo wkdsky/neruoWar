@@ -29,6 +29,20 @@ const resetProjectile = (item, payload = {}) => {
   next.gravity = Number.isFinite(Number(payload.gravity)) ? Number(payload.gravity) : 0;
   next.damage = Math.max(0, Number(payload.damage) || 0);
   next.radius = Math.max(0.2, Number(payload.radius) || 2.2);
+  next.impactRadius = Math.max(0.2, Number(payload.impactRadius) || next.radius || 2.2);
+  next.blastRadius = Math.max(0, Number(payload.blastRadius) || 0);
+  next.blastFalloff = Math.max(0, Math.min(1, Number(payload.blastFalloff) || 0));
+  next.wallDamageMul = Math.max(0.1, Number(payload.wallDamageMul) || 1);
+  next.maxHits = Math.max(1, Math.floor(Number(payload.maxHits) || 1));
+  next.hitCount = 0;
+  next.skillId = payload.skillId || '';
+  next.skillClass = payload.skillClass || '';
+  next.waveIndex = Math.max(0, Math.floor(Number(payload.waveIndex) || 0));
+  next.targetCenterX = Number(payload.targetCenterX) || 0;
+  next.targetCenterY = Number(payload.targetCenterY) || 0;
+  next.targetRadius = Math.max(0, Number(payload.targetRadius) || 0);
+  next.targetShape = payload.targetShape || 'point';
+  next.blockedByWall = !!payload.blockedByWall;
   next.ttl = Math.max(0.02, Number(payload.ttl) || 1.2);
   next.elapsed = 0;
   next.spawnedAt = payload.spawnedAt || nowMs();
@@ -96,4 +110,3 @@ export const stepEffectPool = (pool, dt = 0) => {
     pool.hitFree.push(e);
   }
 };
-

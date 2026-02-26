@@ -4,7 +4,8 @@ import {
   estimateLocalFlowWidth,
   buildSpatialHash,
   querySpatialNearby,
-  pushOutOfRect
+  pushOutOfRect,
+  raycastObstacles
 } from './crowdPhysics';
 import {
   createCombatEffectsPool,
@@ -38,6 +39,38 @@ const CROWD_HARD_CONTACT_GAP = AGENT_RADIUS * 0.58;
 const AGENT_IDLE_DEADZONE = 0.72;
 const STATIONARY_SEPARATION_SCALE = 0.2;
 const STATIONARY_FLAG_SEPARATION_SCALE = 0.08;
+const GROUND_SKILL_CONFIG = {
+  archer: {
+    radius: 72,
+    waves: 4,
+    intervalSec: 0.26,
+    durationSec: 1.22,
+    shotsPerWave: 12,
+    cooldownSec: 8.6,
+    impactRadius: 2.8,
+    blastRadius: 0,
+    blastFalloff: 0,
+    wallDamageMul: 1,
+    gravity: 70,
+    speedHint: 226,
+    damageMul: 2.05
+  },
+  artillery: {
+    radius: 126,
+    waves: 3,
+    intervalSec: 0.46,
+    durationSec: 1.65,
+    shotsPerWave: 6,
+    cooldownSec: 13.5,
+    impactRadius: 4.8,
+    blastRadius: 13.5,
+    blastFalloff: 0.82,
+    wallDamageMul: 1.85,
+    gravity: 95,
+    speedHint: 170,
+    damageMul: 2.75
+  }
+};
 
 const sumUnitsMap = (map = {}) => Object.values(map || {}).reduce((sum, c) => sum + Math.max(0, Number(c) || 0), 0);
 
@@ -115,6 +148,13 @@ const slotOffsetForIndex = (index, columns, spacing = (AGENT_RADIUS * 2) + AGENT
 
 const teamForward = (team) => (team === TEAM_ATTACKER ? { x: 1, y: 0 } : { x: -1, y: 0 });
 
+const skillRangeByClass = (classTag = '') => {
+  if (classTag === 'cavalry') return 220;
+  if (classTag === 'archer') return 260;
+  if (classTag === 'artillery') return 310;
+  return 180;
+};
+
 const resolveAgentSpeedMul = (unitType = {}, category = 'infantry') => {
   const rawSpeed = Number(unitType?.speed);
   if (Number.isFinite(rawSpeed) && rawSpeed > 0) {
@@ -183,6 +223,241 @@ const pointToSegmentDistance = (point, segA, segB) => {
   const cx = ax + (vx * t);
   const cy = ay + (vy * t);
   return Math.hypot(px - cx, py - cy);
+};
+
+const pointInPolygon = (point, polygon = []) => {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const xi = Number(polygon[i]?.x) || 0;
+    const yi = Number(polygon[i]?.y) || 0;
+    const xj = Number(polygon[j]?.x) || 0;
+    const yj = Number(polygon[j]?.y) || 0;
+    const intersects = ((yi > point.y) !== (yj > point.y))
+      && (point.x < (((xj - xi) * (point.y - yi)) / ((yj - yi) || 1e-9)) + xi);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+};
+
+const samplePointInCircle = (center, radius) => {
+  const theta = Math.random() * Math.PI * 2;
+  const r = Math.sqrt(Math.random()) * Math.max(0, Number(radius) || 0);
+  return {
+    x: (Number(center?.x) || 0) + (Math.cos(theta) * r),
+    y: (Number(center?.y) || 0) + (Math.sin(theta) * r)
+  };
+};
+
+const samplePointInTargetArea = (targetSpec = {}) => {
+  const center = {
+    x: Number(targetSpec?.x) || 0,
+    y: Number(targetSpec?.y) || 0
+  };
+  const radius = Math.max(1, Number(targetSpec?.radius) || 1);
+  const clipPolygon = Array.isArray(targetSpec?.clipPolygon) ? targetSpec.clipPolygon : [];
+  if (clipPolygon.length < 3) {
+    return samplePointInCircle(center, radius);
+  }
+  for (let i = 0; i < 6; i += 1) {
+    const sampled = samplePointInCircle(center, radius);
+    if (pointInPolygon(sampled, clipPolygon)) {
+      return sampled;
+    }
+  }
+  return center;
+};
+
+const clipGroundPointByWalls = (origin, target, walls = []) => {
+  const hit = raycastObstacles(origin, target, walls, 0.8);
+  if (!hit) {
+    return {
+      x: Number(target?.x) || 0,
+      y: Number(target?.y) || 0,
+      blockedByWall: false
+    };
+  }
+  const dx = (Number(target?.x) || 0) - (Number(origin?.x) || 0);
+  const dy = (Number(target?.y) || 0) - (Number(origin?.y) || 0);
+  const dist = Math.hypot(dx, dy) || 1;
+  const backStep = Math.min(2.4, dist * 0.08);
+  const keepT = clamp(hit.t - (backStep / dist), 0, 1);
+  return {
+    x: (Number(origin?.x) || 0) + (dx * keepT),
+    y: (Number(origin?.y) || 0) + (dy * keepT),
+    blockedByWall: true
+  };
+};
+
+const normalizeGroundSkillTargetSpec = (sim, squad, classTag, targetInput = {}) => {
+  const fallback = GROUND_SKILL_CONFIG[classTag] || GROUND_SKILL_CONFIG.archer;
+  const sourceX = Number(squad?.x) || 0;
+  const sourceY = Number(squad?.y) || 0;
+  const inputX = Number(targetInput?.x);
+  const inputY = Number(targetInput?.y);
+  const inputMaxRange = Number(targetInput?.maxRange);
+  const rawX = Number.isFinite(inputX) ? inputX : sourceX;
+  const rawY = Number.isFinite(inputY) ? inputY : sourceY;
+  const maxRange = Math.max(8, Number.isFinite(inputMaxRange) ? inputMaxRange : skillRangeByClass(classTag));
+  const vec = normalizeVec(rawX - sourceX, rawY - sourceY);
+  const range = Math.min(maxRange, vec.len || 0);
+  const clampedTarget = {
+    x: sourceX + (vec.x * range),
+    y: sourceY + (vec.y * range)
+  };
+  const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((wall) => !wall?.destroyed) : [];
+  const uiHasClipPolygon = Array.isArray(targetInput?.clipPolygon) && targetInput.clipPolygon.length >= 3;
+  const clippedCenter = uiHasClipPolygon
+    ? {
+      x: clampedTarget.x,
+      y: clampedTarget.y,
+      blockedByWall: !!targetInput?.blockedByWall
+    }
+    : clipGroundPointByWalls(
+      { x: sourceX, y: sourceY },
+      clampedTarget,
+      walls
+    );
+  const inputRadius = Number(targetInput?.radius);
+  const radius = Math.max(
+    8,
+    Number.isFinite(inputRadius) && inputRadius > 0 ? inputRadius : fallback.radius
+  );
+  const clipPolygon = Array.isArray(targetInput?.clipPolygon)
+    ? targetInput.clipPolygon.map((row) => ({ x: Number(row?.x) || 0, y: Number(row?.y) || 0 }))
+    : [];
+  return {
+    kind: 'ground_aoe',
+    x: clippedCenter.x,
+    y: clippedCenter.y,
+    radius,
+    maxRange,
+    clipPolygon,
+    blockedByWall: !!targetInput?.blockedByWall || clippedCenter.blockedByWall
+  };
+};
+
+const solveBallisticVelocity = (source, target, gravity = 70, speedHint = 220) => {
+  const sx = Number(source?.x) || 0;
+  const sy = Number(source?.y) || 0;
+  const sz = Number(source?.z) || 0;
+  const tx = Number(target?.x) || sx;
+  const ty = Number(target?.y) || sy;
+  const dist = Math.hypot(tx - sx, ty - sy);
+  const safeSpeed = Math.max(40, Number(speedHint) || 220);
+  const flightSec = clamp(dist / safeSpeed, 0.42, 1.35);
+  const vx = (tx - sx) / Math.max(0.08, flightSec);
+  const vy = (ty - sy) / Math.max(0.08, flightSec);
+  const g = Math.max(1, Number(gravity) || 70);
+  const vz = ((0.5 * g * (flightSec ** 2)) - sz) / Math.max(0.08, flightSec);
+  return {
+    vx,
+    vy,
+    vz,
+    gravity: g,
+    flightSec
+  };
+};
+
+const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
+  if (!sim || !crowd || !squad || !activeSkill) return 0;
+  const agents = getCrowdAgentsForSquad(crowd, squad.id);
+  if (agents.length <= 0) return 0;
+  const classTag = squad.classTag === 'artillery' ? 'artillery' : 'archer';
+  const config = activeSkill.config || GROUND_SKILL_CONFIG[classTag];
+  const targetSpec = activeSkill.targetSpec || {};
+  const rankedShooters = [...agents]
+    .filter((agent) => !agent.dead)
+    .sort((a, b) => (Number(b.weight) || 0) - (Number(a.weight) || 0));
+  const shooterCount = classTag === 'artillery'
+    ? Math.max(2, Math.min(6, Math.floor(Math.sqrt(rankedShooters.length)) + 1))
+    : Math.max(3, Math.min(14, Math.floor(Math.sqrt(rankedShooters.length)) + 3));
+  const shooters = rankedShooters.slice(0, shooterCount);
+  if (shooters.length <= 0) return 0;
+
+  const totalShots = classTag === 'artillery'
+    ? Math.max(shooters.length, Math.min(10, Number(config?.shotsPerWave) || 6))
+    : Math.max(shooters.length * 2, Math.min(22, Number(config?.shotsPerWave) || 12));
+  const enemyTeam = squad.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
+  let fired = 0;
+  for (let shotIndex = 0; shotIndex < totalShots; shotIndex += 1) {
+    const shooter = shooters[shotIndex % shooters.length];
+    if (!shooter || shooter.dead) continue;
+    const landing = samplePointInTargetArea(targetSpec);
+    const sourceZ = classTag === 'artillery' ? 6 : 4.2;
+    const ballistic = solveBallisticVelocity(
+      { x: shooter.x, y: shooter.y, z: sourceZ },
+      landing,
+      Number(config?.gravity) || 70,
+      Number(config?.speedHint) || 220
+    );
+    const weightMul = Math.max(1, Math.sqrt(Math.max(1, Number(shooter.weight) || 1)));
+    const damageBase = Math.max(0.22, (Number(squad.stats?.atk) || 10) * (classTag === 'artillery' ? 0.11 : 0.065));
+    const damage = damageBase * weightMul * Math.max(1, Number(config?.damageMul) || 1);
+    acquireProjectile(crowd.effectsPool, {
+      type: classTag === 'artillery' ? 'shell' : 'arrow',
+      team: squad.team,
+      squadId: squad.id,
+      sourceAgentId: shooter.id,
+      x: shooter.x,
+      y: shooter.y,
+      z: sourceZ,
+      vx: ballistic.vx,
+      vy: ballistic.vy,
+      vz: ballistic.vz,
+      gravity: ballistic.gravity,
+      damage,
+      radius: classTag === 'artillery' ? 4.9 : 2.3,
+      impactRadius: Math.max(0.8, Number(config?.impactRadius) || 2.2),
+      blastRadius: Math.max(0, Number(config?.blastRadius) || 0),
+      blastFalloff: Math.max(0, Number(config?.blastFalloff) || 0),
+      wallDamageMul: Math.max(0.1, Number(config?.wallDamageMul) || 1),
+      ttl: Math.max(0.2, (Number(ballistic.flightSec) || 0.8) + (classTag === 'artillery' ? 0.35 : 0.2)),
+      targetTeam: enemyTeam,
+      targetCenterX: Number(targetSpec?.x) || 0,
+      targetCenterY: Number(targetSpec?.y) || 0,
+      targetRadius: Math.max(0, Number(targetSpec?.radius) || 0),
+      targetShape: 'ground_aoe',
+      blockedByWall: !!targetSpec?.blockedByWall,
+      skillId: activeSkill.id,
+      skillClass: classTag,
+      waveIndex: waveIndex + 1,
+      maxHits: classTag === 'artillery' ? 999 : 1
+    });
+    fired += 1;
+  }
+  if (fired > 0) {
+    acquireHitEffect(crowd.effectsPool, {
+      type: classTag === 'artillery' ? 'explosion' : 'hit',
+      x: Number(targetSpec?.x) || 0,
+      y: Number(targetSpec?.y) || 0,
+      z: 1.1,
+      radius: Math.max(2, Number(targetSpec?.radius) || 8),
+      ttl: classTag === 'artillery' ? 0.42 : 0.3,
+      team: squad.team
+    });
+  }
+  return fired;
+};
+
+const updateActiveGroundSkill = (sim, crowd, squad, dt) => {
+  const active = squad?.activeSkill;
+  if (!active) return;
+  if ((Number(squad?.remain) || 0) <= 0 || (Number(squad?.morale) || 0) <= 0) {
+    squad.activeSkill = null;
+    return;
+  }
+  active.ttlSec = Math.max(0, (Number(active.ttlSec) || 0) - dt);
+  active.nextWaveSec = (Number(active.nextWaveSec) || 0) - dt;
+  while (active.wavesFired < active.wavesTotal && active.nextWaveSec <= 0 && active.ttlSec > 0) {
+    emitGroundSkillWave(sim, crowd, squad, active, active.wavesFired);
+    active.wavesFired += 1;
+    active.nextWaveSec += Math.max(0.05, Number(active.intervalSec) || 0.2);
+  }
+  squad.action = '兵种攻击';
+  if (active.ttlSec <= 0 || active.wavesFired >= active.wavesTotal) {
+    squad.activeSkill = null;
+  }
 };
 
 const pickNearestEnemySquad = (squad, squads = []) => {
@@ -641,14 +916,17 @@ export const getCrowdAgentsForSquad = (crowd, squadId = '') => {
   return source.filter((agent) => agent && !agent.dead && (agent.weight || 0) > 0.001);
 };
 
-export const triggerCrowdSkill = (sim, crowd, squadId, targetPoint) => {
+export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
   const squad = (sim?.squads || []).find((row) => row.id === squadId);
   if (!squad || squad.remain <= 0) return { ok: false, reason: '部队不可用' };
   if ((Number(squad.morale) || 0) <= 0) return { ok: false, reason: '士气归零，无法发动兵种攻击' };
+  if ((Number(squad.attackCooldown) || 0) > 0.01) return { ok: false, reason: '兵种攻击冷却中' };
   const agents = getCrowdAgentsForSquad(crowd, squad.id);
   if (agents.length <= 0) return { ok: false, reason: '无可用士兵' };
-  const tx = Number(targetPoint?.x) || squad.x || 0;
-  const ty = Number(targetPoint?.y) || squad.y || 0;
+  const inputX = Number(targetInput?.x);
+  const inputY = Number(targetInput?.y);
+  const tx = Number.isFinite(inputX) ? inputX : (squad.x || 0);
+  const ty = Number.isFinite(inputY) ? inputY : (squad.y || 0);
 
   if (squad.classTag === 'infantry') {
     squad.effectBuff = {
@@ -684,47 +962,30 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetPoint) => {
     return { ok: true };
   }
 
-  const volleyCount = Math.max(3, Math.min(8, Math.floor(Math.sqrt(agents.length)) + 2));
-  const shooters = [...agents]
-    .sort((a, b) => (b.weight - a.weight))
-    .slice(0, volleyCount);
-  const enemyTeam = squad.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
-  shooters.forEach((agent, index) => {
-    const dir = normalizeVec(
-      tx - (agent.x || 0) + ((index - (shooters.length / 2)) * 2.2),
-      ty - (agent.y || 0) + ((index - (shooters.length / 2)) * 2.2)
-    );
-    const isArtillery = squad.classTag === 'artillery';
-    const speed = isArtillery ? 168 : 226;
-    const gravity = isArtillery ? 95 : 70;
-    acquireProjectile(crowd.effectsPool, {
-      type: isArtillery ? 'shell' : 'arrow',
-      team: squad.team,
-      squadId: squad.id,
-      sourceAgentId: agent.id,
-      x: agent.x,
-      y: agent.y,
-      z: isArtillery ? 6 : 4.1,
-      vx: dir.x * speed,
-      vy: dir.y * speed,
-      vz: isArtillery ? 42 : 27,
-      gravity,
-      damage: Math.max(0.3, (Number(squad.stats?.atk) || 10) * (isArtillery ? 0.14 : 0.08) * Math.max(1, Math.sqrt(agent.weight || 1))),
-      radius: isArtillery ? 4.8 : 2.2,
-      ttl: isArtillery ? 2.1 : 1.45,
-      targetTeam: enemyTeam
-    });
-  });
-  acquireHitEffect(crowd.effectsPool, {
-    type: squad.classTag === 'artillery' ? 'explosion' : 'hit',
-    x: tx,
-    y: ty,
-    z: 1.2,
-    radius: squad.classTag === 'artillery' ? 10 : 6,
-    ttl: squad.classTag === 'artillery' ? 0.34 : 0.22,
-    team: squad.team
-  });
-  squad.attackCooldown = Math.max(Number(squad.attackCooldown) || 0, squad.classTag === 'artillery' ? 3.1 : 1.9);
+  const rangedClass = squad.classTag === 'artillery' ? 'artillery' : 'archer';
+  const cfg = GROUND_SKILL_CONFIG[rangedClass] || GROUND_SKILL_CONFIG.archer;
+  const targetSpec = normalizeGroundSkillTargetSpec(
+    sim,
+    squad,
+    rangedClass,
+    targetInput && typeof targetInput === 'object' ? targetInput : { x: tx, y: ty }
+  );
+  const activeSkill = {
+    id: `skill_${squad.id}_${Date.now()}`,
+    classTag: rangedClass,
+    targetSpec,
+    wavesTotal: Math.max(1, Math.floor(Number(cfg?.waves) || 1)),
+    wavesFired: 0,
+    intervalSec: Math.max(0.05, Number(cfg?.intervalSec) || 0.2),
+    nextWaveSec: 0,
+    ttlSec: Math.max(0.08, Number(cfg?.durationSec) || 0.8),
+    config: cfg
+  };
+  emitGroundSkillWave(sim, crowd, squad, activeSkill, 0);
+  activeSkill.wavesFired = 1;
+  activeSkill.nextWaveSec = Math.max(0.05, Number(cfg?.intervalSec) || 0.2);
+  squad.activeSkill = activeSkill;
+  squad.attackCooldown = Math.max(Number(squad.attackCooldown) || 0, Number(cfg?.cooldownSec) || 6.5);
   squad.action = '兵种攻击';
   return { ok: true };
 };
@@ -732,6 +993,7 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetPoint) => {
 export const updateCrowdSim = (crowd, sim, dt) => {
   if (!crowd || !sim || sim.ended) return;
   const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  sim.timeElapsed = Math.max(0, Number(sim?.timeElapsed) || 0) + safeDt;
   const squads = Array.isArray(sim?.squads) ? sim.squads : [];
   const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((w) => !w?.destroyed) : [];
 
@@ -764,6 +1026,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     if ((Number(squad.fatigueTimer) || 0) > 0) {
       squad.fatigueTimer = Math.max(0, Number(squad.fatigueTimer) - safeDt);
     }
+    updateActiveGroundSkill(sim, crowd, squad, safeDt);
     squad.attackCooldown = Math.max(0, (Number(squad.attackCooldown) || 0) - safeDt);
     squad.underAttackTimer = Math.max(0, (Number(squad.underAttackTimer) || 0) - safeDt);
     const attackerManual = squad.team === TEAM_ATTACKER

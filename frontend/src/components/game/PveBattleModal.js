@@ -771,6 +771,45 @@ const skillRangeByClass = (classTag) => {
   return 180;
 };
 
+const skillAoeRadiusByClass = (classTag) => {
+  if (classTag === 'archer') return 72;
+  if (classTag === 'artillery') return 126;
+  return 0;
+};
+
+const clipPointByBuildings = (origin, rawPoint, buildings = []) => {
+  let bestHit = null;
+  for (const building of (buildings || [])) {
+    if (!building || building.destroyed) continue;
+    const hit = lineIntersectsRotatedRect(origin, rawPoint, building);
+    if (!hit || hit.t < 0 || hit.t > 1) continue;
+    if (!bestHit || hit.t < bestHit.t) {
+      bestHit = hit;
+    }
+  }
+  if (!bestHit) {
+    return { point: rawPoint, blocked: false };
+  }
+  const dx = (Number(rawPoint?.x) || 0) - (Number(origin?.x) || 0);
+  const dy = (Number(rawPoint?.y) || 0) - (Number(origin?.y) || 0);
+  const dist = Math.hypot(dx, dy) || 1;
+  const backStep = Math.min(2.4, dist * 0.08);
+  const keepT = clamp(Number(bestHit.t) - (backStep / dist), 0, 1);
+  return {
+    point: {
+      x: origin.x + ((rawPoint.x - origin.x) * keepT),
+      y: origin.y + ((rawPoint.y - origin.y) * keepT)
+    },
+    blocked: true
+  };
+};
+
+const projectWorldRadiusPx = (x, y, z, radius, view, pitch, yaw) => {
+  const center = projectWorld(x, y, z, view.viewport, pitch, yaw, view.worldScale);
+  const edge = projectWorld(x + radius, y, z, view.viewport, pitch, yaw, view.worldScale);
+  return Math.max(2, Math.hypot(edge.x - center.x, edge.y - center.y));
+};
+
 const applyInfantrySkill = (sim, squad, targetPoint) => {
   const dx = targetPoint.x - squad.x;
   const dy = targetPoint.y - squad.y;
@@ -859,14 +898,20 @@ const applyArtillerySkill = (sim, squad, targetPoint) => {
   squad.skillUsedCount += 1;
 };
 
-const triggerSquadSkill = (sim, squadId, worldPoint) => {
+const triggerSquadSkill = (sim, squadId, targetInput) => {
   if (sim?.crowd) {
-    return triggerCrowdSkill(sim, sim.crowd, squadId, worldPoint);
+    return triggerCrowdSkill(sim, sim.crowd, squadId, targetInput);
   }
   const squad = findSquadById(sim, squadId);
   if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) return { ok: false, reason: '部队不可用' };
   if (squad.morale <= 0) return { ok: false, reason: '士气归零，无法发动兵种攻击' };
 
+  const inputX = Number(targetInput?.x);
+  const inputY = Number(targetInput?.y);
+  const worldPoint = {
+    x: Number.isFinite(inputX) ? inputX : (Number(squad.x) || 0),
+    y: Number.isFinite(inputY) ? inputY : (Number(squad.y) || 0)
+  };
   const maxRange = skillRangeByClass(squad.classTag);
   const dx = worldPoint.x - squad.x;
   const dy = worldPoint.y - squad.y;
@@ -1489,6 +1534,13 @@ const drawBuildings = (ctx, sim, view, pitch, yaw) => {
 };
 
 const drawEffects = (ctx, sim, view, pitch, yaw) => {
+  const worldRadiusToPx = (x, y, z, radius) => {
+    const safeRadius = Math.max(0, Number(radius) || 0);
+    if (safeRadius <= 0.0001) return 0;
+    const center = projectWorld(x, y, z, view.viewport, pitch, yaw, view.worldScale);
+    const edge = projectWorld(x + safeRadius, y, z, view.viewport, pitch, yaw, view.worldScale);
+    return Math.max(1, Math.hypot(edge.x - center.x, edge.y - center.y));
+  };
   (sim?.projectiles || []).forEach((proj) => {
     if (!proj || proj.hit) return;
     const head = projectWorld(proj.x, proj.y, Math.max(0.5, Number(proj.z) || 0.5), view.viewport, pitch, yaw, view.worldScale);
@@ -1510,8 +1562,12 @@ const drawEffects = (ctx, sim, view, pitch, yaw) => {
     ctx.lineTo(head.x, head.y);
     ctx.stroke();
 
+    const projectileRadiusPx = Math.max(
+      isShell ? 2.8 : 1.8,
+      worldRadiusToPx(proj.x, proj.y, Math.max(0.5, Number(proj.z) || 0.5), Math.max(0.4, Number(proj.radius) || 2.2)) * 0.7
+    );
     ctx.beginPath();
-    ctx.arc(head.x, head.y, isShell ? 3.8 : 2.2, 0, Math.PI * 2);
+    ctx.arc(head.x, head.y, projectileRadiusPx, 0, Math.PI * 2);
     ctx.fillStyle = isShell ? 'rgba(254, 215, 170, 0.95)' : 'rgba(219, 234, 254, 0.95)';
     ctx.fill();
     ctx.restore();
@@ -1521,7 +1577,10 @@ const drawEffects = (ctx, sim, view, pitch, yaw) => {
     if (!effect) return;
     const center = projectWorld(effect.x, effect.y, Math.max(0.2, Number(effect.z) || 0.2), view.viewport, pitch, yaw, view.worldScale);
     const alpha = clamp((Number(effect.ttl) || 0.1) / 0.36, 0.12, 0.9);
-    const radiusPx = Math.max(3, (Number(effect.radius) || 2) * 0.55);
+    const radiusPx = Math.max(
+      3,
+      worldRadiusToPx(effect.x, effect.y, Math.max(0.2, Number(effect.z) || 0.2), Number(effect.radius) || 2)
+    );
     const isExplosion = effect.type === 'explosion';
     const isSlash = effect.type === 'slash';
     ctx.save();
@@ -1817,9 +1876,15 @@ const buildSkillAimOverlay = (sim, selectedSquad, aimWorld, view, pitch, yaw) =>
   const maxRange = skillRangeByClass(selectedSquad.classTag);
   const vec = { x: aimWorld.x - selectedSquad.x, y: aimWorld.y - selectedSquad.y };
   const dist = Math.hypot(vec.x, vec.y) || 1;
-  const targetPoint = dist > maxRange
+  const targetPointRaw = dist > maxRange
     ? { x: selectedSquad.x + ((vec.x / dist) * maxRange), y: selectedSquad.y + ((vec.y / dist) * maxRange) }
     : aimWorld;
+  const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((building) => !building?.destroyed) : [];
+  const isGroundAoe = selectedSquad.classTag === 'archer' || selectedSquad.classTag === 'artillery';
+  const clippedCenter = isGroundAoe
+    ? clipPointByBuildings({ x: selectedSquad.x, y: selectedSquad.y }, targetPointRaw, walls)
+    : { point: targetPointRaw, blocked: false };
+  const targetPoint = clippedCenter.point;
 
   const originScreen = projectWorld(selectedSquad.x, selectedSquad.y, 12, view.viewport, pitch, yaw, view.worldScale);
   const targetScreen = projectWorld(targetPoint.x, targetPoint.y, 0, view.viewport, pitch, yaw, view.worldScale);
@@ -1855,37 +1920,45 @@ const buildSkillAimOverlay = (sim, selectedSquad, aimWorld, view, pitch, yaw) =>
     };
   }
 
-  if (selectedSquad.classTag === 'archer') {
-    const points = [];
-    const radius = 72;
-    const sampleCount = 24;
+  if (selectedSquad.classTag === 'archer' || selectedSquad.classTag === 'artillery') {
+    const radius = skillAoeRadiusByClass(selectedSquad.classTag);
+    const sampleCount = selectedSquad.classTag === 'artillery' ? 30 : 24;
+    const clippedAreaWorld = [];
+    let blockedByWall = clippedCenter.blocked;
     for (let i = 0; i < sampleCount; i += 1) {
       const angle = (i / sampleCount) * Math.PI * 2;
       const raw = {
         x: targetPoint.x + (Math.cos(angle) * radius),
         y: targetPoint.y + (Math.sin(angle) * radius)
       };
-      let clipped = raw;
-      for (const building of (sim?.buildings || [])) {
-        if (building.destroyed) continue;
-        const hit = lineIntersectsRotatedRect({ x: selectedSquad.x, y: selectedSquad.y }, raw, building);
-        if (hit && hit.t >= 0 && hit.t <= 1) {
-          clipped = {
-            x: selectedSquad.x + ((raw.x - selectedSquad.x) * Math.max(0, hit.t - 0.03)),
-            y: selectedSquad.y + ((raw.y - selectedSquad.y) * Math.max(0, hit.t - 0.03))
-          };
-          break;
-        }
-      }
-      points.push(projectWorld(clipped.x, clipped.y, 1, view.viewport, pitch, yaw, view.worldScale));
+      const clipped = clipPointByBuildings({ x: selectedSquad.x, y: selectedSquad.y }, raw, walls);
+      if (clipped.blocked) blockedByWall = true;
+      clippedAreaWorld.push(clipped.point);
     }
+    const clippedArea = clippedAreaWorld.map((point) => projectWorld(point.x, point.y, 1, view.viewport, pitch, yaw, view.worldScale));
+    const screenRadius = projectWorldRadiusPx(targetPoint.x, targetPoint.y, 1, radius, view, pitch, yaw);
+    const targetSpec = {
+      kind: 'ground_aoe',
+      x: targetPoint.x,
+      y: targetPoint.y,
+      radius,
+      clipPolygon: clippedAreaWorld,
+      maxRange,
+      blockedByWall
+    };
     return {
       targetPoint,
       originScreen,
       targetScreen,
-      clippedArea: points,
-      arcHeight: clamp(90 - (dist * 0.18), 24, 78),
-      type: selectedSquad.classTag
+      clippedArea,
+      clippedAreaWorld,
+      arcHeight: selectedSquad.classTag === 'artillery'
+        ? clamp(30 - (dist * 0.06), 8, 32)
+        : clamp(90 - (dist * 0.18), 24, 78),
+      type: selectedSquad.classTag,
+      worldRadius: radius,
+      screenRadius,
+      targetSpec
     };
   }
 
@@ -1955,14 +2028,15 @@ const drawSkillAimOverlay = (ctx, overlay) => {
       else ctx.lineTo(point.x, point.y);
     });
     ctx.closePath();
-    ctx.fillStyle = 'rgba(56, 189, 248, 0.2)';
-    ctx.strokeStyle = 'rgba(125, 211, 252, 0.7)';
+    ctx.fillStyle = overlay.type === 'artillery' ? 'rgba(248, 113, 113, 0.2)' : 'rgba(56, 189, 248, 0.2)';
+    ctx.strokeStyle = overlay.type === 'artillery' ? 'rgba(248, 113, 113, 0.75)' : 'rgba(125, 211, 252, 0.7)';
     ctx.lineWidth = 1;
     ctx.fill();
     ctx.stroke();
   } else {
+    const circleRadius = Math.max(8, Number(overlay.screenRadius) || 0);
     ctx.beginPath();
-    ctx.arc(targetScreen.x, targetScreen.y, overlay.type === 'artillery' ? 34 : 30, 0, Math.PI * 2);
+    ctx.arc(targetScreen.x, targetScreen.y, circleRadius, 0, Math.PI * 2);
     ctx.fillStyle = overlay.type === 'artillery' ? 'rgba(248, 113, 113, 0.18)' : 'rgba(56, 189, 248, 0.18)';
     ctx.strokeStyle = overlay.type === 'artillery' ? 'rgba(248, 113, 113, 0.78)' : 'rgba(125, 211, 252, 0.78)';
     ctx.lineWidth = 1;
@@ -2876,7 +2950,33 @@ const PveBattleModal = ({
       if (!sim || sim.ended) return;
 
       if (pendingSkill && pendingSkill.squadId === selectedSquadIdRef.current) {
-        const result = triggerSquadSkill(sim, pendingSkill.squadId, worldPoint);
+        const selectedSquad = findSquadById(sim, pendingSkill.squadId);
+        let skillTargetInput = worldPoint;
+        if (selectedSquad && canvas) {
+          const view = getViewport(
+            canvas,
+            fieldSize.width,
+            fieldSize.height,
+            cameraPitch,
+            cameraYaw,
+            zoom,
+            panWorldRef.current
+          );
+          const overlay = buildSkillAimOverlay(
+            sim,
+            selectedSquad,
+            worldPoint,
+            view,
+            cameraPitch,
+            cameraYaw
+          );
+          if (overlay?.targetSpec) {
+            skillTargetInput = overlay.targetSpec;
+          } else if (overlay?.targetPoint) {
+            skillTargetInput = overlay.targetPoint;
+          }
+        }
+        const result = triggerSquadSkill(sim, pendingSkill.squadId, skillTargetInput);
         if (!result.ok) {
           showToast(result.reason || '兵种攻击执行失败');
         }
@@ -2893,6 +2993,7 @@ const PveBattleModal = ({
   }, [
     activeComposeMoveId,
     cameraYaw,
+    cameraPitch,
     composeGroups,
     fieldSize,
     getCanvasWorldPoint,
@@ -2902,7 +3003,8 @@ const PveBattleModal = ({
     pickAttackerSquadByPoint,
     resolveGroupFootprint,
     startComposePanDrag,
-    showToast
+    showToast,
+    zoom
   ]);
 
   const handleCanvasPointerMove = useCallback((event) => {
