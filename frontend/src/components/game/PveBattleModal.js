@@ -309,9 +309,21 @@ const buildRemainingPool = (allUnits = [], groups = []) => {
 
 const buildObstacleList = (battlefield = {}) => {
   const itemCatalog = Array.isArray(battlefield?.itemCatalog) ? battlefield.itemCatalog : [];
-  const itemById = new Map(itemCatalog.map((item) => [item.itemId, item]));
+  const itemById = new Map(
+    itemCatalog
+      .map((item) => {
+        const itemId = typeof item?.itemId === 'string'
+          ? item.itemId.trim()
+          : (typeof item?.itemType === 'string' ? item.itemType.trim() : '');
+        if (!itemId) return null;
+        return [itemId, item];
+      })
+      .filter(Boolean)
+  );
   return (Array.isArray(battlefield?.objects) ? battlefield.objects : []).map((obj, index) => {
-    const itemId = typeof obj?.itemId === 'string' ? obj.itemId.trim() : '';
+    const itemId = typeof obj?.itemId === 'string'
+      ? obj.itemId.trim()
+      : (typeof obj?.itemType === 'string' ? obj.itemType.trim() : '');
     const item = itemById.get(itemId) || null;
     return {
       id: typeof obj?.id === 'string' ? obj.id : (typeof obj?.objectId === 'string' ? obj.objectId : `obj_${index + 1}`),
@@ -320,16 +332,26 @@ const buildObstacleList = (battlefield = {}) => {
       y: Number(obj?.y) || 0,
       z: Math.max(0, Math.floor(Number(obj?.z) || 0)),
       rotation: Number(obj?.rotation) || 0,
-      width: Math.max(12, Number(item?.width) || 104),
-      depth: Math.max(12, Number(item?.depth) || 24),
-      height: Math.max(10, Number(item?.height) || 42),
-      maxHp: Math.max(1, Math.floor(Number(item?.hp) || 240)),
-      hp: Math.max(1, Math.floor(Number(item?.hp) || 240)),
-      defense: Math.max(0.1, Number(item?.defense) || 1.1),
-      style: item?.style && typeof item.style === 'object' ? item.style : {},
+      width: Math.max(12, Number(item?.width ?? obj?.width) || 104),
+      depth: Math.max(12, Number(item?.depth ?? obj?.depth) || 24),
+      height: Math.max(10, Number(item?.height ?? obj?.height) || 42),
+      maxHp: Math.max(1, Math.floor(Number(item?.hp ?? obj?.hp) || 240)),
+      hp: Math.max(1, Math.floor(Number(item?.hp ?? obj?.hp) || 240)),
+      defense: Math.max(0.1, Number(item?.defense ?? obj?.defense) || 1.1),
+      style: (
+        (item?.style && typeof item.style === 'object')
+          ? item.style
+          : ((obj?.style && typeof obj.style === 'object') ? obj.style : {})
+      ),
       destroyed: false
     };
   });
+};
+
+const parseStyleNumber = (value, fallback, min, max) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return clamp(num, min, max);
 };
 
 const computeFieldSize = (battlefield = {}) => ({
@@ -565,7 +587,7 @@ const isPointBlockedBySquads = (point, radius, sim, selfId = '') => {
 
 const moveSquadWithCollision = (squad, targetPoint, sim, dt) => {
   const speedBase = Math.max(8, squad.stats.speed * 18);
-  const moralePenalty = squad.morale <= 0 ? 0.5 : (squad.morale < 20 ? 0.72 : 1);
+  const moralePenalty = squad.morale <= 0 ? (2 / 3) : (squad.morale < 20 ? 0.82 : 1);
   const fatiguePenalty = squad.fatigueTimer > 0 ? 0.72 : 1;
   const speed = speedBase * moralePenalty * fatiguePenalty;
   const dx = targetPoint.x - squad.x;
@@ -1300,9 +1322,103 @@ const buildBuildingFaces = (building) => {
 };
 
 const drawBuildings = (ctx, sim, view, pitch, yaw) => {
+  const drawChevalDeFrise = (building) => {
+    const style = building?.style && typeof building.style === 'object' ? building.style : {};
+    const woodColor = typeof style?.color === 'string' ? style.color : '#8c6a44';
+    const spikeColor = typeof style?.spikeColor === 'string' ? style.spikeColor : '#9ca3af';
+    const beamCount = Math.round(parseStyleNumber(style?.beamCount, 2, 2, 3));
+    const spikeCount = Math.round(parseStyleNumber(style?.spikeCount, 8, 4, 14));
+    const beamSpreadDeg = parseStyleNumber(style?.beamSpreadDeg, 34, 10, 60);
+    const beamThicknessRatio = parseStyleNumber(style?.beamThicknessRatio, 0.13, 0.08, 0.24);
+    const spikeLengthRatio = parseStyleNumber(style?.spikeLengthRatio, 0.48, 0.25, 0.8);
+
+    const safeWidth = Math.max(12, Number(building?.width) || 104);
+    const safeDepth = Math.max(12, Number(building?.depth) || 24);
+    const safeHeight = Math.max(10, Number(building?.height) || 42);
+    const beamLength = Math.max(safeWidth, safeDepth) * 1.08;
+    const beamHalf = beamLength / 2;
+    const beamThickness = Math.max(2.4, Math.min(10, Math.min(safeWidth, safeDepth) * beamThicknessRatio));
+    const beamZ = Math.max(3, safeHeight * 0.3);
+    const beamAngles = beamCount === 2 ? [-beamSpreadDeg, beamSpreadDeg] : [-beamSpreadDeg, 0, beamSpreadDeg];
+    const lineWidth = Math.max(2, beamThickness * Math.max(0.45, view.worldScale * 0.14));
+
+    beamAngles.forEach((angleDeg) => {
+      const angle = (((Number(building?.rotation) || 0) + 90 + angleDeg) * Math.PI) / 180;
+      const dx = Math.cos(angle) * beamHalf;
+      const dy = Math.sin(angle) * beamHalf;
+      const start = projectWorld(building.x - dx, building.y - dy, beamZ, view.viewport, pitch, yaw, view.worldScale);
+      const end = projectWorld(building.x + dx, building.y + dy, beamZ, view.viewport, pitch, yaw, view.worldScale);
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.46)';
+      ctx.lineWidth = lineWidth + 1.2;
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+      ctx.strokeStyle = woodColor;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+    });
+
+    const spikeRingRadius = Math.max(beamLength * 0.32, Math.min(safeWidth, safeDepth) * 0.42);
+    const spikeLength = Math.max(8, safeHeight * spikeLengthRatio);
+    const spikeLift = Math.max(6, safeHeight * 0.28);
+    for (let i = 0; i < spikeCount; i += 1) {
+      const angle = ((Math.PI * 2 * i) / spikeCount) + (((Number(building?.rotation) || 0) * Math.PI) / 180);
+      const baseX = building.x + (Math.cos(angle) * spikeRingRadius);
+      const baseY = building.y + (Math.sin(angle) * spikeRingRadius);
+      const tipX = baseX + (Math.cos(angle) * spikeLength);
+      const tipY = baseY + (Math.sin(angle) * spikeLength);
+      const base = projectWorld(baseX, baseY, beamZ + 1.8, view.viewport, pitch, yaw, view.worldScale);
+      const tip = projectWorld(tipX, tipY, beamZ + spikeLift, view.viewport, pitch, yaw, view.worldScale);
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.46)';
+      ctx.lineWidth = 2.1;
+      ctx.beginPath();
+      ctx.moveTo(base.x, base.y);
+      ctx.lineTo(tip.x, tip.y);
+      ctx.stroke();
+      ctx.strokeStyle = spikeColor;
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(base.x, base.y);
+      ctx.lineTo(tip.x, tip.y);
+      ctx.stroke();
+    }
+
+    const center = projectWorld(building.x, building.y, safeHeight + 10, view.viewport, pitch, yaw, view.worldScale);
+    const hpRatio = clamp(building.hp / Math.max(1, building.maxHp), 0, 1);
+    drawRoundedRect(ctx, center.x - 20, center.y - 6, 40, 5, 4);
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.75)';
+    ctx.fill();
+    drawRoundedRect(ctx, center.x - 20, center.y - 6, 40 * hpRatio, 5, 4);
+    ctx.fillStyle = hpRatio > 0.35 ? 'rgba(34, 197, 94, 0.92)' : 'rgba(239, 68, 68, 0.92)';
+    ctx.fill();
+  };
+
   const commands = [];
   (sim?.buildings || []).forEach((building) => {
     if (!building || building.destroyed) return;
+    const shape = typeof building?.style?.shape === 'string'
+      ? building.style.shape.trim().toLowerCase()
+      : '';
+    if (shape === 'cheval_de_frise') {
+      const centerPoint = projectWorld(
+        Number(building?.x) || 0,
+        Number(building?.y) || 0,
+        Math.max(8, (Number(building?.height) || 42) * 0.35),
+        view.viewport,
+        pitch,
+        yaw,
+        view.worldScale
+      );
+      commands.push({
+        depth: centerPoint.depth - 0.04,
+        draw: () => drawChevalDeFrise(building)
+      });
+      return;
+    }
     const faces = buildBuildingFaces(building);
     const topProjected = faces.top.map((point) => projectWorld(point.x, point.y, point.z, view.viewport, pitch, yaw, view.worldScale));
     const sideProjected = faces.sides.map((face) => face.map((point) => projectWorld(point.x, point.y, point.z, view.viewport, pitch, yaw, view.worldScale)));
@@ -1834,6 +1950,8 @@ const PveBattleModal = ({
   const mouseWorldRef = useRef({ x: 0, y: 0 });
   const lastCardSyncRef = useRef(0);
   const middleDragRef = useRef(null);
+  const middleYawRafRef = useRef(0);
+  const middleYawPendingRef = useRef(null);
   const rightDragRef = useRef(null);
   const composePanDragRef = useRef(null);
   const composeRotateDragRef = useRef(null);
@@ -1978,6 +2096,24 @@ const PveBattleModal = ({
     window.clearTimeout(showToast.timer);
   }, [showToast]);
 
+  const scheduleMiddleYaw = useCallback((nextYaw) => {
+    middleYawPendingRef.current = normalizeDeg(nextYaw);
+    if (middleYawRafRef.current) return;
+    middleYawRafRef.current = window.requestAnimationFrame(() => {
+      middleYawRafRef.current = 0;
+      if (middleYawPendingRef.current === null) return;
+      setCameraYaw(middleYawPendingRef.current);
+    });
+  }, []);
+
+  useEffect(() => () => {
+    if (middleYawRafRef.current) {
+      window.cancelAnimationFrame(middleYawRafRef.current);
+      middleYawRafRef.current = 0;
+    }
+    middleYawPendingRef.current = null;
+  }, []);
+
   useEffect(() => {
     if (!open || !battleInitData) {
       setPhase('compose');
@@ -2064,6 +2200,29 @@ const PveBattleModal = ({
       document.body.style.overflow = prevOverflow;
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleWindowMouseMove = (event) => {
+      const drag = middleDragRef.current;
+      if (!drag) return;
+      event.preventDefault();
+      const dx = event.clientX - drag.startX;
+      scheduleMiddleYaw(drag.startYaw + (dx * 0.36));
+    };
+    const handleWindowMouseUp = (event) => {
+      if (event.button !== 1) return;
+      if (!middleDragRef.current) return;
+      middleDragRef.current = null;
+      setIsRotating(false);
+    };
+    window.addEventListener('mousemove', handleWindowMouseMove, { passive: false });
+    window.addEventListener('mouseup', handleWindowMouseUp, { passive: true });
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+    };
+  }, [open, scheduleMiddleYaw]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -2353,6 +2512,7 @@ const PveBattleModal = ({
         startX: event.clientX,
         startYaw: cameraYaw
       };
+      setIsRotating(true);
       return;
     }
 
@@ -2547,11 +2707,6 @@ const PveBattleModal = ({
       return;
     }
 
-    if (middleDragRef.current) {
-      const dx = event.clientX - middleDragRef.current.startX;
-      setCameraYaw(normalizeDeg(middleDragRef.current.startYaw + (dx * 0.36)));
-    }
-
     if (rightDragRef.current) {
       const drag = rightDragRef.current;
       const dx = event.clientX - drag.startX;
@@ -2580,6 +2735,7 @@ const PveBattleModal = ({
         setIsPanning(false);
       } else {
         middleDragRef.current = null;
+        setIsRotating(false);
       }
     }
     if (event.button === 2) {
@@ -2737,7 +2893,6 @@ const PveBattleModal = ({
           TEAM_ATTACKER,
           resolveFormationState
         );
-        drawComposeGroups(ctx, defenderComposeGroups, view, cameraPitch, cameraYaw, zoom, '', TEAM_DEFENDER, resolveFormationState);
         const anchor = attackerRender?.selectedAnchor;
         if (anchor && anchor.groupId && !activeComposeMoveId) {
           setComposeGroupActionsPos((prev) => {
@@ -3114,6 +3269,13 @@ const PveBattleModal = ({
     if (action === 'retreat') runActionShortcut('4');
     if (action === 'defend') runActionShortcut('5');
   }, [runActionShortcut]);
+  const floatingActionButtons = useMemo(() => ([
+    { action: 'idle', keyText: '1', icon: '◼', label: '待命' },
+    { action: 'auto', keyText: '2', icon: '◎', label: '自动攻击' },
+    { action: 'skill', keyText: '3', icon: '✦', label: '兵种攻击' },
+    { action: 'retreat', keyText: '4', icon: '↶', label: '撤退' },
+    { action: 'defend', keyText: '5', icon: '⛨', label: '防御' }
+  ]), []);
 
   const closeModal = useCallback(() => {
     setPendingSkill(null);
@@ -3312,8 +3474,10 @@ const PveBattleModal = ({
                 composePanDragRef.current = null;
                 composeRotateDragRef.current = null;
                 setIsPanning(false);
-                setIsRotating(false);
-                middleDragRef.current = null;
+                if (phase === 'compose') {
+                  setIsRotating(false);
+                  middleDragRef.current = null;
+                }
                 rightDragRef.current = null;
                 composeGhostRef.current = null;
               }}
@@ -3554,11 +3718,18 @@ const PveBattleModal = ({
 
           {phase === 'battle' && floatingActionsPos && (
             <div className="pve-floating-actions" style={{ left: floatingActionsPos.x, top: floatingActionsPos.y }}>
-              <button type="button" title="待命(1)" onClick={() => invokeActionFromButton('idle')}>1</button>
-              <button type="button" title="自动攻击(2)" onClick={() => invokeActionFromButton('auto')}>2</button>
-              <button type="button" title="兵种攻击(3)" onClick={() => invokeActionFromButton('skill')}>3</button>
-              <button type="button" title="撤退(4)" onClick={() => invokeActionFromButton('retreat')}>4</button>
-              <button type="button" title="防御(5)" onClick={() => invokeActionFromButton('defend')}>5</button>
+              {floatingActionButtons.map((item) => (
+                <button
+                  key={`pve-action-${item.action}`}
+                  type="button"
+                  className="pve-floating-action-btn"
+                  data-label={`${item.label} (${item.keyText})`}
+                  onClick={() => invokeActionFromButton(item.action)}
+                >
+                  <span className="pve-floating-action-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="pve-floating-action-key">{item.keyText}</span>
+                </button>
+              ))}
             </div>
           )}
 
