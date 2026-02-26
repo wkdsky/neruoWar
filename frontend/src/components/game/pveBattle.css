@@ -208,6 +208,19 @@
   transform: translateY(-1px);
 }
 
+.pve-squad-card.dead {
+  opacity: 0.38;
+  filter: grayscale(0.82);
+  cursor: not-allowed;
+  border-color: rgba(71, 85, 105, 0.7);
+  box-shadow: none;
+  transform: none;
+}
+
+.pve-squad-card.dead:hover {
+  border-color: rgba(71, 85, 105, 0.7);
+}
+
 .pve-squad-card-head {
   display: flex;
   justify-content: space-between;

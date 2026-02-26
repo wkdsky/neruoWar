@@ -19,6 +19,12 @@ import {
   getFormationFootprint,
   inferTroopCategory
 } from '../../game/formation/ArmyFormationRenderer';
+import {
+  createCrowdSim,
+  updateCrowdSim,
+  triggerCrowdSkill,
+  getCrowdAgentsForSquad
+} from '../../game/battle/crowd/CrowdSim';
 
 const API_BASE = 'http://localhost:5000';
 const DEFAULT_FIELD_WIDTH = 900;
@@ -854,6 +860,9 @@ const applyArtillerySkill = (sim, squad, targetPoint) => {
 };
 
 const triggerSquadSkill = (sim, squadId, worldPoint) => {
+  if (sim?.crowd) {
+    return triggerCrowdSkill(sim, sim.crowd, squadId, worldPoint);
+  }
   const squad = findSquadById(sim, squadId);
   if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) return { ok: false, reason: '部队不可用' };
   if (squad.morale <= 0) return { ok: false, reason: '士气归零，无法发动兵种攻击' };
@@ -1111,7 +1120,11 @@ const updateSimulation = (sim, dt) => {
 
   sim.effects = (sim.effects || []).map((effect) => ({ ...effect, ttl: effect.ttl - dt })).filter((effect) => effect.ttl > 0);
 
-  (sim.squads || []).forEach((squad) => updateSquadCombat(sim, squad, dt));
+  if (sim.crowd) {
+    updateCrowdSim(sim.crowd, sim, dt);
+  } else {
+    (sim.squads || []).forEach((squad) => updateSquadCombat(sim, squad, dt));
+  }
   updateMoraleDecay(sim, dt);
 
   const attackerAlive = getAliveSquads(sim, TEAM_ATTACKER).reduce((sum, squad) => sum + squad.remain, 0);
@@ -1476,6 +1489,60 @@ const drawBuildings = (ctx, sim, view, pitch, yaw) => {
 };
 
 const drawEffects = (ctx, sim, view, pitch, yaw) => {
+  (sim?.projectiles || []).forEach((proj) => {
+    if (!proj || proj.hit) return;
+    const head = projectWorld(proj.x, proj.y, Math.max(0.5, Number(proj.z) || 0.5), view.viewport, pitch, yaw, view.worldScale);
+    const tail = projectWorld(
+      (Number(proj.x) || 0) - ((Number(proj.vx) || 0) * 0.03),
+      (Number(proj.y) || 0) - ((Number(proj.vy) || 0) * 0.03),
+      Math.max(0.2, (Number(proj.z) || 0.5) - ((Number(proj.vz) || 0) * 0.03)),
+      view.viewport,
+      pitch,
+      yaw,
+      view.worldScale
+    );
+    const isShell = proj.type === 'shell';
+    ctx.save();
+    ctx.lineWidth = isShell ? 2.2 : 1.35;
+    ctx.strokeStyle = isShell ? 'rgba(251, 146, 60, 0.9)' : 'rgba(125, 211, 252, 0.86)';
+    ctx.beginPath();
+    ctx.moveTo(tail.x, tail.y);
+    ctx.lineTo(head.x, head.y);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(head.x, head.y, isShell ? 3.8 : 2.2, 0, Math.PI * 2);
+    ctx.fillStyle = isShell ? 'rgba(254, 215, 170, 0.95)' : 'rgba(219, 234, 254, 0.95)';
+    ctx.fill();
+    ctx.restore();
+  });
+
+  (sim?.hitEffects || []).forEach((effect) => {
+    if (!effect) return;
+    const center = projectWorld(effect.x, effect.y, Math.max(0.2, Number(effect.z) || 0.2), view.viewport, pitch, yaw, view.worldScale);
+    const alpha = clamp((Number(effect.ttl) || 0.1) / 0.36, 0.12, 0.9);
+    const radiusPx = Math.max(3, (Number(effect.radius) || 2) * 0.55);
+    const isExplosion = effect.type === 'explosion';
+    const isSlash = effect.type === 'slash';
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radiusPx, 0, Math.PI * 2);
+    if (isExplosion) {
+      ctx.fillStyle = `rgba(248, 113, 113, ${alpha * 0.42})`;
+      ctx.strokeStyle = `rgba(251, 191, 36, ${alpha})`;
+    } else if (isSlash) {
+      ctx.fillStyle = `rgba(186, 230, 253, ${alpha * 0.28})`;
+      ctx.strokeStyle = `rgba(147, 197, 253, ${alpha})`;
+    } else {
+      ctx.fillStyle = `rgba(248, 113, 113, ${alpha * 0.24})`;
+      ctx.strokeStyle = `rgba(253, 186, 116, ${alpha})`;
+    }
+    ctx.lineWidth = 1.2;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  });
+
   (sim?.effects || []).forEach((effect) => {
     const center = projectWorld(effect.x, effect.y, 2, view.viewport, pitch, yaw, view.worldScale);
     const edge = projectWorld(effect.x + effect.radius, effect.y, 2, view.viewport, pitch, yaw, view.worldScale);
@@ -1567,6 +1634,41 @@ const drawFormationInstance = (ctx, projected, row, scale = 1, highlighted = fal
   ctx.restore();
 };
 
+const resolveAgentVisualRow = (agent, squad, isHit = false) => {
+  const team = squad?.team;
+  const category = agent?.typeCategory || squad?.classTag || 'infantry';
+  const palette = {
+    attacker: {
+      infantry: { body: '#f97373', accent: '#fee2e2' },
+      cavalry: { body: '#fb7185', accent: '#ffe4e6' },
+      archer: { body: '#f59e0b', accent: '#fef3c7' },
+      artillery: { body: '#fb923c', accent: '#ffedd5' },
+      other: { body: '#ef4444', accent: '#fee2e2' }
+    },
+    defender: {
+      infantry: { body: '#38bdf8', accent: '#dbeafe' },
+      cavalry: { body: '#22d3ee', accent: '#cffafe' },
+      archer: { body: '#34d399', accent: '#d1fae5' },
+      artillery: { body: '#60a5fa', accent: '#dbeafe' },
+      other: { body: '#0ea5e9', accent: '#dbeafe' }
+    }
+  };
+  const teamPalette = team === TEAM_ATTACKER ? palette.attacker : palette.defender;
+  const base = teamPalette[category] || teamPalette.other;
+  if (!isHit) {
+    return {
+      category,
+      bodyColor: base.body,
+      accentColor: base.accent
+    };
+  }
+  return {
+    category,
+    bodyColor: '#fef08a',
+    accentColor: '#ffffff'
+  };
+};
+
 const drawSquads = (ctx, sim, view, pitch, yaw, zoomValue, selectedId, hoverId, resolveFormationState) => {
   const drawRows = [];
   let selectedFlag = null;
@@ -1579,47 +1681,66 @@ const drawSquads = (ctx, sim, view, pitch, yaw, zoomValue, selectedId, hoverId, 
     if (!squad || squad.remain <= 0) return;
     const isSelected = selectedId === squad.id;
     const isHover = hoverId === squad.id;
-    const liveCountsByType = distributeUnitsByRatio(squad.units || {}, squad.remain || 0, squad.startCount || 0);
-    const formationState = typeof resolveFormationState === 'function'
-      ? resolveFormationState({
-        key: `battle_${squad.id}`,
-        teamId: squad.team,
-        countsByType: liveCountsByType,
-        cameraState
-      })
-      : null;
-    if (!formationState) return;
-    formationState.isHighlighted = isSelected || isHover;
-    formationState.isGhost = false;
-    const rendered = renderFormation(
-      formationState,
-      {
-        kind: 'descriptors',
-        center: { x: squad.x, y: squad.y }
-      },
-      cameraState,
-      0
-    );
-    const footprint = rendered?.footprint || { radius: squad.radius || 20 };
-    const rawRadius = Math.max(10, Number(footprint.radius) || squad.radius || 20);
-    const targetRadius = resolveScaledFormationRadius(rawRadius, squad.remain || squad.startCount || 1);
-    const clusterScale = resolveClusterScale(targetRadius, rawRadius);
-    squad.radius = clamp(targetRadius, 9, 108);
-
-    (rendered?.instances || []).forEach((row) => {
-      const sx = squad.x + ((row.x - squad.x) * clusterScale);
-      const sy = squad.y + ((row.y - squad.y) * clusterScale);
-      const projected = projectWorld(sx, sy, 0, view.viewport, pitch, yaw, view.worldScale);
-      drawRows.push({
-        depth: projected.depth,
-        draw: () => {
-          drawFormationInstance(ctx, {
-            ...projected,
-            worldScale: view.worldScale
-          }, row, SOLDIER_VISUAL_SCALE, isSelected || isHover, false);
-        }
+    if (sim?.crowd) {
+      const agents = getCrowdAgentsForSquad(sim.crowd, squad.id);
+      agents.forEach((agent) => {
+        const projected = projectWorld(agent.x, agent.y, 0, view.viewport, pitch, yaw, view.worldScale);
+        const safeWeight = Math.max(1, Number(agent.weight) || 1);
+        const weightScale = clamp(0.84 + (Math.log2(safeWeight + 1) * 0.16), 0.82, 1.38);
+        const row = resolveAgentVisualRow(agent, squad, (Number(agent.hitTimer) || 0) > 0.01);
+        drawRows.push({
+          depth: projected.depth,
+          draw: () => {
+            drawFormationInstance(ctx, {
+              ...projected,
+              worldScale: view.worldScale
+            }, row, SOLDIER_VISUAL_SCALE * weightScale, isSelected || isHover, false);
+          }
+        });
       });
-    });
+    } else {
+      const liveCountsByType = distributeUnitsByRatio(squad.units || {}, squad.remain || 0, squad.startCount || 0);
+      const formationState = typeof resolveFormationState === 'function'
+        ? resolveFormationState({
+          key: `battle_${squad.id}`,
+          teamId: squad.team,
+          countsByType: liveCountsByType,
+          cameraState
+        })
+        : null;
+      if (!formationState) return;
+      formationState.isHighlighted = isSelected || isHover;
+      formationState.isGhost = false;
+      const rendered = renderFormation(
+        formationState,
+        {
+          kind: 'descriptors',
+          center: { x: squad.x, y: squad.y }
+        },
+        cameraState,
+        0
+      );
+      const footprint = rendered?.footprint || { radius: squad.radius || 20 };
+      const rawRadius = Math.max(10, Number(footprint.radius) || squad.radius || 20);
+      const targetRadius = resolveScaledFormationRadius(rawRadius, squad.remain || squad.startCount || 1);
+      const clusterScale = resolveClusterScale(targetRadius, rawRadius);
+      squad.radius = clamp(targetRadius, 9, 108);
+
+      (rendered?.instances || []).forEach((row) => {
+        const sx = squad.x + ((row.x - squad.x) * clusterScale);
+        const sy = squad.y + ((row.y - squad.y) * clusterScale);
+        const projected = projectWorld(sx, sy, 0, view.viewport, pitch, yaw, view.worldScale);
+        drawRows.push({
+          depth: projected.depth,
+          draw: () => {
+            drawFormationInstance(ctx, {
+              ...projected,
+              worldScale: view.worldScale
+            }, row, SOLDIER_VISUAL_SCALE, isSelected || isHover, false);
+          }
+        });
+      });
+    }
 
     const center = projectWorld(squad.x, squad.y, 0.2, view.viewport, pitch, yaw, view.worldScale);
     const edge = projectWorld(squad.x + squad.radius, squad.y, 0.2, view.viewport, pitch, yaw, view.worldScale);
@@ -1627,11 +1748,15 @@ const drawSquads = (ctx, sim, view, pitch, yaw, zoomValue, selectedId, hoverId, 
     drawRows.push({
       depth: center.depth - 0.02,
       draw: () => {
+        const circleFill = squad.team === TEAM_ATTACKER ? 'rgba(239, 68, 68, 0.2)' : 'rgba(59, 130, 246, 0.2)';
+        const circleStroke = isSelected
+          ? (squad.team === TEAM_ATTACKER ? 'rgba(254, 202, 202, 0.95)' : 'rgba(191, 219, 254, 0.95)')
+          : (squad.team === TEAM_ATTACKER ? 'rgba(252, 165, 165, 0.68)' : 'rgba(147, 197, 253, 0.68)');
         ctx.beginPath();
         ctx.arc(center.x, center.y, radiusPx, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(125, 211, 252, 0.2)';
+        ctx.fillStyle = circleFill;
         ctx.fill();
-        ctx.strokeStyle = isSelected ? 'rgba(186, 230, 253, 0.92)' : 'rgba(125, 211, 252, 0.58)';
+        ctx.strokeStyle = circleStroke;
         ctx.lineWidth = isSelected ? 1.5 : 1;
         ctx.stroke();
       }
@@ -1652,7 +1777,7 @@ const drawSquads = (ctx, sim, view, pitch, yaw, zoomValue, selectedId, hoverId, 
         ctx.stroke();
 
         ctx.globalAlpha = 0.52;
-        ctx.fillStyle = squad.team === TEAM_ATTACKER ? 'rgba(252, 165, 165, 0.78)' : 'rgba(186, 230, 253, 0.78)';
+        ctx.fillStyle = squad.team === TEAM_ATTACKER ? 'rgba(239, 68, 68, 0.84)' : 'rgba(59, 130, 246, 0.8)';
         ctx.beginPath();
         ctx.moveTo(flagAnchor.x + 1, flagAnchor.y - 23);
         ctx.lineTo(flagAnchor.x + 18, flagAnchor.y - 18);
@@ -1698,6 +1823,37 @@ const buildSkillAimOverlay = (sim, selectedSquad, aimWorld, view, pitch, yaw) =>
 
   const originScreen = projectWorld(selectedSquad.x, selectedSquad.y, 12, view.viewport, pitch, yaw, view.worldScale);
   const targetScreen = projectWorld(targetPoint.x, targetPoint.y, 0, view.viewport, pitch, yaw, view.worldScale);
+
+  if (selectedSquad.classTag === 'cavalry') {
+    const groundOrigin = projectWorld(selectedSquad.x, selectedSquad.y, 0.2, view.viewport, pitch, yaw, view.worldScale);
+    const groundTarget = projectWorld(targetPoint.x, targetPoint.y, 0.2, view.viewport, pitch, yaw, view.worldScale);
+    const dirX = groundTarget.x - groundOrigin.x;
+    const dirY = groundTarget.y - groundOrigin.y;
+    const len = Math.hypot(dirX, dirY) || 1;
+    const nx = -dirY / len;
+    const ny = dirX / len;
+    const shaftHalf = clamp(5 + (dist * 0.02), 5, 10);
+    const headLen = clamp(18 + (dist * 0.04), 16, 34);
+    const headHalf = clamp(8 + (dist * 0.02), 8, 14);
+    const tipX = groundTarget.x;
+    const tipY = groundTarget.y;
+    const backX = tipX - ((dirX / len) * headLen);
+    const backY = tipY - ((dirY / len) * headLen);
+    return {
+      targetPoint,
+      originScreen: groundOrigin,
+      targetScreen: groundTarget,
+      type: selectedSquad.classTag,
+      rushDistance: Math.round(Math.max(0, Math.min(maxRange, dist))),
+      arrow: {
+        shaftLeft: { x: groundOrigin.x + (nx * shaftHalf), y: groundOrigin.y + (ny * shaftHalf) },
+        shaftRight: { x: groundOrigin.x - (nx * shaftHalf), y: groundOrigin.y - (ny * shaftHalf) },
+        headBaseLeft: { x: backX + (nx * headHalf), y: backY + (ny * headHalf) },
+        headBaseRight: { x: backX - (nx * headHalf), y: backY - (ny * headHalf) },
+        tip: { x: tipX, y: tipY }
+      }
+    };
+  }
 
   if (selectedSquad.classTag === 'archer') {
     const points = [];
@@ -1746,6 +1902,38 @@ const buildSkillAimOverlay = (sim, selectedSquad, aimWorld, view, pitch, yaw) =>
 
 const drawSkillAimOverlay = (ctx, overlay) => {
   if (!overlay) return;
+  if (overlay.type === 'cavalry' && overlay.arrow) {
+    const { shaftLeft, shaftRight, headBaseLeft, headBaseRight, tip } = overlay.arrow;
+    ctx.save();
+    ctx.fillStyle = 'rgba(251, 146, 60, 0.24)';
+    ctx.strokeStyle = 'rgba(253, 186, 116, 0.96)';
+    ctx.lineWidth = 1.5;
+
+    ctx.beginPath();
+    ctx.moveTo(shaftLeft.x, shaftLeft.y);
+    ctx.lineTo(headBaseLeft.x, headBaseLeft.y);
+    ctx.lineTo(tip.x, tip.y);
+    ctx.lineTo(headBaseRight.x, headBaseRight.y);
+    ctx.lineTo(shaftRight.x, shaftRight.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(tip.x, tip.y, 14, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(251, 146, 60, 0.12)';
+    ctx.strokeStyle = 'rgba(251, 146, 60, 0.82)';
+    ctx.lineWidth = 1.1;
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(254, 243, 199, 0.96)';
+    ctx.font = "11px 'JetBrains Mono', ui-monospace, monospace";
+    ctx.fillText(`冲锋 ${overlay.rushDistance || 0}`, tip.x + 10, tip.y - 8);
+    ctx.restore();
+    return;
+  }
+
   const { originScreen, targetScreen } = overlay;
   const midX = (originScreen.x + targetScreen.x) / 2;
   const midY = Math.min(originScreen.y, targetScreen.y) - overlay.arcHeight;
@@ -1782,6 +1970,54 @@ const drawSkillAimOverlay = (ctx, overlay) => {
     ctx.stroke();
   }
   ctx.restore();
+};
+
+const drawBattleMoveGuides = (ctx, sim, view, pitch, yaw, selectedSquadId) => {
+  if (!sim) return;
+  const selected = (sim.squads || []).find((squad) => squad?.id === selectedSquadId) || null;
+  const guideRows = selected && selected.team === TEAM_ATTACKER && selected.remain > 0 && Array.isArray(selected.waypoints) && selected.waypoints.length > 0
+    ? [selected]
+    : [];
+  guideRows.forEach((squad) => {
+    const points = [{ x: squad.x, y: squad.y }, ...squad.waypoints];
+    const projected = points.map((point) => projectWorld(point.x, point.y, 0.25, view.viewport, pitch, yaw, view.worldScale));
+    if (projected.length <= 1) return;
+
+    ctx.save();
+    ctx.setLineDash([8, 6]);
+    ctx.strokeStyle = 'rgba(251, 113, 133, 0.92)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(projected[0].x, projected[0].y);
+    for (let i = 1; i < projected.length; i += 1) {
+      ctx.lineTo(projected[i].x, projected[i].y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    for (let i = 1; i < projected.length; i += 1) {
+      const node = projected[i];
+      const isLast = i === (projected.length - 1);
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, isLast ? 7.2 : 4.4, 0, Math.PI * 2);
+      ctx.fillStyle = isLast ? 'rgba(248, 113, 113, 0.28)' : 'rgba(251, 113, 133, 0.24)';
+      ctx.fill();
+      ctx.strokeStyle = isLast ? 'rgba(254, 202, 202, 0.96)' : 'rgba(252, 165, 165, 0.88)';
+      ctx.lineWidth = isLast ? 1.5 : 1.1;
+      ctx.stroke();
+      if (isLast) {
+        ctx.beginPath();
+        ctx.moveTo(node.x - 3.8, node.y);
+        ctx.lineTo(node.x + 3.8, node.y);
+        ctx.moveTo(node.x, node.y - 3.8);
+        ctx.lineTo(node.x, node.y + 3.8);
+        ctx.strokeStyle = 'rgba(254, 226, 226, 0.95)';
+        ctx.lineWidth = 1.1;
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  });
 };
 
 const drawComposeGroups = (ctx, groups, view, pitch, yaw, zoomValue, selectedGroupId, team, resolveFormationState) => {
@@ -2266,9 +2502,27 @@ const PveBattleModal = ({
       setCardRows([]);
       return;
     }
-    setCardRows(sampleCardData(sim, selectedSquadIdRef.current, hoverSquadIdRef.current));
+    const rows = sampleCardData(sim, selectedSquadIdRef.current, hoverSquadIdRef.current);
+    setCardRows(rows);
+    if (phase === 'battle') {
+      const selectedStillAlive = rows.some((row) => (
+        row.id === selectedSquadIdRef.current
+        && row.team === TEAM_ATTACKER
+        && row.alive
+      ));
+      if (!selectedStillAlive) {
+        const fallback = rows.find((row) => row.team === TEAM_ATTACKER && row.alive) || null;
+        const nextId = fallback?.id || '';
+        selectedSquadIdRef.current = nextId;
+        setSelectedSquadId(nextId);
+        setPendingSkill(null);
+        if (!nextId) {
+          setFloatingActionsPos(null);
+        }
+      }
+    }
     setBattleTimerSec(sim.timerSec);
-  }, []);
+  }, [phase]);
 
   const saveBattleResult = useCallback(async (summary) => {
     if (!battleInitData?.nodeId || !summary) return;
@@ -2350,6 +2604,8 @@ const PveBattleModal = ({
       squads: [...attackerSquads, ...defenderSquads],
       buildings: buildObstacleList(battleInitData?.battlefield || {}),
       effects: [],
+      projectiles: [],
+      hitEffects: [],
       timerSec: Math.max(30, Math.floor(Number(battleInitData?.timeLimitSec) || DEFAULT_TIME_LIMIT)),
       timeLimitSec: Math.max(30, Math.floor(Number(battleInitData?.timeLimitSec) || DEFAULT_TIME_LIMIT)),
       ended: false,
@@ -2362,6 +2618,7 @@ const PveBattleModal = ({
         squad.action = '自动攻击';
       }
     });
+    sim.crowd = createCrowdSim(sim, { unitTypeMap });
 
     simRef.current = sim;
 
@@ -2540,6 +2797,11 @@ const PveBattleModal = ({
       if (phase === 'battle') {
         const sim = simRef.current;
         if (!sim || sim.ended) return;
+        if (pendingSkill) {
+          setPendingSkill(null);
+          showToast('已取消兵种攻击瞄准');
+          return;
+        }
         const append = leftDownRef.current;
         const ok = issueSquadMove(sim, selectedSquadIdRef.current, worldPoint, append);
         if (!ok) {
@@ -2930,6 +3192,7 @@ const PveBattleModal = ({
         if (sim) {
           updateSimulation(sim, dt);
           drawBuildings(ctx, sim, view, cameraPitch, cameraYaw);
+          drawBattleMoveGuides(ctx, sim, view, cameraPitch, cameraYaw, selectedSquadIdRef.current);
           drawEffects(ctx, sim, view, cameraPitch, cameraYaw);
           const selectedFlag = drawSquads(
             ctx,
@@ -3387,7 +3650,8 @@ const PveBattleModal = ({
               <button
                 key={row.id}
                 type="button"
-                className={`pve-squad-card ${row.selected ? 'selected' : ''}`}
+                className={`pve-squad-card ${row.selected ? 'selected' : ''} ${row.alive ? '' : 'dead'}`}
+                disabled={phase === 'battle' && !row.alive}
                 onClick={() => {
                   if (phase === 'compose') {
                     setSelectedGroupId(row.id);
@@ -3408,7 +3672,10 @@ const PveBattleModal = ({
                     openComposeEditorForSelected(row.id);
                   }
                 }}
-                onMouseEnter={() => setHoverSquadId(row.id)}
+                onMouseEnter={() => {
+                  if (!row.alive) return;
+                  setHoverSquadId(row.id);
+                }}
                 onMouseLeave={() => setHoverSquadId('')}
               >
                 <div className="pve-squad-card-head">
@@ -3443,8 +3710,11 @@ const PveBattleModal = ({
             }))).map((row) => (
               <div
                 key={row.id}
-                className="pve-squad-card enemy"
-                onMouseEnter={() => setHoverSquadId(row.id)}
+                className={`pve-squad-card enemy ${row.alive ? '' : 'dead'}`}
+                onMouseEnter={() => {
+                  if (!row.alive) return;
+                  setHoverSquadId(row.id);
+                }}
                 onMouseLeave={() => setHoverSquadId('')}
               >
                 <div className="pve-squad-card-head">
