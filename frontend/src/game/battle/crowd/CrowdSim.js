@@ -13,6 +13,7 @@ import {
   stepEffectPool
 } from '../effects/CombatEffects';
 import { updateCrowdCombat } from './crowdCombat';
+import { syncMeleeEngagement } from './engagement';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
@@ -613,12 +614,18 @@ const applyCavalryRushImpact = (sim, crowd, squad, agents = [], fromPoint, toPoi
 
 export const createCrowdSim = (sim, options = {}) => {
   const unitTypeMap = options?.unitTypeMap instanceof Map ? options.unitTypeMap : new Map();
+  if (sim && typeof sim === 'object') {
+    sim.engagementAgentDiameter = AGENT_RADIUS * 2;
+    sim.engagementAgentGap = AGENT_GAP;
+  }
   const crowd = {
     agentsBySquad: new Map(),
     allAgents: [],
     effectsPool: createCombatEffectsPool(),
     nextAgentId: 1,
-    unitTypeMap
+    unitTypeMap,
+    spatial: buildSpatialHash([], 14),
+    engagement: null
   };
   (Array.isArray(sim?.squads) ? sim.squads : []).forEach((squad) => {
     const agents = createAgentsForSquad(squad, crowd);
@@ -735,6 +742,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     crowd.allAgents.push(...filtered);
   });
   const spatial = buildSpatialHash(crowd.allAgents, 14);
+  crowd.spatial = spatial;
+  syncMeleeEngagement(crowd, sim, walls, safeDt, Number(sim?.timeElapsed) || 0);
 
   squads.forEach((squad) => {
     if (!squad || squad.remain <= 0) return;
@@ -844,6 +853,11 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         : 1;
       const speedMul = (squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1) * ((squad.skillRush?.ttl || 0) > 0 ? 1.45 : 1);
       const speed = Math.max(6, (Number(squad.stats?.speed) || 1) * 20 * moraleMul * fatigueMul * weightSlow * speedMul * (agent.moveSpeedMul || 1));
+      const engagementCfg = crowd?.engagement?.config || {};
+      const engagementEnabled = !!crowd?.engagement?.enabled;
+      const isMelee = isMeleeAgent(agent);
+      const hasAnchor = engagementEnabled && isMelee && !!agent.engagePairKey
+        && Number.isFinite(Number(agent.engageAx)) && Number.isFinite(Number(agent.engageAy));
 
       const neighbors = querySpatialNearby(spatial, agent.x, agent.y, 12);
       const sep = computeTeamAwareSeparation(agent, neighbors, spacing * 0.94);
@@ -852,6 +866,25 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         : 1;
       let vx = (toDesired.x * speed) + (sep.x * 40 * sepScale);
       let vy = (toDesired.y * speed) + (sep.y * 40 * sepScale);
+      if (hasAnchor) {
+        const anchorDir = normalizeVec((Number(agent.engageAx) || 0) - (agent.x || 0), (Number(agent.engageAy) || 0) - (agent.y || 0));
+        const steerGain = clamp(Number(engagementCfg?.anchorSteerGain) || 0.72, 0.08, 1.8);
+        const steerCap = speed * clamp(Number(engagementCfg?.anchorSteerCapMul) || 0.58, 0.1, 1.4);
+        let steerVx = anchorDir.x * speed * steerGain;
+        let steerVy = anchorDir.y * speed * steerGain;
+        const steerLen = Math.hypot(steerVx, steerVy);
+        if (steerLen > steerCap && steerLen > 0.0001) {
+          steerVx = (steerVx / steerLen) * steerCap;
+          steerVy = (steerVy / steerLen) * steerCap;
+        }
+        vx += steerVx;
+        vy += steerVy;
+        const pressure = Math.max(0, Number(agent.engagePressure) || 0);
+        if (pressure > 0.0001) {
+          vx += (Number(agent.engageFrontDx) || 0) * pressure;
+          vy += (Number(agent.engageFrontDy) || 0) * pressure;
+        }
+      }
       if (stationaryHold && toDesired.len <= AGENT_IDLE_DEADZONE) {
         vx = 0;
         vy = 0;
@@ -900,6 +933,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
 
   crowd.allAgents = [];
   crowd.agentsBySquad.forEach((agents) => crowd.allAgents.push(...agents.filter((agent) => !agent.dead)));
+  crowd.spatial = buildSpatialHash(crowd.allAgents, 14);
   updateCrowdCombat(sim, crowd, safeDt);
   stepEffectPool(crowd.effectsPool, safeDt);
   sim.projectiles = crowd.effectsPool.projectileLive;

@@ -57,6 +57,64 @@ export const pushOutOfRect = (point, rect, inflate = 0) => {
   };
 };
 
+const segmentIntersectsAabb = (a, b, minX, maxX, minY, maxY) => {
+  const dx = (Number(b?.x) || 0) - (Number(a?.x) || 0);
+  const dy = (Number(b?.y) || 0) - (Number(a?.y) || 0);
+  let t0 = 0;
+  let t1 = 1;
+  const clip = (p, q) => {
+    if (Math.abs(p) <= 1e-9) {
+      return q >= 0;
+    }
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+      return true;
+    }
+    if (r < t0) return false;
+    if (r < t1) t1 = r;
+    return true;
+  };
+  if (!clip(-dx, (Number(a?.x) || 0) - minX)) return false;
+  if (!clip(dx, maxX - (Number(a?.x) || 0))) return false;
+  if (!clip(-dy, (Number(a?.y) || 0) - minY)) return false;
+  if (!clip(dy, maxY - (Number(a?.y) || 0))) return false;
+  return t1 >= t0 && t1 >= 0 && t0 <= 1;
+};
+
+export const lineIntersectsRotatedRect = (start, end, rect, inflate = 0) => {
+  const sx = Number(start?.x) || 0;
+  const sy = Number(start?.y) || 0;
+  const ex = Number(end?.x) || 0;
+  const ey = Number(end?.y) || 0;
+  const cx = Number(rect?.x) || 0;
+  const cy = Number(rect?.y) || 0;
+  const rot = Number(rect?.rotation) || 0;
+  const hw = (Math.max(1, Number(rect?.width) || 1) / 2) + Math.max(0, Number(inflate) || 0);
+  const hh = (Math.max(1, Number(rect?.depth) || 1) / 2) + Math.max(0, Number(inflate) || 0);
+  const localStart = rotate2D(sx - cx, sy - cy, -rot);
+  const localEnd = rotate2D(ex - cx, ey - cy, -rot);
+  if (
+    (Math.abs(localStart.x) <= hw && Math.abs(localStart.y) <= hh)
+    || (Math.abs(localEnd.x) <= hw && Math.abs(localEnd.y) <= hh)
+  ) {
+    return true;
+  }
+  return segmentIntersectsAabb(localStart, localEnd, -hw, hw, -hh, hh);
+};
+
+export const hasLineOfSight = (start, end, obstacles = [], inflate = 0) => {
+  for (let i = 0; i < obstacles.length; i += 1) {
+    const wall = obstacles[i];
+    if (!wall || wall.destroyed) continue;
+    if (lineIntersectsRotatedRect(start, end, wall, inflate)) {
+      return false;
+    }
+  }
+  return true;
+};
+
 export const estimateLocalFlowWidth = (origin, forward, obstacles = [], options = {}) => {
   const step = Math.max(1, Number(options?.step) || 4);
   const maxProbe = Math.max(step, Number(options?.maxProbe) || 120);
@@ -126,4 +184,3 @@ export const applyAgentSeparation = (agent, neighbors = [], targetGap = 5.2, str
   });
   return { x: sx, y: sy };
 };
-

@@ -2410,7 +2410,7 @@ const App = () => {
             const parsed = await parseApiResponse(response);
             if (response.ok) {
                 const data = parsed.data || {};
-                setRootNodes(data.nodes);
+                setRootNodes(Array.isArray(data.nodes) ? data.nodes : []);
             } else {
                 window.alert(getApiErrorMessage(parsed, '读取首页根知识域失败'));
             }
@@ -2427,7 +2427,7 @@ const App = () => {
             const parsed = await parseApiResponse(response);
             if (response.ok) {
                 const data = parsed.data || {};
-                setFeaturedNodes(data.nodes);
+                setFeaturedNodes(Array.isArray(data.nodes) ? data.nodes : []);
             } else {
                 window.alert(getApiErrorMessage(parsed, '读取热门知识域失败'));
             }
