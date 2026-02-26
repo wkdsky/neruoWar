@@ -7653,9 +7653,6 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
       });
     });
     const defenderUnits = mapToUnitCountEntries(defenderUnitCountMap, unitTypeMap);
-    const intelSnapshot = findUserIntelSnapshotByNodeId(user, node._id);
-    const hasIntelBattlefieldVision = !!intelSnapshot;
-
     const now = new Date();
     return res.json({
       success: true,
@@ -7682,18 +7679,12 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
         version: Math.max(1, Math.floor(Number(layoutBundle?.version) || 1)),
         gateKey,
         gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
-        intelVisible: hasIntelBattlefieldVision,
+        intelVisible: true,
         layoutMeta: layoutBundle?.activeLayout || null,
         layouts: Array.isArray(layoutBundle?.layouts) ? layoutBundle.layouts : [],
-        itemCatalog: hasIntelBattlefieldVision
-          ? (Array.isArray(layoutBundle?.itemCatalog) ? layoutBundle.itemCatalog : [])
-          : [],
-        objects: hasIntelBattlefieldVision
-          ? (Array.isArray(layoutBundle?.objects) ? layoutBundle.objects : [])
-          : [],
-        defenderDeployments: hasIntelBattlefieldVision
-          ? (Array.isArray(layoutBundle?.defenderDeployments) ? layoutBundle.defenderDeployments : [])
-          : [],
+        itemCatalog: Array.isArray(layoutBundle?.itemCatalog) ? layoutBundle.itemCatalog : [],
+        objects: Array.isArray(layoutBundle?.objects) ? layoutBundle.objects : [],
+        defenderDeployments: Array.isArray(layoutBundle?.defenderDeployments) ? layoutBundle.defenderDeployments : [],
         updatedAt: layoutBundle?.updatedAt || null
       }
     });

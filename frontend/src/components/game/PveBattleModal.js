@@ -690,9 +690,11 @@ const findNearestBuilding = (sim, fromPoint, maxDistance = Infinity) => {
   return best;
 };
 
-const issueSquadMove = (sim, squadId, point, append = false) => {
+const issueSquadMove = (sim, squadId, point, append = false, options = {}) => {
   const squad = findSquadById(sim, squadId);
-  if (!squad || squad.remain <= 0 || squad.team !== TEAM_ATTACKER) return false;
+  const allowAnyTeam = !!options?.allowAnyTeam;
+  if (!squad || squad.remain <= 0) return false;
+  if (!allowAnyTeam && squad.team !== TEAM_ATTACKER) return false;
   if (squad.stamina < STAMINA_MOVE_THRESHOLD) return false;
   const safePoint = clampPointToField(point, sim.field.width, sim.field.height, squad.radius + 2);
   if (append) {
@@ -1015,7 +1017,7 @@ const updateSquadCombat = (sim, squad, dt) => {
       issueSquadMove(sim, squad.id, {
         x: squad.x + ((dirX / len) * step),
         y: squad.y + ((dirY / len) * step)
-      }, false);
+      }, false, { allowAnyTeam: true });
     }
     if (squad.roleTag === '远程' && dist > attackRange * 0.94) {
       const dirX = target.x - squad.x;
@@ -1025,7 +1027,7 @@ const updateSquadCombat = (sim, squad, dt) => {
       issueSquadMove(sim, squad.id, {
         x: squad.x + ((dirX / len) * step),
         y: squad.y + ((dirY / len) * step)
-      }, false);
+      }, false, { allowAnyTeam: true });
     }
   }
 
@@ -1961,9 +1963,7 @@ const PveBattleModal = ({
     && composeGroups
       .filter((group) => sumUnitsMap(group.units) > 0)
       .every((group) => group.placed)
-    && Object.values(remainingPool).every((value) => value === 0)
-    && !composeEditorOpen
-  ), [composeEditorOpen, composeGroups, remainingPool]);
+  ), [composeGroups]);
 
   const showToast = useCallback((message) => {
     if (!message) return;
@@ -2155,7 +2155,7 @@ const PveBattleModal = ({
   const startBattle = useCallback(() => {
     if (!battleInitData) return;
     if (!canStartBattle) {
-      showToast('请完成编组与放置，并确保兵力已全部分配');
+      showToast('请先完成编组与放置');
       return;
     }
 
