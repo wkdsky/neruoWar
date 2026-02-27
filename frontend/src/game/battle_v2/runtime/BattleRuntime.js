@@ -28,8 +28,15 @@ const TEAM_DEFENDER = 'defender';
 const MORALE_MAX = 100;
 const STAMINA_MAX = 100;
 const TEAM_ZONE_GUTTER = 10;
+const DEPLOY_ZONE_RATIO = 0.2;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const clampToRange = (value, min, max) => {
+  const safeMin = Number(min) || 0;
+  const safeMax = Number(max) || 0;
+  if (safeMin <= safeMax) return clamp(Number(value) || 0, safeMin, safeMax);
+  return (safeMin + safeMax) * 0.5;
+};
 const degToRad = (deg) => (Number(deg) || 0) * (Math.PI / 180);
 
 const buildUnitTypeMap = (unitTypes = []) => {
@@ -157,10 +164,40 @@ const computeFieldSize = (battlefield = {}) => ({
   height: Math.max(240, Number(battlefield?.layoutMeta?.fieldHeight) || DEFAULT_FIELD_HEIGHT)
 });
 
-const getDeployRange = (fieldWidth) => ({
-  attackerMaxX: -TEAM_ZONE_GUTTER,
-  defenderMinX: TEAM_ZONE_GUTTER
-});
+const getDeployRange = (fieldWidth, radius = 0) => {
+  const safeWidth = Math.max(120, Number(fieldWidth) || DEFAULT_FIELD_WIDTH);
+  const half = safeWidth / 2;
+  const r = Math.max(0, Number(radius) || 0);
+  const zoneWidth = Math.max(10, safeWidth * DEPLOY_ZONE_RATIO);
+  const minX = -half + r;
+  const maxX = half - r;
+  const attackerMaxX = Math.min(maxX, (-half + zoneWidth) - r);
+  const defenderMinX = Math.max(minX, (half - zoneWidth) + r);
+  return {
+    attackerMaxX,
+    defenderMinX,
+    minX,
+    maxX
+  };
+};
+
+const isXInDeployZone = (x, fieldWidth, radius = 0, team = TEAM_ATTACKER) => {
+  const safeX = Number(x);
+  if (!Number.isFinite(safeX)) return false;
+  const bounds = getDeployRange(fieldWidth, radius);
+  if (team === TEAM_DEFENDER) {
+    return safeX >= bounds.defenderMinX && safeX <= bounds.maxX;
+  }
+  return safeX >= bounds.minX && safeX <= bounds.attackerMaxX;
+};
+
+const clampXToDeployZone = (x, fieldWidth, radius = 0, team = TEAM_ATTACKER) => {
+  const bounds = getDeployRange(fieldWidth, radius);
+  if (team === TEAM_DEFENDER) {
+    return clampToRange(Number(x) || 0, bounds.defenderMinX, bounds.maxX);
+  }
+  return clampToRange(Number(x) || 0, bounds.minX, bounds.attackerMaxX);
+};
 
 const clampXToTeamZone = (x, fieldWidth, radius = 0, team = TEAM_ATTACKER) => {
   const half = fieldWidth / 2;
@@ -267,7 +304,7 @@ const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, un
       team: TEAM_DEFENDER,
       name: (typeof deploy?.name === 'string' && deploy.name.trim()) ? deploy.name.trim() : `守军${index + 1}`,
       units: assigned,
-      x: clampXToTeamZone(Number(deploy?.x) || 0, field.width, 0, TEAM_DEFENDER),
+      x: clampXToDeployZone(Number(deploy?.x) || 0, field.width, 0, TEAM_DEFENDER),
       y: clamp(Number(deploy?.y) || 0, -field.height / 2, field.height / 2),
       placed: true
     });
@@ -283,7 +320,7 @@ const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, un
       const row = index % rows;
       const layer = Math.floor(index / rows);
       const y = -field.height * 0.34 + ((row + 1) * ((field.height * 0.68) / (rows + 1)));
-      const x = clampXToTeamZone((field.width / 2) - 80 - (layer * 60), field.width, 0, TEAM_DEFENDER);
+      const x = clampXToDeployZone((field.width / 2) - 80 - (layer * 60), field.width, 0, TEAM_DEFENDER);
       groups.push({
         id: `def_auto_${index + 1}`,
         team: TEAM_DEFENDER,
@@ -512,7 +549,7 @@ export default class BattleRuntime {
       -this.field.height / 2 + 12,
       this.field.height / 2 - 12
     );
-    const fallbackX = clampXToTeamZone(
+    const fallbackX = clampXToDeployZone(
       -this.field.width / 2 + 72 + (layer * 56),
       this.field.width,
       10,
@@ -523,7 +560,7 @@ export default class BattleRuntime {
     const groupName = (typeof name === 'string' && name.trim())
       ? name.trim()
       : `${candidateName}${this.attackerDeployGroups.length + 1}`;
-    const safeX = clampXToTeamZone(
+    const safeX = clampXToDeployZone(
       Number.isFinite(Number(x)) ? Number(x) : fallbackX,
       this.field.width,
       10,
@@ -598,9 +635,15 @@ export default class BattleRuntime {
     const group = this.attackerDeployGroups.find((row) => row.id === targetId);
     if (!group) return false;
     const safePoint = clampPointToField(worldPoint, this.field, 10);
-    group.x = clampXToTeamZone(safePoint.x, this.field.width, 10, TEAM_ATTACKER);
+    group.x = clampXToDeployZone(safePoint.x, this.field.width, 10, TEAM_ATTACKER);
     group.y = safePoint.y;
     return true;
+  }
+
+  canDeployAt(worldPoint, team = TEAM_ATTACKER, radius = 10) {
+    if (this.phase !== 'deploy') return false;
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    return isXInDeployZone(worldPoint?.x, this.field.width, radius, safeTeam);
   }
 
   pickAttackerDeployGroup(worldPoint, radius = 26) {
@@ -1072,6 +1115,7 @@ export default class BattleRuntime {
 
     return {
       field: this.field,
+      deployRange: this.getDeployRange(),
       buildings: this.sim?.buildings || this.initialBuildings,
       squads,
       visibilityMask: null

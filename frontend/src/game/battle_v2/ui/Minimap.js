@@ -27,12 +27,29 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
       y: ((Number(y) || 0) + fh / 2) * sy
     });
 
+    const deployRange = snapshot.deployRange || {};
+    const attackerMaxX = Number.isFinite(Number(deployRange.attackerMaxX)) ? Number(deployRange.attackerMaxX) : 0;
+    const defenderMinX = Number.isFinite(Number(deployRange.defenderMinX)) ? Number(deployRange.defenderMinX) : 0;
+    const attackerRight = clamp(((attackerMaxX + fw / 2) * sx), 0, width);
+    const defenderLeft = clamp(((defenderMinX + fw / 2) * sx), attackerRight, width);
+
     ctx.fillStyle = 'rgba(11, 40, 70, 0.78)';
-    ctx.fillRect(0, 0, Math.floor(width * 0.5), height);
+    ctx.fillRect(0, 0, attackerRight, height);
+    ctx.fillStyle = 'rgba(74, 62, 33, 0.7)';
+    ctx.fillRect(attackerRight, 0, Math.max(0, defenderLeft - attackerRight), height);
     ctx.fillStyle = 'rgba(85, 24, 24, 0.78)';
-    ctx.fillRect(Math.floor(width * 0.5), 0, Math.ceil(width * 0.5), height);
-    ctx.fillStyle = 'rgba(248, 231, 182, 0.5)';
-    ctx.fillRect(Math.floor(width * 0.5) - 1, 0, 2, height);
+    ctx.fillRect(defenderLeft, 0, Math.max(0, width - defenderLeft), height);
+    ctx.fillStyle = 'rgba(248, 231, 182, 0.55)';
+    ctx.fillRect(attackerRight - 1, 0, 2, height);
+    ctx.fillRect(defenderLeft - 1, 0, 2, height);
+    ctx.fillStyle = 'rgba(226, 232, 240, 0.84)';
+    ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+    ctx.fillText('我方', 6, 13);
+    ctx.fillText('敌方', Math.max(6, width - 28), 13);
+    if ((defenderLeft - attackerRight) >= 22) {
+      ctx.fillStyle = 'rgba(251, 191, 36, 0.88)';
+      ctx.fillText('交战区', (attackerRight + defenderLeft) * 0.5 - 14, 13);
+    }
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
     ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
 

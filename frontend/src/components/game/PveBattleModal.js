@@ -22,11 +22,14 @@ import NumberPadDialog from '../common/NumberPadDialog';
 
 const API_BASE = 'http://localhost:5000';
 const TEAM_ATTACKER = 'attacker';
-const CAMERA_ROTATE_SENSITIVITY = 0.38;
-const CAMERA_ROTATE_CLICK_THRESHOLD = 4;
 const CAMERA_ZOOM_STEP = 24;
 const CAMERA_DISTANCE_MIN = 360;
 const CAMERA_DISTANCE_MAX = 980;
+const DEPLOY_ROTATE_SENSITIVITY = 0.28;
+const DEPLOY_ROTATE_CLICK_THRESHOLD = 3;
+const DEPLOY_DEFAULT_YAW_DEG = 180;
+const DEPLOY_DEFAULT_WORLD_YAW_DEG = 180;
+const DEPLOY_PITCH_DEG = 62;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const createNoopImpostorRenderer = () => ({
@@ -107,11 +110,11 @@ const PveBattleModal = ({
   const runtimeRef = useRef(null);
   const clockRef = useRef(new BattleClock({ fixedStep: 1 / 30 }));
   const cameraRef = useRef(new CameraController({
-    yawDeg: 90,
+    yawDeg: DEPLOY_DEFAULT_YAW_DEG,
     pitchLow: 40,
     pitchHigh: 90,
     distance: 560,
-    mirrorX: true
+    mirrorX: false
   }));
   const glRef = useRef(null);
   const renderersRef = useRef({
@@ -132,7 +135,7 @@ const PveBattleModal = ({
   const reportedRef = useRef(false);
   const pointerWorldRef = useRef({ x: 0, y: 0 });
   const panDragRef = useRef(null);
-  const rotateDragRef = useRef(null);
+  const deployYawDragRef = useRef(null);
   const spacePressedRef = useRef(false);
 
   const [glError, setGlError] = useState('');
@@ -146,6 +149,39 @@ const PveBattleModal = ({
   const [selectedSquadId, setSelectedSquadId] = useState('');
   const [minimapSnapshot, setMinimapSnapshot] = useState(null);
   const [cameraMiniState, setCameraMiniState] = useState({ center: { x: 0, y: 0 }, viewport: { widthWorld: 220, heightWorld: 150 } });
+  const [cameraAssert, setCameraAssert] = useState({
+    cameraImplTag: '',
+    phase: '',
+    yawDeg: 0,
+    worldYawDeg: 0,
+    currentPitch: 0,
+    pitchLow: 0,
+    pitchHigh: 0,
+    distance: 0,
+    mirrorX: false,
+    handedness: 0,
+    centerX: 0,
+    centerY: 0,
+    eyeX: 0,
+    eyeY: 0,
+    eyeZ: 0,
+    targetX: 0,
+    targetY: 0,
+    targetZ: 0,
+    cameraRightX: 0,
+    cameraRightY: 0,
+    cameraRightZ: 0,
+    fieldWidth: 0,
+    fieldHeight: 0,
+    deployAttackerMaxX: 0,
+    deployDefenderMinX: 0,
+    pointerX: 0,
+    pointerY: 0,
+    pointerValid: false,
+    isPanning: false,
+    panStartDistance: 0,
+    panStartPitch: 0
+  });
   const [resultState, setResultState] = useState({ open: false, submitting: false, error: '', summary: null, recorded: false });
   const [deployEditorOpen, setDeployEditorOpen] = useState(false);
   const [deployEditingGroupId, setDeployEditingGroupId] = useState('');
@@ -164,7 +200,6 @@ const PveBattleModal = ({
   const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState('');
   const [confirmDeletePos, setConfirmDeletePos] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
-  const [isRotating, setIsRotating] = useState(false);
 
   const closeModal = useCallback(() => {
     if (typeof onClose === 'function') onClose();
@@ -212,11 +247,13 @@ const PveBattleModal = ({
     const anchor = runtime.getFocusAnchor();
     cameraRef.current.centerX = Number(anchor?.x) || 0;
     cameraRef.current.centerY = Number(anchor?.y) || 0;
-    cameraRef.current.yawDeg = 90;
+    cameraRef.current.yawDeg = DEPLOY_DEFAULT_YAW_DEG;
+    cameraRef.current.worldYawDeg = DEPLOY_DEFAULT_WORLD_YAW_DEG;
+    cameraRef.current.mirrorX = false;
     cameraRef.current.distance = 560;
-    cameraRef.current.currentPitch = cameraRef.current.pitchLow;
-    cameraRef.current.pitchFrom = cameraRef.current.pitchLow;
-    cameraRef.current.pitchTo = cameraRef.current.pitchLow;
+    cameraRef.current.currentPitch = DEPLOY_PITCH_DEG;
+    cameraRef.current.pitchFrom = DEPLOY_PITCH_DEG;
+    cameraRef.current.pitchTo = DEPLOY_PITCH_DEG;
     cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
     clockRef.current.reset();
     clockRef.current.setPaused(false);
@@ -238,12 +275,44 @@ const PveBattleModal = ({
     setDeployActionAnchorMode('');
     setDeployNotice('');
     setDeployEditorDragUnitId('');
+    setCameraAssert({
+      cameraImplTag: '',
+      phase: runtime.getPhase(),
+      yawDeg: Number(cameraRef.current.yawDeg) || 0,
+      worldYawDeg: Number(cameraRef.current.worldYawDeg) || 0,
+      currentPitch: Number(cameraRef.current.currentPitch) || 0,
+      pitchLow: Number(cameraRef.current.pitchLow) || 0,
+      pitchHigh: Number(cameraRef.current.pitchHigh) || 0,
+      distance: Number(cameraRef.current.distance) || 0,
+      mirrorX: !!cameraRef.current.mirrorX,
+      handedness: 0,
+      centerX: Number(cameraRef.current.centerX) || 0,
+      centerY: Number(cameraRef.current.centerY) || 0,
+      eyeX: 0,
+      eyeY: 0,
+      eyeZ: 0,
+      targetX: 0,
+      targetY: 0,
+      targetZ: 0,
+      cameraRightX: 0,
+      cameraRightY: 0,
+      cameraRightZ: 0,
+      fieldWidth: Number(runtime.getField()?.width) || 0,
+      fieldHeight: Number(runtime.getField()?.height) || 0,
+      deployAttackerMaxX: Number(runtime.getDeployRange()?.attackerMaxX) || 0,
+      deployDefenderMinX: Number(runtime.getDeployRange()?.defenderMinX) || 0,
+      pointerX: Number(pointerWorldRef.current?.x) || 0,
+      pointerY: Number(pointerWorldRef.current?.y) || 0,
+      pointerValid: pointerWorldRef.current?.valid !== false,
+      isPanning: false,
+      panStartDistance: 0,
+      panStartPitch: 0
+    });
     setConfirmDeleteGroupId('');
     setConfirmDeletePos({ x: 0, y: 0 });
     setIsPanning(false);
-    setIsRotating(false);
     panDragRef.current = null;
-    rotateDragRef.current = null;
+    deployYawDragRef.current = null;
     spacePressedRef.current = false;
   }, [open, battleInitData]);
 
@@ -345,6 +414,16 @@ const PveBattleModal = ({
       if (nowPhase === 'battle') {
         clockRef.current.tick(deltaSec, (fixedStep) => runtime.step(fixedStep));
       }
+      if (nowPhase === 'deploy') {
+        cameraRef.current.yawDeg = DEPLOY_DEFAULT_YAW_DEG;
+        cameraRef.current.mirrorX = false;
+        cameraRef.current.currentPitch = DEPLOY_PITCH_DEG;
+        cameraRef.current.pitchFrom = DEPLOY_PITCH_DEG;
+        cameraRef.current.pitchTo = DEPLOY_PITCH_DEG;
+        cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
+      } else {
+        cameraRef.current.worldYawDeg = 0;
+      }
 
       const followAnchor = nowPhase === 'battle' ? runtime.getFocusAnchor() : null;
       cameraRef.current.update(deltaSec, followAnchor);
@@ -375,6 +454,7 @@ const PveBattleModal = ({
       const snapshot = runtime.getRenderSnapshot();
       const field = runtime.getField();
       renderers.ground.setFieldSize(field?.width || 900, field?.height || 620);
+      renderers.ground.setDeployRange(runtime.getDeployRange());
       renderers.building.updateFromSnapshot(snapshot.buildings);
       renderers.impostor.updateFromSnapshot(snapshot.units);
       renderers.projectile.updateFromSnapshot(snapshot.projectiles);
@@ -404,6 +484,39 @@ const PveBattleModal = ({
             y: nowPhase === 'battle' ? (followAnchor?.y || 0) : cameraRef.current.centerY
           },
           viewport: cameraViewRectRef.current
+        });
+        setCameraAssert({
+          cameraImplTag: cameraState?.cameraImplTag || '',
+          phase: nowPhase,
+          yawDeg: Number(cameraRef.current.yawDeg) || 0,
+          worldYawDeg: Number(cameraState?.worldYawDeg) || 0,
+          currentPitch: Number(cameraRef.current.currentPitch) || 0,
+          pitchLow: Number(cameraRef.current.pitchLow) || 0,
+          pitchHigh: Number(cameraRef.current.pitchHigh) || 0,
+          distance: Number(cameraRef.current.distance) || 0,
+          mirrorX: !!cameraRef.current.mirrorX,
+          handedness: Number(cameraState?.handedness) || 0,
+          centerX: Number(cameraRef.current.centerX) || 0,
+          centerY: Number(cameraRef.current.centerY) || 0,
+          eyeX: Number(cameraState?.eye?.[0]) || 0,
+          eyeY: Number(cameraState?.eye?.[1]) || 0,
+          eyeZ: Number(cameraState?.eye?.[2]) || 0,
+          targetX: Number(cameraState?.target?.[0]) || 0,
+          targetY: Number(cameraState?.target?.[1]) || 0,
+          targetZ: Number(cameraState?.target?.[2]) || 0,
+          cameraRightX: Number(cameraState?.cameraRight?.[0]) || 0,
+          cameraRightY: Number(cameraState?.cameraRight?.[1]) || 0,
+          cameraRightZ: Number(cameraState?.cameraRight?.[2]) || 0,
+          fieldWidth: Number(field?.width) || 0,
+          fieldHeight: Number(field?.height) || 0,
+          deployAttackerMaxX: Number(runtime.getDeployRange()?.attackerMaxX) || 0,
+          deployDefenderMinX: Number(runtime.getDeployRange()?.defenderMinX) || 0,
+          pointerX: Number(pointerWorldRef.current?.x) || 0,
+          pointerY: Number(pointerWorldRef.current?.y) || 0,
+          pointerValid: pointerWorldRef.current?.valid !== false,
+          isPanning: !!panDragRef.current,
+          panStartDistance: Number(panDragRef.current?.startDistance) || 0,
+          panStartPitch: Number(panDragRef.current?.startPitch) || 0
         });
         if (debugEnabled) {
           setDebugStats(runtime.getDebugStats());
@@ -459,6 +572,10 @@ const PveBattleModal = ({
       const anchor = runtime.getFocusAnchor();
       cameraRef.current.centerX = Number(anchor?.x) || 0;
       cameraRef.current.centerY = Number(anchor?.y) || 0;
+      cameraRef.current.currentPitch = cameraRef.current.pitchLow;
+      cameraRef.current.pitchFrom = cameraRef.current.pitchLow;
+      cameraRef.current.pitchTo = cameraRef.current.pitchLow;
+      cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
     }
     setPhase(runtime.getPhase());
     setBattleStatus(runtime.getBattleStatus());
@@ -509,6 +626,10 @@ const PveBattleModal = ({
 
     if (runtime.getPhase() === 'deploy') {
       if (deployDraggingGroupId) {
+        if (!runtime.canDeployAt(world, TEAM_ATTACKER, 10)) {
+          setDeployNotice('中间交战区不可部署，请放置在左侧蓝色区域');
+          return;
+        }
         runtime.moveDeployGroup(deployDraggingGroupId, world);
         runtime.setAttackerDeployGroupPlaced(deployDraggingGroupId, true);
         runtime.setSelectedDeployGroup(deployDraggingGroupId);
@@ -569,22 +690,8 @@ const PveBattleModal = ({
     setIsPanning(false);
   }, []);
 
-  const clearRotateDrag = useCallback(() => {
-    rotateDragRef.current = null;
-    setIsRotating(false);
-  }, []);
-
-  const applyDeployYawDelta = useCallback((deltaPixels) => {
-    const camera = cameraRef.current;
-    const px = Number(deltaPixels) || 0;
-    if (!camera || !Number.isFinite(px) || Math.abs(px) < 1e-4) return;
-    const deltaDeg = (camera.mirrorX ? -px : px) * CAMERA_ROTATE_SENSITIVITY;
-    const nextYaw = ((Number(camera.yawDeg) || 0) + deltaDeg) % 360;
-    camera.yawDeg = nextYaw < 0 ? nextYaw + 360 : nextYaw;
-    camera.currentPitch = camera.pitchLow;
-    camera.pitchFrom = camera.pitchLow;
-    camera.pitchTo = camera.pitchLow;
-    camera.pitchTweenSec = camera.pitchTweenDurationSec;
+  const clearDeployYawDrag = useCallback(() => {
+    deployYawDragRef.current = null;
   }, []);
 
   const beginPanDrag = useCallback((event, buttonMask = 1) => {
@@ -597,7 +704,9 @@ const PveBattleModal = ({
     panDragRef.current = {
       prevPx: px,
       prevPy: py,
-      buttonMask
+      buttonMask,
+      startDistance: Number(cameraRef.current.distance) || CAMERA_DISTANCE_MIN,
+      startPitch: Number(cameraRef.current.currentPitch) || DEPLOY_PITCH_DEG
     };
     setIsPanning(true);
     event.preventDefault();
@@ -617,12 +726,11 @@ const PveBattleModal = ({
     const currentPhase = runtime.getPhase();
     if (currentPhase === 'deploy') {
       if (event.button === 2) {
-        rotateDragRef.current = {
-          startX: event.clientX,
-          startYaw: cameraRef.current.yawDeg,
+        deployYawDragRef.current = {
+          startX: Number(event.clientX) || 0,
+          startWorldYawDeg: Number(cameraRef.current.worldYawDeg) || 0,
           moved: false
         };
-        setIsRotating(true);
         event.preventDefault();
         return;
       }
@@ -641,20 +749,21 @@ const PveBattleModal = ({
   const handleSceneWheel = useCallback((event) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'deploy') return;
+    if (panDragRef.current) return;
     event.preventDefault();
-    if (event.shiftKey || event.ctrlKey || event.metaKey) {
-      applyDeployYawDelta(event.deltaY < 0 ? -12 : 12);
-      return;
-    }
     const nextDistance = cameraRef.current.distance + (event.deltaY < 0 ? -CAMERA_ZOOM_STEP : CAMERA_ZOOM_STEP);
     cameraRef.current.distance = clamp(nextDistance, CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX);
-  }, [applyDeployYawDelta]);
+  }, []);
 
   const handleMinimapClick = useCallback((worldPoint) => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
     if (runtime.getPhase() === 'deploy') {
       if (!deployDraggingGroupId) return;
+      if (!runtime.canDeployAt(worldPoint, TEAM_ATTACKER, 10)) {
+        setDeployNotice('中间交战区不可部署，请放置在左侧蓝色区域');
+        return;
+      }
       runtime.moveDeployGroup(deployDraggingGroupId, worldPoint);
       runtime.setAttackerDeployGroupPlaced(deployDraggingGroupId, true);
       runtime.setSelectedDeployGroup(deployDraggingGroupId);
@@ -697,7 +806,7 @@ const PveBattleModal = ({
     const runtime = runtimeRef.current;
     const canvas = glCanvasRef.current;
     if (!runtime || !canvas) return;
-    if (panDragRef.current || rotateDragRef.current) return;
+    if (panDragRef.current || deployYawDragRef.current) return;
     const rect = canvas.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
     const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
@@ -731,24 +840,18 @@ const PveBattleModal = ({
       const isDeploy = runtime?.getPhase() === 'deploy';
       if (!isDeploy) {
         clearPanDrag();
-        clearRotateDrag();
+        clearDeployYawDrag();
         return;
       }
 
-      const rotate = rotateDragRef.current;
+      const rotate = deployYawDragRef.current;
       if (rotate) {
         if ((event.buttons & 2) !== 2) {
-          clearRotateDrag();
+          clearDeployYawDrag();
         } else {
-          const dx = event.clientX - rotate.startX;
-          const visualDx = cameraRef.current.mirrorX ? -dx : dx;
-          if (Math.abs(dx) >= CAMERA_ROTATE_CLICK_THRESHOLD) rotate.moved = true;
-          const nextYaw = ((Number(rotate.startYaw) || 0) + (visualDx * CAMERA_ROTATE_SENSITIVITY)) % 360;
-          cameraRef.current.yawDeg = nextYaw < 0 ? nextYaw + 360 : nextYaw;
-          cameraRef.current.currentPitch = cameraRef.current.pitchLow;
-          cameraRef.current.pitchFrom = cameraRef.current.pitchLow;
-          cameraRef.current.pitchTo = cameraRef.current.pitchLow;
-          cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
+          const dx = (Number(event.clientX) || 0) - (Number(rotate.startX) || 0);
+          if (Math.abs(dx) >= DEPLOY_ROTATE_CLICK_THRESHOLD) rotate.moved = true;
+          cameraRef.current.worldYawDeg = (Number(rotate.startWorldYawDeg) || 0) + (dx * DEPLOY_ROTATE_SENSITIVITY);
         }
       }
 
@@ -760,23 +863,28 @@ const PveBattleModal = ({
       }
       const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
       const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
-      cameraRef.current.buildMatrices(canvas.width, canvas.height);
-      const prevWorld = cameraRef.current.screenToGround(pan.prevPx, pan.prevPy, { width: canvas.width, height: canvas.height });
-      const currentWorld = cameraRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
-      cameraRef.current.centerX += (Number(prevWorld?.x) || 0) - (Number(currentWorld?.x) || 0);
-      cameraRef.current.centerY += (Number(prevWorld?.y) || 0) - (Number(currentWorld?.y) || 0);
+      cameraRef.current.distance = Number(pan.startDistance) || cameraRef.current.distance;
+      cameraRef.current.currentPitch = Number(pan.startPitch) || cameraRef.current.currentPitch;
+      cameraRef.current.pitchFrom = cameraRef.current.currentPitch;
+      cameraRef.current.pitchTo = cameraRef.current.currentPitch;
+      cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
+      const dxPx = px - pan.prevPx;
+      const dyPx = py - pan.prevPy;
+      const viewW = Math.max(1, Number(cameraViewRectRef.current?.widthWorld) || 1);
+      const viewH = Math.max(1, Number(cameraViewRectRef.current?.heightWorld) || 1);
+      cameraRef.current.centerX += (dxPx / Math.max(1, canvas.width)) * viewW;
+      cameraRef.current.centerY -= (dyPx / Math.max(1, canvas.height)) * viewH;
       pan.prevPx = px;
       pan.prevPy = py;
-      pointerWorldRef.current = currentWorld;
     };
 
     const handleWindowMouseUp = () => {
       clearPanDrag();
-      clearRotateDrag();
+      clearDeployYawDrag();
     };
     const handleWindowBlur = () => {
       clearPanDrag();
-      clearRotateDrag();
+      clearDeployYawDrag();
       spacePressedRef.current = false;
     };
 
@@ -788,7 +896,7 @@ const PveBattleModal = ({
       window.removeEventListener('mouseup', handleWindowMouseUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [open, clearPanDrag, clearRotateDrag, applyDeployYawDelta]);
+  }, [open, clearPanDrag, clearDeployYawDrag]);
 
   const handleBehavior = useCallback((behavior) => {
     const runtime = runtimeRef.current;
@@ -1214,7 +1322,7 @@ const PveBattleModal = ({
           />
 
           <div
-            className={`pve2-scene ${isPanning ? 'is-panning' : ''} ${isRotating ? 'is-rotating' : ''}`}
+            className={`pve2-scene ${isPanning ? 'is-panning' : ''}`}
             onMouseDown={handleSceneMouseDown}
             onMouseMove={handlePointerMove}
             onContextMenu={(event) => event.preventDefault()}
@@ -1255,8 +1363,8 @@ const PveBattleModal = ({
                   <button type="button" className="btn btn-primary" onClick={handleOpenDeployCreator}>新建部队</button>
                   <span className="pve2-hint">
                     {deployDraggingGroupId
-                      ? '部队已吸附鼠标：点击地图放置'
-                      : '部署阶段：新建部队 -> 确定编组 -> 部队吸附鼠标 -> 点击地图放置'}
+                      ? '部队已吸附鼠标：仅可放置在左侧蓝色部署区'
+                      : '部署阶段：左蓝(我方) / 中间交战区禁布置 / 右红(敌方)'}
                   </span>
                 </>
               )}
@@ -1271,6 +1379,37 @@ const PveBattleModal = ({
 
             {aimState.active ? (
               <div className="pve2-aim-tip">技能瞄准中：点击地面释放，`Esc` 取消</div>
+            ) : null}
+
+            {open ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: 12,
+                  top: 56,
+                  zIndex: 30030,
+                  pointerEvents: 'none',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                  fontSize: 11,
+                  lineHeight: 1.45,
+                  color: '#dbeafe',
+                  background: 'rgba(2, 6, 23, 0.72)',
+                  border: '1px solid rgba(148, 163, 184, 0.35)',
+                  borderRadius: 8,
+                  padding: '6px 8px',
+                  maxWidth: 'min(94vw, 860px)',
+                  whiteSpace: 'pre-wrap'
+                }}
+              >
+                {[
+                  `impl=${cameraAssert.cameraImplTag || 'N/A'} phase=${cameraAssert.phase || '-'} mirrorX=${cameraAssert.mirrorX ? 'true' : 'false'} handedness=${(Number(cameraAssert.handedness) || 0).toFixed(4)}`,
+                  `yawDeg=${(Number(cameraAssert.yawDeg) || 0).toFixed(2)} worldYawDeg=${(Number(cameraAssert.worldYawDeg) || 0).toFixed(2)} deltaYaw=${((Number(cameraAssert.worldYawDeg) || 0) - (Number(cameraAssert.yawDeg) || 0)).toFixed(2)} pitch=${(Number(cameraAssert.currentPitch) || 0).toFixed(2)} [low=${(Number(cameraAssert.pitchLow) || 0).toFixed(2)}, high=${(Number(cameraAssert.pitchHigh) || 0).toFixed(2)}] distance=${(Number(cameraAssert.distance) || 0).toFixed(2)}`,
+                  `center=(${(Number(cameraAssert.centerX) || 0).toFixed(2)}, ${(Number(cameraAssert.centerY) || 0).toFixed(2)}) eye=(${(Number(cameraAssert.eyeX) || 0).toFixed(2)}, ${(Number(cameraAssert.eyeY) || 0).toFixed(2)}, ${(Number(cameraAssert.eyeZ) || 0).toFixed(2)}) target=(${(Number(cameraAssert.targetX) || 0).toFixed(2)}, ${(Number(cameraAssert.targetY) || 0).toFixed(2)}, ${(Number(cameraAssert.targetZ) || 0).toFixed(2)})`,
+                  `cameraRight=(${(Number(cameraAssert.cameraRightX) || 0).toFixed(4)}, ${(Number(cameraAssert.cameraRightY) || 0).toFixed(4)}, ${(Number(cameraAssert.cameraRightZ) || 0).toFixed(4)})`,
+                  `field=(${(Number(cameraAssert.fieldWidth) || 0).toFixed(1)} x ${(Number(cameraAssert.fieldHeight) || 0).toFixed(1)}) deployRange=[attackerMaxX ${(Number(cameraAssert.deployAttackerMaxX) || 0).toFixed(2)}, defenderMinX ${(Number(cameraAssert.deployDefenderMinX) || 0).toFixed(2)}]`,
+                  `pointerWorld=(${(Number(cameraAssert.pointerX) || 0).toFixed(2)}, ${(Number(cameraAssert.pointerY) || 0).toFixed(2)}) pointerValid=${cameraAssert.pointerValid ? 'true' : 'false'} isPanning=${cameraAssert.isPanning ? 'true' : 'false'} panStart(distance=${(Number(cameraAssert.panStartDistance) || 0).toFixed(2)}, pitch=${(Number(cameraAssert.panStartPitch) || 0).toFixed(2)})`
+                ].join('\n')}
+              </div>
             ) : null}
 
             {glError ? (

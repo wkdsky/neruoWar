@@ -1,4 +1,5 @@
 const DEG2RAD = Math.PI / 180;
+const CAMERA_IMPL_TAG = 'CAMERA_WORLD_MAP_ALIGN_V4';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const smoothstep = (t) => {
@@ -21,13 +22,6 @@ const dot3 = (a, b) => (a[0] * b[0]) + (a[1] * b[1]) + (a[2] * b[2]);
 
 const mat4Identity = () => ([
   1, 0, 0, 0,
-  0, 1, 0, 0,
-  0, 0, 1, 0,
-  0, 0, 0, 1
-]);
-
-const mat4MirrorX = () => ([
-  -1, 0, 0, 0,
   0, 1, 0, 0,
   0, 0, 1, 0,
   0, 0, 0, 1
@@ -56,6 +50,17 @@ const mat4Perspective = (fovy, aspect, near, far) => {
     0, f, 0, 0,
     0, 0, (far + near) * nf, -1,
     0, 0, (2 * far * near) * nf, 0
+  ];
+};
+
+const mat4RotationZ = (rad) => {
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  return [
+    c, s, 0, 0,
+    -s, c, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1
   ];
 };
 
@@ -224,6 +229,7 @@ export default class CameraController {
     this.centerY = 0;
     this.lookAheadScale = 0.28;
     this.lookAheadMax = 78;
+    this.worldYawDeg = 0;
 
     this.eye = [0, 0, 0];
     this.target = [0, 0, 0];
@@ -282,31 +288,52 @@ export default class CameraController {
     const safeWidth = Math.max(1, Number(width) || 1);
     const safeHeight = Math.max(1, Number(height) || 1);
 
-    const yawRad = this.yawDeg * DEG2RAD;
+    const yawEffectiveDeg = this.mirrorX ? (180 - this.yawDeg) : this.yawDeg;
+    const yawRad = yawEffectiveDeg * DEG2RAD;
+    const worldYawRad = (Number(this.worldYawDeg) || 0) * DEG2RAD;
     const pitchRad = clamp(this.currentPitch, 10, 89.95) * DEG2RAD;
     const horizontal = Math.cos(pitchRad) * this.distance;
     const vertical = Math.sin(pitchRad) * this.distance;
 
     this.target = [this.centerX, this.centerY, 0];
     this.eye = [
-      this.centerX + (Math.cos(yawRad) * horizontal),
-      this.centerY + (Math.sin(yawRad) * horizontal),
+      this.centerX + (Math.sin(yawRad) * horizontal),
+      this.centerY - (Math.cos(yawRad) * horizontal),
       vertical
     ];
 
     this.view = mat4LookAt(this.eye, this.target, this.up);
     this.projection = mat4Perspective(48 * DEG2RAD, safeWidth / safeHeight, 1, 5000);
     const viewProj = mat4Multiply(this.projection, this.view);
-    this.viewProjection = this.mirrorX ? mat4Multiply(mat4MirrorX(), viewProj) : viewProj;
+    const worldRotation = mat4RotationZ(worldYawRad);
+    this.viewProjection = mat4Multiply(viewProj, worldRotation);
     this.inverseViewProjection = mat4Invert(this.viewProjection);
 
-    const right = [-Math.sin(yawRad), Math.cos(yawRad), 0];
+    const rightBase = [Math.cos(yawRad), Math.sin(yawRad), 0];
+    const cosWorld = Math.cos(worldYawRad);
+    const sinWorld = Math.sin(worldYawRad);
+    const right = [
+      (rightBase[0] * cosWorld) + (rightBase[1] * sinWorld),
+      (-rightBase[0] * sinWorld) + (rightBase[1] * cosWorld),
+      0
+    ];
+    const forward = normalize3([
+      this.target[0] - this.eye[0],
+      this.target[1] - this.eye[1],
+      this.target[2] - this.eye[2]
+    ]);
+    const rightBasis = normalize3(cross3(forward, this.up));
+    const up2 = cross3(rightBasis, forward);
+    const handedness = dot3(cross3(up2, rightBasis), forward);
     return {
       view: this.view,
       projection: this.projection,
       viewProjection: this.viewProjection,
       inverseViewProjection: this.inverseViewProjection,
       cameraRight: right,
+      handedness,
+      cameraImplTag: CAMERA_IMPL_TAG,
+      worldYawDeg: Number(this.worldYawDeg) || 0,
       eye: this.eye,
       target: this.target
     };

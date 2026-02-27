@@ -96,12 +96,9 @@ pm2命令：
 ./start.sh
 pm2 restart neurowar-backend neurowar-frontend
 
-
+git remote set-url origin https://github.com/wkdsky/neruoWar.git
 git config --global --unset http.proxy
 git config --global --unset https.proxy
-
-remote set-url origin https://github.com/wkdsky/neruoWar.git
-
 ------------------------------
 PVE攻占部署流程（当前实现约束）
 ------------------------------
