@@ -245,6 +245,14 @@ const blendHexColors = (hexA, hexB, ratio = 0.5) => {
   return `#${r}${g}${b}`;
 };
 
+const readMapDebugFlag = () => {
+  if (typeof window === 'undefined') return false;
+  const value = new URLSearchParams(window.location.search).get('mapDebug');
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+};
+
 class WebGLNodeRenderer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -283,6 +291,8 @@ class WebGLNodeRenderer {
       offsetY: 0,
       zoom: 1
     };
+    this.mapDebugEnabled = readMapDebugFlag();
+    this._lastDebugState = '';
 
     // 拖拽平移状态
     this.dragState = {
@@ -317,6 +327,15 @@ class WebGLNodeRenderer {
     this.savedState = null;          // 保存的原始状态（用于回滚）
 
     this.init();
+  }
+
+  debugLog(message, payload = undefined) {
+    if (!this.mapDebugEnabled) return;
+    if (payload !== undefined) {
+      console.info(`[MapDebug] ${message}`, payload);
+      return;
+    }
+    console.info(`[MapDebug] ${message}`);
   }
 
   init() {
@@ -1031,6 +1050,10 @@ class WebGLNodeRenderer {
     gl.clearColor(0.07, 0.09, 0.15, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
+    if (this.mapDebugEnabled && this.nodes.size === 0) {
+      this.renderEmptyStateBackdrop();
+    }
+
     // 先渲染连线
     this.renderLines();
 
@@ -1042,6 +1065,21 @@ class WebGLNodeRenderer {
 
     // 渲染标签与2D overlay
     this.renderLabels();
+
+    if (this.mapDebugEnabled) {
+      const debugState = `${canvas.width}x${canvas.height}|nodes:${this.nodes.size}|lines:${this.lines.length}`;
+      if (debugState !== this._lastDebugState) {
+        this._lastDebugState = debugState;
+        this.debugLog('render-state', {
+          width: canvas.width,
+          height: canvas.height,
+          nodes: this.nodes.size,
+          lines: this.lines.length,
+          renderingLoop: this.renderingLoop,
+          animating: this.animating
+        });
+      }
+    }
 
     // 启动持续渲染循环（如果还没有在运行）
     if (!this.animating && !this.renderingLoop && this.nodes.size > 0) {
@@ -1341,8 +1379,76 @@ class WebGLNodeRenderer {
       this.renderUserTravelDot(ctx);
       this.renderUserConeMarker(ctx);
     }
+    if (this.mapDebugEnabled && this.nodes.size === 0) {
+      this.renderEmptyStateOverlay(ctx);
+    }
 
     ctx.globalAlpha = 1;
+  }
+
+  renderEmptyStateBackdrop() {
+    const gl = this.gl;
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+
+    gl.useProgram(this.lineProgram);
+    gl.uniform2f(this.lineLocations.resolution, width, height);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
+    gl.enableVertexAttribArray(this.lineLocations.position);
+    gl.vertexAttribPointer(this.lineLocations.position, 2, gl.FLOAT, false, 0, 0);
+
+    const drawSegment = (x1, y1, x2, y2, color, opacity = 1) => {
+      const vertices = new Float32Array([x1, y1, x2, y2]);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
+      gl.uniform4fv(this.lineLocations.color, color);
+      gl.uniform1f(this.lineLocations.opacity, opacity);
+      gl.drawArrays(gl.LINES, 0, 2);
+    };
+
+    const step = Math.max(40, Math.floor(Math.min(width, height) / 10));
+    for (let x = 0; x <= width; x += step) {
+      drawSegment(x, 0, x, height, [0.32, 0.39, 0.53, 0.35], 1);
+    }
+    for (let y = 0; y <= height; y += step) {
+      drawSegment(0, y, width, y, [0.32, 0.39, 0.53, 0.35], 1);
+    }
+
+    const centerX = width * 0.5;
+    const centerY = height * 0.5;
+    drawSegment(centerX, 0, centerX, height, [0.23, 0.74, 0.96, 0.95], 1);
+    drawSegment(0, centerY, width, centerY, [0.96, 0.38, 0.28, 0.95], 1);
+  }
+
+  renderEmptyStateOverlay(ctx) {
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    if (width <= 0 || height <= 0) return;
+
+    const panelWidth = Math.max(260, Math.min(460, width * 0.5));
+    const panelHeight = 72;
+    const x = (width - panelWidth) * 0.5;
+    const y = Math.max(24, height * 0.08);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+    ctx.fillRect(x, y, panelWidth, panelHeight);
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, panelWidth, panelHeight);
+
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '600 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('地图暂无节点数据，已显示调试网格占位', x + panelWidth * 0.5, y + panelHeight * 0.42);
+
+    if (this.mapDebugEnabled) {
+      ctx.fillStyle = '#93c5fd';
+      ctx.font = '12px monospace';
+      ctx.fillText(`canvas=${width}x${height} nodes=${this.nodes.size} lines=${this.lines.length}`, x + panelWidth * 0.5, y + panelHeight * 0.74);
+    }
+    ctx.restore();
   }
 
   renderButtonIcons(ctx) {

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const degToRad = (deg) => (Number(deg) || 0) * (Math.PI / 180);
 
 const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
   const canvasRef = useRef(null);
@@ -26,8 +27,12 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
       y: ((Number(y) || 0) + fh / 2) * sy
     });
 
-    ctx.fillStyle = 'rgba(10, 16, 24, 0.85)';
-    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = 'rgba(11, 40, 70, 0.78)';
+    ctx.fillRect(0, 0, Math.floor(width * 0.5), height);
+    ctx.fillStyle = 'rgba(85, 24, 24, 0.78)';
+    ctx.fillRect(Math.floor(width * 0.5), 0, Math.ceil(width * 0.5), height);
+    ctx.fillStyle = 'rgba(248, 231, 182, 0.5)';
+    ctx.fillRect(Math.floor(width * 0.5) - 1, 0, 2, height);
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
     ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
 
@@ -38,7 +43,7 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
       const bh = Math.max(1, (Number(wall.depth) || 10) * sy);
       ctx.save();
       ctx.translate(p.x, p.y);
-      ctx.rotate(Number(wall.rotation) || 0);
+      ctx.rotate(degToRad(wall.rotation));
       ctx.fillStyle = 'rgba(100, 116, 139, 0.65)';
       ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
       ctx.restore();

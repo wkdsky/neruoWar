@@ -25,16 +25,26 @@ float gridLine(float value, float stepSize, float thickness) {
 
 void main() {
   vec2 uv = (vWorld / uField) + 0.5;
-  float vignette = smoothstep(1.0, 0.2, distance(uv, vec2(0.5)));
-  vec3 baseA = vec3(0.07, 0.12, 0.16);
-  vec3 baseB = vec3(0.03, 0.08, 0.11);
-  vec3 base = mix(baseB, baseA, clamp(uv.y, 0.0, 1.0));
+  float vignette = smoothstep(1.08, 0.18, distance(uv, vec2(0.5)));
+  float side = step(0.0, vWorld.x);
+  vec3 leftA = vec3(0.05, 0.16, 0.28);
+  vec3 leftB = vec3(0.02, 0.10, 0.18);
+  vec3 rightA = vec3(0.26, 0.10, 0.10);
+  vec3 rightB = vec3(0.16, 0.05, 0.07);
+  vec3 leftBase = mix(leftB, leftA, clamp(uv.y, 0.0, 1.0));
+  vec3 rightBase = mix(rightB, rightA, clamp(uv.y, 0.0, 1.0));
+  vec3 base = mix(leftBase, rightBase, side);
 
-  float g1 = max(gridLine(vWorld.x, 30.0, 0.035), gridLine(vWorld.y, 30.0, 0.035));
-  float g2 = max(gridLine(vWorld.x, 120.0, 0.02), gridLine(vWorld.y, 120.0, 0.02));
-  vec3 grid = vec3(0.12, 0.2, 0.25) * g1 + vec3(0.18, 0.3, 0.36) * g2;
+  float g1 = max(gridLine(vWorld.x, 28.0, 0.035), gridLine(vWorld.y, 28.0, 0.035));
+  float g2 = max(gridLine(vWorld.x, 112.0, 0.02), gridLine(vWorld.y, 112.0, 0.02));
+  vec3 leftGrid = vec3(0.10, 0.22, 0.36) * g1 + vec3(0.14, 0.30, 0.48) * g2;
+  vec3 rightGrid = vec3(0.36, 0.14, 0.14) * g1 + vec3(0.44, 0.20, 0.18) * g2;
+  vec3 grid = mix(leftGrid, rightGrid, side);
 
-  vec3 color = (base + grid) * mix(0.68, 1.0, vignette);
+  float centerBand = 1.0 - smoothstep(0.0, 6.0, abs(vWorld.x));
+  vec3 divider = mix(vec3(0.95, 0.97, 1.0), vec3(1.0, 0.93, 0.78), clamp(centerBand * 1.2, 0.0, 1.0)) * (centerBand * 0.56);
+
+  vec3 color = (base + grid + divider) * mix(0.72, 1.0, vignette);
   outColor = vec4(color, 1.0);
 }
 `;

@@ -27,8 +27,10 @@ const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
 const MORALE_MAX = 100;
 const STAMINA_MAX = 100;
+const TEAM_ZONE_GUTTER = 10;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const degToRad = (deg) => (Number(deg) || 0) * (Math.PI / 180);
 
 const buildUnitTypeMap = (unitTypes = []) => {
   const map = new Map();
@@ -156,9 +158,22 @@ const computeFieldSize = (battlefield = {}) => ({
 });
 
 const getDeployRange = (fieldWidth) => ({
-  attackerMaxX: (-fieldWidth / 2) + (fieldWidth * 0.2),
-  defenderMinX: (fieldWidth / 2) - (fieldWidth * 0.2)
+  attackerMaxX: -TEAM_ZONE_GUTTER,
+  defenderMinX: TEAM_ZONE_GUTTER
 });
+
+const clampXToTeamZone = (x, fieldWidth, radius = 0, team = TEAM_ATTACKER) => {
+  const half = fieldWidth / 2;
+  const r = Math.max(0, Number(radius) || 0);
+  const minX = -half + r;
+  const maxX = half - r;
+  const attackerMax = Math.min(maxX, -TEAM_ZONE_GUTTER - r);
+  const defenderMin = Math.max(minX, TEAM_ZONE_GUTTER + r);
+  if (team === TEAM_DEFENDER) {
+    return clamp(Number(x) || 0, defenderMin, maxX);
+  }
+  return clamp(Number(x) || 0, minX, attackerMax);
+};
 
 const clampPointToField = (point, field, radius = 0) => ({
   x: clamp(Number(point?.x) || 0, -field.width / 2 + radius, field.width / 2 - radius),
@@ -176,6 +191,32 @@ const normalizeUnitsList = (list = []) => {
   return map;
 };
 
+const buildRosterMap = (list = [], unitTypeMap = new Map()) => {
+  const rows = {};
+  (Array.isArray(list) ? list : []).forEach((entry) => {
+    const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+    const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+    if (!unitTypeId || count <= 0) return;
+    rows[unitTypeId] = {
+      unitTypeId,
+      unitName: entry?.unitName || unitTypeMap.get(unitTypeId)?.name || unitTypeId,
+      count: (rows[unitTypeId]?.count || 0) + count
+    };
+  });
+  return rows;
+};
+
+const collectUsedUnitsMap = (groups = []) => {
+  const used = {};
+  (Array.isArray(groups) ? groups : []).forEach((group) => {
+    Object.entries(normalizeUnitsMap(group?.units || {})).forEach(([unitTypeId, count]) => {
+      if (!unitTypeId || count <= 0) return;
+      used[unitTypeId] = (used[unitTypeId] || 0) + count;
+    });
+  });
+  return used;
+};
+
 const normalizeDeploymentUnits = (deployment = {}) => {
   const source = Array.isArray(deployment?.units) && deployment.units.length > 0
     ? deployment.units
@@ -186,32 +227,6 @@ const normalizeDeploymentUnits = (deployment = {}) => {
       count: Math.max(0, Math.floor(Number(entry?.count) || 0))
     }))
     .filter((entry) => entry.unitTypeId && entry.count > 0);
-};
-
-const buildAttackerDeployGroups = (attackerUnits, field, unitTypeMap) => {
-  const source = Array.isArray(attackerUnits) ? attackerUnits : [];
-  const rows = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, source.length))));
-  return source
-    .map((entry, index) => {
-      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
-      const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
-      if (!unitTypeId || count <= 0) return null;
-      const row = index % rows;
-      const layer = Math.floor(index / rows);
-      const y = -field.height * 0.35 + ((row + 1) * (field.height * 0.7 / (rows + 1)));
-      const x = -field.width / 2 + 72 + (layer * 56);
-      const name = entry?.unitName || unitTypeMap.get(unitTypeId)?.name || unitTypeId;
-      return {
-        id: `atk_${index + 1}`,
-        team: TEAM_ATTACKER,
-        name,
-        units: { [unitTypeId]: count },
-        x,
-        y,
-        placed: true
-      };
-    })
-    .filter(Boolean);
 };
 
 const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, unitTypeMap) => {
@@ -252,7 +267,7 @@ const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, un
       team: TEAM_DEFENDER,
       name: (typeof deploy?.name === 'string' && deploy.name.trim()) ? deploy.name.trim() : `守军${index + 1}`,
       units: assigned,
-      x: clamp(Number(deploy?.x) || 0, -field.width / 2, field.width / 2),
+      x: clampXToTeamZone(Number(deploy?.x) || 0, field.width, 0, TEAM_DEFENDER),
       y: clamp(Number(deploy?.y) || 0, -field.height / 2, field.height / 2),
       placed: true
     });
@@ -268,7 +283,7 @@ const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, un
       const row = index % rows;
       const layer = Math.floor(index / rows);
       const y = -field.height * 0.34 + ((row + 1) * ((field.height * 0.68) / (rows + 1)));
-      const x = (field.width / 2) - 80 - (layer * 60);
+      const x = clampXToTeamZone((field.width / 2) - 80 - (layer * 60), field.width, 0, TEAM_DEFENDER);
       groups.push({
         id: `def_auto_${index + 1}`,
         team: TEAM_DEFENDER,
@@ -284,12 +299,26 @@ const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, un
   return groups;
 };
 
-const createSquad = ({ group, index, team, unitTypeMap, unitsPerSoldier, fieldWidth }) => {
+const createSquad = ({ group, index, team, unitTypeMap, unitsPerSoldier, fieldWidth, fieldHeight }) => {
   const units = normalizeUnitsMap(group?.units || {});
   const startCount = sumUnitsMap(units);
   const stats = aggregateStats(units, unitTypeMap);
   const hpAvg = Math.max(1, Number(stats.hpAvg) || 1);
   const maxHealth = Math.max(1, Math.round(startCount * hpAvg));
+  const radius = clamp(8 + (Math.sqrt(Math.max(1, startCount)) * 0.58), 10, 118);
+  const startX = clampXToTeamZone(Number(group?.x) || 0, fieldWidth, radius, team);
+  const startY = clamp(
+    Number(group?.y) || 0,
+    (-fieldHeight / 2) + radius,
+    (fieldHeight / 2) - radius
+  );
+  const rallyRadius = Math.max(6, Math.min(16, radius * 0.35));
+  const rallyX = clampXToTeamZone(
+    team === TEAM_ATTACKER ? (-fieldWidth / 2 + 40) : (fieldWidth / 2 - 40),
+    fieldWidth,
+    rallyRadius,
+    team
+  );
 
   return {
     id: `${team}_squad_${index + 1}`,
@@ -309,9 +338,9 @@ const createSquad = ({ group, index, team, unitTypeMap, unitsPerSoldier, fieldWi
     stats,
     classTag: stats.classTag,
     roleTag: stats.roleTag,
-    x: Number(group?.x) || 0,
-    y: Number(group?.y) || 0,
-    radius: clamp(8 + (Math.sqrt(Math.max(1, startCount)) * 0.58), 10, 118),
+    x: startX,
+    y: startY,
+    radius,
     waypoints: [],
     action: '待命',
     behavior: team === TEAM_DEFENDER ? 'auto' : 'idle',
@@ -321,7 +350,7 @@ const createSquad = ({ group, index, team, unitTypeMap, unitsPerSoldier, fieldWi
     fatigueTimer: 0,
     unitsPerSoldier: Math.max(1, Number(unitsPerSoldier) || DEFAULT_UNITS_PER_SOLDIER),
     rallyPoint: {
-      x: team === TEAM_ATTACKER ? (-fieldWidth / 2 + 40) : (fieldWidth / 2 - 40),
+      x: rallyX,
       y: 0
     },
     skillUsedCount: 0,
@@ -379,8 +408,9 @@ export default class BattleRuntime {
     this.unitsPerSoldier = Math.max(1, Number(this.initData?.unitsPerSoldier) || DEFAULT_UNITS_PER_SOLDIER);
     this.repConfig = buildRepConfig(options?.repConfig || {});
     this.visualConfig = buildVisualResolver(options?.visualConfig || {});
+    this.attackerRoster = buildRosterMap(this.initData?.attacker?.units || [], this.unitTypeMap);
 
-    this.attackerDeployGroups = buildAttackerDeployGroups(this.initData?.attacker?.units || [], this.field, this.unitTypeMap);
+    this.attackerDeployGroups = [];
     this.defenderDeployGroups = buildDefenderDeployGroups(
       this.initData?.defender?.units || [],
       this.initData?.battlefield?.defenderDeployments || [],
@@ -389,7 +419,7 @@ export default class BattleRuntime {
     );
     this.initialBuildings = buildObstacleList(this.initData?.battlefield || {});
 
-    this.selectedDeploySquadId = this.attackerDeployGroups[0]?.id || '';
+    this.selectedDeploySquadId = '';
     this.focusSquadId = '';
     this.selectedBattleSquadId = '';
 
@@ -434,19 +464,168 @@ export default class BattleRuntime {
     this.selectedDeploySquadId = String(groupId || '');
   }
 
+  getDeployGroupById(groupId = '') {
+    const safeId = typeof groupId === 'string' ? groupId.trim() : '';
+    if (!safeId) return null;
+    return this.attackerDeployGroups.find((row) => row.id === safeId) || null;
+  }
+
+  getAttackerRosterRows() {
+    const usedMap = collectUsedUnitsMap(this.attackerDeployGroups);
+    return Object.values(this.attackerRoster)
+      .map((row) => {
+        const total = Math.max(0, Math.floor(Number(row?.count) || 0));
+        const used = Math.max(0, Math.floor(Number(usedMap[row.unitTypeId]) || 0));
+        return {
+          unitTypeId: row.unitTypeId,
+          unitName: row.unitName || row.unitTypeId,
+          total,
+          used,
+          available: Math.max(0, total - used)
+        };
+      })
+      .sort((a, b) => a.unitName.localeCompare(b.unitName, 'zh-Hans-CN'));
+  }
+
+  createAttackerDeployGroup({ units = {}, name = '', x, y, placed = false } = {}) {
+    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可新建部队' };
+    const nextUnits = normalizeUnitsMap(units);
+    if (sumUnitsMap(nextUnits) <= 0) return { ok: false, reason: '请至少配置一个兵种' };
+    const usedMap = collectUsedUnitsMap(this.attackerDeployGroups);
+    const rows = this.getAttackerRosterRows();
+    for (const [unitTypeId, count] of Object.entries(nextUnits)) {
+      const rosterRow = rows.find((row) => row.unitTypeId === unitTypeId);
+      const total = Math.max(0, Math.floor(Number(rosterRow?.total) || 0));
+      const used = Math.max(0, Math.floor(Number(usedMap[unitTypeId]) || 0));
+      if (count > Math.max(0, total - used)) {
+        const unitName = rosterRow?.unitName || unitTypeId;
+        return { ok: false, reason: `${unitName} 可用不足` };
+      }
+    }
+
+    const gridRows = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, this.attackerDeployGroups.length + 1))));
+    const index = this.attackerDeployGroups.length;
+    const row = index % gridRows;
+    const layer = Math.floor(index / gridRows);
+    const fallbackY = clamp(
+      -this.field.height * 0.35 + ((row + 1) * (this.field.height * 0.7 / (gridRows + 1))),
+      -this.field.height / 2 + 12,
+      this.field.height / 2 - 12
+    );
+    const fallbackX = clampXToTeamZone(
+      -this.field.width / 2 + 72 + (layer * 56),
+      this.field.width,
+      10,
+      TEAM_ATTACKER
+    );
+    const candidateTypeId = Object.keys(nextUnits)[0] || '';
+    const candidateName = this.unitTypeMap.get(candidateTypeId)?.name || candidateTypeId || '部队';
+    const groupName = (typeof name === 'string' && name.trim())
+      ? name.trim()
+      : `${candidateName}${this.attackerDeployGroups.length + 1}`;
+    const safeX = clampXToTeamZone(
+      Number.isFinite(Number(x)) ? Number(x) : fallbackX,
+      this.field.width,
+      10,
+      TEAM_ATTACKER
+    );
+    const safeY = clamp(
+      Number.isFinite(Number(y)) ? Number(y) : fallbackY,
+      -this.field.height / 2 + 10,
+      this.field.height / 2 - 10
+    );
+    const groupId = `atk_custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    this.attackerDeployGroups.push({
+      id: groupId,
+      team: TEAM_ATTACKER,
+      name: groupName,
+      units: nextUnits,
+      x: safeX,
+      y: safeY,
+      placed: placed !== false
+    });
+    this.selectedDeploySquadId = groupId;
+    this.focusSquadId = groupId;
+    return { ok: true, groupId };
+  }
+
+  updateAttackerDeployGroup(groupId = '', { units = null, name = null } = {}) {
+    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可编辑部队' };
+    const target = this.getDeployGroupById(groupId);
+    if (!target) return { ok: false, reason: '未找到部队' };
+    const nextUnits = units ? normalizeUnitsMap(units) : normalizeUnitsMap(target.units || {});
+    if (sumUnitsMap(nextUnits) <= 0) return { ok: false, reason: '请至少配置一个兵种' };
+    const others = this.attackerDeployGroups.filter((row) => row.id !== target.id);
+    const usedMap = collectUsedUnitsMap(others);
+    const rows = this.getAttackerRosterRows();
+    for (const [unitTypeId, count] of Object.entries(nextUnits)) {
+      const rosterRow = rows.find((row) => row.unitTypeId === unitTypeId);
+      const total = Math.max(0, Math.floor(Number(rosterRow?.total) || 0));
+      const used = Math.max(0, Math.floor(Number(usedMap[unitTypeId]) || 0));
+      if (count > Math.max(0, total - used)) {
+        const unitName = rosterRow?.unitName || unitTypeId;
+        return { ok: false, reason: `${unitName} 可用不足` };
+      }
+    }
+    target.units = nextUnits;
+    if (typeof name === 'string' && name.trim()) target.name = name.trim();
+    return { ok: true };
+  }
+
+  removeAttackerDeployGroup(groupId = '') {
+    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可解散部队' };
+    const safeGroupId = typeof groupId === 'string' ? groupId.trim() : '';
+    if (!safeGroupId) return { ok: false, reason: '缺少部队ID' };
+    const prevLen = this.attackerDeployGroups.length;
+    this.attackerDeployGroups = this.attackerDeployGroups.filter((row) => row.id !== safeGroupId);
+    if (this.attackerDeployGroups.length === prevLen) return { ok: false, reason: '未找到部队' };
+    const fallbackId = this.attackerDeployGroups[0]?.id || '';
+    if (this.selectedDeploySquadId === safeGroupId) this.selectedDeploySquadId = fallbackId;
+    if (this.focusSquadId === safeGroupId) this.focusSquadId = fallbackId;
+    return { ok: true };
+  }
+
+  setAttackerDeployGroupPlaced(groupId = '', placed = true) {
+    if (this.phase !== 'deploy') return false;
+    const target = this.getDeployGroupById(groupId);
+    if (!target) return false;
+    target.placed = !!placed;
+    return true;
+  }
+
   moveDeployGroup(groupId, worldPoint) {
     const targetId = String(groupId || this.selectedDeploySquadId || '');
     const group = this.attackerDeployGroups.find((row) => row.id === targetId);
     if (!group) return false;
     const safePoint = clampPointToField(worldPoint, this.field, 10);
-    const deployRange = this.getDeployRange();
-    group.x = Math.min(deployRange.attackerMaxX, safePoint.x);
+    group.x = clampXToTeamZone(safePoint.x, this.field.width, 10, TEAM_ATTACKER);
     group.y = safePoint.y;
     return true;
   }
 
+  pickAttackerDeployGroup(worldPoint, radius = 26) {
+    const x = Number(worldPoint?.x) || 0;
+    const y = Number(worldPoint?.y) || 0;
+    let best = null;
+    let bestDist = Infinity;
+    this.attackerDeployGroups.forEach((group) => {
+      if (!group) return;
+      const dx = (Number(group.x) || 0) - x;
+      const dy = (Number(group.y) || 0) - y;
+      const dist = Math.hypot(dx, dy);
+      const pickRadius = Math.max(radius, 12 + Math.sqrt(Math.max(1, sumUnitsMap(group.units || {}))) * 0.9);
+      if (dist <= pickRadius && dist < bestDist) {
+        best = group;
+        bestDist = dist;
+      }
+    });
+    return best;
+  }
+
   canStartBattle() {
-    const attackerCount = this.attackerDeployGroups.reduce((sum, row) => sum + sumUnitsMap(row?.units || {}), 0);
+    const attackerCount = this.attackerDeployGroups
+      .filter((row) => row?.placed !== false)
+      .reduce((sum, row) => sum + sumUnitsMap(row?.units || {}), 0);
     const defenderCount = this.defenderDeployGroups.reduce((sum, row) => sum + sumUnitsMap(row?.units || {}), 0);
     return attackerCount > 0 && defenderCount > 0;
   }
@@ -454,13 +633,15 @@ export default class BattleRuntime {
   startBattle() {
     if (!this.canStartBattle()) return { ok: false, reason: '双方至少需要一支部队' };
     const attackerSquads = this.attackerDeployGroups
+      .filter((group) => group?.placed !== false)
       .map((group, index) => createSquad({
         group,
         index,
         team: TEAM_ATTACKER,
         unitTypeMap: this.unitTypeMap,
         unitsPerSoldier: this.unitsPerSoldier,
-        fieldWidth: this.field.width
+        fieldWidth: this.field.width,
+        fieldHeight: this.field.height
       }))
       .filter((row) => row.startCount > 0);
 
@@ -471,7 +652,8 @@ export default class BattleRuntime {
         team: TEAM_DEFENDER,
         unitTypeMap: this.unitTypeMap,
         unitsPerSoldier: this.unitsPerSoldier,
-        fieldWidth: this.field.width
+        fieldWidth: this.field.width,
+        fieldHeight: this.field.height
       }))
       .filter((row) => row.startCount > 0);
 
@@ -535,6 +717,7 @@ export default class BattleRuntime {
     if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) return false;
     const append = !!options?.append;
     const safe = clampPointToField(worldPoint, this.field, Math.max(6, Number(squad.radius) || 10));
+    safe.x = clampXToTeamZone(safe.x, this.field.width, Math.max(6, Number(squad.radius) || 10), squad.team);
     if (append) {
       squad.waypoints.push(safe);
     } else {
@@ -586,6 +769,40 @@ export default class BattleRuntime {
     const t0 = performance.now();
     this.sim.timerSec = Math.max(0, Number(this.sim.timerSec) - dt);
     updateCrowdSim(this.crowd, this.sim, dt);
+
+    // Hard boundary: attacker stays on left (blue), defender stays on right (red).
+    (this.sim.squads || []).forEach((squad) => {
+      if (!squad) return;
+      const radius = Math.max(2, Number(squad.radius) || 2);
+      const safePoint = clampPointToField({ x: squad.x, y: squad.y }, this.field, radius);
+      squad.x = clampXToTeamZone(safePoint.x, this.field.width, radius, squad.team);
+      squad.y = safePoint.y;
+      if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) {
+        squad.waypoints.forEach((point) => {
+          if (!point) return;
+          const safeWp = clampPointToField(point, this.field, radius);
+          point.x = clampXToTeamZone(safeWp.x, this.field.width, radius, squad.team);
+          point.y = safeWp.y;
+        });
+      }
+      if (squad.rallyPoint) {
+        const safeRally = clampPointToField(squad.rallyPoint, this.field, radius);
+        squad.rallyPoint.x = clampXToTeamZone(safeRally.x, this.field.width, radius, squad.team);
+        squad.rallyPoint.y = safeRally.y;
+      }
+    });
+    (this.crowd?.allAgents || []).forEach((agent) => {
+      if (!agent || agent.dead) return;
+      const radius = Math.max(1, Number(agent.radius) || 1);
+      const safePos = clampPointToField(agent, this.field, radius);
+      agent.x = clampXToTeamZone(safePos.x, this.field.width, radius, agent.team);
+      agent.y = safePos.y;
+      if (agent.goal) {
+        const safeGoal = clampPointToField(agent.goal, this.field, radius);
+        agent.goal.x = clampXToTeamZone(safeGoal.x, this.field.width, radius, agent.team);
+        agent.goal.y = safeGoal.y;
+      }
+    });
 
     (this.sim.squads || []).forEach((squad) => {
       if (!squad || squad.remain <= 0) return;
@@ -648,9 +865,10 @@ export default class BattleRuntime {
           classTag: inferClassFromUnitType(this.unitTypeMap.get(Object.keys(group.units)[0]) || {}),
           remain: sumUnitsMap(group.units),
           startCount: sumUnitsMap(group.units),
-          action: '部署中',
+          action: group?.placed === false ? '待放置' : '部署中',
           stamina: 100,
-          morale: 100
+          morale: 100,
+          placed: group?.placed !== false
         })),
         ...this.defenderDeployGroups.map((group, index) => ({
           id: group.id,
@@ -675,6 +893,7 @@ export default class BattleRuntime {
       startCount: Math.max(0, Math.floor(Number(squad.startCount) || 0)),
       morale: clamp(Number(squad.morale) || 0, 0, 100),
       stamina: clamp(Number(squad.stamina) || 0, 0, 100),
+      placed: squad?.placed !== false,
       selected: this.phase === 'battle'
         ? squad.id === this.selectedBattleSquadId
         : squad.id === this.selectedDeploySquadId,
@@ -744,7 +963,7 @@ export default class BattleRuntime {
         buildings.data[base + 2] = Math.max(2, Number(wall.width) || 10);
         buildings.data[base + 3] = Math.max(2, Number(wall.depth) || 10);
         buildings.data[base + 4] = Math.max(2, Number(wall.height) || 8);
-        buildings.data[base + 5] = Number(wall.rotation) || 0;
+        buildings.data[base + 5] = degToRad(wall.rotation);
         buildings.data[base + 6] = clamp((Number(wall.hp) || 0) / Math.max(1, Number(wall.maxHp) || 1), 0, 1);
         buildings.data[base + 7] = wall.destroyed ? 1 : 0;
         wallCount += 1;
@@ -790,7 +1009,7 @@ export default class BattleRuntime {
       buildings.data[base + 2] = Math.max(2, Number(wall.width) || 10);
       buildings.data[base + 3] = Math.max(2, Number(wall.depth) || 10);
       buildings.data[base + 4] = Math.max(2, Number(wall.height) || 8);
-      buildings.data[base + 5] = Number(wall.rotation) || 0;
+      buildings.data[base + 5] = degToRad(wall.rotation);
       buildings.data[base + 6] = clamp((Number(wall.hp) || 0) / Math.max(1, Number(wall.maxHp) || 1), 0, 1);
       buildings.data[base + 7] = wall.destroyed ? 1 : 0;
       wallCount += 1;

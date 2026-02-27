@@ -91,6 +91,13 @@ const createHomeNavigationPath = () => ([
 const normalizeNavigationRelation = (relation) => (
     relation === 'parent' || relation === 'child' ? relation : 'jump'
 );
+const isMapDebugEnabled = () => {
+    if (typeof window === 'undefined') return false;
+    const value = new URLSearchParams(window.location.search).get('mapDebug');
+    if (typeof value !== 'string') return false;
+    const normalized = value.trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+};
 const buildNavigationTrailItem = (node, relation = 'jump', options = {}) => {
     const nodeId = normalizeObjectId(node?._id);
     if (!nodeId) return null;
@@ -673,11 +680,30 @@ const App = () => {
         try {
             const parent = canvas.parentElement;
             if (!parent) return;
+            const mapDebugEnabled = isMapDebugEnabled();
 
-            // 设置canvas大小
-            const rect = parent.getBoundingClientRect();
-            canvas.width = rect.width || 800;
-            canvas.height = rect.height || 600;
+            const syncCanvasSize = (triggerResize = false) => {
+                const rect = parent.getBoundingClientRect();
+                const width = Math.max(1, Math.floor(rect.width || parent.clientWidth || canvas.clientWidth || 800));
+                const height = Math.max(1, Math.floor(rect.height || parent.clientHeight || canvas.clientHeight || 600));
+                canvas.width = width;
+                canvas.height = height;
+                if (triggerResize && sceneManagerRef.current) {
+                    sceneManagerRef.current.resize(width, height);
+                }
+                if (mapDebugEnabled) {
+                    console.info('[MapDebug] canvas-size', {
+                        width,
+                        height,
+                        clientWidth: canvas.clientWidth,
+                        clientHeight: canvas.clientHeight,
+                        view
+                    });
+                }
+            };
+
+            // 设置 canvas 初始大小
+            syncCanvasSize(false);
 
             // 创建场景管理器
             const sceneManager = new SceneManager(canvas);
@@ -760,22 +786,21 @@ const App = () => {
             sceneManagerRef.current = sceneManager;
             setIsWebGLReady(true);
 
-            // 监听窗口大小变化
-            const handleResize = () => {
-                const newRect = parent.getBoundingClientRect();
-                if (newRect.width > 0 && newRect.height > 0) {
-                    canvas.width = newRect.width;
-                    canvas.height = newRect.height;
-                    if (sceneManagerRef.current) {
-                        sceneManagerRef.current.resize(newRect.width, newRect.height);
-                    }
-                }
-            };
+            // 监听大小变化（窗口 + 容器）
+            const handleResize = () => syncCanvasSize(true);
 
             window.addEventListener('resize', handleResize);
+            let parentResizeObserver = null;
+            if (typeof ResizeObserver === 'function') {
+                parentResizeObserver = new ResizeObserver(() => handleResize());
+                parentResizeObserver.observe(parent);
+            }
 
             return () => {
                 window.removeEventListener('resize', handleResize);
+                if (parentResizeObserver) {
+                    parentResizeObserver.disconnect();
+                }
             };
         } catch (error) {
             console.error('WebGL初始化失败:', error);
@@ -4002,9 +4027,13 @@ const App = () => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
         if (view !== 'home') return;
 
-        // 确保有数据才渲染
-        if (rootNodes.length > 0 || featuredNodes.length > 0) {
-            sceneManagerRef.current.showHome(rootNodes, featuredNodes, []);
+        // 无论数据是否为空都刷新首页场景，避免空白画布
+        sceneManagerRef.current.showHome(rootNodes, featuredNodes, []);
+        if (isMapDebugEnabled()) {
+            console.info('[MapDebug] showHome', {
+                rootCount: rootNodes.length,
+                featuredCount: featuredNodes.length
+            });
         }
     }, [isWebGLReady, view, rootNodes, featuredNodes]);
 

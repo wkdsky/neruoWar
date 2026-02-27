@@ -54,8 +54,6 @@ void main() {
 
 const FS = `#version 300 es
 precision highp float;
-precision highp int;
-precision mediump sampler2DArray;
 
 in vec2 vUv;
 in float vTeam;
@@ -64,58 +62,32 @@ in float vSlice;
 in float vSelected;
 in float vFlag;
 
-uniform sampler2DArray uAlbedo40;
-uniform sampler2DArray uAlbedo90;
-uniform sampler2DArray uNormal40;
-uniform sampler2DArray uNormal90;
 uniform vec3 uLightDir;
 uniform float uPitchMix;
 uniform float uLayer;
 
 out vec4 outColor;
 
-float bayer4x4(vec2 p) {
-  int x = int(mod(p.x, 4.0));
-  int y = int(mod(p.y, 4.0));
-  int idx = x + (y * 4);
-  float table[16] = float[16](
-    0.0, 8.0, 2.0, 10.0,
-    12.0, 4.0, 14.0, 6.0,
-    3.0, 11.0, 1.0, 9.0,
-    15.0, 7.0, 13.0, 5.0
-  );
-  return (table[idx] + 0.5) / 16.0;
-}
-
-vec4 sampleAlbedo(sampler2DArray tex40, sampler2DArray tex90, vec3 uvw) {
-  vec4 c40 = texture(tex40, uvw);
-  vec4 c90 = texture(tex90, uvw);
-  float t = bayer4x4(gl_FragCoord.xy);
-  return (uPitchMix > t) ? c90 : c40;
-}
-
-vec3 sampleNormal(sampler2DArray tex40, sampler2DArray tex90, vec3 uvw) {
-  vec3 n40 = texture(tex40, uvw).xyz * 2.0 - 1.0;
-  vec3 n90 = texture(tex90, uvw).xyz * 2.0 - 1.0;
-  float t = bayer4x4(gl_FragCoord.xy + vec2(1.0, 3.0));
-  vec3 n = (uPitchMix > t) ? n90 : n40;
-  return normalize(n);
-}
-
 void main() {
-  vec3 uvw = vec3(vUv, max(0.0, vSlice));
-  vec4 albedo = sampleAlbedo(uAlbedo40, uAlbedo90, uvw);
-  if (albedo.a < 0.38) discard;
+  vec2 p = (vUv - vec2(0.5)) * vec2(1.0, 1.85);
+  float rr = dot(p, p);
+  if (rr > 0.95) discard;
 
-  vec3 normal = sampleNormal(uNormal40, uNormal90, uvw);
+  float z = sqrt(max(0.0, 1.0 - rr));
+  vec3 normal = normalize(vec3(p.xy * 0.9, z));
   vec3 lightDir = normalize(uLightDir);
   float lambert = max(0.0, dot(normal, lightDir));
-  float ambient = 0.38;
-  float lit = ambient + (lambert * 0.72);
+  float lit = 0.35 + (lambert * 0.75);
 
   vec3 teamTint = (vTeam < 0.5) ? vec3(0.55, 0.76, 1.0) : vec3(1.0, 0.58, 0.58);
-  vec3 color = albedo.rgb;
-  color *= mix(vec3(0.86), teamTint, 0.28 + 0.1 * uLayer);
+  float pseudo = fract((vSlice + (uLayer * 7.0)) * 0.137);
+  vec3 palette = vec3(
+    0.36 + (0.42 * fract(pseudo * 2.3)),
+    0.34 + (0.38 * fract(pseudo * 3.7)),
+    0.30 + (0.36 * fract(pseudo * 5.1))
+  );
+  vec3 color = palette * mix(vec3(0.84), teamTint, 0.34 + 0.09 * uLayer);
+  color = mix(color, color * 1.18, clamp(uPitchMix, 0.0, 1.0) * 0.18);
   color *= lit;
   color *= mix(0.5, 1.0, clamp(vHp, 0.0, 1.0));
   if (vSelected > 0.5) {
@@ -227,11 +199,6 @@ const createTextureArray = (gl, slices, size, angleMode, shapeMode, normalMode =
   return tex;
 };
 
-const bindTextureUnit = (gl, unit, texture) => {
-  gl.activeTexture(gl.TEXTURE0 + unit);
-  gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
-};
-
 export default class ImpostorRenderer {
   constructor(gl, options = {}) {
     this.gl = gl;
@@ -257,18 +224,8 @@ export default class ImpostorRenderer {
       uCameraRight: gl.getUniformLocation(this.program, 'uCameraRight'),
       uLayer: gl.getUniformLocation(this.program, 'uLayer'),
       uLightDir: gl.getUniformLocation(this.program, 'uLightDir'),
-      uPitchMix: gl.getUniformLocation(this.program, 'uPitchMix'),
-      uAlbedo40: gl.getUniformLocation(this.program, 'uAlbedo40'),
-      uAlbedo90: gl.getUniformLocation(this.program, 'uAlbedo90'),
-      uNormal40: gl.getUniformLocation(this.program, 'uNormal40'),
-      uNormal90: gl.getUniformLocation(this.program, 'uNormal90')
+      uPitchMix: gl.getUniformLocation(this.program, 'uPitchMix')
     };
-
-    this.layerTextures = [
-      this.createLayerTextureSet(SHAPE_BODY),
-      this.createLayerTextureSet(SHAPE_GEAR),
-      this.createLayerTextureSet(SHAPE_VEHICLE)
-    ];
 
     this.instanceData = new Float32Array(UNIT_INSTANCE_STRIDE * this.instanceCapacity);
     this.instanceCount = 0;
@@ -347,15 +304,6 @@ export default class ImpostorRenderer {
     gl.uniform1f(this.uniforms.uPitchMix, Math.max(0, Math.min(1, Number(pitchMix) || 0)));
 
     for (let layer = 0; layer < 3; layer += 1) {
-      const texSet = this.layerTextures[layer];
-      bindTextureUnit(gl, 0, texSet.albedo40);
-      bindTextureUnit(gl, 1, texSet.albedo90);
-      bindTextureUnit(gl, 2, texSet.normal40);
-      bindTextureUnit(gl, 3, texSet.normal90);
-      gl.uniform1i(this.uniforms.uAlbedo40, 0);
-      gl.uniform1i(this.uniforms.uAlbedo90, 1);
-      gl.uniform1i(this.uniforms.uNormal40, 2);
-      gl.uniform1i(this.uniforms.uNormal90, 3);
       gl.uniform1f(this.uniforms.uLayer, layer);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.instanceCount);
     }
@@ -371,11 +319,5 @@ export default class ImpostorRenderer {
     if (this.instanceBuffer) gl.deleteBuffer(this.instanceBuffer);
     if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer);
     if (this.vao) gl.deleteVertexArray(this.vao);
-    (this.layerTextures || []).forEach((set) => {
-      if (!set) return;
-      ['albedo40', 'albedo90', 'normal40', 'normal90'].forEach((key) => {
-        if (set[key]) gl.deleteTexture(set[key]);
-      });
-    });
   }
 }

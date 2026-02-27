@@ -14,14 +14,26 @@ import EffectRenderer from '../../game/battle_v2/render/EffectRenderer';
 import GroundRenderer from '../../game/battle_v2/render/GroundRenderer';
 import BattleHUD from '../../game/battle_v2/ui/BattleHUD';
 import SquadCards from '../../game/battle_v2/ui/SquadCards';
+import DeployActionButtons from '../../game/battle_v2/ui/DeployActionButtons';
 import Minimap from '../../game/battle_v2/ui/Minimap';
 import AimOverlayCanvas from '../../game/battle_v2/ui/AimOverlayCanvas';
 import unitVisualConfig from '../../game/battle_v2/assets/UnitVisualConfig.example.json';
+import NumberPadDialog from '../common/NumberPadDialog';
 
 const API_BASE = 'http://localhost:5000';
 const TEAM_ATTACKER = 'attacker';
+const CAMERA_ROTATE_SENSITIVITY = 0.38;
+const CAMERA_ROTATE_CLICK_THRESHOLD = 4;
+const CAMERA_ZOOM_STEP = 24;
+const CAMERA_DISTANCE_MIN = 360;
+const CAMERA_DISTANCE_MAX = 980;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const createNoopImpostorRenderer = () => ({
+  updateFromSnapshot() {},
+  render() {},
+  dispose() {}
+});
 
 const skillRangeByClass = (classTag) => {
   if (classTag === 'cavalry') return 220;
@@ -60,6 +72,29 @@ const buildCompatSummaryPayload = (summary = {}) => ({
   endReason: summary?.endReason || ''
 });
 
+const normalizeDraftUnits = (units = []) => (
+  (Array.isArray(units) ? units : [])
+    .map((entry) => ({
+      unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '',
+      count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+    }))
+    .filter((entry) => entry.unitTypeId && entry.count > 0)
+);
+
+const unitsToMap = (units = []) => {
+  const map = {};
+  normalizeDraftUnits(units).forEach((entry) => {
+    map[entry.unitTypeId] = (map[entry.unitTypeId] || 0) + entry.count;
+  });
+  return map;
+};
+
+const unitsToSummary = (units = [], unitNameByTypeId = new Map()) => (
+  normalizeDraftUnits(units)
+    .map((entry) => `${unitNameByTypeId.get(entry.unitTypeId) || entry.unitTypeId}x${entry.count}`)
+    .join(' / ')
+);
+
 const PveBattleModal = ({
   open = false,
   loading = false,
@@ -71,7 +106,13 @@ const PveBattleModal = ({
   const glCanvasRef = useRef(null);
   const runtimeRef = useRef(null);
   const clockRef = useRef(new BattleClock({ fixedStep: 1 / 30 }));
-  const cameraRef = useRef(new CameraController({ yawDeg: 45, pitchLow: 40, pitchHigh: 90, distance: 560 }));
+  const cameraRef = useRef(new CameraController({
+    yawDeg: 90,
+    pitchLow: 40,
+    pitchHigh: 90,
+    distance: 560,
+    mirrorX: true
+  }));
   const glRef = useRef(null);
   const renderersRef = useRef({
     ground: null,
@@ -84,10 +125,15 @@ const PveBattleModal = ({
   const lastFrameRef = useRef(0);
   const lastUiSyncRef = useRef(0);
   const worldToScreenRef = useRef(null);
+  const worldToDomRef = useRef(null);
   const cameraStateRef = useRef(null);
   const cameraViewRectRef = useRef({ widthWorld: 240, heightWorld: 160 });
   const fpsStateRef = useRef({ windowSec: 0, frames: 0 });
   const reportedRef = useRef(false);
+  const pointerWorldRef = useRef({ x: 0, y: 0 });
+  const panDragRef = useRef(null);
+  const rotateDragRef = useRef(null);
+  const spacePressedRef = useRef(false);
 
   const [glError, setGlError] = useState('');
   const [phase, setPhase] = useState('deploy');
@@ -101,6 +147,24 @@ const PveBattleModal = ({
   const [minimapSnapshot, setMinimapSnapshot] = useState(null);
   const [cameraMiniState, setCameraMiniState] = useState({ center: { x: 0, y: 0 }, viewport: { widthWorld: 220, heightWorld: 150 } });
   const [resultState, setResultState] = useState({ open: false, submitting: false, error: '', summary: null, recorded: false });
+  const [deployEditorOpen, setDeployEditorOpen] = useState(false);
+  const [deployEditingGroupId, setDeployEditingGroupId] = useState('');
+  const [deployEditorDraft, setDeployEditorDraft] = useState({ name: '', units: [] });
+  const [deployQuantityDialog, setDeployQuantityDialog] = useState({
+    open: false,
+    unitTypeId: '',
+    unitName: '',
+    max: 0,
+    current: 1
+  });
+  const [deployDraggingGroupId, setDeployDraggingGroupId] = useState('');
+  const [deployActionAnchorMode, setDeployActionAnchorMode] = useState('');
+  const [deployNotice, setDeployNotice] = useState('');
+  const [deployEditorDragUnitId, setDeployEditorDragUnitId] = useState('');
+  const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState('');
+  const [confirmDeletePos, setConfirmDeletePos] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
 
   const closeModal = useCallback(() => {
     if (typeof onClose === 'function') onClose();
@@ -148,12 +212,39 @@ const PveBattleModal = ({
     const anchor = runtime.getFocusAnchor();
     cameraRef.current.centerX = Number(anchor?.x) || 0;
     cameraRef.current.centerY = Number(anchor?.y) || 0;
+    cameraRef.current.yawDeg = 90;
+    cameraRef.current.distance = 560;
+    cameraRef.current.currentPitch = cameraRef.current.pitchLow;
+    cameraRef.current.pitchFrom = cameraRef.current.pitchLow;
+    cameraRef.current.pitchTo = cameraRef.current.pitchLow;
+    cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
     clockRef.current.reset();
     clockRef.current.setPaused(false);
     reportedRef.current = false;
     setPaused(false);
     setAimState({ active: false, squadId: '', classTag: '', point: null, radiusPx: 0 });
     setResultState({ open: false, submitting: false, error: '', summary: null, recorded: false });
+    setDeployEditorOpen(false);
+    setDeployEditingGroupId('');
+    setDeployEditorDraft({ name: '', units: [] });
+    setDeployQuantityDialog({
+      open: false,
+      unitTypeId: '',
+      unitName: '',
+      max: 0,
+      current: 1
+    });
+    setDeployDraggingGroupId('');
+    setDeployActionAnchorMode('');
+    setDeployNotice('');
+    setDeployEditorDragUnitId('');
+    setConfirmDeleteGroupId('');
+    setConfirmDeletePos({ x: 0, y: 0 });
+    setIsPanning(false);
+    setIsRotating(false);
+    panDragRef.current = null;
+    rotateDragRef.current = null;
+    spacePressedRef.current = false;
   }, [open, battleInitData]);
 
   useEffect(() => {
@@ -171,10 +262,15 @@ const PveBattleModal = ({
       }
       glRef.current = gl;
       renderersRef.current.ground = new GroundRenderer(gl);
-      renderersRef.current.impostor = new ImpostorRenderer(gl, { maxSlices: 32, textureSize: 64 });
       renderersRef.current.building = new BuildingRenderer(gl);
       renderersRef.current.projectile = new ProjectileRenderer(gl);
       renderersRef.current.effect = new EffectRenderer(gl);
+      try {
+        renderersRef.current.impostor = new ImpostorRenderer(gl, { maxSlices: 32, textureSize: 64 });
+      } catch (impostorError) {
+        console.error('ImpostorRenderer 初始化失败，降级为空渲染器:', impostorError);
+        renderersRef.current.impostor = createNoopImpostorRenderer();
+      }
       setGlError('');
     } catch (renderInitError) {
       setGlError(`初始化渲染器失败: ${renderInitError.message}`);
@@ -250,8 +346,8 @@ const PveBattleModal = ({
         clockRef.current.tick(deltaSec, (fixedStep) => runtime.step(fixedStep));
       }
 
-      const focusAnchor = runtime.getFocusAnchor();
-      cameraRef.current.update(deltaSec, focusAnchor);
+      const followAnchor = nowPhase === 'battle' ? runtime.getFocusAnchor() : null;
+      cameraRef.current.update(deltaSec, followAnchor);
       const cameraState = cameraRef.current.buildMatrices(sceneCanvas.width, sceneCanvas.height);
       cameraStateRef.current = cameraState;
 
@@ -263,6 +359,17 @@ const PveBattleModal = ({
       };
 
       worldToScreenRef.current = (world) => cameraRef.current.worldToScreen(world, { width: sceneCanvas.width, height: sceneCanvas.height });
+      const cssRect = sceneCanvas.getBoundingClientRect();
+      const scaleX = sceneCanvas.width / Math.max(1, cssRect.width || 1);
+      const scaleY = sceneCanvas.height / Math.max(1, cssRect.height || 1);
+      worldToDomRef.current = (world) => {
+        const p = cameraRef.current.worldToScreen(world, { width: sceneCanvas.width, height: sceneCanvas.height });
+        return {
+          x: p.x / Math.max(1e-6, scaleX),
+          y: p.y / Math.max(1e-6, scaleY),
+          visible: p.visible
+        };
+      };
 
       const renderStart = performance.now();
       const snapshot = runtime.getRenderSnapshot();
@@ -292,7 +399,10 @@ const PveBattleModal = ({
         setCards(nextCards);
         setMinimapSnapshot(runtime.getMinimapSnapshot());
         setCameraMiniState({
-          center: { x: focusAnchor.x || 0, y: focusAnchor.y || 0 },
+          center: {
+            x: nowPhase === 'battle' ? (followAnchor?.x || 0) : cameraRef.current.centerX,
+            y: nowPhase === 'battle' ? (followAnchor?.y || 0) : cameraRef.current.centerY
+          },
           viewport: cameraViewRectRef.current
         });
         if (debugEnabled) {
@@ -329,6 +439,7 @@ const PveBattleModal = ({
   }, [paused]);
 
   const handleTogglePitch = useCallback(() => {
+    if (runtimeRef.current?.getPhase() !== 'battle') return;
     cameraRef.current.togglePitchMode();
   }, []);
 
@@ -345,17 +456,26 @@ const PveBattleModal = ({
       runtime.setFocusSquad(attacker.id);
       runtime.setSelectedBattleSquad(attacker.id);
       setSelectedSquadId(attacker.id);
+      const anchor = runtime.getFocusAnchor();
+      cameraRef.current.centerX = Number(anchor?.x) || 0;
+      cameraRef.current.centerY = Number(anchor?.y) || 0;
     }
     setPhase(runtime.getPhase());
     setBattleStatus(runtime.getBattleStatus());
     setCards(runtime.getCardRows());
     setAimState({ active: false, squadId: '', classTag: '', point: null, radiusPx: 0 });
+    setDeployDraggingGroupId('');
+    setDeployActionAnchorMode('');
+    setDeployEditorOpen(false);
   }, []);
 
   const handleCardFocus = useCallback((squadId) => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
     runtime.setFocusSquad(squadId);
+    if (runtime.getPhase() === 'deploy') {
+      setDeployActionAnchorMode('card');
+    }
   }, []);
 
   const handleCardSelect = useCallback((squadId) => {
@@ -366,6 +486,7 @@ const PveBattleModal = ({
       runtime.setFocusSquad(squadId);
       setSelectedSquadId(squadId);
       setCards(runtime.getCardRows());
+      setDeployActionAnchorMode('card');
       return;
     }
     if (runtime.setSelectedBattleSquad(squadId)) {
@@ -384,11 +505,33 @@ const PveBattleModal = ({
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
     const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
     const world = cameraRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+    pointerWorldRef.current = world;
 
     if (runtime.getPhase() === 'deploy') {
-      runtime.moveDeployGroup(selectedSquadId, world);
+      if (deployDraggingGroupId) {
+        runtime.moveDeployGroup(deployDraggingGroupId, world);
+        runtime.setAttackerDeployGroupPlaced(deployDraggingGroupId, true);
+        runtime.setSelectedDeployGroup(deployDraggingGroupId);
+        runtime.setFocusSquad(deployDraggingGroupId);
+        setSelectedSquadId(deployDraggingGroupId);
+        setDeployDraggingGroupId('');
+        setDeployActionAnchorMode('world');
+        setDeployNotice('部队已放置，可继续编辑或开战');
+        setCards(runtime.getCardRows());
+        setMinimapSnapshot(runtime.getMinimapSnapshot());
+        return;
+      }
+      const picked = runtime.pickAttackerDeployGroup(world);
+      if (picked?.id) {
+        runtime.setSelectedDeployGroup(picked.id);
+        runtime.setFocusSquad(picked.id);
+        setSelectedSquadId(picked.id);
+        setDeployActionAnchorMode('world');
+        setCards(runtime.getCardRows());
+        return;
+      }
+      setDeployActionAnchorMode('');
       setCards(runtime.getCardRows());
-      setMinimapSnapshot(runtime.getMinimapSnapshot());
       return;
     }
 
@@ -419,13 +562,107 @@ const PveBattleModal = ({
 
     runtime.commandMove(selected.id, world, { append: event.shiftKey });
     setCards(runtime.getCardRows());
-  }, [selectedSquadId, paused, aimState]);
+  }, [selectedSquadId, paused, aimState, deployDraggingGroupId]);
+
+  const clearPanDrag = useCallback(() => {
+    panDragRef.current = null;
+    setIsPanning(false);
+  }, []);
+
+  const clearRotateDrag = useCallback(() => {
+    rotateDragRef.current = null;
+    setIsRotating(false);
+  }, []);
+
+  const applyDeployYawDelta = useCallback((deltaPixels) => {
+    const camera = cameraRef.current;
+    const px = Number(deltaPixels) || 0;
+    if (!camera || !Number.isFinite(px) || Math.abs(px) < 1e-4) return;
+    const deltaDeg = (camera.mirrorX ? -px : px) * CAMERA_ROTATE_SENSITIVITY;
+    const nextYaw = ((Number(camera.yawDeg) || 0) + deltaDeg) % 360;
+    camera.yawDeg = nextYaw < 0 ? nextYaw + 360 : nextYaw;
+    camera.currentPitch = camera.pitchLow;
+    camera.pitchFrom = camera.pitchLow;
+    camera.pitchTo = camera.pitchLow;
+    camera.pitchTweenSec = camera.pitchTweenDurationSec;
+  }, []);
+
+  const beginPanDrag = useCallback((event, buttonMask = 1) => {
+    const canvas = glCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
+    const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+    panDragRef.current = {
+      prevPx: px,
+      prevPy: py,
+      buttonMask
+    };
+    setIsPanning(true);
+    event.preventDefault();
+  }, []);
+
+  const handleSceneMouseDown = useCallback((event) => {
+    const target = event.target;
+    if (
+      target
+      && typeof target.closest === 'function'
+      && target.closest('.pve2-world-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-minimap-wrap, .pve2-action-pad, .pve2-hud, .pve2-confirm, .number-pad-dialog-overlay, .number-pad-dialog')
+    ) {
+      return;
+    }
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    const currentPhase = runtime.getPhase();
+    if (currentPhase === 'deploy') {
+      if (event.button === 2) {
+        rotateDragRef.current = {
+          startX: event.clientX,
+          startYaw: cameraRef.current.yawDeg,
+          moved: false
+        };
+        setIsRotating(true);
+        event.preventDefault();
+        return;
+      }
+      if (event.button === 1) {
+        beginPanDrag(event, 4);
+        return;
+      }
+      if (event.button === 0 && spacePressedRef.current) {
+        beginPanDrag(event, 1);
+        return;
+      }
+    }
+    handleMapCommand(event);
+  }, [beginPanDrag, handleMapCommand]);
+
+  const handleSceneWheel = useCallback((event) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    event.preventDefault();
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      applyDeployYawDelta(event.deltaY < 0 ? -12 : 12);
+      return;
+    }
+    const nextDistance = cameraRef.current.distance + (event.deltaY < 0 ? -CAMERA_ZOOM_STEP : CAMERA_ZOOM_STEP);
+    cameraRef.current.distance = clamp(nextDistance, CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX);
+  }, [applyDeployYawDelta]);
 
   const handleMinimapClick = useCallback((worldPoint) => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
     if (runtime.getPhase() === 'deploy') {
-      runtime.moveDeployGroup(selectedSquadId, worldPoint);
+      if (!deployDraggingGroupId) return;
+      runtime.moveDeployGroup(deployDraggingGroupId, worldPoint);
+      runtime.setAttackerDeployGroupPlaced(deployDraggingGroupId, true);
+      runtime.setSelectedDeployGroup(deployDraggingGroupId);
+      runtime.setFocusSquad(deployDraggingGroupId);
+      setSelectedSquadId(deployDraggingGroupId);
+      setDeployDraggingGroupId('');
+      setDeployActionAnchorMode('world');
+      setDeployNotice('部队已放置，可继续编辑或开战');
       setCards(runtime.getCardRows());
       setMinimapSnapshot(runtime.getMinimapSnapshot());
       return;
@@ -434,7 +671,7 @@ const PveBattleModal = ({
     runtime.commandMove(selectedSquadId, worldPoint, { append: false });
     runtime.setFocusSquad(selectedSquadId);
     setCards(runtime.getCardRows());
-  }, [selectedSquadId]);
+  }, [selectedSquadId, deployDraggingGroupId]);
 
   const handleToggleSkillAim = useCallback(() => {
     const runtime = runtimeRef.current;
@@ -457,21 +694,101 @@ const PveBattleModal = ({
   }, [selectedSquadId]);
 
   const handlePointerMove = useCallback((event) => {
-    if (!aimState.active) return;
     const runtime = runtimeRef.current;
     const canvas = glCanvasRef.current;
     if (!runtime || !canvas) return;
-    const selected = runtime.getSquadById(aimState.squadId);
-    if (!selected) return;
+    if (panDragRef.current || rotateDragRef.current) return;
     const rect = canvas.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
     const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
     const world = cameraRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+    pointerWorldRef.current = world;
+
+    if (runtime.getPhase() === 'deploy' && deployDraggingGroupId) {
+      runtime.moveDeployGroup(deployDraggingGroupId, world);
+      setCards(runtime.getCardRows());
+      setMinimapSnapshot(runtime.getMinimapSnapshot());
+      return;
+    }
+
+    if (!aimState.active) return;
+    const selected = runtime.getSquadById(aimState.squadId);
+    if (!selected) return;
     const center = worldToScreenRef.current ? worldToScreenRef.current({ x: world.x, y: world.y, z: 0 }) : null;
     const edge = worldToScreenRef.current ? worldToScreenRef.current({ x: world.x + skillAoeRadiusByClass(selected.classTag), y: world.y, z: 0 }) : null;
     const radiusPx = center && edge ? Math.hypot(edge.x - center.x, edge.y - center.y) : 22;
     setAimState((prev) => ({ ...prev, point: { x: world.x, y: world.y }, radiusPx }));
-  }, [aimState]);
+  }, [aimState, deployDraggingGroupId]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleWindowMouseMove = (event) => {
+      const canvas = glCanvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const runtime = runtimeRef.current;
+      const isDeploy = runtime?.getPhase() === 'deploy';
+      if (!isDeploy) {
+        clearPanDrag();
+        clearRotateDrag();
+        return;
+      }
+
+      const rotate = rotateDragRef.current;
+      if (rotate) {
+        if ((event.buttons & 2) !== 2) {
+          clearRotateDrag();
+        } else {
+          const dx = event.clientX - rotate.startX;
+          const visualDx = cameraRef.current.mirrorX ? -dx : dx;
+          if (Math.abs(dx) >= CAMERA_ROTATE_CLICK_THRESHOLD) rotate.moved = true;
+          const nextYaw = ((Number(rotate.startYaw) || 0) + (visualDx * CAMERA_ROTATE_SENSITIVITY)) % 360;
+          cameraRef.current.yawDeg = nextYaw < 0 ? nextYaw + 360 : nextYaw;
+          cameraRef.current.currentPitch = cameraRef.current.pitchLow;
+          cameraRef.current.pitchFrom = cameraRef.current.pitchLow;
+          cameraRef.current.pitchTo = cameraRef.current.pitchLow;
+          cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
+        }
+      }
+
+      const pan = panDragRef.current;
+      if (!pan) return;
+      if ((event.buttons & pan.buttonMask) !== pan.buttonMask) {
+        clearPanDrag();
+        return;
+      }
+      const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
+      const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+      cameraRef.current.buildMatrices(canvas.width, canvas.height);
+      const prevWorld = cameraRef.current.screenToGround(pan.prevPx, pan.prevPy, { width: canvas.width, height: canvas.height });
+      const currentWorld = cameraRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+      cameraRef.current.centerX += (Number(prevWorld?.x) || 0) - (Number(currentWorld?.x) || 0);
+      cameraRef.current.centerY += (Number(prevWorld?.y) || 0) - (Number(currentWorld?.y) || 0);
+      pan.prevPx = px;
+      pan.prevPy = py;
+      pointerWorldRef.current = currentWorld;
+    };
+
+    const handleWindowMouseUp = () => {
+      clearPanDrag();
+      clearRotateDrag();
+    };
+    const handleWindowBlur = () => {
+      clearPanDrag();
+      clearRotateDrag();
+      spacePressedRef.current = false;
+    };
+
+    window.addEventListener('mousemove', handleWindowMouseMove);
+    window.addEventListener('mouseup', handleWindowMouseUp);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [open, clearPanDrag, clearRotateDrag, applyDeployYawDelta]);
 
   const handleBehavior = useCallback((behavior) => {
     const runtime = runtimeRef.current;
@@ -480,10 +797,266 @@ const PveBattleModal = ({
     setCards(runtime.getCardRows());
   }, [selectedSquadId]);
 
+  const handleOpenDeployCreator = useCallback(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    const rows = runtime.getAttackerRosterRows();
+    if (rows.length <= 0 || rows.every((row) => row.total <= 0)) {
+      setDeployNotice('当前没有可用兵种库存，无法新建部队');
+      return;
+    }
+    setDeployEditingGroupId('');
+    setDeployEditorDraft({ name: '', units: [] });
+    setDeployEditorOpen(true);
+    setDeployQuantityDialog({
+      open: false,
+      unitTypeId: '',
+      unitName: '',
+      max: 0,
+      current: 1
+    });
+    setDeployNotice('');
+  }, []);
+
+  const handleOpenDeployEditorForGroup = useCallback((groupId) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    const group = runtime.getDeployGroupById(groupId);
+    if (!group) {
+      setDeployNotice('未找到可编辑部队');
+      return;
+    }
+    const draftUnits = Object.entries(group.units || {}).map(([unitTypeId, count]) => ({
+      unitTypeId,
+      count: Math.max(1, Math.floor(Number(count) || 1))
+    }));
+    setDeployEditingGroupId(group.id);
+    setDeployEditorDraft({
+      name: group.name || '',
+      units: normalizeDraftUnits(draftUnits)
+    });
+    setDeployEditorOpen(true);
+    setDeployQuantityDialog({
+      open: false,
+      unitTypeId: '',
+      unitName: '',
+      max: 0,
+      current: 1
+    });
+    setDeployNotice('');
+  }, []);
+
+  const resolveDeployUnitMax = useCallback((unitTypeId) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return 0;
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId) return 0;
+    const rosterRow = runtime.getAttackerRosterRows().find((row) => row.unitTypeId === safeId);
+    const baseAvailable = Math.max(0, Math.floor(Number(rosterRow?.available) || 0));
+    if (!deployEditingGroupId) return baseAvailable;
+    const editingGroup = runtime.getDeployGroupById(deployEditingGroupId);
+    const existing = Math.max(0, Math.floor(Number(editingGroup?.units?.[safeId]) || 0));
+    return baseAvailable + existing;
+  }, [deployEditingGroupId]);
+
+  const openDeployQuantityDialog = useCallback((unitTypeId) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId) return;
+    const max = resolveDeployUnitMax(safeId);
+    if (max <= 0) {
+      setDeployNotice('该兵种没有可分配数量');
+      return;
+    }
+    const unitName = runtime.getAttackerRosterRows().find((row) => row.unitTypeId === safeId)?.unitName || safeId;
+    const current = normalizeDraftUnits(deployEditorDraft.units).find((entry) => entry.unitTypeId === safeId)?.count || 1;
+    setDeployQuantityDialog({
+      open: true,
+      unitTypeId: safeId,
+      unitName,
+      max,
+      current: clamp(current, 1, max)
+    });
+  }, [deployEditorDraft.units, resolveDeployUnitMax]);
+
+  const handleDeployEditorDrop = useCallback((event) => {
+    event.preventDefault();
+    const droppedUnitTypeId = event.dataTransfer?.getData('application/x-attacker-unit-id')
+      || event.dataTransfer?.getData('text/plain')
+      || '';
+    setDeployEditorDragUnitId('');
+    openDeployQuantityDialog(droppedUnitTypeId);
+  }, [openDeployQuantityDialog]);
+
+  const handleConfirmDeployQuantity = useCallback((qty) => {
+    const safeId = typeof deployQuantityDialog?.unitTypeId === 'string' ? deployQuantityDialog.unitTypeId.trim() : '';
+    if (!safeId) {
+      setDeployQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 });
+      return;
+    }
+    const max = Math.max(1, Math.floor(Number(deployQuantityDialog.max) || 1));
+    const safeQty = clamp(Math.floor(Number(qty) || 1), 1, max);
+    setDeployEditorDraft((prev) => {
+      const source = normalizeDraftUnits(prev?.units || []);
+      const idx = source.findIndex((entry) => entry.unitTypeId === safeId);
+      if (idx >= 0) {
+        source[idx] = { ...source[idx], count: safeQty };
+      } else {
+        source.push({ unitTypeId: safeId, count: safeQty });
+      }
+      return { ...prev, units: normalizeDraftUnits(source) };
+    });
+    setDeployQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 });
+  }, [deployQuantityDialog]);
+
+  const handleRemoveDraftUnit = useCallback((unitTypeId) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId) return;
+    setDeployEditorDraft((prev) => ({
+      ...prev,
+      units: normalizeDraftUnits(prev?.units || []).filter((entry) => entry.unitTypeId !== safeId)
+    }));
+  }, []);
+
+  const handleSaveDeployEditor = useCallback(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    const draftUnits = normalizeDraftUnits(deployEditorDraft.units);
+    if (draftUnits.length <= 0) {
+      setDeployNotice('请至少添加一个兵种到部队编组');
+      return;
+    }
+    const unitsMap = unitsToMap(draftUnits);
+    let targetGroupId = '';
+    if (deployEditingGroupId) {
+      const result = runtime.updateAttackerDeployGroup(deployEditingGroupId, {
+        name: deployEditorDraft.name,
+        units: unitsMap
+      });
+      if (!result?.ok) {
+        setDeployNotice(result?.reason || '编辑部队失败');
+        return;
+      }
+      targetGroupId = deployEditingGroupId;
+    } else {
+      const result = runtime.createAttackerDeployGroup({
+        name: deployEditorDraft.name,
+        units: unitsMap,
+        x: pointerWorldRef.current.x,
+        y: pointerWorldRef.current.y,
+        placed: false
+      });
+      if (!result?.ok) {
+        setDeployNotice(result?.reason || '新建部队失败');
+        return;
+      }
+      targetGroupId = result.groupId;
+    }
+    runtime.setSelectedDeployGroup(targetGroupId);
+    runtime.setFocusSquad(targetGroupId);
+    runtime.setAttackerDeployGroupPlaced(targetGroupId, false);
+    setSelectedSquadId(targetGroupId);
+    setDeployDraggingGroupId(targetGroupId);
+    setDeployActionAnchorMode('');
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+    setDeployEditorOpen(false);
+    setDeployEditingGroupId('');
+    setDeployEditorDraft({ name: '', units: [] });
+    setDeployNotice('部队已创建，移动鼠标并点击地图完成放置');
+  }, [deployEditingGroupId, deployEditorDraft]);
+
+  const handleDeployMove = useCallback((groupId) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    const group = runtime.getDeployGroupById(groupId);
+    if (!group) return;
+    pointerWorldRef.current = {
+      x: Number(group.x) || 0,
+      y: Number(group.y) || 0
+    };
+    runtime.setSelectedDeployGroup(groupId);
+    runtime.setFocusSquad(groupId);
+    runtime.setAttackerDeployGroupPlaced(groupId, false);
+    setSelectedSquadId(groupId);
+    setDeployDraggingGroupId(groupId);
+    setDeployActionAnchorMode('');
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+    setDeployNotice('已拾取部队，移动鼠标并点击地图可重新放置');
+  }, []);
+
+  const handleDeployDelete = useCallback((groupId, event = null) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    if (!runtime.getDeployGroupById(groupId)) return;
+    const canvas = glCanvasRef.current;
+    const rect = canvas?.getBoundingClientRect();
+    let x = Number(rect?.width) * 0.5 || 220;
+    let y = Number(rect?.height) * 0.5 || 140;
+    if (event?.currentTarget?.getBoundingClientRect && rect) {
+      const targetRect = event.currentTarget.getBoundingClientRect();
+      x = (targetRect.left + targetRect.width / 2) - rect.left;
+      y = (targetRect.top + targetRect.height / 2) - rect.top;
+    } else if (Number.isFinite(Number(event?.clientX)) && Number.isFinite(Number(event?.clientY)) && rect) {
+      x = Number(event.clientX) - rect.left;
+      y = Number(event.clientY) - rect.top;
+    }
+    setConfirmDeletePos({
+      x: clamp(x, 24, Math.max(24, (Number(rect?.width) || x) - 24)),
+      y: clamp(y, 24, Math.max(24, (Number(rect?.height) || y) - 24))
+    });
+    setConfirmDeleteGroupId(String(groupId || ''));
+  }, []);
+
+  const handleConfirmDeployDelete = useCallback(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    const groupId = String(confirmDeleteGroupId || '');
+    if (!groupId) return;
+    const result = runtime.removeAttackerDeployGroup(groupId);
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '删除部队失败');
+      setConfirmDeleteGroupId('');
+      setConfirmDeletePos({ x: 0, y: 0 });
+      return;
+    }
+    const nextSelected = runtime.getDeployGroups()?.selectedId || '';
+    setSelectedSquadId(nextSelected);
+    setDeployDraggingGroupId((prev) => (prev === groupId ? '' : prev));
+    setDeployActionAnchorMode('');
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+    setConfirmDeleteGroupId('');
+    setConfirmDeletePos({ x: 0, y: 0 });
+    setDeployNotice('部队已删除');
+  }, [confirmDeleteGroupId]);
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
+        if (confirmDeleteGroupId) {
+          setConfirmDeleteGroupId('');
+          setConfirmDeletePos({ x: 0, y: 0 });
+          return;
+        }
+        if (deployQuantityDialog.open) {
+          setDeployQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 });
+          return;
+        }
+        if (deployEditorOpen) {
+          setDeployEditorOpen(false);
+          setDeployEditingGroupId('');
+          setDeployEditorDragUnitId('');
+          return;
+        }
+        if (deployDraggingGroupId) {
+          setDeployDraggingGroupId('');
+          setDeployNotice('已取消部队拖拽放置');
+          return;
+        }
         if (aimState.active) {
           setAimState({ active: false, squadId: '', classTag: '', point: null, radiusPx: 0 });
           return;
@@ -492,6 +1065,10 @@ const PveBattleModal = ({
       }
       if (event.code === 'Space') {
         event.preventDefault();
+        if (runtimeRef.current?.getPhase() === 'deploy') {
+          spacePressedRef.current = true;
+          return;
+        }
         if (runtimeRef.current?.getPhase() === 'battle') {
           handleTogglePause();
         }
@@ -502,7 +1079,35 @@ const PveBattleModal = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, closeModal, aimState.active, handleTogglePause, handleTogglePitch]);
+  }, [
+    open,
+    closeModal,
+    aimState.active,
+    handleTogglePause,
+    handleTogglePitch,
+    confirmDeleteGroupId,
+    deployEditorOpen,
+    deployQuantityDialog.open,
+    deployDraggingGroupId
+  ]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyUp = (event) => {
+      if (event.code === 'Space') {
+        spacePressedRef.current = false;
+      }
+    };
+    const onBlur = () => {
+      spacePressedRef.current = false;
+    };
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -526,6 +1131,37 @@ const PveBattleModal = ({
   const selectedWaypoints = selectedSquad && Array.isArray(selectedSquad.waypoints) ? selectedSquad.waypoints : [];
 
   const pitchLabel = cameraRef.current.getPitchBlend() >= 0.5 ? '90°' : '40°';
+  const deployRosterRows = runtimeRef.current?.getAttackerRosterRows?.() || [];
+  const deployEditingGroup = deployEditingGroupId ? runtimeRef.current?.getDeployGroupById?.(deployEditingGroupId) : null;
+  const deployEditingBaseUnits = deployEditingGroup?.units || {};
+  const deployEditorAvailableRows = deployRosterRows
+    .map((row) => ({
+      ...row,
+      availableForDraft: Math.max(0, row.available + Math.max(0, Number(deployEditingBaseUnits[row.unitTypeId]) || 0))
+    }))
+    .sort((a, b) => a.unitName.localeCompare(b.unitName, 'zh-Hans-CN'));
+  const deployEditorDraftSummary = unitsToSummary(
+    deployEditorDraft.units,
+    new Map(deployRosterRows.map((row) => [row.unitTypeId, row.unitName]))
+  );
+  const deployEditorTotal = normalizeDraftUnits(deployEditorDraft.units).reduce((sum, entry) => sum + entry.count, 0);
+  const selectedDeployGroup = phase === 'deploy' ? runtimeRef.current?.getDeployGroupById?.(selectedSquadId) : null;
+  const worldActionGroupId = selectedDeployGroup?.id || '';
+  const worldActionPos = (
+    phase === 'deploy'
+    && deployActionAnchorMode === 'world'
+    && worldActionGroupId
+    && worldToDomRef.current
+  )
+    ? worldToDomRef.current({ x: selectedDeployGroup.x, y: selectedDeployGroup.y, z: 0 })
+    : null;
+  const confirmDeleteGroup = (
+    phase === 'deploy'
+    && confirmDeleteGroupId
+    && runtimeRef.current
+  )
+    ? runtimeRef.current.getDeployGroupById(confirmDeleteGroupId)
+    : null;
 
   if (!open) return null;
 
@@ -578,9 +1214,11 @@ const PveBattleModal = ({
           />
 
           <div
-            className="pve2-scene"
-            onPointerDown={handleMapCommand}
-            onPointerMove={handlePointerMove}
+            className={`pve2-scene ${isPanning ? 'is-panning' : ''} ${isRotating ? 'is-rotating' : ''}`}
+            onMouseDown={handleSceneMouseDown}
+            onMouseMove={handlePointerMove}
+            onContextMenu={(event) => event.preventDefault()}
+            onWheel={handleSceneWheel}
           >
             <canvas ref={glCanvasRef} className="pve2-gl-canvas" />
             <AimOverlayCanvas
@@ -594,8 +1232,13 @@ const PveBattleModal = ({
 
             <SquadCards
               squads={toCardsByTeam(cards)}
+              phase={phase}
+              actionAnchorMode={deployActionAnchorMode}
               onFocus={handleCardFocus}
               onSelect={handleCardSelect}
+              onDeployMove={handleDeployMove}
+              onDeployEdit={handleOpenDeployEditorForGroup}
+              onDeployDelete={handleDeployDelete}
             />
 
             <div className="pve2-action-pad">
@@ -608,7 +1251,14 @@ const PveBattleModal = ({
                   <button type="button" className={`btn ${aimState.active ? 'btn-warning' : 'btn-primary'}`} onClick={handleToggleSkillAim}>技能瞄准</button>
                 </>
               ) : (
-                <span className="pve2-hint">部署阶段：点击地图放置我方部队，点击卡片切换焦点</span>
+                <>
+                  <button type="button" className="btn btn-primary" onClick={handleOpenDeployCreator}>新建部队</button>
+                  <span className="pve2-hint">
+                    {deployDraggingGroupId
+                      ? '部队已吸附鼠标：点击地图放置'
+                      : '部署阶段：新建部队 -> 确定编组 -> 部队吸附鼠标 -> 点击地图放置'}
+                  </span>
+                </>
               )}
             </div>
 
@@ -625,6 +1275,142 @@ const PveBattleModal = ({
 
             {glError ? (
               <div className="pve2-error-overlay">{glError}</div>
+            ) : null}
+
+            {phase === 'deploy' && worldActionPos?.visible ? (
+              <div
+                className="pve2-world-actions"
+                style={{ left: `${worldActionPos.x}px`, top: `${worldActionPos.y}px` }}
+                onMouseDown={(event) => event.stopPropagation()}
+                onMouseUp={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <DeployActionButtons
+                  layout="arc"
+                  onMove={(event) => handleDeployMove(worldActionGroupId, event)}
+                  onEdit={(event) => handleOpenDeployEditorForGroup(worldActionGroupId, event)}
+                  onDelete={(event) => handleDeployDelete(worldActionGroupId, event)}
+                />
+              </div>
+            ) : null}
+
+            {phase === 'deploy' && deployEditorOpen ? (
+              <div
+                className="pve2-deploy-creator"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <h4>{deployEditingGroupId ? '编辑部队' : '新建部队'}</h4>
+                <label>
+                  <span>部队名称</span>
+                  <input
+                    type="text"
+                    maxLength={32}
+                    value={deployEditorDraft.name || ''}
+                    placeholder="不填则自动命名"
+                    onChange={(event) => setDeployEditorDraft((prev) => ({ ...prev, name: event.target.value || '' }))}
+                  />
+                </label>
+                <div className="pve2-deploy-editor-transfer">
+                  <div className="pve2-deploy-editor-col">
+                    <div className="pve2-deploy-editor-col-title">可用兵种（左侧）</div>
+                    {deployEditorAvailableRows.map((row) => (
+                      <button
+                        key={`atk-left-${row.unitTypeId}`}
+                        type="button"
+                        className="pve2-deploy-unit-card"
+                        draggable={row.availableForDraft > 0}
+                        disabled={row.availableForDraft <= 0}
+                        onDragStart={(event) => {
+                          event.dataTransfer?.setData('application/x-attacker-unit-id', row.unitTypeId);
+                          event.dataTransfer?.setData('text/plain', row.unitTypeId);
+                          setDeployEditorDragUnitId(row.unitTypeId);
+                        }}
+                        onDragEnd={() => setDeployEditorDragUnitId('')}
+                        onClick={() => openDeployQuantityDialog(row.unitTypeId)}
+                      >
+                        <strong>{row.unitName}</strong>
+                        <span>{`可用 ${row.availableForDraft}`}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div
+                    className={`pve2-deploy-editor-col pve2-deploy-editor-col-right ${deployEditorDragUnitId ? 'is-dropzone' : ''}`}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={handleDeployEditorDrop}
+                  >
+                    <div className="pve2-deploy-editor-col-title">部队编组（右侧）</div>
+                    {normalizeDraftUnits(deployEditorDraft.units).length <= 0 ? (
+                      <div className="pve2-deploy-editor-tip">拖拽左侧兵种到这里后，会弹出数量输入框。</div>
+                    ) : null}
+                    {normalizeDraftUnits(deployEditorDraft.units).map((entry) => (
+                      <div key={`atk-right-${entry.unitTypeId}`} className="pve2-deploy-editor-row">
+                        <span>{`${deployEditorAvailableRows.find((row) => row.unitTypeId === entry.unitTypeId)?.unitName || entry.unitTypeId} x${entry.count}`}</span>
+                        <div className="pve2-deploy-editor-row-actions">
+                          <button type="button" className="btn btn-secondary btn-small" onClick={() => openDeployQuantityDialog(entry.unitTypeId)}>数量</button>
+                          <button type="button" className="btn btn-warning btn-small" onClick={() => handleRemoveDraftUnit(entry.unitTypeId)}>移除</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="pve2-deploy-editor-summary">
+                  {`总兵力 ${deployEditorTotal}${deployEditorDraftSummary ? ` ｜ ${deployEditorDraftSummary}` : ''}`}
+                </div>
+                <div className="pve2-deploy-creator-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => {
+                      setDeployEditorOpen(false);
+                      setDeployEditingGroupId('');
+                      setDeployQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 });
+                      setDeployEditorDragUnitId('');
+                    }}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-small"
+                    onClick={handleSaveDeployEditor}
+                    disabled={deployEditorTotal <= 0}
+                  >
+                    确定编组
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {phase === 'deploy' && deployNotice ? (
+              <div className="pve2-deploy-notice">{deployNotice}</div>
+            ) : null}
+
+            {phase === 'deploy' && confirmDeleteGroup ? (
+              <div
+                className="pve2-confirm"
+                style={{ left: `${confirmDeletePos.x}px`, top: `${confirmDeletePos.y}px` }}
+                onMouseDown={(event) => event.stopPropagation()}
+                onMouseUp={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <p>{`确认删除部队「${confirmDeleteGroup.name || '未命名部队'}」吗？`}</p>
+                <div className="pve2-confirm-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => {
+                      setConfirmDeleteGroupId('');
+                      setConfirmDeletePos({ x: 0, y: 0 });
+                    }}
+                  >
+                    取消
+                  </button>
+                  <button type="button" className="btn btn-warning btn-small" onClick={handleConfirmDeployDelete}>确认删除</button>
+                </div>
+              </div>
             ) : null}
           </div>
 
@@ -658,6 +1444,19 @@ const PveBattleModal = ({
           ) : null}
         </div>
       ) : null}
+      <NumberPadDialog
+        open={phase === 'deploy' && deployQuantityDialog.open}
+        title={`设置兵力：${deployQuantityDialog.unitName || deployQuantityDialog.unitTypeId}`}
+        description="可滑动或直接输入数量"
+        min={1}
+        max={Math.max(1, Math.floor(Number(deployQuantityDialog.max) || 1))}
+        initialValue={Math.max(1, Math.floor(Number(deployQuantityDialog.current) || 1))}
+        zIndex={36010}
+        confirmLabel="确定"
+        cancelLabel="取消"
+        onCancel={() => setDeployQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 })}
+        onConfirm={handleConfirmDeployQuantity}
+      />
     </div>
   );
 };

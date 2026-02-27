@@ -26,15 +26,22 @@ const mat4Identity = () => ([
   0, 0, 0, 1
 ]);
 
+const mat4MirrorX = () => ([
+  -1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1
+]);
+
 const mat4Multiply = (a, b) => {
   const out = new Array(16).fill(0);
-  for (let row = 0; row < 4; row += 1) {
-    for (let col = 0; col < 4; col += 1) {
-      out[col + (row * 4)] = (
-        (a[(row * 4) + 0] * b[col + 0])
-        + (a[(row * 4) + 1] * b[col + 4])
-        + (a[(row * 4) + 2] * b[col + 8])
-        + (a[(row * 4) + 3] * b[col + 12])
+  for (let col = 0; col < 4; col += 1) {
+    for (let row = 0; row < 4; row += 1) {
+      out[(col * 4) + row] = (
+        (a[(0 * 4) + row] * b[(col * 4) + 0])
+        + (a[(1 * 4) + row] * b[(col * 4) + 1])
+        + (a[(2 * 4) + row] * b[(col * 4) + 2])
+        + (a[(3 * 4) + row] * b[(col * 4) + 3])
       );
     }
   }
@@ -58,9 +65,9 @@ const mat4LookAt = (eye, center, upRef = [0, 0, 1]) => {
   const u = cross3(s, f);
 
   return [
-    s[0], u[0], -f[0], 0,
-    s[1], u[1], -f[1], 0,
-    s[2], u[2], -f[2], 0,
+    s[0], s[1], s[2], 0,
+    u[0], u[1], u[2], 0,
+    -f[0], -f[1], -f[2], 0,
     -dot3(s, eye), -dot3(u, eye), dot3(f, eye), 1
   ];
 };
@@ -201,10 +208,11 @@ const toNdc = (value, w) => {
 };
 
 export default class CameraController {
-  constructor({ yawDeg = 45, pitchLow = 40, pitchHigh = 90, distance = 560 } = {}) {
+  constructor({ yawDeg = 45, pitchLow = 40, pitchHigh = 90, distance = 560, mirrorX = false } = {}) {
     this.yawDeg = Number(yawDeg) || 45;
     this.pitchLow = Number(pitchLow) || 40;
     this.pitchHigh = Number(pitchHigh) || 90;
+    this.mirrorX = !!mirrorX;
     this.currentPitch = this.pitchLow;
     this.pitchFrom = this.pitchLow;
     this.pitchTo = this.pitchLow;
@@ -288,7 +296,8 @@ export default class CameraController {
 
     this.view = mat4LookAt(this.eye, this.target, this.up);
     this.projection = mat4Perspective(48 * DEG2RAD, safeWidth / safeHeight, 1, 5000);
-    this.viewProjection = mat4Multiply(this.projection, this.view);
+    const viewProj = mat4Multiply(this.projection, this.view);
+    this.viewProjection = this.mirrorX ? mat4Multiply(mat4MirrorX(), viewProj) : viewProj;
     this.inverseViewProjection = mat4Invert(this.viewProjection);
 
     const right = [-Math.sin(yawRad), Math.cos(yawRad), 0];
