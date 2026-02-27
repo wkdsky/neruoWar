@@ -1,0 +1,41 @@
+{
+  "fallback": {
+    "bodyIndex": 0,
+    "gearIndex": 1,
+    "vehicleIndex": 2
+  },
+  "byClass": {
+    "infantry": {
+      "bodyIndex": 3,
+      "gearIndex": 5,
+      "vehicleIndex": 0
+    },
+    "cavalry": {
+      "bodyIndex": 7,
+      "gearIndex": 9,
+      "vehicleIndex": 11
+    },
+    "archer": {
+      "bodyIndex": 13,
+      "gearIndex": 15,
+      "vehicleIndex": 0
+    },
+    "artillery": {
+      "bodyIndex": 17,
+      "gearIndex": 19,
+      "vehicleIndex": 21
+    }
+  },
+  "byType": {
+    "heavy_infantry": {
+      "bodyIndex": 24,
+      "gearIndex": 26,
+      "vehicleIndex": 0
+    },
+    "field_artillery": {
+      "bodyIndex": 17,
+      "gearIndex": 19,
+      "vehicleIndex": 23
+    }
+  }
+}

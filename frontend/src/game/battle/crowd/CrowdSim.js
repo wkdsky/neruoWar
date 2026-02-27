@@ -25,7 +25,9 @@ const STAMINA_RECOVER = 28;
 const AGENT_RADIUS = 2.25;
 const AGENT_GAP = 1.05;
 const WEIGHT_BOTTLENECK_ALPHA = 0.035;
-const MAX_AGENTS_PER_SQUAD = 120;
+const MAX_AGENTS_PER_SQUAD = 4096;
+const DEFAULT_MAX_AGENT_WEIGHT = 50;
+const DEFAULT_DAMAGE_EXPONENT = 0.75;
 const CAVALRY_RUSH_MAX_DISTANCE = 220;
 const CAVALRY_RUSH_MIN_DISTANCE = 18;
 const CAVALRY_RUSH_SPEED = 172;
@@ -85,13 +87,21 @@ const normalizeUnitsMap = (raw = {}) => {
   return out;
 };
 
-const resolveVisibleAgentCount = (remain = 0) => {
+const resolveVisibleAgentCount = (remain = 0, maxAgentWeight = DEFAULT_MAX_AGENT_WEIGHT, strictAgentMapping = false) => {
   const n = Math.max(1, Math.floor(Number(remain) || 0));
+  const byWeight = Math.max(1, Math.ceil(n / Math.max(1, Number(maxAgentWeight) || DEFAULT_MAX_AGENT_WEIGHT)));
+  if (strictAgentMapping) return byWeight;
   if (n <= 30) return n;
-  if (n <= 300) return Math.min(MAX_AGENTS_PER_SQUAD, 30 + Math.floor((n - 30) / 6));
-  if (n <= 3000) return Math.min(MAX_AGENTS_PER_SQUAD, 75 + Math.floor((n - 300) / 60));
-  return MAX_AGENTS_PER_SQUAD;
+  if (n <= 300) return Math.max(byWeight, Math.min(MAX_AGENTS_PER_SQUAD, 30 + Math.floor((n - 30) / 6)));
+  if (n <= 3000) return Math.max(byWeight, Math.min(MAX_AGENTS_PER_SQUAD, 75 + Math.floor((n - 300) / 60)));
+  return Math.max(byWeight, Math.min(MAX_AGENTS_PER_SQUAD, 150 + Math.floor((n - 3000) / 120)));
 };
+
+const resolveRepConfig = (sim, crowd) => ({
+  maxAgentWeight: Math.max(1, Number(crowd?.repConfig?.maxAgentWeight ?? sim?.repConfig?.maxAgentWeight) || DEFAULT_MAX_AGENT_WEIGHT),
+  damageExponent: Math.max(0.2, Math.min(1.25, Number(crowd?.repConfig?.damageExponent ?? sim?.repConfig?.damageExponent) || DEFAULT_DAMAGE_EXPONENT)),
+  strictAgentMapping: (crowd?.repConfig?.strictAgentMapping ?? sim?.repConfig?.strictAgentMapping) !== false
+});
 
 const hamiltonAllocate = (countsByType = {}, budget = 0) => {
   const entries = Object.entries(countsByType || {}).filter(([id, c]) => !!id && c > 0);
@@ -391,7 +401,8 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
       Number(config?.gravity) || 70,
       Number(config?.speedHint) || 220
     );
-    const weightMul = Math.max(1, Math.sqrt(Math.max(1, Number(shooter.weight) || 1)));
+    const repConfig = resolveRepConfig(sim, crowd);
+    const weightMul = Math.max(1, Math.pow(Math.max(1, Number(shooter.weight) || 1), repConfig.damageExponent));
     const damageBase = Math.max(0.22, (Number(squad.stats?.atk) || 10) * (classTag === 'artillery' ? 0.11 : 0.065));
     const damage = damageBase * weightMul * Math.max(1, Number(config?.damageMul) || 1);
     acquireProjectile(crowd.effectsPool, {
@@ -607,18 +618,35 @@ const createAgentsForSquad = (squad, crowd) => {
   const unitMap = crowd.unitTypeMap || new Map();
   const countsByType = normalizeUnitsMap(squad?.units || {});
   const remain = Math.max(1, Math.floor(Number(squad?.remain) || sumUnitsMap(countsByType) || 1));
-  const agentBudget = resolveVisibleAgentCount(remain);
-  const alloc = hamiltonAllocate(countsByType, agentBudget);
+  const repConfig = resolveRepConfig(null, crowd);
+  const minRequiredByType = Object.fromEntries(
+    Object.entries(countsByType).map(([unitTypeId, count]) => [
+      unitTypeId,
+      Math.max(1, Math.ceil(count / Math.max(1, repConfig.maxAgentWeight)))
+    ])
+  );
+  const minRequired = Object.values(minRequiredByType).reduce((sum, c) => sum + c, 0);
+  const agentBudget = Math.max(
+    minRequired,
+    resolveVisibleAgentCount(remain, repConfig.maxAgentWeight, repConfig.strictAgentMapping)
+  );
+  const alloc = repConfig.strictAgentMapping
+    ? { ...minRequiredByType }
+    : hamiltonAllocate(countsByType, agentBudget);
   const agents = [];
-  const baseCols = Math.max(1, Math.ceil(Math.sqrt(agentBudget)));
+  const baseCols = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, Object.values(alloc).reduce((sum, c) => sum + c, 0)))));
 
   let slotOrder = 0;
   Object.entries(alloc).forEach(([unitTypeId, count]) => {
-    const perAgentWeight = (countsByType[unitTypeId] || 1) / Math.max(1, count);
+    const safeCount = Math.max(1, count);
+    const perAgentWeight = Math.min(
+      Math.max(0.2, (countsByType[unitTypeId] || 1) / safeCount),
+      repConfig.maxAgentWeight
+    );
     const unitType = unitMap.get(unitTypeId) || {};
     const category = inferCategoryFromUnitType(unitType, squad?.classTag || 'infantry');
     const moveSpeedMul = resolveAgentSpeedMul(unitType, category);
-    for (let i = 0; i < count; i += 1) {
+    for (let i = 0; i < safeCount; i += 1) {
       const offset = slotOffsetForIndex(slotOrder, baseCols);
       agents.push(createAgent({
         id: `${squad.id}_ag_${slotOrder + 1}`,
@@ -636,6 +664,7 @@ const createAgentsForSquad = (squad, crowd) => {
     }
   });
   if (agents.length <= 0) {
+    const repConfig = resolveRepConfig(null, crowd);
     agents.push(createAgent({
       id: `${squad.id}_ag_1`,
       squadId: squad.id,
@@ -644,11 +673,12 @@ const createAgentsForSquad = (squad, crowd) => {
       category: squad?.classTag || 'infantry',
       x: Number(squad.x) || 0,
       y: Number(squad.y) || 0,
-      weight: remain,
+      weight: Math.min(remain, repConfig.maxAgentWeight),
       slotOrder: 0,
       moveSpeedMul: resolveAgentSpeedMul({}, squad?.classTag || 'infantry')
     }));
   }
+  squad._repMaxAgentWeight = repConfig.maxAgentWeight;
   squad._crowdBaseColumns = Math.max(1, Math.ceil(Math.sqrt(agents.length)));
   squad._crowdForward = teamForward(squad.team);
   const flagBearer = ensureFlagBearer(squad, agents);
@@ -792,8 +822,15 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
 };
 
 const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
+  const repConfig = resolveRepConfig(null, crowd);
+  if (repConfig.strictAgentMapping) {
+    ensureFlagBearer(squad, agents);
+    return;
+  }
   const alive = agents.filter((agent) => !agent.dead && agent.weight > 0.001);
-  const target = Number(squad.remain) <= 0 ? 0 : resolveVisibleAgentCount(Math.max(1, Number(squad.remain) || 1));
+  const target = Number(squad.remain) <= 0
+    ? 0
+    : resolveVisibleAgentCount(Math.max(1, Number(squad.remain) || 1), repConfig.maxAgentWeight, false);
   const delta = alive.length - target;
   if (delta > 0) {
     const removeCount = Math.min(delta, Math.max(1, Math.floor(dt * 14)));
@@ -812,7 +849,7 @@ const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
   } else if (delta < 0 && alive.length > 0) {
     const addCount = Math.min(-delta, Math.max(1, Math.floor(dt * 9)));
     const source = alive.sort((a, b) => b.weight - a.weight)[0] || alive[0];
-    const splitWeight = Math.max(0.45, (source.weight || 1) * 0.5);
+    const splitWeight = Math.min(repConfig.maxAgentWeight, Math.max(0.45, (source.weight || 1) * 0.5));
     for (let i = 0; i < addCount; i += 1) {
       if ((source.weight || 0) <= 0.9) break;
       source.weight = Math.max(0.3, source.weight - splitWeight);
@@ -845,7 +882,8 @@ const applyCavalryRushImpact = (sim, crowd, squad, agents = [], fromPoint, toPoi
 
   const flagBearer = ensureFlagBearer(squad, agents);
   const sourceWeight = Math.max(1, Number(flagBearer?.weight) || 1);
-  const impactDamage = Math.max(0.8, (Number(squad.stats?.atk) || 10) * 0.11 * Math.sqrt(sourceWeight));
+  const repConfig = resolveRepConfig(sim, crowd);
+  const impactDamage = Math.max(0.8, (Number(squad.stats?.atk) || 10) * 0.11 * Math.pow(sourceWeight, repConfig.damageExponent));
   const dir = normalizeVec((toPoint?.x || 0) - (fromPoint?.x || 0), (toPoint?.y || 0) - (fromPoint?.y || 0));
   const enemyTeam = squad.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
 
@@ -889,9 +927,11 @@ const applyCavalryRushImpact = (sim, crowd, squad, agents = [], fromPoint, toPoi
 
 export const createCrowdSim = (sim, options = {}) => {
   const unitTypeMap = options?.unitTypeMap instanceof Map ? options.unitTypeMap : new Map();
+  const repConfig = resolveRepConfig(sim, { repConfig: options?.repConfig || sim?.repConfig || {} });
   if (sim && typeof sim === 'object') {
     sim.engagementAgentDiameter = AGENT_RADIUS * 2;
     sim.engagementAgentGap = AGENT_GAP;
+    sim.repConfig = repConfig;
   }
   const crowd = {
     agentsBySquad: new Map(),
@@ -899,6 +939,7 @@ export const createCrowdSim = (sim, options = {}) => {
     effectsPool: createCombatEffectsPool(),
     nextAgentId: 1,
     unitTypeMap,
+    repConfig,
     spatial: buildSpatialHash([], 14),
     engagement: null
   };

@@ -47,9 +47,10 @@ const cooldownByCategory = (category = 'infantry') => {
   return 0.74;
 };
 
-const damageScaleFromWeight = (weight = 1) => {
+const damageScaleFromWeight = (weight = 1, exponent = 0.75) => {
   const safe = Math.max(1, Number(weight) || 1);
-  return Math.max(1, Math.sqrt(safe));
+  const alpha = Math.max(0.2, Math.min(1.25, Number(exponent) || 0.75));
+  return Math.max(1, Math.pow(safe, alpha));
 };
 
 const projectileCountFromWeight = (weight = 1) => {
@@ -412,6 +413,7 @@ const stepProjectiles = (sim, crowd, dt) => {
 
 export const updateCrowdCombat = (sim, crowd, dt) => {
   const safeDt = Math.max(0, Number(dt) || 0);
+  const damageExponent = Math.max(0.2, Math.min(1.25, Number(sim?.repConfig?.damageExponent) || 0.75));
   const squads = Array.isArray(sim?.squads) ? sim.squads : [];
   const attackers = squads.filter((row) => row.team === TEAM_ATTACKER && row.remain > 0);
   const defenders = squads.filter((row) => row.team === TEAM_DEFENDER && row.remain > 0);
@@ -476,7 +478,7 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
         if (!target) return;
         const dist = Math.hypot((target.x || 0) - (agent.x || 0), (target.y || 0) - (agent.y || 0));
         if (dist > attackRange) return;
-        const weightScale = damageScaleFromWeight(agent.weight);
+        const weightScale = damageScaleFromWeight(agent.weight, damageExponent);
         const baseDamage = Math.max(0.42, ((Number(squad.stats?.atk) || 10) * 0.042) * weightScale);
         spawnRangedProjectiles(sim, crowd, squad, agent, target, 'artillery', baseDamage);
         agent.state = 'attack';
@@ -519,7 +521,7 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
         if (anchorDist > bandLimit * 1.55 && laneDiff > laneTolerance) return;
       }
 
-      const weightScale = damageScaleFromWeight(agent.weight);
+      const weightScale = damageScaleFromWeight(agent.weight, damageExponent);
       const baseDamage = Math.max(0.18, ((Number(squad.stats?.atk) || 10) * 0.035) * weightScale);
       if (isRanged) {
         spawnRangedProjectiles(sim, crowd, squad, agent, target, squad.classTag, baseDamage);
