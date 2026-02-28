@@ -8,6 +8,7 @@ import {
   renderFormation,
   getFormationFootprint
 } from '../../game/formation/ArmyFormationRenderer';
+import { BACKEND_ORIGIN } from '../../runtimeConfig';
 
 const CAMERA_ANGLE_PREVIEW = 45;
 const CAMERA_ANGLE_EDIT = 45;
@@ -37,7 +38,7 @@ const WALL_ACTION_ICON_GAP = 34;
 const WALL_ACTION_ICON_RISE = 32;
 const SCREEN_HIT_TOLERANCE_PX = 4;
 const DEPLOY_ZONE_RATIO = 0.2;
-const API_BASE = 'http://localhost:5000';
+const API_BASE = BACKEND_ORIGIN;
 const DEFAULT_MAX_ITEMS_PER_TYPE = 10;
 const SNAP_EPSILON = 1.2;
 const CACHE_VERSION = 2;

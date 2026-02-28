@@ -23,11 +23,49 @@ const usersRoutes = require('./routes/users');
 // 初始化Express
 const app = express();
 const server = http.createServer(app);
+const DEFAULT_FRONTEND_ORIGIN = 'http://localhost:3000';
+
+const parseOriginList = (...inputs) => {
+  const merged = inputs
+    .filter((item) => typeof item === 'string')
+    .flatMap((item) => item.split(','))
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const unique = Array.from(new Set(merged));
+  return unique.length > 0 ? unique : [DEFAULT_FRONTEND_ORIGIN];
+};
+
+const isOriginAllowed = (origin, allowList = []) => {
+  if (!origin) return true;
+  if (allowList.includes('*')) return true;
+  return allowList.includes(origin);
+};
+
+const createCorsOriginValidator = (allowList = []) => (origin, callback) => {
+  if (isOriginAllowed(origin, allowList)) {
+    callback(null, true);
+    return;
+  }
+  callback(new Error(`CORS origin not allowed: ${origin}`));
+};
+
+const corsOrigins = parseOriginList(
+  process.env.CORS_ORIGINS,
+  process.env.FRONTEND_ORIGIN,
+  DEFAULT_FRONTEND_ORIGIN
+);
+const socketCorsOrigins = parseOriginList(
+  process.env.SOCKET_CORS_ORIGINS,
+  process.env.CORS_ORIGINS,
+  process.env.FRONTEND_ORIGIN,
+  DEFAULT_FRONTEND_ORIGIN
+);
 
 // 初始化Socket.IO
 const io = socketIo(server, {
   cors: {
-    origin: ["http://localhost:3000"],
+    origin: createCorsOriginValidator(socketCorsOrigins),
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -39,7 +77,7 @@ const io = socketIo(server, {
 
 // 中间件
 app.use(cors({
-  origin: ["http://localhost:3000"],
+  origin: createCorsOriginValidator(corsOrigins),
   credentials: true
 }));
 app.use(express.json());
@@ -417,6 +455,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`========================================`);
   console.log(`服务器运行在端口 ${PORT}`);
   console.log(`环境: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`HTTP CORS 来源: ${corsOrigins.join(', ')}`);
+  console.log(`Socket CORS 来源: ${socketCorsOrigins.join(', ')}`);
   console.log(`========================================`);
 });
 

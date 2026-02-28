@@ -18,6 +18,9 @@ MONGO_DB_PATH="${MONGO_DB_PATH:-$HOME/.local/share/mongodb/data}"
 MONGO_LOG_DIR="${MONGO_LOG_DIR:-$HOME/.local/share/mongodb/log}"
 MONGO_LOG_PATH="${MONGO_LOG_PATH:-$MONGO_LOG_DIR/mongod.log}"
 MONGO_PM2_NAME="${MONGO_PM2_NAME:-neurowar-mongodb}"
+BACKEND_DEFAULT_PORT="${BACKEND_DEFAULT_PORT:-5000}"
+FRONTEND_DEFAULT_PORT="${FRONTEND_DEFAULT_PORT:-3000}"
+MAX_PORT_SCAN_STEPS="${MAX_PORT_SCAN_STEPS:-2000}"
 
 migrate_legacy_pm2_home() {
     local legacy_pm2_home="$PROJECT_DIR/.pm2"
@@ -113,28 +116,93 @@ inject_db() {
     node scripts/initUserDomainPreferences.js
 }
 
+is_port_occupied() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnH "( sport = :$port )" | grep -q .
+        return $?
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+        return $?
+    fi
+
+    echo "错误: 未找到 ss/lsof，无法检测端口占用。"
+    exit 1
+}
+
+is_reserved_port() {
+    local target_port="$1"
+    shift
+    local reserved_port
+    for reserved_port in "$@"; do
+        if [ -n "$reserved_port" ] && [ "$target_port" = "$reserved_port" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+find_available_port() {
+    local start_port="$1"
+    shift
+    local port="$start_port"
+    local steps=0
+
+    while is_port_occupied "$port" || is_reserved_port "$port" "$@"; do
+        port=$((port + 1))
+        steps=$((steps + 1))
+        if [ "$steps" -ge "$MAX_PORT_SCAN_STEPS" ] || [ "$port" -gt 65535 ]; then
+            echo "错误: 无法从端口 $start_port 开始找到可用端口。"
+            exit 1
+        fi
+    done
+
+    echo "$port"
+}
+
 migrate_legacy_pm2_home
 ensure_pm2
 start_mongo
 inject_db
 
+pm2 delete neurowar-backend >/dev/null 2>&1 || true
+pm2 delete neurowar-frontend >/dev/null 2>&1 || true
+
+BACKEND_PORT="$(find_available_port "$BACKEND_DEFAULT_PORT")"
+FRONTEND_PORT="$(find_available_port "$FRONTEND_DEFAULT_PORT" "$BACKEND_PORT")"
+BACKEND_ORIGIN="http://localhost:${BACKEND_PORT}"
+FRONTEND_ORIGIN="http://localhost:${FRONTEND_PORT}"
+
+if [ "$BACKEND_PORT" != "$BACKEND_DEFAULT_PORT" ]; then
+    echo "后端默认端口 ${BACKEND_DEFAULT_PORT} 已占用，切换为 ${BACKEND_PORT}"
+fi
+if [ "$FRONTEND_PORT" != "$FRONTEND_DEFAULT_PORT" ]; then
+    echo "前端默认端口 ${FRONTEND_DEFAULT_PORT} 已占用，切换为 ${FRONTEND_PORT}"
+fi
+
 echo "启动后端服务..."
 cd "$BACKEND_DIR"
-pm2 delete neurowar-backend >/dev/null 2>&1 || true
+PORT="$BACKEND_PORT" \
+FRONTEND_ORIGIN="$FRONTEND_ORIGIN" \
+CORS_ORIGINS="$FRONTEND_ORIGIN" \
+SOCKET_CORS_ORIGINS="$FRONTEND_ORIGIN" \
 pm2 start server.js --name neurowar-backend >/dev/null
 
 sleep 3
 
 echo "启动前端服务..."
 cd "$FRONTEND_DIR"
-pm2 delete neurowar-frontend >/dev/null 2>&1 || true
+PORT="$FRONTEND_PORT" \
+REACT_APP_BACKEND_ORIGIN="$BACKEND_ORIGIN" \
 pm2 start npm --name neurowar-frontend -- start >/dev/null
 
 echo "========================================="
 pm2 list
 echo "========================================="
-echo "后端服务: http://localhost:5000"
-echo "前端服务: http://localhost:3000"
+echo "后端服务: ${BACKEND_ORIGIN}"
+echo "前端服务: ${FRONTEND_ORIGIN}"
 echo "MongoDB:   mongodb://localhost:${MONGO_PORT}/strategy-game"
 echo "========================================="
 echo "查看日志:"

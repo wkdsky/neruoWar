@@ -19,8 +19,9 @@ import Minimap from '../../game/battle_v2/ui/Minimap';
 import AimOverlayCanvas from '../../game/battle_v2/ui/AimOverlayCanvas';
 import unitVisualConfig from '../../game/battle_v2/assets/UnitVisualConfig.example.json';
 import NumberPadDialog from '../common/NumberPadDialog';
+import { BACKEND_ORIGIN } from '../../runtimeConfig';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = BACKEND_ORIGIN;
 const TEAM_ATTACKER = 'attacker';
 const CAMERA_ZOOM_STEP = 24;
 const CAMERA_DISTANCE_MIN = 360;

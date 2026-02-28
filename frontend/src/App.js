@@ -17,6 +17,7 @@ import NodeInfoModal from './components/modals/NodeInfoModal';
 import CreateNodeModal from './components/modals/CreateNodeModal';
 import PveBattleModal from './components/game/PveBattleModal';
 import BattlefieldPreviewModal from './components/game/BattlefieldPreviewModal';
+import { BACKEND_ORIGIN } from './runtimeConfig';
 
 // 导入头像
 import defaultMale1 from './assets/avatars/default_male_1.svg';
@@ -83,6 +84,19 @@ const normalizeObjectId = (value) => {
     if (typeof value === 'object' && value._id) return normalizeObjectId(value._id);
     if (typeof value.toString === 'function') return value.toString();
     return '';
+};
+const decodeUserIdFromToken = (token = '') => {
+    if (!token || typeof token !== 'string') return '';
+    const parts = token.split('.');
+    if (parts.length < 2) return '';
+    try {
+        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const normalized = `${base64}${'='.repeat((4 - (base64.length % 4)) % 4)}`;
+        const payload = JSON.parse(atob(normalized));
+        return normalizeObjectId(payload?.userId);
+    } catch (error) {
+        return '';
+    }
 };
 const isValidObjectId = (value) => /^[0-9a-fA-F]{24}$/.test(normalizeObjectId(value));
 const createHomeNavigationPath = () => ([
@@ -405,6 +419,7 @@ const formatCountdownText = (seconds) => {
 const App = () => {
     const [socket, setSocket] = useState(null);
     const [authenticated, setAuthenticated] = useState(false);
+    const [userId, setUserId] = useState('');
     const [username, setUsername] = useState('');
     const [profession, setProfession] = useState('');
     const [userAvatar, setUserAvatar] = useState('default_male_1');
@@ -424,17 +439,23 @@ const App = () => {
     // 修改检查登录状态的useEffect
     useEffect(() => {
         const token = localStorage.getItem('token');
+        const storedUserId = normalizeObjectId(localStorage.getItem('userId'));
         const storedUsername = localStorage.getItem('username');
         const storedLocation = localStorage.getItem('userLocation');
         const storedProfession = localStorage.getItem('profession');
         const storedAvatar = localStorage.getItem('userAvatar');
 
         if (token && storedUsername) {
+            const resolvedUserId = storedUserId || decodeUserIdFromToken(token);
             setAuthenticated(true);
+            setUserId(resolvedUserId);
             setUsername(storedUsername);
             setProfession(storedProfession || '');
             setUserLocation(storedLocation || '');
             setUserAvatar(storedAvatar || 'default_male_1');
+            if (resolvedUserId) {
+                localStorage.setItem('userId', resolvedUserId);
+            }
 
             // 如果location为空，需要显示位置选择弹窗
             if (!storedLocation || storedLocation === '') {
@@ -843,7 +864,7 @@ const App = () => {
             initializeSocket();
         }
     
-        const newSocket = io('http://localhost:5000', {
+        const newSocket = io(BACKEND_ORIGIN, {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
@@ -885,11 +906,13 @@ const App = () => {
 
   const handleLoginSuccess = async (data) => {
     localStorage.setItem('token', data.token);
+    localStorage.setItem('userId', normalizeObjectId(data.userId));
     localStorage.setItem('username', data.username);
     localStorage.setItem('userLocation', data.location || '');
     localStorage.setItem('profession', data.profession || '求知');
     localStorage.setItem('userAvatar', data.avatar || 'default_male_1');
     setAuthenticated(true);
+    setUserId(normalizeObjectId(data.userId));
     setUsername(data.username);
     setProfession(data.profession || '求知');
     setUserLocation(data.location || '');
@@ -2226,6 +2249,7 @@ const App = () => {
 
     const handleLogout = () => {
         localStorage.removeItem('token');
+        localStorage.removeItem('userId');
         localStorage.removeItem('username');
         localStorage.removeItem('userLocation');
         localStorage.removeItem('profession');
@@ -2234,6 +2258,7 @@ const App = () => {
         hasRestoredPageRef.current = false;
         isRestoringPageRef.current = false;
         setAuthenticated(false);
+        setUserId('');
         setUsername('');
         setProfession('');
         setView('login');
@@ -2304,7 +2329,7 @@ const App = () => {
             socketRef.current = null;
         }
     
-        const newSocket = io('http://localhost:5000', {
+        const newSocket = io(BACKEND_ORIGIN, {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
@@ -3756,7 +3781,9 @@ const App = () => {
                         const domainId = normalizeObjectId(domain?._id);
                         const isFavorite = favoriteDomainSet.has(domainId);
                         const isUpdatingFavorite = favoriteActionDomainId === domainId;
-                        const isTitleOnlySection = sectionType === 'master_title';
+                        const isTitleOnlySection = sectionType === 'master_title'
+                            || sectionType === 'admin_title'
+                            || sectionType === 'title_only';
                         const titleOnlyName = String(domain?.name || '').trim() || '未命名知识域';
                         const relatedDomainName = sectionType === 'recent'
                             ? ((typeof domain?.recentVisitDisplayName === 'string' && domain.recentVisitDisplayName.trim())
@@ -3814,8 +3841,8 @@ const App = () => {
                     {!relatedDomainsData.loading && relatedDomainsData.error && (
                         <div className="related-domains-error">{relatedDomainsData.error}</div>
                     )}
-                    {renderRelatedDomainSection('作为域主', domainMasterDomains, '当前没有作为域主的知识域', 'master_title')}
-                    {renderRelatedDomainSection('作为域相', domainAdminDomains, '当前没有域相身份的知识域')}
+                    {renderRelatedDomainSection('作为域主', domainMasterDomains, '当前没有作为域主的知识域', 'title_only')}
+                    {renderRelatedDomainSection('作为域相', domainAdminDomains, '当前没有域相身份的知识域', 'title_only')}
                     {renderRelatedDomainSection('收藏的知识域', favoriteDomains, '暂无收藏，点击右侧星标可收藏')}
                     {renderRelatedDomainSection('最近访问的知识域', recentDomains, '暂无访问记录', 'recent')}
                 </div>
@@ -3845,9 +3872,31 @@ const App = () => {
         const distributionDisabledReason = '';
         const distributionButtonTooltip = '知识点分发';
         const nodeId = normalizeObjectId(nodeDetail?._id);
-        const isDomainMasterUser = nodeDetail?.domainMaster?.username && nodeDetail.domainMaster.username === username;
-        const isDomainAdminUser = Array.isArray(nodeDetail?.domainAdmins)
-            && nodeDetail.domainAdmins.some((item) => item?.username && item.username === username);
+        const currentUserId = normalizeObjectId(userId)
+            || normalizeObjectId(localStorage.getItem('userId'))
+            || decodeUserIdFromToken(localStorage.getItem('token'));
+        const currentUsernameNormalized = (typeof username === 'string' ? username.trim().toLowerCase() : '')
+            || (typeof localStorage.getItem('username') === 'string' ? localStorage.getItem('username').trim().toLowerCase() : '');
+        const domainMasterId = normalizeObjectId(nodeDetail?.domainMaster);
+        const domainMasterName = typeof nodeDetail?.domainMaster?.username === 'string'
+            ? nodeDetail.domainMaster.username.trim().toLowerCase()
+            : '';
+        const domainAdminIds = Array.isArray(nodeDetail?.domainAdmins)
+            ? nodeDetail.domainAdmins.map((item) => normalizeObjectId(item)).filter(Boolean)
+            : [];
+        const domainAdminNames = Array.isArray(nodeDetail?.domainAdmins)
+            ? nodeDetail.domainAdmins
+                .map((item) => (typeof item?.username === 'string' ? item.username.trim().toLowerCase() : ''))
+                .filter(Boolean)
+            : [];
+        const isDomainMasterUser = (
+            (currentUserId && domainMasterId && currentUserId === domainMasterId)
+            || (currentUsernameNormalized && domainMasterName && currentUsernameNormalized === domainMasterName)
+        );
+        const isDomainAdminUser = (
+            (currentUserId && domainAdminIds.includes(currentUserId))
+            || (currentUsernameNormalized && domainAdminNames.includes(currentUsernameNormalized))
+        );
         const isManagedNodeByUser = isDomainMasterUser || isDomainAdminUser;
         const showIntelStealButton = !isAdmin && isAtCurrentNode && !isDomainMasterUser && !isDomainAdminUser;
         const intelStatusMatched = intelHeistStatus.nodeId === nodeId
@@ -3865,26 +3914,34 @@ const App = () => {
         const siegeStatusMatched = siegeStatus.nodeId === nodeId
             ? siegeStatus
             : createEmptySiegeStatus();
-        const activeSiegeGateText = (siegeStatusMatched.activeGateKeys || [])
-            .map((gateKey) => CITY_GATE_LABEL_MAP[gateKey] || gateKey)
-            .filter(Boolean)
-            .join('、');
+        const managedIdentityUserIds = new Set([domainMasterId, ...domainAdminIds].filter(Boolean));
+        const managedIdentityNames = new Set([domainMasterName, ...domainAdminNames].filter(Boolean));
+        const hasHostileSiegeOnManagedNode = isManagedNodeByUser && (siegeStatusMatched.activeGateKeys || []).some((gateKey) => {
+            const gateState = siegeStatusMatched.gateStates?.[gateKey];
+            const attackers = Array.isArray(gateState?.attackers) ? gateState.attackers : [];
+            if (attackers.length <= 0) return false;
+            return attackers.some((attacker) => {
+                const attackerId = normalizeObjectId(attacker?.userId);
+                const attackerName = typeof attacker?.username === 'string' ? attacker.username.trim().toLowerCase() : '';
+                if (attackerId && managedIdentityUserIds.has(attackerId)) return false;
+                if (attackerName && managedIdentityNames.has(attackerName)) return false;
+                return true;
+            });
+        });
         const siegeGateLabel = siegeStatusMatched.compare?.gateLabel
             || CITY_GATE_LABEL_MAP[siegeStatusMatched.compareGate]
             || '';
-        const siegeTooltip = siegeStatusMatched.loading
-            ? '围城状态读取中...'
-            : (isManagedNodeByUser
-                ? (siegeStatusMatched.hasActiveSiege
-                    ? `${isDomainAdminUser ? '围城预警（仅可查看攻击用户与攻打门位）' : '围城预警（可查看攻守信息）'}${activeSiegeGateText ? `：${activeSiegeGateText}` : ''}`
-                    : '暂无围城')
+        const siegeTooltip = isManagedNodeByUser
+            ? '攻占详情'
+            : (siegeStatusMatched.loading
+                ? '围城状态读取中...'
                 : (siegeStatusMatched.hasActiveSiege
                     ? `攻占知识域（围城进行中${siegeGateLabel ? `：${siegeGateLabel}` : ''}）`
                     : (siegeStatusMatched.canStartSiege
                         ? '攻占知识域'
                         : `攻占知识域（${siegeStatusMatched.startDisabledReason || '当前不可发起'}）`)));
         const siegeDisabled = false;
-        const showSiegeButton = !isAdmin && (!isManagedNodeByUser || siegeStatusMatched.hasActiveSiege);
+        const showSiegeButton = !isAdmin && (!isManagedNodeByUser || hasHostileSiegeOnManagedNode);
 
         return {
             showMoveButton: !isAdmin,
@@ -3901,9 +3958,11 @@ const App = () => {
             intelStealDisabled,
             intelStealHasSnapshot: !!intelStatusMatched.latestSnapshot,
             showSiegeButton,
-            siegeTooltip,
+            siegeTooltip: showSiegeButton ? siegeTooltip : '',
             siegeDisabled,
-            siegeActive: !!siegeStatusMatched.hasActiveSiege
+            siegeActive: isManagedNodeByUser
+                ? hasHostileSiegeOnManagedNode
+                : !!siegeStatusMatched.hasActiveSiege
         };
     };
 
@@ -4093,7 +4152,7 @@ const App = () => {
         if (view !== 'titleDetail' && view !== 'nodeDetail') {
             sceneManagerRef.current.clearNodeButtons();
         }
-    }, [view, currentNodeDetail, currentTitleDetail, isAdmin, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
+    }, [view, currentNodeDetail, currentTitleDetail, isAdmin, userId, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
 
     useEffect(() => {
         if (!isWebGLReady) {
@@ -6187,9 +6246,9 @@ const App = () => {
                             <div className="modal-header">
                                 <h3>
                                     {isSiegeDomainMasterViewer
-                                        ? `你的知识域 ${siegeDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'} 正在被攻打`
+                                        ? '你的（域主）知识域正被攻击！'
                                         : (isSiegeDomainAdminViewer
-                                            ? `你管理的知识域 ${siegeDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'} 正在被攻打`
+                                            ? '你管理的（域相）知识域正被攻击！'
                                             : `攻占知识域：${siegeDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'}`)}
                                 </h3>
                                 <button
@@ -6233,7 +6292,6 @@ const App = () => {
                                                 ) : (
                                                     <div className="intel-heist-tip">当前没有进行中的围城</div>
                                                 )}
-                                                <div className="intel-heist-tip">域相仅可查看攻击用户与攻打门位，兵力与守备信息已隐藏。</div>
                                             </div>
                                         ) : (
                                             <>

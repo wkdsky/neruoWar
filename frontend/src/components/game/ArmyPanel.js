@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import './ArmyPanel.css';
+import { BACKEND_ORIGIN } from '../../runtimeConfig';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = BACKEND_ORIGIN;
 const QUICK_QTY_STEPS = [10, 50, 100, 500, 1000];
 
 const parseApiResponse = async (response) => {

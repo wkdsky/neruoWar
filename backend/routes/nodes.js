@@ -5186,7 +5186,7 @@ router.get('/public/root-nodes', async (req, res) => {
         delete query.$or;
       }
       const projectionRows = await DomainTitleProjection.find(query)
-        .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId status')
+        .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster domainAdmins allianceId status')
         .sort({ name: 1, nodeId: 1 })
         .limit(pageSize + 1)
         .lean();
@@ -5359,21 +5359,22 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
   try {
     const { nodeId } = req.params;
     const maxNodes = toSafeInteger(req.query?.limit, 160, { min: 20, max: 500 });
+    const useTitleProjectionRead = isDomainTitleProjectionReadEnabled();
 
     if (!isValidObjectId(nodeId)) {
       return res.status(400).json({ error: '无效的节点ID' });
     }
 
-    const center = isDomainTitleProjectionReadEnabled()
+    let center = useTitleProjectionRead
       ? await DomainTitleProjection.findOne({
         nodeId: new mongoose.Types.ObjectId(nodeId),
         status: 'approved'
       })
-        .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId status')
+        .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster domainAdmins allianceId status')
         .lean()
         .then((row) => (row ? mapProjectionRowToNodeLike(row) : null))
       : await Node.findById(nodeId)
-        .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId status associations relatedParentDomains relatedChildDomains')
+        .select('name description synonymSenses knowledgePoint contentScore domainMaster domainAdmins allianceId status associations relatedParentDomains relatedChildDomains')
         .lean();
     if (!center) {
       return res.status(404).json({ error: '节点不存在' });
@@ -5384,13 +5385,13 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
     await hydrateNodeSensesForNodes([center]);
 
     const centerNodeId = getIdString(center?._id || nodeId);
-    const [centerRelationRows, incomingRelationRows] = isDomainTitleProjectionReadEnabled()
+    const [centerRelationRows, incomingRelationRows] = useTitleProjectionRead
       ? await Promise.all([
         listActiveTitleRelationsBySourceNodeIds([centerNodeId]),
         listActiveTitleRelationsByTargetNodeIds([centerNodeId])
       ])
       : [[], []];
-    const centerAssociations = isDomainTitleProjectionReadEnabled()
+    const centerAssociations = useTitleProjectionRead
       ? normalizeTitleRelationAssociationList(centerRelationRows)
       : normalizeTitleRelationAssociationList(center?.associations || []);
     const directNeighborIdSet = new Set();
@@ -5399,7 +5400,7 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
       if (!isValidObjectId(targetNodeId) || targetNodeId === centerNodeId) continue;
       directNeighborIdSet.add(targetNodeId);
     }
-    if (isDomainTitleProjectionReadEnabled()) {
+    if (useTitleProjectionRead) {
       for (const row of incomingRelationRows) {
         const sourceNodeId = getIdString(row?.sourceNodeId);
         if (!isValidObjectId(sourceNodeId) || sourceNodeId === centerNodeId) continue;
@@ -5410,22 +5411,49 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
     const directNeighborObjectIds = Array.from(directNeighborIdSet)
       .slice(0, Math.max(50, maxNodes * 5))
       .map((id) => new mongoose.Types.ObjectId(id));
-    const directNeighborDocs = directNeighborObjectIds.length > 0
-      ? (isDomainTitleProjectionReadEnabled()
+    let directNeighborDocs = directNeighborObjectIds.length > 0
+      ? (useTitleProjectionRead
         ? await DomainTitleProjection.find({
           status: 'approved',
           nodeId: { $in: directNeighborObjectIds }
         })
-          .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster allianceId status')
+          .select('nodeId name description relatedParentDomains relatedChildDomains knowledgePoint contentScore domainMaster domainAdmins allianceId status')
           .lean()
           .then((rows) => rows.map((row) => mapProjectionRowToNodeLike(row)))
         : await Node.find({
           status: 'approved',
           _id: { $in: directNeighborObjectIds }
         })
-          .select('name description synonymSenses knowledgePoint contentScore domainMaster allianceId associations relatedParentDomains relatedChildDomains')
+          .select('name description synonymSenses knowledgePoint contentScore domainMaster domainAdmins allianceId associations relatedParentDomains relatedChildDomains')
           .lean())
       : [];
+
+    if (useTitleProjectionRead) {
+      const roleNodeObjectIds = Array.from(new Set([
+        centerNodeId,
+        ...directNeighborDocs.map((item) => getIdString(item?._id))
+      ].filter((id) => isValidObjectId(id)))).map((id) => new mongoose.Types.ObjectId(id));
+
+      if (roleNodeObjectIds.length > 0) {
+        const roleRows = await Node.find({ _id: { $in: roleNodeObjectIds } })
+          .select('_id domainMaster domainAdmins')
+          .lean();
+        const roleByNodeId = new Map(
+          roleRows.map((row) => [getIdString(row?._id), row])
+        );
+        const mergeNodeDomainRole = (nodeDoc = {}) => {
+          const roleDoc = roleByNodeId.get(getIdString(nodeDoc?._id));
+          if (!roleDoc) return nodeDoc;
+          return {
+            ...nodeDoc,
+            domainMaster: roleDoc?.domainMaster || null,
+            domainAdmins: Array.isArray(roleDoc?.domainAdmins) ? roleDoc.domainAdmins : []
+          };
+        };
+        center = mergeNodeDomainRole(center);
+        directNeighborDocs = directNeighborDocs.map((item) => mergeNodeDomainRole(item));
+      }
+    }
     await hydrateNodeSensesForNodes(directNeighborDocs);
 
     const sortedNeighborDocs = directNeighborDocs
@@ -5608,6 +5636,7 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
       knowledgePoint: nodeDoc?.knowledgePoint || null,
       contentScore: nodeDoc?.contentScore,
       domainMaster: nodeDoc?.domainMaster || null,
+      domainAdmins: Array.isArray(nodeDoc?.domainAdmins) ? nodeDoc.domainAdmins : [],
       allianceId: nodeDoc?.allianceId || null
     });
 
