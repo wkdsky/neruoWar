@@ -28,9 +28,12 @@ const CAMERA_DISTANCE_MIN = 360;
 const CAMERA_DISTANCE_MAX = 980;
 const DEPLOY_ROTATE_SENSITIVITY = 0.28;
 const DEPLOY_ROTATE_CLICK_THRESHOLD = 3;
-const DEPLOY_DEFAULT_YAW_DEG = 180;
-const DEPLOY_DEFAULT_WORLD_YAW_DEG = 180;
+const DEPLOY_DEFAULT_YAW_DEG = 0;
+const DEPLOY_DEFAULT_WORLD_YAW_DEG = 0;
 const DEPLOY_PITCH_DEG = 62;
+const BATTLE_FOLLOW_YAW_DEG = 0;
+const BATTLE_FOLLOW_WORLD_YAW_DEG = 0;
+const BATTLE_FOLLOW_MIRROR_X = false;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const createNoopImpostorRenderer = () => ({
@@ -98,6 +101,16 @@ const unitsToSummary = (units = [], unitNameByTypeId = new Map()) => (
     .map((entry) => `${unitNameByTypeId.get(entry.unitTypeId) || entry.unitTypeId}x${entry.count}`)
     .join(' / ')
 );
+
+const formatCoord = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : '--';
+};
+
+const worldToMapCoord = (x, y) => ({
+  x: Number(x) || 0,
+  y: Number(y) || 0
+});
 
 const PveBattleModal = ({
   open = false,
@@ -181,7 +194,14 @@ const PveBattleModal = ({
     pointerValid: false,
     isPanning: false,
     panStartDistance: 0,
-    panStartPitch: 0
+    panStartPitch: 0,
+    followTargetX: 0,
+    followTargetY: 0,
+    followTargetSquadId: '',
+    focusActualX: 0,
+    focusActualY: 0,
+    focusActualSquadId: '',
+    focusActualResolved: false
   });
   const [resultState, setResultState] = useState({ open: false, submitting: false, error: '', summary: null, recorded: false });
   const [deployEditorOpen, setDeployEditorOpen] = useState(false);
@@ -423,10 +443,26 @@ const PveBattleModal = ({
         cameraRef.current.pitchTo = DEPLOY_PITCH_DEG;
         cameraRef.current.pitchTweenSec = cameraRef.current.pitchTweenDurationSec;
       } else {
-        cameraRef.current.worldYawDeg = 0;
+        // Keep battle follow camera on the same axis orientation as deploy.
+        cameraRef.current.yawDeg = BATTLE_FOLLOW_YAW_DEG;
+        cameraRef.current.worldYawDeg = BATTLE_FOLLOW_WORLD_YAW_DEG;
+        cameraRef.current.mirrorX = BATTLE_FOLLOW_MIRROR_X;
       }
 
-      const followAnchor = nowPhase === 'battle' ? runtime.getFocusAnchor() : null;
+      const rawFocusAnchor = runtime.getFocusAnchor();
+      const focusTargetSquadId = String(rawFocusAnchor?.squadId || '');
+      const rawFollowAnchor = nowPhase === 'battle' ? rawFocusAnchor : null;
+      const followTargetSquadId = String(rawFollowAnchor?.squadId || '');
+      const followSquad = followTargetSquadId ? runtime.getSquadById(followTargetSquadId) : null;
+      const followAnchor = nowPhase === 'battle'
+        ? {
+            x: Number(followSquad?.x ?? rawFollowAnchor?.x) || 0,
+            y: Number(followSquad?.y ?? rawFollowAnchor?.y) || 0,
+            vx: Number(rawFollowAnchor?.vx) || 0,
+            vy: Number(rawFollowAnchor?.vy) || 0,
+            squadId: followTargetSquadId
+          }
+        : null;
       cameraRef.current.update(deltaSec, followAnchor);
       const cameraState = cameraRef.current.buildMatrices(sceneCanvas.width, sceneCanvas.height);
       cameraStateRef.current = cameraState;
@@ -479,6 +515,17 @@ const PveBattleModal = ({
         setBattleStatus(status);
         setCards(nextCards);
         setMinimapSnapshot(runtime.getMinimapSnapshot());
+        const followedSquad = followTargetSquadId ? runtime.getSquadById(followTargetSquadId) : null;
+        const followedDeployGroup = (nowPhase === 'deploy' && focusTargetSquadId)
+          ? runtime.getDeployGroupById(focusTargetSquadId)
+          : null;
+        const lockAnchor = nowPhase === 'battle'
+          ? followAnchor
+          : {
+              x: Number(rawFocusAnchor?.x) || 0,
+              y: Number(rawFocusAnchor?.y) || 0,
+              squadId: focusTargetSquadId
+            };
         setCameraMiniState({
           center: {
             x: nowPhase === 'battle' ? (followAnchor?.x || 0) : cameraRef.current.centerX,
@@ -517,7 +564,14 @@ const PveBattleModal = ({
           pointerValid: pointerWorldRef.current?.valid !== false,
           isPanning: !!panDragRef.current,
           panStartDistance: Number(panDragRef.current?.startDistance) || 0,
-          panStartPitch: Number(panDragRef.current?.startPitch) || 0
+          panStartPitch: Number(panDragRef.current?.startPitch) || 0,
+          followTargetX: Number(lockAnchor?.x) || 0,
+          followTargetY: Number(lockAnchor?.y) || 0,
+          followTargetSquadId: String(lockAnchor?.squadId || followTargetSquadId || ''),
+          focusActualX: Number((followedSquad || followedDeployGroup)?.x) || 0,
+          focusActualY: Number((followedSquad || followedDeployGroup)?.y) || 0,
+          focusActualSquadId: String((followedSquad || followedDeployGroup)?.id || ''),
+          focusActualResolved: !!(followedSquad || followedDeployGroup)
         });
         if (debugEnabled) {
           setDebugStats(runtime.getDebugStats());
@@ -571,8 +625,12 @@ const PveBattleModal = ({
       runtime.setSelectedBattleSquad(attacker.id);
       setSelectedSquadId(attacker.id);
       const anchor = runtime.getFocusAnchor();
-      cameraRef.current.centerX = Number(anchor?.x) || 0;
-      cameraRef.current.centerY = Number(anchor?.y) || 0;
+      const followedSquad = runtime.getSquadById(anchor?.squadId || attacker.id) || runtime.getSquadById(attacker.id);
+      cameraRef.current.centerX = Number(followedSquad?.x ?? anchor?.x) || 0;
+      cameraRef.current.centerY = Number(followedSquad?.y ?? anchor?.y) || 0;
+      cameraRef.current.yawDeg = BATTLE_FOLLOW_YAW_DEG;
+      cameraRef.current.worldYawDeg = BATTLE_FOLLOW_WORLD_YAW_DEG;
+      cameraRef.current.mirrorX = BATTLE_FOLLOW_MIRROR_X;
       cameraRef.current.currentPitch = cameraRef.current.pitchLow;
       cameraRef.current.pitchFrom = cameraRef.current.pitchLow;
       cameraRef.current.pitchTo = cameraRef.current.pitchLow;
@@ -1271,6 +1329,84 @@ const PveBattleModal = ({
   )
     ? runtimeRef.current.getDeployGroupById(confirmDeleteGroupId)
     : null;
+  const squadNameById = new Map((Array.isArray(cards) ? cards : []).map((row) => [row.id, row.name || row.id]));
+  const mapField = minimapSnapshot?.field || { width: cameraAssert.fieldWidth, height: cameraAssert.fieldHeight };
+  const cameraLockTargetId = String(cameraAssert.followTargetSquadId || '');
+  const cameraLockTargetName = squadNameById.get(cameraLockTargetId) || (cameraLockTargetId ? `部队 ${cameraLockTargetId}` : '未锁定');
+  const cameraLockWorld = {
+    x: Number(cameraAssert.followTargetX) || 0,
+    y: Number(cameraAssert.followTargetY) || 0
+  };
+  const cameraLockMap = worldToMapCoord(cameraLockWorld.x, cameraLockWorld.y, mapField);
+  const cameraLockScreen = worldToScreenRef.current
+    ? worldToScreenRef.current({ x: cameraLockWorld.x, y: cameraLockWorld.y, z: 0 })
+    : { x: -9999, y: -9999, visible: false };
+  const cameraLockDelta = {
+    x: cameraLockWorld.x - (Number(cameraAssert.centerX) || 0),
+    y: cameraLockWorld.y - (Number(cameraAssert.centerY) || 0)
+  };
+  const cameraRightProjection = (
+    cameraLockDelta.x * (Number(cameraAssert.cameraRightX) || 0)
+    + cameraLockDelta.y * (Number(cameraAssert.cameraRightY) || 0)
+  );
+  const cameraRightSideLabel = cameraRightProjection >= 0 ? '相机右侧' : '相机左侧';
+  const cameraDiagnosticsRows = [
+    `相机镜像：${cameraAssert.mirrorX ? '开启' : '关闭'}`,
+    `相机手性：${formatCoord(cameraAssert.handedness)}`,
+    `相机朝向角：${formatCoord(cameraAssert.yawDeg)}°`,
+    `世界朝向角：${formatCoord(cameraAssert.worldYawDeg)}°`,
+    `朝向角差值：${formatCoord((Number(cameraAssert.worldYawDeg) || 0) - (Number(cameraAssert.yawDeg) || 0))}°`,
+    `相机中心（世界）：X ${formatCoord(cameraAssert.centerX)}，Y ${formatCoord(cameraAssert.centerY)}`,
+    `相机右向量：X ${formatCoord(cameraAssert.cameraRightX)}，Y ${formatCoord(cameraAssert.cameraRightY)}`
+  ];
+  const cardFlagsById = new Map((Array.isArray(cards) ? cards : []).map((row) => [
+    row.id,
+    { selected: !!row.selected, focus: !!row.focus, action: row.action || '' }
+  ]));
+  const attackerRealtimeRows = (Array.isArray(minimapSnapshot?.squads) ? minimapSnapshot.squads : [])
+    .filter((row) => row?.team === TEAM_ATTACKER && (Number(row?.remain) || 0) > 0)
+    .map((row, index) => {
+      const worldX = Number(row?.x) || 0;
+      const worldY = Number(row?.y) || 0;
+      const mapCoord = worldToMapCoord(worldX, worldY, mapField);
+      const squadId = String(row?.id || '');
+      const screenCoord = worldToScreenRef.current
+        ? worldToScreenRef.current({ x: worldX, y: worldY, z: 0 })
+        : { x: -9999, y: -9999, visible: false };
+      const deltaX = worldX - (Number(cameraAssert.centerX) || 0);
+      const deltaY = worldY - (Number(cameraAssert.centerY) || 0);
+      const rightProjection = (
+        deltaX * (Number(cameraAssert.cameraRightX) || 0)
+        + deltaY * (Number(cameraAssert.cameraRightY) || 0)
+      );
+      const runtimeSquad = phase === 'battle'
+        ? runtimeRef.current?.getSquadById?.(squadId)
+        : runtimeRef.current?.getDeployGroupById?.(squadId);
+      const waypoints = Array.isArray(runtimeSquad?.waypoints) ? runtimeSquad.waypoints : [];
+      const firstWaypoint = waypoints[0] || null;
+      const flags = cardFlagsById.get(squadId) || { selected: false, focus: false, action: '' };
+      return {
+        id: squadId || `attacker_${index}`,
+        name: squadNameById.get(squadId) || `我方部队${index + 1}`,
+        worldX,
+        worldY,
+        mapX: mapCoord.x,
+        mapY: mapCoord.y,
+        screenX: Number(screenCoord?.x) || 0,
+        screenY: Number(screenCoord?.y) || 0,
+        visible: !!screenCoord?.visible,
+        deltaX,
+        deltaY,
+        rightProjection,
+        rightSideLabel: rightProjection >= 0 ? '相机右侧' : '相机左侧',
+        selected: !!flags.selected,
+        focus: !!flags.focus,
+        action: flags.action || (phase === 'deploy' ? (runtimeSquad?.placed === false ? '待放置' : '部署中') : '-'),
+        waypointCount: waypoints.length,
+        firstWaypointX: Number(firstWaypoint?.x) || 0,
+        firstWaypointY: Number(firstWaypoint?.y) || 0
+      };
+    });
 
   if (!open) return null;
 
@@ -1382,33 +1518,59 @@ const PveBattleModal = ({
               <div className="pve2-aim-tip">技能瞄准中：点击地面释放，`Esc` 取消</div>
             ) : null}
 
-            {open ? (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: 12,
-                  top: 56,
-                  zIndex: 30030,
-                  pointerEvents: 'none',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                  fontSize: 11,
-                  lineHeight: 1.45,
-                  color: '#dbeafe',
-                  background: 'rgba(2, 6, 23, 0.72)',
-                  border: '1px solid rgba(148, 163, 184, 0.35)',
-                  borderRadius: 8,
-                  padding: '6px 8px',
-                  maxWidth: 'min(94vw, 860px)',
-                  whiteSpace: 'pre-wrap'
-                }}
-              >
+            <div
+              className="pve2-live-pos-panel"
+              onMouseDown={(event) => event.stopPropagation()}
+              onMouseMove={(event) => event.stopPropagation()}
+              onMouseUp={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              onWheel={(event) => event.stopPropagation()}
+            >
+              <div className="pve2-live-pos-title">实时坐标标记</div>
+              <div className="pve2-live-pos-item">
+                <div className="pve2-live-pos-name">相机方向诊断（实时）</div>
+                {cameraDiagnosticsRows.map((line, index) => (
+                  <div key={`camera-diagnose-${index}`}>{line}</div>
+                ))}
+              </div>
+              <div className="pve2-live-pos-item">
+                <div className="pve2-live-pos-name">相机锁定目标位置（实时）</div>
+                <div>{`相机锁定目标：${cameraLockTargetName}`}</div>
+                <div>{`地图坐标：X ${formatCoord(cameraLockMap.x)}，Y ${formatCoord(cameraLockMap.y)}`}</div>
+                <div>{`世界坐标：X ${formatCoord(cameraLockWorld.x)}，Y ${formatCoord(cameraLockWorld.y)}`}</div>
+                <div>{`屏幕坐标：X ${formatCoord(cameraLockScreen.x)}，Y ${formatCoord(cameraLockScreen.y)}（${cameraLockScreen.visible ? '可见' : '不可见'}）`}</div>
+                <div>{`相对相机中心：ΔX ${formatCoord(cameraLockDelta.x)}，ΔY ${formatCoord(cameraLockDelta.y)}`}</div>
+                <div>{`右向量投影：${formatCoord(cameraRightProjection)}（${cameraRightSideLabel}）`}</div>
+              </div>
+              <div className="pve2-live-pos-item">
+                <div className="pve2-live-pos-name">我方部队实时位置</div>
+                {attackerRealtimeRows.length > 0 ? attackerRealtimeRows.map((row) => (
+                  <div key={`pos-${row.id}`} className="pve2-live-pos-row">
+                    <span>{row.name}</span>
+                    <span>{`地图坐标：(${formatCoord(row.mapX)}, ${formatCoord(row.mapY)})`}</span>
+                    <span>{`世界坐标：(${formatCoord(row.worldX)}, ${formatCoord(row.worldY)})`}</span>
+                    <span>{`屏幕坐标：(${formatCoord(row.screenX)}, ${formatCoord(row.screenY)})（${row.visible ? '可见' : '不可见'}）`}</span>
+                    <span>{`相对相机中心：ΔX ${formatCoord(row.deltaX)}，ΔY ${formatCoord(row.deltaY)}`}</span>
+                    <span>{`右向量投影：${formatCoord(row.rightProjection)}（${row.rightSideLabel}）`}</span>
+                    <span>{`状态标记：${row.selected ? '已选中' : '未选中'} / ${row.focus ? '焦点' : '非焦点'} / 动作 ${row.action || '-'}`}</span>
+                    <span>{`路径点数量：${row.waypointCount}${row.waypointCount > 0 ? ` ｜ 首路径点(${formatCoord(row.firstWaypointX)}, ${formatCoord(row.firstWaypointY)})` : ''}`}</span>
+                  </div>
+                )) : <div className="pve2-live-pos-empty">暂无可显示的我方部队坐标</div>}
+              </div>
+            </div>
+
+            {debugEnabled ? (
+              <div className="pve2-camera-debug-panel">
                 {[
                   `impl=${cameraAssert.cameraImplTag || 'N/A'} phase=${cameraAssert.phase || '-'} mirrorX=${cameraAssert.mirrorX ? 'true' : 'false'} handedness=${(Number(cameraAssert.handedness) || 0).toFixed(4)}`,
                   `yawDeg=${(Number(cameraAssert.yawDeg) || 0).toFixed(2)} worldYawDeg=${(Number(cameraAssert.worldYawDeg) || 0).toFixed(2)} deltaYaw=${((Number(cameraAssert.worldYawDeg) || 0) - (Number(cameraAssert.yawDeg) || 0)).toFixed(2)} pitch=${(Number(cameraAssert.currentPitch) || 0).toFixed(2)} [low=${(Number(cameraAssert.pitchLow) || 0).toFixed(2)}, high=${(Number(cameraAssert.pitchHigh) || 0).toFixed(2)}] distance=${(Number(cameraAssert.distance) || 0).toFixed(2)}`,
                   `center=(${(Number(cameraAssert.centerX) || 0).toFixed(2)}, ${(Number(cameraAssert.centerY) || 0).toFixed(2)}) eye=(${(Number(cameraAssert.eyeX) || 0).toFixed(2)}, ${(Number(cameraAssert.eyeY) || 0).toFixed(2)}, ${(Number(cameraAssert.eyeZ) || 0).toFixed(2)}) target=(${(Number(cameraAssert.targetX) || 0).toFixed(2)}, ${(Number(cameraAssert.targetY) || 0).toFixed(2)}, ${(Number(cameraAssert.targetZ) || 0).toFixed(2)})`,
                   `cameraRight=(${(Number(cameraAssert.cameraRightX) || 0).toFixed(4)}, ${(Number(cameraAssert.cameraRightY) || 0).toFixed(4)}, ${(Number(cameraAssert.cameraRightZ) || 0).toFixed(4)})`,
                   `field=(${(Number(cameraAssert.fieldWidth) || 0).toFixed(1)} x ${(Number(cameraAssert.fieldHeight) || 0).toFixed(1)}) deployRange=[attackerMaxX ${(Number(cameraAssert.deployAttackerMaxX) || 0).toFixed(2)}, defenderMinX ${(Number(cameraAssert.deployDefenderMinX) || 0).toFixed(2)}]`,
-                  `pointerWorld=(${(Number(cameraAssert.pointerX) || 0).toFixed(2)}, ${(Number(cameraAssert.pointerY) || 0).toFixed(2)}) pointerValid=${cameraAssert.pointerValid ? 'true' : 'false'} isPanning=${cameraAssert.isPanning ? 'true' : 'false'} panStart(distance=${(Number(cameraAssert.panStartDistance) || 0).toFixed(2)}, pitch=${(Number(cameraAssert.panStartPitch) || 0).toFixed(2)})`
+                  `pointerWorld=(${(Number(cameraAssert.pointerX) || 0).toFixed(2)}, ${(Number(cameraAssert.pointerY) || 0).toFixed(2)}) pointerValid=${cameraAssert.pointerValid ? 'true' : 'false'} isPanning=${cameraAssert.isPanning ? 'true' : 'false'} panStart(distance=${(Number(cameraAssert.panStartDistance) || 0).toFixed(2)}, pitch=${(Number(cameraAssert.panStartPitch) || 0).toFixed(2)})`,
+                  `cameraFollowTarget=(${(Number(cameraAssert.followTargetX) || 0).toFixed(2)}, ${(Number(cameraAssert.followTargetY) || 0).toFixed(2)}) squadId=${cameraAssert.followTargetSquadId || '-'}`,
+                  `focusSquadActual=(${(Number(cameraAssert.focusActualX) || 0).toFixed(2)}, ${(Number(cameraAssert.focusActualY) || 0).toFixed(2)}) squadId=${cameraAssert.focusActualSquadId || '-'} resolved=${cameraAssert.focusActualResolved ? 'true' : 'false'}`
                 ].join('\n')}
               </div>
             ) : null}

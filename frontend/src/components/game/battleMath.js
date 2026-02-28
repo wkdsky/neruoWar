@@ -42,7 +42,7 @@ export const projectWorld = (x, y, z, viewport, tiltDeg, yawDeg, worldScale) => 
   const depth = (yawY * camera.tiltCos) + (z * camera.tiltSin);
   return {
     x: viewport.centerX + (yawX * worldScale),
-    y: viewport.centerY + (viewY * worldScale),
+    y: viewport.centerY - (viewY * worldScale),
     depth
   };
 };
@@ -52,7 +52,7 @@ export const unprojectScreen = (sx, sy, viewport, tiltDeg, yawDeg, worldScale) =
   const safeScale = Math.max(0.0001, worldScale || 1);
   const safeGroundScale = Math.max(0.0001, camera.tiltSin);
   const yawX = (sx - viewport.centerX) / safeScale;
-  const yawY = (sy - viewport.centerY) / (safeScale * safeGroundScale);
+  const yawY = (viewport.centerY - sy) / (safeScale * safeGroundScale);
   return {
     x: (yawX * camera.yawCos) + (yawY * camera.yawSin),
     y: (-yawX * camera.yawSin) + (yawY * camera.yawCos)

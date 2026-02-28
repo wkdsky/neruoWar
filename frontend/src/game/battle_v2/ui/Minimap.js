@@ -22,9 +22,10 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
     const sx = width / fw;
     const sy = height / fh;
 
+    // Unified coordinate rule: center is (0, 0), left/right = -/+, top/bottom = +/-
     const toMap = (x, y) => ({
       x: ((Number(x) || 0) + fw / 2) * sx,
-      y: ((Number(y) || 0) + fh / 2) * sy
+      y: ((fh / 2) - (Number(y) || 0)) * sy
     });
 
     const deployRange = snapshot.deployRange || {};
@@ -60,7 +61,8 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
       const bh = Math.max(1, (Number(wall.depth) || 10) * sy);
       ctx.save();
       ctx.translate(p.x, p.y);
-      ctx.rotate(degToRad(wall.rotation));
+      // Canvas y-axis points downward, so invert rotation to keep world CCW consistent.
+      ctx.rotate(-degToRad(wall.rotation));
       ctx.fillStyle = 'rgba(100, 116, 139, 0.65)';
       ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
       ctx.restore();
@@ -99,7 +101,7 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
     const fw = Math.max(1, Number(snapshot.field.width) || 1);
     const fh = Math.max(1, Number(snapshot.field.height) || 1);
     const worldX = (rx / rect.width) * fw - fw / 2;
-    const worldY = (ry / rect.height) * fh - fh / 2;
+    const worldY = (fh / 2) - ((ry / rect.height) * fh);
     onMapClick({ x: worldX, y: worldY });
   };
 

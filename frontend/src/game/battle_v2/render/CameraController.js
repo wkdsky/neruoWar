@@ -214,9 +214,9 @@ const toNdc = (value, w) => {
 
 export default class CameraController {
   constructor({ yawDeg = 45, pitchLow = 40, pitchHigh = 90, distance = 560, mirrorX = false } = {}) {
-    this.yawDeg = Number(yawDeg) || 45;
-    this.pitchLow = Number(pitchLow) || 40;
-    this.pitchHigh = Number(pitchHigh) || 90;
+    this.yawDeg = Number.isFinite(Number(yawDeg)) ? Number(yawDeg) : 45;
+    this.pitchLow = Number.isFinite(Number(pitchLow)) ? Number(pitchLow) : 40;
+    this.pitchHigh = Number.isFinite(Number(pitchHigh)) ? Number(pitchHigh) : 90;
     this.mirrorX = !!mirrorX;
     this.currentPitch = this.pitchLow;
     this.pitchFrom = this.pitchLow;
@@ -298,7 +298,7 @@ export default class CameraController {
     this.target = [this.centerX, this.centerY, 0];
     this.eye = [
       this.centerX + (Math.sin(yawRad) * horizontal),
-      this.centerY - (Math.cos(yawRad) * horizontal),
+      -(this.centerY - (Math.cos(yawRad) * horizontal)),
       vertical
     ];
 
