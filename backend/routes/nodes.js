@@ -2460,6 +2460,59 @@ const buildGateDefenseView = (node, gateDefenseByMap = {}, unitTypeMap = new Map
   });
 };
 
+const hasAnyGateDefenseSnapshotEntries = (gateDefense = {}) => (
+  CITY_GATE_KEYS.some((gateKey) => (
+    (Array.isArray(gateDefense?.[gateKey]) ? gateDefense[gateKey] : [])
+      .some((entry) => Math.max(0, Math.floor(Number(entry?.count) || 0)) > 0)
+  ))
+);
+
+const buildBattlefieldGateDefenseSnapshotFromNode = (node = {}, unitTypeMap = new Map()) => {
+  const battlefieldState = normalizeBattlefieldStateInput(resolveNodeBattlefieldLayout(node, {}));
+  const layouts = Array.isArray(battlefieldState?.layouts) ? battlefieldState.layouts : [];
+  const layoutGateByLayoutId = new Map();
+  layouts.forEach((layout) => {
+    const layoutId = normalizeBattlefieldLayoutId(layout?.layoutId);
+    const gateKey = typeof layout?.gateKey === 'string' ? layout.gateKey.trim() : '';
+    if (!layoutId || !CITY_GATE_KEYS.includes(gateKey)) return;
+    layoutGateByLayoutId.set(layoutId, gateKey);
+  });
+
+  const gateUnitMapByKey = CITY_GATE_KEYS.reduce((acc, gateKey) => {
+    acc[gateKey] = new Map();
+    return acc;
+  }, { cheng: new Map(), qi: new Map() });
+
+  const deployments = Array.isArray(battlefieldState?.defenderDeployments)
+    ? battlefieldState.defenderDeployments
+    : [];
+  deployments.forEach((deployment) => {
+    if (deployment?.placed === false) return;
+    const layoutId = normalizeBattlefieldLayoutId(deployment?.layoutId);
+    const gateFromLayout = layoutId ? layoutGateByLayoutId.get(layoutId) : '';
+    const gateFromRow = typeof deployment?.gateKey === 'string' ? deployment.gateKey.trim() : '';
+    const gateKey = CITY_GATE_KEYS.includes(gateFromLayout)
+      ? gateFromLayout
+      : (CITY_GATE_KEYS.includes(gateFromRow) ? gateFromRow : '');
+    if (!gateKey) return;
+    const targetMap = gateUnitMapByKey[gateKey];
+    normalizeDefenderDeploymentUnits(deployment).forEach((entry) => {
+      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
+      const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
+      if (!unitTypeId || count <= 0) return;
+      targetMap.set(unitTypeId, (targetMap.get(unitTypeId) || 0) + count);
+    });
+  });
+
+  return {
+    gateDefense: CITY_GATE_KEYS.reduce((acc, gateKey) => {
+      acc[gateKey] = mapToUnitCountEntries(gateUnitMapByKey[gateKey], unitTypeMap);
+      return acc;
+    }, { cheng: [], qi: [] }),
+    updatedAt: battlefieldState?.updatedAt || null
+  };
+};
+
 const parseSupportStatusLabel = (status = '') => {
   if (status === 'moving') return '支援中';
   if (status === 'sieging') return '围城中';
@@ -2861,17 +2914,35 @@ const buildSiegePayloadForUser = ({
   const preferredGate = userActiveGate || inferredGate || '';
 
   const serializedDefenseLayout = serializeDefenseLayout(resolveNodeDefenseLayout(node, {}));
+  const layoutGateDefenseSnapshot = buildIntelGateDefenseSnapshot(serializedDefenseLayout.gateDefense, unitTypeMap);
+  const layoutHasDefenseSnapshot = hasAnyGateDefenseSnapshotEntries(layoutGateDefenseSnapshot);
+  const battlefieldGateDefenseSnapshot = buildBattlefieldGateDefenseSnapshotFromNode(node, unitTypeMap);
+  const battlefieldHasDefenseSnapshot = hasAnyGateDefenseSnapshotEntries(battlefieldGateDefenseSnapshot.gateDefense);
+  const preferredGateDefenseSnapshot = battlefieldHasDefenseSnapshot
+    ? battlefieldGateDefenseSnapshot.gateDefense
+    : layoutGateDefenseSnapshot;
+  const preferredDefenseDeploymentUpdatedAt = battlefieldHasDefenseSnapshot
+    ? (battlefieldGateDefenseSnapshot.updatedAt || serializedDefenseLayout?.updatedAt || null)
+    : (serializedDefenseLayout?.updatedAt || battlefieldGateDefenseSnapshot.updatedAt || null);
   const domainMasterDefenseSnapshot = isNodeMaster
     ? {
       nodeId: getIdString(node?._id),
       nodeName: node?.name || '',
       sourceBuildingId: '',
-      deploymentUpdatedAt: serializedDefenseLayout?.updatedAt || null,
+      deploymentUpdatedAt: preferredDefenseDeploymentUpdatedAt,
       capturedAt: null,
-      gateDefense: buildIntelGateDefenseSnapshot(serializedDefenseLayout.gateDefense, unitTypeMap)
+      gateDefense: preferredGateDefenseSnapshot
     }
     : null;
-  const effectiveDefenderSnapshot = domainMasterDefenseSnapshot || intelSnapshot;
+  const intelHasDefenseSnapshot = hasAnyGateDefenseSnapshotEntries(intelSnapshot?.gateDefense || {});
+  const normalizedIntelSnapshot = (!isNodeMaster && intelSnapshot && !intelHasDefenseSnapshot && (layoutHasDefenseSnapshot || battlefieldHasDefenseSnapshot))
+    ? {
+      ...intelSnapshot,
+      deploymentUpdatedAt: intelSnapshot?.deploymentUpdatedAt || preferredDefenseDeploymentUpdatedAt,
+      gateDefense: preferredGateDefenseSnapshot
+    }
+    : intelSnapshot;
+  const effectiveDefenderSnapshot = domainMasterDefenseSnapshot || normalizedIntelSnapshot;
   const intelNodeId = getIdString(effectiveDefenderSnapshot?.nodeId);
   const defenderHasIntel = !!effectiveDefenderSnapshot && intelNodeId === getIdString(node?._id);
   const defenderSource = defenderHasIntel ? 'intel' : 'unknown';
@@ -6499,6 +6570,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
 
     await hydrateNodeTitleStatesForNodes([node], {
       includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: false
     });
 
@@ -6892,6 +6964,7 @@ router.put('/:nodeId/domain-admins/gate-defense-viewers', authenticateToken, asy
     }
     await hydrateNodeTitleStatesForNodes([node], {
       includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: false
     });
     if (!isDomainMaster(node, requestUserId)) {
@@ -6948,6 +7021,7 @@ router.get('/:nodeId/intel-heist', authenticateToken, async (req, res) => {
     }
     await hydrateNodeTitleStatesForNodes([node], {
       includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: false
     });
     if (!user) {
@@ -6997,6 +7071,7 @@ router.post('/:nodeId/intel-heist/scan', authenticateToken, async (req, res) => 
     }
     await hydrateNodeTitleStatesForNodes([node], {
       includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: false
     });
     if (!user) {
@@ -7031,13 +7106,23 @@ router.post('/:nodeId/intel-heist/scan', authenticateToken, async (req, res) => 
         .map((item) => [item?.id || item?.unitTypeId, item])
         .filter(([id]) => !!id)
     );
+    const layoutGateDefenseSnapshot = buildIntelGateDefenseSnapshot(serializedLayout.gateDefense, unitTypeMap);
+    const battlefieldGateDefenseSnapshot = buildBattlefieldGateDefenseSnapshotFromNode(node, unitTypeMap);
+    const useBattlefieldSnapshot = hasAnyGateDefenseSnapshotEntries(battlefieldGateDefenseSnapshot.gateDefense);
+    const effectiveGateDefenseSnapshot = useBattlefieldSnapshot
+      ? battlefieldGateDefenseSnapshot.gateDefense
+      : layoutGateDefenseSnapshot;
+    const effectiveDeploymentUpdatedAt = useBattlefieldSnapshot
+      ? (battlefieldGateDefenseSnapshot.updatedAt || defenseLayout?.updatedAt || null)
+      : (defenseLayout?.updatedAt || battlefieldGateDefenseSnapshot.updatedAt || null);
+
     const snapshotData = {
       nodeId: node._id,
       nodeName: node.name,
       sourceBuildingId: buildingId,
-      deploymentUpdatedAt: defenseLayout?.updatedAt || null,
+      deploymentUpdatedAt: effectiveDeploymentUpdatedAt,
       capturedAt: new Date(),
-      gateDefense: buildIntelGateDefenseSnapshot(serializedLayout.gateDefense, unitTypeMap)
+      gateDefense: effectiveGateDefenseSnapshot
     };
 
     const targetNodeId = getIdString(node._id);
@@ -7483,6 +7568,7 @@ router.get('/:nodeId/siege', authenticateToken, async (req, res) => {
     }
     await hydrateNodeTitleStatesForNodes([node], {
       includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: true
     });
 
@@ -7662,6 +7748,8 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
     const domainMasterUser = isValidObjectId(domainMasterId)
       ? await User.findById(domainMasterId).select('username')
       : null;
+    const intelSnapshot = findUserIntelSnapshotByNodeId(user, node._id);
+    const intelVisible = !!intelSnapshot;
 
     const battlefieldItemCatalog = await fetchBattlefieldItems({ enabledOnly: true });
     const battlefieldState = resolveNodeBattlefieldLayout(node, {});
@@ -7708,7 +7796,7 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
         version: Math.max(1, Math.floor(Number(layoutBundle?.version) || 1)),
         gateKey,
         gateLabel: CITY_GATE_LABELS[gateKey] || gateKey,
-        intelVisible: true,
+        intelVisible,
         layoutMeta: layoutBundle?.activeLayout || null,
         layouts: Array.isArray(layoutBundle?.layouts) ? layoutBundle.layouts : [],
         itemCatalog: Array.isArray(layoutBundle?.itemCatalog) ? layoutBundle.itemCatalog : [],
@@ -7896,6 +7984,7 @@ router.post('/:nodeId/siege/start', authenticateToken, async (req, res) => {
     }
     await hydrateNodeTitleStatesForNodes([node], {
       includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: true
     });
 
@@ -8032,7 +8121,8 @@ router.post('/:nodeId/siege/request-support', authenticateToken, async (req, res
       return res.status(400).json({ error: '未加入熵盟，无法呼叫支援' });
     }
     await hydrateNodeTitleStatesForNodes([node], {
-      includeDefenseLayout: false,
+      includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: true
     });
 
@@ -8167,6 +8257,7 @@ router.post('/:nodeId/siege/support', authenticateToken, async (req, res) => {
     }
     await hydrateNodeTitleStatesForNodes([node], {
       includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: true
     });
 
@@ -8437,7 +8528,8 @@ router.post('/:nodeId/siege/retreat', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: '仅普通用户可执行撤退' });
     }
     await hydrateNodeTitleStatesForNodes([node], {
-      includeDefenseLayout: false,
+      includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: true
     });
 

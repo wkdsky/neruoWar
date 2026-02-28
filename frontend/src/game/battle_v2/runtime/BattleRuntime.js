@@ -439,6 +439,7 @@ export default class BattleRuntime {
     this.phase = 'deploy';
     this.startedAtMs = 0;
     this.endedAtMs = 0;
+    this.intelVisible = this.initData?.battlefield?.intelVisible !== false;
 
     this.unitTypeMap = buildUnitTypeMap(this.initData?.unitTypes || []);
     this.field = computeFieldSize(this.initData?.battlefield || {});
@@ -898,6 +899,7 @@ export default class BattleRuntime {
   }
 
   getCardRows() {
+    const hideDefenderIntelInDeploy = !this.intelVisible && this.phase === 'deploy';
     const squads = this.phase === 'battle' || this.phase === 'ended'
       ? (this.sim?.squads || [])
       : [
@@ -913,7 +915,7 @@ export default class BattleRuntime {
           morale: 100,
           placed: group?.placed !== false
         })),
-        ...this.defenderDeployGroups.map((group, index) => ({
+        ...(!hideDefenderIntelInDeploy ? this.defenderDeployGroups.map((group, index) => ({
           id: group.id,
           name: group.name,
           team: TEAM_DEFENDER,
@@ -923,7 +925,7 @@ export default class BattleRuntime {
           action: '部署中',
           stamina: 100,
           morale: 100
-        }))
+        })) : [])
       ];
 
     return squads.map((squad) => ({
@@ -963,7 +965,10 @@ export default class BattleRuntime {
   getRenderSnapshot() {
     const deployUnitCount = this.attackerDeployGroups.length + this.defenderDeployGroups.length;
     const units = ensureBuffer(this.snapshotState, 'units', UNIT_INSTANCE_STRIDE, this.crowd?.allAgents?.length || deployUnitCount);
-    const activeBuildings = Array.isArray(this.sim?.buildings) ? this.sim.buildings : this.initialBuildings;
+    const hideDefenderIntelInDeploy = !this.intelVisible && (!this.sim || this.phase === 'deploy');
+    const activeBuildings = hideDefenderIntelInDeploy
+      ? []
+      : (Array.isArray(this.sim?.buildings) ? this.sim.buildings : this.initialBuildings);
     const buildings = ensureBuffer(this.snapshotState, 'buildings', BUILDING_INSTANCE_STRIDE, activeBuildings.length || 0);
     const projectiles = ensureBuffer(this.snapshotState, 'projectiles', PROJECTILE_INSTANCE_STRIDE, this.sim?.projectiles?.length || 0);
     const effects = ensureBuffer(this.snapshotState, 'effects', EFFECT_INSTANCE_STRIDE, this.sim?.hitEffects?.length || 0);
@@ -993,7 +998,9 @@ export default class BattleRuntime {
         previewCount += 1;
       };
       this.attackerDeployGroups.forEach((group, idx) => fillPreviewGroup(group, TEAM_ATTACKER, group.id === this.selectedDeploySquadId, idx));
-      this.defenderDeployGroups.forEach((group, idx) => fillPreviewGroup(group, TEAM_DEFENDER, false, idx));
+      if (!hideDefenderIntelInDeploy) {
+        this.defenderDeployGroups.forEach((group, idx) => fillPreviewGroup(group, TEAM_DEFENDER, false, idx));
+      }
       units.count = previewCount;
 
       let wallCount = 0;
@@ -1099,6 +1106,7 @@ export default class BattleRuntime {
   }
 
   getMinimapSnapshot() {
+    const hideDefenderIntelInDeploy = !this.intelVisible && this.phase === 'deploy';
     const squads = this.phase === 'battle' || this.phase === 'ended'
       ? (this.sim?.squads || []).map((row) => ({
         id: row.id,
@@ -1110,13 +1118,15 @@ export default class BattleRuntime {
       }))
       : [
         ...this.attackerDeployGroups.map((row) => ({ id: row.id, x: row.x, y: row.y, team: TEAM_ATTACKER, remain: sumUnitsMap(row.units), selected: row.id === this.selectedDeploySquadId })),
-        ...this.defenderDeployGroups.map((row) => ({ id: row.id, x: row.x, y: row.y, team: TEAM_DEFENDER, remain: sumUnitsMap(row.units), selected: false }))
+        ...(!hideDefenderIntelInDeploy
+          ? this.defenderDeployGroups.map((row) => ({ id: row.id, x: row.x, y: row.y, team: TEAM_DEFENDER, remain: sumUnitsMap(row.units), selected: false }))
+          : [])
       ];
 
     return {
       field: this.field,
       deployRange: this.getDeployRange(),
-      buildings: this.sim?.buildings || this.initialBuildings,
+      buildings: hideDefenderIntelInDeploy ? [] : (this.sim?.buildings || this.initialBuildings),
       squads,
       visibilityMask: null
     };

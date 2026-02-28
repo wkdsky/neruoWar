@@ -2597,7 +2597,7 @@ const App = () => {
         };
     };
 
-    const fetchSiegeStatus = async (targetNodeId, { silent = true } = {}) => {
+    const fetchSiegeStatus = async (targetNodeId, { silent = true, force = false } = {}) => {
         const token = localStorage.getItem('token');
         if (!token || !targetNodeId || !authenticated || isAdmin) {
             if (!silent) {
@@ -2615,8 +2615,12 @@ const App = () => {
         }
 
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${targetNodeId}/siege`, {
-                headers: { Authorization: `Bearer ${token}` }
+            const requestUrl = force
+                ? `http://localhost:5000/api/nodes/${targetNodeId}/siege?_=${Date.now()}`
+                : `http://localhost:5000/api/nodes/${targetNodeId}/siege`;
+            const response = await fetch(requestUrl, {
+                headers: { Authorization: `Bearer ${token}` },
+                cache: 'no-store'
             });
             const parsed = await parseApiResponse(response);
             if (!response.ok || !parsed.data) {
@@ -2775,6 +2779,10 @@ const App = () => {
                 latestSnapshot: normalized
             };
         });
+        const currentSiegeNodeId = normalizeObjectId(siegeDialog.node?._id || siegeStatus.nodeId);
+        if (currentSiegeNodeId && currentSiegeNodeId === targetNodeId) {
+            fetchSiegeStatus(targetNodeId, { silent: false, force: true });
+        }
     };
 
     const handleSiegeAction = async (targetNode) => {
@@ -2792,7 +2800,7 @@ const App = () => {
             message: ''
         });
 
-        const status = await fetchSiegeStatus(nodeId, { silent: false });
+        const status = await fetchSiegeStatus(nodeId, { silent: false, force: true });
         if (!status) {
             setSiegeDialog((prev) => ({
                 ...prev,
@@ -6246,9 +6254,9 @@ const App = () => {
                             <div className="modal-header">
                                 <h3>
                                     {isSiegeDomainMasterViewer
-                                        ? '你的（域主）知识域正被攻击！'
+                                        ? '你的知识域正被攻击！'
                                         : (isSiegeDomainAdminViewer
-                                            ? '你管理的（域相）知识域正被攻击！'
+                                            ? '你管理的知识域正被攻击！'
                                             : `攻占知识域：${siegeDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'}`)}
                                 </h3>
                                 <button
