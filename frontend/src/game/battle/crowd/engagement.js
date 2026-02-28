@@ -6,6 +6,8 @@ import {
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
+const ORDER_MOVE = 'MOVE';
+const ORDER_CHARGE = 'CHARGE';
 
 const FEATURE_FLAG_QUERY_KEY = 'meleeEngage';
 const FEATURE_FLAG_GLOBAL_KEY = '__MELEE_ENGAGEMENT_ENABLED';
@@ -124,6 +126,22 @@ const isAgentMelee = (agent = {}) => {
 const canonicalPairKey = (a = '', b = '') => (
   a <= b ? `${a}|${b}` : `${b}|${a}`
 );
+
+const resolveOrderType = (squad = {}) => {
+  const orderType = typeof squad?.order?.type === 'string' ? squad.order.type : '';
+  return orderType;
+};
+
+const isChargeCommitted = (squad = {}, nowSec = 0) => (
+  resolveOrderType(squad) === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > nowSec
+);
+
+const canInjectDetourWaypoint = (squad = {}, nowSec = 0) => {
+  const orderType = resolveOrderType(squad);
+  if (orderType === ORDER_MOVE) return false;
+  if (isChargeCommitted(squad, nowSec)) return false;
+  return true;
+};
 
 const clearAgentEngagementMeta = (agent) => {
   if (!agent) return;
@@ -500,7 +518,11 @@ export const syncMeleeEngagement = (crowd, sim, walls = [], dt = 0, nowSec = 0) 
     if (attackerMeta.blockedRatio >= toSafeNumber(cfg?.blockedSquadRatio, 0.35)) {
       attacker._engageRetargetUntil = nextNow + toSafeNumber(cfg?.retargetCooldownSec, 0.9);
       attacker._engageBlockedTargetId = defender.id;
-      if ((!Array.isArray(attacker.waypoints) || attacker.waypoints.length <= 0) && attacker.behavior !== 'retreat') {
+      if (
+        (!Array.isArray(attacker.waypoints) || attacker.waypoints.length <= 0)
+        && attacker.behavior !== 'retreat'
+        && canInjectDetourWaypoint(attacker, nextNow)
+      ) {
         const driftSign = (stableHash(attacker.id) % 2 === 0) ? 1 : -1;
         attacker.waypoints = [{
           x: (attacker.x || 0) + (pair.tangentX * toSafeNumber(cfg?.detourDistance, 14) * driftSign),
@@ -511,7 +533,11 @@ export const syncMeleeEngagement = (crowd, sim, walls = [], dt = 0, nowSec = 0) 
     if (defenderMeta.blockedRatio >= toSafeNumber(cfg?.blockedSquadRatio, 0.35)) {
       defender._engageRetargetUntil = nextNow + toSafeNumber(cfg?.retargetCooldownSec, 0.9);
       defender._engageBlockedTargetId = attacker.id;
-      if ((!Array.isArray(defender.waypoints) || defender.waypoints.length <= 0) && defender.behavior !== 'retreat') {
+      if (
+        (!Array.isArray(defender.waypoints) || defender.waypoints.length <= 0)
+        && defender.behavior !== 'retreat'
+        && canInjectDetourWaypoint(defender, nextNow)
+      ) {
         const driftSign = (stableHash(defender.id) % 2 === 0) ? -1 : 1;
         defender.waypoints = [{
           x: (defender.x || 0) + (pair.tangentX * toSafeNumber(cfg?.detourDistance, 14) * driftSign),

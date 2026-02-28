@@ -246,6 +246,7 @@ export default class CameraController {
     this.centerY = 0;
     this.lookAheadScale = 0.28;
     this.lookAheadMax = 78;
+    this.lookAheadSpeedEps = 1.8;
     this.worldYawDeg = 0;
 
     this.eye = [0, 0, 0];
@@ -290,9 +291,12 @@ export default class CameraController {
       const vx = Number(anchor.vx) || 0;
       const vy = Number(anchor.vy) || 0;
       const speed = Math.hypot(vx, vy);
-      const lookAhead = Math.min(this.lookAheadMax, speed * this.lookAheadScale);
-      const dirX = speed > 1e-4 ? (vx / speed) : 0;
-      const dirY = speed > 1e-4 ? (vy / speed) : 0;
+      const validLookAhead = speed >= this.lookAheadSpeedEps;
+      const lookAhead = validLookAhead
+        ? Math.min(this.lookAheadMax, speed * this.lookAheadScale)
+        : 0;
+      const dirX = validLookAhead ? (vx / speed) : 0;
+      const dirY = validLookAhead ? (vy / speed) : 0;
       const targetX = (Number(anchor.x) || 0) + (dirX * lookAhead);
       const targetY = (Number(anchor.y) || 0) + (dirY * lookAhead);
       const followLerp = clamp(dt * 6.8, 0, 1);

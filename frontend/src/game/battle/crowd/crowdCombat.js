@@ -18,6 +18,9 @@ import {
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
+const ORDER_MOVE = 'MOVE';
+const ORDER_ATTACK_MOVE = 'ATTACK_MOVE';
+const ORDER_CHARGE = 'CHARGE';
 
 const toEnemyTeam = (team) => (team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER);
 
@@ -426,17 +429,29 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     if (!squad || squad.remain <= 0) return;
     if ((Number(squad?.skillRush?.ttl) || 0) > 0) return;
     const behavior = typeof squad.behavior === 'string' ? squad.behavior : 'auto';
+    const orderType = typeof squad?.order?.type === 'string' ? squad.order.type : '';
+    const chargeCommitted = orderType === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > (Number(sim?.timeElapsed) || 0);
     if (behavior === 'retreat') return;
     if (squad.activeSkill && (squad.classTag === 'archer' || squad.classTag === 'artillery')) return;
     const enemySquads = squad.team === TEAM_ATTACKER ? defenders : attackers;
     const enemyTeam = toEnemyTeam(squad.team);
     if (enemySquads.length <= 0) return;
-    const targetSquad = pickEnemySquadTarget(squad, enemySquads, {
-      engagementEnabled,
-      config: engagementCfg,
-      walls,
-      nowSec: Number(sim?.timeElapsed) || 0
-    });
+    let targetSquad = null;
+    if (chargeCommitted) {
+      targetSquad = enemySquads.find((row) => row.id === squad.targetSquadId && row.remain > 0)
+        || enemySquads
+          .slice()
+          .sort((a, b) => Math.hypot((a.x || 0) - (squad.x || 0), (a.y || 0) - (squad.y || 0))
+            - Math.hypot((b.x || 0) - (squad.x || 0), (b.y || 0) - (squad.y || 0)))[0]
+        || null;
+    } else {
+      targetSquad = pickEnemySquadTarget(squad, enemySquads, {
+        engagementEnabled,
+        config: engagementCfg,
+        walls,
+        nowSec: Number(sim?.timeElapsed) || 0
+      });
+    }
     if (!targetSquad) return;
     squad.targetSquadId = targetSquad.id;
 
@@ -449,9 +464,18 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
       || squad.classTag === 'artillery'
       || squad.roleTag === '远程'
       || (Number(squad?.stats?.range) || 0) >= 2.2;
-    const idleCanRetaliate = behavior !== 'idle'
+    const squadDistToTarget = Math.hypot((targetSquad.x || 0) - (squad.x || 0), (targetSquad.y || 0) - (squad.y || 0));
+    const moveOrder = orderType === ORDER_MOVE;
+    const attackMoveOrder = orderType === ORDER_ATTACK_MOVE;
+    let idleCanRetaliate = behavior !== 'idle'
       || (Number(squad.underAttackTimer) || 0) > 0.18
-      || Math.hypot((targetSquad.x || 0) - (squad.x || 0), (targetSquad.y || 0) - (squad.y || 0)) < (attackRange * 0.92);
+      || squadDistToTarget < (attackRange * 0.92);
+    if (moveOrder) {
+      idleCanRetaliate = ((Number(squad.underAttackTimer) || 0) > 0.42)
+        || squadDistToTarget < (attackRange * 0.45);
+    } else if (attackMoveOrder || chargeCommitted) {
+      idleCanRetaliate = true;
+    }
     if (!idleCanRetaliate) return;
     if (squad.classTag === 'artillery' && isRanged) {
       squad._artilleryVolleyCd = Math.max(0, (Number(squad._artilleryVolleyCd) || 0) - safeDt);

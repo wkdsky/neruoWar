@@ -7,6 +7,7 @@ import AdminPanel from './components/admin/AdminPanel';
 import AlliancePanel from './components/game/AlliancePanel';
 import ProfilePanel from './components/game/ProfilePanel';
 import ArmyPanel from './components/game/ArmyPanel';
+import TrainingGroundPanel from './components/game/TrainingGroundPanel';
 import NodeDetail from './components/game/NodeDetail';
 import HomeView from './components/game/Home';
 import KnowledgeDomainScene from './components/game/KnowledgeDomainScene';
@@ -520,6 +521,7 @@ const App = () => {
     const [notificationActionId, setNotificationActionId] = useState('');
     const [adminPendingNodes, setAdminPendingNodes] = useState([]);
     const [showRelatedDomainsPanel, setShowRelatedDomainsPanel] = useState(false);
+    const [showMilitaryMenu, setShowMilitaryMenu] = useState(false);
     const [relatedDomainsData, setRelatedDomainsData] = useState({
         loading: false,
         error: '',
@@ -617,6 +619,7 @@ const App = () => {
     const headerRef = useRef(null);
     const notificationsWrapperRef = useRef(null);
     const relatedDomainsWrapperRef = useRef(null);
+    const militaryMenuWrapperRef = useRef(null);
     const senseSelectorAnchorRef = useRef({ x: 0, y: 0, visible: false });
     const knowledgeDomainReturnContextRef = useRef(null);
     const [knowledgeHeaderOffset, setKnowledgeHeaderOffset] = useState(92);
@@ -2139,7 +2142,7 @@ const App = () => {
         return;
       }
 
-      if (targetView === 'army' && !isAdmin) {
+      if ((targetView === 'army' || targetView === 'trainingGround') && !isAdmin) {
         setView(targetView);
         return;
       }
@@ -2193,7 +2196,7 @@ const App = () => {
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
     if (view === 'login') return;
 
-    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army'].includes(view);
+    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'trainingGround'].includes(view);
     if (!isKnownView) {
       setView('home');
       return;
@@ -2204,7 +2207,7 @@ const App = () => {
       return;
     }
 
-    if (view === 'army' && isAdmin) {
+    if ((view === 'army' || view === 'trainingGround') && isAdmin) {
       setView('home');
       return;
     }
@@ -2247,6 +2250,21 @@ const App = () => {
     };
   }, [showRelatedDomainsPanel]);
 
+  useEffect(() => {
+    if (!showMilitaryMenu) return undefined;
+
+    const handleClickOutside = (event) => {
+      if (militaryMenuWrapperRef.current && !militaryMenuWrapperRef.current.contains(event.target)) {
+        setShowMilitaryMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showMilitaryMenu]);
+
     const handleLogout = () => {
         localStorage.removeItem('token');
         localStorage.removeItem('userId');
@@ -2274,6 +2292,7 @@ const App = () => {
         setNotificationActionId('');
         setAdminPendingNodes([]);
         setShowRelatedDomainsPanel(false);
+        setShowMilitaryMenu(false);
         setRelatedDomainsData({
             loading: false,
             error: '',
@@ -5845,6 +5864,7 @@ const App = () => {
                                             const nextVisible = !showNotificationsPanel;
                                             setShowNotificationsPanel(nextVisible);
                                             setShowRelatedDomainsPanel(false);
+                                            setShowMilitaryMenu(false);
                                             if (nextVisible) {
                                                 await fetchNotifications(false);
                                                 if (isAdmin) {
@@ -5871,6 +5891,7 @@ const App = () => {
                                             const nextVisible = !showRelatedDomainsPanel;
                                             setShowNotificationsPanel(false);
                                             setShowRelatedDomainsPanel(nextVisible);
+                                            setShowMilitaryMenu(false);
                                         }}
                                     >
                                         <Layers size={18} />
@@ -5885,6 +5906,7 @@ const App = () => {
                                 </div>
                                 <button
                                     onClick={async () => {
+                                        setShowMilitaryMenu(false);
                                         await navigateToHomeWithDockCollapse();
                                     }}
                                     className="btn btn-primary"
@@ -5894,6 +5916,7 @@ const App = () => {
                                 </button>
                                 <button
                                     onClick={async () => {
+                                        setShowMilitaryMenu(false);
                                         await prepareForPrimaryNavigation();
                                         setView('alliance');
                                     }}
@@ -5903,20 +5926,52 @@ const App = () => {
                                     熵盟
                                 </button>
                                 {!isAdmin && (
-                                    <button
-                                        onClick={async () => {
-                                            await prepareForPrimaryNavigation();
-                                            setView('army');
-                                        }}
-                                        className="btn btn-secondary"
-                                    >
-                                        <Users size={18} />
-                                        军团编制
-                                    </button>
+                                    <div className="military-menu-wrapper" ref={militaryMenuWrapperRef}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary military-menu-trigger"
+                                            onClick={() => {
+                                                const nextVisible = !showMilitaryMenu;
+                                                setShowNotificationsPanel(false);
+                                                setShowRelatedDomainsPanel(false);
+                                                setShowMilitaryMenu(nextVisible);
+                                            }}
+                                        >
+                                            <Users size={18} />
+                                            军事
+                                        </button>
+                                        {showMilitaryMenu && (
+                                            <div className="military-menu-panel">
+                                                <button
+                                                    type="button"
+                                                    className="military-menu-item"
+                                                    onClick={async () => {
+                                                        setShowMilitaryMenu(false);
+                                                        await prepareForPrimaryNavigation();
+                                                        setView('army');
+                                                    }}
+                                                >
+                                                    兵营
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="military-menu-item"
+                                                    onClick={async () => {
+                                                        setShowMilitaryMenu(false);
+                                                        await prepareForPrimaryNavigation();
+                                                        setView('trainingGround');
+                                                    }}
+                                                >
+                                                    训练场
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
                                 {isAdmin && (
                                     <button
                                         onClick={() => {
+                                            setShowMilitaryMenu(false);
                                             openAdminPanel('users');
                                         }}
                                         className="btn btn-warning"
@@ -6122,6 +6177,9 @@ const App = () => {
                 {view === "army" && !isAdmin && (
                     <ArmyPanel />
                 )}
+                {view === "trainingGround" && !isAdmin && (
+                    <TrainingGroundPanel />
+                )}
 
                 {view !== "home" &&
                  !(view === "nodeDetail" && currentNodeDetail) &&
@@ -6129,7 +6187,8 @@ const App = () => {
                  view !== "alliance" &&
                  !(view === "admin" && isAdmin) &&
                  view !== "profile" &&
-                 !(view === "army" && !isAdmin) && (
+                 !(view === "army" && !isAdmin) &&
+                 !(view === "trainingGround" && !isAdmin) && (
                     <div className="no-pending-nodes">
                         <p>页面状态异常，已为你回退到首页</p>
                         <button

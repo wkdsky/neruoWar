@@ -1282,6 +1282,48 @@ body {
     position: relative;
 }
 
+.military-menu-wrapper {
+    position: relative;
+}
+
+.military-menu-trigger {
+    min-width: 98px;
+    justify-content: center;
+}
+
+.military-menu-panel {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    z-index: 999;
+    min-width: 160px;
+    border-radius: 10px;
+    border: 1px solid rgba(59, 130, 246, 0.45);
+    background: rgba(15, 23, 42, 0.97);
+    box-shadow: 0 16px 32px rgba(2, 6, 23, 0.45);
+    display: grid;
+    padding: 6px;
+    gap: 4px;
+}
+
+.military-menu-item {
+    border: none;
+    border-radius: 7px;
+    background: rgba(30, 41, 59, 0.85);
+    color: #e2e8f0;
+    cursor: pointer;
+    padding: 0.5rem 0.65rem;
+    text-align: left;
+    font-size: 0.82rem;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+.military-menu-item:hover {
+    background: rgba(37, 99, 235, 0.35);
+    color: #f8fafc;
+}
+
 .related-domains-trigger-btn {
     min-width: 122px;
     justify-content: center;
@@ -1341,6 +1383,29 @@ body {
 
 .related-domains-body {
     padding: 0.8rem 1rem 1rem;
+}
+
+.training-ground-entry {
+    margin: 2.2rem auto;
+    width: min(560px, 90vw);
+    padding: 1.2rem;
+    border-radius: 12px;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    background: rgba(15, 23, 42, 0.8);
+    color: #e2e8f0;
+    display: grid;
+    gap: 0.75rem;
+}
+
+.training-ground-entry h2 {
+    margin: 0;
+    font-size: 1.1rem;
+}
+
+.training-ground-entry p {
+    margin: 0;
+    color: #cbd5e1;
+    font-size: 0.9rem;
 }
 
 .related-domain-section {

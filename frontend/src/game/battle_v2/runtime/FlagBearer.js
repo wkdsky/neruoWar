@@ -18,22 +18,12 @@ export const resolveFlagBearerAgent = (crowd, squad) => {
 export const resolveSquadAnchor = (sim, crowd, squadId) => {
   const squad = (sim?.squads || []).find((row) => row.id === squadId) || null;
   if (!squad) return null;
-  const flag = resolveFlagBearerAgent(crowd, squad);
-  if (flag) {
-    return {
-      x: Number(flag.x) || 0,
-      y: Number(flag.y) || 0,
-      vx: Number(flag.vx) || 0,
-      vy: Number(flag.vy) || 0,
-      squadId: squad.id,
-      team: squad.team
-    };
-  }
+  // Formation anchor is authoritative for control/camera; flag bearer is visual-only.
   return {
     x: Number(squad.x) || 0,
     y: Number(squad.y) || 0,
-    vx: 0,
-    vy: 0,
+    vx: Number(squad.vx) || 0,
+    vy: Number(squad.vy) || 0,
     squadId: squad.id,
     team: squad.team
   };

@@ -10,10 +10,6 @@ import {
   sumUnitsMap,
   withRepConfig
 } from './RepMapping';
-import {
-  resolveFallbackAnchor,
-  resolveSquadAnchor
-} from './FlagBearer';
 import { UNIT_INSTANCE_STRIDE } from '../render/ImpostorRenderer';
 import { BUILDING_INSTANCE_STRIDE } from '../render/BuildingRenderer';
 import { PROJECTILE_INSTANCE_STRIDE } from '../render/ProjectileRenderer';
@@ -25,10 +21,24 @@ const DEFAULT_TIME_LIMIT = 240;
 const DEFAULT_UNITS_PER_SOLDIER = 10;
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
+const TEAM_ANY = 'any';
 const MORALE_MAX = 100;
 const STAMINA_MAX = 100;
 const TEAM_ZONE_GUTTER = 10;
 const DEPLOY_ZONE_RATIO = 0.2;
+const ORDER_IDLE = 'IDLE';
+const ORDER_MOVE = 'MOVE';
+const ORDER_ATTACK_MOVE = 'ATTACK_MOVE';
+const ORDER_CHARGE = 'CHARGE';
+const SPEED_MODE_B = 'B_HARMONIC';
+const SPEED_MODE_C = 'C_PER_TYPE';
+const SPEED_MODE_AUTO = 'AUTO';
+const SPEED_AUTH_USER = 'USER';
+const SPEED_AUTH_AI = 'AI';
+const SPEED_POLICY_MARCH = 'MARCH';
+const SPEED_POLICY_RETREAT = 'RETREAT';
+const SPEED_POLICY_REFORM = 'REFORM';
+const CAMERA_DEAD_ZONE = 0.9;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const clampToRange = (value, min, max) => {
@@ -38,6 +48,7 @@ const clampToRange = (value, min, max) => {
   return (safeMin + safeMax) * 0.5;
 };
 const degToRad = (deg) => (Number(deg) || 0) * (Math.PI / 180);
+const resolveTeamTag = (team = TEAM_ATTACKER) => (team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER);
 
 const buildUnitTypeMap = (unitTypes = []) => {
   const map = new Map();
@@ -150,6 +161,25 @@ const buildObstacleList = (battlefield = {}) => {
     };
   });
 };
+
+const buildItemCatalog = (battlefield = {}) => (
+  (Array.isArray(battlefield?.itemCatalog) ? battlefield.itemCatalog : [])
+    .map((item) => {
+      const itemId = typeof item?.itemId === 'string' ? item.itemId.trim() : '';
+      if (!itemId) return null;
+      return {
+        itemId,
+        name: typeof item?.name === 'string' && item.name.trim() ? item.name.trim() : itemId,
+        width: Math.max(8, Number(item?.width) || 84),
+        depth: Math.max(8, Number(item?.depth) || 24),
+        height: Math.max(6, Number(item?.height) || 38),
+        hp: Math.max(1, Number(item?.hp) || 180),
+        defense: Math.max(0.1, Number(item?.defense) || 1.1),
+        style: item?.style && typeof item.style === 'object' ? item.style : {}
+      };
+    })
+    .filter(Boolean)
+);
 
 const cloneObstacleList = (list = []) => (
   (Array.isArray(list) ? list : []).map((wall) => ({
@@ -336,26 +366,35 @@ const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, un
   return groups;
 };
 
-const createSquad = ({ group, index, team, unitTypeMap, unitsPerSoldier, fieldWidth, fieldHeight }) => {
+const createSquad = ({
+  group,
+  index,
+  team,
+  unitTypeMap,
+  unitsPerSoldier,
+  fieldWidth,
+  fieldHeight,
+  allowCrossMidline = true
+}) => {
   const units = normalizeUnitsMap(group?.units || {});
   const startCount = sumUnitsMap(units);
   const stats = aggregateStats(units, unitTypeMap);
   const hpAvg = Math.max(1, Number(stats.hpAvg) || 1);
   const maxHealth = Math.max(1, Math.round(startCount * hpAvg));
   const radius = clamp(8 + (Math.sqrt(Math.max(1, startCount)) * 0.58), 10, 118);
-  const startX = clampXToTeamZone(Number(group?.x) || 0, fieldWidth, radius, team);
+  const startX = allowCrossMidline
+    ? clamp(Number(group?.x) || 0, -fieldWidth / 2 + radius, fieldWidth / 2 - radius)
+    : clampXToTeamZone(Number(group?.x) || 0, fieldWidth, radius, team);
   const startY = clamp(
     Number(group?.y) || 0,
     (-fieldHeight / 2) + radius,
     (fieldHeight / 2) - radius
   );
   const rallyRadius = Math.max(6, Math.min(16, radius * 0.35));
-  const rallyX = clampXToTeamZone(
-    team === TEAM_ATTACKER ? (-fieldWidth / 2 + 40) : (fieldWidth / 2 - 40),
-    fieldWidth,
-    rallyRadius,
-    team
-  );
+  const rallyDefaultX = team === TEAM_ATTACKER ? (-fieldWidth / 2 + 40) : (fieldWidth / 2 - 40);
+  const rallyX = allowCrossMidline
+    ? clamp(rallyDefaultX, -fieldWidth / 2 + rallyRadius, fieldWidth / 2 - rallyRadius)
+    : clampXToTeamZone(rallyDefaultX, fieldWidth, rallyRadius, team);
 
   return {
     id: `${team}_squad_${index + 1}`,
@@ -377,10 +416,27 @@ const createSquad = ({ group, index, team, unitTypeMap, unitsPerSoldier, fieldWi
     roleTag: stats.roleTag,
     x: startX,
     y: startY,
+    vx: 0,
+    vy: 0,
+    dirX: team === TEAM_ATTACKER ? 1 : -1,
+    dirY: 0,
+    speed: 0,
     radius,
     waypoints: [],
     action: '待命',
     behavior: team === TEAM_DEFENDER ? 'auto' : 'idle',
+    order: {
+      type: ORDER_IDLE,
+      issuedAt: 0,
+      commitUntil: 0,
+      targetPoint: null,
+      targetSquadId: ''
+    },
+    speedMode: SPEED_MODE_B,
+    speedModeAuthority: SPEED_AUTH_AI,
+    speedPolicy: SPEED_POLICY_MARCH,
+    reformUntil: 0,
+    reformRadiusThreshold: Math.max(18, radius * 1.4),
     underAttackTimer: 0,
     attackCooldown: 0,
     effectBuff: null,
@@ -446,11 +502,23 @@ export default class BattleRuntime {
     this.unitsPerSoldier = Math.max(1, Number(this.initData?.unitsPerSoldier) || DEFAULT_UNITS_PER_SOLDIER);
     this.repConfig = buildRepConfig(options?.repConfig || {});
     this.visualConfig = buildVisualResolver(options?.visualConfig || {});
-    this.attackerRoster = buildRosterMap(this.initData?.attacker?.units || [], this.unitTypeMap);
+    const initAllowCross = this.initData?.rules?.allowCrossMidline;
+    const optionAllowCross = options?.rules?.allowCrossMidline;
+    this.rules = {
+      allowCrossMidline: typeof optionAllowCross === 'boolean'
+        ? optionAllowCross
+        : (typeof initAllowCross === 'boolean' ? initAllowCross : true)
+    };
+    const attackerRosterSource = this.initData?.attacker?.rosterUnits || this.initData?.attacker?.units || [];
+    const defenderRosterSource = this.initData?.defender?.rosterUnits || this.initData?.defender?.units || [];
+    const defenderDeploySource = this.initData?.defender?.deployUnits || this.initData?.defender?.units || [];
+    this.attackerRoster = buildRosterMap(attackerRosterSource, this.unitTypeMap);
+    this.defenderRoster = buildRosterMap(defenderRosterSource, this.unitTypeMap);
+    this.itemCatalog = buildItemCatalog(this.initData?.battlefield || {});
 
     this.attackerDeployGroups = [];
     this.defenderDeployGroups = buildDefenderDeployGroups(
-      this.initData?.defender?.units || [],
+      defenderDeploySource,
       this.initData?.battlefield?.defenderDeployments || [],
       this.field,
       this.unitTypeMap
@@ -463,6 +531,18 @@ export default class BattleRuntime {
 
     this.sim = null;
     this.crowd = null;
+    this.cameraAnchor = { x: 0, y: 0, vx: 0, vy: 0, squadId: '', team: '' };
+    this.cameraAnchorRaw = { x: 0, y: 0, vx: 0, vy: 0, squadId: '', team: '' };
+    this._lastMidlineClamp = {
+      squadId: '',
+      preClampX: 0,
+      postClampX: 0,
+      team: '',
+      radius: 0,
+      allowedMinX: 0,
+      allowedMaxX: 0,
+      changed: false
+    };
 
     this.snapshotState = {
       units: { stride: UNIT_INSTANCE_STRIDE, count: 0, capacity: 0, data: new Float32Array(UNIT_INSTANCE_STRIDE * 16) },
@@ -474,7 +554,8 @@ export default class BattleRuntime {
     this.debugStats = {
       simStepMs: 0,
       renderMs: 0,
-      fps: 0
+      fps: 0,
+      allowCrossMidline: this.rules.allowCrossMidline
     };
   }
 
@@ -484,6 +565,10 @@ export default class BattleRuntime {
 
   getField() {
     return this.field;
+  }
+
+  getRules() {
+    return { ...this.rules };
   }
 
   getDeployRange() {
@@ -502,15 +587,27 @@ export default class BattleRuntime {
     this.selectedDeploySquadId = String(groupId || '');
   }
 
-  getDeployGroupById(groupId = '') {
+  getDeployGroupById(groupId = '', team = TEAM_ANY) {
     const safeId = typeof groupId === 'string' ? groupId.trim() : '';
     if (!safeId) return null;
-    return this.attackerDeployGroups.find((row) => row.id === safeId) || null;
+    const safeTeam = typeof team === 'string' ? team.trim() : '';
+    if (safeTeam === TEAM_ATTACKER) {
+      return this.attackerDeployGroups.find((row) => row.id === safeId) || null;
+    }
+    if (safeTeam === TEAM_DEFENDER) {
+      return this.defenderDeployGroups.find((row) => row.id === safeId) || null;
+    }
+    return this.attackerDeployGroups.find((row) => row.id === safeId)
+      || this.defenderDeployGroups.find((row) => row.id === safeId)
+      || null;
   }
 
-  getAttackerRosterRows() {
-    const usedMap = collectUsedUnitsMap(this.attackerDeployGroups);
-    return Object.values(this.attackerRoster)
+  getRosterRows(team = TEAM_ATTACKER) {
+    const safeTeam = resolveTeamTag(team);
+    const groupRows = safeTeam === TEAM_DEFENDER ? this.defenderDeployGroups : this.attackerDeployGroups;
+    const roster = safeTeam === TEAM_DEFENDER ? this.defenderRoster : this.attackerRoster;
+    const usedMap = collectUsedUnitsMap(groupRows);
+    return Object.values(roster)
       .map((row) => {
         const total = Math.max(0, Math.floor(Number(row?.count) || 0));
         const used = Math.max(0, Math.floor(Number(usedMap[row.unitTypeId]) || 0));
@@ -525,12 +622,22 @@ export default class BattleRuntime {
       .sort((a, b) => a.unitName.localeCompare(b.unitName, 'zh-Hans-CN'));
   }
 
-  createAttackerDeployGroup({ units = {}, name = '', x, y, placed = false } = {}) {
+  getAttackerRosterRows() {
+    return this.getRosterRows(TEAM_ATTACKER);
+  }
+
+  getDefenderRosterRows() {
+    return this.getRosterRows(TEAM_DEFENDER);
+  }
+
+  createDeployGroup(team = TEAM_ATTACKER, { units = {}, name = '', x, y, placed = false } = {}) {
     if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可新建部队' };
+    const safeTeam = resolveTeamTag(team);
     const nextUnits = normalizeUnitsMap(units);
     if (sumUnitsMap(nextUnits) <= 0) return { ok: false, reason: '请至少配置一个兵种' };
-    const usedMap = collectUsedUnitsMap(this.attackerDeployGroups);
-    const rows = this.getAttackerRosterRows();
+    const targetGroups = safeTeam === TEAM_DEFENDER ? this.defenderDeployGroups : this.attackerDeployGroups;
+    const usedMap = collectUsedUnitsMap(targetGroups);
+    const rows = this.getRosterRows(safeTeam);
     for (const [unitTypeId, count] of Object.entries(nextUnits)) {
       const rosterRow = rows.find((row) => row.unitTypeId === unitTypeId);
       const total = Math.max(0, Math.floor(Number(rosterRow?.total) || 0));
@@ -541,8 +648,8 @@ export default class BattleRuntime {
       }
     }
 
-    const gridRows = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, this.attackerDeployGroups.length + 1))));
-    const index = this.attackerDeployGroups.length;
+    const gridRows = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, targetGroups.length + 1))));
+    const index = targetGroups.length;
     const row = index % gridRows;
     const layer = Math.floor(index / gridRows);
     const fallbackY = clamp(
@@ -551,31 +658,31 @@ export default class BattleRuntime {
       this.field.height / 2 - 12
     );
     const fallbackX = clampXToDeployZone(
-      -this.field.width / 2 + 72 + (layer * 56),
+      safeTeam === TEAM_DEFENDER ? (this.field.width / 2 - 72 - (layer * 56)) : (-this.field.width / 2 + 72 + (layer * 56)),
       this.field.width,
       10,
-      TEAM_ATTACKER
+      safeTeam
     );
     const candidateTypeId = Object.keys(nextUnits)[0] || '';
     const candidateName = this.unitTypeMap.get(candidateTypeId)?.name || candidateTypeId || '部队';
     const groupName = (typeof name === 'string' && name.trim())
       ? name.trim()
-      : `${candidateName}${this.attackerDeployGroups.length + 1}`;
+      : `${candidateName}${targetGroups.length + 1}`;
     const safeX = clampXToDeployZone(
       Number.isFinite(Number(x)) ? Number(x) : fallbackX,
       this.field.width,
       10,
-      TEAM_ATTACKER
+      safeTeam
     );
     const safeY = clamp(
       Number.isFinite(Number(y)) ? Number(y) : fallbackY,
       -this.field.height / 2 + 10,
       this.field.height / 2 - 10
     );
-    const groupId = `atk_custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    this.attackerDeployGroups.push({
+    const groupId = `${safeTeam === TEAM_DEFENDER ? 'def' : 'atk'}_custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    targetGroups.push({
       id: groupId,
-      team: TEAM_ATTACKER,
+      team: safeTeam,
       name: groupName,
       units: nextUnits,
       x: safeX,
@@ -587,15 +694,17 @@ export default class BattleRuntime {
     return { ok: true, groupId };
   }
 
-  updateAttackerDeployGroup(groupId = '', { units = null, name = null } = {}) {
+  updateDeployGroup(team = TEAM_ATTACKER, groupId = '', { units = null, name = null } = {}) {
     if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可编辑部队' };
-    const target = this.getDeployGroupById(groupId);
+    const safeTeam = resolveTeamTag(team);
+    const target = this.getDeployGroupById(groupId, safeTeam);
     if (!target) return { ok: false, reason: '未找到部队' };
+    const groups = safeTeam === TEAM_DEFENDER ? this.defenderDeployGroups : this.attackerDeployGroups;
     const nextUnits = units ? normalizeUnitsMap(units) : normalizeUnitsMap(target.units || {});
     if (sumUnitsMap(nextUnits) <= 0) return { ok: false, reason: '请至少配置一个兵种' };
-    const others = this.attackerDeployGroups.filter((row) => row.id !== target.id);
+    const others = groups.filter((row) => row.id !== target.id);
     const usedMap = collectUsedUnitsMap(others);
-    const rows = this.getAttackerRosterRows();
+    const rows = this.getRosterRows(safeTeam);
     for (const [unitTypeId, count] of Object.entries(nextUnits)) {
       const rosterRow = rows.find((row) => row.unitTypeId === unitTypeId);
       const total = Math.max(0, Math.floor(Number(rosterRow?.total) || 0));
@@ -610,33 +719,68 @@ export default class BattleRuntime {
     return { ok: true };
   }
 
-  removeAttackerDeployGroup(groupId = '') {
+  removeDeployGroup(team = TEAM_ATTACKER, groupId = '') {
     if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可解散部队' };
+    const safeTeam = resolveTeamTag(team);
     const safeGroupId = typeof groupId === 'string' ? groupId.trim() : '';
     if (!safeGroupId) return { ok: false, reason: '缺少部队ID' };
-    const prevLen = this.attackerDeployGroups.length;
-    this.attackerDeployGroups = this.attackerDeployGroups.filter((row) => row.id !== safeGroupId);
-    if (this.attackerDeployGroups.length === prevLen) return { ok: false, reason: '未找到部队' };
-    const fallbackId = this.attackerDeployGroups[0]?.id || '';
+    const listKey = safeTeam === TEAM_DEFENDER ? 'defenderDeployGroups' : 'attackerDeployGroups';
+    const prevLen = this[listKey].length;
+    this[listKey] = this[listKey].filter((row) => row.id !== safeGroupId);
+    if (this[listKey].length === prevLen) return { ok: false, reason: '未找到部队' };
+    const fallbackId = this.attackerDeployGroups[0]?.id || this.defenderDeployGroups[0]?.id || '';
     if (this.selectedDeploySquadId === safeGroupId) this.selectedDeploySquadId = fallbackId;
     if (this.focusSquadId === safeGroupId) this.focusSquadId = fallbackId;
     return { ok: true };
   }
 
-  setAttackerDeployGroupPlaced(groupId = '', placed = true) {
+  setDeployGroupPlaced(team = TEAM_ATTACKER, groupId = '', placed = true) {
     if (this.phase !== 'deploy') return false;
-    const target = this.getDeployGroupById(groupId);
+    const safeTeam = resolveTeamTag(team);
+    const target = this.getDeployGroupById(groupId, safeTeam);
     if (!target) return false;
     target.placed = !!placed;
     return true;
   }
 
-  moveDeployGroup(groupId, worldPoint) {
+  createAttackerDeployGroup(options = {}) {
+    return this.createDeployGroup(TEAM_ATTACKER, options);
+  }
+
+  createDefenderDeployGroup(options = {}) {
+    return this.createDeployGroup(TEAM_DEFENDER, options);
+  }
+
+  updateAttackerDeployGroup(groupId = '', options = {}) {
+    return this.updateDeployGroup(TEAM_ATTACKER, groupId, options);
+  }
+
+  updateDefenderDeployGroup(groupId = '', options = {}) {
+    return this.updateDeployGroup(TEAM_DEFENDER, groupId, options);
+  }
+
+  removeAttackerDeployGroup(groupId = '') {
+    return this.removeDeployGroup(TEAM_ATTACKER, groupId);
+  }
+
+  removeDefenderDeployGroup(groupId = '') {
+    return this.removeDeployGroup(TEAM_DEFENDER, groupId);
+  }
+
+  setAttackerDeployGroupPlaced(groupId = '', placed = true) {
+    return this.setDeployGroupPlaced(TEAM_ATTACKER, groupId, placed);
+  }
+
+  setDefenderDeployGroupPlaced(groupId = '', placed = true) {
+    return this.setDeployGroupPlaced(TEAM_DEFENDER, groupId, placed);
+  }
+
+  moveDeployGroup(groupId, worldPoint, team = TEAM_ANY) {
     const targetId = String(groupId || this.selectedDeploySquadId || '');
-    const group = this.attackerDeployGroups.find((row) => row.id === targetId);
+    const group = this.getDeployGroupById(targetId, team);
     if (!group) return false;
     const safePoint = clampPointToField(worldPoint, this.field, 10);
-    group.x = clampXToDeployZone(safePoint.x, this.field.width, 10, TEAM_ATTACKER);
+    group.x = clampXToDeployZone(safePoint.x, this.field.width, 10, resolveTeamTag(group.team));
     group.y = safePoint.y;
     return true;
   }
@@ -647,12 +791,16 @@ export default class BattleRuntime {
     return isXInDeployZone(worldPoint?.x, this.field.width, radius, safeTeam);
   }
 
-  pickAttackerDeployGroup(worldPoint, radius = 26) {
+  pickDeployGroup(worldPoint, team = TEAM_ANY, radius = 26) {
+    const safeTeam = typeof team === 'string' ? team.trim() : '';
+    const targetGroups = safeTeam === TEAM_ATTACKER
+      ? this.attackerDeployGroups
+      : (safeTeam === TEAM_DEFENDER ? this.defenderDeployGroups : [...this.attackerDeployGroups, ...this.defenderDeployGroups]);
     const x = Number(worldPoint?.x) || 0;
     const y = Number(worldPoint?.y) || 0;
     let best = null;
     let bestDist = Infinity;
-    this.attackerDeployGroups.forEach((group) => {
+    targetGroups.forEach((group) => {
       if (!group) return;
       const dx = (Number(group.x) || 0) - x;
       const dy = (Number(group.y) || 0) - y;
@@ -666,11 +814,107 @@ export default class BattleRuntime {
     return best;
   }
 
+  pickAttackerDeployGroup(worldPoint, radius = 26) {
+    return this.pickDeployGroup(worldPoint, TEAM_ATTACKER, radius);
+  }
+
+  pickDefenderDeployGroup(worldPoint, radius = 26) {
+    return this.pickDeployGroup(worldPoint, TEAM_DEFENDER, radius);
+  }
+
+  getItemCatalog() {
+    return Array.isArray(this.itemCatalog) ? this.itemCatalog : [];
+  }
+
+  pickBuilding(worldPoint, radius = 24) {
+    const x = Number(worldPoint?.x) || 0;
+    const y = Number(worldPoint?.y) || 0;
+    let best = null;
+    let bestDist = Infinity;
+    (Array.isArray(this.initialBuildings) ? this.initialBuildings : []).forEach((item) => {
+      if (!item) return;
+      const dx = (Number(item.x) || 0) - x;
+      const dy = (Number(item.y) || 0) - y;
+      const dist = Math.hypot(dx, dy);
+      const hitRadius = Math.max(
+        Number(radius) || 0,
+        Math.max(8, (Math.max(Math.abs(Number(item.width) || 0), Math.abs(Number(item.depth) || 0)) * 0.55))
+      );
+      if (dist <= hitRadius && dist < bestDist) {
+        best = item;
+        bestDist = dist;
+      }
+    });
+    return best;
+  }
+
+  placeBuilding({ itemId = '', x = 0, y = 0, z = 0, rotation = 0 } = {}) {
+    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可布置物品' };
+    const safeItemId = typeof itemId === 'string' ? itemId.trim() : '';
+    if (!safeItemId) return { ok: false, reason: '缺少物品ID' };
+    const item = this.getItemCatalog().find((row) => row.itemId === safeItemId);
+    if (!item) return { ok: false, reason: '物品不存在或不可用' };
+    const radius = Math.max(4, Math.max(Number(item.width) || 0, Number(item.depth) || 0) * 0.5);
+    const safePoint = clampPointToField({ x, y }, this.field, radius);
+    const objectId = `obj_custom_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.initialBuildings.push({
+      id: objectId,
+      itemId: safeItemId,
+      x: safePoint.x,
+      y: safePoint.y,
+      z: Math.max(0, Number(z) || 0),
+      rotation: Number(rotation) || 0,
+      width: Math.max(8, Number(item.width) || 84),
+      depth: Math.max(8, Number(item.depth) || 24),
+      height: Math.max(6, Number(item.height) || 38),
+      maxHp: Math.max(1, Number(item.hp) || 180),
+      hp: Math.max(1, Number(item.hp) || 180),
+      defense: Math.max(0.1, Number(item.defense) || 1.1),
+      destroyed: false
+    });
+    return { ok: true, objectId };
+  }
+
+  moveBuilding(objectId = '', worldPoint = null) {
+    if (this.phase !== 'deploy') return false;
+    const safeId = typeof objectId === 'string' ? objectId.trim() : '';
+    if (!safeId) return false;
+    const target = (Array.isArray(this.initialBuildings) ? this.initialBuildings : []).find((row) => row?.id === safeId);
+    if (!target) return false;
+    const radius = Math.max(4, Math.max(Number(target.width) || 0, Number(target.depth) || 0) * 0.5);
+    const safePoint = clampPointToField(worldPoint, this.field, radius);
+    target.x = safePoint.x;
+    target.y = safePoint.y;
+    return true;
+  }
+
+  rotateBuilding(objectId = '', deltaDeg = 0) {
+    if (this.phase !== 'deploy') return false;
+    const safeId = typeof objectId === 'string' ? objectId.trim() : '';
+    if (!safeId) return false;
+    const target = (Array.isArray(this.initialBuildings) ? this.initialBuildings : []).find((row) => row?.id === safeId);
+    if (!target) return false;
+    target.rotation = (Number(target.rotation) || 0) + (Number(deltaDeg) || 0);
+    return true;
+  }
+
+  removeBuilding(objectId = '') {
+    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可移除物品' };
+    const safeId = typeof objectId === 'string' ? objectId.trim() : '';
+    if (!safeId) return { ok: false, reason: '缺少物品ID' };
+    const prevLen = this.initialBuildings.length;
+    this.initialBuildings = this.initialBuildings.filter((row) => row?.id !== safeId);
+    if (this.initialBuildings.length === prevLen) return { ok: false, reason: '未找到物品' };
+    return { ok: true };
+  }
+
   canStartBattle() {
     const attackerCount = this.attackerDeployGroups
       .filter((row) => row?.placed !== false)
       .reduce((sum, row) => sum + sumUnitsMap(row?.units || {}), 0);
-    const defenderCount = this.defenderDeployGroups.reduce((sum, row) => sum + sumUnitsMap(row?.units || {}), 0);
+    const defenderCount = this.defenderDeployGroups
+      .filter((row) => row?.placed !== false)
+      .reduce((sum, row) => sum + sumUnitsMap(row?.units || {}), 0);
     return attackerCount > 0 && defenderCount > 0;
   }
 
@@ -685,11 +929,13 @@ export default class BattleRuntime {
         unitTypeMap: this.unitTypeMap,
         unitsPerSoldier: this.unitsPerSoldier,
         fieldWidth: this.field.width,
-        fieldHeight: this.field.height
+        fieldHeight: this.field.height,
+        allowCrossMidline: this.rules.allowCrossMidline
       }))
       .filter((row) => row.startCount > 0);
 
     const defenderSquads = this.defenderDeployGroups
+      .filter((group) => group?.placed !== false)
       .map((group, index) => createSquad({
         group,
         index,
@@ -697,7 +943,8 @@ export default class BattleRuntime {
         unitTypeMap: this.unitTypeMap,
         unitsPerSoldier: this.unitsPerSoldier,
         fieldWidth: this.field.width,
-        fieldHeight: this.field.height
+        fieldHeight: this.field.height,
+        allowCrossMidline: this.rules.allowCrossMidline
       }))
       .filter((row) => row.startCount > 0);
 
@@ -729,6 +976,7 @@ export default class BattleRuntime {
     this.endedAtMs = 0;
     this.focusSquadId = this.sim.squads.find((row) => row.team === TEAM_ATTACKER && row.remain > 0)?.id || this.sim.squads[0]?.id || '';
     this.selectedBattleSquadId = this.focusSquadId;
+    this.updateCameraAnchor(0);
     return { ok: true };
   }
 
@@ -755,21 +1003,185 @@ export default class BattleRuntime {
     return true;
   }
 
+  commandSpeedMode(squadIds, mode = SPEED_MODE_B, source = SPEED_AUTH_USER) {
+    if (this.phase !== 'battle' || !this.sim) return false;
+    const sourceTag = source === SPEED_AUTH_AI ? SPEED_AUTH_AI : SPEED_AUTH_USER;
+    const targetMode = mode === SPEED_MODE_C
+      ? SPEED_MODE_C
+      : (mode === SPEED_MODE_AUTO ? SPEED_MODE_AUTO : SPEED_MODE_B);
+    const ids = Array.isArray(squadIds) ? squadIds : [squadIds];
+    let changed = false;
+    ids.forEach((id) => {
+      const squad = this.getSquadById(id);
+      if (!squad || squad.remain <= 0) return;
+      if (sourceTag === SPEED_AUTH_AI && squad.speedModeAuthority === SPEED_AUTH_USER) return;
+      if (targetMode === SPEED_MODE_AUTO) {
+        const prevPolicy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
+        squad.speedModeAuthority = SPEED_AUTH_AI;
+        const nextMode = squad.behavior === 'retreat' ? SPEED_MODE_C : SPEED_MODE_B;
+        squad.speedMode = nextMode;
+        if (nextMode === SPEED_MODE_C) {
+          squad.speedPolicy = SPEED_POLICY_RETREAT;
+          squad.reformUntil = 0;
+        } else if (prevPolicy === SPEED_POLICY_RETREAT || prevPolicy === SPEED_POLICY_REFORM) {
+          squad.speedPolicy = SPEED_POLICY_REFORM;
+          squad.reformUntil = 6;
+        } else {
+          squad.speedPolicy = SPEED_POLICY_MARCH;
+          squad.reformUntil = 0;
+        }
+        changed = true;
+        return;
+      }
+      squad.speedMode = targetMode;
+      squad.speedModeAuthority = sourceTag;
+      if (targetMode === SPEED_MODE_C) {
+        squad.speedPolicy = SPEED_POLICY_RETREAT;
+        squad.reformUntil = 0;
+      } else if (squad.speedPolicy === SPEED_POLICY_RETREAT || squad.speedPolicy === SPEED_POLICY_REFORM) {
+        squad.speedPolicy = SPEED_POLICY_REFORM;
+        squad.reformUntil = 6;
+      } else {
+        squad.speedPolicy = SPEED_POLICY_MARCH;
+        squad.reformUntil = 0;
+      }
+      changed = true;
+    });
+    return changed;
+  }
+
+  applyOrderToSquad(squad, orderType, safePoint) {
+    if (!squad) return;
+    const now = Math.max(0, Number(this.sim?.timeElapsed) || 0);
+    const kind = orderType === ORDER_ATTACK_MOVE
+      ? ORDER_ATTACK_MOVE
+      : (orderType === ORDER_CHARGE ? ORDER_CHARGE : ORDER_MOVE);
+    squad.order = {
+      type: kind,
+      issuedAt: now,
+      commitUntil: kind === ORDER_CHARGE ? now + 1.35 : 0,
+      targetPoint: safePoint ? { x: safePoint.x, y: safePoint.y } : null,
+      targetSquadId: ''
+    };
+    if (kind === ORDER_CHARGE) {
+      squad.behavior = 'move';
+      squad.action = '冲锋';
+      squad.speedPolicy = SPEED_POLICY_RETREAT;
+      if (squad.speedModeAuthority !== SPEED_AUTH_USER) {
+        this.commandSpeedMode(squad.id, SPEED_MODE_C, SPEED_AUTH_AI);
+      }
+      return;
+    }
+    if (kind === ORDER_ATTACK_MOVE) {
+      squad.behavior = 'move';
+      squad.action = '攻击前进';
+      if (squad.speedMode === SPEED_MODE_C && squad.speedModeAuthority !== SPEED_AUTH_USER) {
+        this.commandSpeedMode(squad.id, SPEED_MODE_B, SPEED_AUTH_AI);
+      }
+      return;
+    }
+    squad.behavior = 'move';
+    squad.action = '移动';
+  }
+
+  resolveTeamZoneBounds(team, radius = 0) {
+    const r = Math.max(0, Number(radius) || 0);
+    const half = this.field.width / 2;
+    const minX = -half + r;
+    const maxX = half - r;
+    const attackerMax = Math.min(maxX, -TEAM_ZONE_GUTTER - r);
+    const defenderMin = Math.max(minX, TEAM_ZONE_GUTTER + r);
+    if (team === TEAM_DEFENDER) {
+      return { minX: defenderMin, maxX };
+    }
+    return { minX, maxX: attackerMax };
+  }
+
+  resolveRawFocusAnchor() {
+    if (!this.sim || !this.crowd) return { x: 0, y: 0, vx: 0, vy: 0, squadId: '', team: '' };
+    const preferredId = this.focusSquadId || this.selectedBattleSquadId;
+    const preferred = preferredId ? this.getSquadById(preferredId) : null;
+    const fallback = preferred || (this.sim.squads || []).find((row) => row && row.remain > 0) || null;
+    if (!fallback) return { x: 0, y: 0, vx: 0, vy: 0, squadId: '', team: '' };
+    return {
+      x: Number(fallback.x) || 0,
+      y: Number(fallback.y) || 0,
+      vx: Number(fallback.vx) || 0,
+      vy: Number(fallback.vy) || 0,
+      squadId: fallback.id,
+      team: fallback.team
+    };
+  }
+
+  updateCameraAnchor(dtSec = 0.016) {
+    const raw = this.resolveRawFocusAnchor();
+    this.cameraAnchorRaw = { ...raw };
+    const dt = Math.max(0.001, Number(dtSec) || 0.016);
+    if (!this.cameraAnchor.squadId || this.cameraAnchor.squadId !== raw.squadId) {
+      this.cameraAnchor = { ...raw };
+      return;
+    }
+    const dx = raw.x - (Number(this.cameraAnchor.x) || 0);
+    const dy = raw.y - (Number(this.cameraAnchor.y) || 0);
+    const dist = Math.hypot(dx, dy);
+    const followAlpha = clamp(dt * 6.6, 0, 1);
+    if (dist > CAMERA_DEAD_ZONE) {
+      this.cameraAnchor.x += dx * followAlpha;
+      this.cameraAnchor.y += dy * followAlpha;
+    }
+    const targetVx = Number(raw.vx) || 0;
+    const targetVy = Number(raw.vy) || 0;
+    const velAlpha = clamp(dt * 5.2, 0, 1);
+    this.cameraAnchor.vx = (Number(this.cameraAnchor.vx) || 0) + ((targetVx - (Number(this.cameraAnchor.vx) || 0)) * velAlpha);
+    this.cameraAnchor.vy = (Number(this.cameraAnchor.vy) || 0) + ((targetVy - (Number(this.cameraAnchor.vy) || 0)) * velAlpha);
+    this.cameraAnchor.squadId = raw.squadId;
+    this.cameraAnchor.team = raw.team;
+  }
+
+  applyAutoSpeedModes() {
+    if (!this.sim || this.phase !== 'battle') return;
+    (this.sim.squads || []).forEach((squad) => {
+      if (!squad || squad.remain <= 0) return;
+      if (squad.behavior === 'retreat') {
+        this.commandSpeedMode(squad.id, SPEED_MODE_C, SPEED_AUTH_AI);
+        return;
+      }
+      const underPressure = (Number(squad.underAttackTimer) || 0) > 0.8 && (Number(squad.morale) || 0) < 20;
+      if (underPressure) {
+        this.commandSpeedMode(squad.id, SPEED_MODE_C, SPEED_AUTH_AI);
+        return;
+      }
+      if (squad.speedMode === SPEED_MODE_C && (Number(squad.morale) || 0) > 24 && squad.behavior !== 'retreat') {
+        this.commandSpeedMode(squad.id, SPEED_MODE_B, SPEED_AUTH_AI);
+      }
+    });
+  }
+
   commandMove(squadId, worldPoint, options = {}) {
     if (this.phase !== 'battle' || !this.sim) return false;
     const squad = this.getSquadById(squadId);
     if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) return false;
     const append = !!options?.append;
+    const orderType = typeof options?.orderType === 'string' ? options.orderType : ORDER_MOVE;
     const safe = clampPointToField(worldPoint, this.field, Math.max(6, Number(squad.radius) || 10));
-    safe.x = clampXToTeamZone(safe.x, this.field.width, Math.max(6, Number(squad.radius) || 10), squad.team);
+    if (!this.rules.allowCrossMidline) {
+      safe.x = clampXToTeamZone(safe.x, this.field.width, Math.max(6, Number(squad.radius) || 10), squad.team);
+    }
     if (append) {
       squad.waypoints.push(safe);
     } else {
       squad.waypoints = [safe];
     }
-    squad.behavior = 'move';
-    squad.action = '移动';
+    this.applyOrderToSquad(squad, orderType, safe);
     return true;
+  }
+
+  commandAttackMove(squadId, worldPoint) {
+    return this.commandMove(squadId, worldPoint, { append: false, orderType: ORDER_ATTACK_MOVE });
+  }
+
+  commandCharge(squadId, worldPoint) {
+    return this.commandMove(squadId, worldPoint, { append: false, orderType: ORDER_CHARGE });
   }
 
   commandBehavior(squadId, behavior = 'idle') {
@@ -780,23 +1192,32 @@ export default class BattleRuntime {
       squad.behavior = 'idle';
       squad.waypoints = [];
       squad.action = '待命';
+      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
       return true;
     }
     if (behavior === 'auto') {
       squad.behavior = 'auto';
       squad.action = '自动攻击';
+      squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
       return true;
     }
     if (behavior === 'defend') {
       squad.behavior = 'defend';
       squad.waypoints = [];
       squad.action = '防御';
+      squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
       return true;
     }
     if (behavior === 'retreat') {
       squad.behavior = 'retreat';
       squad.waypoints = [squad.rallyPoint];
       squad.action = '撤退';
+      squad.order = { type: ORDER_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: squad.rallyPoint ? { ...squad.rallyPoint } : null, targetSquadId: '' };
+      if (squad.speedModeAuthority !== SPEED_AUTH_USER) {
+        this.commandSpeedMode(squad.id, SPEED_MODE_C, SPEED_AUTH_AI);
+      } else {
+        squad.speedPolicy = SPEED_POLICY_RETREAT;
+      }
       return true;
     }
     return false;
@@ -813,25 +1234,59 @@ export default class BattleRuntime {
     const t0 = performance.now();
     this.sim.timerSec = Math.max(0, Number(this.sim.timerSec) - dt);
     updateCrowdSim(this.crowd, this.sim, dt);
+    this.applyAutoSpeedModes();
 
-    // Hard boundary: attacker stays on left (blue), defender stays on right (red).
+    const allowCrossMidline = !!this.rules.allowCrossMidline;
+    let clampRecord = {
+      squadId: '',
+      preClampX: 0,
+      postClampX: 0,
+      team: '',
+      radius: 0,
+      allowedMinX: 0,
+      allowedMaxX: 0,
+      changed: false
+    };
     (this.sim.squads || []).forEach((squad) => {
       if (!squad) return;
       const radius = Math.max(2, Number(squad.radius) || 2);
-      const safePoint = clampPointToField({ x: squad.x, y: squad.y }, this.field, radius);
-      squad.x = clampXToTeamZone(safePoint.x, this.field.width, radius, squad.team);
+      const preX = Number(squad.x) || 0;
+      const safePoint = clampPointToField({ x: preX, y: squad.y }, this.field, radius);
+      const bounds = allowCrossMidline
+        ? { minX: -this.field.width / 2 + radius, maxX: this.field.width / 2 - radius }
+        : this.resolveTeamZoneBounds(squad.team, radius);
+      const nextX = allowCrossMidline
+        ? clamp(safePoint.x, bounds.minX, bounds.maxX)
+        : clampXToTeamZone(safePoint.x, this.field.width, radius, squad.team);
+      squad.x = nextX;
       squad.y = safePoint.y;
+      if (!clampRecord.squadId && squad.id === (this.focusSquadId || this.selectedBattleSquadId)) {
+        clampRecord = {
+          squadId: squad.id,
+          preClampX: preX,
+          postClampX: nextX,
+          team: squad.team,
+          radius,
+          allowedMinX: bounds.minX,
+          allowedMaxX: bounds.maxX,
+          changed: Math.abs(preX - nextX) > 1e-4
+        };
+      }
       if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) {
         squad.waypoints.forEach((point) => {
           if (!point) return;
           const safeWp = clampPointToField(point, this.field, radius);
-          point.x = clampXToTeamZone(safeWp.x, this.field.width, radius, squad.team);
+          point.x = allowCrossMidline
+            ? clamp(safeWp.x, -this.field.width / 2 + radius, this.field.width / 2 - radius)
+            : clampXToTeamZone(safeWp.x, this.field.width, radius, squad.team);
           point.y = safeWp.y;
         });
       }
       if (squad.rallyPoint) {
         const safeRally = clampPointToField(squad.rallyPoint, this.field, radius);
-        squad.rallyPoint.x = clampXToTeamZone(safeRally.x, this.field.width, radius, squad.team);
+        squad.rallyPoint.x = allowCrossMidline
+          ? clamp(safeRally.x, -this.field.width / 2 + radius, this.field.width / 2 - radius)
+          : clampXToTeamZone(safeRally.x, this.field.width, radius, squad.team);
         squad.rallyPoint.y = safeRally.y;
       }
     });
@@ -839,11 +1294,15 @@ export default class BattleRuntime {
       if (!agent || agent.dead) return;
       const radius = Math.max(1, Number(agent.radius) || 1);
       const safePos = clampPointToField(agent, this.field, radius);
-      agent.x = clampXToTeamZone(safePos.x, this.field.width, radius, agent.team);
+      agent.x = allowCrossMidline
+        ? clamp(safePos.x, -this.field.width / 2 + radius, this.field.width / 2 - radius)
+        : clampXToTeamZone(safePos.x, this.field.width, radius, agent.team);
       agent.y = safePos.y;
       if (agent.goal) {
         const safeGoal = clampPointToField(agent.goal, this.field, radius);
-        agent.goal.x = clampXToTeamZone(safeGoal.x, this.field.width, radius, agent.team);
+        agent.goal.x = allowCrossMidline
+          ? clamp(safeGoal.x, -this.field.width / 2 + radius, this.field.width / 2 - radius)
+          : clampXToTeamZone(safeGoal.x, this.field.width, radius, agent.team);
         agent.goal.y = safeGoal.y;
       }
     });
@@ -872,6 +1331,9 @@ export default class BattleRuntime {
       this.endedAtMs = Date.now();
     }
 
+    this._lastMidlineClamp = clampRecord;
+    this.debugStats.allowCrossMidline = allowCrossMidline;
+    this.updateCameraAnchor(dt);
     this.debugStats.simStepMs = performance.now() - t0;
   }
 
@@ -922,9 +1384,10 @@ export default class BattleRuntime {
           classTag: inferClassFromUnitType(this.unitTypeMap.get(Object.keys(group.units)[0]) || {}),
           remain: sumUnitsMap(group.units),
           startCount: sumUnitsMap(group.units),
-          action: '部署中',
+          action: group?.placed === false ? '待放置' : '部署中',
           stamina: 100,
-          morale: 100
+          morale: 100,
+          placed: group?.placed !== false
         })) : [])
       ];
 
@@ -938,6 +1401,10 @@ export default class BattleRuntime {
       startCount: Math.max(0, Math.floor(Number(squad.startCount) || 0)),
       morale: clamp(Number(squad.morale) || 0, 0, 100),
       stamina: clamp(Number(squad.stamina) || 0, 0, 100),
+      speedMode: squad.speedMode || SPEED_MODE_B,
+      speedModeAuthority: squad.speedModeAuthority || SPEED_AUTH_AI,
+      speedPolicy: squad.speedPolicy || SPEED_POLICY_MARCH,
+      orderType: squad.order?.type || ORDER_IDLE,
       placed: squad?.placed !== false,
       selected: this.phase === 'battle'
         ? squad.id === this.selectedBattleSquadId
@@ -949,17 +1416,22 @@ export default class BattleRuntime {
 
   getFocusAnchor() {
     if (this.phase === 'deploy') {
-      const group = this.attackerDeployGroups.find((row) => row.id === (this.selectedDeploySquadId || this.focusSquadId))
+      const targetId = this.selectedDeploySquadId || this.focusSquadId;
+      const group = this.getDeployGroupById(targetId, TEAM_ANY)
         || this.attackerDeployGroups[0]
+        || this.defenderDeployGroups[0]
         || { x: 0, y: 0, id: '' };
       return { x: Number(group.x) || 0, y: Number(group.y) || 0, vx: 0, vy: 0, squadId: group.id || '' };
     }
     if (!this.sim || !this.crowd) return { x: 0, y: 0, vx: 0, vy: 0, squadId: '' };
-    if (this.focusSquadId) {
-      const picked = resolveSquadAnchor(this.sim, this.crowd, this.focusSquadId);
-      if (picked) return picked;
-    }
-    return resolveFallbackAnchor(this.sim, this.crowd, this.selectedBattleSquadId);
+    return {
+      x: Number(this.cameraAnchor?.x) || 0,
+      y: Number(this.cameraAnchor?.y) || 0,
+      vx: Number(this.cameraAnchor?.vx) || 0,
+      vy: Number(this.cameraAnchor?.vy) || 0,
+      squadId: String(this.cameraAnchor?.squadId || ''),
+      team: this.cameraAnchor?.team || ''
+    };
   }
 
   getRenderSnapshot() {
@@ -999,7 +1471,7 @@ export default class BattleRuntime {
       };
       this.attackerDeployGroups.forEach((group, idx) => fillPreviewGroup(group, TEAM_ATTACKER, group.id === this.selectedDeploySquadId, idx));
       if (!hideDefenderIntelInDeploy) {
-        this.defenderDeployGroups.forEach((group, idx) => fillPreviewGroup(group, TEAM_DEFENDER, false, idx));
+        this.defenderDeployGroups.forEach((group, idx) => fillPreviewGroup(group, TEAM_DEFENDER, group.id === this.selectedDeploySquadId, idx));
       }
       units.count = previewCount;
 
@@ -1119,7 +1591,7 @@ export default class BattleRuntime {
       : [
         ...this.attackerDeployGroups.map((row) => ({ id: row.id, x: row.x, y: row.y, team: TEAM_ATTACKER, remain: sumUnitsMap(row.units), selected: row.id === this.selectedDeploySquadId })),
         ...(!hideDefenderIntelInDeploy
-          ? this.defenderDeployGroups.map((row) => ({ id: row.id, x: row.x, y: row.y, team: TEAM_DEFENDER, remain: sumUnitsMap(row.units), selected: false }))
+          ? this.defenderDeployGroups.map((row) => ({ id: row.id, x: row.x, y: row.y, team: TEAM_DEFENDER, remain: sumUnitsMap(row.units), selected: row.id === this.selectedDeploySquadId }))
           : [])
       ];
 
@@ -1133,11 +1605,28 @@ export default class BattleRuntime {
   }
 
   getDebugStats() {
+    const unitModelCount = Math.max(0, Math.floor(Number(this.snapshotState?.units?.count) || 0));
+    const anchorDx = (Number(this.cameraAnchorRaw?.x) || 0) - (Number(this.cameraAnchor?.x) || 0);
+    const anchorDy = (Number(this.cameraAnchorRaw?.y) || 0) - (Number(this.cameraAnchor?.y) || 0);
     return {
       ...this.debugStats,
-      agentCount: this.snapshotState.units.count,
-      projectileCount: this.snapshotState.projectiles.count,
-      buildingCount: this.snapshotState.buildings.count
+      unitModelCount,
+      agentCount: unitModelCount,
+      projectileCount: Math.max(0, Math.floor(Number(this.snapshotState?.projectiles?.count) || 0)),
+      buildingCount: Math.max(0, Math.floor(Number(this.snapshotState?.buildings?.count) || 0)),
+      allowCrossMidline: !!this.rules.allowCrossMidline,
+      cameraAnchorRawX: Number(this.cameraAnchorRaw?.x) || 0,
+      cameraAnchorRawY: Number(this.cameraAnchorRaw?.y) || 0,
+      cameraAnchorSmoothX: Number(this.cameraAnchor?.x) || 0,
+      cameraAnchorSmoothY: Number(this.cameraAnchor?.y) || 0,
+      cameraAnchorDelta: Math.hypot(anchorDx, anchorDy),
+      clampSquadId: this._lastMidlineClamp?.squadId || '',
+      clampPreX: Number(this._lastMidlineClamp?.preClampX) || 0,
+      clampPostX: Number(this._lastMidlineClamp?.postClampX) || 0,
+      clampChanged: !!this._lastMidlineClamp?.changed,
+      clampRadius: Number(this._lastMidlineClamp?.radius) || 0,
+      clampAllowedMinX: Number(this._lastMidlineClamp?.allowedMinX) || 0,
+      clampAllowedMaxX: Number(this._lastMidlineClamp?.allowedMaxX) || 0
     };
   }
 

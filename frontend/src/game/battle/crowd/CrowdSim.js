@@ -18,6 +18,15 @@ import { syncMeleeEngagement } from './engagement';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
+const ORDER_IDLE = 'IDLE';
+const ORDER_MOVE = 'MOVE';
+const ORDER_ATTACK_MOVE = 'ATTACK_MOVE';
+const ORDER_CHARGE = 'CHARGE';
+const SPEED_MODE_B = 'B_HARMONIC';
+const SPEED_MODE_C = 'C_PER_TYPE';
+const SPEED_POLICY_MARCH = 'MARCH';
+const SPEED_POLICY_RETREAT = 'RETREAT';
+const SPEED_POLICY_REFORM = 'REFORM';
 const STAMINA_MAX = 100;
 const STAMINA_MOVE_THRESHOLD = 20;
 const STAMINA_MOVE_COST = 8;
@@ -41,6 +50,17 @@ const CROWD_HARD_CONTACT_GAP = AGENT_RADIUS * 0.58;
 const AGENT_IDLE_DEADZONE = 0.72;
 const STATIONARY_SEPARATION_SCALE = 0.2;
 const STATIONARY_FLAG_SEPARATION_SCALE = 0.08;
+const AGENT_MAX_ACCEL = 220;
+const AGENT_REFORM_ACCEL = 260;
+const AGENT_RETREAT_ACCEL = 280;
+const AGENT_AVOID_PROBE = 10;
+const FLAG_BACK_OFFSET = 0.72;
+const LEADER_MAX_TURN_RATE = Math.PI * 1.9;
+const LEADER_MAX_ACCEL = 120;
+const LEADER_MAX_DECEL = 170;
+const LEADER_ARRIVAL_RADIUS = 5.4;
+const LEADER_SLOW_RADIUS = 38;
+const OBSTACLE_AVOID_PROBE = 20;
 const GROUND_SKILL_CONFIG = {
   archer: {
     radius: 72,
@@ -185,16 +205,84 @@ const resolveAttackRange = (squad = {}) => {
   return 6.2;
 };
 
+const resolveUnitTypeSpeed = (crowd, unitTypeId, fallback = 1) => {
+  const unitType = crowd?.unitTypeMap?.get(unitTypeId) || null;
+  const speed = Number(unitType?.speed);
+  if (!Number.isFinite(speed) || speed <= 0.05) return Math.max(0.2, Number(fallback) || 1);
+  return Math.max(0.2, speed);
+};
+
+const computeHarmonicGroupSpeed = (squad = {}, crowd = null) => {
+  const units = normalizeUnitsMap(squad?.units || {});
+  const entries = Object.entries(units).filter(([, count]) => count > 0);
+  if (entries.length <= 0) return Math.max(0.2, Number(squad?.stats?.speed) || 1);
+  const total = entries.reduce((sum, [, count]) => sum + count, 0);
+  let denom = 0;
+  entries.forEach(([unitTypeId, count]) => {
+    const w = count / Math.max(1, total);
+    const v = resolveUnitTypeSpeed(crowd, unitTypeId, squad?.stats?.speed);
+    denom += w / Math.max(0.05, v);
+  });
+  if (denom <= 1e-6) return Math.max(0.2, Number(squad?.stats?.speed) || 1);
+  return Math.max(0.2, 1 / denom);
+};
+
+const computeRetreatGroupSpeed = (squad = {}, crowd = null) => {
+  const units = normalizeUnitsMap(squad?.units || {});
+  const entries = Object.entries(units).filter(([, count]) => count > 0);
+  if (entries.length <= 0) return Math.max(0.2, Number(squad?.stats?.speed) || 1);
+  let maxSpeed = 0;
+  entries.forEach(([unitTypeId]) => {
+    maxSpeed = Math.max(maxSpeed, resolveUnitTypeSpeed(crowd, unitTypeId, squad?.stats?.speed));
+  });
+  return Math.max(0.2, maxSpeed);
+};
+
+const resolveSquadOrderType = (squad = {}) => {
+  const orderType = typeof squad?.order?.type === 'string' ? squad.order.type : '';
+  if (orderType === ORDER_MOVE || orderType === ORDER_ATTACK_MOVE || orderType === ORDER_CHARGE) return orderType;
+  return ORDER_IDLE;
+};
+
+const clampVecLength = (x, y, maxLen = 1) => {
+  const len = Math.hypot(x, y);
+  if (len <= maxLen || len <= 1e-6) return { x, y, len };
+  return {
+    x: (x / len) * maxLen,
+    y: (y / len) * maxLen,
+    len: maxLen
+  };
+};
+
+const computeAvoidanceDirection = (origin, desiredDir, walls = [], probe = OBSTACLE_AVOID_PROBE) => {
+  const dir = normalizeVec(desiredDir?.x || 0, desiredDir?.y || 0);
+  if (dir.len <= 1e-4) return { x: 0, y: 0 };
+  const ahead = {
+    x: (Number(origin?.x) || 0) + (dir.x * probe),
+    y: (Number(origin?.y) || 0) + (dir.y * probe)
+  };
+  const hit = raycastObstacles(origin, ahead, walls, 1);
+  if (!hit?.obstacle) return { x: 0, y: 0 };
+  const wall = hit.obstacle;
+  const away = normalizeVec((Number(hit.x) || 0) - (Number(wall.x) || 0), (Number(hit.y) || 0) - (Number(wall.y) || 0));
+  const tangentA = { x: -away.y, y: away.x };
+  const tangentB = { x: away.y, y: -away.x };
+  const dotA = (tangentA.x * dir.x) + (tangentA.y * dir.y);
+  const pick = dotA >= 0 ? tangentA : tangentB;
+  return { x: pick.x, y: pick.y };
+};
+
 const isMeleeAgent = (agent) => {
   const category = typeof agent?.typeCategory === 'string' ? agent.typeCategory : '';
   return category !== 'archer' && category !== 'artillery';
 };
 
 const computeTeamAwareSeparation = (agent, neighbors = [], sameTeamGap = 5.2) => {
+  if (agent?.isFlagBearer) return { x: 0, y: 0 };
   let sx = 0;
   let sy = 0;
   neighbors.forEach((other) => {
-    if (!other || other.id === agent.id || other.dead) return;
+    if (!other || other.id === agent.id || other.dead || other.isFlagBearer) return;
     const dx = (agent.x || 0) - (other.x || 0);
     const dy = (agent.y || 0) - (other.y || 0);
     const dist = Math.hypot(dx, dy);
@@ -486,8 +574,19 @@ const pickNearestEnemySquad = (squad, squads = []) => {
   return best;
 };
 
-const updateSquadBehaviorPlan = (squad, sim) => {
+const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
   if (!squad || squad.remain <= 0) return;
+  const orderType = resolveSquadOrderType(squad);
+  const chargeCommitted = orderType === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > nowSec;
+  if (orderType === ORDER_MOVE) {
+    if (!Array.isArray(squad.waypoints)) squad.waypoints = [];
+    squad.action = squad.waypoints.length > 0 ? '移动' : '待命';
+    return;
+  }
+  if (chargeCommitted) {
+    squad.action = '冲锋';
+    return;
+  }
   if ((Number(squad?.skillRush?.ttl) || 0) > 0) {
     squad.action = '兵种攻击';
     return;
@@ -519,7 +618,7 @@ const updateSquadBehaviorPlan = (squad, sim) => {
 
   if (!nearestEnemy) {
     if (!hasWaypoint) {
-      squad.action = squad.behavior === 'defend' ? '防御' : '待命';
+      squad.action = squad.behavior === 'defend' ? '防御' : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '待命');
     }
     return;
   }
@@ -546,14 +645,14 @@ const updateSquadBehaviorPlan = (squad, sim) => {
       nextX = Math.min(nextX, fieldWidth * 0.12);
     }
     squad.waypoints = [{ x: nextX, y: nextY }];
-    squad.action = '移动';
+    squad.action = orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动';
   } else if (isRanged && dist < desired * 0.72 && !hasWaypoint) {
     const backX = (squad.x || 0) - (dirX * 26);
     const backY = (squad.y || 0) - (dirY * 26);
     squad.waypoints = [{ x: backX, y: backY }];
-    squad.action = '移动';
+    squad.action = orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '移动';
   } else if (!hasWaypoint) {
-    squad.action = squad.behavior === 'defend' ? '防御' : '普通攻击';
+    squad.action = squad.behavior === 'defend' ? '防御' : (orderType === ORDER_ATTACK_MOVE ? '攻击前进' : '普通攻击');
   }
 };
 
@@ -681,21 +780,29 @@ const createAgentsForSquad = (squad, crowd) => {
   squad._repMaxAgentWeight = repConfig.maxAgentWeight;
   squad._crowdBaseColumns = Math.max(1, Math.ceil(Math.sqrt(agents.length)));
   squad._crowdForward = teamForward(squad.team);
-  const flagBearer = ensureFlagBearer(squad, agents);
-  if (flagBearer) {
-    squad.x = flagBearer.x;
-    squad.y = flagBearer.y;
-  }
+  ensureFlagBearer(squad, agents);
   return agents;
 };
 
-const leaderMoveStep = (squad, sim, dt, forwardVec) => {
+const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
   const moralePenalty = squad.morale <= 0 ? (2 / 3) : (squad.morale < 20 ? 0.82 : 1);
   const fatiguePenalty = squad.fatigueTimer > 0 ? 0.72 : 1;
   const buffSpeed = squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1;
   const rushSpeed = squad.skillRush?.ttl > 0 ? 1.45 : 1;
-  const speedBase = Math.max(9, (Number(squad.stats?.speed) || 1) * 18);
-  const speed = speedBase * moralePenalty * fatiguePenalty * buffSpeed * rushSpeed;
+  const speedMode = squad.speedMode === SPEED_MODE_C ? SPEED_MODE_C : SPEED_MODE_B;
+  const speedPolicy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
+  const orderType = resolveSquadOrderType(squad);
+  const nowSec = Number(sim?.timeElapsed) || 0;
+  const chargingCommitted = orderType === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > nowSec;
+  const baseGroupSpeed = speedMode === SPEED_MODE_C
+    ? computeRetreatGroupSpeed(squad, crowd)
+    : computeHarmonicGroupSpeed(squad, crowd);
+  const policyMul = speedPolicy === SPEED_POLICY_RETREAT
+    ? 1.08
+    : (speedPolicy === SPEED_POLICY_REFORM ? 0.82 : 1);
+  const speedBase = Math.max(9, baseGroupSpeed * 18);
+  const speedTargetMax = speedBase * moralePenalty * fatiguePenalty * buffSpeed * rushSpeed * policyMul * (chargingCommitted ? 1.15 : 1);
+  const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((row) => !row?.destroyed) : [];
   let target = null;
 
   if (squad.skillRush?.ttl > 0) {
@@ -715,43 +822,75 @@ const leaderMoveStep = (squad, sim, dt, forwardVec) => {
     target = squad.waypoints[0];
   }
 
-  if (!target) {
+  let currentSpeed = Math.max(0, Number(squad.speed) || 0);
+  let dir = normalizeVec(Number(squad.dirX) || Number(forwardVec?.x) || 1, Number(squad.dirY) || Number(forwardVec?.y) || 0);
+  if (dir.len <= 1e-4) dir = normalizeVec(Number(forwardVec?.x) || 1, Number(forwardVec?.y) || 0);
+  let desiredSpeed = 0;
+  let desiredDir = { x: dir.x, y: dir.y };
+
+  if (target && (Number(squad.stamina) || 0) >= STAMINA_MOVE_THRESHOLD) {
+    const toTarget = normalizeVec((Number(target.x) || 0) - (Number(squad.x) || 0), (Number(target.y) || 0) - (Number(squad.y) || 0));
+    if (toTarget.len <= LEADER_ARRIVAL_RADIUS) {
+      if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) squad.waypoints.shift();
+      if ((resolveSquadOrderType(squad) === ORDER_MOVE || resolveSquadOrderType(squad) === ORDER_CHARGE) && (!squad.waypoints || squad.waypoints.length <= 0)) {
+        squad.order = { type: ORDER_IDLE, issuedAt: nowSec, commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      }
+    } else {
+      const avoid = computeAvoidanceDirection({ x: squad.x, y: squad.y }, toTarget, walls, OBSTACLE_AVOID_PROBE);
+      desiredDir = normalizeVec(toTarget.x + (avoid.x * 0.68), toTarget.y + (avoid.y * 0.68));
+      const arrivalRate = clamp((toTarget.len - LEADER_ARRIVAL_RADIUS) / Math.max(1, LEADER_SLOW_RADIUS - LEADER_ARRIVAL_RADIUS), 0.1, 1);
+      desiredSpeed = Math.min(speedTargetMax, speedTargetMax * arrivalRate);
+    }
+    squad.stamina = clamp((Number(squad.stamina) || 0) - (STAMINA_MOVE_COST * dt), 0, STAMINA_MAX);
+  } else {
+    desiredSpeed = 0;
     squad.stamina = clamp((Number(squad.stamina) || 0) + (STAMINA_RECOVER * dt), 0, STAMINA_MAX);
-    return forwardVec;
+    if (!target && squad.behavior === 'move' && resolveSquadOrderType(squad) === ORDER_MOVE) {
+      squad.action = '待命';
+    }
   }
 
-  if ((Number(squad.stamina) || 0) < STAMINA_MOVE_THRESHOLD) {
-    squad.waypoints = [];
-    squad.stamina = clamp((Number(squad.stamina) || 0) + (STAMINA_RECOVER * dt), 0, STAMINA_MAX);
-    return forwardVec;
+  const dot = clamp((dir.x * desiredDir.x) + (dir.y * desiredDir.y), -1, 1);
+  const angle = Math.acos(dot);
+  if (angle > 1e-4) {
+    const cross = (dir.x * desiredDir.y) - (dir.y * desiredDir.x);
+    const sign = cross >= 0 ? 1 : -1;
+    const stepTurn = Math.min(angle, LEADER_MAX_TURN_RATE * dt) * sign;
+    const cosT = Math.cos(stepTurn);
+    const sinT = Math.sin(stepTurn);
+    const nextDir = normalizeVec((dir.x * cosT) - (dir.y * sinT), (dir.x * sinT) + (dir.y * cosT));
+    dir = { x: nextDir.x, y: nextDir.y };
   }
 
-  const dir = normalizeVec((Number(target.x) || 0) - (Number(squad.x) || 0), (Number(target.y) || 0) - (Number(squad.y) || 0));
-  if (dir.len <= 0.0001) {
-    if (squad.waypoints.length > 0) squad.waypoints.shift();
-    return forwardVec;
-  }
-  const appliedSpeed = squad.skillRush?.ttl > 0 ? CAVALRY_RUSH_SPEED : speed;
-  const step = Math.min(dir.len, appliedSpeed * dt);
+  const accel = desiredSpeed >= currentSpeed ? LEADER_MAX_ACCEL : LEADER_MAX_DECEL;
+  const maxDv = accel * dt;
+  const dv = clamp(desiredSpeed - currentSpeed, -maxDv, maxDv);
+  currentSpeed = Math.max(0, currentSpeed + dv);
   const prevX = Number(squad.x) || 0;
   const prevY = Number(squad.y) || 0;
-  let nx = (Number(squad.x) || 0) + (dir.x * step);
-  let ny = (Number(squad.y) || 0) + (dir.y * step);
+  let nx = prevX + (dir.x * currentSpeed * dt);
+  let ny = prevY + (dir.y * currentSpeed * dt);
   const halfW = (Number(sim?.field?.width) || 900) / 2;
   const halfH = (Number(sim?.field?.height) || 620) / 2;
   nx = clamp(nx, -halfW + 4, halfW - 4);
   ny = clamp(ny, -halfH + 4, halfH - 4);
-  const walls = Array.isArray(sim?.buildings) ? sim.buildings : [];
   walls.forEach((wall) => {
-    if (!wall || wall.destroyed) return;
     const pushed = pushOutOfRect({ x: nx, y: ny }, wall, AGENT_RADIUS + 1.8);
     nx = pushed.x;
     ny = pushed.y;
   });
+  const movedX = nx - prevX;
+  const movedY = ny - prevY;
   squad.x = nx;
   squad.y = ny;
+  squad.vx = movedX / Math.max(1e-4, dt);
+  squad.vy = movedY / Math.max(1e-4, dt);
+  squad.speed = Math.hypot(squad.vx, squad.vy);
+  squad.dirX = dir.x;
+  squad.dirY = dir.y;
+
   if (squad.skillRush?.ttl > 0) {
-    const moved = Math.hypot(nx - prevX, ny - prevY);
+    const moved = Math.hypot(movedX, movedY);
     squad.skillRush.remainDistance = Math.max(0, (Number(squad.skillRush.remainDistance) || 0) - moved);
     if (squad.skillRush.ttl <= 0 || squad.skillRush.remainDistance <= 0.8) {
       squad.skillRush = null;
@@ -760,17 +899,16 @@ const leaderMoveStep = (squad, sim, dt, forwardVec) => {
     } else {
       squad.action = '兵种攻击';
     }
+  } else if (chargingCommitted) {
+    squad.action = '冲锋';
   }
-  squad.stamina = clamp((Number(squad.stamina) || 0) - (STAMINA_MOVE_COST * dt), 0, STAMINA_MAX);
+
   if ((Number(squad.stamina) || 0) < STAMINA_MOVE_THRESHOLD && !(squad.skillRush?.ttl > 0)) {
     squad.waypoints = [];
-    if (squad.behavior === 'move') {
+    if (squad.behavior === 'move' && resolveSquadOrderType(squad) !== ORDER_ATTACK_MOVE) {
       squad.behavior = 'idle';
       squad.action = '待命';
     }
-  }
-  if (Math.hypot((Number(target.x) || 0) - nx, (Number(target.y) || 0) - ny) <= 5.4) {
-    if (squad.waypoints.length > 0) squad.waypoints.shift();
   }
   return { x: dir.x, y: dir.y };
 };
@@ -788,18 +926,25 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
     return;
   }
   const remain = alive.reduce((sum, agent) => sum + Math.max(0, agent.weight || 0), 0);
-  const flagBearer = ensureFlagBearer(squad, alive);
-  const anchorX = Number.isFinite(Number(flagBearer?.x)) ? Number(flagBearer.x) : (Number(squad.x) || 0);
-  const anchorY = Number.isFinite(Number(flagBearer?.y)) ? Number(flagBearer.y) : (Number(squad.y) || 0);
+  ensureFlagBearer(squad, alive);
+  const center = alive.reduce((acc, agent) => {
+    acc.x += Number(agent.x) || 0;
+    acc.y += Number(agent.y) || 0;
+    return acc;
+  }, { x: 0, y: 0 });
+  center.x /= Math.max(1, alive.length);
+  center.y /= Math.max(1, alive.length);
+  const anchorX = Number(squad.x) || 0;
+  const anchorY = Number(squad.y) || 0;
   const maxDist = alive.reduce((max, agent) => {
-    const d = Math.hypot((agent.x || 0) - anchorX, (agent.y || 0) - anchorY);
+    const d = Math.hypot((Number(agent.x) || 0) - anchorX, (Number(agent.y) || 0) - anchorY);
     return Math.max(max, d);
   }, 0);
   const remainRounded = Math.max(0, Math.round(remain));
   squad.remain = clamp(remainRounded, 0, Math.max(0, Number(squad.startCount) || 0));
   squad.losses = Math.max(0, Math.floor((Number(squad.startCount) || 0) - squad.remain));
-  squad.x = anchorX;
-  squad.y = anchorY;
+  squad.centerX = Number.isFinite(center.x) ? center.x : anchorX;
+  squad.centerY = Number.isFinite(center.y) ? center.y : anchorY;
   squad.radius = clamp(maxDist + 6, 8, 130);
   const healthRatio = clamp(squad.remain / Math.max(1, Number(squad.startCount) || 1), 0, 1);
   squad.health = Math.max(0, (Number(squad.maxHealth) || 1) * healthRatio);
@@ -869,6 +1014,55 @@ const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
     }
   }
   ensureFlagBearer(squad, agents);
+};
+
+const updateSquadSpeedPolicyState = (squad, agents = [], dt = 0) => {
+  if (!squad) return;
+  const speedMode = squad.speedMode === SPEED_MODE_C ? SPEED_MODE_C : SPEED_MODE_B;
+  const policy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
+  if (speedMode === SPEED_MODE_C) {
+    squad.speedPolicy = SPEED_POLICY_RETREAT;
+    squad.reformUntil = 0;
+    return;
+  }
+  if (policy === SPEED_POLICY_RETREAT) {
+    squad.speedPolicy = SPEED_POLICY_REFORM;
+    squad.reformUntil = Math.max(4.6, Number(squad.reformUntil) || 0);
+  }
+  if (squad.speedPolicy !== SPEED_POLICY_REFORM) {
+    squad.speedPolicy = SPEED_POLICY_MARCH;
+    squad.reformUntil = 0;
+    return;
+  }
+  const alive = (Array.isArray(agents) ? agents : []).filter((agent) => agent && !agent.dead && (agent.weight || 0) > 0.001);
+  if (alive.length <= 0) {
+    squad.speedPolicy = SPEED_POLICY_MARCH;
+    squad.reformUntil = 0;
+    return;
+  }
+  const threshold = Math.max(10, Number(squad.reformRadiusThreshold) || Math.max(16, Number(squad.radius) || 16));
+  const inRange = alive.filter((agent) => {
+    const dist = Math.hypot((Number(agent.x) || 0) - (Number(squad.x) || 0), (Number(agent.y) || 0) - (Number(squad.y) || 0));
+    return dist <= threshold;
+  }).length;
+  const ratio = inRange / Math.max(1, alive.length);
+  squad.reformUntil = Math.max(0, (Number(squad.reformUntil) || 0) - dt);
+  if (ratio >= 0.7 || squad.reformUntil <= 0) {
+    squad.speedPolicy = SPEED_POLICY_MARCH;
+    squad.reformUntil = 0;
+  }
+};
+
+const resolveAgentModeSpeedMul = (agent, squad, crowd) => {
+  const speedMode = squad?.speedMode === SPEED_MODE_C ? SPEED_MODE_C : SPEED_MODE_B;
+  const speedPolicy = typeof squad?.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
+  if (speedMode === SPEED_MODE_B || speedPolicy === SPEED_POLICY_MARCH) return 1;
+  if (speedMode === SPEED_MODE_C) {
+    const realSpeed = resolveUnitTypeSpeed(crowd, agent?.unitTypeId, squad?.stats?.speed);
+    const groupSpeed = Math.max(0.2, Number(squad?._groupSpeedScalar) || Number(squad?.stats?.speed) || 1);
+    return clamp(realSpeed / Math.max(0.2, groupSpeed), 0.65, 2.1);
+  }
+  return clamp(Number(agent?.moveSpeedMul) || 1, 0.6, 1.8);
 };
 
 const applyCavalryRushImpact = (sim, crowd, squad, agents = [], fromPoint, toPoint) => {
@@ -1070,15 +1264,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     updateActiveGroundSkill(sim, crowd, squad, safeDt);
     squad.attackCooldown = Math.max(0, (Number(squad.attackCooldown) || 0) - safeDt);
     squad.underAttackTimer = Math.max(0, (Number(squad.underAttackTimer) || 0) - safeDt);
-    const attackerManual = squad.team === TEAM_ATTACKER
-      && (squad.behavior === 'idle' || squad.behavior === 'move');
-    if (!attackerManual) {
-      updateSquadBehaviorPlan(squad, sim);
-    } else if (squad.behavior === 'idle') {
-      squad.action = '待命';
-    } else if (squad.behavior === 'move') {
-      squad.action = '移动';
-    }
+    updateSquadBehaviorPlan(squad, sim, Number(sim?.timeElapsed) || 0);
     squad._aiSkillCd = Math.max(0, Number(squad._aiSkillCd) || 0);
 
     if (squad.team === TEAM_DEFENDER && (Number(squad.morale) || 0) > 0) {
@@ -1117,8 +1303,13 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const toEnemy = normalizeVec((enemy.x || 0) - (squad.x || 0), (enemy.y || 0) - (squad.y || 0));
       if (toEnemy.len > 0.0001) forward = { x: toEnemy.x, y: toEnemy.y };
     }
-    forward = leaderMoveStep(squad, sim, safeDt, forward);
+    forward = leaderMoveStep(squad, sim, crowd, safeDt, forward);
     squad._crowdForward = forward;
+    updateSquadSpeedPolicyState(squad, agents, safeDt);
+    const modeGroupSpeed = squad.speedMode === SPEED_MODE_C
+      ? computeRetreatGroupSpeed(squad, crowd)
+      : computeHarmonicGroupSpeed(squad, crowd);
+    squad._groupSpeedScalar = Math.max(0.2, modeGroupSpeed);
 
     const baseCols = Math.max(1, Number(squad._crowdBaseColumns) || Math.ceil(Math.sqrt(agents.length)));
     const leaderMoving = ((Number(squad.skillRush?.ttl) || 0) > 0)
@@ -1137,17 +1328,38 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     const bottlenecked = columns < baseCols;
     const side = { x: -forward.y, y: forward.x };
     const spacing = (AGENT_RADIUS * 2) + AGENT_GAP;
+    const speedPolicy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
+    const retreatMode = speedPolicy === SPEED_POLICY_RETREAT;
+    const reformMode = speedPolicy === SPEED_POLICY_REFORM;
+    const slotGain = retreatMode ? 0.44 : (reformMode ? 1.36 : 1);
+    const sepGain = retreatMode ? 0.52 : (reformMode ? 0.86 : 1);
+    const avoidGain = retreatMode ? 0.68 : 0.95;
+    const accelCap = retreatMode ? AGENT_RETREAT_ACCEL : (reformMode ? AGENT_REFORM_ACCEL : AGENT_MAX_ACCEL);
+    const flagBack = spacing * FLAG_BACK_OFFSET;
     const sorted = [...agents].sort((a, b) => a.slotOrder - b.slotOrder);
     ensureFlagBearer(squad, sorted);
 
     sorted.forEach((agent, index) => {
+      if (!agent || agent.dead) return;
+      if (agent.isFlagBearer) {
+        const flagOffsetX = -forward.x * flagBack;
+        const flagOffsetY = -forward.y * flagBack;
+        agent.x = (Number(squad.x) || 0) + flagOffsetX;
+        agent.y = (Number(squad.y) || 0) + flagOffsetY;
+        agent.vx = Number(squad.vx) || 0;
+        agent.vy = Number(squad.vy) || 0;
+        if (Math.abs(agent.vx) + Math.abs(agent.vy) > 0.08) {
+          agent.yaw = Math.atan2(agent.vy, agent.vx);
+        } else {
+          agent.yaw = Math.atan2(forward.y, forward.x);
+        }
+        agent.state = agent.attackCd > 0 ? 'attack' : 'idle';
+        agent.hitTimer = Math.max(0, (Number(agent.hitTimer) || 0) - safeDt);
+        return;
+      }
       const slot = slotOffsetForIndex(index, columns, spacing);
-      const desiredX = agent.isFlagBearer
-        ? (Number(squad.x) || 0)
-        : (Number(squad.x) || 0) + (side.x * slot.side) - (forward.x * slot.back);
-      const desiredY = agent.isFlagBearer
-        ? (Number(squad.y) || 0)
-        : (Number(squad.y) || 0) + (side.y * slot.side) - (forward.y * slot.back);
+      const desiredX = (Number(squad.x) || 0) + (side.x * slot.side) - (forward.x * slot.back);
+      const desiredY = (Number(squad.y) || 0) + (side.y * slot.side) - (forward.y * slot.back);
       const toDesired = normalizeVec(desiredX - (agent.x || 0), desiredY - (agent.y || 0));
       const stationaryHold = !leaderMoving && (squad.behavior === 'idle' || squad.behavior === 'move');
       const moraleMul = squad.morale <= 0 ? (2 / 3) : (squad.morale < 20 ? 0.82 : 1);
@@ -1156,7 +1368,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         ? 1 / (1 + (WEIGHT_BOTTLENECK_ALPHA * Math.max(0, Math.min(40, (agent.weight || 1)) - 1)))
         : 1;
       const speedMul = (squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1) * ((squad.skillRush?.ttl || 0) > 0 ? 1.45 : 1);
-      const speed = Math.max(6, (Number(squad.stats?.speed) || 1) * 20 * moraleMul * fatigueMul * weightSlow * speedMul * (agent.moveSpeedMul || 1));
+      const modeSpeedMul = resolveAgentModeSpeedMul(agent, squad, crowd);
+      const speed = Math.max(6, (Number(squad._groupSpeedScalar) || Number(squad.stats?.speed) || 1) * 20 * moraleMul * fatigueMul * weightSlow * speedMul * modeSpeedMul);
       const engagementCfg = crowd?.engagement?.config || {};
       const engagementEnabled = !!crowd?.engagement?.enabled;
       const isMelee = isMeleeAgent(agent);
@@ -1168,8 +1381,13 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const sepScale = stationaryHold
         ? (agent.isFlagBearer ? STATIONARY_FLAG_SEPARATION_SCALE : STATIONARY_SEPARATION_SCALE)
         : 1;
-      let vx = (toDesired.x * speed) + (sep.x * 40 * sepScale);
-      let vy = (toDesired.y * speed) + (sep.y * 40 * sepScale);
+      const avoid = computeAvoidanceDirection(agent, toDesired, walls, AGENT_AVOID_PROBE);
+      let desiredVx = (toDesired.x * speed * slotGain)
+        + (sep.x * 40 * sepScale * sepGain)
+        + (avoid.x * speed * avoidGain * 0.5);
+      let desiredVy = (toDesired.y * speed * slotGain)
+        + (sep.y * 40 * sepScale * sepGain)
+        + (avoid.y * speed * avoidGain * 0.5);
       if (hasAnchor) {
         const anchorDir = normalizeVec((Number(agent.engageAx) || 0) - (agent.x || 0), (Number(agent.engageAy) || 0) - (agent.y || 0));
         const steerGain = clamp(Number(engagementCfg?.anchorSteerGain) || 0.72, 0.08, 1.8);
@@ -1181,18 +1399,25 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           steerVx = (steerVx / steerLen) * steerCap;
           steerVy = (steerVy / steerLen) * steerCap;
         }
-        vx += steerVx;
-        vy += steerVy;
+        desiredVx += steerVx;
+        desiredVy += steerVy;
         const pressure = Math.max(0, Number(agent.engagePressure) || 0);
         if (pressure > 0.0001) {
-          vx += (Number(agent.engageFrontDx) || 0) * pressure;
-          vy += (Number(agent.engageFrontDy) || 0) * pressure;
+          desiredVx += (Number(agent.engageFrontDx) || 0) * pressure;
+          desiredVy += (Number(agent.engageFrontDy) || 0) * pressure;
         }
       }
       if (stationaryHold && toDesired.len <= AGENT_IDLE_DEADZONE) {
-        vx = 0;
-        vy = 0;
+        desiredVx = 0;
+        desiredVy = 0;
       }
+      const accelStep = clampVecLength(
+        desiredVx - (Number(agent.vx) || 0),
+        desiredVy - (Number(agent.vy) || 0),
+        accelCap * safeDt
+      );
+      let vx = (Number(agent.vx) || 0) + accelStep.x;
+      let vy = (Number(agent.vy) || 0) + accelStep.y;
       const vLen = Math.hypot(vx, vy);
       const maxV = speed * 1.15;
       if (vLen > maxV) {

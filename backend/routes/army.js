@@ -3,6 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
 const { fetchArmyUnitTypes } = require('../services/armyUnitTypeService');
+const { fetchBattlefieldItems } = require('../services/placeableCatalogService');
 
 const getUnitTypeId = (unit) => {
   const id = typeof unit?.id === 'string' ? unit.id.trim() : '';
@@ -231,6 +232,76 @@ router.get('/unit-types', async (req, res) => {
     return res.json({ unitTypes });
   } catch (error) {
     console.error('获取兵种列表失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.get('/training/init', authenticateToken, async (req, res) => {
+  try {
+    const [unitTypes, itemCatalog, user] = await Promise.all([
+      fetchArmyUnitTypes(),
+      fetchBattlefieldItems({ enabledOnly: true }),
+      User.findById(req.user.userId).select('username')
+    ]);
+
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    const unlimitedUnits = (Array.isArray(unitTypes) ? unitTypes : [])
+      .map((unit) => {
+        const unitTypeId = getUnitTypeId(unit);
+        if (!unitTypeId) return null;
+        return {
+          unitTypeId,
+          unitName: unit?.name || unitTypeId,
+          count: 999999
+        };
+      })
+      .filter(Boolean);
+
+    const unlimitedItems = (Array.isArray(itemCatalog) ? itemCatalog : []).map((item) => ({
+      ...item,
+      initialCount: 999999
+    }));
+
+    return res.json({
+      mode: 'training',
+      battleId: `training_${Date.now()}`,
+      nodeId: '',
+      gateKey: 'training',
+      gateLabel: '训练场',
+      nodeName: '训练场',
+      timeLimitSec: 240,
+      unitsPerSoldier: 10,
+      attacker: {
+        username: user.username || '我方',
+        totalCount: 0,
+        units: unlimitedUnits,
+        rosterUnits: unlimitedUnits
+      },
+      defender: {
+        username: '敌方',
+        totalCount: 0,
+        units: [],
+        rosterUnits: unlimitedUnits,
+        deployUnits: []
+      },
+      unitTypes: Array.isArray(unitTypes) ? unitTypes : [],
+      battlefield: {
+        intelVisible: true,
+        layoutMeta: {
+          fieldWidth: 900,
+          fieldHeight: 620,
+          maxItemsPerType: 999999
+        },
+        itemCatalog: unlimitedItems,
+        objects: [],
+        defenderDeployments: []
+      }
+    });
+  } catch (error) {
+    console.error('获取训练场初始化失败:', error);
     return res.status(500).json({ error: '服务器错误' });
   }
 });

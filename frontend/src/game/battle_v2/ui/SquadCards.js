@@ -8,10 +8,17 @@ const iconByClass = {
   artillery: '炮'
 };
 
+const SPEED_MODE_C = 'C_PER_TYPE';
+const speedModeBadge = (row = {}) => {
+  if (row?.speedModeAuthority !== 'USER') return 'A';
+  return row?.speedMode === SPEED_MODE_C ? 'C' : 'B';
+};
+
 const SquadCards = ({
   squads = [],
   phase = 'deploy',
   actionAnchorMode = '',
+  deployActionTeam = 'attacker',
   onFocus,
   onSelect,
   onDeployMove,
@@ -33,13 +40,21 @@ const SquadCards = ({
       >
         <div className="pve2-card-head">
           <strong title={row.name}>{row.name}</strong>
-          <span>{iconByClass[row.classTag] || '兵'}</span>
+          <div className="pve2-card-head-meta">
+            <span>{iconByClass[row.classTag] || '兵'}</span>
+            {phase === 'battle' ? (
+              <span className="pve2-speed-badge">
+                {speedModeBadge(row)}
+                {row?.speedModeAuthority === 'USER' ? <em>锁</em> : null}
+              </span>
+            ) : null}
+          </div>
         </div>
         <div className="pve2-card-row">{row.remain}/{row.startCount}</div>
         <div className="pve2-card-row">士气 {Math.round(row.morale)}</div>
         <div className="pve2-card-row">{row.action || '待命'}</div>
       </button>
-      {phase === 'deploy' && actionAnchorMode === 'card' && row.team === 'attacker' && row.selected ? (
+      {phase === 'deploy' && actionAnchorMode === 'card' && (!deployActionTeam || row.team === deployActionTeam) && row.selected ? (
         <div
           className="pve2-card-actions"
           onPointerDown={(event) => event.stopPropagation()}
