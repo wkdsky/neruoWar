@@ -22,7 +22,7 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
     const sx = width / fw;
     const sy = height / fh;
 
-    // Unified coordinate rule: center is (0, 0), left/right = -/+, top/bottom = +/-
+    // Standard minimap orientation: world left/right matches screen left/right.
     const toMap = (x, y) => ({
       x: ((Number(x) || 0) + fw / 2) * sx,
       y: ((fh / 2) - (Number(y) || 0)) * sy

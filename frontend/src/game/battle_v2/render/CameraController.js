@@ -64,15 +64,32 @@ const mat4RotationZ = (rad) => {
   ];
 };
 
-const mat4LookAt = (eye, center, upRef = [0, 0, 1]) => {
-  const f = normalize3(subtract3(center, eye));
-  const s = normalize3(cross3(f, upRef));
-  const u = cross3(s, f);
+const mat4Translation = (tx, ty, tz) => ([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  Number(tx) || 0, Number(ty) || 0, Number(tz) || 0, 1
+]);
 
+const buildLookAtRhBasis = (eye, target, upWorld = [0, 0, 1]) => {
+  const look = subtract3(target, eye);
+  let f = normalize3(look);
+  let s = cross3(f, upWorld);
+  if (Math.hypot(s[0], s[1], s[2]) <= 1e-6) {
+    const fallbackUp = Math.abs(f[2]) < 0.99 ? [0, 0, 1] : [0, 1, 0];
+    s = cross3(f, fallbackUp);
+  }
+  s = normalize3(s);
+  const u = normalize3(cross3(s, f));
+  return { f, s, u };
+};
+
+const buildLookAtRhMatrix = (eye, basis) => {
+  const { f, s, u } = basis;
   return [
-    s[0], s[1], s[2], 0,
-    u[0], u[1], u[2], 0,
-    -f[0], -f[1], -f[2], 0,
+    s[0], u[0], -f[0], 0,
+    s[1], u[1], -f[1], 0,
+    s[2], u[2], -f[2], 0,
     -dot3(s, eye), -dot3(u, eye), dot3(f, eye), 1
   ];
 };
@@ -291,23 +308,58 @@ export default class CameraController {
     const yawEffectiveDeg = this.mirrorX ? (180 - this.yawDeg) : this.yawDeg;
     const yawRad = yawEffectiveDeg * DEG2RAD;
     const worldYawRad = (Number(this.worldYawDeg) || 0) * DEG2RAD;
-    const pitchRad = clamp(this.currentPitch, 10, 89.95) * DEG2RAD;
-    const horizontal = Math.cos(pitchRad) * this.distance;
+    const pitchRad = clamp(this.currentPitch, 10, 170) * DEG2RAD;
+    // Keep left/right world orientation stable even when pitch crosses 90 deg.
+    // Without this, cos(pitch) becomes negative and effectively flips yaw by 180 deg.
+    const horizontal = Math.abs(Math.cos(pitchRad) * this.distance);
     const vertical = Math.sin(pitchRad) * this.distance;
 
     this.target = [this.centerX, this.centerY, 0];
     this.eye = [
       this.centerX + (Math.sin(yawRad) * horizontal),
-      -(this.centerY - (Math.cos(yawRad) * horizontal)),
+      this.centerY - (Math.cos(yawRad) * horizontal),
       vertical
     ];
 
-    this.view = mat4LookAt(this.eye, this.target, this.up);
     this.projection = mat4Perspective(48 * DEG2RAD, safeWidth / safeHeight, 1, 5000);
-    const viewProj = mat4Multiply(this.projection, this.view);
-    const worldRotation = mat4RotationZ(worldYawRad);
-    this.viewProjection = mat4Multiply(viewProj, worldRotation);
-    this.inverseViewProjection = mat4Invert(this.viewProjection);
+    const pivotWorldRotation = mat4Multiply(
+      mat4Multiply(
+        mat4Translation(this.centerX, this.centerY, 0),
+        mat4RotationZ(worldYawRad)
+      ),
+      mat4Translation(-this.centerX, -this.centerY, 0)
+    );
+    const applyView = (view) => {
+      this.view = view;
+      const viewProj = mat4Multiply(this.projection, this.view);
+      this.viewProjection = mat4Multiply(viewProj, pivotWorldRotation);
+      this.inverseViewProjection = mat4Invert(this.viewProjection);
+    };
+
+    let basis = buildLookAtRhBasis(this.eye, this.target, this.up);
+    applyView(buildLookAtRhMatrix(this.eye, basis));
+
+    const lookDir = normalize3(subtract3(this.target, this.eye));
+    let forwardFromView = normalize3([-this.view[8], -this.view[9], -this.view[10]]);
+    let handedness = dot3(cross3(basis.s, basis.u), [-forwardFromView[0], -forwardFromView[1], -forwardFromView[2]]);
+
+    let flipFixApplied = false;
+    const eyeZ = Number(this.eye[2]) || 0;
+    const needFix = (
+      eyeZ <= 1e-3
+      || !Number.isFinite(forwardFromView[2])
+      || forwardFromView[2] >= -1e-6
+      || dot3(forwardFromView, lookDir) < 0
+      || handedness < 0
+    );
+    if (needFix) {
+      this.eye[2] = Math.abs(eyeZ) + 1;
+      basis = buildLookAtRhBasis(this.eye, this.target, this.up);
+      applyView(buildLookAtRhMatrix(this.eye, basis));
+      forwardFromView = normalize3([-this.view[8], -this.view[9], -this.view[10]]);
+      handedness = dot3(cross3(basis.s, basis.u), [-forwardFromView[0], -forwardFromView[1], -forwardFromView[2]]);
+      flipFixApplied = true;
+    }
 
     const rightBase = [Math.cos(yawRad), Math.sin(yawRad), 0];
     const cosWorld = Math.cos(worldYawRad);
@@ -317,23 +369,21 @@ export default class CameraController {
       (-rightBase[0] * sinWorld) + (rightBase[1] * cosWorld),
       0
     ];
-    const forward = normalize3([
-      this.target[0] - this.eye[0],
-      this.target[1] - this.eye[1],
-      this.target[2] - this.eye[2]
-    ]);
-    const rightBasis = normalize3(cross3(forward, this.up));
-    const up2 = cross3(rightBasis, forward);
-    const handedness = dot3(cross3(up2, rightBasis), forward);
+    const forward = forwardFromView;
     return {
       view: this.view,
       projection: this.projection,
       viewProjection: this.viewProjection,
       inverseViewProjection: this.inverseViewProjection,
       cameraRight: right,
+      right: basis.s,
+      up: basis.u,
+      forward,
       handedness,
       cameraImplTag: CAMERA_IMPL_TAG,
       worldYawDeg: Number(this.worldYawDeg) || 0,
+      forwardZ: Number(forward[2]) || 0,
+      flipFixApplied,
       eye: this.eye,
       target: this.target
     };
