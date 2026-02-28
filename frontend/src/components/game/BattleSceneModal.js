@@ -1,24 +1,24 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './pveBattle.css';
-import BattleRuntime from '../../game/battle_v2/runtime/BattleRuntime';
-import BattleClock from '../../game/battle_v2/runtime/BattleClock';
-import CameraController from '../../game/battle_v2/render/CameraController';
+import BattleRuntime from '../../game/battle/presentation/runtime/BattleRuntime';
+import BattleClock from '../../game/battle/presentation/runtime/BattleClock';
+import CameraController from '../../game/battle/presentation/render/CameraController';
 import {
   createBattleGlContext,
   resizeCanvasToDisplaySize
-} from '../../game/battle_v2/render/WebGL2Context';
-import ImpostorRenderer from '../../game/battle_v2/render/ImpostorRenderer';
-import BuildingRenderer from '../../game/battle_v2/render/BuildingRenderer';
-import ProjectileRenderer from '../../game/battle_v2/render/ProjectileRenderer';
-import EffectRenderer from '../../game/battle_v2/render/EffectRenderer';
-import GroundRenderer from '../../game/battle_v2/render/GroundRenderer';
-import BattleHUD from '../../game/battle_v2/ui/BattleHUD';
-import SquadCards from '../../game/battle_v2/ui/SquadCards';
-import DeployActionButtons from '../../game/battle_v2/ui/DeployActionButtons';
-import Minimap from '../../game/battle_v2/ui/Minimap';
-import AimOverlayCanvas from '../../game/battle_v2/ui/AimOverlayCanvas';
-import BattleDebugPanel from '../../game/battle_v2/ui/BattleDebugPanel';
-import unitVisualConfig from '../../game/battle_v2/assets/UnitVisualConfig.example.json';
+} from '../../game/battle/presentation/render/WebGL2Context';
+import ImpostorRenderer from '../../game/battle/presentation/render/ImpostorRenderer';
+import BuildingRenderer from '../../game/battle/presentation/render/BuildingRenderer';
+import ProjectileRenderer from '../../game/battle/presentation/render/ProjectileRenderer';
+import EffectRenderer from '../../game/battle/presentation/render/EffectRenderer';
+import GroundRenderer from '../../game/battle/presentation/render/GroundRenderer';
+import BattleHUD from '../../game/battle/presentation/ui/BattleHUD';
+import SquadCards from '../../game/battle/presentation/ui/SquadCards';
+import DeployActionButtons from '../../game/battle/presentation/ui/DeployActionButtons';
+import Minimap from '../../game/battle/presentation/ui/Minimap';
+import AimOverlayCanvas from '../../game/battle/presentation/ui/AimOverlayCanvas';
+import BattleDebugPanel from '../../game/battle/presentation/ui/BattleDebugPanel';
+import unitVisualConfig from '../../game/battle/presentation/assets/UnitVisualConfig.example.json';
 import NumberPadDialog from '../common/NumberPadDialog';
 import { BACKEND_ORIGIN } from '../../runtimeConfig';
 

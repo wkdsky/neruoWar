@@ -2,7 +2,7 @@ import {
   createCrowdSim,
   updateCrowdSim,
   triggerCrowdSkill
-} from '../../battle/crowd/CrowdSim';
+} from '../../simulation/crowd/CrowdSim';
 import { buildBattleSummary } from './BattleSummary';
 import {
   buildRepConfig,
