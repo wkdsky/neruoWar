@@ -18,7 +18,7 @@ import NodeInfoModal from './components/modals/NodeInfoModal';
 import CreateNodeModal from './components/modals/CreateNodeModal';
 import PveBattleModal from './components/game/PveBattleModal';
 import BattlefieldPreviewModal from './components/game/BattlefieldPreviewModal';
-import { BACKEND_ORIGIN } from './runtimeConfig';
+import { API_BASE, BACKEND_ORIGIN } from './runtimeConfig';
 
 // 导入头像
 import defaultMale1 from './assets/avatars/default_male_1.svg';
@@ -957,7 +957,7 @@ const App = () => {
     const token = localStorage.getItem('token');
     try {
       console.log('正在更新location:', location);
-      const response = await fetch('http://localhost:5000/api/location', {
+      const response = await fetch(`${API_BASE}/location`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1026,7 +1026,7 @@ const App = () => {
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(normalizedLocationName)}`);
+      const response = await fetch(`${API_BASE}/nodes/public/search?query=${encodeURIComponent(normalizedLocationName)}`);
       const parsedSearch = await parseApiResponse(response);
       if (!response.ok || !parsedSearch?.data) {
         if (!silent) {
@@ -1054,7 +1054,7 @@ const App = () => {
         || localNodeMatch?._id
       );
       if (isValidObjectId(detailNodeId)) {
-        const detailResponse = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${detailNodeId}?includeFavoriteCount=1`);
+        const detailResponse = await fetch(`${API_BASE}/nodes/public/node-detail/${detailNodeId}?includeFavoriteCount=1`);
         const parsedDetail = await parseApiResponse(detailResponse);
         if (!detailResponse.ok || !parsedDetail?.data?.node) {
           if (!silent) {
@@ -1149,10 +1149,10 @@ const App = () => {
 
     try {
       const [profileResponse, armyResponse] = await Promise.all([
-        fetch('http://localhost:5000/api/profile', {
+        fetch(`${API_BASE}/profile`, {
           headers: { Authorization: `Bearer ${token}` }
         }),
-        fetch('http://localhost:5000/api/army/me', {
+        fetch(`${API_BASE}/army/me`, {
           headers: { Authorization: `Bearer ${token}` }
         })
       ]);
@@ -1232,7 +1232,7 @@ const App = () => {
     }
 
     try {
-      const response = await fetch('http://localhost:5000/api/nodes/me/related-domains', {
+      const response = await fetch(`${API_BASE}/nodes/me/related-domains`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const parsed = await parseApiResponse(response);
@@ -1275,7 +1275,7 @@ const App = () => {
 
     setFavoriteActionDomainId(normalizedId);
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${normalizedId}/favorite`, {
+      const response = await fetch(`${API_BASE}/nodes/${normalizedId}/favorite`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -1302,7 +1302,7 @@ const App = () => {
       : '';
 
     try {
-      await fetch(`http://localhost:5000/api/nodes/${domainId}/recent-visit`, {
+      await fetch(`${API_BASE}/nodes/${domainId}/recent-visit`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1333,7 +1333,7 @@ const App = () => {
     }
 
     try {
-      const response = await fetch('http://localhost:5000/api/notifications', {
+      const response = await fetch(`${API_BASE}/notifications`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const parsed = await parseApiResponse(response);
@@ -1369,7 +1369,7 @@ const App = () => {
     }
 
     try {
-      const response = await fetch('http://localhost:5000/api/nodes/pending', {
+      const response = await fetch(`${API_BASE}/nodes/pending`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const parsed = await parseApiResponse(response);
@@ -1399,7 +1399,7 @@ const App = () => {
     if (target?.read) return;
 
     try {
-      const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/read`, {
+      const response = await fetch(`${API_BASE}/notifications/${notificationId}/read`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -1428,7 +1428,7 @@ const App = () => {
 
     setIsMarkingAllRead(true);
     try {
-      const response = await fetch('http://localhost:5000/api/notifications/read-all', {
+      const response = await fetch(`${API_BASE}/notifications/read-all`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -1472,7 +1472,7 @@ const App = () => {
 
     try {
       await Promise.all(unreadAnnouncementIds.map(async (notificationId) => {
-        const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/read`, {
+        const response = await fetch(`${API_BASE}/notifications/${notificationId}/read`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${token}`
@@ -1500,7 +1500,7 @@ const App = () => {
 
     setIsClearingNotifications(true);
     try {
-      const response = await fetch('http://localhost:5000/api/notifications/clear', {
+      const response = await fetch(`${API_BASE}/notifications/clear`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -1532,7 +1532,7 @@ const App = () => {
     setNotificationActionId(actionKey);
 
     try {
-      const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/respond`, {
+      const response = await fetch(`${API_BASE}/notifications/${notificationId}/respond`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1563,7 +1563,7 @@ const App = () => {
     if (!token || !targetNodeId) return false;
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${targetNodeId}/domain-master/apply`, {
+      const response = await fetch(`${API_BASE}/nodes/${targetNodeId}/domain-master/apply`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1622,7 +1622,7 @@ const App = () => {
     }
 
     try {
-      const response = await fetch('http://localhost:5000/api/nodes/me/siege-supports', {
+      const response = await fetch(`${API_BASE}/nodes/me/siege-supports`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const parsed = await parseApiResponse(response);
@@ -1664,7 +1664,7 @@ const App = () => {
     if (!token) return null;
 
     try {
-      const response = await fetch('http://localhost:5000/api/travel/status', {
+      const response = await fetch(`${API_BASE}/travel/status`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const parsed = await parseApiResponse(response);
@@ -1755,7 +1755,7 @@ const App = () => {
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/distribution-participation`, {
+      const response = await fetch(`${API_BASE}/nodes/${nodeId}/distribution-participation`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const parsed = await parseApiResponse(response);
@@ -1800,7 +1800,7 @@ const App = () => {
     if (!token) return null;
 
     try {
-      const response = await fetch('http://localhost:5000/api/travel/estimate', {
+      const response = await fetch(`${API_BASE}/travel/estimate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1826,7 +1826,7 @@ const App = () => {
     if (!token) return 'failed';
 
     try {
-      const response = await fetch('http://localhost:5000/api/travel/start', {
+      const response = await fetch(`${API_BASE}/travel/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1873,7 +1873,7 @@ const App = () => {
     const token = localStorage.getItem('token');
 
     try {
-      const response = await fetch('http://localhost:5000/api/travel/stop', {
+      const response = await fetch(`${API_BASE}/travel/stop`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2112,6 +2112,13 @@ const App = () => {
       return;
     }
 
+    if (saved.view === 'trainingGround') {
+      localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
+      setView('home');
+      hasRestoredPageRef.current = true;
+      return;
+    }
+
     isRestoringPageRef.current = true;
 
     const restorePage = async () => {
@@ -2166,6 +2173,10 @@ const App = () => {
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
 
     const currentView = (showKnowledgeDomain || isTransitioningToDomain) ? 'knowledgeDomain' : view;
+    if (currentView === 'trainingGround') {
+      localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
+      return;
+    }
     const nodeId = normalizeObjectId(
       currentView === 'knowledgeDomain'
         ? (knowledgeDomainNode?._id || currentTitleDetail?._id || currentNodeDetail?._id)
@@ -2455,7 +2466,7 @@ const App = () => {
         if (!token) return;
     
         try {
-            const response = await fetch('http://localhost:5000/api/admin/users', {
+            const response = await fetch(`${API_BASE}/admin/users`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -2475,7 +2486,7 @@ const App = () => {
     // 获取根节点
     const fetchRootNodes = async () => {
         try {
-            const response = await fetch('http://localhost:5000/api/nodes/public/root-nodes');
+            const response = await fetch(`${API_BASE}/nodes/public/root-nodes`);
             const parsed = await parseApiResponse(response);
             if (response.ok) {
                 const data = parsed.data || {};
@@ -2492,7 +2503,7 @@ const App = () => {
     // 获取热门节点
     const fetchFeaturedNodes = async () => {
         try {
-            const response = await fetch('http://localhost:5000/api/nodes/public/featured-nodes');
+            const response = await fetch(`${API_BASE}/nodes/public/featured-nodes`);
             const parsed = await parseApiResponse(response);
             if (response.ok) {
                 const data = parsed.data || {};
@@ -2635,8 +2646,8 @@ const App = () => {
 
         try {
             const requestUrl = force
-                ? `http://localhost:5000/api/nodes/${targetNodeId}/siege?_=${Date.now()}`
-                : `http://localhost:5000/api/nodes/${targetNodeId}/siege`;
+                ? `${API_BASE}/nodes/${targetNodeId}/siege?_=${Date.now()}`
+                : `${API_BASE}/nodes/${targetNodeId}/siege`;
             const response = await fetch(requestUrl, {
                 headers: { Authorization: `Bearer ${token}` },
                 cache: 'no-store'
@@ -2689,7 +2700,7 @@ const App = () => {
         }
 
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${targetNodeId}/intel-heist`, {
+            const response = await fetch(`${API_BASE}/nodes/${targetNodeId}/intel-heist`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             const data = await response.json();
@@ -2851,7 +2862,7 @@ const App = () => {
         }));
 
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/start`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/start`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2900,7 +2911,7 @@ const App = () => {
         }));
 
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/request-support`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/request-support`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2948,7 +2959,7 @@ const App = () => {
         }));
 
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/retreat`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/retreat`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -3010,7 +3021,7 @@ const App = () => {
             message: ''
         }));
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/support`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/support`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -3095,7 +3106,7 @@ const App = () => {
             layoutBundle: null
         });
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/battlefield-preview?gateKey=${encodeURIComponent(gateKey)}`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/battlefield-preview?gateKey=${encodeURIComponent(gateKey)}`, {
                 headers: {
                     Authorization: `Bearer ${token}`
                 }
@@ -3151,7 +3162,7 @@ const App = () => {
         });
 
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/siege/pve/battle-init?gateKey=${encodeURIComponent(gateKey)}`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/pve/battle-init?gateKey=${encodeURIComponent(gateKey)}`, {
                 headers: {
                     Authorization: `Bearer ${token}`
                 }
@@ -3207,7 +3218,7 @@ const App = () => {
         }
         try {
             await prepareForPrimaryNavigation();
-            const response = await fetch(`http://localhost:5000/api/nodes/public/title-detail/${normalizedNodeId}?depth=1`);
+            const response = await fetch(`${API_BASE}/nodes/public/title-detail/${normalizedNodeId}?depth=1`);
             if (!response.ok) {
                 if (shouldAlert) {
                     const parsed = await parseApiResponse(response);
@@ -3317,8 +3328,8 @@ const App = () => {
             await prepareForPrimaryNavigation();
             const requestedSenseId = typeof navOptions?.activeSenseId === 'string' ? navOptions.activeSenseId.trim() : '';
             const detailUrl = requestedSenseId
-                ? `http://localhost:5000/api/nodes/public/node-detail/${normalizedNodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
-                : `http://localhost:5000/api/nodes/public/node-detail/${normalizedNodeId}`;
+                ? `${API_BASE}/nodes/public/node-detail/${normalizedNodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
+                : `${API_BASE}/nodes/public/node-detail/${normalizedNodeId}`;
             const response = await fetch(detailUrl);
             if (response.ok) {
                 const data = await response.json();
@@ -3506,7 +3517,7 @@ const App = () => {
         let targetNodeId = normalizeObjectId(notification.nodeId);
         if (!targetNodeId && typeof notification.nodeName === 'string' && notification.nodeName.trim()) {
             try {
-                const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(notification.nodeName.trim())}`);
+                const response = await fetch(`${API_BASE}/nodes/public/search?query=${encodeURIComponent(notification.nodeName.trim())}`);
                 if (response.ok) {
                     const data = await response.json();
                     const exactMatch = Array.isArray(data?.results)
@@ -3595,7 +3606,7 @@ const App = () => {
             feedback: ''
         }));
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/distribution-participation/join`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/distribution-participation/join`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -3643,7 +3654,7 @@ const App = () => {
             feedback: ''
         }));
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/distribution-participation/exit`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/distribution-participation/exit`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -4050,7 +4061,7 @@ const App = () => {
 
         setIsSearching(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(query)}`);
+            const response = await fetch(`${API_BASE}/nodes/public/search?query=${encodeURIComponent(query)}`);
             if (response.ok) {
                 const data = await response.json();
                 setHomeSearchResults(data.results);
@@ -4328,8 +4339,8 @@ const App = () => {
         (async () => {
             try {
                 const detailUrl = requestedSenseId
-                    ? `http://localhost:5000/api/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
-                    : `http://localhost:5000/api/nodes/public/node-detail/${nodeId}`;
+                    ? `${API_BASE}/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
+                    : `${API_BASE}/nodes/public/node-detail/${nodeId}`;
                 const response = await fetch(detailUrl);
                 const rawText = await response.text();
                 let data = null;
@@ -6178,7 +6189,7 @@ const App = () => {
                     <ArmyPanel />
                 )}
                 {view === "trainingGround" && !isAdmin && (
-                    <TrainingGroundPanel />
+                    <TrainingGroundPanel onExit={navigateToHomeWithDockCollapse} />
                 )}
 
                 {view !== "home" &&

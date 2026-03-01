@@ -21,6 +21,48 @@ MONGO_PM2_NAME="${MONGO_PM2_NAME:-neurowar-mongodb}"
 BACKEND_DEFAULT_PORT="${BACKEND_DEFAULT_PORT:-5000}"
 FRONTEND_DEFAULT_PORT="${FRONTEND_DEFAULT_PORT:-3000}"
 MAX_PORT_SCAN_STEPS="${MAX_PORT_SCAN_STEPS:-2000}"
+MONGODB_URI_ENV="${MONGODB_URI:-mongodb://localhost:${MONGO_PORT}/strategy-game}"
+
+FORCE_RESET_ADMIN=false
+CLEAR_DOMAINS=false
+
+print_usage() {
+    cat <<'EOF'
+用法: ./start.sh [选项]
+
+选项:
+  --force-reset-admin   强制重置 admin 用户（密码恢复为 123456）
+  --clear-domains       清空所有知识域数据（保留用户/熵盟/目录配置）
+  -h, --help            显示帮助
+
+说明:
+  - 启动时若检测到数据库已有业务数据（用户/知识域/熵盟任一非空），将跳过基础注入。
+  - 若数据库为空，则执行基础注入（目录配置 + 管理员 + 用户字段初始化）。
+EOF
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --force-reset-admin|force-reset-admin|reset-admin|admin-reset)
+                FORCE_RESET_ADMIN=true
+                ;;
+            --clear-domains|clear-domains|clear-domain-data)
+                CLEAR_DOMAINS=true
+                ;;
+            -h|--help|help)
+                print_usage
+                exit 0
+                ;;
+            *)
+                echo "错误: 未知参数 $1"
+                print_usage
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
 
 migrate_legacy_pm2_home() {
     local legacy_pm2_home="$PROJECT_DIR/.pm2"
@@ -116,6 +158,253 @@ inject_db() {
     node scripts/initUserDomainPreferences.js
 }
 
+has_existing_gameplay_data() {
+    local marker
+    marker="$(
+        cd "$BACKEND_DIR"
+        MONGODB_URI="$MONGODB_URI_ENV" node - <<'NODE'
+const mongoose = require('mongoose');
+const User = require('./models/User');
+const Node = require('./models/Node');
+const EntropyAlliance = require('./models/EntropyAlliance');
+
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/strategy-game';
+
+async function run() {
+  await mongoose.connect(MONGODB_URI);
+  const [userCount, nodeCount, allianceCount] = await Promise.all([
+    User.countDocuments({}),
+    Node.countDocuments({}),
+    EntropyAlliance.countDocuments({})
+  ]);
+  await mongoose.disconnect();
+  if ((userCount + nodeCount + allianceCount) > 0) {
+    process.stdout.write('HAS_DATA');
+    return;
+  }
+  process.stdout.write('EMPTY');
+}
+
+run()
+  .catch(async (error) => {
+    console.error(error.message);
+    try {
+      await mongoose.disconnect();
+    } catch (e) {
+      // ignore
+    }
+    process.exit(1);
+  });
+NODE
+    )"
+
+    [ "$marker" = "HAS_DATA" ]
+}
+
+force_reset_admin_user() {
+    echo "执行管理员强制重置..."
+    cd "$BACKEND_DIR"
+    MONGODB_URI="$MONGODB_URI_ENV" node - <<'NODE'
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const User = require('./models/User');
+
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/strategy-game';
+const ADMIN_USERNAME = 'admin';
+const ADMIN_PASSWORD = '123456';
+
+async function run() {
+  await mongoose.connect(MONGODB_URI);
+  const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 10);
+
+  const admin = await User.findOneAndUpdate(
+    { username: ADMIN_USERNAME },
+    {
+      $set: {
+        password: hashedPassword,
+        plainPassword: ADMIN_PASSWORD,
+        role: 'admin',
+        level: 0,
+        experience: 0,
+        knowledgeBalance: 0,
+        location: '任意',
+        profession: '求知',
+        avatar: 'default_male_1',
+        gender: 'male',
+        allianceId: null,
+        ownedNodes: [],
+        favoriteDomains: [],
+        recentVisitedDomains: [],
+        notifications: []
+      },
+      $setOnInsert: {
+        username: ADMIN_USERNAME
+      }
+    },
+    {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true
+    }
+  ).select('username role level experience location');
+
+  await mongoose.disconnect();
+  console.log(`管理员已重置: ${admin.username} / 密码: ${ADMIN_PASSWORD}`);
+}
+
+run()
+  .catch(async (error) => {
+    console.error('重置管理员失败:', error.message);
+    try {
+      await mongoose.disconnect();
+    } catch (e) {
+      // ignore
+    }
+    process.exit(1);
+  });
+NODE
+}
+
+clear_knowledge_domain_data() {
+    echo "清空知识域相关数据..."
+    cd "$BACKEND_DIR"
+    MONGODB_URI="$MONGODB_URI_ENV" node - <<'NODE'
+const mongoose = require('mongoose');
+const Node = require('./models/Node');
+const NodeSense = require('./models/NodeSense');
+const NodeSenseComment = require('./models/NodeSenseComment');
+const NodeSenseEditSuggestion = require('./models/NodeSenseEditSuggestion');
+const NodeSenseFavorite = require('./models/NodeSenseFavorite');
+const DomainTitleProjection = require('./models/DomainTitleProjection');
+const DomainTitleRelation = require('./models/DomainTitleRelation');
+const DomainDefenseLayout = require('./models/DomainDefenseLayout');
+const DomainSiegeState = require('./models/DomainSiegeState');
+const SiegeParticipant = require('./models/SiegeParticipant');
+const SiegeBattleRecord = require('./models/SiegeBattleRecord');
+const DistributionParticipant = require('./models/DistributionParticipant');
+const DistributionResult = require('./models/DistributionResult');
+const AllianceBroadcastEvent = require('./models/AllianceBroadcastEvent');
+const Notification = require('./models/Notification');
+const UserInboxState = require('./models/UserInboxState');
+const ScheduledTask = require('./models/ScheduledTask');
+const Army = require('./models/Army');
+const User = require('./models/User');
+
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/strategy-game';
+
+async function run() {
+  await mongoose.connect(MONGODB_URI);
+
+  const [
+    nodeResult,
+    nodeSenseResult,
+    nodeSenseCommentResult,
+    nodeSenseSuggestionResult,
+    nodeSenseFavoriteResult,
+    projectionResult,
+    relationResult,
+    defenseLayoutResult,
+    siegeStateResult,
+    siegeParticipantResult,
+    siegeBattleRecordResult,
+    distributionParticipantResult,
+    distributionResultResult,
+    allianceBroadcastResult,
+    notificationResult,
+    inboxStateResult,
+    scheduledTaskResult,
+    armyResult
+  ] = await Promise.all([
+    Node.deleteMany({}),
+    NodeSense.deleteMany({}),
+    NodeSenseComment.deleteMany({}),
+    NodeSenseEditSuggestion.deleteMany({}),
+    NodeSenseFavorite.deleteMany({}),
+    DomainTitleProjection.deleteMany({}),
+    DomainTitleRelation.deleteMany({}),
+    DomainDefenseLayout.deleteMany({}),
+    DomainSiegeState.deleteMany({}),
+    SiegeParticipant.deleteMany({}),
+    SiegeBattleRecord.deleteMany({}),
+    DistributionParticipant.deleteMany({}),
+    DistributionResult.deleteMany({}),
+    AllianceBroadcastEvent.deleteMany({}),
+    Notification.deleteMany({}),
+    UserInboxState.deleteMany({}),
+    ScheduledTask.deleteMany({}),
+    Army.deleteMany({})
+  ]);
+
+  const userUpdateResult = await User.updateMany(
+    {},
+    {
+      $set: {
+        ownedNodes: [],
+        location: '',
+        lastArrivedFromNodeId: null,
+        lastArrivedFromNodeName: '',
+        lastArrivedAt: null,
+        favoriteDomains: [],
+        recentVisitedDomains: [],
+        notifications: [],
+        intelDomainSnapshots: {},
+        travelState: {
+          status: 'idle',
+          isTraveling: false,
+          path: [],
+          startedAt: null,
+          unitDurationSeconds: 60,
+          targetNodeId: null,
+          stoppingNearestNodeId: null,
+          stoppingNearestNodeName: '',
+          stopStartedAt: null,
+          stopDurationSeconds: 0,
+          stopFromNode: null,
+          queuedTargetNodeId: null,
+          queuedTargetNodeName: ''
+        }
+      }
+    }
+  );
+
+  await mongoose.disconnect();
+
+  console.log(JSON.stringify({
+    node: nodeResult.deletedCount || 0,
+    nodeSense: nodeSenseResult.deletedCount || 0,
+    nodeSenseComment: nodeSenseCommentResult.deletedCount || 0,
+    nodeSenseEditSuggestion: nodeSenseSuggestionResult.deletedCount || 0,
+    nodeSenseFavorite: nodeSenseFavoriteResult.deletedCount || 0,
+    domainTitleProjection: projectionResult.deletedCount || 0,
+    domainTitleRelation: relationResult.deletedCount || 0,
+    domainDefenseLayout: defenseLayoutResult.deletedCount || 0,
+    domainSiegeState: siegeStateResult.deletedCount || 0,
+    siegeParticipant: siegeParticipantResult.deletedCount || 0,
+    siegeBattleRecord: siegeBattleRecordResult.deletedCount || 0,
+    distributionParticipant: distributionParticipantResult.deletedCount || 0,
+    distributionResult: distributionResultResult.deletedCount || 0,
+    allianceBroadcastEvent: allianceBroadcastResult.deletedCount || 0,
+    notification: notificationResult.deletedCount || 0,
+    userInboxState: inboxStateResult.deletedCount || 0,
+    scheduledTask: scheduledTaskResult.deletedCount || 0,
+    army: armyResult.deletedCount || 0,
+    userUpdated: userUpdateResult.modifiedCount || 0
+  }, null, 2));
+}
+
+run()
+  .catch(async (error) => {
+    console.error('清空知识域数据失败:', error.message);
+    try {
+      await mongoose.disconnect();
+    } catch (e) {
+      // ignore
+    }
+    process.exit(1);
+  });
+NODE
+}
+
 is_port_occupied() {
     local port="$1"
     if command -v ss >/dev/null 2>&1; then
@@ -162,10 +451,25 @@ find_available_port() {
     echo "$port"
 }
 
+parse_args "$@"
+
 migrate_legacy_pm2_home
 ensure_pm2
 start_mongo
-inject_db
+
+if [ "$CLEAR_DOMAINS" = true ]; then
+    clear_knowledge_domain_data
+fi
+
+if has_existing_gameplay_data; then
+    echo "检测到数据库已有业务数据，跳过基础注入。"
+else
+    inject_db
+fi
+
+if [ "$FORCE_RESET_ADMIN" = true ]; then
+    force_reset_admin_user
+fi
 
 pm2 delete neurowar-backend >/dev/null 2>&1 || true
 pm2 delete neurowar-frontend >/dev/null 2>&1 || true

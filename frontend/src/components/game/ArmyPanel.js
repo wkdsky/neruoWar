@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import './ArmyPanel.css';
-import { BACKEND_ORIGIN } from '../../runtimeConfig';
+import NumberPadDialog from '../common/NumberPadDialog';
+import { API_BASE } from '../../runtimeConfig';
 
-const API_BASE = BACKEND_ORIGIN;
 const QUICK_QTY_STEPS = [10, 50, 100, 500, 1000];
+const TEMPLATE_MAX_COUNT = 999999999;
 
 const parseApiResponse = async (response) => {
   const rawText = await response.text();
@@ -34,15 +35,44 @@ const normalizeInteger = (value, fallback = 0, min = 0) => {
   return Math.max(min, Math.floor(num));
 };
 
+const normalizeTemplateUnits = (units = []) => (
+  (Array.isArray(units) ? units : [])
+    .map((entry) => ({
+      unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '',
+      count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+    }))
+    .filter((entry) => entry.unitTypeId && entry.count > 0)
+);
+
+const unitsToSummaryText = (units = [], unitNameById = new Map()) => (
+  normalizeTemplateUnits(units)
+    .map((entry) => `${unitNameById.get(entry.unitTypeId) || entry.unitTypeId}x${entry.count}`)
+    .join(' / ')
+);
+
 const ArmyPanel = () => {
   const [unitTypes, setUnitTypes] = useState([]);
   const [knowledgeBalance, setKnowledgeBalance] = useState(0);
   const [roster, setRoster] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [draftByUnit, setDraftByUnit] = useState({});
   const [cartByUnit, setCartByUnit] = useState({});
   const [loading, setLoading] = useState(true);
   const [checkingOut, setCheckingOut] = useState(false);
   const [error, setError] = useState('');
+  const [templateNotice, setTemplateNotice] = useState('');
+  const [templateActionId, setTemplateActionId] = useState('');
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
+  const [templateEditingId, setTemplateEditingId] = useState('');
+  const [templateEditorDraft, setTemplateEditorDraft] = useState({ name: '', units: [] });
+  const [templateEditorDragUnitId, setTemplateEditorDragUnitId] = useState('');
+  const [templateQuantityDialog, setTemplateQuantityDialog] = useState({
+    open: false,
+    unitTypeId: '',
+    unitName: '',
+    max: 0,
+    current: 1
+  });
 
   const token = localStorage.getItem('token');
 
@@ -55,6 +85,18 @@ const ArmyPanel = () => {
       return acc;
     }, {});
   }, [unitTypes]);
+
+  const unitNameByTypeId = useMemo(() => (
+    new Map(
+      unitTypes
+        .map((unit) => {
+          const unitId = getUnitId(unit);
+          if (!unitId) return null;
+          return [unitId, unit?.name || unitId];
+        })
+        .filter(Boolean)
+    )
+  ), [unitTypes]);
 
   const rosterByUnitId = useMemo(() => roster.reduce((acc, item) => {
     const key = typeof item?.unitTypeId === 'string' ? item.unitTypeId : '';
@@ -94,6 +136,27 @@ const ArmyPanel = () => {
   const remainBalance = knowledgeBalance - totalCost;
   const isInsufficient = remainBalance < 0;
 
+  const templateEditorAvailableRows = useMemo(() => (
+    unitsWithCount
+      .map((unit) => ({
+        unitTypeId: unit.id,
+        unitName: unit.name || unit.id,
+        availableForDraft: TEMPLATE_MAX_COUNT,
+        unlimited: true
+      }))
+      .sort((a, b) => a.unitName.localeCompare(b.unitName, 'zh-Hans-CN'))
+  ), [unitsWithCount]);
+
+  const templateEditorTotal = useMemo(
+    () => normalizeTemplateUnits(templateEditorDraft.units).reduce((sum, entry) => sum + entry.count, 0),
+    [templateEditorDraft.units]
+  );
+
+  const templateEditorSummary = useMemo(
+    () => unitsToSummaryText(templateEditorDraft.units, unitNameByTypeId),
+    [templateEditorDraft.units, unitNameByTypeId]
+  );
+
   const fetchArmyData = useCallback(async () => {
     if (!token) {
       setLoading(false);
@@ -105,9 +168,14 @@ const ArmyPanel = () => {
     setError('');
 
     try {
-      const [unitTypesResponse, meResponse] = await Promise.all([
-        fetch(`${API_BASE}/api/army/unit-types`),
-        fetch(`${API_BASE}/api/army/me`, {
+      const [unitTypesResponse, meResponse, templatesResponse] = await Promise.all([
+        fetch(`${API_BASE}/army/unit-types`),
+        fetch(`${API_BASE}/army/me`, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }),
+        fetch(`${API_BASE}/army/templates`, {
           headers: {
             Authorization: `Bearer ${token}`
           }
@@ -116,6 +184,7 @@ const ArmyPanel = () => {
 
       const unitTypesParsed = await parseApiResponse(unitTypesResponse);
       const meParsed = await parseApiResponse(meResponse);
+      const templatesParsed = await parseApiResponse(templatesResponse);
 
       if (!unitTypesResponse.ok) {
         setError(getApiErrorMessage(unitTypesParsed, '加载兵种列表失败'));
@@ -129,13 +198,21 @@ const ArmyPanel = () => {
         return;
       }
 
+      if (!templatesResponse.ok) {
+        setError(getApiErrorMessage(templatesParsed, '加载模板失败'));
+        setLoading(false);
+        return;
+      }
+
       const nextUnitTypes = Array.isArray(unitTypesParsed.data?.unitTypes) ? unitTypesParsed.data.unitTypes : [];
       const nextRoster = Array.isArray(meParsed.data?.roster) ? meParsed.data.roster : [];
       const nextBalance = Number.isFinite(meParsed.data?.knowledgeBalance) ? meParsed.data.knowledgeBalance : 0;
+      const nextTemplates = Array.isArray(templatesParsed.data?.templates) ? templatesParsed.data.templates : [];
 
       setUnitTypes(nextUnitTypes);
       setRoster(nextRoster);
       setKnowledgeBalance(nextBalance);
+      setTemplates(nextTemplates);
 
       setDraftByUnit((prev) => {
         const next = { ...prev };
@@ -230,7 +307,7 @@ const ArmyPanel = () => {
     setError('');
 
     try {
-      const response = await fetch(`${API_BASE}/api/army/recruit/checkout`, {
+      const response = await fetch(`${API_BASE}/army/recruit/checkout`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -265,6 +342,205 @@ const ArmyPanel = () => {
     }
   };
 
+  const closeTemplateEditor = () => {
+    setTemplateEditorOpen(false);
+    setTemplateEditingId('');
+    setTemplateEditorDragUnitId('');
+    setTemplateEditorDraft({ name: '', units: [] });
+    setTemplateQuantityDialog({
+      open: false,
+      unitTypeId: '',
+      unitName: '',
+      max: 0,
+      current: 1
+    });
+  };
+
+  const openTemplateCreate = () => {
+    setTemplateNotice('');
+    setTemplateEditorOpen(true);
+    setTemplateEditingId('');
+    setTemplateEditorDragUnitId('');
+    setTemplateEditorDraft({ name: '', units: [] });
+    setTemplateQuantityDialog({
+      open: false,
+      unitTypeId: '',
+      unitName: '',
+      max: 0,
+      current: 1
+    });
+  };
+
+  const openTemplateEdit = (template) => {
+    if (!template) return;
+    setTemplateNotice('');
+    setTemplateEditorOpen(true);
+    setTemplateEditingId(typeof template.templateId === 'string' ? template.templateId : '');
+    setTemplateEditorDragUnitId('');
+    setTemplateEditorDraft({
+      name: typeof template.name === 'string' ? template.name : '',
+      units: normalizeTemplateUnits(template.units)
+    });
+    setTemplateQuantityDialog({
+      open: false,
+      unitTypeId: '',
+      unitName: '',
+      max: 0,
+      current: 1
+    });
+  };
+
+  const resolveTemplateUnitMax = useCallback((unitTypeId) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId) return 0;
+    const row = templateEditorAvailableRows.find((item) => item.unitTypeId === safeId);
+    const baseMax = row?.unlimited
+      ? TEMPLATE_MAX_COUNT
+      : Math.max(0, Math.floor(Number(row?.availableForDraft) || 0));
+    const existing = normalizeTemplateUnits(templateEditorDraft.units)
+      .find((entry) => entry.unitTypeId === safeId)?.count || 0;
+    return Math.min(TEMPLATE_MAX_COUNT, baseMax + existing);
+  }, [templateEditorAvailableRows, templateEditorDraft.units]);
+
+  const openTemplateQuantityDialog = useCallback((unitTypeId) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId) return;
+    const row = templateEditorAvailableRows.find((item) => item.unitTypeId === safeId);
+    const max = resolveTemplateUnitMax(safeId);
+    if (max <= 0) {
+      setTemplateNotice('该兵种当前不可配置');
+      return;
+    }
+    const current = normalizeTemplateUnits(templateEditorDraft.units).find((entry) => entry.unitTypeId === safeId)?.count || 1;
+    setTemplateQuantityDialog({
+      open: true,
+      unitTypeId: safeId,
+      unitName: row?.unitName || safeId,
+      max,
+      current: Math.max(1, Math.min(max, current))
+    });
+  }, [resolveTemplateUnitMax, templateEditorAvailableRows, templateEditorDraft.units]);
+
+  const handleTemplateDrop = useCallback((event) => {
+    event.preventDefault();
+    const droppedUnitTypeId = event.dataTransfer?.getData('application/x-deploy-unit-id')
+      || event.dataTransfer?.getData('text/plain')
+      || '';
+    setTemplateEditorDragUnitId('');
+    openTemplateQuantityDialog(droppedUnitTypeId);
+  }, [openTemplateQuantityDialog]);
+
+  const handleConfirmTemplateQuantity = useCallback((qty) => {
+    const safeId = typeof templateQuantityDialog?.unitTypeId === 'string' ? templateQuantityDialog.unitTypeId.trim() : '';
+    if (!safeId) {
+      setTemplateQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 });
+      return;
+    }
+    const max = Math.max(1, Math.floor(Number(templateQuantityDialog.max) || 1));
+    const safeQty = Math.max(1, Math.min(max, Math.floor(Number(qty) || 1)));
+    setTemplateEditorDraft((prev) => {
+      const source = normalizeTemplateUnits(prev?.units || []);
+      const idx = source.findIndex((entry) => entry.unitTypeId === safeId);
+      if (idx >= 0) {
+        source[idx] = { ...source[idx], count: safeQty };
+      } else {
+        source.push({ unitTypeId: safeId, count: safeQty });
+      }
+      return { ...prev, units: normalizeTemplateUnits(source) };
+    });
+    setTemplateQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 });
+  }, [templateQuantityDialog]);
+
+  const handleRemoveTemplateUnit = (unitTypeId) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    if (!safeId) return;
+    setTemplateEditorDraft((prev) => ({
+      ...prev,
+      units: normalizeTemplateUnits(prev?.units || []).filter((entry) => entry.unitTypeId !== safeId)
+    }));
+  };
+
+  const submitTemplateEditor = async () => {
+    if (!token) {
+      setTemplateNotice('未登录，无法保存模板');
+      return;
+    }
+    const units = normalizeTemplateUnits(templateEditorDraft.units);
+    if (units.length <= 0) {
+      setTemplateNotice('请至少添加一个兵种到模板');
+      return;
+    }
+
+    const isEditing = !!templateEditingId;
+    const actionId = isEditing ? templateEditingId : '__create__';
+    setTemplateActionId(actionId);
+    setTemplateNotice('');
+
+    try {
+      const response = await fetch(
+        isEditing
+          ? `${API_BASE}/army/templates/${templateEditingId}`
+          : `${API_BASE}/army/templates`,
+        {
+          method: isEditing ? 'PUT' : 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            name: templateEditorDraft.name || '',
+            units
+          })
+        }
+      );
+      const parsed = await parseApiResponse(response);
+      if (!response.ok) {
+        setTemplateNotice(getApiErrorMessage(parsed, isEditing ? '更新模板失败' : '创建模板失败'));
+        return;
+      }
+      const nextTemplates = Array.isArray(parsed.data?.templates) ? parsed.data.templates : templates;
+      setTemplates(nextTemplates);
+      closeTemplateEditor();
+      setTemplateNotice(isEditing ? '模板已更新' : '模板已创建');
+    } catch (requestError) {
+      setTemplateNotice(`${isEditing ? '更新模板' : '创建模板'}失败: ${requestError.message}`);
+    } finally {
+      setTemplateActionId('');
+    }
+  };
+
+  const deleteTemplate = async (template) => {
+    const templateId = typeof template?.templateId === 'string' ? template.templateId.trim() : '';
+    if (!templateId || !token) return;
+    if (!window.confirm(`确认删除模板「${template?.name || '未命名模板'}」？`)) return;
+
+    setTemplateActionId(templateId);
+    setTemplateNotice('');
+    try {
+      const response = await fetch(`${API_BASE}/army/templates/${templateId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok) {
+        setTemplateNotice(getApiErrorMessage(parsed, '删除模板失败'));
+        return;
+      }
+      const nextTemplates = Array.isArray(parsed.data?.templates) ? parsed.data.templates : [];
+      setTemplates(nextTemplates);
+      if (templateEditingId === templateId) {
+        closeTemplateEditor();
+      }
+      setTemplateNotice('模板已删除');
+    } catch (requestError) {
+      setTemplateNotice(`删除模板失败: ${requestError.message}`);
+    } finally {
+      setTemplateActionId('');
+    }
+  };
+
   return (
     <div className="army-panel">
       <div className="army-panel-header">
@@ -273,6 +549,7 @@ const ArmyPanel = () => {
       </div>
 
       {error && <div className="army-message army-message-error">{error}</div>}
+      {templateNotice && <div className="army-message army-message-info">{templateNotice}</div>}
 
       {loading ? (
         <div className="army-loading">加载中...</div>
@@ -417,9 +694,155 @@ const ArmyPanel = () => {
                 ))}
               </div>
             </aside>
+
+            <aside className="army-template-card">
+              <div className="army-template-card-head">
+                <h3>部队模板</h3>
+                <button type="button" className="btn btn-primary btn-small" onClick={openTemplateCreate}>
+                  新建模板
+                </button>
+              </div>
+              {templates.length <= 0 ? (
+                <div className="army-preview-empty">暂无模板，点击“新建模板”创建</div>
+              ) : (
+                <div className="army-template-list">
+                  {templates.map((template) => {
+                    const templateId = typeof template?.templateId === 'string' ? template.templateId : '';
+                    const summary = unitsToSummaryText(template?.units || [], unitNameByTypeId);
+                    const rowBusy = templateActionId === templateId || templateActionId === '__create__';
+                    return (
+                      <div key={templateId || Math.random()} className="army-template-row">
+                        <div className="army-template-meta">
+                          <strong>{template?.name || '未命名模板'}</strong>
+                          <span>{`总兵力 ${Math.max(0, Math.floor(Number(template?.totalCount) || 0))}`}</span>
+                          <em>{summary || '无兵种配置'}</em>
+                        </div>
+                        <div className="army-template-actions">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            disabled={rowBusy}
+                            onClick={() => openTemplateEdit(template)}
+                          >
+                            编辑
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-warning btn-small"
+                            disabled={rowBusy}
+                            onClick={() => deleteTemplate(template)}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </aside>
           </div>
         </div>
       )}
+
+      {templateEditorOpen && (
+        <div className="army-template-editor-overlay" onClick={closeTemplateEditor}>
+          <div
+            className="army-template-editor-modal"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <h4>{templateEditingId ? '编辑部队模板' : '新建部队模板'}</h4>
+            <label>
+              <span>模板名称</span>
+              <input
+                type="text"
+                maxLength={32}
+                value={templateEditorDraft.name || ''}
+                placeholder="不填则自动命名"
+                onChange={(event) => setTemplateEditorDraft((prev) => ({ ...prev, name: event.target.value || '' }))}
+              />
+            </label>
+            <div className="army-template-editor-transfer">
+              <div className="army-template-editor-col">
+                <div className="army-template-editor-col-title">可用兵种（左侧）</div>
+                {templateEditorAvailableRows.map((row) => (
+                  <button
+                    key={`template-left-${row.unitTypeId}`}
+                    type="button"
+                    className="army-template-unit-card"
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer?.setData('application/x-deploy-unit-id', row.unitTypeId);
+                      event.dataTransfer?.setData('text/plain', row.unitTypeId);
+                      setTemplateEditorDragUnitId(row.unitTypeId);
+                    }}
+                    onDragEnd={() => setTemplateEditorDragUnitId('')}
+                    onClick={() => openTemplateQuantityDialog(row.unitTypeId)}
+                  >
+                    <strong>{row.unitName}</strong>
+                    <span>{row.unlimited ? '可用 ∞' : `可用 ${row.availableForDraft}`}</span>
+                  </button>
+                ))}
+              </div>
+              <div
+                className={`army-template-editor-col army-template-editor-col-right ${templateEditorDragUnitId ? 'is-dropzone' : ''}`}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={handleTemplateDrop}
+              >
+                <div className="army-template-editor-col-title">模板编组（右侧）</div>
+                {normalizeTemplateUnits(templateEditorDraft.units).length <= 0 ? (
+                  <div className="army-template-editor-tip">拖拽左侧兵种到这里后，会弹出数量输入框。</div>
+                ) : null}
+                {normalizeTemplateUnits(templateEditorDraft.units).map((entry) => (
+                  <div key={`template-right-${entry.unitTypeId}`} className="army-template-editor-row">
+                    <span>{`${unitNameByTypeId.get(entry.unitTypeId) || entry.unitTypeId} x${entry.count}`}</span>
+                    <div className="army-template-editor-row-actions">
+                      <button type="button" className="btn btn-secondary btn-small" onClick={() => openTemplateQuantityDialog(entry.unitTypeId)}>数量</button>
+                      <button type="button" className="btn btn-warning btn-small" onClick={() => handleRemoveTemplateUnit(entry.unitTypeId)}>移除</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="army-template-editor-summary">
+              {`总兵力 ${templateEditorTotal}${templateEditorSummary ? ` ｜ ${templateEditorSummary}` : ''}`}
+            </div>
+            <div className="army-template-editor-actions">
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={closeTemplateEditor}
+                disabled={Boolean(templateActionId)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-small"
+                onClick={submitTemplateEditor}
+                disabled={templateEditorTotal <= 0 || Boolean(templateActionId)}
+              >
+                {templateActionId ? '保存中...' : '保存模板'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <NumberPadDialog
+        open={templateEditorOpen && templateQuantityDialog.open}
+        title={`设置兵力：${templateQuantityDialog.unitName || templateQuantityDialog.unitTypeId}`}
+        description="可滑动或直接输入数量"
+        min={1}
+        max={Math.max(1, Math.floor(Number(templateQuantityDialog.max) || 1))}
+        initialValue={Math.max(1, Math.floor(Number(templateQuantityDialog.current) || 1))}
+        zIndex={36100}
+        confirmLabel="确定"
+        cancelLabel="取消"
+        onCancel={() => setTemplateQuantityDialog({ open: false, unitTypeId: '', unitName: '', max: 0, current: 1 })}
+        onConfirm={handleConfirmTemplateQuantity}
+      />
     </div>
   );
 };

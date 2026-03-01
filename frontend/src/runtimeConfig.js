@@ -1,4 +1,15 @@
-const LEGACY_BACKEND_ORIGIN = 'http://localhost:5000';
+const FALLBACK_BACKEND_PORT = '5001';
+
+const resolveFallbackBackendOrigin = () => {
+  if (typeof window !== 'undefined' && window.location) {
+    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+    const hostname = window.location.hostname || 'localhost';
+    return `${protocol}//${hostname}:${FALLBACK_BACKEND_PORT}`;
+  }
+  return `http://localhost:${FALLBACK_BACKEND_PORT}`;
+};
+
+const LEGACY_BACKEND_ORIGIN = resolveFallbackBackendOrigin();
 
 const trimTrailingSlash = (value = '') => value.replace(/\/+$/, '');
 

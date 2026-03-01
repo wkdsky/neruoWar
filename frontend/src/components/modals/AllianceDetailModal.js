@@ -8,6 +8,7 @@ import {
     getActiveAllianceVisualStyle,
     normalizeAllianceVisualStyle
 } from '../../utils/allianceVisualStyle';
+import { API_BASE } from '../../runtimeConfig';
 
 const EMPTY_ITEMS = [];
 const DEFAULT_PENDING_PAGE_SIZE = 20;
@@ -171,7 +172,7 @@ const AllianceDetailModal = ({
                 page: '1',
                 pageSize: '500'
             });
-            const response = await fetch(`http://localhost:5000/api/alliances/${alliance._id}/announcements?${params.toString()}`);
+            const response = await fetch(`${API_BASE}/alliances/${alliance._id}/announcements?${params.toString()}`);
             const data = await response.json();
             if (!response.ok) {
                 setOverviewAnnouncements([]);
@@ -269,7 +270,7 @@ const AllianceDetailModal = ({
                 page: String(Math.max(1, pendingApplicationsPage)),
                 pageSize: String(Math.max(1, pendingApplicationsPagination.pageSize || DEFAULT_PENDING_PAGE_SIZE))
             });
-            const response = await fetch(`http://localhost:5000/api/alliances/leader/${alliance._id}/pending-applications?${query.toString()}`, {
+            const response = await fetch(`${API_BASE}/alliances/leader/${alliance._id}/pending-applications?${query.toString()}`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -348,7 +349,7 @@ const AllianceDetailModal = ({
         const actionKey = `${notificationId}:${action}`;
         setManageActionKey(actionKey);
         try {
-            const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/respond`, {
+            const response = await fetch(`${API_BASE}/notifications/${notificationId}/respond`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -385,7 +386,7 @@ const AllianceDetailModal = ({
         const actionKey = `kick:${member._id}`;
         setManageActionKey(actionKey);
         try {
-            const response = await fetch(`http://localhost:5000/api/alliances/leader/${alliance._id}/remove-member`, {
+            const response = await fetch(`${API_BASE}/alliances/leader/${alliance._id}/remove-member`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -431,7 +432,7 @@ const AllianceDetailModal = ({
         if (!token) return false;
         setManageActionKey('save:manage');
         try {
-            const response = await fetch(`http://localhost:5000/api/alliances/leader/${alliance._id}/manage`, {
+            const response = await fetch(`${API_BASE}/alliances/leader/${alliance._id}/manage`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',

@@ -3,6 +3,7 @@ import { Shield, Users, Zap } from 'lucide-react';
 import '../../App.css'; 
 import AllianceDetailModal from '../modals/AllianceDetailModal';
 import CreateAllianceModal from '../modals/CreateAllianceModal';
+import { API_BASE } from '../../runtimeConfig';
 
 const ALLIANCE_LIST_PAGE_SIZE = 20;
 const ALLIANCE_DETAIL_MEMBER_PAGE_SIZE = 30;
@@ -41,7 +42,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                 page: String(Math.max(1, page)),
                 pageSize: String(Math.max(1, pageSize))
             });
-            const response = await fetch(`http://localhost:5000/api/alliances/list?${params.toString()}`);
+            const response = await fetch(`${API_BASE}/alliances/list?${params.toString()}`);
             if (response.ok) {
                 const data = await response.json();
                 const pagination = data?.pagination || {};
@@ -65,7 +66,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
     const fetchUserAlliance = async () => {
         if (!token) return;
         try {
-            const response = await fetch('http://localhost:5000/api/alliances/my/info', {
+            const response = await fetch(`${API_BASE}/alliances/my/info`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -94,7 +95,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                 domainPage: String(Math.max(1, domainPage)),
                 domainPageSize: String(Math.max(1, domainPageSize))
             });
-            const response = await fetch(`http://localhost:5000/api/alliances/${allianceId}?${params.toString()}`);
+            const response = await fetch(`${API_BASE}/alliances/${allianceId}?${params.toString()}`);
             if (response.ok) {
                 const data = await response.json();
                 setSelectedAlliance(data);
@@ -116,7 +117,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
     const createAlliance = async (allianceData) => {
         const { name, flag, declaration, visualStyle } = allianceData;
         try {
-            const response = await fetch('http://localhost:5000/api/alliances/create', {
+            const response = await fetch(`${API_BASE}/alliances/create`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -141,7 +142,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
 
     const joinAlliance = async (allianceId) => {
         try {
-            const response = await fetch(`http://localhost:5000/api/alliances/join/${allianceId}`, {
+            const response = await fetch(`${API_BASE}/alliances/join/${allianceId}`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`
@@ -164,7 +165,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
 
     const leaveAlliance = async (newLeaderId = '') => {
         try {
-            const response = await fetch('http://localhost:5000/api/alliances/leave', {
+            const response = await fetch(`${API_BASE}/alliances/leave`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -193,7 +194,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
     const transferAllianceLeadership = async (allianceId, newLeaderId) => {
         if (!allianceId || !newLeaderId) return false;
         try {
-            const response = await fetch(`http://localhost:5000/api/alliances/leader/${allianceId}/transfer`, {
+            const response = await fetch(`${API_BASE}/alliances/leader/${allianceId}/transfer`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

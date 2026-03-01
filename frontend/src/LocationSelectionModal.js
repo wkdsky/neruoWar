@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, X, MapPin, Eye, LogOut } from 'lucide-react';
+import { API_BASE } from './runtimeConfig';
 
 const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, username, onLogout }) => {
     const [searchQuery, setSearchQuery] = useState('');
@@ -50,7 +51,7 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
 
         setIsSearching(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/public/search?query=${encodeURIComponent(normalizedQuery)}`);
+            const response = await fetch(`${API_BASE}/nodes/public/search?query=${encodeURIComponent(normalizedQuery)}`);
             if (response.ok) {
                 const data = await response.json();
                 setSearchResults(normalizeLocationTitleResults(data?.results || [], normalizedQuery));
@@ -91,7 +92,7 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
     const fetchLocationTree = async (nodeId) => {
         try {
             // 使用公开API端点，所有用户都可以访问
-            const response = await fetch('http://localhost:5000/api/nodes/public/all-nodes');
+            const response = await fetch(`${API_BASE}/nodes/public/all-nodes`);
 
             if (!response.ok) return null;
 
@@ -395,7 +396,7 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
                 if (nodePos.id !== 'home') {
                     // 点击了一个节点，获取其完整信息并选中
                     try {
-                        const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodePos.id}`);
+                        const response = await fetch(`${API_BASE}/nodes/public/node-detail/${nodePos.id}`);
                         if (response.ok) {
                             const data = await response.json();
                             setSelectedNode(data.node);

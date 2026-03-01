@@ -436,6 +436,159 @@
   padding: 6px 8px;
 }
 
+.pve2-template-error {
+  border-color: rgba(248, 113, 113, 0.6);
+  color: #fecaca;
+}
+
+.pve2-template-list {
+  display: grid;
+  gap: 8px;
+  width: min(660px, calc(100vw - 36px));
+}
+
+.pve2-template-row {
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(8, 14, 24, 0.82);
+  padding: 7px 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.pve2-template-meta {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.pve2-template-meta strong {
+  color: #f8fafc;
+  font-size: 12px;
+}
+
+.pve2-template-meta span {
+  color: #93c5fd;
+  font-size: 11px;
+}
+
+.pve2-template-meta em {
+  color: #cbd5e1;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pve2-template-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pve2-template-fill-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  display: grid;
+  place-items: center;
+  background: rgba(3, 8, 16, 0.5);
+  pointer-events: auto;
+}
+
+.pve2-template-fill-panel {
+  width: min(760px, calc(100vw - 36px));
+  max-height: min(78vh, 680px);
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(8, 14, 24, 0.95);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.pve2-template-fill-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pve2-template-fill-head h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.pve2-template-fill-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.pve2-template-fill-summary strong {
+  color: #fde68a;
+}
+
+.pve2-template-fill-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pve2-template-fill-row {
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(10, 18, 30, 0.82);
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.pve2-template-fill-meta {
+  display: grid;
+  gap: 2px;
+}
+
+.pve2-template-fill-meta strong {
+  color: #e2e8f0;
+  font-size: 12px;
+}
+
+.pve2-template-fill-meta span {
+  color: #cbd5e1;
+  font-size: 11px;
+}
+
+.pve2-template-fill-progress {
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.88);
+  overflow: hidden;
+}
+
+.pve2-template-fill-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #22d3ee 0%, #3b82f6 100%);
+}
+
+.pve2-template-fill-row em {
+  color: #bae6fd;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.pve2-template-fill-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .pve2-quick-deploy-backdrop {
   position: absolute;
   inset: 0;

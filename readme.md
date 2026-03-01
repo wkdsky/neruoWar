@@ -93,7 +93,11 @@ export codez=""
 ------------------------------
 pm2命令：
 ------------------------------
-./start.sh
+  - 普通启动：bash ./start.sh
+  - 强制重置管理员后启动：./start.sh --force-reset-admin
+  - 清空知识域后启动：./start.sh --clear-domains
+  - 两者同时：./start.sh --clear-domains --force-reset-admin
+
 pm2 restart neurowar-backend neurowar-frontend
 
 git remote set-url origin https://github.com/wkdsky/neruoWar.git

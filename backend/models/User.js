@@ -145,6 +145,41 @@ const ArmyRosterEntrySchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const ArmyTemplateUnitSchema = new mongoose.Schema({
+  unitTypeId: {
+    type: String,
+    required: true
+  },
+  count: {
+    type: Number,
+    default: 0,
+    min: 0
+  }
+}, { _id: false });
+
+const ArmyTemplateSchema = new mongoose.Schema({
+  templateId: {
+    type: String,
+    required: true
+  },
+  name: {
+    type: String,
+    default: ''
+  },
+  units: {
+    type: [ArmyTemplateUnitSchema],
+    default: []
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
 const IntelGateDefenseEntrySchema = new mongoose.Schema({
   unitTypeId: {
     type: String,
@@ -352,6 +387,10 @@ const userSchema = new mongoose.Schema({
   },
   armyRoster: {
     type: [ArmyRosterEntrySchema],
+    default: []
+  },
+  armyTemplates: {
+    type: [ArmyTemplateSchema],
     default: []
   },
   intelDomainSnapshots: {

@@ -10,6 +10,7 @@ import {
   resolveAssociationBackStep
 } from '../shared/associationFlowShared';
 import './CreateNodeModal.css';
+import { API_BASE } from '../../runtimeConfig';
 
 const REL_SYMBOL_SUPERSET = '⊇';
 const REL_SYMBOL_SUBSET = '⊆';
@@ -206,7 +207,7 @@ const CreateNodeModal = ({
   const fetchNodeDetailForAssociation = useCallback(async (nodeId) => {
     if (!nodeId) return null;
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}`);
+      const response = await fetch(`${API_BASE}/nodes/public/node-detail/${nodeId}`);
       if (!response.ok) return null;
       const data = await response.json();
       return data?.node || null;
@@ -233,7 +234,7 @@ const CreateNodeModal = ({
     if (cache.has(cacheKey)) return cache.get(cacheKey);
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(senseId)}`);
+      const response = await fetch(`${API_BASE}/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(senseId)}`);
       if (!response.ok) {
         const emptyData = {
           parentTargets: [],
@@ -526,7 +527,7 @@ const CreateNodeModal = ({
 
     const token = localStorage.getItem('token');
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
+      const response = await fetch(`${API_BASE}/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (requestId !== nodeASearchRequestIdRef.current) return;
@@ -692,7 +693,7 @@ const CreateNodeModal = ({
 
     const token = localStorage.getItem('token');
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
+      const response = await fetch(`${API_BASE}/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (requestId !== nodeBSearchRequestIdRef.current) return;
@@ -1216,7 +1217,7 @@ const CreateNodeModal = ({
     };
 
     try {
-      const response = await fetch('http://localhost:5000/api/nodes/create', {
+      const response = await fetch(`${API_BASE}/nodes/create`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

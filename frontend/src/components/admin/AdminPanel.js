@@ -10,6 +10,7 @@ import {
     resolveAssociationBackStep
 } from '../shared/associationFlowShared';
 import './Admin.css';
+import { API_BASE } from '../../runtimeConfig';
 
 const REL_SYMBOL_SUPERSET = '⊇';
 const REL_SYMBOL_SUBSET = '⊆';
@@ -408,7 +409,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
             if (normalizedKeyword) {
                 params.set('keyword', normalizedKeyword);
             }
-            const response = await fetch(`http://localhost:5000/api/admin/users?${params.toString()}`, {
+            const response = await fetch(`${API_BASE}/admin/users?${params.toString()}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -510,7 +511,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         }
 
         try {
-            const response = await fetch(`http://localhost:5000/api/admin/users/${userId}`, {
+            const response = await fetch(`${API_BASE}/admin/users/${userId}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -547,7 +548,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         if (!window.confirm(`确定要删除用户 ${username} 吗？`)) return;
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/admin/users/${userId}`, {
+            const response = await fetch(`${API_BASE}/admin/users/${userId}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -570,7 +571,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const fetchAdminSettings = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://localhost:5000/api/admin/settings', {
+            const response = await fetch(`${API_BASE}/admin/settings`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -602,7 +603,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         }
 
         try {
-            const response = await fetch('http://localhost:5000/api/admin/settings', {
+            const response = await fetch(`${API_BASE}/admin/settings`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -635,7 +636,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const fetchArmyUnitTypes = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://localhost:5000/api/admin/army/unit-types', {
+            const response = await fetch(`${API_BASE}/admin/army/unit-types`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (!response.ok) return;
@@ -747,8 +748,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         try {
             const response = await fetch(
                 isCreate
-                    ? 'http://localhost:5000/api/admin/army/unit-types'
-                    : `http://localhost:5000/api/admin/army/unit-types/${editingUnitTypeId}`,
+                    ? `${API_BASE}/admin/army/unit-types`
+                    : `${API_BASE}/admin/army/unit-types/${editingUnitTypeId}`,
                 {
                     method: isCreate ? 'POST' : 'PUT',
                     headers: {
@@ -779,7 +780,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setUnitTypeActionId(unitType.unitTypeId);
         try {
-            const response = await fetch(`http://localhost:5000/api/admin/army/unit-types/${unitType.unitTypeId}`, {
+            const response = await fetch(`${API_BASE}/admin/army/unit-types/${unitType.unitTypeId}`, {
                 method: 'DELETE',
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -818,7 +819,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const fetchBattlefieldItemCatalog = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://localhost:5000/api/admin/catalog/items', {
+            const response = await fetch(`${API_BASE}/admin/catalog/items`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (!response.ok) return;
@@ -919,8 +920,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         try {
             const response = await fetch(
                 isCreate
-                    ? 'http://localhost:5000/api/admin/catalog/items'
-                    : `http://localhost:5000/api/admin/catalog/items/${editingBattlefieldItemId}`,
+                    ? `${API_BASE}/admin/catalog/items`
+                    : `${API_BASE}/admin/catalog/items/${editingBattlefieldItemId}`,
                 {
                     method: isCreate ? 'POST' : 'PUT',
                     headers: {
@@ -951,7 +952,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setBattlefieldItemActionId(item.itemId);
         try {
-            const response = await fetch(`http://localhost:5000/api/admin/catalog/items/${item.itemId}`, {
+            const response = await fetch(`${API_BASE}/admin/catalog/items/${item.itemId}`, {
                 method: 'DELETE',
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -976,7 +977,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const fetchCityBuildingTypeCatalog = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://localhost:5000/api/admin/catalog/buildings', {
+            const response = await fetch(`${API_BASE}/admin/catalog/buildings`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (!response.ok) return;
@@ -1084,8 +1085,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         try {
             const response = await fetch(
                 isCreate
-                    ? 'http://localhost:5000/api/admin/catalog/buildings'
-                    : `http://localhost:5000/api/admin/catalog/buildings/${editingCityBuildingTypeId}`,
+                    ? `${API_BASE}/admin/catalog/buildings`
+                    : `${API_BASE}/admin/catalog/buildings/${editingCityBuildingTypeId}`,
                 {
                     method: isCreate ? 'POST' : 'PUT',
                     headers: {
@@ -1116,7 +1117,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setCityBuildingTypeActionId(buildingType.buildingTypeId);
         try {
-            const response = await fetch(`http://localhost:5000/api/admin/catalog/buildings/${buildingType.buildingTypeId}`, {
+            const response = await fetch(`${API_BASE}/admin/catalog/buildings/${buildingType.buildingTypeId}`, {
                 method: 'DELETE',
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -1142,7 +1143,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const fetchPendingNodes = async () => {
         try {
             const token = localStorage.getItem('token');
-            const response = await fetch('http://localhost:5000/api/nodes/pending', {
+            const response = await fetch(`${API_BASE}/nodes/pending`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -1157,7 +1158,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const fetchPendingMasterApplications = async () => {
         try {
             const token = localStorage.getItem('token');
-            const response = await fetch('http://localhost:5000/api/notifications', {
+            const response = await fetch(`${API_BASE}/notifications`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (!response.ok) return;
@@ -1183,7 +1184,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         setPendingNodeActionId(nodeId);
         setPendingNodeActionGroupName(nodeName || '');
         try {
-            const response = await fetch('http://localhost:5000/api/nodes/approve', {
+            const response = await fetch(`${API_BASE}/nodes/approve`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1222,7 +1223,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setPendingNodeActionId(nodeId);
         try {
-            const response = await fetch('http://localhost:5000/api/nodes/reject', {
+            const response = await fetch(`${API_BASE}/nodes/reject`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1251,7 +1252,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         if (!token || !notificationId) return;
         setMasterApplyActionId(`${notificationId}:${action}`);
         try {
-            const response = await fetch(`http://localhost:5000/api/notifications/${notificationId}/respond`, {
+            const response = await fetch(`${API_BASE}/notifications/${notificationId}/respond`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1302,7 +1303,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
             if (normalizedKeyword) {
                 params.set('keyword', normalizedKeyword);
             }
-            const response = await fetch(`http://localhost:5000/api/nodes?${params.toString()}`, {
+            const response = await fetch(`${API_BASE}/nodes?${params.toString()}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -1572,7 +1573,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         });
 
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(senseId)}`);
+            const response = await fetch(`${API_BASE}/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(senseId)}`);
             if (!response.ok) {
                 const empty = toEmpty();
                 relationContextCacheRef.current.set(cacheKey, empty);
@@ -2140,7 +2141,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setIsSavingNodeEdit(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2235,7 +2236,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const safeNodeId = String(nodeId || '').trim();
         if (!safeNodeId) return null;
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${safeNodeId}`);
+            const response = await fetch(`${API_BASE}/nodes/public/node-detail/${safeNodeId}`);
             if (!response.ok) return null;
             const data = await response.json();
             return data?.node || null;
@@ -2350,7 +2351,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setNewSenseAssocFlow((prev) => ({ ...prev, searchLoading: true }));
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
+            const response = await fetch(`${API_BASE}/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (!response.ok) {
@@ -2683,7 +2684,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setIsSavingNewSense(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${addingSenseNode._id}/admin/senses`, {
+            const response = await fetch(`${API_BASE}/nodes/${addingSenseNode._id}/admin/senses`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2749,7 +2750,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         setEditingSenseActionToken(token);
         const authToken = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/admin/senses/${encodeURIComponent(senseId)}/text`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/admin/senses/${encodeURIComponent(senseId)}/text`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2779,7 +2780,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setDeleteSensePreviewLoading(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/admin/senses/${encodeURIComponent(sense.senseId)}/delete-preview`, {
+            const response = await fetch(`${API_BASE}/nodes/${node._id}/admin/senses/${encodeURIComponent(sense.senseId)}/delete-preview`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2842,7 +2843,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setIsDeletingSense(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/admin/senses/${encodeURIComponent(sense.senseId)}`, {
+            const response = await fetch(`${API_BASE}/nodes/${node._id}/admin/senses/${encodeURIComponent(sense.senseId)}`, {
                 method: 'DELETE',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2887,7 +2888,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setDeletePreviewLoading(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/delete-preview`, {
+            const response = await fetch(`${API_BASE}/nodes/${node._id}/delete-preview`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -2951,7 +2952,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         setIsDeletingNode(true);
         let isSuccess = false;
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${deletingNodeTarget._id}`, {
+            const response = await fetch(`${API_BASE}/nodes/${deletingNodeTarget._id}`, {
                 method: 'DELETE',
                 headers: {
                     'Content-Type': 'application/json',
@@ -3006,7 +3007,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         }
 
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${nodeId}/featured`, {
+            const response = await fetch(`${API_BASE}/nodes/${nodeId}/featured`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -3538,7 +3539,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
 
     const fetchNodeDetailForAssociation = async (nodeId) => {
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}`);
+            const response = await fetch(`${API_BASE}/nodes/public/node-detail/${nodeId}`);
             if (response.ok) {
                 const data = await response.json();
                 return data.node;
@@ -3709,7 +3710,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         setAssocSearchLoading(true);
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
+            const response = await fetch(`${API_BASE}/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -4165,7 +4166,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         setAssocDeleteSearchLoading(true);
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
+            const response = await fetch(`${API_BASE}/nodes/search?keyword=${encodeURIComponent(effectiveKeyword)}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (requestId !== assocDeleteSearchRequestIdRef.current) return;
@@ -4792,7 +4793,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         const associationsPayload = buildAssociationPayloadForMutation(associationDraftList);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${editingAssociationNode._id}/associations/preview`, {
+            const response = await fetch(`${API_BASE}/nodes/${editingAssociationNode._id}/associations/preview`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -4873,7 +4874,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                 targetSenseId: newUpperSenseId
             }
         ];
-        const response = await fetch(`http://localhost:5000/api/nodes/${lowerNodeId}/associations`, {
+        const response = await fetch(`${API_BASE}/nodes/${lowerNodeId}/associations`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
@@ -4944,7 +4945,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const pendingReassignPlans = Array.from(pendingReassignPlanMap.values());
         setAssocApplyLoading(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/${editingAssociationNode._id}/associations`, {
+            const response = await fetch(`${API_BASE}/nodes/${editingAssociationNode._id}/associations`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -5001,7 +5002,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                 page: String(Math.max(1, page)),
                 pageSize: String(ADMIN_ALLIANCE_PAGE_SIZE)
             });
-            const response = await fetch(`http://localhost:5000/api/alliances/admin/all?${params.toString()}`, {
+            const response = await fetch(`${API_BASE}/alliances/admin/all?${params.toString()}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -5040,7 +5041,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         setIsAllianceMemberLoading(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/alliances/admin/${allianceId}/members`, {
+            const response = await fetch(`${API_BASE}/alliances/admin/${allianceId}/members`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await response.json();
@@ -5092,7 +5093,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                 keyword: normalizedKeyword,
                 limit: '60'
             });
-            const response = await fetch(`http://localhost:5000/api/alliances/admin/member-candidates?${params.toString()}`, {
+            const response = await fetch(`${API_BASE}/alliances/admin/member-candidates?${params.toString()}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await response.json();
@@ -5252,7 +5253,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
 
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/alliances/admin/${editingAlliance._id}`, {
+            const response = await fetch(`${API_BASE}/alliances/admin/${editingAlliance._id}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -5279,7 +5280,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         if (!window.confirm(`确定要删除熵盟 "${allianceName}" 吗？此操作将清除所有成员的熵盟关联！`)) return;
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/alliances/admin/${allianceId}`, {
+            const response = await fetch(`${API_BASE}/alliances/admin/${allianceId}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -5313,7 +5314,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         setIsMasterSearchLoading(true);
         setHasMasterSearchTriggered(true);
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/admin/search-users?keyword=${encodeURIComponent(normalizedKeyword)}`, {
+            const response = await fetch(`${API_BASE}/nodes/admin/search-users?keyword=${encodeURIComponent(normalizedKeyword)}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -5342,7 +5343,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const confirmChangeMaster = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch(`http://localhost:5000/api/nodes/admin/domain-master/${changingMasterNode._id}`, {
+            const response = await fetch(`${API_BASE}/nodes/admin/domain-master/${changingMasterNode._id}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',

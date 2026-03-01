@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Camera, Lock, Save, X, Check } from 'lucide-react';
 import './ProfilePanel.css';
+import { API_BASE } from '../../runtimeConfig';
 
 // 导入头像
 import defaultMale1 from '../../assets/avatars/default_male_1.svg';
@@ -60,7 +61,7 @@ const ProfilePanel = ({ username, onAvatarChange }) => {
     const fetchUserInfo = async () => {
         const token = localStorage.getItem('token');
         try {
-            const response = await fetch('http://localhost:5000/api/profile', {
+            const response = await fetch(`${API_BASE}/profile`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -85,7 +86,7 @@ const ProfilePanel = ({ username, onAvatarChange }) => {
         const token = localStorage.getItem('token');
 
         try {
-            const response = await fetch('http://localhost:5000/api/profile/avatar', {
+            const response = await fetch(`${API_BASE}/profile/avatar`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -140,7 +141,7 @@ const ProfilePanel = ({ username, onAvatarChange }) => {
         const token = localStorage.getItem('token');
 
         try {
-            const response = await fetch('http://localhost:5000/api/profile/password', {
+            const response = await fetch(`${API_BASE}/profile/password`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',

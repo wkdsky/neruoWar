@@ -14,6 +14,7 @@ import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
 import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
 import BattlefieldPreviewModal from './BattlefieldPreviewModal';
 import './KnowledgeDomainScene.css';
+import { API_BASE } from '../../runtimeConfig';
 
 const avatarMap = {
   male1: defaultMale1,
@@ -1040,7 +1041,7 @@ const KnowledgeDomainScene = ({
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/public/node-detail/${nodeId}?includeFavoriteCount=1`);
+      const response = await fetch(`${API_BASE}/nodes/public/node-detail/${nodeId}?includeFavoriteCount=1`);
       const parsed = await parseApiResponse(response);
       const data = parsed.data;
       if (!response.ok || !data?.node) {
@@ -1207,7 +1208,7 @@ const KnowledgeDomainScene = ({
       error: ''
     }));
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/intel-heist/scan`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/intel-heist/scan`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1353,7 +1354,7 @@ const KnowledgeDomainScene = ({
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/defense-layout`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/defense-layout`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const parsed = await parseApiResponse(response);
@@ -1443,10 +1444,10 @@ const KnowledgeDomainScene = ({
     }));
     try {
       const [unitTypeResponse, meResponse] = await Promise.all([
-        fetch('http://localhost:5000/api/army/unit-types', {
+        fetch(`${API_BASE}/army/unit-types`, {
           headers: { Authorization: `Bearer ${token}` }
         }),
-        fetch('http://localhost:5000/api/army/me', {
+        fetch(`${API_BASE}/army/me`, {
           headers: { Authorization: `Bearer ${token}` }
         })
       ]);
@@ -2084,7 +2085,7 @@ const KnowledgeDomainScene = ({
       error: ''
     }));
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/defense-layout`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/defense-layout`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -2198,7 +2199,7 @@ const KnowledgeDomainScene = ({
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/domain-admins`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const parsed = await parseApiResponse(response);
@@ -2292,7 +2293,7 @@ const KnowledgeDomainScene = ({
     setIsSavingGateDefenseViewerPerms(false);
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/resign`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/domain-admins/resign`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -2321,7 +2322,7 @@ const KnowledgeDomainScene = ({
     setManageFeedback('');
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/invite`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/domain-admins/invite`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2374,7 +2375,7 @@ const KnowledgeDomainScene = ({
 
     try {
       const response = await fetch(
-        `http://localhost:5000/api/nodes/${node._id}/domain-admins/search-users?keyword=${encodeURIComponent(keyword)}`,
+        `${API_BASE}/nodes/${node._id}/domain-admins/search-users?keyword=${encodeURIComponent(keyword)}`,
         {
           headers: { Authorization: `Bearer ${token}` }
         }
@@ -2406,7 +2407,7 @@ const KnowledgeDomainScene = ({
     setManageFeedback('');
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/${adminUserId}`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/domain-admins/${adminUserId}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -2448,7 +2449,7 @@ const KnowledgeDomainScene = ({
     setIsSavingGateDefenseViewerPerms(true);
     setManageFeedback('');
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/gate-defense-viewers`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/domain-admins/gate-defense-viewers`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -2492,7 +2493,7 @@ const KnowledgeDomainScene = ({
     setManageFeedback('');
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/domain-admins/invite/${notificationId}/revoke`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/domain-admins/invite/${notificationId}/revoke`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -2676,7 +2677,7 @@ const KnowledgeDomainScene = ({
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/distribution-settings`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/distribution-settings`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const parsed = await parseApiResponse(response);
@@ -2844,7 +2845,7 @@ const KnowledgeDomainScene = ({
         }))
       };
 
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/distribution-settings`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/distribution-settings`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -2942,7 +2943,7 @@ const KnowledgeDomainScene = ({
     }));
 
     try {
-      const response = await fetch(`http://localhost:5000/api/nodes/${node._id}/distribution-settings/publish`, {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/distribution-settings/publish`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3170,7 +3171,7 @@ const KnowledgeDomainScene = ({
       setDistributionUserSearching(true);
       try {
         const response = await fetch(
-          `http://localhost:5000/api/nodes/${node._id}/distribution-settings/search-users?keyword=${encodeURIComponent(keyword)}`,
+          `${API_BASE}/nodes/${node._id}/distribution-settings/search-users?keyword=${encodeURIComponent(keyword)}`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         const parsed = await parseApiResponse(response);
@@ -3208,7 +3209,7 @@ const KnowledgeDomainScene = ({
       setDistributionAllianceSearching(true);
       try {
         const response = await fetch(
-          `http://localhost:5000/api/nodes/${node._id}/distribution-settings/search-alliances?keyword=${encodeURIComponent(keyword)}`,
+          `${API_BASE}/nodes/${node._id}/distribution-settings/search-alliances?keyword=${encodeURIComponent(keyword)}`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         const parsed = await parseApiResponse(response);

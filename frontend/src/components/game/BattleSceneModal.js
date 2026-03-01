@@ -20,9 +20,7 @@ import AimOverlayCanvas from '../../game/battle/presentation/ui/AimOverlayCanvas
 import BattleDebugPanel from '../../game/battle/presentation/ui/BattleDebugPanel';
 import unitVisualConfig from '../../game/battle/presentation/assets/UnitVisualConfig.example.json';
 import NumberPadDialog from '../common/NumberPadDialog';
-import { BACKEND_ORIGIN } from '../../runtimeConfig';
-
-const API_BASE = BACKEND_ORIGIN;
+import { API_BASE } from '../../runtimeConfig';
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
 const ORDER_MOVE = 'MOVE';
@@ -116,6 +114,16 @@ const unitsToSummary = (units = [], unitNameByTypeId = new Map()) => (
   normalizeDraftUnits(units)
     .map((entry) => `${unitNameByTypeId.get(entry.unitTypeId) || entry.unitTypeId}x${entry.count}`)
     .join(' / ')
+);
+
+const normalizeTemplateUnits = (units = []) => (
+  (Array.isArray(units) ? units : [])
+    .map((entry) => ({
+      unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '',
+      unitName: typeof entry?.unitName === 'string' ? entry.unitName.trim() : '',
+      count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+    }))
+    .filter((entry) => entry.unitTypeId && entry.count > 0)
 );
 
 const QUICK_DEPLOY_TEAM_SHORTCUTS = [5, 10, 20, 30, 50];
@@ -478,6 +486,17 @@ const BattleSceneModal = ({
   const [quickDeployApplying, setQuickDeployApplying] = useState(false);
   const [quickDeployError, setQuickDeployError] = useState('');
   const [quickDeployRandomForm, setQuickDeployRandomForm] = useState({ ...QUICK_DEPLOY_RANDOM_DEFAULT });
+  const [armyTemplates, setArmyTemplates] = useState([]);
+  const [armyTemplatesLoading, setArmyTemplatesLoading] = useState(false);
+  const [armyTemplatesError, setArmyTemplatesError] = useState('');
+  const [templateFillPreview, setTemplateFillPreview] = useState({
+    open: false,
+    team: TEAM_ATTACKER,
+    template: null,
+    rows: [],
+    totalRequested: 0,
+    totalFilled: 0
+  });
   const [commandMode, setCommandMode] = useState(ORDER_MOVE);
   const [showMidlineDebug, setShowMidlineDebug] = useState(true);
   const [isPanning, setIsPanning] = useState(false);
@@ -620,6 +639,66 @@ const BattleSceneModal = ({
   }, [open, setupRuntime]);
 
   useEffect(() => {
+    if (!open) {
+      setArmyTemplates([]);
+      setArmyTemplatesLoading(false);
+      setArmyTemplatesError('');
+      setTemplateFillPreview({
+        open: false,
+        team: TEAM_ATTACKER,
+        template: null,
+        rows: [],
+        totalRequested: 0,
+        totalFilled: 0
+      });
+      return;
+    }
+
+    let cancelled = false;
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setArmyTemplates([]);
+      setArmyTemplatesError('未登录，无法加载部队模板');
+      setArmyTemplatesLoading(false);
+      return;
+    }
+
+    const fetchTemplates = async () => {
+      setArmyTemplatesLoading(true);
+      setArmyTemplatesError('');
+      try {
+        const response = await fetch(`${API_BASE}/army/templates`, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        const parsed = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) {
+          setArmyTemplates([]);
+          setArmyTemplatesError(parsed?.error || parsed?.message || '加载部队模板失败');
+          return;
+        }
+        setArmyTemplates(Array.isArray(parsed?.templates) ? parsed.templates : []);
+      } catch (loadError) {
+        if (cancelled) return;
+        setArmyTemplates([]);
+        setArmyTemplatesError(`加载部队模板失败: ${loadError.message}`);
+      } finally {
+        if (!cancelled) {
+          setArmyTemplatesLoading(false);
+        }
+      }
+    };
+
+    fetchTemplates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
     if (!open || !glCanvasRef.current || loading || error || !battleInitData) return;
     try {
       const gl = createBattleGlContext(glCanvasRef.current);
@@ -649,6 +728,19 @@ const BattleSceneModal = ({
     };
   }, [open, loading, error, battleInitData, destroyRenderers]);
 
+  useEffect(() => {
+    if (phase === 'deploy') return;
+    if (!templateFillPreview.open) return;
+    setTemplateFillPreview({
+      open: false,
+      team: TEAM_ATTACKER,
+      template: null,
+      rows: [],
+      totalRequested: 0,
+      totalFilled: 0
+    });
+  }, [phase, templateFillPreview.open]);
+
   const reportBattleResult = useCallback(async (summary) => {
     if (!summary) return;
     if (!requireResultReport || !battleInitData?.nodeId) {
@@ -659,7 +751,7 @@ const BattleSceneModal = ({
     setResultState((prev) => ({ ...prev, submitting: true, error: '' }));
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`${API_BASE}/api/nodes/${battleInitData.nodeId}/siege/pve/battle-result`, {
+      const response = await fetch(`${API_BASE}/nodes/${battleInitData.nodeId}/siege/pve/battle-result`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1513,6 +1605,122 @@ const BattleSceneModal = ({
     setDeployNotice(`部队已创建，移动鼠标并点击地图放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
   }, [deployEditingGroupId, deployEditorDraft, deployEditorTeam]);
 
+  const buildTemplateFillSnapshot = useCallback((template, team = TEAM_ATTACKER) => {
+    const runtime = runtimeRef.current;
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    if (!runtime) {
+      return { rows: [], totalRequested: 0, totalFilled: 0 };
+    }
+    const rosterRows = runtime.getRosterRows(safeTeam);
+    const rosterMap = new Map(
+      (Array.isArray(rosterRows) ? rosterRows : []).map((row) => ([
+        row.unitTypeId,
+        {
+          available: Math.max(0, Math.floor(Number(row?.available) || 0)),
+          unitName: row?.unitName || row?.unitTypeId || ''
+        }
+      ]))
+    );
+    const rows = normalizeTemplateUnits(template?.units || []).map((entry) => {
+      const rosterInfo = rosterMap.get(entry.unitTypeId) || { available: 0, unitName: entry.unitTypeId };
+      const requested = Math.max(1, Math.floor(Number(entry.count) || 1));
+      const filled = Math.max(0, Math.min(requested, rosterInfo.available));
+      const fillPercent = requested > 0 ? Math.max(0, Math.min(100, (filled / requested) * 100)) : 0;
+      return {
+        unitTypeId: entry.unitTypeId,
+        unitName: entry.unitName || rosterInfo.unitName || entry.unitTypeId,
+        requested,
+        available: rosterInfo.available,
+        filled,
+        fillPercent
+      };
+    });
+    const totalRequested = rows.reduce((sum, row) => sum + row.requested, 0);
+    const totalFilled = rows.reduce((sum, row) => sum + row.filled, 0);
+    return { rows, totalRequested, totalFilled };
+  }, []);
+
+  const createDeployGroupFromTemplateUnits = useCallback((team, unitsMap, templateName = '') => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return false;
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const result = runtime.createDeployGroup(safeTeam, {
+      name: typeof templateName === 'string' ? templateName.trim() : '',
+      units: unitsMap,
+      x: pointerWorldRef.current.x,
+      y: pointerWorldRef.current.y,
+      placed: false
+    });
+    if (!result?.ok) {
+      setDeployNotice(result?.reason || '按模板创建部队失败');
+      return false;
+    }
+    const targetGroupId = result.groupId;
+    runtime.setSelectedDeployGroup(targetGroupId);
+    runtime.setFocusSquad(targetGroupId);
+    runtime.setDeployGroupPlaced(safeTeam, targetGroupId, false);
+    setSelectedSquadId(targetGroupId);
+    setDeployDraggingGroup({ groupId: targetGroupId, team: safeTeam });
+    setDeployActionAnchorMode('');
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+    setDeployNotice(`模板部队已创建，移动鼠标并点击地图放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
+    return true;
+  }, []);
+
+  const handleCreateTrainingGroupByTemplate = useCallback((template, team = TEAM_ATTACKER) => {
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const snapshot = buildTemplateFillSnapshot(template, safeTeam);
+    const unitsMap = {};
+    snapshot.rows.forEach((row) => {
+      if (row.filled > 0) {
+        unitsMap[row.unitTypeId] = row.filled;
+      }
+    });
+    createDeployGroupFromTemplateUnits(safeTeam, unitsMap, template?.name || '');
+  }, [buildTemplateFillSnapshot, createDeployGroupFromTemplateUnits]);
+
+  const handleOpenTemplateFillPreview = useCallback((template, team = TEAM_ATTACKER) => {
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const snapshot = buildTemplateFillSnapshot(template, safeTeam);
+    setTemplateFillPreview({
+      open: true,
+      team: safeTeam,
+      template,
+      rows: snapshot.rows,
+      totalRequested: snapshot.totalRequested,
+      totalFilled: snapshot.totalFilled
+    });
+  }, [buildTemplateFillSnapshot]);
+
+  const handleCloseTemplateFillPreview = useCallback(() => {
+    setTemplateFillPreview({
+      open: false,
+      team: TEAM_ATTACKER,
+      template: null,
+      rows: [],
+      totalRequested: 0,
+      totalFilled: 0
+    });
+  }, []);
+
+  const handleConfirmTemplateFillPreview = useCallback(() => {
+    const template = templateFillPreview.template;
+    if (!template) return;
+    const safeTeam = templateFillPreview.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const snapshot = buildTemplateFillSnapshot(template, safeTeam);
+    const unitsMap = {};
+    snapshot.rows.forEach((row) => {
+      if (row.filled > 0) {
+        unitsMap[row.unitTypeId] = row.filled;
+      }
+    });
+    const created = createDeployGroupFromTemplateUnits(safeTeam, unitsMap, template?.name || '');
+    if (created) {
+      handleCloseTemplateFillPreview();
+    }
+  }, [templateFillPreview, buildTemplateFillSnapshot, createDeployGroupFromTemplateUnits, handleCloseTemplateFillPreview]);
+
   const handleDeployMove = useCallback((groupId) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'deploy') return;
@@ -2166,9 +2374,107 @@ const BattleSceneModal = ({
                         ? '部署阶段：可新建我方/敌方部队；选择物品后点击地图即可无限放置'
                         : '部署阶段：左蓝(我方) / 中间交战区禁布置 / 右红(敌方)')}
                   </span>
+                  {armyTemplatesLoading ? (
+                    <span className="pve2-hint">部队模板加载中...</span>
+                  ) : null}
+                  {!armyTemplatesLoading && armyTemplatesError ? (
+                    <span className="pve2-hint pve2-template-error">{armyTemplatesError}</span>
+                  ) : null}
+                  {!armyTemplatesLoading && !armyTemplatesError && armyTemplates.length <= 0 ? (
+                    <span className="pve2-hint">暂无部队模板，可在兵营里创建后回来使用</span>
+                  ) : null}
+                  {!armyTemplatesLoading && armyTemplates.length > 0 ? (
+                    <div className="pve2-template-list">
+                      {armyTemplates.map((template, index) => {
+                        const templateId = typeof template?.templateId === 'string' ? template.templateId : `idx_${index}`;
+                        const templateUnits = normalizeTemplateUnits(template?.units || []);
+                        const templateSummary = templateUnits
+                          .map((entry) => `${entry.unitName || entry.unitTypeId}x${entry.count}`)
+                          .join(' / ');
+                        const templateTotal = templateUnits.reduce((sum, item) => sum + item.count, 0);
+                        return (
+                          <div key={`tpl-${templateId}`} className="pve2-template-row">
+                            <div className="pve2-template-meta">
+                              <strong>{template?.name || '未命名模板'}</strong>
+                              <span>{`模板兵力 ${Math.max(0, Math.floor(Number(template?.totalCount) || templateTotal))}`}</span>
+                              <em>{templateSummary || '无兵种配置'}</em>
+                            </div>
+                            <div className="pve2-template-actions">
+                              {isTrainingMode ? (
+                                <>
+                                  <button type="button" className="btn btn-primary btn-small" onClick={() => handleCreateTrainingGroupByTemplate(template, TEAM_ATTACKER)}>
+                                    创建我方
+                                  </button>
+                                  <button type="button" className="btn btn-danger btn-small" onClick={() => handleCreateTrainingGroupByTemplate(template, TEAM_DEFENDER)}>
+                                    创建敌方
+                                  </button>
+                                </>
+                              ) : (
+                                <button type="button" className="btn btn-primary btn-small" onClick={() => handleOpenTemplateFillPreview(template, TEAM_ATTACKER)}>
+                                  选择并填充
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>
+
+            {phase === 'deploy' && !isTrainingMode && templateFillPreview.open ? (
+              <div
+                className="pve2-template-fill-backdrop"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleCloseTemplateFillPreview();
+                }}
+              >
+                <div
+                  className="pve2-template-fill-panel"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="pve2-template-fill-head">
+                    <h4>{`模板填充：${templateFillPreview.template?.name || '未命名模板'}`}</h4>
+                    <button type="button" className="btn btn-secondary btn-small" onClick={handleCloseTemplateFillPreview}>关闭</button>
+                  </div>
+                  <div className="pve2-template-fill-summary">
+                    <span>{`模板总兵力 ${templateFillPreview.totalRequested}`}</span>
+                    <span>{`当前可填充 ${templateFillPreview.totalFilled}`}</span>
+                    <strong>{`填充率 ${templateFillPreview.totalRequested > 0 ? ((templateFillPreview.totalFilled / templateFillPreview.totalRequested) * 100).toFixed(1) : '0.0'}%`}</strong>
+                  </div>
+                  <div className="pve2-template-fill-list">
+                    {(templateFillPreview.rows || []).map((row) => (
+                      <div key={`fill-${row.unitTypeId}`} className="pve2-template-fill-row">
+                        <div className="pve2-template-fill-meta">
+                          <strong>{row.unitName || row.unitTypeId}</strong>
+                          <span>{`模板 ${row.requested} ｜ 可用 ${row.available} ｜ 填充 ${row.filled}`}</span>
+                        </div>
+                        <div className="pve2-template-fill-progress">
+                          <div className="pve2-template-fill-progress-bar" style={{ width: `${Math.max(0, Math.min(100, row.fillPercent || 0))}%` }} />
+                        </div>
+                        <em>{`${Math.max(0, Math.min(100, row.fillPercent || 0)).toFixed(1)}%`}</em>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="pve2-template-fill-actions">
+                    <button type="button" className="btn btn-secondary" onClick={handleCloseTemplateFillPreview}>取消</button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={templateFillPreview.totalFilled <= 0}
+                      onClick={handleConfirmTemplateFillPreview}
+                    >
+                      生成部队
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {phase === 'deploy' && isTrainingMode && quickDeployOpen ? (
               <div

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import './Login.css';
+import { API_BASE } from '../../runtimeConfig';
 
 const Login = ({ onLogin }) => {
     const [username, setUsername] = useState('');
@@ -19,7 +20,7 @@ const Login = ({ onLogin }) => {
 
     const handleLogin = async () => {
         try {
-            const response = await fetch('http://localhost:5000/api/login', {
+            const response = await fetch(`${API_BASE}/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password })
@@ -52,7 +53,7 @@ const Login = ({ onLogin }) => {
         }
 
         try {
-            const response = await fetch('http://localhost:5000/api/register', {
+            const response = await fetch(`${API_BASE}/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password })
@@ -88,7 +89,7 @@ const Login = ({ onLogin }) => {
         }
 
         try {
-            const response = await fetch('http://localhost:5000/api/reset-password', {
+            const response = await fetch(`${API_BASE}/reset-password`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

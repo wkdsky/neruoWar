@@ -3139,7 +3139,7 @@ const resolveSiegePveBattleContext = async ({ nodeId = '', requestUserId = '', g
 
   const [node, user, unitTypes] = await Promise.all([
     Node.findById(safeNodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
-    User.findById(safeUserId).select('username role allianceId intelDomainSnapshots'),
+    User.findById(safeUserId).select('username role allianceId armyRoster intelDomainSnapshots'),
     fetchArmyUnitTypes()
   ]);
   if (!node || node.status !== 'approved') {
@@ -7770,6 +7770,8 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
       });
     });
     const defenderUnits = mapToUnitCountEntries(defenderUnitCountMap, unitTypeMap);
+    const attackerRoster = normalizeUserRoster(user?.armyRoster, unitTypes);
+    const attackerRosterUnits = mapToUnitCountEntries(buildUnitCountMap(attackerRoster), unitTypeMap);
     const now = new Date();
     return res.json({
       success: true,
@@ -7785,7 +7787,8 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
       attacker: {
         username: typeof user?.username === 'string' ? user.username : '',
         totalCount: Math.max(0, Math.floor(Number(gateSummary?.totalCount) || 0)),
-        units: Array.isArray(gateSummary?.aggregateUnits) ? gateSummary.aggregateUnits : []
+        units: Array.isArray(gateSummary?.aggregateUnits) ? gateSummary.aggregateUnits : [],
+        rosterUnits: attackerRosterUnits
       },
       defender: {
         username: typeof domainMasterUser?.username === 'string' ? domainMasterUser.username : '',
