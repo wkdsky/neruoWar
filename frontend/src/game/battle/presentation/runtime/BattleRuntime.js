@@ -33,12 +33,33 @@ const ORDER_CHARGE = 'CHARGE';
 const SPEED_MODE_B = 'B_HARMONIC';
 const SPEED_MODE_C = 'C_PER_TYPE';
 const SPEED_MODE_AUTO = 'AUTO';
+const MARCH_MODE_COHESIVE = 'cohesive';
+const MARCH_MODE_LOOSE = 'loose';
 const SPEED_AUTH_USER = 'USER';
 const SPEED_AUTH_AI = 'AI';
 const SPEED_POLICY_MARCH = 'MARCH';
 const SPEED_POLICY_RETREAT = 'RETREAT';
 const SPEED_POLICY_REFORM = 'REFORM';
 const CAMERA_DEAD_ZONE = 0.9;
+const SKILL_COOLDOWN_BY_CLASS = {
+  infantry: 2.1,
+  cavalry: 2.8,
+  archer: 8.6,
+  artillery: 13.5
+};
+const SKILL_CLASS_ORDER = ['infantry', 'cavalry', 'archer', 'artillery'];
+const SKILL_META_BY_CLASS = {
+  infantry: { id: 'skill_infantry_buff', name: '战吼', icon: '吼' },
+  cavalry: { id: 'skill_cavalry_charge', name: '冲锋', icon: '锋' },
+  archer: { id: 'skill_archer_volley', name: '箭雨', icon: '雨' },
+  artillery: { id: 'skill_artillery_bombard', name: '炮击', icon: '爆' }
+};
+const SKILL_DESC_BY_CLASS = {
+  infantry: '战吼增益，短时提升攻防。',
+  cavalry: '短程突击，沿路径冲锋并击退。',
+  archer: '箭雨压制，在目标区域持续打击。',
+  artillery: '炮击轰炸，高爆范围并可伤建筑。'
+};
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const clampToRange = (value, min, max) => {
@@ -258,6 +279,84 @@ const normalizeUnitsList = (list = []) => {
   return map;
 };
 
+const buildSkillMetaFromSquad = (squad = null, unitTypeMap = new Map()) => {
+  if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) {
+    return { cooldownRemain: 0, skills: [] };
+  }
+  const classCounts = {
+    infantry: 0,
+    cavalry: 0,
+    archer: 0,
+    artillery: 0
+  };
+  const sourceUnits = squad.remainUnits && Object.keys(squad.remainUnits).length > 0
+    ? squad.remainUnits
+    : (squad.units || {});
+  Object.entries(sourceUnits || {}).forEach(([unitTypeId, rawCount]) => {
+    const count = Math.max(0, Number(rawCount) || 0);
+    if (count <= 0) return;
+    const classTag = inferClassFromUnitType(unitTypeMap.get(unitTypeId) || {});
+    classCounts[classTag] = (classCounts[classTag] || 0) + count;
+  });
+  if (Object.values(classCounts).every((count) => count <= 0)) {
+    const fallbackClass = typeof squad.classTag === 'string' ? squad.classTag : 'infantry';
+    classCounts[fallbackClass] = Math.max(1, Number(squad.remain) || 1);
+  }
+  const cooldownMap = squad.skillCooldowns && typeof squad.skillCooldowns === 'object'
+    ? squad.skillCooldowns
+    : {};
+  const fallbackCooldown = Math.max(0, Number(squad.attackCooldown) || 0);
+  let maxRemain = 0;
+  const skills = [];
+  SKILL_CLASS_ORDER.forEach((classTag) => {
+    const count = Math.max(0, Number(classCounts[classTag]) || 0);
+    if (count <= 0) return;
+    const skillMeta = SKILL_META_BY_CLASS[classTag] || SKILL_META_BY_CLASS.infantry;
+    const cooldownTotal = Math.max(0.1, Number(SKILL_COOLDOWN_BY_CLASS[classTag]) || 6);
+    const cooldownRemain = Math.max(
+      0,
+      Number.isFinite(Number(cooldownMap[classTag])) ? Number(cooldownMap[classTag]) : fallbackCooldown
+    );
+    maxRemain = Math.max(maxRemain, cooldownRemain);
+    const center = squad.classCenters && squad.classCenters[classTag] ? squad.classCenters[classTag] : null;
+    skills.push({
+      id: skillMeta.id,
+      name: skillMeta.name,
+      kind: classTag,
+      classTag,
+      count: Math.round(count),
+      description: SKILL_DESC_BY_CLASS[classTag] || '',
+      icon: skillMeta.icon,
+      cooldownTotal,
+      cooldownRemain,
+      anchor: center ? {
+        x: Number(center.x) || Number(squad.x) || 0,
+        y: Number(center.y) || Number(squad.y) || 0
+      } : {
+        x: Number(squad.x) || 0,
+        y: Number(squad.y) || 0
+      },
+      available: cooldownRemain <= 0.01 && (Number(squad.morale) || 0) > 0
+    });
+  });
+  return {
+    cooldownRemain: maxRemain,
+    skills
+  };
+};
+
+const hashWaypoints = (waypoints = []) => {
+  if (!Array.isArray(waypoints) || waypoints.length <= 0) return '';
+  let out = '';
+  for (let i = 0; i < waypoints.length; i += 1) {
+    const p = waypoints[i];
+    const x = Math.round((Number(p?.x) || 0) * 10) / 10;
+    const y = Math.round((Number(p?.y) || 0) * 10) / 10;
+    out += `${x},${y};`;
+  }
+  return out;
+};
+
 const buildRosterMap = (list = [], unitTypeMap = new Map()) => {
   const rows = {};
   (Array.isArray(list) ? list : []).forEach((entry) => {
@@ -435,6 +534,7 @@ const createSquad = ({
     speedMode: SPEED_MODE_B,
     speedModeAuthority: SPEED_AUTH_AI,
     speedPolicy: SPEED_POLICY_MARCH,
+    marchMode: MARCH_MODE_COHESIVE,
     reformUntil: 0,
     reformRadiusThreshold: Math.max(18, radius * 1.4),
     underAttackTimer: 0,
@@ -448,6 +548,20 @@ const createSquad = ({
     },
     skillUsedCount: 0,
     lastAttackedAt: 0,
+    skillCooldowns: {
+      infantry: 0,
+      cavalry: 0,
+      archer: 0,
+      artillery: 0
+    },
+    classCenters: {
+      infantry: { x: startX, y: startY, count: 0 },
+      cavalry: { x: startX, y: startY, count: 0 },
+      archer: { x: startX, y: startY, count: 0 },
+      artillery: { x: startX, y: startY, count: 0 }
+    },
+    lastMoveMarker: null,
+    guard: { enabled: false, cx: startX, cy: startY, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' },
     selected: false,
     hover: false,
     flagBearerAgentId: ''
@@ -557,6 +671,11 @@ export default class BattleRuntime {
       fps: 0,
       allowCrossMidline: this.rules.allowCrossMidline
     };
+    this.orderSeq = 0;
+    this.lastInputEventType = '';
+    this._debugTrackOrder = (typeof window !== 'undefined' && /[?&]battleDebugOrder=1\b/.test(window.location.search || ''));
+    this._waypointHashBySquad = new Map();
+    this._lastOrderSeqSnapshot = 0;
   }
 
   getPhase() {
@@ -831,7 +950,11 @@ export default class BattleRuntime {
     const y = Number(worldPoint?.y) || 0;
     let best = null;
     let bestDist = Infinity;
-    (Array.isArray(this.initialBuildings) ? this.initialBuildings : []).forEach((item) => {
+    const source = this.phase === 'battle' || this.phase === 'ended'
+      ? (Array.isArray(this.sim?.buildings) ? this.sim.buildings : this.initialBuildings)
+      : this.initialBuildings;
+    (Array.isArray(source) ? source : []).forEach((item) => {
+      if (item?.destroyed) return;
       if (!item) return;
       const dx = (Number(item.x) || 0) - x;
       const dy = (Number(item.y) || 0) - y;
@@ -1003,6 +1126,39 @@ export default class BattleRuntime {
     return true;
   }
 
+  markCommandIssued(inputType = '') {
+    this.orderSeq += 1;
+    this.lastInputEventType = String(inputType || 'command');
+  }
+
+  pickSquadAtPoint(worldX, worldY, options = {}) {
+    if (this.phase !== 'battle' || !this.sim) return '';
+    const team = options?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const safeX = Number(worldX);
+    const safeY = Number(worldY);
+    if (!Number.isFinite(safeX) || !Number.isFinite(safeY)) return '';
+    const maxDist = Math.max(6, Number(options?.maxDist) || 30);
+    const maxDistSq = maxDist * maxDist;
+    let bestId = '';
+    let bestDistSq = Infinity;
+    const squads = Array.isArray(this.sim?.squads) ? this.sim.squads : [];
+    for (let i = 0; i < squads.length; i += 1) {
+      const row = squads[i];
+      if (!row || row.team !== team || (Number(row.remain) || 0) <= 0) continue;
+      const dx = (Number(row.x) || 0) - safeX;
+      const dy = (Number(row.y) || 0) - safeY;
+      const pickRadius = Math.max(12, Number(row.radius) || 12);
+      const limit = Math.max(maxDist, pickRadius);
+      const d2 = (dx * dx) + (dy * dy);
+      if (d2 > (limit * limit)) continue;
+      if (d2 < bestDistSq && d2 <= maxDistSq * 9) {
+        bestDistSq = d2;
+        bestId = row.id;
+      }
+    }
+    return bestId;
+  }
+
   commandSpeedMode(squadIds, mode = SPEED_MODE_B, source = SPEED_AUTH_USER) {
     if (this.phase !== 'battle' || !this.sim) return false;
     const sourceTag = source === SPEED_AUTH_AI ? SPEED_AUTH_AI : SPEED_AUTH_USER;
@@ -1047,11 +1203,13 @@ export default class BattleRuntime {
       }
       changed = true;
     });
+    if (changed) this.markCommandIssued('speed_mode');
     return changed;
   }
 
   applyOrderToSquad(squad, orderType, safePoint) {
     if (!squad) return;
+    squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
     const now = Math.max(0, Number(this.sim?.timeElapsed) || 0);
     const kind = orderType === ORDER_ATTACK_MOVE
       ? ORDER_ATTACK_MOVE
@@ -1116,7 +1274,6 @@ export default class BattleRuntime {
   updateCameraAnchor(dtSec = 0.016) {
     const raw = this.resolveRawFocusAnchor();
     this.cameraAnchorRaw = { ...raw };
-    const dt = Math.max(0.001, Number(dtSec) || 0.016);
     if (!this.cameraAnchor.squadId || this.cameraAnchor.squadId !== raw.squadId) {
       this.cameraAnchor = { ...raw };
       return;
@@ -1124,18 +1281,8 @@ export default class BattleRuntime {
     const dx = raw.x - (Number(this.cameraAnchor.x) || 0);
     const dy = raw.y - (Number(this.cameraAnchor.y) || 0);
     const dist = Math.hypot(dx, dy);
-    const followAlpha = clamp(dt * 6.6, 0, 1);
-    if (dist > CAMERA_DEAD_ZONE) {
-      this.cameraAnchor.x += dx * followAlpha;
-      this.cameraAnchor.y += dy * followAlpha;
-    }
-    const targetVx = Number(raw.vx) || 0;
-    const targetVy = Number(raw.vy) || 0;
-    const velAlpha = clamp(dt * 5.2, 0, 1);
-    this.cameraAnchor.vx = (Number(this.cameraAnchor.vx) || 0) + ((targetVx - (Number(this.cameraAnchor.vx) || 0)) * velAlpha);
-    this.cameraAnchor.vy = (Number(this.cameraAnchor.vy) || 0) + ((targetVy - (Number(this.cameraAnchor.vy) || 0)) * velAlpha);
-    this.cameraAnchor.squadId = raw.squadId;
-    this.cameraAnchor.team = raw.team;
+    if (dist <= CAMERA_DEAD_ZONE * 0.35) return;
+    this.cameraAnchor = { ...raw };
   }
 
   applyAutoSpeedModes() {
@@ -1172,7 +1319,10 @@ export default class BattleRuntime {
     } else {
       squad.waypoints = [safe];
     }
+    squad.lastMoveMarker = { x: safe.x, y: safe.y, ttl: 1.2 };
+    squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
     this.applyOrderToSquad(squad, orderType, safe);
+    this.markCommandIssued(options?.inputType || 'move');
     return true;
   }
 
@@ -1188,29 +1338,45 @@ export default class BattleRuntime {
     if (this.phase !== 'battle' || !this.sim) return false;
     const squad = this.getSquadById(squadId);
     if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) return false;
+    if (behavior === 'standby') {
+      squad.behavior = 'standby';
+      squad.waypoints = [];
+      squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
+      squad.action = '待命';
+      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      this.markCommandIssued('behavior_standby');
+      return true;
+    }
     if (behavior === 'idle') {
       squad.behavior = 'idle';
       squad.waypoints = [];
+      squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '待命';
       squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      this.markCommandIssued('behavior_idle');
       return true;
     }
     if (behavior === 'auto') {
       squad.behavior = 'auto';
+      squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '自动攻击';
       squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      this.markCommandIssued('behavior_auto');
       return true;
     }
     if (behavior === 'defend') {
       squad.behavior = 'defend';
       squad.waypoints = [];
+      squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '防御';
       squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      this.markCommandIssued('behavior_defend');
       return true;
     }
     if (behavior === 'retreat') {
       squad.behavior = 'retreat';
       squad.waypoints = [squad.rallyPoint];
+      squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '撤退';
       squad.order = { type: ORDER_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: squad.rallyPoint ? { ...squad.rallyPoint } : null, targetSquadId: '' };
       if (squad.speedModeAuthority !== SPEED_AUTH_USER) {
@@ -1218,14 +1384,97 @@ export default class BattleRuntime {
       } else {
         squad.speedPolicy = SPEED_POLICY_RETREAT;
       }
+      this.markCommandIssued('behavior_retreat');
       return true;
     }
     return false;
   }
 
+  commandSetWaypoints(squadId, points = [], options = {}) {
+    if (this.phase !== 'battle' || !this.sim) return false;
+    const squad = this.getSquadById(squadId);
+    if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) return false;
+    const source = Array.isArray(points) ? points : [];
+    const radius = Math.max(6, Number(squad.radius) || 10);
+    const next = [];
+    for (let i = 0; i < source.length; i += 1) {
+      const p = source[i];
+      const safe = clampPointToField(p, this.field, radius);
+      if (!this.rules.allowCrossMidline) {
+        safe.x = clampXToTeamZone(safe.x, this.field.width, radius, squad.team);
+      }
+      next.push({ x: safe.x, y: safe.y });
+    }
+    squad.waypoints = next;
+    squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
+    if (next.length > 0) {
+      const tail = next[next.length - 1];
+      squad.lastMoveMarker = { x: tail.x, y: tail.y, ttl: 1.2 };
+      this.applyOrderToSquad(squad, ORDER_MOVE, tail);
+    } else {
+      squad.behavior = 'idle';
+      squad.action = '待命';
+      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+    }
+    this.markCommandIssued(options?.inputType || 'set_waypoints');
+    return true;
+  }
+
+  commandGuard(squadId, guardSpec = {}) {
+    if (this.phase !== 'battle' || !this.sim) return false;
+    const squad = this.getSquadById(squadId);
+    if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) return false;
+    const cx = Number.isFinite(Number(guardSpec?.centerX)) ? Number(guardSpec.centerX) : (Number(squad.x) || 0);
+    const cy = Number.isFinite(Number(guardSpec?.centerY)) ? Number(guardSpec.centerY) : (Number(squad.y) || 0);
+    const radius = Math.max(12, Number(guardSpec?.radius) || Math.max(42, Number(squad.radius) || 24));
+    squad.guard = {
+      enabled: true,
+      cx,
+      cy,
+      radius,
+      returnRadius: Math.max(8, radius * 0.36),
+      chaseRadius: Math.max(radius * 1.45, radius + 24),
+      activeTargetId: ''
+    };
+    squad.behavior = 'guard';
+    squad.waypoints = [];
+    squad.action = '自由攻击';
+    squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: { x: cx, y: cy }, targetSquadId: '' };
+    this.markCommandIssued('guard');
+    return true;
+  }
+
+  commandMarchMode(squadId, mode = MARCH_MODE_COHESIVE) {
+    if (this.phase !== 'battle' || !this.sim) return false;
+    const squad = this.getSquadById(squadId);
+    if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) return false;
+    if (mode === MARCH_MODE_LOOSE) {
+      squad.speedMode = SPEED_MODE_C;
+      squad.speedModeAuthority = SPEED_AUTH_USER;
+      squad.speedPolicy = SPEED_POLICY_RETREAT;
+      squad.marchMode = MARCH_MODE_LOOSE;
+    } else {
+      squad.speedMode = SPEED_MODE_B;
+      squad.speedModeAuthority = SPEED_AUTH_USER;
+      squad.speedPolicy = SPEED_POLICY_MARCH;
+      squad.marchMode = MARCH_MODE_COHESIVE;
+    }
+    this.markCommandIssued('march_mode');
+    return true;
+  }
+
   commandSkill(squadId, targetSpec) {
     if (this.phase !== 'battle' || !this.sim || !this.crowd) return { ok: false, reason: '战斗未开始' };
-    return triggerCrowdSkill(this.sim, this.crowd, squadId, targetSpec);
+    const result = triggerCrowdSkill(this.sim, this.crowd, squadId, targetSpec);
+    if (result?.ok) {
+      this.markCommandIssued('skill');
+    }
+    return result;
+  }
+
+  getSkillMetaForSquad(squadId = '') {
+    const squad = this.getSquadById(squadId);
+    return buildSkillMetaFromSquad(squad, this.unitTypeMap);
   }
 
   step(dtSec) {
@@ -1309,10 +1558,16 @@ export default class BattleRuntime {
 
     (this.sim.squads || []).forEach((squad) => {
       if (!squad || squad.remain <= 0) return;
+      if (squad.lastMoveMarker && Number(squad.lastMoveMarker.ttl) > 0) {
+        squad.lastMoveMarker.ttl = Math.max(0, (Number(squad.lastMoveMarker.ttl) || 0) - dt);
+      }
       const inCombat = (Number(squad.underAttackTimer) || 0) > 0 || (Number(squad.attackCooldown) || 0) > 0;
       const decay = inCombat ? 0.34 : 0.9;
       squad.morale = clamp((Number(squad.morale) || 0) - (decay * dt), 0, MORALE_MAX);
       squad.stamina = clamp((Number(squad.stamina) || 0) + (inCombat ? 3.2 : 5.4) * dt, 0, STAMINA_MAX);
+      if ((Number(squad.morale) || 0) <= 0 && squad.behavior !== 'retreat') {
+        this.commandBehavior(squad.id, 'retreat');
+      }
     });
 
     const attackerAlive = (this.sim.squads || [])
@@ -1334,6 +1589,26 @@ export default class BattleRuntime {
     this._lastMidlineClamp = clampRecord;
     this.debugStats.allowCrossMidline = allowCrossMidline;
     this.updateCameraAnchor(dt);
+    if (this._debugTrackOrder) {
+      const squads = Array.isArray(this.sim?.squads) ? this.sim.squads : [];
+      for (let i = 0; i < squads.length; i += 1) {
+        const squad = squads[i];
+        if (!squad) continue;
+        const nextHash = hashWaypoints(squad.waypoints);
+        const prevHash = this._waypointHashBySquad.get(squad.id) || '';
+        if (nextHash !== prevHash && this.orderSeq === this._lastOrderSeqSnapshot) {
+          console.warn('[battle-order-guard] waypoints changed without command seq', {
+            squadId: squad.id,
+            prevHash,
+            nextHash,
+            orderSeq: this.orderSeq,
+            inputType: this.lastInputEventType || ''
+          });
+        }
+        this._waypointHashBySquad.set(squad.id, nextHash);
+      }
+      this._lastOrderSeqSnapshot = this.orderSeq;
+    }
     this.debugStats.simStepMs = performance.now() - t0;
   }
 
@@ -1404,7 +1679,11 @@ export default class BattleRuntime {
       speedMode: squad.speedMode || SPEED_MODE_B,
       speedModeAuthority: squad.speedModeAuthority || SPEED_AUTH_AI,
       speedPolicy: squad.speedPolicy || SPEED_POLICY_MARCH,
+      marchMode: squad.marchMode || MARCH_MODE_COHESIVE,
+      behavior: squad.behavior || 'idle',
+      debugTargetScore: squad.debugTargetScore || null,
       orderType: squad.order?.type || ORDER_IDLE,
+      skills: this.phase === 'battle' ? buildSkillMetaFromSquad(squad, this.unitTypeMap).skills : [],
       placed: squad?.placed !== false,
       selected: this.phase === 'battle'
         ? squad.id === this.selectedBattleSquadId
@@ -1567,7 +1846,11 @@ export default class BattleRuntime {
       effects.data[base + 2] = Number(e.z) || 0;
       effects.data[base + 3] = Math.max(0.6, Number(e.radius) || 2.2);
       effects.data[base + 4] = e.team === TEAM_ATTACKER ? 0 : 1;
-      effects.data[base + 5] = e.type === 'explosion' ? 1 : 0;
+      if (e.type === 'explosion') effects.data[base + 5] = 1;
+      else if (e.type === 'buff_aura') effects.data[base + 5] = 2;
+      else if (e.type === 'charge_dust') effects.data[base + 5] = 3;
+      else if (e.type === 'smoke') effects.data[base + 5] = 4;
+      else effects.data[base + 5] = 0;
       effects.data[base + 6] = clamp((Number(e.ttl) || 0) / Math.max(0.01, (Number(e.elapsed) || 0) + (Number(e.ttl) || 0)), 0, 1);
       effects.data[base + 7] = 0;
       effectCount += 1;

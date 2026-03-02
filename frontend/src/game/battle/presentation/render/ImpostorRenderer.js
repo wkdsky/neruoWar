@@ -54,6 +54,7 @@ void main() {
 
 const FS = `#version 300 es
 precision highp float;
+precision highp sampler2DArray;
 
 in vec2 vUv;
 in float vTeam;
@@ -64,6 +65,8 @@ in float vFlag;
 
 uniform vec3 uLightDir;
 uniform float uPitchMix;
+uniform sampler2DArray uTexArray;
+uniform float uUseTexArray;
 uniform float uLayer;
 
 out vec4 outColor;
@@ -87,6 +90,11 @@ void main() {
     0.30 + (0.36 * fract(pseudo * 5.1))
   );
   vec3 color = palette * mix(vec3(0.84), teamTint, 0.34 + 0.09 * uLayer);
+  if (uUseTexArray > 0.5) {
+    float layer = floor(mod(vSlice, 8.0) + 0.5);
+    vec4 texel = texture(uTexArray, vec3(vUv, layer));
+    color = mix(color, texel.rgb, clamp(texel.a, 0.0, 1.0) * 0.72);
+  }
   color = mix(color, color * 1.18, clamp(uPitchMix, 0.0, 1.0) * 0.18);
   color *= lit;
   color *= mix(0.5, 1.0, clamp(vHp, 0.0, 1.0));
@@ -224,12 +232,21 @@ export default class ImpostorRenderer {
       uCameraRight: gl.getUniformLocation(this.program, 'uCameraRight'),
       uLayer: gl.getUniformLocation(this.program, 'uLayer'),
       uLightDir: gl.getUniformLocation(this.program, 'uLightDir'),
-      uPitchMix: gl.getUniformLocation(this.program, 'uPitchMix')
+      uPitchMix: gl.getUniformLocation(this.program, 'uPitchMix'),
+      uTexArray: gl.getUniformLocation(this.program, 'uTexArray'),
+      uUseTexArray: gl.getUniformLocation(this.program, 'uUseTexArray')
     };
 
     this.instanceData = new Float32Array(UNIT_INSTANCE_STRIDE * this.instanceCapacity);
     this.instanceCount = 0;
+    this.textureArray = null;
+    this.textureLayers = 0;
     this.bindInstanceLayout();
+  }
+
+  setTextureArray(texture, layers = 0) {
+    this.textureArray = texture || null;
+    this.textureLayers = Math.max(0, Number(layers) || 0);
   }
 
   createLayerTextureSet(shapeMode) {
@@ -302,6 +319,14 @@ export default class ImpostorRenderer {
     gl.uniform3fv(this.uniforms.uCameraRight, new Float32Array(cameraState.cameraRight));
     gl.uniform3f(this.uniforms.uLightDir, -0.24, -0.35, 0.91);
     gl.uniform1f(this.uniforms.uPitchMix, Math.max(0, Math.min(1, Number(pitchMix) || 0)));
+    if (this.textureArray) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureArray);
+      gl.uniform1i(this.uniforms.uTexArray, 0);
+      gl.uniform1f(this.uniforms.uUseTexArray, 1);
+    } else {
+      gl.uniform1f(this.uniforms.uUseTexArray, 0);
+    }
 
     for (let layer = 0; layer < 3; layer += 1) {
       gl.uniform1f(this.uniforms.uLayer, layer);
@@ -309,6 +334,7 @@ export default class ImpostorRenderer {
     }
 
     gl.bindVertexArray(null);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
     gl.useProgram(null);
   }
 

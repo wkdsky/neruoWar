@@ -51,6 +51,10 @@ const BattleDebugPanel = ({
     lines.push(
       `速度模式：${selectedSquad.speedMode || 'B_HARMONIC'} ｜ 模式权限 ${selectedSquad.speedModeAuthority || 'AI'}`
     );
+    if (selectedSquad?.debugTargetScore) {
+      const score = selectedSquad.debugTargetScore;
+      lines.push(`目标评分：${score.targetId || '-'} ｜ total ${formatFixed(score.score, 2)} ｜ atk ${formatFixed(score.atkTerm, 2)} ｜ frag ${formatFixed(score.fragTerm, 2)} ｜ lowHp ${formatFixed(score.lowHpBonus, 2)}`);
+    }
   }
 
   return (

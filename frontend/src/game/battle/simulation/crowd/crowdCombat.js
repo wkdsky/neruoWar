@@ -21,6 +21,9 @@ const TEAM_DEFENDER = 'defender';
 const ORDER_MOVE = 'MOVE';
 const ORDER_ATTACK_MOVE = 'ATTACK_MOVE';
 const ORDER_CHARGE = 'CHARGE';
+const GUARD_REEVAL_SEC = 0.15;
+const MOVING_FIRE_MAX_SPREAD = 14;
+const MOVING_FIRE_MIN_HIT = 0.42;
 
 const toEnemyTeam = (team) => (team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER);
 
@@ -59,6 +62,25 @@ const damageScaleFromWeight = (weight = 1, exponent = 0.75) => {
 const projectileCountFromWeight = (weight = 1) => {
   const safe = Math.max(1, Number(weight) || 1);
   return Math.max(1, Math.min(5, 1 + Math.floor(Math.log2(safe))));
+};
+
+export const scoreEnemyTargetValue = (attackerSquad, enemySquad) => {
+  const enemyAtk = Math.max(0.1, Number(enemySquad?.stats?.atk) || 0.1);
+  const enemyDef = Math.max(0, Number(enemySquad?.stats?.def) || 0);
+  const enemyHp = Math.max(1, Number(enemySquad?.health) || Number(enemySquad?.maxHealth) || 1);
+  const enemyHpRatio = clamp(enemyHp / Math.max(1, Number(enemySquad?.maxHealth) || enemyHp), 0, 1);
+  const atkTerm = enemyAtk / (enemyDef + 1);
+  const fragTerm = enemyAtk / (enemyHp + 1);
+  const lowHpBonus = 1 - enemyHpRatio;
+  const dist = Math.hypot((Number(enemySquad?.x) || 0) - (Number(attackerSquad?.x) || 0), (Number(enemySquad?.y) || 0) - (Number(attackerSquad?.y) || 0));
+  const score = (atkTerm * 2) + (fragTerm * 1.4) + (lowHpBonus * 1.8) - (dist * 0.025);
+  return {
+    score,
+    atkTerm,
+    fragTerm,
+    lowHpBonus,
+    dist
+  };
 };
 
 export const pickEnemySquadTarget = (squad, enemySquads = [], options = {}) => {
@@ -181,19 +203,29 @@ const applyDamageToAgent = (sim, crowd, sourceAgent, targetAgent, amount = 0, hi
   return 0;
 };
 
-const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAgent, category, baseDamage) => {
+const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAgent, category, baseDamage, options = {}) => {
   const count = category === 'artillery'
     ? Math.max(3, Math.min(6, 2 + Math.floor(Math.log2(Math.max(1, Number(sourceAgent?.weight) || 1)))))
     : projectileCountFromWeight(sourceAgent.weight);
   const speed = projectileSpeedByCategory(category);
   const gravity = category === 'artillery' ? 95 : 70;
+  const speedRatio = clamp(Number(options?.speedRatio) || 0, 0, 1);
+  const movingPenaltyEnabled = !!options?.movingPenalty && !options?.forceAccurate;
+  const spreadRadius = movingPenaltyEnabled ? (2 + (MOVING_FIRE_MAX_SPREAD * speedRatio)) : 0;
+  const hitChance = movingPenaltyEnabled ? Math.max(MOVING_FIRE_MIN_HIT, 1 - (0.45 * speedRatio)) : 1;
+  let spawned = 0;
   for (let i = 0; i < count; i += 1) {
+    if (Math.random() > hitChance && (i + 1) < count) continue;
     const jitter = category === 'artillery'
       ? (i - ((count - 1) / 2)) * 0.16
       : (i - ((count - 1) / 2)) * 0.08;
+    const randR = movingPenaltyEnabled ? (Math.random() * spreadRadius) : 0;
+    const randA = movingPenaltyEnabled ? (Math.random() * Math.PI * 2) : 0;
+    const spreadX = randR * Math.cos(randA);
+    const spreadY = randR * Math.sin(randA);
     const dir = normalizeVec(
-      (targetAgent.x - sourceAgent.x) + (jitter * (category === 'artillery' ? 9 : 6)),
-      (targetAgent.y - sourceAgent.y) + (jitter * (category === 'artillery' ? 9 : 6))
+      (targetAgent.x - sourceAgent.x) + spreadX + (jitter * (category === 'artillery' ? 9 : 6)),
+      (targetAgent.y - sourceAgent.y) + spreadY + (jitter * (category === 'artillery' ? 9 : 6))
     );
     acquireProjectile(crowd.effectsPool, {
       type: category === 'artillery' ? 'shell' : 'arrow',
@@ -208,6 +240,27 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
       vz: category === 'artillery' ? 44 : 28,
       gravity,
       damage: baseDamage * (category === 'artillery' ? (1.05 + (i * 0.06)) : (0.9 + (i * 0.08))),
+      radius: category === 'artillery' ? 4.5 : 2.2,
+      ttl: category === 'artillery' ? 2.2 : 1.5,
+      targetTeam: toEnemyTeam(sourceAgent.team)
+    });
+    spawned += 1;
+  }
+  if (spawned <= 0) {
+    const dir = normalizeVec((targetAgent.x - sourceAgent.x), (targetAgent.y - sourceAgent.y));
+    acquireProjectile(crowd.effectsPool, {
+      type: category === 'artillery' ? 'shell' : 'arrow',
+      team: sourceAgent.team,
+      squadId: attackerSquad.id,
+      sourceAgentId: sourceAgent.id,
+      x: sourceAgent.x,
+      y: sourceAgent.y,
+      z: category === 'artillery' ? 6 : 4.2,
+      vx: dir.x * speed,
+      vy: dir.y * speed,
+      vz: category === 'artillery' ? 44 : 28,
+      gravity,
+      damage: baseDamage,
       radius: category === 'artillery' ? 4.5 : 2.2,
       ttl: category === 'artillery' ? 2.2 : 1.5,
       targetTeam: toEnemyTeam(sourceAgent.team)
@@ -369,6 +422,17 @@ const detonateProjectile = (sim, crowd, projectile, center, walls, hitWall = nul
     ttl: projectile.type === 'shell' ? 0.44 : 0.18,
     team: projectile.team
   });
+  if (projectile.type === 'shell') {
+    acquireHitEffect(crowd.effectsPool, {
+      type: 'smoke',
+      x: center.x,
+      y: center.y,
+      z: 0.9,
+      radius: Math.max(3.2, effectRadius * 1.1),
+      ttl: 0.62,
+      team: projectile.team
+    });
+  }
 };
 
 const stepProjectiles = (sim, crowd, dt) => {
@@ -429,7 +493,9 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     if (!squad || squad.remain <= 0) return;
     if ((Number(squad?.skillRush?.ttl) || 0) > 0) return;
     const behavior = typeof squad.behavior === 'string' ? squad.behavior : 'auto';
+    if (behavior === 'standby') return;
     const orderType = typeof squad?.order?.type === 'string' ? squad.order.type : '';
+    const nowSec = Number(sim?.timeElapsed) || 0;
     const chargeCommitted = orderType === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > (Number(sim?.timeElapsed) || 0);
     if (behavior === 'retreat') return;
     if (squad.activeSkill && (squad.classTag === 'archer' || squad.classTag === 'artillery')) return;
@@ -437,19 +503,59 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     const enemyTeam = toEnemyTeam(squad.team);
     if (enemySquads.length <= 0) return;
     let targetSquad = null;
+    const guard = squad?.guard?.enabled ? squad.guard : null;
+    if (guard && nowSec >= (Number(squad._guardRetargetAt) || 0)) {
+      let bestGuardTarget = null;
+      let bestGuardScore = -Infinity;
+      const gcx = Number(guard.cx) || (Number(squad.x) || 0);
+      const gcy = Number(guard.cy) || (Number(squad.y) || 0);
+      const guardRadius = Math.max(12, Number(guard.radius) || 48);
+      const chaseRadius = Math.max(guardRadius + 10, Number(guard.chaseRadius) || (guardRadius * 1.45));
+      for (let i = 0; i < enemySquads.length; i += 1) {
+        const enemy = enemySquads[i];
+        if (!enemy || enemy.remain <= 0) continue;
+        const distToCenter = Math.hypot((Number(enemy.x) || 0) - gcx, (Number(enemy.y) || 0) - gcy);
+        if (distToCenter > chaseRadius) continue;
+        const scoreBreakdown = scoreEnemyTargetValue(squad, enemy);
+        const radiusBonus = distToCenter <= guardRadius ? 0.85 : 0;
+        const finalScore = scoreBreakdown.score + radiusBonus;
+        if (finalScore <= bestGuardScore) continue;
+        bestGuardScore = finalScore;
+        bestGuardTarget = enemy;
+        squad.debugTargetScore = {
+          targetId: enemy.id,
+          score: finalScore,
+          atkTerm: scoreBreakdown.atkTerm,
+          fragTerm: scoreBreakdown.fragTerm,
+          lowHpBonus: scoreBreakdown.lowHpBonus,
+          dist: scoreBreakdown.dist
+        };
+      }
+      squad.targetSquadId = bestGuardTarget?.id || '';
+      squad._guardRetargetAt = nowSec + GUARD_REEVAL_SEC;
+    }
+    if (guard && squad.targetSquadId) {
+      for (let i = 0; i < enemySquads.length; i += 1) {
+        const enemy = enemySquads[i];
+        if (!enemy || enemy.id !== squad.targetSquadId || enemy.remain <= 0) continue;
+        targetSquad = enemy;
+        break;
+      }
+    }
     if (chargeCommitted) {
-      targetSquad = enemySquads.find((row) => row.id === squad.targetSquadId && row.remain > 0)
+      targetSquad = targetSquad
+        || enemySquads.find((row) => row.id === squad.targetSquadId && row.remain > 0)
         || enemySquads
           .slice()
           .sort((a, b) => Math.hypot((a.x || 0) - (squad.x || 0), (a.y || 0) - (squad.y || 0))
             - Math.hypot((b.x || 0) - (squad.x || 0), (b.y || 0) - (squad.y || 0)))[0]
         || null;
     } else {
-      targetSquad = pickEnemySquadTarget(squad, enemySquads, {
+      targetSquad = targetSquad || pickEnemySquadTarget(squad, enemySquads, {
         engagementEnabled,
         config: engagementCfg,
         walls,
-        nowSec: Number(sim?.timeElapsed) || 0
+        nowSec
       });
     }
     if (!targetSquad) return;
@@ -465,6 +571,10 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
       || squad.roleTag === '远程'
       || (Number(squad?.stats?.range) || 0) >= 2.2;
     const squadDistToTarget = Math.hypot((targetSquad.x || 0) - (squad.x || 0), (targetSquad.y || 0) - (squad.y || 0));
+    const speedNow = Math.hypot(Number(squad.vx) || 0, Number(squad.vy) || 0);
+    const nominalSpeed = Math.max(12, (Number(squad._groupSpeedScalar) || Number(squad.stats?.speed) || 1) * 20);
+    const speedRatio = clamp(speedNow / nominalSpeed, 0, 1);
+    const movingPenalty = !!guard && speedRatio > 0.05 && !squad.activeSkill;
     const moveOrder = orderType === ORDER_MOVE;
     const attackMoveOrder = orderType === ORDER_ATTACK_MOVE;
     let idleCanRetaliate = behavior !== 'idle'
@@ -504,7 +614,11 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
         if (dist > attackRange) return;
         const weightScale = damageScaleFromWeight(agent.weight, damageExponent);
         const baseDamage = Math.max(0.42, ((Number(squad.stats?.atk) || 10) * 0.042) * weightScale);
-        spawnRangedProjectiles(sim, crowd, squad, agent, target, 'artillery', baseDamage);
+        spawnRangedProjectiles(sim, crowd, squad, agent, target, 'artillery', baseDamage, {
+          movingPenalty,
+          speedRatio,
+          forceAccurate: !!squad.activeSkill
+        });
         agent.state = 'attack';
         agent.attackCd = 0.55 + (Math.random() * 0.22);
         fired += 1;
@@ -548,7 +662,11 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
       const weightScale = damageScaleFromWeight(agent.weight, damageExponent);
       const baseDamage = Math.max(0.18, ((Number(squad.stats?.atk) || 10) * 0.035) * weightScale);
       if (isRanged) {
-        spawnRangedProjectiles(sim, crowd, squad, agent, target, squad.classTag, baseDamage);
+        spawnRangedProjectiles(sim, crowd, squad, agent, target, squad.classTag, baseDamage, {
+          movingPenalty,
+          speedRatio,
+          forceAccurate: !!squad.activeSkill
+        });
         agent.state = 'attack';
       } else {
         applyDamageToAgent(sim, crowd, agent, target, baseDamage, 'slash');

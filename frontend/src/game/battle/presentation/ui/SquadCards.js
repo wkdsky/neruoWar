@@ -1,5 +1,6 @@
 import React from 'react';
 import DeployActionButtons from './DeployActionButtons';
+import BattleActionButtons from './BattleActionButtons';
 
 const iconByClass = {
   infantry: '步',
@@ -27,6 +28,9 @@ const SquadCards = ({
   deployActionTeam = 'attacker',
   onFocus,
   onSelect,
+  hoverSquadIdOnCard = '',
+  onCardHoverChange = null,
+  onBattleAction = null,
   onDeployMove,
   onDeployEdit,
   onDeployDelete
@@ -35,7 +39,12 @@ const SquadCards = ({
   const defender = squads.filter((row) => row.team === 'defender');
 
   const renderCard = (row) => (
-    <div key={row.id} className="pve2-card-wrap">
+    <div
+      key={row.id}
+      className="pve2-card-wrap"
+      onMouseEnter={() => onCardHoverChange?.(row.id)}
+      onMouseLeave={() => onCardHoverChange?.('')}
+    >
       <button
         type="button"
         className={`pve2-card ${row.team === 'attacker' ? 'ally' : 'enemy'} ${row.selected ? 'selected' : ''} ${!row.alive ? 'dead' : ''}`}
@@ -60,6 +69,15 @@ const SquadCards = ({
         <div className="pve2-card-row">士气 {Math.round(row.morale)}</div>
         <div className="pve2-card-row">{row.action || '待命'}</div>
       </button>
+      {phase === 'battle' && row.team === 'attacker' && row.alive && row.selected && hoverSquadIdOnCard === row.id ? (
+        <div className="pve2-card-actions pve2-card-actions-battle">
+          <BattleActionButtons
+            visible
+            mode="card"
+            onAction={(actionId, payload) => onBattleAction?.(row.id, actionId, payload)}
+          />
+        </div>
+      ) : null}
       {phase === 'deploy' && actionAnchorMode === 'card' && (!deployActionTeam || row.team === deployActionTeam) && row.selected ? (
         <div
           className="pve2-card-actions"

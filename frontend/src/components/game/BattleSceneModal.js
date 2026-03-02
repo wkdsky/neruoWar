@@ -15,17 +15,17 @@ import GroundRenderer from '../../game/battle/presentation/render/GroundRenderer
 import BattleHUD from '../../game/battle/presentation/ui/BattleHUD';
 import SquadCards from '../../game/battle/presentation/ui/SquadCards';
 import DeployActionButtons from '../../game/battle/presentation/ui/DeployActionButtons';
+import BattleActionButtons from '../../game/battle/presentation/ui/BattleActionButtons';
 import Minimap from '../../game/battle/presentation/ui/Minimap';
 import AimOverlayCanvas from '../../game/battle/presentation/ui/AimOverlayCanvas';
 import BattleDebugPanel from '../../game/battle/presentation/ui/BattleDebugPanel';
 import unitVisualConfig from '../../game/battle/presentation/assets/UnitVisualConfig.example.json';
+import createBattleProceduralTextures from '../../game/battle/presentation/assets/ProceduralTextures';
 import NumberPadDialog from '../common/NumberPadDialog';
 import { API_BASE } from '../../runtimeConfig';
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
 const ORDER_MOVE = 'MOVE';
-const ORDER_ATTACK_MOVE = 'ATTACK_MOVE';
-const ORDER_CHARGE = 'CHARGE';
 const SPEED_MODE_B = 'B_HARMONIC';
 const SPEED_MODE_C = 'C_PER_TYPE';
 const SPEED_MODE_AUTO = 'AUTO';
@@ -43,6 +43,12 @@ const BATTLE_PITCH_HIGH_DEG = 90;
 const BATTLE_FOLLOW_YAW_DEG = 0;
 const BATTLE_FOLLOW_WORLD_YAW_DEG = 0;
 const BATTLE_FOLLOW_MIRROR_X = false;
+const BATTLE_UI_MODE_NONE = 'NONE';
+const BATTLE_UI_MODE_PATH = 'PATH_PLANNING';
+const BATTLE_UI_MODE_MARCH_PICK = 'MARCH_PICK';
+const BATTLE_UI_MODE_GUARD = 'GUARD';
+const BATTLE_UI_MODE_SKILL_PICK = 'SKILL_PICK';
+const BATTLE_UI_MODE_SKILL_CONFIRM = 'SKILL_CONFIRM';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const normalizeDeg = (deg) => {
@@ -145,23 +151,11 @@ const QUICK_DEPLOY_RANDOM_DEFAULT = {
   defenderTotal: '10000'
 };
 
-const ORDER_MODE_OPTIONS = [
-  { value: ORDER_MOVE, label: '移动' },
-  { value: ORDER_ATTACK_MOVE, label: '攻击前进' },
-  { value: ORDER_CHARGE, label: '冲锋' }
-];
-
 const SPEED_MODE_CYCLE = [SPEED_MODE_B, SPEED_MODE_C, SPEED_MODE_AUTO];
 const speedModeLabel = (mode) => {
   if (mode === SPEED_MODE_C) return '撤退(C)';
   if (mode === SPEED_MODE_AUTO) return '自动(A)';
   return '行军(B)';
-};
-const orderTypeLabel = (type) => {
-  if (type === ORDER_ATTACK_MOVE) return '攻击前进';
-  if (type === ORDER_CHARGE) return '冲锋';
-  if (type === ORDER_MOVE) return '移动';
-  return '待命';
 };
 const QUICK_DEPLOY_STANDARD_PRESETS = [
   {
@@ -394,6 +388,7 @@ const BattleSceneModal = ({
     projectile: null,
     effect: null
   });
+  const proceduralTexRef = useRef(null);
   const rafRef = useRef(0);
   const lastFrameRef = useRef(0);
   const lastUiSyncRef = useRef(0);
@@ -416,6 +411,16 @@ const BattleSceneModal = ({
   const [debugEnabled, setDebugEnabled] = useState(false);
   const [debugStats, setDebugStats] = useState({ fps: 0, simStepMs: 0, renderMs: 0, unitModelCount: 0, agentCount: 0, projectileCount: 0, buildingCount: 0 });
   const [aimState, setAimState] = useState({ active: false, squadId: '', classTag: '', point: null, radiusPx: 0 });
+  const [battleUiMode, setBattleUiMode] = useState(BATTLE_UI_MODE_NONE);
+  const [worldActionsVisibleForSquadId, setWorldActionsVisibleForSquadId] = useState('');
+  const [hoverSquadIdOnCard, setHoverSquadIdOnCard] = useState('');
+  const [pendingPathPoints, setPendingPathPoints] = useState([]);
+  const [planningHoverPoint, setPlanningHoverPoint] = useState(null);
+  const [skillConfirmState, setSkillConfirmState] = useState(null);
+  const [skillPopupSquadId, setSkillPopupSquadId] = useState('');
+  const [skillPopupPos, setSkillPopupPos] = useState({ x: 120, y: 120 });
+  const [marchModePickOpen, setMarchModePickOpen] = useState(false);
+  const [marchPopupPos, setMarchPopupPos] = useState({ x: 120, y: 120 });
   const [selectedSquadId, setSelectedSquadId] = useState('');
   const [minimapSnapshot, setMinimapSnapshot] = useState(null);
   const [cameraMiniState, setCameraMiniState] = useState({ center: { x: 0, y: 0 }, viewport: { widthWorld: 220, heightWorld: 150 } });
@@ -496,7 +501,6 @@ const BattleSceneModal = ({
     totalRequested: 0,
     totalFilled: 0
   });
-  const [commandMode, setCommandMode] = useState(ORDER_MOVE);
   const [showMidlineDebug, setShowMidlineDebug] = useState(true);
   const [isPanning, setIsPanning] = useState(false);
   const deployDraggingGroupId = String(deployDraggingGroup?.groupId || '');
@@ -520,6 +524,10 @@ const BattleSceneModal = ({
       projectile: null,
       effect: null
     };
+    if (proceduralTexRef.current?.dispose) {
+      proceduralTexRef.current.dispose();
+    }
+    proceduralTexRef.current = null;
     glRef.current = null;
   }, []);
 
@@ -564,6 +572,16 @@ const BattleSceneModal = ({
     reportedRef.current = false;
     setPaused(false);
     setAimState({ active: false, squadId: '', classTag: '', point: null, radiusPx: 0 });
+    setBattleUiMode(BATTLE_UI_MODE_NONE);
+    setWorldActionsVisibleForSquadId('');
+    setHoverSquadIdOnCard('');
+    setPendingPathPoints([]);
+    setPlanningHoverPoint(null);
+    setSkillConfirmState(null);
+    setSkillPopupSquadId('');
+    setSkillPopupPos({ x: 120, y: 120 });
+    setMarchModePickOpen(false);
+    setMarchPopupPos({ x: 120, y: 120 });
     setResultState({ open: false, submitting: false, error: '', summary: null, recorded: false });
     setDeployEditorOpen(false);
     setDeployEditingGroupId('');
@@ -586,7 +604,6 @@ const BattleSceneModal = ({
     setQuickDeployApplying(false);
     setQuickDeployError('');
     setQuickDeployRandomForm({ ...QUICK_DEPLOY_RANDOM_DEFAULT });
-    setCommandMode(ORDER_MOVE);
     setShowMidlineDebug(true);
     setCameraAssert({
       cameraImplTag: '',
@@ -709,8 +726,14 @@ const BattleSceneModal = ({
       renderersRef.current.building = new BuildingRenderer(gl);
       renderersRef.current.projectile = new ProjectileRenderer(gl);
       renderersRef.current.effect = new EffectRenderer(gl);
+      proceduralTexRef.current = createBattleProceduralTextures(gl);
+      if (proceduralTexRef.current) {
+        renderersRef.current.projectile.setTextureArray?.(proceduralTexRef.current.projectileTexArray);
+        renderersRef.current.effect.setTextureArray?.(proceduralTexRef.current.effectTexArray);
+      }
       try {
         renderersRef.current.impostor = new ImpostorRenderer(gl, { maxSlices: 32, textureSize: 64 });
+        renderersRef.current.impostor.setTextureArray?.(proceduralTexRef.current?.unitTexArray, 8);
       } catch (impostorError) {
         console.error('ImpostorRenderer 初始化失败，降级为空渲染器:', impostorError);
         renderersRef.current.impostor = createNoopImpostorRenderer();
@@ -738,6 +761,20 @@ const BattleSceneModal = ({
       totalFilled: 0
     });
   }, [phase, templateFillPreview.open]);
+
+  useEffect(() => {
+    if (phase === 'battle') return;
+    setBattleUiMode(BATTLE_UI_MODE_NONE);
+    setWorldActionsVisibleForSquadId('');
+    setHoverSquadIdOnCard('');
+    setPendingPathPoints([]);
+    setPlanningHoverPoint(null);
+    setSkillConfirmState(null);
+    setMarchModePickOpen(false);
+    setMarchPopupPos({ x: 120, y: 120 });
+    setPaused(false);
+    clockRef.current.setPaused(false);
+  }, [phase]);
 
   const reportBattleResult = useCallback(async (summary) => {
     if (!summary) return;
@@ -1013,6 +1050,14 @@ const BattleSceneModal = ({
     setBattleStatus(runtime.getBattleStatus());
     setCards(runtime.getCardRows());
     setAimState({ active: false, squadId: '', classTag: '', point: null, radiusPx: 0 });
+    setBattleUiMode(BATTLE_UI_MODE_NONE);
+    setWorldActionsVisibleForSquadId(attacker?.id || '');
+    setHoverSquadIdOnCard('');
+    setPendingPathPoints([]);
+    setPlanningHoverPoint(null);
+    setSkillConfirmState(null);
+    setMarchModePickOpen(false);
+    setMarchPopupPos({ x: 120, y: 120 });
     setDeployDraggingGroup({ groupId: '', team: TEAM_ATTACKER });
     setDeployActionAnchorMode('');
     setDeployEditorOpen(false);
@@ -1020,7 +1065,6 @@ const BattleSceneModal = ({
     setQuickDeployOpen(false);
     setQuickDeployApplying(false);
     setQuickDeployError('');
-    setCommandMode(ORDER_MOVE);
   }, []);
 
   const handleCardFocus = useCallback((squadId) => {
@@ -1033,6 +1077,8 @@ const BattleSceneModal = ({
     runtime.setFocusSquad(squadId);
     if (runtime.getPhase() === 'deploy') {
       setDeployActionAnchorMode('card');
+    } else {
+      setWorldActionsVisibleForSquadId(String(squadId || ''));
     }
   }, [isTrainingMode]);
 
@@ -1053,111 +1099,251 @@ const BattleSceneModal = ({
     }
     if (runtime.setSelectedBattleSquad(squadId)) {
       setSelectedSquadId(squadId);
-      const nextCards = runtime.getCardRows();
-      const row = nextCards.find((item) => item.id === squadId);
-      if (row?.orderType === ORDER_ATTACK_MOVE) setCommandMode(ORDER_ATTACK_MOVE);
-      else if (row?.orderType === ORDER_CHARGE) setCommandMode(ORDER_CHARGE);
-      else setCommandMode(ORDER_MOVE);
-      setCards(nextCards);
+      runtime.setFocusSquad(squadId);
+      const anchor = runtime.getFocusAnchor();
+      cameraRef.current.beginFocusTransition(anchor);
+      setWorldActionsVisibleForSquadId(squadId);
+      setBattleUiMode((prev) => (
+        prev === BATTLE_UI_MODE_PATH || prev === BATTLE_UI_MODE_SKILL_CONFIRM || prev === BATTLE_UI_MODE_MARCH_PICK
+          ? prev
+          : BATTLE_UI_MODE_NONE
+      ));
+      setCards(runtime.getCardRows());
     }
   }, [isTrainingMode]);
 
-  const handleMapCommand = useCallback((event) => {
-    if (event.button !== 0) return;
-    const runtime = runtimeRef.current;
+  const resolveEventWorldPoint = useCallback((event) => {
     const canvas = glCanvasRef.current;
-    if (!runtime || !canvas || !cameraStateRef.current) return;
-
+    if (!canvas || !cameraStateRef.current) return null;
     const rect = canvas.getBoundingClientRect();
     const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
     const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
     const world = cameraRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
     pointerWorldRef.current = world;
+    if (!Number.isFinite(Number(world?.x)) || !Number.isFinite(Number(world?.y))) return null;
+    return world;
+  }, []);
 
-    if (runtime.getPhase() === 'deploy') {
-      if (deployDraggingGroupId) {
-        if (!runtime.canDeployAt(world, deployDraggingTeam, 10)) {
-          setDeployNotice(deployDraggingTeam === TEAM_DEFENDER
-            ? '中间交战区不可部署，请放置在右侧红色区域'
-            : '中间交战区不可部署，请放置在左侧蓝色区域');
-          return;
+  const isPointInsideBattleField = useCallback((point) => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return false;
+    const field = runtime.getField?.();
+    const halfW = Math.max(10, Number(field?.width) || 900) * 0.5;
+    const halfH = Math.max(10, Number(field?.height) || 620) * 0.5;
+    const x = Number(point?.x);
+    const y = Number(point?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    return x >= -halfW && x <= halfW && y >= -halfH && y <= halfH;
+  }, []);
+
+  const isPathPointBlocked = useCallback((point) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'battle') return true;
+    if (!isPointInsideBattleField(point)) return true;
+    const hit = runtime.pickBuilding(point, 8);
+    return !!hit;
+  }, [isPointInsideBattleField]);
+
+  const resolvePopupPos = useCallback((payload, fallbackWorld = null) => {
+    const canvas = glCanvasRef.current;
+    const rect = canvas?.getBoundingClientRect();
+    if (!rect || !rect.width || !rect.height) {
+      return { x: 120, y: 120 };
+    }
+    let x = Number(payload?.clientX) - rect.left;
+    let y = Number(payload?.clientY) - rect.top;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      if (fallbackWorld && worldToDomRef.current) {
+        const dom = worldToDomRef.current({ x: fallbackWorld.x, y: fallbackWorld.y, z: 0 });
+        if (dom?.visible) {
+          x = Number(dom.x);
+          y = Number(dom.y);
         }
-        runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
-        runtime.setDeployGroupPlaced(deployDraggingTeam, deployDraggingGroupId, true);
-        runtime.setSelectedDeployGroup(deployDraggingGroupId);
-        runtime.setFocusSquad(deployDraggingGroupId);
-        setSelectedSquadId(deployDraggingGroupId);
-        setDeployDraggingGroup({ groupId: '', team: TEAM_ATTACKER });
-        setDeployActionAnchorMode('world');
-        setDeployNotice(`部队已放置，可继续编辑或${isTrainingMode ? '开始训练' : '开战'}`);
-        setCards(runtime.getCardRows());
-        setMinimapSnapshot(runtime.getMinimapSnapshot());
+      }
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      x = rect.width * 0.5;
+      y = rect.height * 0.5;
+    }
+    return {
+      x: clamp(x, 16, Math.max(16, rect.width - 16)),
+      y: clamp(y, 16, Math.max(16, rect.height - 16))
+    };
+  }, []);
+
+  const setClockPaused = useCallback((nextPaused) => {
+    setPaused(!!nextPaused);
+    clockRef.current.setPaused(!!nextPaused);
+  }, []);
+
+  const syncBattleCards = useCallback(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    setCards(runtime.getCardRows());
+  }, []);
+
+  const selectBattleSquad = useCallback((squadId, showActions = true) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'battle') return false;
+    if (!runtime.setSelectedBattleSquad(squadId)) return false;
+    runtime.setFocusSquad(squadId);
+    const anchor = runtime.getFocusAnchor();
+    cameraRef.current.beginFocusTransition(anchor);
+    setSelectedSquadId(squadId);
+    if (showActions) {
+      setWorldActionsVisibleForSquadId(squadId);
+    }
+    syncBattleCards();
+    return true;
+  }, [syncBattleCards]);
+
+  const closeSkillConfirm = useCallback((resumeBattle = true) => {
+    setSkillConfirmState(null);
+    setBattleUiMode(BATTLE_UI_MODE_NONE);
+    if (resumeBattle) setClockPaused(false);
+  }, [setClockPaused]);
+
+  const closeSkillPick = useCallback(() => {
+    if (battleUiMode === BATTLE_UI_MODE_SKILL_PICK) {
+      setBattleUiMode(BATTLE_UI_MODE_NONE);
+    }
+    setSkillPopupSquadId('');
+  }, [battleUiMode]);
+
+  const commitPathPlanning = useCallback((commit = true) => {
+    const runtime = runtimeRef.current;
+    if (runtime && commit && selectedSquadId) {
+      runtime.commandSetWaypoints(selectedSquadId, pendingPathPoints, { inputType: 'path_planning' });
+      syncBattleCards();
+    }
+    setPendingPathPoints([]);
+    setPlanningHoverPoint(null);
+    setBattleUiMode(BATTLE_UI_MODE_NONE);
+    setClockPaused(false);
+  }, [selectedSquadId, pendingPathPoints, setClockPaused, syncBattleCards]);
+
+  const closeMarchModePick = useCallback(() => {
+    setMarchModePickOpen(false);
+    if (battleUiMode === BATTLE_UI_MODE_MARCH_PICK) {
+      setBattleUiMode(BATTLE_UI_MODE_NONE);
+      setClockPaused(false);
+    }
+  }, [battleUiMode, setClockPaused]);
+
+  const executeBattleAction = useCallback((squadId, actionId, payload = null) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'battle') return;
+    if (!selectBattleSquad(squadId, true)) return;
+    const squad = runtime.getSquadById(squadId);
+    if (!squad) return;
+    const popupPos = resolvePopupPos(payload, { x: Number(squad.x) || 0, y: Number(squad.y) || 0 });
+
+    if (actionId !== 'marchMode') {
+      closeMarchModePick();
+    }
+    if (actionId !== 'skills') {
+      closeSkillPick();
+    }
+
+    if (actionId === 'planPath') {
+      setPendingPathPoints([]);
+      setPlanningHoverPoint(null);
+      setBattleUiMode(BATTLE_UI_MODE_PATH);
+      setClockPaused(true);
+      return;
+    }
+    if (actionId === 'marchMode') {
+      setBattleUiMode(BATTLE_UI_MODE_MARCH_PICK);
+      setMarchModePickOpen(true);
+      setMarchPopupPos(popupPos);
+      setClockPaused(true);
+      return;
+    }
+    if (actionId === 'freeAttack') {
+      runtime.commandGuard(squadId, {
+        centerX: Number(squad.x) || 0,
+        centerY: Number(squad.y) || 0,
+        radius: Math.max(42, Number(squad.radius) || 24)
+      });
+      setBattleUiMode(BATTLE_UI_MODE_GUARD);
+      setTimeout(() => setBattleUiMode(BATTLE_UI_MODE_NONE), 0);
+      syncBattleCards();
+      return;
+    }
+    if (actionId === 'skills') {
+      setSkillPopupPos(popupPos);
+      setSkillPopupSquadId(squadId);
+      setBattleUiMode(BATTLE_UI_MODE_SKILL_PICK);
+      setSkillConfirmState(null);
+      return;
+    }
+    if (actionId === 'standby') {
+      runtime.commandBehavior(squadId, 'standby');
+      setBattleUiMode(BATTLE_UI_MODE_NONE);
+      syncBattleCards();
+      return;
+    }
+    if (actionId === 'retreat') {
+      runtime.commandBehavior(squadId, 'retreat');
+      setBattleUiMode(BATTLE_UI_MODE_NONE);
+      syncBattleCards();
+    }
+  }, [setClockPaused, selectBattleSquad, syncBattleCards, closeMarchModePick, closeSkillPick, resolvePopupPos]);
+
+  const handleMapCommand = useCallback((event) => {
+    if (event.button !== 0) return;
+    const runtime = runtimeRef.current;
+    const world = resolveEventWorldPoint(event);
+    if (!runtime || !world) return;
+
+    if (runtime.getPhase() !== 'deploy') return;
+    if (deployDraggingGroupId) {
+      if (!runtime.canDeployAt(world, deployDraggingTeam, 10)) {
+        setDeployNotice(deployDraggingTeam === TEAM_DEFENDER
+          ? '中间交战区不可部署，请放置在右侧红色区域'
+          : '中间交战区不可部署，请放置在左侧蓝色区域');
         return;
       }
-      if (isTrainingMode && selectedPaletteItemId) {
-        const placeResult = runtime.placeBuilding({
-          itemId: selectedPaletteItemId,
-          x: world.x,
-          y: world.y,
-          z: 0,
-          rotation: 0
-        });
-        if (!placeResult?.ok) {
-          setDeployNotice(placeResult?.reason || '物品放置失败');
-          return;
-        }
-        setDeployNotice('物品已放置，可继续布置');
-        setMinimapSnapshot(runtime.getMinimapSnapshot());
+      runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
+      runtime.setDeployGroupPlaced(deployDraggingTeam, deployDraggingGroupId, true);
+      runtime.setSelectedDeployGroup(deployDraggingGroupId);
+      runtime.setFocusSquad(deployDraggingGroupId);
+      setSelectedSquadId(deployDraggingGroupId);
+      setDeployDraggingGroup({ groupId: '', team: TEAM_ATTACKER });
+      setDeployActionAnchorMode('world');
+      setDeployNotice(`部队已放置，可继续编辑或${isTrainingMode ? '开始训练' : '开战'}`);
+      setCards(runtime.getCardRows());
+      setMinimapSnapshot(runtime.getMinimapSnapshot());
+      return;
+    }
+    if (isTrainingMode && selectedPaletteItemId) {
+      const placeResult = runtime.placeBuilding({
+        itemId: selectedPaletteItemId,
+        x: world.x,
+        y: world.y,
+        z: 0,
+        rotation: 0
+      });
+      if (!placeResult?.ok) {
+        setDeployNotice(placeResult?.reason || '物品放置失败');
         return;
       }
-      const picked = runtime.pickDeployGroup(world, isTrainingMode ? 'any' : TEAM_ATTACKER);
-      if (picked?.id) {
-        runtime.setSelectedDeployGroup(picked.id);
-        runtime.setFocusSquad(picked.id);
-        setSelectedSquadId(picked.id);
-        setDeployActionAnchorMode('world');
-        setCards(runtime.getCardRows());
-        return;
-      }
-      setDeployActionAnchorMode('');
+      setDeployNotice('物品已放置，可继续布置');
+      setMinimapSnapshot(runtime.getMinimapSnapshot());
+      return;
+    }
+    const picked = runtime.pickDeployGroup(world, isTrainingMode ? 'any' : TEAM_ATTACKER);
+    if (picked?.id) {
+      runtime.setSelectedDeployGroup(picked.id);
+      runtime.setFocusSquad(picked.id);
+      setSelectedSquadId(picked.id);
+      setDeployActionAnchorMode('world');
       setCards(runtime.getCardRows());
       return;
     }
-
-    if (runtime.getPhase() !== 'battle' || paused) return;
-    const selected = runtime.getSquadById(selectedSquadId);
-    if (!selected || selected.team !== TEAM_ATTACKER || selected.remain <= 0) return;
-
-    if (aimState.active && aimState.squadId === selected.id) {
-      const maxRange = skillRangeByClass(selected.classTag);
-      const aoeRadius = skillAoeRadiusByClass(selected.classTag);
-      const dx = world.x - selected.x;
-      const dy = world.y - selected.y;
-      const dist = Math.hypot(dx, dy) || 1;
-      const tx = dist > maxRange ? selected.x + (dx / dist) * maxRange : world.x;
-      const ty = dist > maxRange ? selected.y + (dy / dist) * maxRange : world.y;
-      runtime.commandSkill(selected.id, {
-        kind: 'ground_aoe',
-        x: tx,
-        y: ty,
-        radius: aoeRadius,
-        maxRange,
-        clipPolygon: [],
-        blockedByWall: false
-      });
-      setAimState({ active: false, squadId: '', classTag: '', point: null, radiusPx: 0 });
-      return;
-    }
-
-    if (commandMode === ORDER_ATTACK_MOVE) {
-      runtime.commandAttackMove(selected.id, world);
-    } else if (commandMode === ORDER_CHARGE) {
-      runtime.commandCharge(selected.id, world);
-    } else {
-      runtime.commandMove(selected.id, world, { append: event.shiftKey, orderType: ORDER_MOVE });
-    }
+    setDeployActionAnchorMode('');
     setCards(runtime.getCardRows());
-  }, [selectedSquadId, paused, aimState, deployDraggingGroupId, deployDraggingTeam, isTrainingMode, selectedPaletteItemId, commandMode]);
+  }, [deployDraggingGroupId, deployDraggingTeam, isTrainingMode, selectedPaletteItemId, resolveEventWorldPoint]);
 
   const clearPanDrag = useCallback(() => {
     panDragRef.current = null;
@@ -1191,7 +1377,7 @@ const BattleSceneModal = ({
     if (
       target
       && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-action-pad, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .number-pad-dialog-overlay, .number-pad-dialog')
+      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .number-pad-dialog-overlay, .number-pad-dialog')
     ) {
       return;
     }
@@ -1217,12 +1403,121 @@ const BattleSceneModal = ({
         return;
       }
     }
-    handleMapCommand(event);
-  }, [beginPanDrag, handleMapCommand]);
+    if (currentPhase !== 'battle') {
+      handleMapCommand(event);
+      return;
+    }
+    const world = resolveEventWorldPoint(event);
+    if (!world) return;
+    const selected = runtime.getSquadById(selectedSquadId);
+
+    if (battleUiMode === BATTLE_UI_MODE_MARCH_PICK) {
+      closeMarchModePick();
+      return;
+    }
+
+    if (event.button === 2) {
+      event.preventDefault();
+      if (battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM) {
+        closeSkillConfirm(true);
+        return;
+      }
+      if (battleUiMode === BATTLE_UI_MODE_PATH) {
+        setPendingPathPoints((prev) => {
+          if (prev.length > 0) return prev.slice(0, prev.length - 1);
+          setBattleUiMode(BATTLE_UI_MODE_NONE);
+          setPlanningHoverPoint(null);
+          setClockPaused(false);
+          return prev;
+        });
+        return;
+      }
+      if (battleUiMode === BATTLE_UI_MODE_SKILL_PICK) {
+        closeSkillPick();
+        return;
+      }
+      if (selected && selected.team === TEAM_ATTACKER && selected.remain > 0) {
+        runtime.commandMove(selected.id, world, { append: false, replace: true, orderType: ORDER_MOVE, inputType: 'battle_rmb_move' });
+        syncBattleCards();
+      }
+      return;
+    }
+    if (event.button !== 0) return;
+
+    if (battleUiMode === BATTLE_UI_MODE_SKILL_PICK) {
+      closeSkillPick();
+    }
+
+    if (battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM) {
+      if (!skillConfirmState || !selected || selected.id !== skillConfirmState.squadId) return;
+      const centerX = Number(skillConfirmState?.center?.x) || Number(selected.x) || 0;
+      const centerY = Number(skillConfirmState?.center?.y) || Number(selected.y) || 0;
+      if (skillConfirmState.kind === 'infantry') {
+        runtime.commandSkill(selected.id, { kind: 'infantry', x: centerX, y: centerY });
+      } else if (skillConfirmState.kind === 'cavalry') {
+        const dirX = Number(skillConfirmState?.dir?.x) || 1;
+        const dirY = Number(skillConfirmState?.dir?.y) || 0;
+        const len = Math.max(18, Number(skillConfirmState?.len) || 80);
+        runtime.commandSkill(selected.id, {
+          kind: 'cavalry',
+          x: centerX + (dirX * len),
+          y: centerY + (dirY * len),
+          dirX,
+          dirY,
+          distance: len
+        });
+      } else if (skillConfirmState.hoverPoint) {
+        runtime.commandSkill(selected.id, {
+          kind: skillConfirmState.kind,
+          x: skillConfirmState.hoverPoint.x,
+          y: skillConfirmState.hoverPoint.y
+        });
+      }
+      closeSkillConfirm(true);
+      syncBattleCards();
+      return;
+    }
+
+    if (battleUiMode === BATTLE_UI_MODE_PATH) {
+      if (isPathPointBlocked(world)) return;
+      setPendingPathPoints((prev) => [...prev, { x: world.x, y: world.y }]);
+      return;
+    }
+
+    const pickedSquadId = runtime.pickSquadAtPoint(world.x, world.y, { team: TEAM_ATTACKER, maxDist: 34 });
+    if (pickedSquadId) {
+      selectBattleSquad(pickedSquadId, true);
+      return;
+    }
+    setWorldActionsVisibleForSquadId('');
+    if (battleUiMode !== BATTLE_UI_MODE_NONE) {
+      setBattleUiMode(BATTLE_UI_MODE_NONE);
+      setSkillPopupSquadId('');
+    }
+  }, [
+    beginPanDrag,
+    handleMapCommand,
+    resolveEventWorldPoint,
+    battleUiMode,
+    closeSkillConfirm,
+    closeSkillPick,
+    closeMarchModePick,
+    selectedSquadId,
+    skillConfirmState,
+    setClockPaused,
+    selectBattleSquad,
+    syncBattleCards,
+    isPathPointBlocked
+  ]);
 
   const handleSceneWheel = useCallback((event) => {
     const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    if (!runtime) return;
+    if (runtime.getPhase() === 'battle') {
+      event.preventDefault();
+      return;
+    }
+    if (runtime.getPhase() !== 'deploy') return;
     if (panDragRef.current) return;
     event.preventDefault();
     const nextDistance = cameraRef.current.distance + (event.deltaY < 0 ? -CAMERA_ZOOM_STEP : CAMERA_ZOOM_STEP);
@@ -1253,36 +1548,9 @@ const BattleSceneModal = ({
       return;
     }
     if (runtime.getPhase() !== 'battle') return;
-    if (commandMode === ORDER_ATTACK_MOVE) {
-      runtime.commandAttackMove(selectedSquadId, worldPoint);
-    } else if (commandMode === ORDER_CHARGE) {
-      runtime.commandCharge(selectedSquadId, worldPoint);
-    } else {
-      runtime.commandMove(selectedSquadId, worldPoint, { append: false, orderType: ORDER_MOVE });
-    }
-    runtime.setFocusSquad(selectedSquadId);
-    setCards(runtime.getCardRows());
-  }, [selectedSquadId, deployDraggingGroupId, deployDraggingTeam, isTrainingMode, commandMode]);
-
-  const handleToggleSkillAim = useCallback(() => {
-    const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase() !== 'battle') return;
-    const selected = runtime.getSquadById(selectedSquadId);
-    if (!selected || selected.team !== TEAM_ATTACKER || selected.remain <= 0) return;
-    if (selected.classTag !== 'archer' && selected.classTag !== 'artillery' && selected.classTag !== 'cavalry' && selected.classTag !== 'infantry') return;
-    setAimState((prev) => {
-      if (prev.active && prev.squadId === selected.id) {
-        return { active: false, squadId: '', classTag: '', point: null, radiusPx: 0 };
-      }
-      return {
-        active: true,
-        squadId: selected.id,
-        classTag: selected.classTag,
-        point: null,
-        radiusPx: 0
-      };
-    });
-  }, [selectedSquadId]);
+    cameraRef.current.centerX = Number(worldPoint?.x) || 0;
+    cameraRef.current.centerY = Number(worldPoint?.y) || 0;
+  }, [deployDraggingGroupId, deployDraggingTeam, isTrainingMode]);
 
   const handlePointerMove = useCallback((event) => {
     const runtime = runtimeRef.current;
@@ -1302,6 +1570,50 @@ const BattleSceneModal = ({
       return;
     }
 
+    if (runtime.getPhase() !== 'battle') return;
+    if (battleUiMode === BATTLE_UI_MODE_PATH) {
+      if (isPathPointBlocked(world)) {
+        setPlanningHoverPoint(null);
+      } else {
+        setPlanningHoverPoint({ x: world.x, y: world.y });
+      }
+      return;
+    }
+    if (battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM && skillConfirmState?.squadId) {
+      const selected = runtime.getSquadById(skillConfirmState.squadId);
+      if (!selected) return;
+      const centerX = Number(skillConfirmState?.center?.x) || Number(selected.x) || 0;
+      const centerY = Number(skillConfirmState?.center?.y) || Number(selected.y) || 0;
+      if (skillConfirmState.kind === 'cavalry') {
+        const dx = world.x - centerX;
+        const dy = world.y - centerY;
+        const len = Math.hypot(dx, dy) || 1;
+        const clampedLen = clamp(len, 18, skillRangeByClass('cavalry'));
+        setSkillConfirmState((prev) => (prev ? {
+          ...prev,
+          dir: { x: dx / len, y: dy / len },
+          len: clampedLen,
+          hoverPoint: { x: world.x, y: world.y }
+        } : prev));
+        return;
+      }
+      if (skillConfirmState.kind === 'archer' || skillConfirmState.kind === 'artillery') {
+        const maxRange = skillRangeByClass(skillConfirmState.kind);
+        const sx = centerX;
+        const sy = centerY;
+        const dx = world.x - sx;
+        const dy = world.y - sy;
+        const dist = Math.hypot(dx, dy) || 1;
+        const tx = dist > maxRange ? sx + (dx / dist) * maxRange : world.x;
+        const ty = dist > maxRange ? sy + (dy / dist) * maxRange : world.y;
+        setSkillConfirmState((prev) => (prev ? {
+          ...prev,
+          hoverPoint: { x: tx, y: ty }
+        } : prev));
+        return;
+      }
+    }
+
     if (!aimState.active) return;
     const selected = runtime.getSquadById(aimState.squadId);
     if (!selected) return;
@@ -1309,7 +1621,7 @@ const BattleSceneModal = ({
     const edge = worldToScreenRef.current ? worldToScreenRef.current({ x: world.x + skillAoeRadiusByClass(selected.classTag), y: world.y, z: 0 }) : null;
     const radiusPx = center && edge ? Math.hypot(edge.x - center.x, edge.y - center.y) : 22;
     setAimState((prev) => ({ ...prev, point: { x: world.x, y: world.y }, radiusPx }));
-  }, [aimState, deployDraggingGroupId, deployDraggingTeam]);
+  }, [aimState, deployDraggingGroupId, deployDraggingTeam, battleUiMode, skillConfirmState, isPathPointBlocked]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1389,13 +1701,6 @@ const BattleSceneModal = ({
     };
   }, [open, clearPanDrag, clearDeployYawDrag, handleMapCommand]);
 
-  const handleBehavior = useCallback((behavior) => {
-    const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase() !== 'battle') return;
-    runtime.commandBehavior(selectedSquadId, behavior);
-    setCards(runtime.getCardRows());
-  }, [selectedSquadId]);
-
   const handleSetSpeedMode = useCallback((mode) => {
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'battle') return;
@@ -1416,6 +1721,91 @@ const BattleSceneModal = ({
     const next = SPEED_MODE_CYCLE[(idx + 1) % SPEED_MODE_CYCLE.length];
     handleSetSpeedMode(next);
   }, [selectedSquadId, handleSetSpeedMode]);
+
+  const handleBattleActionClick = useCallback((squadId, actionId, payload = null) => {
+    executeBattleAction(squadId, actionId, payload);
+  }, [executeBattleAction]);
+
+  const handleSkillPick = useCallback((skill, meta = {}) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'battle') return;
+    const candidateSquadId = typeof meta?.squadId === 'string' && meta.squadId
+      ? meta.squadId
+      : selectedSquadId;
+    const selected = runtime.getSquadById(candidateSquadId);
+    if (!selected || selected.team !== TEAM_ATTACKER || selected.remain <= 0) return;
+    if (selected.id !== selectedSquadId) {
+      selectBattleSquad(selected.id, true);
+    }
+    if (!skill?.available) return;
+    closeSkillPick();
+    const kind = (skill.kind === 'infantry' || skill.kind === 'cavalry' || skill.kind === 'archer' || skill.kind === 'artillery')
+      ? skill.kind
+      : (selected.classTag || 'infantry');
+    const center = skill?.anchor && Number.isFinite(Number(skill.anchor.x)) && Number.isFinite(Number(skill.anchor.y))
+      ? { x: Number(skill.anchor.x), y: Number(skill.anchor.y) }
+      : (
+        selected?.classCenters?.[kind]
+          ? {
+            x: Number(selected.classCenters[kind].x) || Number(selected.x) || 0,
+            y: Number(selected.classCenters[kind].y) || Number(selected.y) || 0
+          }
+          : { x: Number(selected.x) || 0, y: Number(selected.y) || 0 }
+      );
+    if (kind === 'infantry') {
+      runtime.commandSkill(selected.id, {
+        kind: 'infantry',
+        x: center.x,
+        y: center.y
+      });
+      setSkillConfirmState(null);
+      setBattleUiMode(BATTLE_UI_MODE_NONE);
+      setClockPaused(false);
+      syncBattleCards();
+      return;
+    }
+    if (kind === 'cavalry') {
+      const dirX = Number(selected.dirX) || 1;
+      const dirY = Number(selected.dirY) || 0;
+      const len = 82;
+      setSkillConfirmState({
+        squadId: selected.id,
+        kind: 'cavalry',
+        center,
+        dir: { x: dirX, y: dirY },
+        len,
+        aoeRadius: 0,
+        hoverPoint: { x: center.x + (dirX * len), y: center.y + (dirY * len) }
+      });
+      setBattleUiMode(BATTLE_UI_MODE_SKILL_CONFIRM);
+      setClockPaused(true);
+      return;
+    }
+    const aoeRadius = skillAoeRadiusByClass(kind);
+    setSkillConfirmState({
+      squadId: selected.id,
+      kind: kind === 'artillery' ? 'artillery' : 'archer',
+      center,
+      dir: { x: 1, y: 0 },
+      len: 0,
+      aoeRadius,
+      hoverPoint: { x: center.x, y: center.y }
+    });
+    setBattleUiMode(BATTLE_UI_MODE_SKILL_CONFIRM);
+    setClockPaused(true);
+  }, [selectedSquadId, setClockPaused, selectBattleSquad, closeSkillPick, syncBattleCards]);
+
+  const handleFinishPathPlanning = useCallback(() => {
+    commitPathPlanning(true);
+  }, [commitPathPlanning]);
+
+  const handlePickMarchMode = useCallback((mode) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'battle' || !selectedSquadId) return;
+    runtime.commandMarchMode(selectedSquadId, mode);
+    syncBattleCards();
+    closeMarchModePick();
+  }, [selectedSquadId, syncBattleCards, closeMarchModePick]);
 
   const handleOpenDeployCreator = useCallback((team = TEAM_ATTACKER) => {
     const runtime = runtimeRef.current;
@@ -2040,6 +2430,25 @@ const BattleSceneModal = ({
           setDeployNotice('已取消部队拖拽放置');
           return;
         }
+        if (battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM) {
+          closeSkillConfirm(true);
+          return;
+        }
+        if (battleUiMode === BATTLE_UI_MODE_PATH) {
+          commitPathPlanning(false);
+          return;
+        }
+        if (battleUiMode === BATTLE_UI_MODE_MARCH_PICK || battleUiMode === BATTLE_UI_MODE_SKILL_PICK || battleUiMode === BATTLE_UI_MODE_GUARD) {
+          setBattleUiMode(BATTLE_UI_MODE_NONE);
+          setSkillPopupSquadId('');
+          setMarchModePickOpen(false);
+          setClockPaused(false);
+          return;
+        }
+        if (worldActionsVisibleForSquadId) {
+          setWorldActionsVisibleForSquadId('');
+          return;
+        }
         if (aimState.active) {
           setAimState({ active: false, squadId: '', classTag: '', point: null, radiusPx: 0 });
           return;
@@ -2072,7 +2481,12 @@ const BattleSceneModal = ({
     deployEditorOpen,
     deployQuantityDialog.open,
     quickDeployOpen,
-    deployDraggingGroupId
+    deployDraggingGroupId,
+    battleUiMode,
+    closeSkillConfirm,
+    commitPathPlanning,
+    worldActionsVisibleForSquadId,
+    setClockPaused
   ]);
 
   useEffect(() => {
@@ -2094,6 +2508,36 @@ const BattleSceneModal = ({
   }, [open]);
 
   useEffect(() => {
+    if (!open || !marchModePickOpen) return undefined;
+    const handleGlobalPointerDown = (event) => {
+      const target = event.target;
+      if (target && typeof target.closest === 'function' && target.closest('.pve2-march-float')) {
+        return;
+      }
+      closeMarchModePick();
+    };
+    window.addEventListener('pointerdown', handleGlobalPointerDown, true);
+    return () => {
+      window.removeEventListener('pointerdown', handleGlobalPointerDown, true);
+    };
+  }, [open, marchModePickOpen, closeMarchModePick]);
+
+  useEffect(() => {
+    if (!open || battleUiMode !== BATTLE_UI_MODE_SKILL_PICK) return undefined;
+    const handleGlobalPointerDown = (event) => {
+      const target = event.target;
+      if (target && typeof target.closest === 'function' && target.closest('.pve2-skill-float, .pve2-battle-action-btn.skills')) {
+        return;
+      }
+      closeSkillPick();
+    };
+    window.addEventListener('pointerdown', handleGlobalPointerDown, true);
+    return () => {
+      window.removeEventListener('pointerdown', handleGlobalPointerDown, true);
+    };
+  }, [open, battleUiMode, closeSkillPick]);
+
+  useEffect(() => {
     if (!open) {
       runtimeRef.current = null;
       destroyRenderers();
@@ -2112,13 +2556,17 @@ const BattleSceneModal = ({
     return runtime.getSquadById(selectedSquadId);
   })();
   const selectedCardRow = cards.find((row) => row.id === selectedSquadId) || null;
+  const skillPopupTargetSquadId = (battleUiMode === BATTLE_UI_MODE_SKILL_PICK && skillPopupSquadId)
+    ? skillPopupSquadId
+    : '';
+  const skillPopupMeta = (phase === 'battle' && runtimeRef.current && skillPopupTargetSquadId)
+    ? runtimeRef.current.getSkillMetaForSquad(skillPopupTargetSquadId)
+    : { skills: [], cooldownRemain: 0 };
   const selectedSpeedModeUi = selectedCardRow
     ? (selectedCardRow.speedModeAuthority === 'USER'
       ? (selectedCardRow.speedMode || SPEED_MODE_B)
       : SPEED_MODE_AUTO)
     : SPEED_MODE_B;
-  const selectedOrderType = selectedCardRow?.orderType || ORDER_MOVE;
-
   const selectedWaypoints = selectedSquad && Array.isArray(selectedSquad.waypoints) ? selectedSquad.waypoints : [];
 
   const pitchLabel = cameraRef.current.getPitchBlend() >= 0.5
@@ -2148,6 +2596,25 @@ const BattleSceneModal = ({
   )
     ? worldToDomRef.current({ x: selectedDeployGroup.x, y: selectedDeployGroup.y, z: 0 })
     : null;
+  const selectedBattleActionSquad = (
+    phase === 'battle'
+    && runtimeRef.current
+    && worldActionsVisibleForSquadId
+  ) ? runtimeRef.current.getSquadById(worldActionsVisibleForSquadId) : null;
+  const pathPlanningTailPoint = (
+    phase === 'battle'
+    && battleUiMode === BATTLE_UI_MODE_PATH
+    && Array.isArray(pendingPathPoints)
+    && pendingPathPoints.length > 0
+  ) ? pendingPathPoints[pendingPathPoints.length - 1] : null;
+  const pathPlanningTailDom = (
+    pathPlanningTailPoint
+    && worldToDomRef.current
+  ) ? worldToDomRef.current({
+    x: Number(pathPlanningTailPoint.x) || 0,
+    y: Number(pathPlanningTailPoint.y) || 0,
+    z: 0
+  }) : null;
   const confirmDeleteGroup = (
     phase === 'deploy'
     && confirmDeleteGroupId
@@ -2254,6 +2721,10 @@ const BattleSceneModal = ({
               selectedSquad={selectedSquad}
               aimState={aimState}
               waypoints={selectedWaypoints}
+              battleUiMode={battleUiMode}
+              pendingPathPoints={pendingPathPoints}
+              planningHoverPoint={planningHoverPoint}
+              skillConfirmState={skillConfirmState}
             />
 
             {canDrawMidlineDebug ? (
@@ -2275,6 +2746,9 @@ const BattleSceneModal = ({
               deployActionTeam={isTrainingMode ? '' : TEAM_ATTACKER}
               onFocus={handleCardFocus}
               onSelect={handleCardSelect}
+              hoverSquadIdOnCard={hoverSquadIdOnCard}
+              onCardHoverChange={setHoverSquadIdOnCard}
+              onBattleAction={handleBattleActionClick}
               onDeployMove={handleDeployMove}
               onDeployEdit={handleOpenDeployEditorForGroup}
               onDeployDelete={handleDeployDelete}
@@ -2282,18 +2756,6 @@ const BattleSceneModal = ({
 
             {phase === 'battle' ? (
               <div className="pve2-action-pad">
-                <div className="pve2-order-mode-group">
-                  {ORDER_MODE_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      className={`btn btn-secondary btn-small ${commandMode === option.value ? 'is-active' : ''}`}
-                      onClick={() => setCommandMode(option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
                 <button
                   type="button"
                   className="btn btn-secondary btn-small"
@@ -2301,12 +2763,7 @@ const BattleSceneModal = ({
                 >
                   {`速度模式：${speedModeLabel(selectedSpeedModeUi)}`}
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('idle')}>待命</button>
-                <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('auto')}>自动</button>
-                <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('defend')}>防御</button>
-                <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('retreat')}>撤退</button>
-                <button type="button" className={`btn ${aimState.active ? 'btn-warning' : 'btn-primary'}`} onClick={handleToggleSkillAim}>技能瞄准</button>
-                <span className="pve2-hint">{`当前命令：${orderTypeLabel(selectedOrderType)}`}</span>
+                <span className="pve2-hint">{`交互态：${battleUiMode}`}</span>
               </div>
             ) : (
               <div className="pve2-deploy-sidebar">
@@ -2380,6 +2837,59 @@ const BattleSceneModal = ({
                 </section>
               </div>
             )}
+
+            {phase === 'battle' && marchModePickOpen ? (
+              <div
+                className="pve2-march-float"
+                style={{ left: `${marchPopupPos.x}px`, top: `${marchPopupPos.y}px` }}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button type="button" className="btn btn-primary btn-small" onClick={() => handlePickMarchMode('cohesive')}>整体行进</button>
+                <button type="button" className="btn btn-secondary btn-small" onClick={() => handlePickMarchMode('loose')}>游离行进</button>
+              </div>
+            ) : null}
+
+            {phase === 'battle' && battleUiMode === BATTLE_UI_MODE_SKILL_PICK && skillPopupTargetSquadId && (skillPopupMeta.skills || []).length > 0 ? (
+              <div
+                className="pve2-skill-float"
+                style={{ left: `${skillPopupPos.x}px`, top: `${skillPopupPos.y}px` }}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                {(skillPopupMeta.skills || []).map((skill) => {
+                  const total = Math.max(0.1, Number(skill?.cooldownTotal) || 1);
+                  const remain = Math.max(0, Number(skill?.cooldownRemain) || 0);
+                  const ratio = clamp(remain / total, 0, 1);
+                  const ringStyle = {
+                    backgroundImage: `conic-gradient(rgba(148,163,184,0.82) ${Math.round(ratio * 360)}deg, rgba(59,130,246,0.94) 0deg)`
+                  };
+                  return (
+                    <button
+                      key={skill.id || skill.kind}
+                      type="button"
+                      className={`pve2-skill-float-btn ${skill.available ? '' : 'is-cd'}`}
+                      style={ringStyle}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleSkillPick(skill, {
+                          squadId: skillPopupTargetSquadId,
+                          clientX: Number(event.clientX) || 0,
+                          clientY: Number(event.clientY) || 0
+                        });
+                      }}
+                    >
+                      <span className="pve2-skill-float-icon">{skill.icon || skill.name?.slice(0, 1) || '技'}</span>
+                      <span className="pve2-skill-float-tip">
+                        <strong>{skill.name || '技能'}</strong>
+                        <em>{skill.description || ''}</em>
+                        <i>{`兵力 ${Math.max(0, Number(skill.count) || 0)} | ${remain > 0.01 ? `冷却 ${remain.toFixed(1)}s` : '可释放'}`}</i>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
 
             {phase === 'deploy' && !isTrainingMode && templateFillPreview.open ? (
               <div
@@ -2641,8 +3151,11 @@ const BattleSceneModal = ({
               onMapClick={handleMinimapClick}
             />
 
-            {aimState.active ? (
-              <div className="pve2-aim-tip">技能瞄准中：点击地面释放，`Esc` 取消</div>
+            {battleUiMode === BATTLE_UI_MODE_PATH ? (
+              <div className="pve2-aim-tip">路径规划中：LMB 添加路点，RMB 撤销，点击最后路径点“√”执行</div>
+            ) : null}
+            {battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM ? (
+              <div className="pve2-aim-tip">技能确认态：LMB 确认释放，RMB 取消</div>
             ) : null}
 
             {debugEnabled ? (
@@ -2658,6 +3171,38 @@ const BattleSceneModal = ({
 
             {glError ? (
               <div className="pve2-error-overlay">{glError}</div>
+            ) : null}
+
+            {phase === 'battle' && pathPlanningTailDom?.visible ? (
+              <button
+                type="button"
+                className="pve2-path-confirm-btn"
+                style={{ left: `${pathPlanningTailDom.x}px`, top: `${pathPlanningTailDom.y}px` }}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleFinishPathPlanning();
+                }}
+              >
+                √
+              </button>
+            ) : null}
+
+            {phase === 'battle' ? (
+              <BattleActionButtons
+                visible={!!worldActionsVisibleForSquadId}
+                mode="world"
+                anchorWorldPos={selectedBattleActionSquad ? {
+                  x: Number(selectedBattleActionSquad.x) || 0,
+                  y: Number(selectedBattleActionSquad.y) || 0,
+                  z: Math.max(3, Number(selectedBattleActionSquad.radius) || 12) * 0.25
+                } : null}
+                camera={(world) => (worldToDomRef.current ? worldToDomRef.current(world) : null)}
+                onAction={(actionId, payload) => {
+                  if (!worldActionsVisibleForSquadId) return;
+                  executeBattleAction(worldActionsVisibleForSquadId, actionId, payload);
+                }}
+              />
             ) : null}
 
             {phase === 'deploy' && worldActionPos?.visible ? (

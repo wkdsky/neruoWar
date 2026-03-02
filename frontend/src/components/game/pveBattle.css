@@ -203,6 +203,7 @@
 .pve2-card-wrap {
   display: grid;
   gap: 4px;
+  position: relative;
 }
 
 .pve2-card-strip.left {
@@ -892,6 +893,245 @@
 .pve2-world-actions .pve2-icon-btn.move {
   left: 8px;
   top: 30px;
+}
+
+.pve2-battle-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.pve2-battle-actions-world {
+  position: absolute;
+  z-index: 14;
+  width: 176px;
+  transform: translate(-50%, -100%);
+}
+
+.pve2-battle-actions-card {
+  width: 100%;
+}
+
+.pve2-battle-action-btn {
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: rgba(8, 16, 30, 0.9);
+  color: #dbeafe;
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 5px 4px;
+  cursor: pointer;
+}
+
+.pve2-battle-action-btn:hover {
+  border-color: rgba(96, 165, 250, 0.75);
+}
+
+.pve2-battle-action-btn.retreat {
+  border-color: rgba(248, 113, 113, 0.72);
+  color: #fecaca;
+}
+
+.pve2-battle-skill-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin-bottom: 2px;
+}
+
+.pve2-battle-skill-chip {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(96, 165, 250, 0.72);
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 30%, rgba(147, 197, 253, 0.95), rgba(30, 58, 138, 0.95));
+  color: #eff6ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.pve2-battle-skill-chip.is-cd {
+  border-color: rgba(148, 163, 184, 0.62);
+  background: radial-gradient(circle at 35% 30%, rgba(148, 163, 184, 0.92), rgba(51, 65, 85, 0.95));
+  color: #e2e8f0;
+}
+
+.pve2-battle-skill-icon {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.pve2-battle-skill-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  min-width: 150px;
+  max-width: 220px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.95);
+  color: #dbeafe;
+  padding: 5px 6px;
+  display: none;
+  z-index: 18;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.44);
+}
+
+.pve2-battle-skill-tip strong {
+  display: block;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.pve2-battle-skill-tip em {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1.25;
+  color: #cbd5e1;
+}
+
+.pve2-battle-skill-chip:hover .pve2-battle-skill-tip {
+  display: block;
+}
+
+.pve2-card-actions-battle {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  border: 1px solid rgba(148, 163, 184, 0.36);
+  border-radius: 10px;
+  background: rgba(5, 10, 18, 0.82);
+  backdrop-filter: blur(1px);
+  padding: 6px;
+  align-content: center;
+  justify-content: center;
+}
+
+.pve2-skill-float {
+  position: absolute;
+  transform: translate(-40%, -52%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.pve2-skill-float-btn {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(96, 165, 250, 0.78);
+  border-radius: 999px;
+  color: #eff6ff;
+  cursor: pointer;
+  background-color: rgba(8, 16, 30, 0.96);
+  background-repeat: no-repeat;
+  box-shadow: 0 6px 16px rgba(2, 6, 23, 0.42);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.pve2-skill-float-btn.is-cd {
+  border-color: rgba(148, 163, 184, 0.72);
+}
+
+.pve2-skill-float-icon {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-shadow: 0 1px 2px rgba(2, 6, 23, 0.64);
+}
+
+.pve2-skill-float-tip {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 160px;
+  max-width: 220px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.96);
+  color: #dbeafe;
+  padding: 6px 7px;
+  display: none;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.46);
+  z-index: 22;
+}
+
+.pve2-skill-float-tip strong {
+  display: block;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.pve2-skill-float-tip em {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1.25;
+  color: #cbd5e1;
+}
+
+.pve2-skill-float-tip i {
+  display: block;
+  margin-top: 3px;
+  font-style: normal;
+  font-size: 10px;
+  color: #93c5fd;
+}
+
+.pve2-skill-float-btn:hover .pve2-skill-float-tip {
+  display: block;
+}
+
+.pve2-march-float {
+  position: absolute;
+  transform: translate(-50%, -110%);
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.pve2-path-confirm-btn {
+  position: absolute;
+  transform: translate(-50%, -120%);
+  z-index: 20;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(250, 204, 21, 0.88);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.95);
+  color: #fde68a;
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(2, 6, 23, 0.44);
+}
+
+.pve2-path-confirm-btn:hover {
+  background: rgba(30, 41, 59, 0.98);
 }
 
 .pve2-world-actions .pve2-icon-btn.edit {

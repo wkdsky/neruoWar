@@ -244,9 +244,14 @@ export default class CameraController {
     this.distance = Math.max(120, Number(distance) || 560);
     this.centerX = 0;
     this.centerY = 0;
-    this.lookAheadScale = 0.28;
-    this.lookAheadMax = 78;
-    this.lookAheadSpeedEps = 1.8;
+    this.lookAheadScale = 0.22;
+    this.lookAheadMax = 54;
+    this.lookAheadSpeedEps = 2.6;
+    this.followTau = 0.19;
+    this.followSquadId = '';
+    this.focusTransitionSec = 0;
+    this.focusTransitionDurationSec = 0.36;
+    this.followSnapRequested = false;
     this.worldYawDeg = 0;
 
     this.eye = [0, 0, 0];
@@ -288,20 +293,44 @@ export default class CameraController {
     }
 
     if (anchor && Number.isFinite(Number(anchor.x)) && Number.isFinite(Number(anchor.y))) {
+      const nextSquadId = String(anchor.squadId || '');
+      const switched = !!nextSquadId && nextSquadId !== this.followSquadId;
+      if (switched || this.followSnapRequested) {
+        this.focusTransitionSec = 0;
+        this.followSquadId = nextSquadId;
+        this.followSnapRequested = false;
+      } else if (!this.followSquadId && nextSquadId) {
+        this.followSquadId = nextSquadId;
+      }
+      this.focusTransitionSec = Math.min(this.focusTransitionDurationSec, this.focusTransitionSec + dt);
       const vx = Number(anchor.vx) || 0;
       const vy = Number(anchor.vy) || 0;
       const speed = Math.hypot(vx, vy);
+      const transitionMix = this.focusTransitionDurationSec <= 1e-4
+        ? 1
+        : (this.focusTransitionSec / this.focusTransitionDurationSec);
+      const smoothMix = smoothstep(transitionMix);
       const validLookAhead = speed >= this.lookAheadSpeedEps;
       const lookAhead = validLookAhead
-        ? Math.min(this.lookAheadMax, speed * this.lookAheadScale)
+        ? Math.min(this.lookAheadMax, speed * this.lookAheadScale * smoothMix)
         : 0;
       const dirX = validLookAhead ? (vx / speed) : 0;
       const dirY = validLookAhead ? (vy / speed) : 0;
       const targetX = (Number(anchor.x) || 0) + (dirX * lookAhead);
       const targetY = (Number(anchor.y) || 0) + (dirY * lookAhead);
-      const followLerp = clamp(dt * 6.8, 0, 1);
+      const tau = Math.max(0.04, this.followTau);
+      const followLerp = clamp(1 - Math.exp(-dt / tau), 0, 1);
       this.centerX += (targetX - this.centerX) * followLerp;
       this.centerY += (targetY - this.centerY) * followLerp;
+    }
+  }
+
+  beginFocusTransition(anchor = null) {
+    this.followSnapRequested = true;
+    if (anchor && Number.isFinite(Number(anchor.x)) && Number.isFinite(Number(anchor.y))) {
+      this.centerX = Number(anchor.x) || 0;
+      this.centerY = Number(anchor.y) || 0;
+      this.followSquadId = String(anchor.squadId || this.followSquadId || '');
     }
   }
 

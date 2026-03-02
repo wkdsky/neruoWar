@@ -37,11 +37,15 @@ void main() {
 
 const FS = `#version 300 es
 precision highp float;
+precision highp sampler2DArray;
 
 in vec2 vUv;
 in float vTeam;
 in float vType;
 in float vLife;
+
+uniform sampler2DArray uTexArray;
+uniform float uUseTexArray;
 
 out vec4 outColor;
 
@@ -53,6 +57,12 @@ void main() {
   vec3 color = (vTeam < 0.5) ? vec3(0.45, 0.74, 1.0) : vec3(1.0, 0.56, 0.46);
   if (vType > 0.5) {
     color = mix(color, vec3(1.0, 0.86, 0.42), 0.45);
+  }
+  if (uUseTexArray > 0.5) {
+    float layer = floor(mod(vType, 4.0) + 0.5);
+    vec4 texel = texture(uTexArray, vec3(vUv, layer));
+    color = mix(color, texel.rgb, texel.a * 0.75);
+    alpha *= max(0.2, texel.a);
   }
   outColor = vec4(color, alpha);
 }
@@ -75,10 +85,17 @@ export default class ProjectileRenderer {
     this.uniforms = {
       uViewProj: gl.getUniformLocation(this.program, 'uViewProj'),
       uCameraRight: gl.getUniformLocation(this.program, 'uCameraRight'),
-      uCameraUp: gl.getUniformLocation(this.program, 'uCameraUp')
+      uCameraUp: gl.getUniformLocation(this.program, 'uCameraUp'),
+      uTexArray: gl.getUniformLocation(this.program, 'uTexArray'),
+      uUseTexArray: gl.getUniformLocation(this.program, 'uUseTexArray')
     };
+    this.textureArray = null;
 
     this.bindLayout();
+  }
+
+  setTextureArray(texture) {
+    this.textureArray = texture || null;
   }
 
   bindLayout() {
@@ -128,8 +145,17 @@ export default class ProjectileRenderer {
     gl.uniformMatrix4fv(this.uniforms.uViewProj, false, new Float32Array(cameraState.viewProjection));
     gl.uniform3fv(this.uniforms.uCameraRight, new Float32Array(cameraState.cameraRight));
     gl.uniform3f(this.uniforms.uCameraUp, 0, 0, 1);
+    if (this.textureArray) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureArray);
+      gl.uniform1i(this.uniforms.uTexArray, 0);
+      gl.uniform1f(this.uniforms.uUseTexArray, 1);
+    } else {
+      gl.uniform1f(this.uniforms.uUseTexArray, 0);
+    }
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
     gl.bindVertexArray(null);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
     gl.useProgram(null);
     gl.disable(gl.BLEND);
   }

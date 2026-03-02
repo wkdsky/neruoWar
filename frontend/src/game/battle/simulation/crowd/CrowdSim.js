@@ -93,6 +93,12 @@ const GROUND_SKILL_CONFIG = {
     damageMul: 2.75
   }
 };
+const SKILL_COOLDOWN_BY_CLASS = {
+  infantry: 2.1,
+  cavalry: 2.8,
+  archer: 8.6,
+  artillery: 13.5
+};
 
 const sumUnitsMap = (map = {}) => Object.values(map || {}).reduce((sum, c) => sum + Math.max(0, Number(c) || 0), 0);
 
@@ -461,7 +467,7 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
   if (!sim || !crowd || !squad || !activeSkill) return 0;
   const agents = getCrowdAgentsForSquad(crowd, squad.id);
   if (agents.length <= 0) return 0;
-  const classTag = squad.classTag === 'artillery' ? 'artillery' : 'archer';
+  const classTag = activeSkill?.classTag === 'artillery' ? 'artillery' : 'archer';
   const config = activeSkill.config || GROUND_SKILL_CONFIG[classTag];
   const targetSpec = activeSkill.targetSpec || {};
   const rankedShooters = [...agents]
@@ -603,6 +609,93 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
       const fallbackX = squad.team === TEAM_ATTACKER ? (-halfW + 40) : (halfW - 40);
       squad.waypoints = [{ x: fallbackX, y: 0 }];
     }
+    return;
+  }
+
+  const guard = squad?.guard && squad.guard.enabled ? squad.guard : null;
+  if (guard) {
+    const gcx = Number(guard.cx) || (Number(squad.x) || 0);
+    const gcy = Number(guard.cy) || (Number(squad.y) || 0);
+    const guardRadius = Math.max(12, Number(guard.radius) || 48);
+    const returnRadius = Math.max(8, Number(guard.returnRadius) || (guardRadius * 0.36));
+    const chaseRadius = Math.max(guardRadius + 10, Number(guard.chaseRadius) || (guardRadius * 1.45));
+    let guardEnemy = null;
+    if (squad.targetSquadId) {
+      const squads = Array.isArray(sim?.squads) ? sim.squads : [];
+      for (let i = 0; i < squads.length; i += 1) {
+        const row = squads[i];
+        if (!row || row.id !== squad.targetSquadId || row.remain <= 0) continue;
+        guardEnemy = row;
+        break;
+      }
+    }
+    if (!guardEnemy) {
+      guardEnemy = pickNearestEnemySquad({ x: gcx, y: gcy, team: squad.team }, sim?.squads || []);
+    }
+    const enemyDist = guardEnemy
+      ? Math.hypot((Number(guardEnemy.x) || 0) - gcx, (Number(guardEnemy.y) || 0) - gcy)
+      : Infinity;
+    const toCenter = Math.hypot((Number(squad.x) || 0) - gcx, (Number(squad.y) || 0) - gcy);
+    const isRangedGuard = squad.classTag === 'archer'
+      || squad.classTag === 'artillery'
+      || squad.roleTag === '远程'
+      || (Number(squad?.stats?.range) || 0) >= 2.2;
+
+    if (guardEnemy && enemyDist <= guardRadius) {
+      guard.activeTargetId = guardEnemy.id;
+    } else if (guardEnemy && guard.activeTargetId === guardEnemy.id && enemyDist <= chaseRadius) {
+      // keep tracking locked target inside chase radius
+    } else {
+      guard.activeTargetId = '';
+    }
+
+    if (isRangedGuard) {
+      squad.targetSquadId = guardEnemy && enemyDist <= guardRadius ? guardEnemy.id : '';
+      if (toCenter > returnRadius) {
+        squad.waypoints = [{ x: gcx, y: gcy }];
+      } else {
+        squad.waypoints = [];
+      }
+      squad.action = squad.targetSquadId ? '自由攻击' : '警戒';
+      return;
+    }
+
+    if (guard.activeTargetId) {
+      let locked = null;
+      const squads = Array.isArray(sim?.squads) ? sim.squads : [];
+      for (let i = 0; i < squads.length; i += 1) {
+        const row = squads[i];
+        if (!row || row.id !== guard.activeTargetId || row.remain <= 0) continue;
+        locked = row;
+        break;
+      }
+      if (locked) {
+        const lockDistToCenter = Math.hypot((Number(locked.x) || 0) - gcx, (Number(locked.y) || 0) - gcy);
+        if (lockDistToCenter <= chaseRadius) {
+          squad.targetSquadId = locked.id;
+          squad.waypoints = [{ x: Number(locked.x) || 0, y: Number(locked.y) || 0 }];
+          squad.action = '自由攻击';
+          return;
+        }
+      }
+      guard.activeTargetId = '';
+    }
+
+    squad.targetSquadId = '';
+    if (toCenter > returnRadius) {
+      squad.waypoints = [{ x: gcx, y: gcy }];
+      squad.action = '回位';
+    } else {
+      squad.waypoints = [];
+      squad.action = '警戒';
+    }
+    return;
+  }
+
+  if (squad.behavior === 'standby') {
+    squad.targetSquadId = '';
+    squad.waypoints = [];
+    squad.action = '待命';
     return;
   }
 
@@ -804,6 +897,8 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
   const speedTargetMax = speedBase * moralePenalty * fatiguePenalty * buffSpeed * rushSpeed * policyMul * (chargingCommitted ? 1.15 : 1);
   const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((row) => !row?.destroyed) : [];
   let target = null;
+  const activeSkillClass = typeof squad?.activeSkill?.classTag === 'string' ? squad.activeSkill.classTag : '';
+  const lockRangedSkill = activeSkillClass === 'archer' || activeSkillClass === 'artillery';
 
   if (squad.skillRush?.ttl > 0) {
     const remainDistance = Math.max(0, Number(squad.skillRush.remainDistance) || 0);
@@ -818,6 +913,9 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
       y: (Number(squad.y) || 0) + ((squad.skillRush.dirY || 0) * remainDistance)
     };
     squad.skillRush.ttl = Math.max(0, squad.skillRush.ttl - dt);
+  } else if (lockRangedSkill) {
+    target = null;
+    squad.waypoints = [];
   } else if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) {
     target = squad.waypoints[0];
   }
@@ -828,7 +926,10 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
   let desiredSpeed = 0;
   let desiredDir = { x: dir.x, y: dir.y };
 
-  if (target && (Number(squad.stamina) || 0) >= STAMINA_MOVE_THRESHOLD) {
+  if (lockRangedSkill) {
+    desiredSpeed = 0;
+    squad.stamina = clamp((Number(squad.stamina) || 0) + (STAMINA_RECOVER * dt * 0.5), 0, STAMINA_MAX);
+  } else if (target && (Number(squad.stamina) || 0) >= STAMINA_MOVE_THRESHOLD) {
     const toTarget = normalizeVec((Number(target.x) || 0) - (Number(squad.x) || 0), (Number(target.y) || 0) - (Number(squad.y) || 0));
     if (toTarget.len <= LEADER_ARRIVAL_RADIUS) {
       if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) squad.waypoints.shift();
@@ -915,7 +1016,46 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
 
 const aggregateSquadFromAgents = (squad, agents = []) => {
   if (!squad) return;
-  const alive = agents.filter((agent) => agent && !agent.dead && agent.weight > 0.001);
+  const alive = [];
+  let remain = 0;
+  let centerAccX = 0;
+  let centerAccY = 0;
+  const remainUnits = {};
+  const classAcc = {
+    infantry: { x: 0, y: 0, w: 0 },
+    cavalry: { x: 0, y: 0, w: 0 },
+    archer: { x: 0, y: 0, w: 0 },
+    artillery: { x: 0, y: 0, w: 0 }
+  };
+  const anchorX = Number(squad.x) || 0;
+  const anchorY = Number(squad.y) || 0;
+  let maxDist = 0;
+
+  for (let i = 0; i < agents.length; i += 1) {
+    const agent = agents[i];
+    if (!agent || agent.dead) continue;
+    const weight = Math.max(0, Number(agent.weight) || 0);
+    if (weight <= 0.001) continue;
+    alive.push(agent);
+    remain += weight;
+    const ax = Number(agent.x) || 0;
+    const ay = Number(agent.y) || 0;
+    centerAccX += ax;
+    centerAccY += ay;
+    const d = Math.hypot(ax - anchorX, ay - anchorY);
+    if (d > maxDist) maxDist = d;
+    const unitTypeId = typeof agent.unitTypeId === 'string' ? agent.unitTypeId : '__fallback__';
+    remainUnits[unitTypeId] = (remainUnits[unitTypeId] || 0) + weight;
+    let cls = typeof agent.typeCategory === 'string' ? agent.typeCategory : '';
+    if (cls !== 'infantry' && cls !== 'cavalry' && cls !== 'archer' && cls !== 'artillery') {
+      cls = typeof squad.classTag === 'string' ? squad.classTag : 'infantry';
+    }
+    if (!classAcc[cls]) cls = 'infantry';
+    classAcc[cls].x += ax * weight;
+    classAcc[cls].y += ay * weight;
+    classAcc[cls].w += weight;
+  }
+
   if (alive.length <= 0) {
     squad.remain = 0;
     squad.health = 0;
@@ -923,23 +1063,20 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
     squad.behavior = 'idle';
     squad.waypoints = [];
     squad.flagBearerAgentId = '';
+    squad.classCenters = {
+      infantry: { x: anchorX, y: anchorY, count: 0 },
+      cavalry: { x: anchorX, y: anchorY, count: 0 },
+      archer: { x: anchorX, y: anchorY, count: 0 },
+      artillery: { x: anchorX, y: anchorY, count: 0 }
+    };
     return;
   }
-  const remain = alive.reduce((sum, agent) => sum + Math.max(0, agent.weight || 0), 0);
+
   ensureFlagBearer(squad, alive);
-  const center = alive.reduce((acc, agent) => {
-    acc.x += Number(agent.x) || 0;
-    acc.y += Number(agent.y) || 0;
-    return acc;
-  }, { x: 0, y: 0 });
-  center.x /= Math.max(1, alive.length);
-  center.y /= Math.max(1, alive.length);
-  const anchorX = Number(squad.x) || 0;
-  const anchorY = Number(squad.y) || 0;
-  const maxDist = alive.reduce((max, agent) => {
-    const d = Math.hypot((Number(agent.x) || 0) - anchorX, (Number(agent.y) || 0) - anchorY);
-    return Math.max(max, d);
-  }, 0);
+  const center = {
+    x: centerAccX / Math.max(1, alive.length),
+    y: centerAccY / Math.max(1, alive.length)
+  };
   const remainRounded = Math.max(0, Math.round(remain));
   squad.remain = clamp(remainRounded, 0, Math.max(0, Number(squad.startCount) || 0));
   squad.losses = Math.max(0, Math.floor((Number(squad.startCount) || 0) - squad.remain));
@@ -956,14 +1093,23 @@ const aggregateSquadFromAgents = (squad, agents = []) => {
     return;
   }
 
-  const remainUnits = {};
-  alive.forEach((agent) => {
-    const unitTypeId = typeof agent.unitTypeId === 'string' ? agent.unitTypeId : '__fallback__';
-    remainUnits[unitTypeId] = (remainUnits[unitTypeId] || 0) + Math.max(0, agent.weight || 0);
-  });
   squad.remainUnits = Object.fromEntries(
     Object.entries(remainUnits).map(([unitTypeId, value]) => [unitTypeId, Math.max(0, Math.round(value))])
   );
+  const classCenters = {};
+  classCenters.infantry = classAcc.infantry.w > 0
+    ? { x: classAcc.infantry.x / classAcc.infantry.w, y: classAcc.infantry.y / classAcc.infantry.w, count: Math.round(classAcc.infantry.w) }
+    : { x: squad.centerX, y: squad.centerY, count: 0 };
+  classCenters.cavalry = classAcc.cavalry.w > 0
+    ? { x: classAcc.cavalry.x / classAcc.cavalry.w, y: classAcc.cavalry.y / classAcc.cavalry.w, count: Math.round(classAcc.cavalry.w) }
+    : { x: squad.centerX, y: squad.centerY, count: 0 };
+  classCenters.archer = classAcc.archer.w > 0
+    ? { x: classAcc.archer.x / classAcc.archer.w, y: classAcc.archer.y / classAcc.archer.w, count: Math.round(classAcc.archer.w) }
+    : { x: squad.centerX, y: squad.centerY, count: 0 };
+  classCenters.artillery = classAcc.artillery.w > 0
+    ? { x: classAcc.artillery.x / classAcc.artillery.w, y: classAcc.artillery.y / classAcc.artillery.w, count: Math.round(classAcc.artillery.w) }
+    : { x: squad.centerX, y: squad.centerY, count: 0 };
+  squad.classCenters = classCenters;
 };
 
 const trimOrGrowAgents = (squad, agents = [], crowd, dt) => {
@@ -1066,7 +1212,7 @@ const resolveAgentModeSpeedMul = (agent, squad, crowd) => {
 };
 
 const applyCavalryRushImpact = (sim, crowd, squad, agents = [], fromPoint, toPoint) => {
-  if (!squad || squad.classTag !== 'cavalry' || !squad.skillRush) return;
+  if (!squad || !squad.skillRush) return;
   const rush = squad.skillRush;
   if (!(rush.hitAgentIds instanceof Set)) {
     rush.hitAgentIds = new Set();
@@ -1151,19 +1297,81 @@ export const getCrowdAgentsForSquad = (crowd, squadId = '') => {
   return source.filter((agent) => agent && !agent.dead && (agent.weight || 0) > 0.001);
 };
 
+const ensureSkillCooldownMap = (squad) => {
+  if (!squad || typeof squad !== 'object') return {
+    infantry: 0,
+    cavalry: 0,
+    archer: 0,
+    artillery: 0
+  };
+  if (!squad.skillCooldowns || typeof squad.skillCooldowns !== 'object') {
+    const seedCooldown = Math.max(0, Number(squad.attackCooldown) || 0);
+    const seedKind = (squad.classTag === 'cavalry' || squad.classTag === 'archer' || squad.classTag === 'artillery')
+      ? squad.classTag
+      : 'infantry';
+    squad.skillCooldowns = {
+      infantry: seedKind === 'infantry' ? seedCooldown : 0,
+      cavalry: seedKind === 'cavalry' ? seedCooldown : 0,
+      archer: seedKind === 'archer' ? seedCooldown : 0,
+      artillery: seedKind === 'artillery' ? seedCooldown : 0
+    };
+    return squad.skillCooldowns;
+  }
+  if (!Number.isFinite(Number(squad.skillCooldowns.infantry))) squad.skillCooldowns.infantry = 0;
+  if (!Number.isFinite(Number(squad.skillCooldowns.cavalry))) squad.skillCooldowns.cavalry = 0;
+  if (!Number.isFinite(Number(squad.skillCooldowns.archer))) squad.skillCooldowns.archer = 0;
+  if (!Number.isFinite(Number(squad.skillCooldowns.artillery))) squad.skillCooldowns.artillery = 0;
+  return squad.skillCooldowns;
+};
+
+const updateAttackCooldownFromSkills = (squad) => {
+  const cooldowns = ensureSkillCooldownMap(squad);
+  const maxCooldown = Math.max(
+    0,
+    Number(cooldowns.infantry) || 0,
+    Number(cooldowns.cavalry) || 0,
+    Number(cooldowns.archer) || 0,
+    Number(cooldowns.artillery) || 0
+  );
+  squad.attackCooldown = maxCooldown;
+  return maxCooldown;
+};
+
 export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
   const squad = (sim?.squads || []).find((row) => row.id === squadId);
   if (!squad || squad.remain <= 0) return { ok: false, reason: '部队不可用' };
   if ((Number(squad.morale) || 0) <= 0) return { ok: false, reason: '士气归零，无法发动兵种攻击' };
-  if ((Number(squad.attackCooldown) || 0) > 0.01) return { ok: false, reason: '兵种攻击冷却中' };
   const agents = getCrowdAgentsForSquad(crowd, squad.id);
   if (agents.length <= 0) return { ok: false, reason: '无可用士兵' };
+  const inputKind = typeof targetInput?.kind === 'string' ? targetInput.kind.trim() : '';
+  let skillKind = inputKind;
+  if (skillKind !== 'infantry' && skillKind !== 'cavalry' && skillKind !== 'archer' && skillKind !== 'artillery') {
+    skillKind = typeof squad.classTag === 'string' ? squad.classTag : 'infantry';
+  }
+  if (skillKind !== 'infantry' && skillKind !== 'cavalry' && skillKind !== 'archer' && skillKind !== 'artillery') {
+    skillKind = 'infantry';
+  }
+  let classWeight = 0;
+  for (let i = 0; i < agents.length; i += 1) {
+    const agent = agents[i];
+    if (!agent || agent.dead || (Number(agent.weight) || 0) <= 0.001) continue;
+    if ((agent.typeCategory || 'infantry') === skillKind) {
+      classWeight += Math.max(0, Number(agent.weight) || 0);
+    }
+  }
+  if (classWeight <= 0.01) {
+    return { ok: false, reason: '该兵种当前无人可释放技能' };
+  }
+  const cooldownMap = ensureSkillCooldownMap(squad);
+  const classCooldownRemain = Math.max(0, Number(cooldownMap[skillKind]) || 0);
+  if (classCooldownRemain > 0.01) return { ok: false, reason: '兵种攻击冷却中' };
   const inputX = Number(targetInput?.x);
   const inputY = Number(targetInput?.y);
   const tx = Number.isFinite(inputX) ? inputX : (squad.x || 0);
   const ty = Number.isFinite(inputY) ? inputY : (squad.y || 0);
 
-  if (squad.classTag === 'infantry') {
+  if (skillKind === 'infantry') {
+    if (squad.guard) squad.guard.enabled = false;
     squad.effectBuff = {
       type: 'infantry',
       ttl: 7.5,
@@ -1171,13 +1379,15 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
       defMul: 1.3,
       speedMul: 0.78
     };
-    squad.waypoints = [{ x: tx, y: ty }];
-    squad.attackCooldown = Math.max(Number(squad.attackCooldown) || 0, 2.1);
+    squad.waypoints = [];
+    cooldownMap.infantry = Math.max(Number(cooldownMap.infantry) || 0, Number(SKILL_COOLDOWN_BY_CLASS.infantry) || 2.1);
+    updateAttackCooldownFromSkills(squad);
     squad.action = '兵种攻击';
     return { ok: true };
   }
 
-  if (squad.classTag === 'cavalry') {
+  if (skillKind === 'cavalry') {
+    if (squad.guard) squad.guard.enabled = false;
     const dir = normalizeVec(tx - (Number(squad.x) || 0), ty - (Number(squad.y) || 0));
     const dist = clamp(dir.len, CAVALRY_RUSH_MIN_DISTANCE, CAVALRY_RUSH_MAX_DISTANCE);
     squad.skillRush = {
@@ -1192,12 +1402,14 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
     squad.behavior = 'skill';
     squad.waypoints = [];
     squad.stamina = clamp((Number(squad.stamina) || 0) - 32, 0, STAMINA_MAX);
-    squad.attackCooldown = Math.max(Number(squad.attackCooldown) || 0, 2.8);
+    cooldownMap.cavalry = Math.max(Number(cooldownMap.cavalry) || 0, Number(SKILL_COOLDOWN_BY_CLASS.cavalry) || 2.8);
+    updateAttackCooldownFromSkills(squad);
     squad.action = '兵种攻击';
     return { ok: true };
   }
 
-  const rangedClass = squad.classTag === 'artillery' ? 'artillery' : 'archer';
+  const rangedClass = skillKind === 'artillery' ? 'artillery' : 'archer';
+  if (squad.guard) squad.guard.enabled = false;
   const cfg = GROUND_SKILL_CONFIG[rangedClass] || GROUND_SKILL_CONFIG.archer;
   const targetSpec = normalizeGroundSkillTargetSpec(
     sim,
@@ -1220,7 +1432,11 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
   activeSkill.wavesFired = 1;
   activeSkill.nextWaveSec = Math.max(0.05, Number(cfg?.intervalSec) || 0.2);
   squad.activeSkill = activeSkill;
-  squad.attackCooldown = Math.max(Number(squad.attackCooldown) || 0, Number(cfg?.cooldownSec) || 6.5);
+  cooldownMap[rangedClass] = Math.max(
+    Number(cooldownMap[rangedClass]) || 0,
+    Number(cfg?.cooldownSec) || Number(SKILL_COOLDOWN_BY_CLASS[rangedClass]) || 6.5
+  );
+  updateAttackCooldownFromSkills(squad);
   squad.action = '兵种攻击';
   return { ok: true };
 };
@@ -1258,11 +1474,48 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       squad.effectBuff.ttl = Math.max(0, Number(squad.effectBuff.ttl) - safeDt);
       if (squad.effectBuff.ttl <= 0) squad.effectBuff = null;
     }
+    squad._buffFxCd = Math.max(0, Number(squad._buffFxCd) || 0);
+    if (squad.effectBuff) {
+      squad._buffFxCd = Math.max(0, squad._buffFxCd - safeDt);
+      if (squad._buffFxCd <= 0) {
+        acquireHitEffect(crowd.effectsPool, {
+          type: 'buff_aura',
+          x: Number(squad.x) || 0,
+          y: Number(squad.y) || 0,
+          z: 1.1,
+          radius: Math.max(4, Number(squad.radius) * 0.55),
+          ttl: 0.24,
+          team: squad.team
+        });
+        squad._buffFxCd = 0.24;
+      }
+    }
+    squad._rushDustCd = Math.max(0, Number(squad._rushDustCd) || 0);
+    if ((Number(squad?.skillRush?.ttl) || 0) > 0) {
+      squad._rushDustCd = Math.max(0, squad._rushDustCd - safeDt);
+      if (squad._rushDustCd <= 0) {
+        acquireHitEffect(crowd.effectsPool, {
+          type: 'charge_dust',
+          x: Number(squad.x) || 0,
+          y: Number(squad.y) || 0,
+          z: 0.7,
+          radius: Math.max(5, Number(squad.radius) * 0.48),
+          ttl: 0.22,
+          team: squad.team
+        });
+        squad._rushDustCd = 0.09;
+      }
+    }
     if ((Number(squad.fatigueTimer) || 0) > 0) {
       squad.fatigueTimer = Math.max(0, Number(squad.fatigueTimer) - safeDt);
     }
     updateActiveGroundSkill(sim, crowd, squad, safeDt);
-    squad.attackCooldown = Math.max(0, (Number(squad.attackCooldown) || 0) - safeDt);
+    const skillCooldowns = ensureSkillCooldownMap(squad);
+    skillCooldowns.infantry = Math.max(0, (Number(skillCooldowns.infantry) || 0) - safeDt);
+    skillCooldowns.cavalry = Math.max(0, (Number(skillCooldowns.cavalry) || 0) - safeDt);
+    skillCooldowns.archer = Math.max(0, (Number(skillCooldowns.archer) || 0) - safeDt);
+    skillCooldowns.artillery = Math.max(0, (Number(skillCooldowns.artillery) || 0) - safeDt);
+    updateAttackCooldownFromSkills(squad);
     squad.underAttackTimer = Math.max(0, (Number(squad.underAttackTimer) || 0) - safeDt);
     updateSquadBehaviorPlan(squad, sim, Number(sim?.timeElapsed) || 0);
     squad._aiSkillCd = Math.max(0, Number(squad._aiSkillCd) || 0);
@@ -1331,9 +1584,10 @@ export const updateCrowdSim = (crowd, sim, dt) => {
     const speedPolicy = typeof squad.speedPolicy === 'string' ? squad.speedPolicy : SPEED_POLICY_MARCH;
     const retreatMode = speedPolicy === SPEED_POLICY_RETREAT;
     const reformMode = speedPolicy === SPEED_POLICY_REFORM;
-    const slotGain = retreatMode ? 0.44 : (reformMode ? 1.36 : 1);
-    const sepGain = retreatMode ? 0.52 : (reformMode ? 0.86 : 1);
-    const avoidGain = retreatMode ? 0.68 : 0.95;
+    const looseMarch = squad?.marchMode === 'loose' && !retreatMode;
+    const slotGain = retreatMode ? 0.44 : (reformMode ? 1.36 : (looseMarch ? 0.82 : 1));
+    const sepGain = retreatMode ? 0.52 : (reformMode ? 0.86 : (looseMarch ? 0.72 : 1));
+    const avoidGain = retreatMode ? 0.68 : (looseMarch ? 0.78 : 0.95);
     const accelCap = retreatMode ? AGENT_RETREAT_ACCEL : (reformMode ? AGENT_REFORM_ACCEL : AGENT_MAX_ACCEL);
     const flagBack = spacing * FLAG_BACK_OFFSET;
     const sorted = [...agents].sort((a, b) => a.slotOrder - b.slotOrder);
@@ -1361,7 +1615,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const desiredX = (Number(squad.x) || 0) + (side.x * slot.side) - (forward.x * slot.back);
       const desiredY = (Number(squad.y) || 0) + (side.y * slot.side) - (forward.y * slot.back);
       const toDesired = normalizeVec(desiredX - (agent.x || 0), desiredY - (agent.y || 0));
-      const stationaryHold = !leaderMoving && (squad.behavior === 'idle' || squad.behavior === 'move');
+      const stationaryHold = !leaderMoving && (squad.behavior === 'idle' || squad.behavior === 'move' || squad.behavior === 'standby');
       const moraleMul = squad.morale <= 0 ? (2 / 3) : (squad.morale < 20 ? 0.82 : 1);
       const fatigueMul = squad.fatigueTimer > 0 ? 0.72 : 1;
       const weightSlow = bottlenecked
@@ -1449,7 +1703,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       }
     });
 
-    if (squad.classTag === 'cavalry' && squad.skillRush) {
+    if (squad.skillRush) {
       applyCavalryRushImpact(sim, crowd, squad, sorted, rushFromPoint, {
         x: Number(squad.x) || 0,
         y: Number(squad.y) || 0
