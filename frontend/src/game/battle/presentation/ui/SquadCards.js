@@ -13,6 +13,12 @@ const speedModeBadge = (row = {}) => {
   if (row?.speedModeAuthority !== 'USER') return 'A';
   return row?.speedMode === SPEED_MODE_C ? 'C' : 'B';
 };
+const cardSizeClassByCount = (count = 0) => {
+  const safeCount = Math.max(0, Math.floor(Number(count) || 0));
+  if (safeCount > 12) return 'is-compact';
+  if (safeCount > 8) return 'is-medium';
+  return 'is-large';
+};
 
 const SquadCards = ({
   squads = [],
@@ -73,8 +79,18 @@ const SquadCards = ({
 
   return (
     <>
-      <div className="pve2-card-strip left">{attacker.map(renderCard)}</div>
-      <div className="pve2-card-strip right">{defender.map(renderCard)}</div>
+      <div
+        className={`pve2-card-strip left ${cardSizeClassByCount(attacker.length)}`}
+        onWheelCapture={(event) => event.stopPropagation()}
+      >
+        {attacker.map(renderCard)}
+      </div>
+      <div
+        className={`pve2-card-strip right ${cardSizeClassByCount(defender.length)}`}
+        onWheelCapture={(event) => event.stopPropagation()}
+      >
+        {defender.map(renderCard)}
+      </div>
     </>
   );
 };

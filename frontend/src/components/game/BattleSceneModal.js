@@ -478,7 +478,6 @@ const BattleSceneModal = ({
   const [deployEditorDragUnitId, setDeployEditorDragUnitId] = useState('');
   const [deployEditorTeam, setDeployEditorTeam] = useState(TEAM_ATTACKER);
   const [selectedPaletteItemId, setSelectedPaletteItemId] = useState('');
-  const [selectedBuildingId, setSelectedBuildingId] = useState('');
   const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState('');
   const [confirmDeletePos, setConfirmDeletePos] = useState({ x: 0, y: 0 });
   const [quickDeployOpen, setQuickDeployOpen] = useState(false);
@@ -582,7 +581,6 @@ const BattleSceneModal = ({
     setDeployEditorDragUnitId('');
     setDeployEditorTeam(TEAM_ATTACKER);
     setSelectedPaletteItemId('');
-    setSelectedBuildingId('');
     setQuickDeployOpen(false);
     setQuickDeployTab('standard');
     setQuickDeployApplying(false);
@@ -1019,7 +1017,6 @@ const BattleSceneModal = ({
     setDeployActionAnchorMode('');
     setDeployEditorOpen(false);
     setSelectedPaletteItemId('');
-    setSelectedBuildingId('');
     setQuickDeployOpen(false);
     setQuickDeployApplying(false);
     setQuickDeployError('');
@@ -1109,7 +1106,6 @@ const BattleSceneModal = ({
           setDeployNotice(placeResult?.reason || '物品放置失败');
           return;
         }
-        setSelectedBuildingId(placeResult.objectId || '');
         setDeployNotice('物品已放置，可继续布置');
         setMinimapSnapshot(runtime.getMinimapSnapshot());
         return;
@@ -1120,13 +1116,8 @@ const BattleSceneModal = ({
         runtime.setFocusSquad(picked.id);
         setSelectedSquadId(picked.id);
         setDeployActionAnchorMode('world');
-        setSelectedBuildingId('');
         setCards(runtime.getCardRows());
         return;
-      }
-      if (isTrainingMode) {
-        const pickedBuilding = runtime.pickBuilding(world);
-        setSelectedBuildingId(pickedBuilding?.id || '');
       }
       setDeployActionAnchorMode('');
       setCards(runtime.getCardRows());
@@ -1200,7 +1191,7 @@ const BattleSceneModal = ({
     if (
       target
       && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-minimap-wrap, .pve2-action-pad, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .number-pad-dialog-overlay, .number-pad-dialog')
+      && target.closest('.pve2-world-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-action-pad, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .number-pad-dialog-overlay, .number-pad-dialog')
     ) {
       return;
     }
@@ -1821,15 +1812,6 @@ const BattleSceneModal = ({
     setQuickDeployError('');
   }, []);
 
-  const handleOpenQuickDeploy = useCallback(() => {
-    const runtime = runtimeRef.current;
-    if (!runtime || runtime.getPhase() !== 'deploy' || !isTrainingMode) return;
-    setQuickDeployTab('standard');
-    setQuickDeployError('');
-    setQuickDeployApplying(false);
-    setQuickDeployOpen(true);
-  }, [isTrainingMode]);
-
   const validateQuickDeployConfig = useCallback((config, runtime) => {
     const attackerTeamCount = parseQuickDeployNumber(config?.attackerTeamCount);
     const defenderTeamCount = parseQuickDeployNumber(config?.defenderTeamCount);
@@ -1956,7 +1938,6 @@ const BattleSceneModal = ({
       setConfirmDeleteGroupId('');
       setConfirmDeletePos({ x: 0, y: 0 });
       setSelectedPaletteItemId('');
-      setSelectedBuildingId('');
 
       const existing = runtime.getDeployGroups();
       const attackerIds = (existing?.attacker || []).map((group) => String(group?.id || '')).filter(Boolean);
@@ -2158,7 +2139,6 @@ const BattleSceneModal = ({
   );
   const deployEditorTotal = normalizeDraftUnits(deployEditorDraft.units).reduce((sum, entry) => sum + entry.count, 0);
   const selectedDeployGroup = phase === 'deploy' ? runtimeRef.current?.getDeployGroupById?.(selectedSquadId) : null;
-  const itemCatalogRows = runtimeRef.current?.getItemCatalog?.() || [];
   const worldActionGroupId = selectedDeployGroup?.id || '';
   const worldActionPos = (
     phase === 'deploy'
@@ -2300,129 +2280,106 @@ const BattleSceneModal = ({
               onDeployDelete={handleDeployDelete}
             />
 
-            <div className="pve2-action-pad">
-              {phase === 'battle' ? (
-                <>
-                  <div className="pve2-order-mode-group">
-                    {ORDER_MODE_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={`btn btn-secondary btn-small ${commandMode === option.value ? 'is-active' : ''}`}
-                        onClick={() => setCommandMode(option.value)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    onClick={handleCycleSpeedMode}
-                  >
-                    {`速度模式：${speedModeLabel(selectedSpeedModeUi)}`}
-                  </button>
-                  <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('idle')}>待命</button>
-                  <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('auto')}>自动</button>
-                  <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('defend')}>防御</button>
-                  <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('retreat')}>撤退</button>
-                  <button type="button" className={`btn ${aimState.active ? 'btn-warning' : 'btn-primary'}`} onClick={handleToggleSkillAim}>技能瞄准</button>
-                  <span className="pve2-hint">{`当前命令：${orderTypeLabel(selectedOrderType)}`}</span>
-                </>
-              ) : (
-                <>
-                  {isTrainingMode ? (
-                    <>
-                      <button type="button" className="btn btn-primary" onClick={() => handleOpenDeployCreator(TEAM_ATTACKER)}>新建我方部队</button>
-                      <button type="button" className="btn btn-danger" onClick={() => handleOpenDeployCreator(TEAM_DEFENDER)}>新建敌方部队</button>
-                      <button type="button" className="btn btn-secondary" onClick={handleOpenQuickDeploy}>一键布置</button>
-                      {itemCatalogRows.length > 0 ? (
-                        <select
-                          className="pve2-item-selector"
-                          value={selectedPaletteItemId}
-                          onChange={(event) => setSelectedPaletteItemId(event.target.value || '')}
-                        >
-                          <option value="">不放置物品</option>
-                          {itemCatalogRows.map((item) => (
-                            <option key={item.itemId} value={item.itemId}>{item.name || item.itemId}</option>
-                          ))}
-                        </select>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="btn btn-warning"
-                        disabled={!selectedBuildingId}
-                        onClick={() => {
-                          const runtime = runtimeRef.current;
-                          if (!runtime || !selectedBuildingId) return;
-                          runtime.removeBuilding(selectedBuildingId);
-                          setSelectedBuildingId('');
-                          setMinimapSnapshot(runtime.getMinimapSnapshot());
-                          setDeployNotice('物品已移除');
-                        }}
-                      >
-                        移除选中物品
-                      </button>
-                    </>
-                  ) : (
+            {phase === 'battle' ? (
+              <div className="pve2-action-pad">
+                <div className="pve2-order-mode-group">
+                  {ORDER_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`btn btn-secondary btn-small ${commandMode === option.value ? 'is-active' : ''}`}
+                      onClick={() => setCommandMode(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={handleCycleSpeedMode}
+                >
+                  {`速度模式：${speedModeLabel(selectedSpeedModeUi)}`}
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('idle')}>待命</button>
+                <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('auto')}>自动</button>
+                <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('defend')}>防御</button>
+                <button type="button" className="btn btn-secondary" onClick={() => handleBehavior('retreat')}>撤退</button>
+                <button type="button" className={`btn ${aimState.active ? 'btn-warning' : 'btn-primary'}`} onClick={handleToggleSkillAim}>技能瞄准</button>
+                <span className="pve2-hint">{`当前命令：${orderTypeLabel(selectedOrderType)}`}</span>
+              </div>
+            ) : (
+              <div className="pve2-deploy-sidebar">
+                <section className="pve2-deploy-sidebar-section">
+                  <div className="pve2-deploy-sidebar-title">新建部队</div>
+                  <div className="pve2-deploy-sidebar-body">
                     <button type="button" className="btn btn-primary" onClick={() => handleOpenDeployCreator(TEAM_ATTACKER)}>新建部队</button>
-                  )}
-                  <span className="pve2-hint">
-                    {deployDraggingGroupId
-                      ? `部队已吸附鼠标：仅可放置在${deployDraggingTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`
-                      : (isTrainingMode
-                        ? '部署阶段：可新建我方/敌方部队；选择物品后点击地图即可无限放置'
-                        : '部署阶段：左蓝(我方) / 中间交战区禁布置 / 右红(敌方)')}
-                  </span>
-                  {armyTemplatesLoading ? (
-                    <span className="pve2-hint">部队模板加载中...</span>
-                  ) : null}
-                  {!armyTemplatesLoading && armyTemplatesError ? (
-                    <span className="pve2-hint pve2-template-error">{armyTemplatesError}</span>
-                  ) : null}
-                  {!armyTemplatesLoading && !armyTemplatesError && armyTemplates.length <= 0 ? (
-                    <span className="pve2-hint">暂无部队模板，可在兵营里创建后回来使用</span>
-                  ) : null}
-                  {!armyTemplatesLoading && armyTemplates.length > 0 ? (
-                    <div className="pve2-template-list">
-                      {armyTemplates.map((template, index) => {
-                        const templateId = typeof template?.templateId === 'string' ? template.templateId : `idx_${index}`;
-                        const templateUnits = normalizeTemplateUnits(template?.units || []);
-                        const templateSummary = templateUnits
-                          .map((entry) => `${entry.unitName || entry.unitTypeId}x${entry.count}`)
-                          .join(' / ');
-                        const templateTotal = templateUnits.reduce((sum, item) => sum + item.count, 0);
+                  </div>
+                </section>
+
+                <section className="pve2-deploy-sidebar-section">
+                  <div className="pve2-deploy-sidebar-title">部队模板</div>
+                  <div className="pve2-deploy-sidebar-body">
+                    {armyTemplatesLoading ? (
+                      <span className="pve2-hint">部队模板加载中...</span>
+                    ) : null}
+                    {!armyTemplatesLoading && armyTemplatesError ? (
+                      <span className="pve2-hint pve2-template-error">{armyTemplatesError}</span>
+                    ) : null}
+                    {!armyTemplatesLoading && !armyTemplatesError && armyTemplates.length <= 0 ? (
+                      <span className="pve2-hint">暂无部队模板，可在兵营里创建后回来使用</span>
+                    ) : null}
+                    {!armyTemplatesLoading && armyTemplates.length > 0 ? (
+                      <div className="pve2-template-list">
+                        {armyTemplates.map((template, index) => {
+                          const templateId = typeof template?.templateId === 'string' ? template.templateId : `idx_${index}`;
+                          const templateUnits = normalizeTemplateUnits(template?.units || []);
+                          const templateSummary = templateUnits
+                            .map((entry) => `${entry.unitName || entry.unitTypeId}x${entry.count}`)
+                            .join(' / ');
+                          const templateTotal = templateUnits.reduce((sum, item) => sum + item.count, 0);
                         return (
-                          <div key={`tpl-${templateId}`} className="pve2-template-row">
-                            <div className="pve2-template-meta">
-                              <strong>{template?.name || '未命名模板'}</strong>
-                              <span>{`模板兵力 ${Math.max(0, Math.floor(Number(template?.totalCount) || templateTotal))}`}</span>
-                              <em>{templateSummary || '无兵种配置'}</em>
-                            </div>
-                            <div className="pve2-template-actions">
+                            <div key={`tpl-${templateId}`} className="pve2-template-row">
+                              <button
+                                type="button"
+                                className="pve2-template-row-main"
+                                onClick={() => {
+                                  if (isTrainingMode) {
+                                    handleCreateTrainingGroupByTemplate(template, TEAM_ATTACKER);
+                                    return;
+                                  }
+                                  handleOpenTemplateFillPreview(template, TEAM_ATTACKER);
+                                }}
+                              >
+                                <span className="pve2-template-meta">
+                                  <strong>{template?.name || '未命名模板'}</strong>
+                                  <span>{`模板兵力 ${Math.max(0, Math.floor(Number(template?.totalCount) || templateTotal))}`}</span>
+                                  <em>{templateSummary || '无兵种配置'}</em>
+                                </span>
+                                {!isTrainingMode ? (
+                                  <span className="pve2-template-direct">填充</span>
+                                ) : null}
+                              </button>
                               {isTrainingMode ? (
-                                <>
-                                  <button type="button" className="btn btn-primary btn-small" onClick={() => handleCreateTrainingGroupByTemplate(template, TEAM_ATTACKER)}>
-                                    创建我方
+                                <span className="pve2-template-actions">
+                                  <button
+                                    type="button"
+                                    className="btn btn-danger btn-small"
+                                    onClick={() => handleCreateTrainingGroupByTemplate(template, TEAM_DEFENDER)}
+                                  >
+                                    敌方
                                   </button>
-                                  <button type="button" className="btn btn-danger btn-small" onClick={() => handleCreateTrainingGroupByTemplate(template, TEAM_DEFENDER)}>
-                                    创建敌方
-                                  </button>
-                                </>
-                              ) : (
-                                <button type="button" className="btn btn-primary btn-small" onClick={() => handleOpenTemplateFillPreview(template, TEAM_ATTACKER)}>
-                                  选择并填充
-                                </button>
-                              )}
+                                </span>
+                              ) : null}
                             </div>
-                          </div>
                         );
                       })}
                     </div>
                   ) : null}
-                </>
-              )}
-            </div>
+                  </div>
+                </section>
+              </div>
+            )}
 
             {phase === 'deploy' && !isTrainingMode && templateFillPreview.open ? (
               <div
