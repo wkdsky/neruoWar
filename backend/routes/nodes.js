@@ -24,6 +24,7 @@ const {
   findUserActiveParticipants
 } = require('../services/siegeParticipantStore');
 const { fetchArmyUnitTypes } = require('../services/armyUnitTypeService');
+const { fetchUnitTypesWithComponents } = require('../services/unitRegistryService');
 const {
   isNotificationCollectionReadEnabled,
   upsertNotificationsToCollection,
@@ -67,6 +68,11 @@ const {
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
 const { encodeTimeCursor, decodeTimeCursor, buildTimeCursorQuery } = require('../utils/cursorPagination');
+
+const fetchEnabledUnitTypes = async () => {
+  const registry = await fetchUnitTypesWithComponents({ enabledOnly: true });
+  return Array.isArray(registry?.unitTypes) ? registry.unitTypes : [];
+};
 
 const getIdString = (value) => {
   if (!value) return '';
@@ -3140,7 +3146,7 @@ const resolveSiegePveBattleContext = async ({ nodeId = '', requestUserId = '', g
   const [node, user, unitTypes] = await Promise.all([
     Node.findById(safeNodeId).select('name status domainMaster domainAdmins relatedParentDomains relatedChildDomains'),
     User.findById(safeUserId).select('username role allianceId armyRoster intelDomainSnapshots'),
-    fetchArmyUnitTypes()
+    fetchEnabledUnitTypes()
   ]);
   if (!node || node.status !== 'approved') {
     throw createRouteExposeError(404, '知识域不存在或不可操作');

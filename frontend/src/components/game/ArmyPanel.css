@@ -77,6 +77,12 @@
   gap: 8px;
 }
 
+.army-unit-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .army-unit-head h3 {
   margin: 0;
   font-size: 1.05rem;
@@ -312,6 +318,224 @@
   flex-shrink: 0;
 }
 
+.army-unit-detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 36070;
+  background: rgba(2, 6, 23, 0.72);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.army-unit-detail-modal {
+  width: min(980px, calc(100vw - 24px));
+  max-height: min(90vh, 900px);
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: rgba(8, 14, 24, 0.97);
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.army-unit-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.army-unit-detail-head h4 {
+  margin: 0;
+  font-size: 16px;
+  color: #f8fafc;
+}
+
+.army-unit-detail-head span {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.army-unit-detail-intro {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.56);
+  padding: 8px 10px;
+}
+
+.army-unit-detail-intro strong {
+  font-size: 12px;
+  color: #93c5fd;
+}
+
+.army-unit-detail-intro p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #dbeafe;
+}
+
+.army-unit-detail-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.army-unit-detail-stats > div {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.52);
+  padding: 6px 8px;
+  display: grid;
+  gap: 3px;
+}
+
+.army-unit-detail-stats span {
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+.army-unit-detail-stats strong {
+  font-size: 14px;
+  color: #f8fafc;
+}
+
+.army-unit-detail-visuals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.army-unit-visual-card {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.52);
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.army-unit-visual-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.army-unit-visual-card strong {
+  font-size: 12px;
+  color: #e2e8f0;
+}
+
+.army-unit-visual-card span {
+  font-size: 11px;
+  color: #93c5fd;
+}
+
+.army-unit-visual-stage {
+  min-height: 220px;
+  border-radius: 8px;
+  border: 1px dashed rgba(148, 163, 184, 0.4);
+  background:
+    radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.18), transparent 42%),
+    linear-gradient(160deg, rgba(15, 23, 42, 0.96), rgba(30, 41, 59, 0.82));
+  display: grid;
+  place-items: center;
+  perspective: 700px;
+  cursor: grab;
+  user-select: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.army-unit-visual-stage.is-battle {
+  min-height: 220px;
+  background:
+    radial-gradient(circle at 80% 30%, rgba(16, 185, 129, 0.14), transparent 40%),
+    linear-gradient(160deg, rgba(2, 6, 23, 0.96), rgba(15, 23, 42, 0.82));
+}
+
+.army-unit-visual-stage:active,
+.army-unit-visual-stage.is-dragging {
+  cursor: grabbing;
+}
+
+.army-unit-turntable {
+  position: relative;
+  width: min(72%, 280px);
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  transform-style: preserve-3d;
+}
+
+.army-unit-turntable-shadow {
+  position: absolute;
+  left: 50%;
+  top: 64%;
+  width: 84%;
+  height: 18%;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: radial-gradient(ellipse at center, rgba(2, 6, 23, 0.55), rgba(2, 6, 23, 0));
+}
+
+.army-unit-turntable-disc {
+  position: absolute;
+  left: 50%;
+  top: 56%;
+  width: 82%;
+  aspect-ratio: 1 / 1;
+  transform: translate(-50%, -50%) rotateX(66deg);
+  border-radius: 50%;
+  border: 1px solid rgba(125, 211, 252, 0.62);
+  background:
+    radial-gradient(circle at 50% 45%, rgba(148, 163, 184, 0.34), rgba(30, 41, 59, 0.86) 64%),
+    repeating-radial-gradient(circle at 50% 50%, rgba(148, 163, 184, 0.16) 0 6px, rgba(15, 23, 42, 0) 6px 12px);
+  box-shadow:
+    inset 0 0 0 1px rgba(226, 232, 240, 0.08),
+    0 8px 20px rgba(2, 6, 23, 0.45);
+}
+
+.army-unit-turntable.is-battle .army-unit-turntable-disc {
+  border-color: rgba(134, 239, 172, 0.58);
+  background:
+    radial-gradient(circle at 50% 45%, rgba(34, 197, 94, 0.24), rgba(22, 101, 52, 0.84) 64%),
+    repeating-radial-gradient(circle at 50% 50%, rgba(187, 247, 208, 0.14) 0 6px, rgba(15, 23, 42, 0) 6px 12px);
+}
+
+.army-unit-turntable.is-battle .army-unit-turntable-shadow {
+  background: radial-gradient(ellipse at center, rgba(20, 83, 45, 0.45), rgba(2, 6, 23, 0));
+}
+
+.army-unit-visual-dummy {
+  width: 104px;
+  height: 104px;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.58);
+  background: linear-gradient(140deg, rgba(59, 130, 246, 0.36), rgba(2, 132, 199, 0.58));
+  color: #e0f2fe;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  font-weight: 700;
+  transform-style: preserve-3d;
+  transition: box-shadow 0.16s ease;
+  box-shadow: 0 10px 20px rgba(2, 6, 23, 0.4);
+}
+
+.army-unit-visual-dummy.is-battle {
+  width: 86px;
+  height: 86px;
+  border-radius: 999px;
+  border-color: rgba(134, 239, 172, 0.55);
+  background: linear-gradient(140deg, rgba(22, 163, 74, 0.36), rgba(22, 101, 52, 0.58));
+  color: #dcfce7;
+  font-size: 14px;
+}
+
 .army-template-editor-overlay {
   position: fixed;
   inset: 0;
@@ -450,6 +674,14 @@
   }
 
   .army-unit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .army-unit-detail-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .army-unit-detail-visuals {
     grid-template-columns: 1fr;
   }
 

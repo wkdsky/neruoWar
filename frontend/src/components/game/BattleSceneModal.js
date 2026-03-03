@@ -21,6 +21,7 @@ import AimOverlayCanvas from '../../game/battle/presentation/ui/AimOverlayCanvas
 import BattleDebugPanel from '../../game/battle/presentation/ui/BattleDebugPanel';
 import unitVisualConfig from '../../game/battle/presentation/assets/UnitVisualConfig.example.json';
 import createBattleProceduralTextures from '../../game/battle/presentation/assets/ProceduralTextures';
+import normalizeUnitTypes from '../../game/unit/normalizeUnitTypes';
 import NumberPadDialog from '../common/NumberPadDialog';
 import { API_BASE } from '../../runtimeConfig';
 const TEAM_ATTACKER = 'attacker';
@@ -536,7 +537,14 @@ const BattleSceneModal = ({
       runtimeRef.current = null;
       return;
     }
-    const runtime = new BattleRuntime(battleInitData, {
+    const normalizedInitData = {
+      ...battleInitData,
+      unitTypes: normalizeUnitTypes(
+        Array.isArray(battleInitData?.unitTypes) ? battleInitData.unitTypes : [],
+        { enabledOnly: true }
+      )
+    };
+    const runtime = new BattleRuntime(normalizedInitData, {
       repConfig: {
         maxAgentWeight: 50,
         damageExponent: 0.75,
@@ -732,8 +740,11 @@ const BattleSceneModal = ({
         renderersRef.current.effect.setTextureArray?.(proceduralTexRef.current.effectTexArray);
       }
       try {
-        renderersRef.current.impostor = new ImpostorRenderer(gl, { maxSlices: 32, textureSize: 64 });
-        renderersRef.current.impostor.setTextureArray?.(proceduralTexRef.current?.unitTexArray, 8);
+        renderersRef.current.impostor = new ImpostorRenderer(gl, { maxSlices: 64, textureSize: 64 });
+        renderersRef.current.impostor.setTextureArray?.(
+          proceduralTexRef.current?.unitTexArray,
+          proceduralTexRef.current?.unitTexLayerCount || 64
+        );
       } catch (impostorError) {
         console.error('ImpostorRenderer 初始化失败，降级为空渲染器:', impostorError);
         renderersRef.current.impostor = createNoopImpostorRenderer();

@@ -6,8 +6,10 @@ const dotenv = require('dotenv');
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const ArmyUnitType = require('../models/ArmyUnitType');
+const UnitComponent = require('../models/UnitComponent');
 const BattlefieldItem = require('../models/BattlefieldItem');
 const CityBuildingType = require('../models/CityBuildingType');
+const { buildUnitCatalog } = require('../seed/unitCatalogFactory');
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/strategy-game';
 const DATA_FILE_PATH = path.resolve(__dirname, '../seed/bootstrap_catalog_data.json');
@@ -16,6 +18,10 @@ const loadBootstrapData = () => {
   const raw = fs.readFileSync(DATA_FILE_PATH, 'utf8');
   const parsed = JSON.parse(raw);
   return {
+    unitComponents: Array.isArray(parsed?.unitComponents) ? parsed.unitComponents : [],
+    unitTypesPatch: parsed?.unitTypesPatch && typeof parsed.unitTypesPatch === 'object'
+      ? parsed.unitTypesPatch
+      : {},
     armyUnitTypes: Array.isArray(parsed?.armyUnitTypes) ? parsed.armyUnitTypes : [],
     battlefieldItems: Array.isArray(parsed?.battlefieldItems) ? parsed.battlefieldItems : [],
     cityBuildingTypes: Array.isArray(parsed?.cityBuildingTypes) ? parsed.cityBuildingTypes : []
@@ -28,6 +34,7 @@ const ensureCollections = async () => {
   const existingNames = new Set(existing.map((item) => item.name));
   const collectionNames = [
     ArmyUnitType.collection.collectionName,
+    UnitComponent.collection.collectionName,
     BattlefieldItem.collection.collectionName,
     CityBuildingType.collection.collectionName
   ];
@@ -49,10 +56,22 @@ const uniqByKey = (rows = [], keyName = '') => {
   return out;
 };
 
-const upsertByKey = async (Model, rows = [], keyName = '') => {
+const upsertByKey = async (Model, rows = [], keyName = '', { replace = false } = {}) => {
   const sourceRows = uniqByKey(rows, keyName);
   if (sourceRows.length === 0) {
+    if (replace) {
+      await Model.deleteMany({});
+    }
     return { matchedCount: 0, modifiedCount: 0, upsertedCount: 0 };
+  }
+  if (replace) {
+    await Model.deleteMany({});
+    await Model.insertMany(sourceRows, { ordered: false });
+    return {
+      matchedCount: 0,
+      modifiedCount: 0,
+      upsertedCount: sourceRows.length
+    };
   }
   const result = await Model.bulkWrite(
     sourceRows.map((row) => ({
@@ -74,18 +93,24 @@ const upsertByKey = async (Model, rows = [], keyName = '') => {
 
 const run = async () => {
   const data = loadBootstrapData();
+  const generatedCatalog = buildUnitCatalog({
+    unitComponents: data.unitComponents,
+    unitTypesPatch: data.unitTypesPatch
+  });
   await mongoose.connect(MONGODB_URI);
   await ensureCollections();
-  await Promise.all([ArmyUnitType.init(), BattlefieldItem.init(), CityBuildingType.init()]);
+  await Promise.all([ArmyUnitType.init(), UnitComponent.init(), BattlefieldItem.init(), CityBuildingType.init()]);
 
-  const [armyResult, itemResult, buildingResult] = await Promise.all([
-    upsertByKey(ArmyUnitType, data.armyUnitTypes, 'unitTypeId'),
+  const [armyResult, componentResult, itemResult, buildingResult] = await Promise.all([
+    upsertByKey(ArmyUnitType, generatedCatalog.unitTypes, 'unitTypeId', { replace: true }),
+    upsertByKey(UnitComponent, generatedCatalog.unitComponents, 'componentId', { replace: true }),
     upsertByKey(BattlefieldItem, data.battlefieldItems, 'itemId'),
     upsertByKey(CityBuildingType, data.cityBuildingTypes, 'buildingTypeId')
   ]);
 
-  const [armyCount, itemCount, buildingCount] = await Promise.all([
+  const [armyCount, componentCount, itemCount, buildingCount] = await Promise.all([
     ArmyUnitType.countDocuments(),
+    UnitComponent.countDocuments(),
     BattlefieldItem.countDocuments(),
     CityBuildingType.countDocuments()
   ]);
@@ -95,11 +120,13 @@ const run = async () => {
     dataFile: DATA_FILE_PATH,
     upsert: {
       armyUnitTypes: armyResult,
+      unitComponents: componentResult,
       battlefieldItems: itemResult,
       cityBuildingTypes: buildingResult
     },
     counts: {
       armyUnitTypes: armyCount,
+      unitComponents: componentCount,
       battlefieldItems: itemCount,
       cityBuildingTypes: buildingCount
     }

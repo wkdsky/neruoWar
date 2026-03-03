@@ -2,13 +2,18 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
-const { fetchArmyUnitTypes } = require('../services/armyUnitTypeService');
+const { fetchUnitTypesWithComponents } = require('../services/unitRegistryService');
 const { fetchBattlefieldItems } = require('../services/placeableCatalogService');
 
 const getUnitTypeId = (unit) => {
   const id = typeof unit?.id === 'string' ? unit.id.trim() : '';
   if (id) return id;
   return typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : '';
+};
+
+const fetchEnabledUnitTypes = async () => {
+  const registry = await fetchUnitTypesWithComponents({ enabledOnly: true });
+  return Array.isArray(registry?.unitTypes) ? registry.unitTypes : [];
 };
 
 const normalizeRoster = (rawRoster, unitTypes) => {
@@ -316,7 +321,7 @@ const executeRecruitCheckout = async ({ userId, recruitItems }) => {
 
 router.get('/unit-types', async (req, res) => {
   try {
-    const unitTypes = await fetchArmyUnitTypes();
+    const unitTypes = await fetchEnabledUnitTypes();
     return res.json({ unitTypes });
   } catch (error) {
     console.error('获取兵种列表失败:', error);
@@ -327,7 +332,7 @@ router.get('/unit-types', async (req, res) => {
 router.get('/training/init', authenticateToken, async (req, res) => {
   try {
     const [unitTypes, itemCatalog, user] = await Promise.all([
-      fetchArmyUnitTypes(),
+      fetchEnabledUnitTypes(),
       fetchBattlefieldItems({ enabledOnly: true }),
       User.findById(req.user.userId).select('username')
     ]);
@@ -397,7 +402,7 @@ router.get('/training/init', authenticateToken, async (req, res) => {
 router.get('/me', authenticateToken, async (req, res) => {
   try {
     const [unitTypes, user] = await Promise.all([
-      fetchArmyUnitTypes(),
+      fetchEnabledUnitTypes(),
       User.findById(req.user.userId).select('knowledgeBalance armyRoster')
     ]);
 
@@ -415,7 +420,7 @@ router.get('/me', authenticateToken, async (req, res) => {
 router.get('/templates', authenticateToken, async (req, res) => {
   try {
     const [unitTypes, user] = await Promise.all([
-      fetchArmyUnitTypes(),
+      fetchEnabledUnitTypes(),
       User.findById(req.user.userId).select('armyTemplates')
     ]);
     if (!user) {
@@ -435,7 +440,7 @@ router.get('/templates', authenticateToken, async (req, res) => {
 router.post('/templates', authenticateToken, async (req, res) => {
   try {
     const [unitTypes, user] = await Promise.all([
-      fetchArmyUnitTypes(),
+      fetchEnabledUnitTypes(),
       User.findById(req.user.userId).select('armyTemplates')
     ]);
     if (!user) {
@@ -483,7 +488,7 @@ router.put('/templates/:templateId', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '模板ID不能为空' });
     }
     const [unitTypes, user] = await Promise.all([
-      fetchArmyUnitTypes(),
+      fetchEnabledUnitTypes(),
       User.findById(req.user.userId).select('armyTemplates')
     ]);
     if (!user) {
@@ -548,7 +553,7 @@ router.delete('/templates/:templateId', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '模板ID不能为空' });
     }
     const [unitTypes, user] = await Promise.all([
-      fetchArmyUnitTypes(),
+      fetchEnabledUnitTypes(),
       User.findById(req.user.userId).select('armyTemplates')
     ]);
     if (!user) {
@@ -586,7 +591,7 @@ router.post('/recruit', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '数量必须为正整数' });
     }
 
-    const unitTypes = await fetchArmyUnitTypes();
+    const unitTypes = await fetchEnabledUnitTypes();
     const unitTypeMap = buildUnitTypeMap(unitTypes);
     const unitType = unitTypeMap[unitTypeId];
 
@@ -621,7 +626,7 @@ router.post('/recruit', authenticateToken, async (req, res) => {
 
 router.post('/recruit/checkout', authenticateToken, async (req, res) => {
   try {
-    const unitTypes = await fetchArmyUnitTypes();
+    const unitTypes = await fetchEnabledUnitTypes();
     const unitTypeMap = buildUnitTypeMap(unitTypes);
     const normalized = normalizeRecruitItems(req.body?.items, unitTypeMap);
 

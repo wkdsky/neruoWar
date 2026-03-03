@@ -5,14 +5,15 @@ import {
   updateDynamicBuffer
 } from './WebGL2Context';
 
-export const UNIT_INSTANCE_STRIDE = 12;
+export const UNIT_INSTANCE_STRIDE = 16;
 
 const VS = `#version 300 es
 layout(location=0) in vec2 aQuadPos;
 layout(location=1) in vec2 aUv;
 layout(location=2) in vec4 iData0; // x y z size
 layout(location=3) in vec4 iData1; // yaw team hp body
-layout(location=4) in vec4 iData2; // gear vehicle selected flag
+layout(location=4) in vec4 iData2; // gear vehicle silhouette tint
+layout(location=5) in vec4 iData3; // selected flag reserved reserved
 
 uniform mat4 uViewProj;
 uniform vec3 uCameraRight;
@@ -24,6 +25,7 @@ out float vHp;
 out float vSlice;
 out float vSelected;
 out float vFlag;
+out float vTint;
 
 void main() {
   vec3 base = vec3(iData0.x, iData0.y, iData0.z);
@@ -38,14 +40,17 @@ void main() {
   vUv = aUv;
   vTeam = iData1.y;
   vHp = iData1.z;
-  vSelected = iData2.z;
-  vFlag = iData2.w;
+  vSelected = iData3.x;
+  vFlag = iData3.y;
+  vTint = iData2.w;
   if (uLayer < 0.5) {
     vSlice = iData1.w;
   } else if (uLayer < 1.5) {
     vSlice = iData2.x;
-  } else {
+  } else if (uLayer < 2.5) {
     vSlice = iData2.y;
+  } else {
+    vSlice = iData2.z;
   }
 
   gl_Position = uViewProj * vec4(world, 1.0);
@@ -62,12 +67,14 @@ in float vHp;
 in float vSlice;
 in float vSelected;
 in float vFlag;
+in float vTint;
 
 uniform vec3 uLightDir;
 uniform float uPitchMix;
 uniform sampler2DArray uTexArray;
 uniform float uUseTexArray;
 uniform float uLayer;
+uniform float uTexLayerCount;
 
 out vec4 outColor;
 
@@ -89,9 +96,15 @@ void main() {
     0.34 + (0.38 * fract(pseudo * 3.7)),
     0.30 + (0.36 * fract(pseudo * 5.1))
   );
-  vec3 color = palette * mix(vec3(0.84), teamTint, 0.34 + 0.09 * uLayer);
+  vec3 color = palette * mix(vec3(0.84), teamTint, 0.34 + 0.07 * uLayer);
+  color *= max(0.35, min(2.0, vTint <= 0.001 ? 1.0 : vTint));
+  if (uLayer > 2.5) {
+    color = mix(color, teamTint, 0.55);
+    color *= 0.72;
+  }
   if (uUseTexArray > 0.5) {
-    float layer = floor(mod(vSlice, 8.0) + 0.5);
+    float layer = floor(vSlice + 0.5);
+    layer = clamp(layer, 0.0, max(0.0, uTexLayerCount - 1.0));
     vec4 texel = texture(uTexArray, vec3(vUv, layer));
     color = mix(color, texel.rgb, clamp(texel.a, 0.0, 1.0) * 0.72);
   }
@@ -221,7 +234,8 @@ export default class ImpostorRenderer {
       uv: 1,
       iData0: 2,
       iData1: 3,
-      iData2: 4
+      iData2: 4,
+      iData3: 5
     };
     const quad = createStaticQuadVao(gl, this.attrs);
     this.vao = quad.vao;
@@ -234,7 +248,8 @@ export default class ImpostorRenderer {
       uLightDir: gl.getUniformLocation(this.program, 'uLightDir'),
       uPitchMix: gl.getUniformLocation(this.program, 'uPitchMix'),
       uTexArray: gl.getUniformLocation(this.program, 'uTexArray'),
-      uUseTexArray: gl.getUniformLocation(this.program, 'uUseTexArray')
+      uUseTexArray: gl.getUniformLocation(this.program, 'uUseTexArray'),
+      uTexLayerCount: gl.getUniformLocation(this.program, 'uTexLayerCount')
     };
 
     this.instanceData = new Float32Array(UNIT_INSTANCE_STRIDE * this.instanceCapacity);
@@ -287,6 +302,10 @@ export default class ImpostorRenderer {
     gl.vertexAttribPointer(this.attrs.iData2, 4, gl.FLOAT, false, strideBytes, 32);
     gl.vertexAttribDivisor(this.attrs.iData2, 1);
 
+    gl.enableVertexAttribArray(this.attrs.iData3);
+    gl.vertexAttribPointer(this.attrs.iData3, 4, gl.FLOAT, false, strideBytes, 48);
+    gl.vertexAttribDivisor(this.attrs.iData3, 1);
+
     gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
@@ -324,11 +343,13 @@ export default class ImpostorRenderer {
       gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureArray);
       gl.uniform1i(this.uniforms.uTexArray, 0);
       gl.uniform1f(this.uniforms.uUseTexArray, 1);
+      gl.uniform1f(this.uniforms.uTexLayerCount, Math.max(1, Number(this.textureLayers) || Number(this.maxSlices) || 1));
     } else {
       gl.uniform1f(this.uniforms.uUseTexArray, 0);
+      gl.uniform1f(this.uniforms.uTexLayerCount, Math.max(1, Number(this.maxSlices) || 1));
     }
 
-    for (let layer = 0; layer < 3; layer += 1) {
+    for (let layer = 0; layer < 4; layer += 1) {
       gl.uniform1f(this.uniforms.uLayer, layer);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.instanceCount);
     }

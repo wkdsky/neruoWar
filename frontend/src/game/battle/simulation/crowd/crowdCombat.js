@@ -24,6 +24,16 @@ const ORDER_CHARGE = 'CHARGE';
 const GUARD_REEVAL_SEC = 0.15;
 const MOVING_FIRE_MAX_SPREAD = 14;
 const MOVING_FIRE_MIN_HIT = 0.42;
+const RPS_ADVANTAGE = {
+  mobility: 'ranged',
+  ranged: 'defense',
+  defense: 'mobility'
+};
+const RPS_MUL = {
+  advantage: { damageMul: 1.2, poiseDamageMul: 1.25, hitMul: 1.08 },
+  disadvantage: { damageMul: 0.85, poiseDamageMul: 0.85, hitMul: 0.92 },
+  neutral: { damageMul: 1, poiseDamageMul: 1, hitMul: 1 }
+};
 
 const toEnemyTeam = (team) => (team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER);
 
@@ -62,6 +72,94 @@ const damageScaleFromWeight = (weight = 1, exponent = 0.75) => {
 const projectileCountFromWeight = (weight = 1) => {
   const safe = Math.max(1, Number(weight) || 1);
   return Math.max(1, Math.min(5, 1 + Math.floor(Math.log2(safe))));
+};
+
+const ensureActionState = (squad) => {
+  if (!squad || typeof squad !== 'object') return { kind: 'none', ttl: 0, dur: 0 };
+  if (!squad.actionState || typeof squad.actionState !== 'object') {
+    squad.actionState = { kind: 'none', ttl: 0, dur: 0, from: 'none', to: 'none' };
+  }
+  return squad.actionState;
+};
+
+const ensureStability = (squad) => {
+  if (!squad || typeof squad !== 'object') return null;
+  if (!squad.stability || typeof squad.stability !== 'object') {
+    squad.stability = {
+      poise: 100,
+      poiseMax: 100,
+      chargePoise: 140,
+      chargePoiseCurrent: 140,
+      transition: 90,
+      transitionMax: 90
+    };
+  }
+  const s = squad.stability;
+  s.poiseMax = Math.max(10, Number(s.poiseMax) || 100);
+  s.poise = clamp(Number(s.poise) || s.poiseMax, 0, s.poiseMax);
+  s.transitionMax = Math.max(10, Number(s.transitionMax) || 90);
+  s.transition = clamp(Number(s.transition) || s.transitionMax, 0, s.transitionMax);
+  s.chargePoise = Math.max(s.poiseMax, Number(s.chargePoise) || (s.poiseMax * 1.3));
+  s.chargePoiseCurrent = clamp(Number(s.chargePoiseCurrent) || s.chargePoise, 0, s.chargePoise);
+  return s;
+};
+
+const resolveRpsMul = (attackerSquad, defenderSquad) => {
+  const attackerType = typeof attackerSquad?.rpsType === 'string' ? attackerSquad.rpsType : 'mobility';
+  const defenderType = typeof defenderSquad?.rpsType === 'string' ? defenderSquad.rpsType : 'mobility';
+  if (attackerType === defenderType) return RPS_MUL.neutral;
+  if (RPS_ADVANTAGE[attackerType] === defenderType) return RPS_MUL.advantage;
+  if (RPS_ADVANTAGE[defenderType] === attackerType) return RPS_MUL.disadvantage;
+  return RPS_MUL.neutral;
+};
+
+const triggerSquadStagger = (squad, severity = 'medium') => {
+  const actionState = ensureActionState(squad);
+  const prevKind = actionState.kind || 'none';
+  const reaction = squad?.staggerReaction?.durationSec && typeof squad.staggerReaction.durationSec === 'object'
+    ? squad.staggerReaction.durationSec
+    : { light: 0.35, medium: 0.52, heavy: 0.76, knockdown: 1.02 };
+  const dur = Math.max(0.16, Number(reaction[severity]) || Number(reaction.medium) || 0.52);
+  actionState.kind = 'stagger';
+  actionState.from = prevKind;
+  actionState.to = severity;
+  actionState.ttl = dur;
+  actionState.dur = dur;
+  squad.waypoints = [];
+  squad.action = '硬直';
+};
+
+const applySquadStabilityHit = (defenderSquad, attackerSquad, damage = 0, options = {}) => {
+  if (!defenderSquad) return;
+  const stability = ensureStability(defenderSquad);
+  if (!stability) return;
+  const rps = resolveRpsMul(attackerSquad, defenderSquad);
+  const poiseDamageMul = Number(options?.poiseDamageMul) || 1;
+  const eventScale = Math.max(0.08, Number(damage) || 0);
+  const poiseDamage = eventScale * (0.55 + ((Number(attackerSquad?.stats?.atk) || 10) * 0.03)) * poiseDamageMul * (rps.poiseDamageMul || 1);
+  const actionState = ensureActionState(defenderSquad);
+  if (actionState.kind === 'transition') {
+    stability.transition = Math.max(0, (Number(stability.transition) || 0) - (poiseDamage * 1.12));
+    if (stability.transition <= 0.01) {
+      triggerSquadStagger(defenderSquad, 'medium');
+      stability.transition = Math.max(0, Number(stability.transitionMax) * 0.36);
+    }
+  } else if ((Number(defenderSquad?.skillRush?.ttl) || 0) > 0) {
+    stability.chargePoiseCurrent = Math.max(0, (Number(stability.chargePoiseCurrent) || 0) - (poiseDamage * 1.15));
+    if (stability.chargePoiseCurrent <= 0.01) {
+      defenderSquad.skillRush = null;
+      triggerSquadStagger(defenderSquad, 'heavy');
+      stability.poise = Math.max(0, Number(stability.poiseMax) * 0.22);
+      stability.chargePoiseCurrent = Math.max(0, Number(stability.chargePoise) || 0);
+    }
+  } else {
+    stability.poise = Math.max(0, (Number(stability.poise) || 0) - poiseDamage);
+    if (stability.poise <= 0.01) {
+      const severity = poiseDamage > (Number(stability.poiseMax) * 0.42) ? 'heavy' : 'medium';
+      triggerSquadStagger(defenderSquad, severity);
+      stability.poise = Math.max(0, Number(stability.poiseMax) * (severity === 'heavy' ? 0.2 : 0.34));
+    }
+  }
 };
 
 export const scoreEnemyTargetValue = (attackerSquad, enemySquad) => {
@@ -166,21 +264,26 @@ const pickEnemyFromEngagementCandidates = (agent, candidates = [], cfg = {}) => 
   return best;
 };
 
-const applyDamageToAgent = (sim, crowd, sourceAgent, targetAgent, amount = 0, hitType = 'hit') => {
+const applyDamageToAgent = (sim, crowd, sourceAgent, targetAgent, amount = 0, hitType = 'hit', options = {}) => {
   if (!targetAgent || targetAgent.dead) return 0;
-  const safeAmount = Math.max(0.06, Number(amount) || 0);
+  const squadMap = sim?._squadById instanceof Map ? sim._squadById : null;
+  const targetSquad = squadMap ? (squadMap.get(targetAgent.squadId) || null) : (sim?.squads?.find((row) => row.id === targetAgent.squadId) || null);
+  const sourceSquad = squadMap ? (squadMap.get(sourceAgent?.squadId) || null) : (sim?.squads?.find((row) => row.id === sourceAgent?.squadId) || null);
+  const rps = resolveRpsMul(sourceSquad, targetSquad);
+  const safeAmount = Math.max(0.06, (Number(amount) || 0) * (rps.damageMul || 1));
   targetAgent.hpWeight = Math.max(0, (Number(targetAgent.hpWeight) || targetAgent.weight || 1) - safeAmount);
   targetAgent.weight = Math.max(0, (Number(targetAgent.weight) || 0) - safeAmount);
   targetAgent.hitTimer = 0.14;
-  const targetSquad = sim?.squads?.find((row) => row.id === targetAgent.squadId) || null;
   if (targetSquad) {
     targetSquad.underAttackTimer = 1.1;
     targetSquad.lastAttackedAt = Date.now();
     targetSquad.morale = clamp((Number(targetSquad.morale) || 0) - (safeAmount * 0.22), 0, 100);
   }
-  const sourceSquad = sim?.squads?.find((row) => row.id === sourceAgent?.squadId) || null;
   if (sourceSquad) {
     sourceSquad.morale = clamp((Number(sourceSquad.morale) || 0) + (safeAmount * 0.2), 0, 100);
+  }
+  if (targetSquad && sourceSquad) {
+    applySquadStabilityHit(targetSquad, sourceSquad, safeAmount, { poiseDamageMul: Number(options?.poiseDamageMul) || 1 });
   }
   acquireHitEffect(crowd.effectsPool, {
     type: hitType,
@@ -212,7 +315,12 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
   const speedRatio = clamp(Number(options?.speedRatio) || 0, 0, 1);
   const movingPenaltyEnabled = !!options?.movingPenalty && !options?.forceAccurate;
   const spreadRadius = movingPenaltyEnabled ? (2 + (MOVING_FIRE_MAX_SPREAD * speedRatio)) : 0;
-  const hitChance = movingPenaltyEnabled ? Math.max(MOVING_FIRE_MIN_HIT, 1 - (0.45 * speedRatio)) : 1;
+  const rpsHitMul = Math.max(0.4, Number(options?.rpsHitMul) || 1);
+  const hitChance = clamp(
+    (movingPenaltyEnabled ? Math.max(MOVING_FIRE_MIN_HIT, 1 - (0.45 * speedRatio)) : 1) * rpsHitMul,
+    MOVING_FIRE_MIN_HIT * 0.8,
+    1
+  );
   let spawned = 0;
   for (let i = 0; i < count; i += 1) {
     if (Math.random() > hitChance && (i + 1) < count) continue;
@@ -482,8 +590,18 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
   const safeDt = Math.max(0, Number(dt) || 0);
   const damageExponent = Math.max(0.2, Math.min(1.25, Number(sim?.repConfig?.damageExponent) || 0.75));
   const squads = Array.isArray(sim?.squads) ? sim.squads : [];
-  const attackers = squads.filter((row) => row.team === TEAM_ATTACKER && row.remain > 0);
-  const defenders = squads.filter((row) => row.team === TEAM_DEFENDER && row.remain > 0);
+  const attackers = [];
+  const defenders = [];
+  const squadMap = new Map();
+  for (let i = 0; i < squads.length; i += 1) {
+    const row = squads[i];
+    if (!row) continue;
+    squadMap.set(row.id, row);
+    if ((Number(row.remain) || 0) <= 0) continue;
+    if (row.team === TEAM_ATTACKER) attackers.push(row);
+    else if (row.team === TEAM_DEFENDER) defenders.push(row);
+  }
+  sim._squadById = squadMap;
   const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((wall) => wall && !wall.destroyed) : [];
   const engagementEnabled = crowd?.engagement ? !!crowd.engagement.enabled : isMeleeEngagementEnabled();
   const engagementCfg = crowd?.engagement?.config || getMeleeEngagementConfig();
@@ -492,6 +610,10 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
   squads.forEach((squad) => {
     if (!squad || squad.remain <= 0) return;
     if ((Number(squad?.skillRush?.ttl) || 0) > 0) return;
+    const actionState = ensureActionState(squad);
+    if ((actionState.kind === 'stagger' || actionState.kind === 'transition') && (Number(actionState.ttl) || 0) > 0) {
+      return;
+    }
     const behavior = typeof squad.behavior === 'string' ? squad.behavior : 'auto';
     if (behavior === 'standby') return;
     const orderType = typeof squad?.order?.type === 'string' ? squad.order.type : '';
@@ -560,6 +682,7 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     }
     if (!targetSquad) return;
     squad.targetSquadId = targetSquad.id;
+    const rpsMul = resolveRpsMul(squad, targetSquad);
 
     const agents = crowd.agentsBySquad.get(squad.id) || [];
     const enemyAgents = crowd.agentsBySquad.get(targetSquad.id) || [];
@@ -617,7 +740,8 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
         spawnRangedProjectiles(sim, crowd, squad, agent, target, 'artillery', baseDamage, {
           movingPenalty,
           speedRatio,
-          forceAccurate: !!squad.activeSkill
+          forceAccurate: !!squad.activeSkill,
+          rpsHitMul: rpsMul.hitMul || 1
         });
         agent.state = 'attack';
         agent.attackCd = 0.55 + (Math.random() * 0.22);
@@ -665,11 +789,14 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
         spawnRangedProjectiles(sim, crowd, squad, agent, target, squad.classTag, baseDamage, {
           movingPenalty,
           speedRatio,
-          forceAccurate: !!squad.activeSkill
+          forceAccurate: !!squad.activeSkill,
+          rpsHitMul: rpsMul.hitMul || 1
         });
         agent.state = 'attack';
       } else {
-        applyDamageToAgent(sim, crowd, agent, target, baseDamage, 'slash');
+        applyDamageToAgent(sim, crowd, agent, target, baseDamage, 'slash', {
+          poiseDamageMul: rpsMul.poiseDamageMul || 1
+        });
         acquireHitEffect(crowd.effectsPool, {
           type: 'slash',
           x: (agent.x + target.x) / 2,

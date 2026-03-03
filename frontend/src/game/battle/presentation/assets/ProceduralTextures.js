@@ -85,16 +85,23 @@ const paintSmoke = (ctx, size) => {
 
 export const createBattleProceduralTextures = (gl) => {
   if (!gl) return null;
-  const unitTexArray = createTextureArray(gl, 64, 8, [
-    (ctx, size) => paintCircle(ctx, size, 'rgba(140, 180, 220, 1)', 'rgba(26, 42, 66, 0)'),
-    (ctx, size) => paintCircle(ctx, size, 'rgba(228, 170, 160, 1)', 'rgba(44, 24, 24, 0)'),
-    (ctx, size) => paintCircle(ctx, size, 'rgba(206, 200, 130, 1)', 'rgba(40, 34, 18, 0)'),
-    (ctx, size) => paintArrow(ctx, size),
-    (ctx, size) => paintRing(ctx, size, 'rgba(78, 222, 120, 0.9)'),
-    (ctx, size) => paintRing(ctx, size, 'rgba(99, 179, 237, 0.9)'),
-    (ctx, size) => paintRing(ctx, size, 'rgba(248, 113, 113, 0.9)'),
-    (ctx, size) => paintSmoke(ctx, size)
-  ]);
+  const unitLayerCount = 64;
+  const unitPainters = [];
+  for (let i = 0; i < unitLayerCount; i += 1) {
+    const hue = (i % unitLayerCount) / Math.max(1, unitLayerCount);
+    const primary = `hsla(${Math.round(hue * 360)}, 76%, 70%, 0.95)`;
+    const secondary = `hsla(${Math.round(hue * 360)}, 70%, 22%, 0)`;
+    if (i % 11 === 0) {
+      unitPainters.push((ctx, size) => paintArrow(ctx, size));
+    } else if (i % 7 === 0) {
+      unitPainters.push((ctx, size) => paintRing(ctx, size, `hsla(${Math.round(hue * 360)}, 88%, 66%, 0.92)`));
+    } else if (i % 5 === 0) {
+      unitPainters.push((ctx, size) => paintSmoke(ctx, size));
+    } else {
+      unitPainters.push((ctx, size) => paintCircle(ctx, size, primary, secondary));
+    }
+  }
+  const unitTexArray = createTextureArray(gl, 64, unitLayerCount, unitPainters);
 
   const projectileTexArray = createTextureArray(gl, 32, 4, [
     (ctx, size) => paintCircle(ctx, size, 'rgba(235, 250, 255, 0.95)', 'rgba(60, 110, 160, 0)'),
@@ -114,6 +121,7 @@ export const createBattleProceduralTextures = (gl) => {
 
   return {
     unitTexArray,
+    unitTexLayerCount: unitLayerCount,
     projectileTexArray,
     effectTexArray,
     dispose() {

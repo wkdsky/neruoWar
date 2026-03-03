@@ -211,6 +211,45 @@ const resolveAttackRange = (squad = {}) => {
   return 6.2;
 };
 
+const ensureSquadActionState = (squad) => {
+  if (!squad || typeof squad !== 'object') return { kind: 'none', ttl: 0, dur: 0, from: 'none', to: 'none' };
+  if (!squad.actionState || typeof squad.actionState !== 'object') {
+    squad.actionState = { kind: 'none', ttl: 0, dur: 0, from: 'none', to: 'none' };
+  }
+  if (typeof squad.actionState.kind !== 'string') squad.actionState.kind = 'none';
+  if (!Number.isFinite(Number(squad.actionState.ttl))) squad.actionState.ttl = 0;
+  if (!Number.isFinite(Number(squad.actionState.dur))) squad.actionState.dur = 0;
+  return squad.actionState;
+};
+
+const ensureSquadStability = (squad) => {
+  if (!squad || typeof squad !== 'object') return null;
+  if (!squad.stability || typeof squad.stability !== 'object') {
+    squad.stability = {
+      poise: 100,
+      poiseMax: 100,
+      chargePoise: 140,
+      chargePoiseCurrent: 140,
+      transition: 90,
+      transitionMax: 90,
+      poiseRegenPerSec: 6.2,
+      transitionDecayPerSec: 4.1,
+      transitionRegenPerSec: 2.5
+    };
+  }
+  const s = squad.stability;
+  s.poiseMax = Math.max(10, Number(s.poiseMax) || 100);
+  s.poise = clamp(Number(s.poise) || s.poiseMax, 0, s.poiseMax);
+  s.chargePoise = Math.max(s.poiseMax, Number(s.chargePoise) || (s.poiseMax * 1.3));
+  s.chargePoiseCurrent = clamp(Number(s.chargePoiseCurrent) || s.chargePoise, 0, s.chargePoise);
+  s.transitionMax = Math.max(10, Number(s.transitionMax) || 90);
+  s.transition = clamp(Number(s.transition) || s.transitionMax, 0, s.transitionMax);
+  s.poiseRegenPerSec = Math.max(0.1, Number(s.poiseRegenPerSec) || 6.2);
+  s.transitionDecayPerSec = Math.max(0.1, Number(s.transitionDecayPerSec) || 4.1);
+  s.transitionRegenPerSec = Math.max(0.1, Number(s.transitionRegenPerSec) || 2.5);
+  return s;
+};
+
 const resolveUnitTypeSpeed = (crowd, unitTypeId, fallback = 1) => {
   const unitType = crowd?.unitTypeMap?.get(unitTypeId) || null;
   const speed = Number(unitType?.speed);
@@ -562,6 +601,9 @@ const updateActiveGroundSkill = (sim, crowd, squad, dt) => {
   squad.action = '兵种攻击';
   if (active.ttlSec <= 0 || active.wavesFired >= active.wavesTotal) {
     squad.activeSkill = null;
+    if (squad.actionState && squad.actionState.kind === 'skill') {
+      squad.actionState = { kind: 'none', from: 'none', to: 'none', ttl: 0, dur: 0 };
+    }
   }
 };
 
@@ -582,6 +624,17 @@ const pickNearestEnemySquad = (squad, squads = []) => {
 
 const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
   if (!squad || squad.remain <= 0) return;
+  const actionState = ensureSquadActionState(squad);
+  if (actionState.kind === 'stagger' && (Number(actionState.ttl) || 0) > 0) {
+    squad.waypoints = [];
+    squad.targetSquadId = '';
+    squad.action = '硬直';
+    return;
+  }
+  if (actionState.kind === 'transition' && (Number(actionState.ttl) || 0) > 0) {
+    squad.action = '调整队形';
+    return;
+  }
   const orderType = resolveSquadOrderType(squad);
   const chargeCommitted = orderType === ORDER_CHARGE && (Number(squad?.order?.commitUntil) || 0) > nowSec;
   if (orderType === ORDER_MOVE) {
@@ -878,6 +931,8 @@ const createAgentsForSquad = (squad, crowd) => {
 };
 
 const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
+  const actionState = ensureSquadActionState(squad);
+  const actionKind = typeof actionState.kind === 'string' ? actionState.kind : 'none';
   const moralePenalty = squad.morale <= 0 ? (2 / 3) : (squad.morale < 20 ? 0.82 : 1);
   const fatiguePenalty = squad.fatigueTimer > 0 ? 0.72 : 1;
   const buffSpeed = squad.effectBuff?.speedMul ? Number(squad.effectBuff.speedMul) : 1;
@@ -905,6 +960,9 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
     if (remainDistance <= 0.01) {
       squad.skillRush = null;
       squad.behavior = 'auto';
+      if (squad.actionState && squad.actionState.kind === 'charge') {
+        squad.actionState = { kind: 'none', from: 'none', to: 'none', ttl: 0, dur: 0 };
+      }
       squad.action = '自动攻击';
       return forwardVec;
     }
@@ -926,7 +984,14 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
   let desiredSpeed = 0;
   let desiredDir = { x: dir.x, y: dir.y };
 
-  if (lockRangedSkill) {
+  if (actionKind === 'stagger') {
+    desiredSpeed = 0;
+    squad.waypoints = [];
+    squad.stamina = clamp((Number(squad.stamina) || 0) + (STAMINA_RECOVER * dt * 0.25), 0, STAMINA_MAX);
+  } else if (actionKind === 'transition') {
+    desiredSpeed = Math.min(speedTargetMax * 0.32, desiredSpeed);
+    squad.stamina = clamp((Number(squad.stamina) || 0) + (STAMINA_RECOVER * dt * 0.15), 0, STAMINA_MAX);
+  } else if (lockRangedSkill) {
     desiredSpeed = 0;
     squad.stamina = clamp((Number(squad.stamina) || 0) + (STAMINA_RECOVER * dt * 0.5), 0, STAMINA_MAX);
   } else if (target && (Number(squad.stamina) || 0) >= STAMINA_MOVE_THRESHOLD) {
@@ -996,6 +1061,9 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
     if (squad.skillRush.ttl <= 0 || squad.skillRush.remainDistance <= 0.8) {
       squad.skillRush = null;
       squad.behavior = 'auto';
+      if (squad.actionState && squad.actionState.kind === 'charge') {
+        squad.actionState = { kind: 'none', from: 'none', to: 'none', ttl: 0, dur: 0 };
+      }
       squad.action = '自动攻击';
     } else {
       squad.action = '兵种攻击';
@@ -1382,6 +1450,13 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
     squad.waypoints = [];
     cooldownMap.infantry = Math.max(Number(cooldownMap.infantry) || 0, Number(SKILL_COOLDOWN_BY_CLASS.infantry) || 2.1);
     updateAttackCooldownFromSkills(squad);
+    squad.actionState = {
+      kind: 'skill',
+      from: 'none',
+      to: 'infantry',
+      ttl: 0.45,
+      dur: 0.45
+    };
     squad.action = '兵种攻击';
     return { ok: true };
   }
@@ -1404,6 +1479,13 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
     squad.stamina = clamp((Number(squad.stamina) || 0) - 32, 0, STAMINA_MAX);
     cooldownMap.cavalry = Math.max(Number(cooldownMap.cavalry) || 0, Number(SKILL_COOLDOWN_BY_CLASS.cavalry) || 2.8);
     updateAttackCooldownFromSkills(squad);
+    squad.actionState = {
+      kind: 'charge',
+      from: 'none',
+      to: 'cavalry',
+      ttl: Math.max(0.55, (dist / CAVALRY_RUSH_SPEED) * 1.5),
+      dur: Math.max(0.55, (dist / CAVALRY_RUSH_SPEED) * 1.5)
+    };
     squad.action = '兵种攻击';
     return { ok: true };
   }
@@ -1437,6 +1519,13 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
     Number(cfg?.cooldownSec) || Number(SKILL_COOLDOWN_BY_CLASS[rangedClass]) || 6.5
   );
   updateAttackCooldownFromSkills(squad);
+  squad.actionState = {
+    kind: 'skill',
+    from: 'none',
+    to: rangedClass,
+    ttl: Math.max(0.2, Number(cfg?.durationSec) || 0.8),
+    dur: Math.max(0.2, Number(cfg?.durationSec) || 0.8)
+  };
   squad.action = '兵种攻击';
   return { ok: true };
 };
@@ -1469,6 +1558,47 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       squad.waypoints = [];
       squad.flagBearerAgentId = '';
       return;
+    }
+    const actionState = ensureSquadActionState(squad);
+    const stability = ensureSquadStability(squad);
+    if (actionState.kind !== 'none') {
+      actionState.ttl = Math.max(0, (Number(actionState.ttl) || 0) - safeDt);
+      if (actionState.ttl <= 0) {
+        actionState.kind = 'none';
+        actionState.from = 'none';
+        actionState.to = 'none';
+        actionState.dur = 0;
+        actionState.ttl = 0;
+      }
+    }
+    if (stability) {
+      if (actionState.kind === 'transition') {
+        stability.transition = clamp(
+          (Number(stability.transition) || 0) - (Math.max(0.1, Number(stability.transitionDecayPerSec) || 0.1) * safeDt),
+          0,
+          Math.max(1, Number(stability.transitionMax) || 1)
+        );
+      } else {
+        stability.transition = clamp(
+          (Number(stability.transition) || 0) + (Math.max(0.1, Number(stability.transitionRegenPerSec) || 0.1) * safeDt),
+          0,
+          Math.max(1, Number(stability.transitionMax) || 1)
+        );
+      }
+      if ((Number(squad?.skillRush?.ttl) || 0) > 0) {
+        stability.chargePoiseCurrent = clamp(
+          Number(stability.chargePoiseCurrent) || Number(stability.chargePoise) || 0,
+          0,
+          Math.max(1, Number(stability.chargePoise) || 1)
+        );
+      } else {
+        stability.chargePoiseCurrent = Math.max(0, Number(stability.chargePoise) || 0);
+      }
+      stability.poise = clamp(
+        (Number(stability.poise) || 0) + (Math.max(0.1, Number(stability.poiseRegenPerSec) || 0.1) * safeDt),
+        0,
+        Math.max(1, Number(stability.poiseMax) || 1)
+      );
     }
     if (squad.effectBuff) {
       squad.effectBuff.ttl = Math.max(0, Number(squad.effectBuff.ttl) - safeDt);

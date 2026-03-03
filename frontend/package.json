@@ -18,7 +18,8 @@
         "start": "HOST=0.0.0.0 react-scripts start",
         "build": "react-scripts build",
         "test": "react-scripts test",
-        "eject": "react-scripts eject"
+        "eject": "react-scripts eject",
+        "balance:harness": "node scripts/balanceHarness.mjs"
     },
     "eslintConfig": {
         "extends": [

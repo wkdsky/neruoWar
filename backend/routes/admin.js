@@ -6,14 +6,15 @@ const Node = require('../models/Node');
 const EntropyAlliance = require('../models/EntropyAlliance');
 const GameSetting = require('../models/GameSetting');
 const ArmyUnitType = require('../models/ArmyUnitType');
+const UnitComponent = require('../models/UnitComponent');
 const BattlefieldItem = require('../models/BattlefieldItem');
 const CityBuildingType = require('../models/CityBuildingType');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
 const {
-  fetchArmyUnitTypes,
   serializeArmyUnitType
 } = require('../services/armyUnitTypeService');
+const { fetchUnitTypesWithComponents, serializeUnitComponent } = require('../services/unitRegistryService');
 const {
   fetchBattlefieldItems,
   fetchCityBuildingTypes,
@@ -30,6 +31,9 @@ const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
 const UNIT_TYPE_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
 const CATALOG_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
 const ROLE_TAG_SET = new Set(['近战', '远程']);
+const RPS_TYPE_SET = new Set(['mobility', 'ranged', 'defense']);
+const RARITY_SET = new Set(['common', 'rare', 'epic', 'legend']);
+const COMPONENT_KIND_SET = new Set(['body', 'weapon', 'vehicle', 'ability', 'behaviorProfile', 'stabilityProfile', 'staggerReaction', 'interactionRule']);
 
 const parseNumberField = ({ body, key, required = false, integer = false, min = null }) => {
   if (!Object.prototype.hasOwnProperty.call(body, key)) {
@@ -139,6 +143,135 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
     }
   });
 
+  if (Object.prototype.hasOwnProperty.call(source, 'enabled')) {
+    parsed.enabled = !!source.enabled;
+  } else if (create) {
+    parsed.enabled = true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'rpsType')) {
+    const rpsType = typeof source.rpsType === 'string' ? source.rpsType.trim() : '';
+    if (!RPS_TYPE_SET.has(rpsType)) {
+      errors.push('rpsType 必须是 mobility/ranged/defense');
+    } else {
+      parsed.rpsType = rpsType;
+    }
+  } else if (create) {
+    errors.push('缺少字段：rpsType');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'professionId')) {
+    const professionId = typeof source.professionId === 'string' ? source.professionId.trim() : '';
+    if (!professionId) {
+      errors.push('professionId 不能为空');
+    } else if (professionId.length > 64) {
+      errors.push('professionId 过长');
+    } else {
+      parsed.professionId = professionId;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'tier') || Object.prototype.hasOwnProperty.call(source, 'level')) {
+    const tierValue = Object.prototype.hasOwnProperty.call(source, 'tier') ? source.tier : source.level;
+    const tier = Math.floor(Number(tierValue));
+    if (!Number.isInteger(tier) || tier < 1 || tier > 4) {
+      errors.push('tier 必须是 1-4 的整数');
+    } else {
+      parsed.tier = tier;
+      parsed.level = tier;
+    }
+  } else if (create) {
+    parsed.tier = 1;
+    parsed.level = 1;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'rarity')) {
+    const rarity = typeof source.rarity === 'string' ? source.rarity.trim() : '';
+    if (!RARITY_SET.has(rarity)) {
+      errors.push('rarity 必须是 common/rare/epic/legend');
+    } else {
+      parsed.rarity = rarity;
+    }
+  } else if (create) {
+    parsed.rarity = 'common';
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'tags')) {
+    if (!Array.isArray(source.tags)) {
+      errors.push('tags 必须是字符串数组');
+    } else {
+      parsed.tags = source.tags
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 64);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'description')) {
+    const description = typeof source.description === 'string' ? source.description.trim() : '';
+    parsed.description = description.slice(0, 1024);
+  }
+
+  const parseOptionalId = (key) => {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) return;
+    const text = typeof source[key] === 'string' ? source[key].trim() : '';
+    parsed[key] = text || null;
+  };
+
+  parseOptionalId('bodyId');
+  parseOptionalId('vehicleId');
+  parseOptionalId('behaviorProfileId');
+  parseOptionalId('stabilityProfileId');
+
+  if (Object.prototype.hasOwnProperty.call(source, 'weaponIds')) {
+    if (!Array.isArray(source.weaponIds)) {
+      errors.push('weaponIds 必须是字符串数组');
+    } else {
+      parsed.weaponIds = source.weaponIds
+        .map((id) => (typeof id === 'string' ? id.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 16);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'abilityIds')) {
+    if (!Array.isArray(source.abilityIds)) {
+      errors.push('abilityIds 必须是字符串数组');
+    } else {
+      parsed.abilityIds = source.abilityIds
+        .map((id) => (typeof id === 'string' ? id.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 16);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'visuals')) {
+    const visuals = source.visuals;
+    if (!visuals || typeof visuals !== 'object' || Array.isArray(visuals)) {
+      errors.push('visuals 必须是对象');
+    } else {
+      const battle = visuals.battle && typeof visuals.battle === 'object' ? visuals.battle : {};
+      const preview = visuals.preview && typeof visuals.preview === 'object' ? visuals.preview : {};
+      parsed.visuals = {
+        battle: {
+          bodyLayer: Math.max(0, Math.floor(Number(battle.bodyLayer) || 0)),
+          gearLayer: Math.max(0, Math.floor(Number(battle.gearLayer) || 0)),
+          vehicleLayer: Math.max(0, Math.floor(Number(battle.vehicleLayer) || 0)),
+          tint: Number.isFinite(Number(battle.tint)) ? Number(battle.tint) : 0,
+          silhouetteLayer: Math.max(0, Math.floor(Number(battle.silhouetteLayer) || 0))
+        },
+        preview: {
+          style: typeof preview.style === 'string' && preview.style.trim() ? preview.style.trim() : 'procedural',
+          palette: {
+            primary: typeof preview?.palette?.primary === 'string' ? preview.palette.primary : '#5aa3ff',
+            secondary: typeof preview?.palette?.secondary === 'string' ? preview.palette.secondary : '#cfd8e3',
+            accent: typeof preview?.palette?.accent === 'string' ? preview.palette.accent : '#ffd166'
+          }
+        }
+      };
+    }
+  }
+
   if (Object.prototype.hasOwnProperty.call(source, 'nextUnitTypeId')) {
     const nextUnitTypeId = typeof source.nextUnitTypeId === 'string' ? source.nextUnitTypeId.trim() : '';
     parsed.nextUnitTypeId = nextUnitTypeId || null;
@@ -163,6 +296,77 @@ const parseUnitTypePayload = (body, { create = false } = {}) => {
     }
   }
 
+  if (Object.prototype.hasOwnProperty.call(parsed, 'tier')) {
+    parsed.level = parsed.tier;
+  } else if (Object.prototype.hasOwnProperty.call(parsed, 'level')) {
+    parsed.tier = Math.max(1, Math.floor(Number(parsed.level) || 1));
+    parsed.level = parsed.tier;
+  }
+
+  return { parsed, errors };
+};
+
+const parseUnitComponentPayload = (body, { create = false } = {}) => {
+  const source = body && typeof body === 'object' ? body : {};
+  const parsed = {};
+  const errors = [];
+  if (create) {
+    const componentId = typeof source.componentId === 'string' ? source.componentId.trim() : '';
+    if (!componentId || !UNIT_TYPE_ID_RE.test(componentId)) {
+      errors.push('componentId 仅支持字母、数字、下划线、中划线，长度 2-64');
+    } else {
+      parsed.componentId = componentId;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'kind')) {
+    const kind = typeof source.kind === 'string' ? source.kind.trim() : '';
+    if (!COMPONENT_KIND_SET.has(kind)) {
+      errors.push('kind 不合法');
+    } else {
+      parsed.kind = kind;
+    }
+  } else if (create) {
+    errors.push('缺少字段：kind');
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'name')) {
+    const name = typeof source.name === 'string' ? source.name.trim() : '';
+    if (!name) {
+      errors.push('name 不能为空');
+    } else {
+      parsed.name = name.slice(0, 64);
+    }
+  } else if (create) {
+    errors.push('缺少字段：name');
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'tags')) {
+    if (!Array.isArray(source.tags)) {
+      errors.push('tags 必须是字符串数组');
+    } else {
+      parsed.tags = source.tags
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 64);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'data')) {
+    if (!source.data || typeof source.data !== 'object' || Array.isArray(source.data)) {
+      errors.push('data 必须是对象');
+    } else {
+      parsed.data = source.data;
+    }
+  } else if (create) {
+    parsed.data = {};
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'version')) {
+    const version = Math.floor(Number(source.version));
+    if (!Number.isInteger(version) || version < 1) {
+      errors.push('version 必须是 >=1 的整数');
+    } else {
+      parsed.version = version;
+    }
+  } else if (create) {
+    parsed.version = 1;
+  }
   return { parsed, errors };
 };
 
@@ -585,7 +789,7 @@ router.put('/settings', authenticateToken, isAdmin, async (req, res) => {
 
 router.get('/army/unit-types', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const unitTypes = await fetchArmyUnitTypes();
+    const { unitTypes } = await fetchUnitTypesWithComponents({ enabledOnly: false });
     return res.json({
       success: true,
       unitTypes
@@ -683,6 +887,92 @@ router.delete('/army/unit-types/:unitTypeId', authenticateToken, isAdmin, async 
     });
   } catch (error) {
     console.error('删除兵种失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.get('/unit-components', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const docs = await UnitComponent.find({}).sort({ kind: 1, componentId: 1, createdAt: 1 }).lean();
+    return res.json({
+      success: true,
+      unitComponents: docs.map(serializeUnitComponent)
+    });
+  } catch (error) {
+    console.error('获取组件库失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.post('/unit-components', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { parsed, errors } = parseUnitComponentPayload(req.body, { create: true });
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0] });
+    }
+    const exists = await UnitComponent.findOne({ componentId: parsed.componentId }).select('_id').lean();
+    if (exists) {
+      return res.status(400).json({ error: 'componentId 已存在' });
+    }
+    const created = await UnitComponent.create(parsed);
+    return res.status(201).json({
+      success: true,
+      unitComponent: serializeUnitComponent(created)
+    });
+  } catch (error) {
+    console.error('创建组件失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.put('/unit-components/:componentId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const componentId = typeof req.params?.componentId === 'string' ? req.params.componentId.trim() : '';
+    if (!componentId) {
+      return res.status(400).json({ error: '无效的 componentId' });
+    }
+    const { parsed, errors } = parseUnitComponentPayload(req.body, { create: false });
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors[0] });
+    }
+    const updateKeys = Object.keys(parsed).filter((key) => key !== 'componentId');
+    if (updateKeys.length <= 0) {
+      return res.status(400).json({ error: '没有可更新的字段' });
+    }
+    const updated = await UnitComponent.findOneAndUpdate(
+      { componentId },
+      { $set: parsed },
+      { new: true }
+    );
+    if (!updated) {
+      return res.status(404).json({ error: '组件不存在' });
+    }
+    return res.json({
+      success: true,
+      unitComponent: serializeUnitComponent(updated)
+    });
+  } catch (error) {
+    console.error('更新组件失败:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.delete('/unit-components/:componentId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const componentId = typeof req.params?.componentId === 'string' ? req.params.componentId.trim() : '';
+    if (!componentId) {
+      return res.status(400).json({ error: '无效的 componentId' });
+    }
+    const deleted = await UnitComponent.findOneAndDelete({ componentId });
+    if (!deleted) {
+      return res.status(404).json({ error: '组件不存在' });
+    }
+    return res.json({
+      success: true,
+      message: '组件已删除'
+    });
+  } catch (error) {
+    console.error('删除组件失败:', error);
     return res.status(500).json({ error: '服务器错误' });
   }
 });

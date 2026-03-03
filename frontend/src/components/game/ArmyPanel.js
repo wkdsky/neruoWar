@@ -1,7 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './ArmyPanel.css';
 import NumberPadDialog from '../common/NumberPadDialog';
 import { API_BASE } from '../../runtimeConfig';
+import normalizeUnitTypes from '../../game/unit/normalizeUnitTypes';
+import {
+  ArmyCloseupThreePreview,
+  ArmyBattleImpostorPreview
+} from './unit/ArmyUnitPreviewCanvases';
 
 const QUICK_QTY_STEPS = [10, 50, 100, 500, 1000];
 const TEMPLATE_MAX_COUNT = 999999999;
@@ -44,6 +49,20 @@ const normalizeTemplateUnits = (units = []) => (
     .filter((entry) => entry.unitTypeId && entry.count > 0)
 );
 
+const buildUnitIntro = (unit = {}) => {
+  const explicit = typeof unit?.description === 'string' ? unit.description.trim() : '';
+  if (explicit) return explicit;
+  const role = unit?.roleTag === '远程' ? '远程压制' : '近战突击';
+  const rpsType = typeof unit?.rpsType === 'string' ? unit.rpsType : 'mobility';
+  const professionId = typeof unit?.professionId === 'string' ? unit.professionId : '';
+  const speed = Number(unit?.speed) || 0;
+  const range = Number(unit?.range) || 0;
+  if (role === '远程压制') {
+    return `该兵种定位为${role}（${rpsType}/${professionId}），擅长在中远距离持续输出。当前射程 ${range}，机动 ${speed}。`;
+  }
+  return `该兵种定位为${role}（${rpsType}/${professionId}），擅长正面接战与阵线压迫。当前射程 ${range}，机动 ${speed}。`;
+};
+
 const unitsToSummaryText = (units = [], unitNameById = new Map()) => (
   normalizeTemplateUnits(units)
     .map((entry) => `${unitNameById.get(entry.unitTypeId) || entry.unitTypeId}x${entry.count}`)
@@ -62,6 +81,10 @@ const ArmyPanel = () => {
   const [error, setError] = useState('');
   const [templateNotice, setTemplateNotice] = useState('');
   const [templateActionId, setTemplateActionId] = useState('');
+  const [detailUnitId, setDetailUnitId] = useState('');
+  const [detailRotation, setDetailRotation] = useState({ closeup: 0, battle: 0 });
+  const [detailDragTarget, setDetailDragTarget] = useState('');
+  const detailRotationDragRef = useRef(null);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [templateEditingId, setTemplateEditingId] = useState('');
   const [templateEditorDraft, setTemplateEditorDraft] = useState({ name: '', units: [] });
@@ -113,6 +136,11 @@ const ArmyPanel = () => {
       count: Number.isFinite(rosterByUnitId[unitId]?.count) ? rosterByUnitId[unitId].count : 0
     };
   }), [unitTypes, rosterByUnitId]);
+
+  const detailUnit = useMemo(
+    () => unitsWithCount.find((unit) => unit.id === detailUnitId) || null,
+    [unitsWithCount, detailUnitId]
+  );
 
   const cartItems = useMemo(() => {
     return Object.entries(cartByUnit)
@@ -204,7 +232,10 @@ const ArmyPanel = () => {
         return;
       }
 
-      const nextUnitTypes = Array.isArray(unitTypesParsed.data?.unitTypes) ? unitTypesParsed.data.unitTypes : [];
+      const nextUnitTypes = normalizeUnitTypes(
+        Array.isArray(unitTypesParsed.data?.unitTypes) ? unitTypesParsed.data.unitTypes : [],
+        { enabledOnly: true }
+      );
       const nextRoster = Array.isArray(meParsed.data?.roster) ? meParsed.data.roster : [];
       const nextBalance = Number.isFinite(meParsed.data?.knowledgeBalance) ? meParsed.data.knowledgeBalance : 0;
       const nextTemplates = Array.isArray(templatesParsed.data?.templates) ? templatesParsed.data.templates : [];
@@ -234,6 +265,62 @@ const ArmyPanel = () => {
   useEffect(() => {
     fetchArmyData();
   }, [fetchArmyData]);
+
+  useEffect(() => {
+    if (!detailUnitId) {
+      detailRotationDragRef.current = null;
+      setDetailDragTarget('');
+    }
+  }, [detailUnitId]);
+
+  const beginDetailRotationDrag = useCallback((stageKey, event) => {
+    if (!detailUnitId || event.button !== 0) return;
+    event.preventDefault();
+    const safeKey = stageKey === 'battle' ? 'battle' : 'closeup';
+    setDetailDragTarget(safeKey);
+    const pointerId = Number.isFinite(event.pointerId) ? event.pointerId : null;
+    detailRotationDragRef.current = {
+      stageKey: safeKey,
+      startX: Number(event.clientX) || 0,
+      startRotation: Number(detailRotation[safeKey]) || 0,
+      pointerId
+    };
+    if (pointerId !== null && event.currentTarget?.setPointerCapture) {
+      try {
+        event.currentTarget.setPointerCapture(pointerId);
+      } catch (error) {
+        // Ignore browsers that reject pointer capture in specific edge cases.
+      }
+    }
+  }, [detailUnitId, detailRotation]);
+
+  const updateDetailRotationDrag = useCallback((stageKey, event) => {
+    const drag = detailRotationDragRef.current;
+    if (!drag || drag.stageKey !== stageKey) return;
+    if (drag.pointerId !== null && event.pointerId !== drag.pointerId) return;
+    const dx = (Number(event.clientX) || 0) - drag.startX;
+    const next = drag.startRotation + (dx * 0.55);
+    const normalized = ((next % 360) + 360) % 360;
+    setDetailRotation((prev) => ({
+      ...prev,
+      [drag.stageKey]: normalized
+    }));
+  }, []);
+
+  const stopDetailRotationDrag = useCallback((event) => {
+    const drag = detailRotationDragRef.current;
+    if (!drag) return;
+    if (drag.pointerId !== null && Number.isFinite(event?.pointerId) && event.pointerId !== drag.pointerId) return;
+    if (drag.pointerId !== null && event?.currentTarget?.releasePointerCapture) {
+      try {
+        event.currentTarget.releasePointerCapture(drag.pointerId);
+      } catch (error) {
+        // Ignore when capture is already released.
+      }
+    }
+    detailRotationDragRef.current = null;
+    setDetailDragTarget('');
+  }, []);
 
   const getDraftQty = (unitTypeId) => normalizeInteger(draftByUnit[unitTypeId], 0, 0);
 
@@ -565,7 +652,20 @@ const ArmyPanel = () => {
                 <article className="army-unit-card" key={unitId}>
                   <div className="army-unit-head">
                     <h3>{unit.name}</h3>
-                    <span>{unit.roleTag}</span>
+                    <div className="army-unit-head-right">
+                      <span>{unit.roleTag}</span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={() => {
+                          setDetailUnitId(unitId);
+                          setDetailRotation({ closeup: 0, battle: 0 });
+                          setDetailDragTarget('');
+                        }}
+                      >
+                        详情
+                      </button>
+                    </div>
                   </div>
                   <div className="army-unit-stats">
                     <span>速度 {unit.speed}</span>
@@ -744,6 +844,116 @@ const ArmyPanel = () => {
           </div>
         </div>
       )}
+
+      {detailUnit ? (
+        <div
+          className="army-unit-detail-overlay"
+          onClick={() => {
+            detailRotationDragRef.current = null;
+            setDetailDragTarget('');
+            setDetailUnitId('');
+          }}
+        >
+          <div
+            className="army-unit-detail-modal"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <div className="army-unit-detail-head">
+              <div>
+                <h4>{detailUnit.name || detailUnit.id}</h4>
+                <span>
+                  {`${detailUnit.roleTag || '未知'} ｜ ${detailUnit.rpsType || '-'} ｜ ${detailUnit.professionId || '-'} ｜ T${Math.max(1, Number(detailUnit.tier) || 1)}`}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={() => {
+                  detailRotationDragRef.current = null;
+                  setDetailDragTarget('');
+                  setDetailUnitId('');
+                }}
+              >
+                关闭
+              </button>
+            </div>
+
+            <div className="army-unit-detail-intro">
+              <strong>兵种简介</strong>
+              <p>{buildUnitIntro(detailUnit)}</p>
+            </div>
+
+            <div className="army-unit-detail-stats">
+              <div><span>速度</span><strong>{Number(detailUnit.speed) || 0}</strong></div>
+              <div><span>生命</span><strong>{Number(detailUnit.hp) || 0}</strong></div>
+              <div><span>攻击</span><strong>{Number(detailUnit.atk) || 0}</strong></div>
+              <div><span>防御</span><strong>{Number(detailUnit.def) || 0}</strong></div>
+              <div><span>射程</span><strong>{Number(detailUnit.range) || 0}</strong></div>
+              <div><span>单价</span><strong>{Number(detailUnit.costKP) || 0}</strong></div>
+              <div><span>库存</span><strong>{Number(detailUnit.count) || 0}</strong></div>
+              <div><span>升级到</span><strong>{detailUnit.nextUnitTypeId || '无'}</strong></div>
+            </div>
+
+            <div className="army-unit-detail-intro">
+              <strong>组件装配</strong>
+              <p>
+                {`body=${detailUnit.bodyId || '-'} ｜ weapon=${(detailUnit.weaponIds || []).join(', ') || '-'} ｜ vehicle=${detailUnit.vehicleId || '-'} ｜ ability=${(detailUnit.abilityIds || []).join(', ') || '-'} ｜ behavior=${detailUnit.behaviorProfileId || '-'} ｜ stability=${detailUnit.stabilityProfileId || '-'}`}
+              </p>
+            </div>
+
+            <div className="army-unit-detail-visuals">
+              <section className="army-unit-visual-card">
+                <header>
+                  <strong>近距离3D模型 + 贴图</strong>
+                  <span>预留（可旋转）</span>
+                </header>
+                <div
+                  className={`army-unit-visual-stage ${detailDragTarget === 'closeup' ? 'is-dragging' : ''}`}
+                  onPointerDown={(event) => beginDetailRotationDrag('closeup', event)}
+                  onPointerMove={(event) => updateDetailRotationDrag('closeup', event)}
+                  onPointerUp={stopDetailRotationDrag}
+                  onPointerCancel={stopDetailRotationDrag}
+                >
+                  <div className="army-unit-turntable">
+                    <div className="army-unit-turntable-shadow" />
+                    <div className="army-unit-turntable-disc" />
+                    <ArmyCloseupThreePreview
+                      unit={detailUnit}
+                      rotationDeg={detailRotation.closeup}
+                      className="army-unit-visual-dummy"
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="army-unit-visual-card">
+                <header>
+                  <strong>战场形象（小人模型 + 贴图）</strong>
+                  <span>预留（可旋转）</span>
+                </header>
+                <div
+                  className={`army-unit-visual-stage is-battle ${detailDragTarget === 'battle' ? 'is-dragging' : ''}`}
+                  onPointerDown={(event) => beginDetailRotationDrag('battle', event)}
+                  onPointerMove={(event) => updateDetailRotationDrag('battle', event)}
+                  onPointerUp={stopDetailRotationDrag}
+                  onPointerCancel={stopDetailRotationDrag}
+                >
+                  <div className="army-unit-turntable is-battle">
+                    <div className="army-unit-turntable-shadow is-battle" />
+                    <div className="army-unit-turntable-disc is-battle" />
+                    <ArmyBattleImpostorPreview
+                      unit={detailUnit}
+                      rotationDeg={detailRotation.battle}
+                      className="army-unit-visual-dummy is-battle"
+                    />
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {templateEditorOpen && (
         <div className="army-template-editor-overlay" onClick={closeTemplateEditor}>

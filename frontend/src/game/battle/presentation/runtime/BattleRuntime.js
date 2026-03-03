@@ -76,15 +76,48 @@ const buildUnitTypeMap = (unitTypes = []) => {
   (Array.isArray(unitTypes) ? unitTypes : []).forEach((item) => {
     const unitTypeId = typeof item?.unitTypeId === 'string' ? item.unitTypeId.trim() : '';
     if (!unitTypeId) return;
+    const tier = Math.max(1, Math.floor(Number(item?.tier ?? item?.level) || 1));
+    const battleVisual = item?.visuals?.battle && typeof item.visuals.battle === 'object' ? item.visuals.battle : {};
+    const previewVisual = item?.visuals?.preview && typeof item.visuals.preview === 'object' ? item.visuals.preview : {};
     map.set(unitTypeId, {
       ...item,
       unitTypeId,
+      tier,
+      level: tier,
       speed: Math.max(0.2, Number(item?.speed) || 1),
       hp: Math.max(1, Number(item?.hp) || 10),
       atk: Math.max(0.1, Number(item?.atk) || 1),
       def: Math.max(0, Number(item?.def) || 0),
       range: Math.max(1, Number(item?.range) || 1),
-      roleTag: item?.roleTag === '远程' ? '远程' : '近战'
+      roleTag: item?.roleTag === '远程' ? '远程' : '近战',
+      rpsType: item?.rpsType === 'ranged' || item?.rpsType === 'defense' ? item.rpsType : 'mobility',
+      professionId: typeof item?.professionId === 'string' ? item.professionId : '',
+      rarity: typeof item?.rarity === 'string' ? item.rarity : 'common',
+      visuals: {
+        battle: {
+          bodyLayer: Math.max(0, Math.floor(Number(battleVisual.bodyLayer) || 0)),
+          gearLayer: Math.max(0, Math.floor(Number(battleVisual.gearLayer) || 0)),
+          vehicleLayer: Math.max(0, Math.floor(Number(battleVisual.vehicleLayer) || 0)),
+          tint: Number.isFinite(Number(battleVisual.tint)) ? Number(battleVisual.tint) : 0,
+          silhouetteLayer: Math.max(0, Math.floor(Number(battleVisual.silhouetteLayer) || 0))
+        },
+        preview: {
+          style: typeof previewVisual.style === 'string' ? previewVisual.style : 'procedural',
+          palette: {
+            primary: typeof previewVisual?.palette?.primary === 'string' ? previewVisual.palette.primary : '#5aa3ff',
+            secondary: typeof previewVisual?.palette?.secondary === 'string' ? previewVisual.palette.secondary : '#cfd8e3',
+            accent: typeof previewVisual?.palette?.accent === 'string' ? previewVisual.palette.accent : '#ffd166'
+          }
+        }
+      },
+      bodyId: item?.bodyId || null,
+      weaponIds: Array.isArray(item?.weaponIds) ? item.weaponIds : [],
+      vehicleId: item?.vehicleId || null,
+      abilityIds: Array.isArray(item?.abilityIds) ? item.abilityIds : [],
+      behaviorProfileId: item?.behaviorProfileId || null,
+      stabilityProfileId: item?.stabilityProfileId || null,
+      components: item?.components && typeof item.components === 'object' ? item.components : {},
+      isFlying: !!item?.components?.vehicle?.data?.isFlying
     });
   });
   return map;
@@ -111,7 +144,11 @@ const aggregateStats = (unitsMap = {}, unitTypeMap = new Map()) => {
       hpAvg: 90,
       atk: 16,
       def: 12,
-      range: 1
+      range: 1,
+      rpsType: 'mobility',
+      professionId: '',
+      tier: 1,
+      mainTypeId: ''
     };
   }
 
@@ -148,7 +185,11 @@ const aggregateStats = (unitsMap = {}, unitTypeMap = new Map()) => {
     hpAvg: totalHp / Math.max(1, total),
     atk: totalAtk / Math.max(1, total),
     def: totalDef / Math.max(1, total),
-    range: avgRange
+    range: avgRange,
+    rpsType: mainType?.rpsType || 'mobility',
+    professionId: mainType?.professionId || '',
+    tier: Math.max(1, Number(mainType?.tier || mainType?.level) || 1),
+    mainTypeId
   };
 };
 
@@ -465,6 +506,61 @@ const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, un
   return groups;
 };
 
+const DEFAULT_BEHAVIOR_PROFILE = {
+  transitionSec: {
+    moveToAttack: 0.3,
+    attackToMove: 0.28,
+    forwardToRetreat: 0.36,
+    retreatToForward: 0.36
+  }
+};
+
+const DEFAULT_STAGGER_REACTION = {
+  durationSec: {
+    light: 0.35,
+    medium: 0.52,
+    heavy: 0.76,
+    knockdown: 1.02
+  }
+};
+
+const DEFAULT_STABILITY_PROFILE = {
+  poiseMax: 100,
+  chargePoise: 140,
+  transitionMax: 90,
+  poiseRegenPerSec: 6.2,
+  transitionDecayPerSec: 4.1,
+  transitionRegenPerSec: 2.5
+};
+
+const resolveComponentData = (unitType = {}, key = '') => {
+  if (!key) return null;
+  const comp = unitType?.components?.[key];
+  if (Array.isArray(comp)) return comp.length > 0 ? comp[0] : null;
+  return comp && typeof comp === 'object' ? comp : null;
+};
+
+const resolveBehaviorProfile = (unitType = {}) => {
+  const profile = resolveComponentData(unitType, 'behaviorProfile');
+  return profile?.data && typeof profile.data === 'object'
+    ? profile.data
+    : DEFAULT_BEHAVIOR_PROFILE;
+};
+
+const resolveStabilityProfile = (unitType = {}) => {
+  const profile = resolveComponentData(unitType, 'stabilityProfile');
+  return profile?.data && typeof profile.data === 'object'
+    ? profile.data
+    : DEFAULT_STABILITY_PROFILE;
+};
+
+const resolveStaggerReaction = (unitType = {}) => {
+  const profile = resolveComponentData(unitType, 'staggerReaction');
+  return profile?.data && typeof profile.data === 'object'
+    ? profile.data
+    : DEFAULT_STAGGER_REACTION;
+};
+
 const createSquad = ({
   group,
   index,
@@ -478,6 +574,13 @@ const createSquad = ({
   const units = normalizeUnitsMap(group?.units || {});
   const startCount = sumUnitsMap(units);
   const stats = aggregateStats(units, unitTypeMap);
+  const mainType = unitTypeMap.get(stats.mainTypeId) || {};
+  const behaviorProfile = resolveBehaviorProfile(mainType);
+  const stabilityProfile = resolveStabilityProfile(mainType);
+  const staggerReaction = resolveStaggerReaction(mainType);
+  const poiseMax = Math.max(20, Number(stabilityProfile.poiseMax) || 100);
+  const transitionMax = Math.max(20, Number(stabilityProfile.transitionMax) || 90);
+  const chargePoise = Math.max(poiseMax, Number(stabilityProfile.chargePoise) || (poiseMax * 1.2));
   const hpAvg = Math.max(1, Number(stats.hpAvg) || 1);
   const maxHealth = Math.max(1, Math.round(startCount * hpAvg));
   const radius = clamp(8 + (Math.sqrt(Math.max(1, startCount)) * 0.58), 10, 118);
@@ -513,6 +616,10 @@ const createSquad = ({
     stats,
     classTag: stats.classTag,
     roleTag: stats.roleTag,
+    rpsType: stats.rpsType || 'mobility',
+    professionId: stats.professionId || '',
+    tier: Math.max(1, Number(stats.tier) || 1),
+    mainUnitTypeId: stats.mainTypeId || '',
     x: startX,
     y: startY,
     vx: 0,
@@ -523,6 +630,26 @@ const createSquad = ({
     radius,
     waypoints: [],
     action: '待命',
+    actionState: {
+      kind: 'none',
+      from: 'none',
+      to: 'none',
+      ttl: 0,
+      dur: 0
+    },
+    behaviorProfile,
+    stability: {
+      poise: poiseMax,
+      poiseMax,
+      chargePoise,
+      chargePoiseCurrent: chargePoise,
+      transition: transitionMax,
+      transitionMax,
+      poiseRegenPerSec: Math.max(0.2, Number(stabilityProfile.poiseRegenPerSec) || 6.2),
+      transitionDecayPerSec: Math.max(0.1, Number(stabilityProfile.transitionDecayPerSec) || 4.1),
+      transitionRegenPerSec: Math.max(0.1, Number(stabilityProfile.transitionRegenPerSec) || 2.5)
+    },
+    staggerReaction,
     behavior: team === TEAM_DEFENDER ? 'auto' : 'idle',
     order: {
       type: ORDER_IDLE,
@@ -568,7 +695,7 @@ const createSquad = ({
   };
 };
 
-const buildVisualResolver = (visualConfig) => {
+const buildVisualResolver = (visualConfig, unitTypeMap = new Map()) => {
   const byType = (visualConfig && typeof visualConfig === 'object' && visualConfig.byType) ? visualConfig.byType : {};
   const byClass = (visualConfig && typeof visualConfig === 'object' && visualConfig.byClass) ? visualConfig.byClass : {};
   const fallback = (visualConfig && typeof visualConfig === 'object' && visualConfig.fallback) ? visualConfig.fallback : {
@@ -578,12 +705,27 @@ const buildVisualResolver = (visualConfig) => {
   };
 
   return (unitTypeId, classTag) => {
+    const unitType = unitTypeMap.get(unitTypeId) || null;
+    const battleVisual = unitType?.visuals?.battle && typeof unitType.visuals.battle === 'object'
+      ? unitType.visuals.battle
+      : null;
+    if (battleVisual) {
+      return {
+        bodyIndex: Math.max(0, Number(battleVisual.bodyLayer) || 0),
+        gearIndex: Math.max(0, Number(battleVisual.gearLayer) || 0),
+        vehicleIndex: Math.max(0, Number(battleVisual.vehicleLayer) || 0),
+        silhouetteIndex: Math.max(0, Number(battleVisual.silhouetteLayer) || 0),
+        tint: Number.isFinite(Number(battleVisual.tint)) ? Number(battleVisual.tint) : 0
+      };
+    }
     const type = byType[unitTypeId] || null;
     const group = type || byClass[classTag] || fallback;
     return {
       bodyIndex: Math.max(0, Number(group?.bodyIndex) || 0),
       gearIndex: Math.max(0, Number(group?.gearIndex) || 0),
-      vehicleIndex: Math.max(0, Number(group?.vehicleIndex) || 0)
+      vehicleIndex: Math.max(0, Number(group?.vehicleIndex) || 0),
+      silhouetteIndex: Math.max(0, Number(group?.silhouetteIndex) || 0),
+      tint: Number.isFinite(Number(group?.tint)) ? Number(group.tint) : 0
     };
   };
 };
@@ -615,7 +757,7 @@ export default class BattleRuntime {
     this.field = computeFieldSize(this.initData?.battlefield || {});
     this.unitsPerSoldier = Math.max(1, Number(this.initData?.unitsPerSoldier) || DEFAULT_UNITS_PER_SOLDIER);
     this.repConfig = buildRepConfig(options?.repConfig || {});
-    this.visualConfig = buildVisualResolver(options?.visualConfig || {});
+    this.visualConfig = buildVisualResolver(options?.visualConfig || {}, this.unitTypeMap);
     const initAllowCross = this.initData?.rules?.allowCrossMidline;
     const optionAllowCross = options?.rules?.allowCrossMidline;
     this.rules = {
@@ -1131,6 +1273,29 @@ export default class BattleRuntime {
     this.lastInputEventType = String(inputType || 'command');
   }
 
+  beginSquadTransition(squad, fromKey = 'move', toKey = 'attack') {
+    if (!squad) return;
+    const profile = squad.behaviorProfile && typeof squad.behaviorProfile === 'object'
+      ? squad.behaviorProfile
+      : DEFAULT_BEHAVIOR_PROFILE;
+    const trans = profile.transitionSec && typeof profile.transitionSec === 'object'
+      ? profile.transitionSec
+      : DEFAULT_BEHAVIOR_PROFILE.transitionSec;
+    const key = `${fromKey}To${toKey}`;
+    const fallback = Number(trans.moveToAttack) || 0.3;
+    const dur = Math.max(0.05, Number(trans[key]) || fallback);
+    squad.actionState = {
+      kind: 'transition',
+      from: fromKey,
+      to: toKey,
+      ttl: dur,
+      dur
+    };
+    if (squad.stability && typeof squad.stability === 'object') {
+      squad.stability.transition = Math.max(0, Number(squad.stability.transitionMax) || 0);
+    }
+  }
+
   pickSquadAtPoint(worldX, worldY, options = {}) {
     if (this.phase !== 'battle' || !this.sim) return '';
     const team = options?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
@@ -1209,6 +1374,7 @@ export default class BattleRuntime {
 
   applyOrderToSquad(squad, orderType, safePoint) {
     if (!squad) return;
+    const prevOrder = typeof squad?.order?.type === 'string' ? squad.order.type : ORDER_IDLE;
     squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
     const now = Math.max(0, Number(this.sim?.timeElapsed) || 0);
     const kind = orderType === ORDER_ATTACK_MOVE
@@ -1222,6 +1388,7 @@ export default class BattleRuntime {
       targetSquadId: ''
     };
     if (kind === ORDER_CHARGE) {
+      this.beginSquadTransition(squad, prevOrder === ORDER_MOVE ? 'move' : 'attack', 'charge');
       squad.behavior = 'move';
       squad.action = '冲锋';
       squad.speedPolicy = SPEED_POLICY_RETREAT;
@@ -1231,6 +1398,7 @@ export default class BattleRuntime {
       return;
     }
     if (kind === ORDER_ATTACK_MOVE) {
+      this.beginSquadTransition(squad, prevOrder === ORDER_MOVE ? 'move' : 'idle', 'attack');
       squad.behavior = 'move';
       squad.action = '攻击前进';
       if (squad.speedMode === SPEED_MODE_C && squad.speedModeAuthority !== SPEED_AUTH_USER) {
@@ -1238,6 +1406,7 @@ export default class BattleRuntime {
       }
       return;
     }
+    this.beginSquadTransition(squad, prevOrder === ORDER_ATTACK_MOVE ? 'attack' : 'idle', 'move');
     squad.behavior = 'move';
     squad.action = '移动';
   }
@@ -1339,6 +1508,7 @@ export default class BattleRuntime {
     const squad = this.getSquadById(squadId);
     if (!squad || squad.team !== TEAM_ATTACKER || squad.remain <= 0) return false;
     if (behavior === 'standby') {
+      this.beginSquadTransition(squad, 'move', 'standby');
       squad.behavior = 'standby';
       squad.waypoints = [];
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
@@ -1348,6 +1518,7 @@ export default class BattleRuntime {
       return true;
     }
     if (behavior === 'idle') {
+      this.beginSquadTransition(squad, 'move', 'idle');
       squad.behavior = 'idle';
       squad.waypoints = [];
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
@@ -1357,6 +1528,7 @@ export default class BattleRuntime {
       return true;
     }
     if (behavior === 'auto') {
+      this.beginSquadTransition(squad, 'idle', 'attack');
       squad.behavior = 'auto';
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '自动攻击';
@@ -1365,6 +1537,7 @@ export default class BattleRuntime {
       return true;
     }
     if (behavior === 'defend') {
+      this.beginSquadTransition(squad, 'idle', 'defend');
       squad.behavior = 'defend';
       squad.waypoints = [];
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
@@ -1374,6 +1547,7 @@ export default class BattleRuntime {
       return true;
     }
     if (behavior === 'retreat') {
+      this.beginSquadTransition(squad, 'forward', 'retreat');
       squad.behavior = 'retreat';
       squad.waypoints = [squad.rallyPoint];
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
@@ -1566,7 +1740,14 @@ export default class BattleRuntime {
       squad.morale = clamp((Number(squad.morale) || 0) - (decay * dt), 0, MORALE_MAX);
       squad.stamina = clamp((Number(squad.stamina) || 0) + (inCombat ? 3.2 : 5.4) * dt, 0, STAMINA_MAX);
       if ((Number(squad.morale) || 0) <= 0 && squad.behavior !== 'retreat') {
-        this.commandBehavior(squad.id, 'retreat');
+        if (squad.team === TEAM_ATTACKER) {
+          this.commandBehavior(squad.id, 'retreat');
+        } else {
+          squad.behavior = 'retreat';
+          squad.action = '撤退';
+          squad.waypoints = [squad.rallyPoint];
+          this.beginSquadTransition(squad, 'forward', 'retreat');
+        }
       }
     });
 
@@ -1683,6 +1864,8 @@ export default class BattleRuntime {
       behavior: squad.behavior || 'idle',
       debugTargetScore: squad.debugTargetScore || null,
       orderType: squad.order?.type || ORDER_IDLE,
+      actionState: squad.actionState || { kind: 'none', ttl: 0, dur: 0 },
+      stability: squad.stability || null,
       skills: this.phase === 'battle' ? buildSkillMetaFromSquad(squad, this.unitTypeMap).skills : [],
       placed: squad?.placed !== false,
       selected: this.phase === 'battle'
@@ -1733,10 +1916,11 @@ export default class BattleRuntime {
         const unitTypeId = Object.keys(unitsMap)[0] || '';
         const classTag = inferClassFromUnitType(this.unitTypeMap.get(unitTypeId) || {});
         const visual = this.visualConfig(unitTypeId, classTag);
+        const isFlying = !!this.unitTypeMap.get(unitTypeId)?.isFlying;
         const base = previewCount * UNIT_INSTANCE_STRIDE;
         units.data[base + 0] = Number(group.x) || 0;
         units.data[base + 1] = Number(group.y) || 0;
-        units.data[base + 2] = 0;
+        units.data[base + 2] = isFlying ? 8.5 : 0;
         units.data[base + 3] = Math.max(4.2, Math.min(12, Math.sqrt(total) * 0.52));
         units.data[base + 4] = teamTag === TEAM_ATTACKER ? 0 : Math.PI;
         units.data[base + 5] = teamTag === TEAM_ATTACKER ? 0 : 1;
@@ -1744,8 +1928,12 @@ export default class BattleRuntime {
         units.data[base + 7] = visual.bodyIndex;
         units.data[base + 8] = visual.gearIndex;
         units.data[base + 9] = visual.vehicleIndex;
-        units.data[base + 10] = selected ? 1 : 0;
-        units.data[base + 11] = idx === 0 ? 1 : 0;
+        units.data[base + 10] = visual.silhouetteIndex || 0;
+        units.data[base + 11] = Number.isFinite(Number(visual.tint)) ? Number(visual.tint) : 1;
+        units.data[base + 12] = selected ? 1 : 0;
+        units.data[base + 13] = idx === 0 ? 1 : 0;
+        units.data[base + 14] = 0;
+        units.data[base + 15] = 0;
         previewCount += 1;
       };
       this.attackerDeployGroups.forEach((group, idx) => fillPreviewGroup(group, TEAM_ATTACKER, group.id === this.selectedDeploySquadId, idx));
@@ -1782,10 +1970,11 @@ export default class BattleRuntime {
       if (!agent || agent.dead || (Number(agent.weight) || 0) <= 0.001) continue;
       const squad = this.getSquadById(agent.squadId);
       const visual = this.visualConfig(agent.unitTypeId, squad?.classTag || agent.typeCategory || 'infantry');
+      const isFlying = !!this.unitTypeMap.get(agent.unitTypeId)?.isFlying;
       const base = unitCount * UNIT_INSTANCE_STRIDE;
       units.data[base + 0] = Number(agent.x) || 0;
       units.data[base + 1] = Number(agent.y) || 0;
-      units.data[base + 2] = 0;
+      units.data[base + 2] = isFlying ? 8.5 : 0;
       units.data[base + 3] = Math.max(2.6, Math.min(10.5, Math.sqrt(Math.max(1, Number(agent.weight) || 1)) * 0.82));
       units.data[base + 4] = Number(agent.yaw) || 0;
       units.data[base + 5] = agent.team === TEAM_ATTACKER ? 0 : 1;
@@ -1793,8 +1982,12 @@ export default class BattleRuntime {
       units.data[base + 7] = visual.bodyIndex;
       units.data[base + 8] = visual.gearIndex;
       units.data[base + 9] = visual.vehicleIndex;
-      units.data[base + 10] = agent.squadId === this.selectedBattleSquadId ? 1 : 0;
-      units.data[base + 11] = agent.isFlagBearer ? 1 : 0;
+      units.data[base + 10] = visual.silhouetteIndex || 0;
+      units.data[base + 11] = Number.isFinite(Number(visual.tint)) ? Number(visual.tint) : 1;
+      units.data[base + 12] = agent.squadId === this.selectedBattleSquadId ? 1 : 0;
+      units.data[base + 13] = agent.isFlagBearer ? 1 : 0;
+      units.data[base + 14] = 0;
+      units.data[base + 15] = 0;
       unitCount += 1;
     }
     units.count = unitCount;
