@@ -1,3 +1,11 @@
+/**
+ * UnitType normalization is the frontend compatibility boundary.
+ * - Primary contract: backend UnitTypeDTO v1 (`schemaVersion: 1`).
+ * - Compatibility contract: legacy payloads still accepted (`id/level`).
+ * - Keep defaults centralized here; runtime should consume normalized rows.
+ * - `id`/`level` are retained only for backward compatibility and mirror
+ *   `unitTypeId`/`tier` respectively.
+ */
 import {
   clampNumber,
   ensureStringArray,
@@ -8,16 +16,39 @@ import {
   toStringId
 } from './types';
 
+const CLASS_TAG_SET = new Set(['infantry', 'cavalry', 'archer', 'artillery']);
+
+const normalizeClassTag = (value, fallbackUnit = {}) => {
+  const explicit = toStringId(value).toLowerCase();
+  if (CLASS_TAG_SET.has(explicit)) return explicit;
+  const name = toStringId(fallbackUnit?.name);
+  const roleTag = fallbackUnit?.roleTag === '远程' ? '远程' : '近战';
+  const speed = Number(fallbackUnit?.speed) || 0;
+  const range = Number(fallbackUnit?.range) || 0;
+  if (/(炮|投石|火炮|炮兵|臼炮|加农)/.test(name)) return 'artillery';
+  if (/(弓|弩|弓兵|弩兵|射手)/.test(name) || (roleTag === '远程' && range >= 3)) return 'archer';
+  if (/(骑|骑兵|铁骑|龙骑)/.test(name) || speed >= 2.1) return 'cavalry';
+  return 'infantry';
+};
+
 const normalizeVisuals = (visuals = {}) => {
   const battle = visuals?.battle && typeof visuals.battle === 'object' ? visuals.battle : {};
   const preview = visuals?.preview && typeof visuals.preview === 'object' ? visuals.preview : {};
+  const bodyLayer = toInt(battle.bodyLayer, 0, 0, 1024);
+  const spriteFrontLayer = toInt(battle.spriteFrontLayer ?? bodyLayer, bodyLayer, 0, 4096);
+  const rawTopLayer = battle?.spriteTopLayer;
+  const spriteTopLayer = Number.isFinite(Number(rawTopLayer))
+    ? toInt(rawTopLayer, 0, 0, 4096)
+    : null;
   return {
     battle: {
-      bodyLayer: toInt(battle.bodyLayer, 0, 0, 1024),
+      bodyLayer,
       gearLayer: toInt(battle.gearLayer, 0, 0, 1024),
       vehicleLayer: toInt(battle.vehicleLayer, 0, 0, 1024),
       tint: clampNumber(battle.tint, 0, -9999, 9999),
-      silhouetteLayer: toInt(battle.silhouetteLayer, 0, 0, 1024)
+      silhouetteLayer: toInt(battle.silhouetteLayer, 0, 0, 1024),
+      spriteFrontLayer,
+      spriteTopLayer
     },
     preview: {
       style: toStringId(preview.style) || 'procedural',
@@ -32,7 +63,19 @@ const normalizeVisuals = (visuals = {}) => {
 
 const normalizeComponents = (components = {}) => {
   const source = components && typeof components === 'object' ? components : {};
+  const bodyId = toStringId(source.bodyId) || null;
+  const weaponIds = ensureStringArray(source.weaponIds);
+  const vehicleId = toStringId(source.vehicleId) || null;
+  const abilityIds = ensureStringArray(source.abilityIds);
+  const behaviorProfileId = toStringId(source.behaviorProfileId) || null;
+  const stabilityProfileId = toStringId(source.stabilityProfileId) || null;
   return {
+    bodyId,
+    weaponIds,
+    vehicleId,
+    abilityIds,
+    behaviorProfileId,
+    stabilityProfileId,
     body: source.body && typeof source.body === 'object' ? source.body : null,
     weapon: Array.isArray(source.weapon) ? source.weapon.filter((item) => item && typeof item === 'object') : [],
     vehicle: source.vehicle && typeof source.vehicle === 'object' ? source.vehicle : null,
@@ -44,8 +87,8 @@ const normalizeComponents = (components = {}) => {
 };
 
 export const normalizeUnitType = (unit = {}) => {
-  const unitTypeId = toStringId(unit?.unitTypeId || unit?.id);
-  const tier = Math.max(1, toInt(unit?.tier ?? unit?.level, 1, 1, 4));
+  const unitTypeId = toStringId(unit?.unitTypeId) || toStringId(unit?.id);
+  const tier = Math.max(1, toInt(unit?.tier, toInt(unit?.level, 1, 1, 4), 1, 4));
   const range = clampNumber(unit?.range, 1, 1, 9999);
   const roleTag = normalizeRoleTag(unit?.roleTag, range);
   const enabled = unit?.enabled !== false;
@@ -53,11 +96,19 @@ export const normalizeUnitType = (unit = {}) => {
   const vehicleId = toStringId(unit?.vehicleId) || null;
   const behaviorProfileId = toStringId(unit?.behaviorProfileId) || null;
   const stabilityProfileId = toStringId(unit?.stabilityProfileId) || null;
+  const components = normalizeComponents(unit?.components || {});
+  const classTag = normalizeClassTag(unit?.classTag, {
+    ...unit,
+    roleTag,
+    range
+  });
   return {
+    schemaVersion: Math.max(1, toInt(unit?.schemaVersion, 1, 1, 9999)),
     id: unitTypeId,
     unitTypeId,
     name: toStringId(unit?.name) || unitTypeId || '未知兵种',
     enabled,
+    classTag,
     roleTag,
     rpsType: normalizeRpsType(unit?.rpsType),
     professionId: toStringId(unit?.professionId),
@@ -77,14 +128,14 @@ export const normalizeUnitType = (unit = {}) => {
     sortOrder: toInt(unit?.sortOrder, 0, -999999, 999999),
     tags: ensureStringArray(unit?.tags),
     description: typeof unit?.description === 'string' ? unit.description.trim() : '',
-    bodyId,
-    weaponIds: ensureStringArray(unit?.weaponIds),
-    vehicleId,
-    abilityIds: ensureStringArray(unit?.abilityIds),
-    behaviorProfileId,
-    stabilityProfileId,
+    bodyId: components.bodyId || bodyId,
+    weaponIds: components.weaponIds.length > 0 ? components.weaponIds : ensureStringArray(unit?.weaponIds),
+    vehicleId: components.vehicleId || vehicleId,
+    abilityIds: components.abilityIds.length > 0 ? components.abilityIds : ensureStringArray(unit?.abilityIds),
+    behaviorProfileId: components.behaviorProfileId || behaviorProfileId,
+    stabilityProfileId: components.stabilityProfileId || stabilityProfileId,
     visuals: normalizeVisuals(unit?.visuals || {}),
-    components: normalizeComponents(unit?.components || {})
+    components
   };
 };
 

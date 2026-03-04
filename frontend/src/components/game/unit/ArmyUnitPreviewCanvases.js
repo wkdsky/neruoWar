@@ -5,7 +5,9 @@ import {
   resizeCanvasToDisplaySize
 } from '../../../game/battle/presentation/render/WebGL2Context';
 import ImpostorRenderer, { UNIT_INSTANCE_STRIDE } from '../../../game/battle/presentation/render/ImpostorRenderer';
-import createBattleProceduralTextures from '../../../game/battle/presentation/assets/ProceduralTextures';
+import createBattleProceduralTextures, {
+  resolveTopLayer
+} from '../../../game/battle/presentation/assets/ProceduralTextures';
 
 const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
 
@@ -16,35 +18,71 @@ const colorFromHex = (value, fallback) => {
   return Number.parseInt(text, 16);
 };
 
+const CLOSEUP_GEOMETRY_CACHE = {
+  body: new THREE.SphereGeometry(5.8, 28, 20),
+  helmet: new THREE.SphereGeometry(4.45, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.58),
+  weapon: new THREE.BoxGeometry(0.95, 10.6, 0.95),
+  stripe: new THREE.TorusGeometry(3.85, 0.38, 12, 40, Math.PI * 1.28),
+  base: new THREE.CylinderGeometry(7.2, 8.4, 2.4, 28)
+};
+
+const CLOSEUP_MATERIAL_CACHE = new Map();
+
+const getCloseupMaterials = (unit = {}) => {
+  const palette = unit?.visuals?.preview?.palette || {};
+  const key = `${palette.primary || ''}|${palette.secondary || ''}|${palette.accent || ''}`;
+  if (CLOSEUP_MATERIAL_CACHE.has(key)) return CLOSEUP_MATERIAL_CACHE.get(key);
+  const materials = {
+    primary: new THREE.MeshStandardMaterial({
+      color: colorFromHex(palette.primary, 0x5aa3ff),
+      roughness: 0.36,
+      metalness: 0.12
+    }),
+    secondary: new THREE.MeshStandardMaterial({
+      color: colorFromHex(palette.secondary, 0xcfd8e3),
+      roughness: 0.52,
+      metalness: 0.1
+    }),
+    accent: new THREE.MeshStandardMaterial({
+      color: colorFromHex(palette.accent, 0xffd166),
+      roughness: 0.28,
+      metalness: 0.22
+    })
+  };
+  CLOSEUP_MATERIAL_CACHE.set(key, materials);
+  return materials;
+};
+
 const buildCloseupMesh = (unit = {}) => {
   const group = new THREE.Group();
-  const palette = unit?.visuals?.preview?.palette || {};
-  const primary = new THREE.MeshStandardMaterial({ color: colorFromHex(palette.primary, 0x5aa3ff), roughness: 0.38, metalness: 0.18 });
-  const secondary = new THREE.MeshStandardMaterial({ color: colorFromHex(palette.secondary, 0xcfd8e3), roughness: 0.58, metalness: 0.08 });
-  const accent = new THREE.MeshStandardMaterial({ color: colorFromHex(palette.accent, 0xffd166), roughness: 0.32, metalness: 0.24 });
+  const materials = getCloseupMaterials(unit);
 
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(4.6, 8.8, 6, 10), primary);
-  body.position.set(0, 0, 8.2);
+  const body = new THREE.Mesh(CLOSEUP_GEOMETRY_CACHE.body, materials.primary);
+  body.position.set(0, 0, 8.6);
   group.add(body);
 
-  const shoulder = new THREE.Mesh(new THREE.BoxGeometry(7.5, 2.8, 2), secondary);
-  shoulder.position.set(0, 0, 11.4);
-  group.add(shoulder);
+  const helmet = new THREE.Mesh(CLOSEUP_GEOMETRY_CACHE.helmet, materials.secondary);
+  helmet.position.set(0, 0, 12.1);
+  helmet.rotation.x = Math.PI * 0.04;
+  group.add(helmet);
 
-  const weaponLength = 8 + Math.min(10, Number(unit?.range) || 1);
-  const weapon = new THREE.Mesh(new THREE.BoxGeometry(1.1, weaponLength, 1.1), accent);
-  weapon.position.set(4.5, 0, 8.6);
-  weapon.rotation.z = Math.PI * 0.4;
+  const weapon = new THREE.Mesh(CLOSEUP_GEOMETRY_CACHE.weapon, materials.accent);
+  weapon.position.set(4.7, 0.5, 8.4);
+  weapon.rotation.z = Math.PI * 0.42;
+  weapon.rotation.y = Math.PI * 0.04;
   group.add(weapon);
 
-  const vehicle = new THREE.Mesh(new THREE.CylinderGeometry(6.8, 8.2, 2.2, 20), secondary);
-  vehicle.position.set(0, 0, 2.1);
-  group.add(vehicle);
+  const stripe = new THREE.Mesh(CLOSEUP_GEOMETRY_CACHE.stripe, materials.accent);
+  stripe.position.set(0.15, 0.25, 8.25);
+  stripe.rotation.z = Math.PI * 0.45;
+  stripe.rotation.x = Math.PI * 0.26;
+  group.add(stripe);
 
-  return {
-    group,
-    materials: [primary, secondary, accent]
-  };
+  const base = new THREE.Mesh(CLOSEUP_GEOMETRY_CACHE.base, materials.secondary);
+  base.position.set(0, 0, 1.2);
+  group.add(base);
+
+  return group;
 };
 
 export const ArmyCloseupThreePreview = ({ unit, rotationDeg = 0, className = '' }) => {
@@ -62,6 +100,7 @@ export const ArmyCloseupThreePreview = ({ unit, rotationDeg = 0, className = '' 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(42, Math.max(0.2, (canvas.clientWidth || 320) / Math.max(1, canvas.clientHeight || 220)), 0.1, 800);
     camera.position.set(0, -46, 26);
+    camera.up.set(0, 0, 1);
     camera.lookAt(0, 0, 8);
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0x4b5563, 1.05);
@@ -77,7 +116,7 @@ export const ArmyCloseupThreePreview = ({ unit, rotationDeg = 0, className = '' 
     turntable.position.set(0, 0, 0.6);
     scene.add(turntable);
 
-    const { group, materials } = buildCloseupMesh(unit);
+    const group = buildCloseupMesh(unit);
     scene.add(group);
 
     let raf = 0;
@@ -90,7 +129,7 @@ export const ArmyCloseupThreePreview = ({ unit, rotationDeg = 0, className = '' 
         camera.aspect = Math.max(0.2, w / Math.max(1, h));
         camera.updateProjectionMatrix();
       }
-      group.rotation.y = (rotationRef.current * Math.PI) / 180;
+      group.rotation.z = (rotationRef.current * Math.PI) / 180;
       renderer.render(scene, camera);
     };
     renderFrame();
@@ -98,10 +137,6 @@ export const ArmyCloseupThreePreview = ({ unit, rotationDeg = 0, className = '' 
     return () => {
       cancelAnimationFrame(raf);
       renderer.dispose();
-      materials.forEach((mat) => mat.dispose());
-      group.traverse((node) => {
-        if (node?.geometry && typeof node.geometry.dispose === 'function') node.geometry.dispose();
-      });
       turntable.geometry.dispose();
       turntable.material.dispose();
     };
@@ -116,9 +151,15 @@ export const ArmyCloseupThreePreview = ({ unit, rotationDeg = 0, className = '' 
   );
 };
 
-const buildCameraState = (width, height) => {
+const buildCameraState = (width, height, orbitDeg = 0) => {
   const camera = new THREE.PerspectiveCamera(44, Math.max(0.2, width / Math.max(1, height)), 0.1, 600);
-  camera.position.set(0, -58, 32);
+  const orbitRad = (Number(orbitDeg) || 0) * (Math.PI / 180);
+  const orbitRadius = 58;
+  camera.position.set(
+    Math.sin(orbitRad) * orbitRadius,
+    -Math.cos(orbitRad) * orbitRadius,
+    32
+  );
   camera.up.set(0, 0, 1);
   camera.lookAt(0, 0, 8);
   camera.updateMatrixWorld(true);
@@ -167,7 +208,7 @@ export const ArmyBattleImpostorPreview = ({ unit, rotationDeg = 0, className = '
       snapshot.data[1] = 0;
       snapshot.data[2] = 0;
       snapshot.data[3] = 8.4;
-      snapshot.data[4] = (rotationRef.current * Math.PI) / 180;
+      snapshot.data[4] = 0;
       snapshot.data[5] = 0;
       snapshot.data[6] = 1;
       snapshot.data[7] = Number(battleVisual.bodyLayer) || 0;
@@ -179,8 +220,20 @@ export const ArmyBattleImpostorPreview = ({ unit, rotationDeg = 0, className = '
       snapshot.data[13] = 1;
       snapshot.data[14] = 0;
       snapshot.data[15] = 0;
+      const frontLayer = Number(battleVisual.spriteFrontLayer ?? battleVisual.bodyLayer) || 0;
+      const bodyTopLayer = Number.isFinite(Number(battleVisual.spriteTopLayer))
+        ? Math.max(0, Math.floor(Number(battleVisual.spriteTopLayer)))
+        : resolveTopLayer(frontLayer);
+      snapshot.data[16] = bodyTopLayer;
+      snapshot.data[17] = resolveTopLayer(Number(battleVisual.gearLayer) || 0);
+      snapshot.data[18] = resolveTopLayer(Number(battleVisual.vehicleLayer) || 0);
+      snapshot.data[19] = resolveTopLayer(Number(battleVisual.silhouetteLayer) || 0);
       renderer.updateFromSnapshot(snapshot);
-      const cameraState = buildCameraState(Math.max(1, gl.drawingBufferWidth), Math.max(1, gl.drawingBufferHeight));
+      const cameraState = buildCameraState(
+        Math.max(1, gl.drawingBufferWidth),
+        Math.max(1, gl.drawingBufferHeight),
+        -rotationRef.current
+      );
       renderer.render(cameraState, 0.2);
     };
     frame();

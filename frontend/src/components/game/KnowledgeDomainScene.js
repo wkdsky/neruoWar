@@ -1101,6 +1101,11 @@ const KnowledgeDomainScene = ({
       open: false,
       gateKey: ''
     });
+    fetchDefenseLayout(true);
+  };
+
+  const handleBattlefieldPreviewSaved = () => {
+    fetchDefenseLayout(true);
   };
 
   const clearDistributionToastTimer = () => {
@@ -4550,6 +4555,7 @@ const KnowledgeDomainScene = ({
         gateKey={battlefieldPreviewState.gateKey}
         gateLabel={CITY_GATE_LABELS[battlefieldPreviewState.gateKey] || ''}
         canEdit={canEditGateDefense}
+        onSaved={handleBattlefieldPreviewSaved}
         onClose={closeBattlefieldPreview}
       />
       )}

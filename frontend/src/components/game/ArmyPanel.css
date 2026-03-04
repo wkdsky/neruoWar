@@ -48,10 +48,222 @@
   padding: 12px 0;
 }
 
+.army-library-tabs {
+  display: inline-flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.64);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.army-library-tab {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.46);
+  color: #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+
+.army-library-tab.active {
+  border-color: rgba(125, 211, 252, 0.75);
+  color: #e0f2fe;
+  background: rgba(2, 132, 199, 0.28);
+}
+
+.army-message-inline {
+  margin-bottom: 12px;
+}
+
 .army-content {
   display: grid;
   grid-template-columns: minmax(0, 1.8fr) minmax(300px, 1fr);
   gap: 14px;
+}
+
+.army-equipment-content {
+  display: grid;
+  gap: 12px;
+}
+
+.army-equipment-section {
+  background: rgba(15, 23, 42, 0.56);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.army-equipment-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.army-equipment-head h3 {
+  margin: 0;
+  color: #f8fafc;
+}
+
+.army-equipment-head span {
+  font-size: 0.82rem;
+  color: #93c5fd;
+}
+
+.army-equipment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.army-equipment-card {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(16, 24, 39, 0.72);
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.army-equipment-card:hover {
+  border-color: rgba(125, 211, 252, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.25);
+}
+
+.army-equipment-card:focus-visible {
+  outline: 2px solid rgba(125, 211, 252, 0.9);
+  outline-offset: 1px;
+}
+
+.army-equipment-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.army-equipment-card-head h4 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 0.95rem;
+}
+
+.army-equipment-desc {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
+.army-equipment-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.army-equipment-stats span {
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(15, 23, 42, 0.7);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.78rem;
+  color: #dbeafe;
+}
+
+.army-equipment-style {
+  border: 1px dashed rgba(148, 163, 184, 0.32);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.62);
+  padding: 7px 8px;
+  font-size: 0.78rem;
+  color: #93c5fd;
+  line-height: 1.45;
+}
+
+.army-equipment-open-tip {
+  font-size: 0.78rem;
+  color: #86efac;
+}
+
+.army-unit-grid-library {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.army-unit-card-library {
+  min-height: 180px;
+}
+
+.army-item-style-modal {
+  width: min(760px, calc(100vw - 24px));
+  max-height: min(82vh, 760px);
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: rgba(8, 14, 24, 0.97);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.army-item-style-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.army-item-style-modal-head h4 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 15px;
+}
+
+.army-item-style-modal-head span {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.army-item-style-list {
+  display: grid;
+  gap: 6px;
+}
+
+.army-item-style-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 6px 8px;
+}
+
+.army-item-style-row span {
+  color: #93c5fd;
+  font-size: 12px;
+}
+
+.army-item-style-row strong {
+  color: #f8fafc;
+  font-size: 12px;
+  text-align: right;
+  word-break: break-word;
+}
+
+.army-item-style-summary {
+  border: 1px dashed rgba(148, 163, 184, 0.32);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.62);
+  padding: 8px;
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .army-unit-grid {
@@ -674,6 +886,14 @@
   }
 
   .army-unit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .army-equipment-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .army-unit-grid-library {
     grid-template-columns: 1fr;
   }
 

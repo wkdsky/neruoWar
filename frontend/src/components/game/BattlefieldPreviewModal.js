@@ -1082,6 +1082,7 @@ const BattlefieldPreviewModal = ({
   gateLabel = '',
   canEdit = false,
   layoutBundleOverride = null,
+  onSaved = null,
   onClose
 }) => {
   const sceneCanvasRef = useRef(null);
@@ -1287,7 +1288,6 @@ const BattlefieldPreviewModal = ({
   const deployedDefenderCountMap = useMemo(() => {
     const map = new Map();
     (Array.isArray(defenderDeployments) ? defenderDeployments : []).forEach((item) => {
-      if (item?.placed === false) return;
       normalizeDefenderUnits(item?.units, item?.unitTypeId, item?.count).forEach((entry) => {
         map.set(entry.unitTypeId, (map.get(entry.unitTypeId) || 0) + entry.count);
       });
@@ -2169,6 +2169,19 @@ const BattlefieldPreviewModal = ({
       });
       setCacheNeedsSync(false);
       setErrorText('');
+      if (typeof onSaved === 'function') {
+        try {
+          onSaved({
+            nodeId,
+            gateKey,
+            layoutBundle: data?.layoutBundle && typeof data.layoutBundle === 'object'
+              ? data.layoutBundle
+              : null
+          });
+        } catch {
+          // Ignore callback failures to avoid breaking save success flow.
+        }
+      }
       if (!silent) setMessage(data.message || '战场布局已保存');
       return { ok: true };
     } catch (error) {
@@ -2187,7 +2200,7 @@ const BattlefieldPreviewModal = ({
     } finally {
       if (!silent) setSavingLayout(false);
     }
-  }, [activeLayoutMeta, defenderDeployments, effectiveCanEdit, gateKey, itemCatalog, nodeId, open]);
+  }, [activeLayoutMeta, defenderDeployments, effectiveCanEdit, gateKey, itemCatalog, nodeId, onSaved, open]);
 
   useEffect(() => {
     persistBattlefieldLayoutRef.current = persistBattlefieldLayout;
@@ -3957,7 +3970,7 @@ const BattlefieldPreviewModal = ({
           {defenderEditorOpen && (
             <div className="battlefield-defender-editor" onClick={(event) => event.stopPropagation()}>
               <div className="battlefield-defender-editor-head">
-                <strong>新建守城部队</strong>
+                <strong>{defenderEditingDeployId ? '编辑守城部队' : '新建守城部队'}</strong>
                 <div className="battlefield-sidebar-row">
                   <button type="button" className="btn btn-small btn-secondary" onClick={closeDefenderEditor}>关闭</button>
                   <button
@@ -4058,7 +4071,7 @@ const BattlefieldPreviewModal = ({
                 </div>
               </div>
               <div className="battlefield-defender-editor-tip">
-                {`总兵力 ${defenderEditorTotalCount}。确定后会生成或更新守军部队卡片；双击左侧守军部队卡片可再次编辑，若该部队已部署会自动从战场撤回。`}
+                {`总兵力 ${defenderEditorTotalCount}。确定后会生成或更新守军部队卡片；可通过卡片右上角“编辑/删除”管理部队，若该部队已部署会自动从战场撤回。`}
               </div>
             </div>
           )}
@@ -4129,26 +4142,9 @@ const BattlefieldPreviewModal = ({
                     <div className="battlefield-sidebar-tip">当前未创建守军部队，请先点击“新建部队”。</div>
                   )}
                   {defenderDeploymentRows.map((item) => (
-                    <button
+                    <article
                       key={`def-deploy-${item.deployId}`}
-                      type="button"
-                      className={`battlefield-item-card ${selectedDeploymentId === item.deployId ? 'selected' : ''}`}
-                      draggable={false}
-                      onDragStart={(event) => {
-                        event.dataTransfer?.setData('application/x-defender-deploy-id', item.deployId);
-                        event.dataTransfer?.setData('text/plain', item.deployId);
-                        setDefenderDragPreview({
-                          deployId: item.deployId,
-                          x: Number(item?.x) || 0,
-                          y: Number(item?.y) || 0,
-                          rotation: normalizeDefenderFacingDeg(item?.rotation),
-                          blocked: false
-                        });
-                      }}
-                      onDragEnd={() => {
-                        setDefenderDragPreview(null);
-                        setActiveDefenderMoveId('');
-                      }}
+                      className={`battlefield-item-card battlefield-defender-card ${selectedDeploymentId === item.deployId ? 'selected' : ''}`}
                       onClick={() => {
                         setSelectedDeploymentId(item.deployId);
                         setSelectedWallId('');
@@ -4184,12 +4180,38 @@ const BattlefieldPreviewModal = ({
                         startEditDefenderDeployment(item.deployId);
                       }}
                     >
-                      <strong>{`${item.teamName} · #${item.sortOrder}`}</strong>
+                      <div className="battlefield-defender-card-head">
+                        <strong>{`${item.teamName} · #${item.sortOrder}`}</strong>
+                        <div className="battlefield-defender-card-actions">
+                          <button
+                            type="button"
+                            className="btn btn-small btn-secondary"
+                            disabled={!effectiveCanEdit}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              startEditDefenderDeployment(item.deployId);
+                            }}
+                          >
+                            编辑
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-small btn-warning"
+                            disabled={!effectiveCanEdit}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              removeDefenderDeployment(item.deployId);
+                            }}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
                       <span>{`总兵力 ${item.totalCount}`}</span>
                       <span>{item.unitSummary || '未配置兵种'}</span>
                       <span>{item.placed !== false ? '状态 已部署' : '状态 未部署'}</span>
                       <span>{item.placed !== false ? `坐标 (${Math.round(item.x)}, ${Math.round(item.y)})` : '坐标 -'}</span>
-                    </button>
+                    </article>
                   ))}
 
                   <div className="battlefield-sidebar-meta">
@@ -4214,18 +4236,6 @@ const BattlefieldPreviewModal = ({
                       )
                       : (editMode ? '先新建守军部队，再点击部队卡片拾取并放置到右侧蓝色守方区域' : '先新建守军部队；进入“布置战场”后可点击部队卡片进行部署')}
                   </div>
-                  {selectedDefenderDeployment && (
-                    <div className="battlefield-sidebar-row">
-                      <button
-                        type="button"
-                        className="btn btn-small btn-warning"
-                        disabled={!effectiveCanEdit}
-                        onClick={() => removeDefenderDeployment(selectedDefenderDeployment.deployId)}
-                      >
-                        删除
-                      </button>
-                    </div>
-                  )}
                 </>
               )}
             </div>

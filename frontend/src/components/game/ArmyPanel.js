@@ -7,6 +7,10 @@ import {
   ArmyCloseupThreePreview,
   ArmyBattleImpostorPreview
 } from './unit/ArmyUnitPreviewCanvases';
+import {
+  ArmyBattlefieldItemCloseupPreview,
+  ArmyBattlefieldItemBattlePreview
+} from './item/ArmyBattlefieldItemPreviewCanvases';
 
 const QUICK_QTY_STEPS = [10, 50, 100, 500, 1000];
 const TEMPLATE_MAX_COUNT = 999999999;
@@ -69,11 +73,75 @@ const unitsToSummaryText = (units = [], unitNameById = new Map()) => (
     .join(' / ')
 );
 
-const ArmyPanel = () => {
+const normalizeBattlefieldItemCatalog = (items = []) => {
+  const source = Array.isArray(items) ? items : [];
+  const out = [];
+  const seen = new Set();
+  source.forEach((item) => {
+    const itemId = typeof item?.itemId === 'string' && item.itemId.trim()
+      ? item.itemId.trim()
+      : (typeof item?.id === 'string' && item.id.trim() ? item.id.trim() : '');
+    if (!itemId || seen.has(itemId)) return;
+    seen.add(itemId);
+    out.push({
+      itemId,
+      name: (typeof item?.name === 'string' && item.name.trim()) ? item.name.trim() : itemId,
+      description: (typeof item?.description === 'string' && item.description.trim())
+        ? item.description.trim()
+        : '',
+      width: Math.max(12, Number(item?.width) || 84),
+      depth: Math.max(12, Number(item?.depth) || 24),
+      height: Math.max(10, Number(item?.height) || 32),
+      hp: Math.max(1, Math.floor(Number(item?.hp) || 1)),
+      defense: Math.max(0.1, Number(item?.defense) || 1),
+      style: item?.style && typeof item.style === 'object' ? item.style : {}
+    });
+  });
+  return out;
+};
+
+const buildBattlefieldItemIntro = (item = {}) => {
+  const explicit = typeof item?.description === 'string' ? item.description.trim() : '';
+  if (explicit) return explicit;
+  const shape = typeof item?.style?.shape === 'string' ? item.style.shape.trim().toLowerCase() : '';
+  const shapeLabel = shape === 'stakes' ? '拒马木刺' : '防御墙体';
+  return `${item?.name || item?.itemId || '该设置物'}用于战场布置，属于${shapeLabel}，可用于阻挡推进与吸收伤害。`;
+};
+
+const formatStyleValue = (value) => {
+  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.join(', ');
+  if (value && typeof value === 'object') return JSON.stringify(value);
+  return '';
+};
+
+const formatBattlefieldItemStyleSummary = (style = {}) => {
+  const entries = Object.entries(style || {})
+    .map(([key, value]) => [key, formatStyleValue(value)])
+    .filter(([, value]) => value !== '');
+  if (entries.length <= 0) return '默认样式';
+  return entries.slice(0, 8).map(([key, value]) => `${key}: ${value}`).join(' ｜ ');
+};
+
+const getBattlefieldItemStyleEntries = (style = {}) => (
+  Object.entries(style || {})
+    .map(([key, value]) => ({ key, value: formatStyleValue(value) }))
+    .filter((entry) => entry.value !== '')
+);
+
+const ArmyPanel = ({ initialLibraryTab = 'units', mode = 'barracks' }) => {
+  const isLibraryMode = mode === 'library';
+  const safeInitialLibraryTab = initialLibraryTab === 'equipment' ? 'equipment' : 'units';
+  const [libraryTab, setLibraryTab] = useState(safeInitialLibraryTab);
   const [unitTypes, setUnitTypes] = useState([]);
   const [knowledgeBalance, setKnowledgeBalance] = useState(0);
   const [roster, setRoster] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [battlefieldItems, setBattlefieldItems] = useState([]);
+  const [battlefieldItemsError, setBattlefieldItemsError] = useState('');
+  const [styleModalItemId, setStyleModalItemId] = useState('');
   const [draftByUnit, setDraftByUnit] = useState({});
   const [cartByUnit, setCartByUnit] = useState({});
   const [loading, setLoading] = useState(true);
@@ -85,6 +153,10 @@ const ArmyPanel = () => {
   const [detailRotation, setDetailRotation] = useState({ closeup: 0, battle: 0 });
   const [detailDragTarget, setDetailDragTarget] = useState('');
   const detailRotationDragRef = useRef(null);
+  const [detailItemId, setDetailItemId] = useState('');
+  const [detailItemRotation, setDetailItemRotation] = useState({ closeup: 0, battle: 0 });
+  const [detailItemDragTarget, setDetailItemDragTarget] = useState('');
+  const detailItemRotationDragRef = useRef(null);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [templateEditingId, setTemplateEditingId] = useState('');
   const [templateEditorDraft, setTemplateEditorDraft] = useState({ name: '', units: [] });
@@ -98,6 +170,10 @@ const ArmyPanel = () => {
   });
 
   const token = localStorage.getItem('token');
+
+  useEffect(() => {
+    setLibraryTab(initialLibraryTab === 'equipment' ? 'equipment' : 'units');
+  }, [initialLibraryTab]);
 
   const unitTypeMap = useMemo(() => {
     return unitTypes.reduce((acc, unit) => {
@@ -140,6 +216,23 @@ const ArmyPanel = () => {
   const detailUnit = useMemo(
     () => unitsWithCount.find((unit) => unit.id === detailUnitId) || null,
     [unitsWithCount, detailUnitId]
+  );
+  const detailItem = useMemo(
+    () => battlefieldItems.find((item) => item.itemId === detailItemId) || null,
+    [battlefieldItems, detailItemId]
+  );
+  const styleModalItem = useMemo(
+    () => battlefieldItems.find((item) => item.itemId === styleModalItemId) || null,
+    [battlefieldItems, styleModalItemId]
+  );
+  const styleModalEntries = useMemo(
+    () => getBattlefieldItemStyleEntries(styleModalItem?.style || {}),
+    [styleModalItem]
+  );
+
+  const recruitedUnits = useMemo(
+    () => unitsWithCount.filter((unit) => (Number(unit.count) || 0) > 0),
+    [unitsWithCount]
   );
 
   const cartItems = useMemo(() => {
@@ -196,7 +289,7 @@ const ArmyPanel = () => {
     setError('');
 
     try {
-      const [unitTypesResponse, meResponse, templatesResponse] = await Promise.all([
+      const [unitTypesResponse, meResponse, templatesResponse, trainingInitResponse] = await Promise.all([
         fetch(`${API_BASE}/army/unit-types`),
         fetch(`${API_BASE}/army/me`, {
           headers: {
@@ -207,12 +300,20 @@ const ArmyPanel = () => {
           headers: {
             Authorization: `Bearer ${token}`
           }
-        })
+        }),
+        fetch(`${API_BASE}/army/training/init`, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }).catch(() => null)
       ]);
 
       const unitTypesParsed = await parseApiResponse(unitTypesResponse);
       const meParsed = await parseApiResponse(meResponse);
       const templatesParsed = await parseApiResponse(templatesResponse);
+      const trainingInitParsed = trainingInitResponse
+        ? await parseApiResponse(trainingInitResponse)
+        : null;
 
       if (!unitTypesResponse.ok) {
         setError(getApiErrorMessage(unitTypesParsed, '加载兵种列表失败'));
@@ -239,11 +340,21 @@ const ArmyPanel = () => {
       const nextRoster = Array.isArray(meParsed.data?.roster) ? meParsed.data.roster : [];
       const nextBalance = Number.isFinite(meParsed.data?.knowledgeBalance) ? meParsed.data.knowledgeBalance : 0;
       const nextTemplates = Array.isArray(templatesParsed.data?.templates) ? templatesParsed.data.templates : [];
+      const nextBattlefieldItems = trainingInitResponse?.ok
+        ? normalizeBattlefieldItemCatalog(trainingInitParsed?.data?.battlefield?.itemCatalog)
+        : [];
 
       setUnitTypes(nextUnitTypes);
       setRoster(nextRoster);
       setKnowledgeBalance(nextBalance);
       setTemplates(nextTemplates);
+      setBattlefieldItems(nextBattlefieldItems);
+      setBattlefieldItemsError(
+        trainingInitResponse?.ok
+          ? ''
+          : getApiErrorMessage(trainingInitParsed, '加载战场设置物失败，请稍后重试')
+      );
+      setStyleModalItemId('');
 
       setDraftByUnit((prev) => {
         const next = { ...prev };
@@ -272,6 +383,13 @@ const ArmyPanel = () => {
       setDetailDragTarget('');
     }
   }, [detailUnitId]);
+
+  useEffect(() => {
+    if (!detailItemId) {
+      detailItemRotationDragRef.current = null;
+      setDetailItemDragTarget('');
+    }
+  }, [detailItemId]);
 
   const beginDetailRotationDrag = useCallback((stageKey, event) => {
     if (!detailUnitId || event.button !== 0) return;
@@ -320,6 +438,55 @@ const ArmyPanel = () => {
     }
     detailRotationDragRef.current = null;
     setDetailDragTarget('');
+  }, []);
+
+  const beginItemDetailRotationDrag = useCallback((stageKey, event) => {
+    if (!detailItemId || event.button !== 0) return;
+    event.preventDefault();
+    const safeKey = stageKey === 'battle' ? 'battle' : 'closeup';
+    setDetailItemDragTarget(safeKey);
+    const pointerId = Number.isFinite(event.pointerId) ? event.pointerId : null;
+    detailItemRotationDragRef.current = {
+      stageKey: safeKey,
+      startX: Number(event.clientX) || 0,
+      startRotation: Number(detailItemRotation[safeKey]) || 0,
+      pointerId
+    };
+    if (pointerId !== null && event.currentTarget?.setPointerCapture) {
+      try {
+        event.currentTarget.setPointerCapture(pointerId);
+      } catch (error) {
+        // Ignore browsers that reject pointer capture in specific edge cases.
+      }
+    }
+  }, [detailItemId, detailItemRotation]);
+
+  const updateItemDetailRotationDrag = useCallback((stageKey, event) => {
+    const drag = detailItemRotationDragRef.current;
+    if (!drag || drag.stageKey !== stageKey) return;
+    if (drag.pointerId !== null && event.pointerId !== drag.pointerId) return;
+    const dx = (Number(event.clientX) || 0) - drag.startX;
+    const next = drag.startRotation + (dx * 0.55);
+    const normalized = ((next % 360) + 360) % 360;
+    setDetailItemRotation((prev) => ({
+      ...prev,
+      [drag.stageKey]: normalized
+    }));
+  }, []);
+
+  const stopItemDetailRotationDrag = useCallback((event) => {
+    const drag = detailItemRotationDragRef.current;
+    if (!drag) return;
+    if (drag.pointerId !== null && Number.isFinite(event?.pointerId) && event.pointerId !== drag.pointerId) return;
+    if (drag.pointerId !== null && event?.currentTarget?.releasePointerCapture) {
+      try {
+        event.currentTarget.releasePointerCapture(drag.pointerId);
+      } catch (error) {
+        // Ignore when capture is already released.
+      }
+    }
+    detailItemRotationDragRef.current = null;
+    setDetailItemDragTarget('');
   }, []);
 
   const getDraftQty = (unitTypeId) => normalizeInteger(draftByUnit[unitTypeId], 0, 0);
@@ -631,15 +798,141 @@ const ArmyPanel = () => {
   return (
     <div className="army-panel">
       <div className="army-panel-header">
-        <h2>军团编制</h2>
-        <div className="army-balance">知识点余额：<strong>{knowledgeBalance}</strong></div>
+        <h2>{isLibraryMode ? '军事资料库' : '军团编制'}</h2>
+        {!isLibraryMode ? (
+          <div className="army-balance">知识点余额：<strong>{knowledgeBalance}</strong></div>
+        ) : null}
       </div>
 
       {error && <div className="army-message army-message-error">{error}</div>}
-      {templateNotice && <div className="army-message army-message-info">{templateNotice}</div>}
+      {!isLibraryMode && templateNotice && <div className="army-message army-message-info">{templateNotice}</div>}
+      {isLibraryMode ? (
+        <div className="army-library-tabs">
+          <button
+            type="button"
+            className={`army-library-tab ${libraryTab === 'units' ? 'active' : ''}`}
+            onClick={() => setLibraryTab('units')}
+          >
+            兵种库
+          </button>
+          <button
+            type="button"
+            className={`army-library-tab ${libraryTab === 'equipment' ? 'active' : ''}`}
+            onClick={() => setLibraryTab('equipment')}
+          >
+            装备库
+          </button>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="army-loading">加载中...</div>
+      ) : isLibraryMode && libraryTab === 'equipment' ? (
+        <div className="army-equipment-content">
+          {battlefieldItemsError ? (
+            <div className="army-message army-message-error army-message-inline">{battlefieldItemsError}</div>
+          ) : null}
+          <section className="army-equipment-section">
+            <div className="army-equipment-head">
+              <h3>战场设置物一览</h3>
+              <span>点击卡片查看 3D 模型与战场模型</span>
+            </div>
+            {battlefieldItems.length <= 0 ? (
+              <div className="army-preview-empty">暂无可用战场设置物，请先在管理员面板配置物品目录。</div>
+            ) : (
+              <div className="army-equipment-grid">
+                {battlefieldItems.map((item) => (
+                  <article
+                    key={item.itemId}
+                    className="army-equipment-card"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      detailItemRotationDragRef.current = null;
+                      setDetailItemDragTarget('');
+                      setDetailItemId(item.itemId);
+                      setDetailItemRotation({ closeup: 0, battle: 0 });
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      detailItemRotationDragRef.current = null;
+                      setDetailItemDragTarget('');
+                      setDetailItemId(item.itemId);
+                      setDetailItemRotation({ closeup: 0, battle: 0 });
+                    }}
+                  >
+                    <div className="army-equipment-card-head">
+                      <h4>{item.name}</h4>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setStyleModalItemId(item.itemId);
+                        }}
+                      >
+                        样式
+                      </button>
+                    </div>
+                    <p className="army-equipment-desc">{buildBattlefieldItemIntro(item)}</p>
+                    <div className="army-equipment-stats">
+                      <span>{`尺寸 ${Math.round(item.width)} x ${Math.round(item.depth)} x ${Math.round(item.height)}`}</span>
+                      <span>{`生命 ${Math.round(item.hp)}`}</span>
+                      <span>{`防御 ${Number(item.defense).toFixed(1)}`}</span>
+                    </div>
+                    <div className="army-equipment-open-tip">点击查看模型详情</div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      ) : isLibraryMode ? (
+        <div className="army-equipment-content">
+          <section className="army-equipment-section">
+            <div className="army-equipment-head">
+              <h3>兵种库</h3>
+              <span>仅展示兵种资料，征召请前往兵营</span>
+            </div>
+            {unitsWithCount.length <= 0 ? (
+              <div className="army-preview-empty">暂无可用兵种数据</div>
+            ) : (
+              <div className="army-unit-grid army-unit-grid-library">
+                {unitsWithCount.map((unit) => (
+                  <article className="army-unit-card army-unit-card-library" key={`library-${unit.id}`}>
+                    <div className="army-unit-head">
+                      <h3>{unit.name}</h3>
+                      <div className="army-unit-head-right">
+                        <span>{unit.roleTag}</span>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-small"
+                          onClick={() => {
+                            setDetailUnitId(unit.id);
+                            setDetailRotation({ closeup: 0, battle: 0 });
+                            setDetailDragTarget('');
+                          }}
+                        >
+                          详情
+                        </button>
+                      </div>
+                    </div>
+                    <div className="army-unit-stats">
+                      <span>速度 {unit.speed}</span>
+                      <span>生命 {unit.hp}</span>
+                      <span>攻击 {unit.atk}</span>
+                      <span>防御 {unit.def}</span>
+                      <span>射程 {unit.range}</span>
+                      <span>{`职业 ${unit.professionId || '-'}`}</span>
+                    </div>
+                    <p className="army-equipment-desc">{buildUnitIntro(unit)}</p>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
       ) : (
         <div className="army-content">
           <div className="army-unit-grid">
@@ -786,7 +1079,9 @@ const ArmyPanel = () => {
             <aside className="army-roster-card">
               <h3>我的军团</h3>
               <div className="army-roster-list">
-                {unitsWithCount.map((unit) => (
+                {recruitedUnits.length <= 0 ? (
+                  <div className="army-preview-empty">暂无已征召士兵</div>
+                ) : recruitedUnits.map((unit) => (
                   <div className="army-roster-row" key={`roster-${unit.id}`}>
                     <span>{unit.name}</span>
                     <strong>{unit.count}</strong>
@@ -951,6 +1246,149 @@ const ArmyPanel = () => {
                 </div>
               </section>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {detailItem ? (
+        <div
+          className="army-unit-detail-overlay"
+          onClick={() => {
+            detailItemRotationDragRef.current = null;
+            setDetailItemDragTarget('');
+            setDetailItemId('');
+          }}
+        >
+          <div
+            className="army-unit-detail-modal"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <div className="army-unit-detail-head">
+              <div>
+                <h4>{detailItem.name || detailItem.itemId}</h4>
+                <span>{`设置物ID：${detailItem.itemId || '-'}`}</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={() => {
+                  detailItemRotationDragRef.current = null;
+                  setDetailItemDragTarget('');
+                  setDetailItemId('');
+                }}
+              >
+                关闭
+              </button>
+            </div>
+
+            <div className="army-unit-detail-intro">
+              <strong>设置物简介</strong>
+              <p>{buildBattlefieldItemIntro(detailItem)}</p>
+            </div>
+
+            <div className="army-unit-detail-stats">
+              <div><span>宽度</span><strong>{Math.round(Number(detailItem.width) || 0)}</strong></div>
+              <div><span>深度</span><strong>{Math.round(Number(detailItem.depth) || 0)}</strong></div>
+              <div><span>高度</span><strong>{Math.round(Number(detailItem.height) || 0)}</strong></div>
+              <div><span>生命</span><strong>{Math.round(Number(detailItem.hp) || 0)}</strong></div>
+              <div><span>防御</span><strong>{Number(detailItem.defense || 0).toFixed(1)}</strong></div>
+              <div><span>样式</span><strong>{detailItem?.style?.shape || 'wall'}</strong></div>
+              <div><span>模型</span><strong>3D</strong></div>
+              <div><span>战场模型</span><strong>impostor</strong></div>
+            </div>
+
+            <div className="army-unit-detail-intro">
+              <strong>样式参数</strong>
+              <p>{formatBattlefieldItemStyleSummary(detailItem.style)}</p>
+            </div>
+
+            <div className="army-unit-detail-visuals">
+              <section className="army-unit-visual-card">
+                <header>
+                  <strong>3D模型 + 贴图</strong>
+                  <span>可拖拽旋转</span>
+                </header>
+                <div
+                  className={`army-unit-visual-stage ${detailItemDragTarget === 'closeup' ? 'is-dragging' : ''}`}
+                  onPointerDown={(event) => beginItemDetailRotationDrag('closeup', event)}
+                  onPointerMove={(event) => updateItemDetailRotationDrag('closeup', event)}
+                  onPointerUp={stopItemDetailRotationDrag}
+                  onPointerCancel={stopItemDetailRotationDrag}
+                >
+                  <div className="army-unit-turntable">
+                    <div className="army-unit-turntable-shadow" />
+                    <div className="army-unit-turntable-disc" />
+                    <ArmyBattlefieldItemCloseupPreview
+                      item={detailItem}
+                      rotationDeg={detailItemRotation.closeup}
+                      className="army-unit-visual-dummy"
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="army-unit-visual-card">
+                <header>
+                  <strong>战场模型</strong>
+                  <span>可拖拽旋转</span>
+                </header>
+                <div
+                  className={`army-unit-visual-stage is-battle ${detailItemDragTarget === 'battle' ? 'is-dragging' : ''}`}
+                  onPointerDown={(event) => beginItemDetailRotationDrag('battle', event)}
+                  onPointerMove={(event) => updateItemDetailRotationDrag('battle', event)}
+                  onPointerUp={stopItemDetailRotationDrag}
+                  onPointerCancel={stopItemDetailRotationDrag}
+                >
+                  <div className="army-unit-turntable is-battle">
+                    <div className="army-unit-turntable-shadow is-battle" />
+                    <div className="army-unit-turntable-disc is-battle" />
+                    <ArmyBattlefieldItemBattlePreview
+                      item={detailItem}
+                      rotationDeg={detailItemRotation.battle}
+                      className="army-unit-visual-dummy is-battle"
+                    />
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {styleModalItem ? (
+        <div className="army-unit-detail-overlay" onClick={() => setStyleModalItemId('')}>
+          <div
+            className="army-item-style-modal"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <div className="army-item-style-modal-head">
+              <div>
+                <h4>{`${styleModalItem.name || styleModalItem.itemId} · 样式`}</h4>
+                <span>{`设置物ID：${styleModalItem.itemId || '-'}`}</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={() => setStyleModalItemId('')}
+              >
+                关闭
+              </button>
+            </div>
+            {styleModalEntries.length <= 0 ? (
+              <div className="army-preview-empty">该设置物当前使用默认样式参数。</div>
+            ) : (
+              <div className="army-item-style-list">
+                {styleModalEntries.map((entry) => (
+                  <div key={`style-${styleModalItem.itemId}-${entry.key}`} className="army-item-style-row">
+                    <span>{entry.key}</span>
+                    <strong>{entry.value}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="army-item-style-summary">{formatBattlefieldItemStyleSummary(styleModalItem.style)}</div>
           </div>
         </div>
       ) : null}

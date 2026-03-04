@@ -266,6 +266,23 @@ const createEmptySiegeStatus = () => ({
         qi: normalizeSiegeGateState({}, 'qi')
     }
 });
+const mergeSiegeStatusPreservingIntelView = (previousStatus = {}, nextStatus = {}, targetNodeId = '') => {
+    const prevNodeId = normalizeObjectId(previousStatus?.nodeId);
+    const nextNodeId = normalizeObjectId(nextStatus?.nodeId || targetNodeId);
+    if (!prevNodeId || !nextNodeId || prevNodeId !== nextNodeId) return nextStatus;
+    const previousDefender = previousStatus?.compare?.defender;
+    if (previousDefender?.source !== 'intel') return nextStatus;
+    return {
+        ...nextStatus,
+        compare: {
+            ...(nextStatus?.compare || {}),
+            defender: previousDefender
+        },
+        intelUsed: previousStatus?.intelUsed ?? nextStatus?.intelUsed ?? false,
+        intelCapturedAt: previousStatus?.intelCapturedAt || nextStatus?.intelCapturedAt || null,
+        intelDeploymentUpdatedAt: previousStatus?.intelDeploymentUpdatedAt || nextStatus?.intelDeploymentUpdatedAt || null
+    };
+};
 const normalizeSiegeStatus = (raw = {}, fallbackNodeId = '') => {
     const source = raw && typeof raw === 'object' ? raw : {};
     const gateStatesSource = source?.gateStates && typeof source.gateStates === 'object' ? source.gateStates : {};
@@ -2033,9 +2050,9 @@ const App = () => {
       return undefined;
     }
 
-    fetchSiegeStatus(targetNodeId, { silent: true });
+    fetchSiegeStatus(targetNodeId, { silent: true, preserveIntelView: siegeDialog.open });
     const timer = setInterval(() => {
-      fetchSiegeStatus(targetNodeId, { silent: true });
+      fetchSiegeStatus(targetNodeId, { silent: true, preserveIntelView: siegeDialog.open });
     }, siegeDialog.open ? 2000 : 4000);
     return () => clearInterval(timer);
   }, [authenticated, isAdmin, view, currentTitleDetail?._id, userLocation, travelStatus.isTraveling, siegeDialog.open]);
@@ -2149,7 +2166,7 @@ const App = () => {
         return;
       }
 
-      if ((targetView === 'army' || targetView === 'trainingGround') && !isAdmin) {
+      if ((targetView === 'army' || targetView === 'equipment' || targetView === 'trainingGround') && !isAdmin) {
         setView(targetView);
         return;
       }
@@ -2207,7 +2224,7 @@ const App = () => {
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
     if (view === 'login') return;
 
-    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'trainingGround'].includes(view);
+    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround'].includes(view);
     if (!isKnownView) {
       setView('home');
       return;
@@ -2218,7 +2235,7 @@ const App = () => {
       return;
     }
 
-    if ((view === 'army' || view === 'trainingGround') && isAdmin) {
+    if ((view === 'army' || view === 'equipment' || view === 'trainingGround') && isAdmin) {
       setView('home');
       return;
     }
@@ -2627,7 +2644,7 @@ const App = () => {
         };
     };
 
-    const fetchSiegeStatus = async (targetNodeId, { silent = true, force = false } = {}) => {
+    const fetchSiegeStatus = async (targetNodeId, { silent = true, force = false, preserveIntelView = false } = {}) => {
         const token = localStorage.getItem('token');
         if (!token || !targetNodeId || !authenticated || isAdmin) {
             if (!silent) {
@@ -2662,12 +2679,20 @@ const App = () => {
                     startDisabledReason: getApiErrorMessage(parsed, '无法获取围城状态'),
                     supportDisabledReason: getApiErrorMessage(parsed, '无法获取围城状态')
                 };
-                setSiegeStatus(next);
-                return next;
+                let resolved = next;
+                setSiegeStatus((prev) => {
+                    resolved = preserveIntelView ? mergeSiegeStatusPreservingIntelView(prev, next, targetNodeId) : next;
+                    return resolved;
+                });
+                return resolved;
             }
             const normalized = normalizeSiegeStatus(parsed.data, targetNodeId);
-            setSiegeStatus(normalized);
-            return normalized;
+            let resolved = normalized;
+            setSiegeStatus((prev) => {
+                resolved = preserveIntelView ? mergeSiegeStatusPreservingIntelView(prev, normalized, targetNodeId) : normalized;
+                return resolved;
+            });
+            return resolved;
         } catch (error) {
             const fallback = createEmptySiegeStatus();
             const next = {
@@ -2677,8 +2702,12 @@ const App = () => {
                 startDisabledReason: `获取围城状态失败: ${error.message}`,
                 supportDisabledReason: `获取围城状态失败: ${error.message}`
             };
-            setSiegeStatus(next);
-            return next;
+            let resolved = next;
+            setSiegeStatus((prev) => {
+                resolved = preserveIntelView ? mergeSiegeStatusPreservingIntelView(prev, next, targetNodeId) : next;
+                return resolved;
+            });
+            return resolved;
         }
     };
 
@@ -2811,7 +2840,7 @@ const App = () => {
         });
         const currentSiegeNodeId = normalizeObjectId(siegeDialog.node?._id || siegeStatus.nodeId);
         if (currentSiegeNodeId && currentSiegeNodeId === targetNodeId) {
-            fetchSiegeStatus(targetNodeId, { silent: false, force: true });
+            fetchSiegeStatus(targetNodeId, { silent: false, force: true, preserveIntelView: true });
         }
     };
 
@@ -2830,7 +2859,7 @@ const App = () => {
             message: ''
         });
 
-        const status = await fetchSiegeStatus(nodeId, { silent: false, force: true });
+        const status = await fetchSiegeStatus(nodeId, { silent: false, force: true, preserveIntelView: true });
         if (!status) {
             setSiegeDialog((prev) => ({
                 ...prev,
@@ -3202,7 +3231,7 @@ const App = () => {
     const handlePveBattleFinished = async () => {
         const nodeId = normalizeObjectId(pveBattleState.nodeId || siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
         if (nodeId) {
-            await fetchSiegeStatus(nodeId, { silent: false });
+            await fetchSiegeStatus(nodeId, { silent: false, preserveIntelView: true });
         }
     };
 
@@ -5975,6 +6004,17 @@ const App = () => {
                                                 >
                                                     训练场
                                                 </button>
+                                                <button
+                                                    type="button"
+                                                    className="military-menu-item"
+                                                    onClick={async () => {
+                                                        setShowMilitaryMenu(false);
+                                                        await prepareForPrimaryNavigation();
+                                                        setView('equipment');
+                                                    }}
+                                                >
+                                                    装备库
+                                                </button>
                                             </div>
                                         )}
                                     </div>
@@ -6188,6 +6228,9 @@ const App = () => {
                 {view === "army" && !isAdmin && (
                     <ArmyPanel />
                 )}
+                {view === "equipment" && !isAdmin && (
+                    <ArmyPanel initialLibraryTab="equipment" mode="library" />
+                )}
                 {view === "trainingGround" && !isAdmin && (
                     <TrainingGroundPanel onExit={navigateToHomeWithDockCollapse} />
                 )}
@@ -6199,6 +6242,7 @@ const App = () => {
                  !(view === "admin" && isAdmin) &&
                  view !== "profile" &&
                  !(view === "army" && !isAdmin) &&
+                 !(view === "equipment" && !isAdmin) &&
                  !(view === "trainingGround" && !isAdmin) && (
                     <div className="no-pending-nodes">
                         <p>页面状态异常，已为你回退到首页</p>

@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const ArmyUnitType = require('../models/ArmyUnitType');
 const UnitComponent = require('../models/UnitComponent');
-const { serializeArmyUnitType } = require('./armyUnitTypeService');
+const { toUnitTypeDtoV1 } = require('./unitTypeDtoService');
 const { buildUnitCatalog } = require('../seed/unitCatalogFactory');
 
 const RPS_TYPES = new Set(['mobility', 'ranged', 'defense']);
@@ -85,26 +85,6 @@ const buildComponentRefSet = (unitTypes = []) => {
   return refs;
 };
 
-const toComponentRef = (componentMap, componentId) => {
-  const key = typeof componentId === 'string' ? componentId.trim() : '';
-  if (!key) return null;
-  return componentMap.get(key) || null;
-};
-
-const buildExpandedComponents = (unitType = {}, componentMap = new Map()) => ({
-  body: toComponentRef(componentMap, unitType.bodyId),
-  weapon: (Array.isArray(unitType.weaponIds) ? unitType.weaponIds : [])
-    .map((id) => toComponentRef(componentMap, id))
-    .filter(Boolean),
-  vehicle: toComponentRef(componentMap, unitType.vehicleId),
-  ability: (Array.isArray(unitType.abilityIds) ? unitType.abilityIds : [])
-    .map((id) => toComponentRef(componentMap, id))
-    .filter(Boolean),
-  behaviorProfile: toComponentRef(componentMap, unitType.behaviorProfileId),
-  stabilityProfile: toComponentRef(componentMap, unitType.stabilityProfileId),
-  interactionRule: toComponentRef(componentMap, 'rule_rps_triangle')
-});
-
 const serializeUnitComponent = (doc) => {
   const src = typeof doc?.toObject === 'function' ? doc.toObject() : (doc || {});
   return {
@@ -130,13 +110,7 @@ const fetchUnitTypesWithComponents = async ({ enabledOnly = true } = {}) => {
     : [];
   const unitComponents = componentDocs.map(serializeUnitComponent);
   const componentMap = new Map(unitComponents.map((item) => [item.componentId, item]));
-  const unitTypes = docs.map((doc) => {
-    const base = serializeArmyUnitType(doc);
-    return {
-      ...base,
-      components: buildExpandedComponents(base, componentMap)
-    };
-  });
+  const unitTypes = docs.map((doc) => toUnitTypeDtoV1(doc, componentMap));
 
   const logSignature = `${enabledOnly ? 'enabled' : 'all'}:${unitTypes.length}:${unitComponents.length}`;
   if (logSignature !== lastLoggedSignature) {

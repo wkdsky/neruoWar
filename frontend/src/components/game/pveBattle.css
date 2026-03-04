@@ -280,6 +280,55 @@
   line-height: 1.28;
 }
 
+.pve2-runtime-debug {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 26;
+  min-width: min(420px, 66vw);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(5, 10, 18, 0.86);
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.pve2-formation-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  pointer-events: none;
+}
+
+.pve2-formation-line {
+  position: absolute;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.78);
+  box-shadow: 0 0 0 1px rgba(14, 116, 144, 0.36);
+  transform-origin: left center;
+}
+
+.pve2-formation-handle {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  background: rgba(15, 23, 42, 0.88);
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1;
+  pointer-events: auto;
+  cursor: ew-resize;
+  box-shadow: 0 6px 16px rgba(2, 6, 23, 0.38);
+}
+
 .pve2-speed-badge {
   display: inline-flex;
   align-items: center;
@@ -1193,8 +1242,9 @@
 
 .pve2-deploy-editor-transfer {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  height: clamp(176px, 34vh, 286px);
 }
 
 .pve2-deploy-editor-col {
@@ -1202,10 +1252,10 @@
   border-radius: 8px;
   background: rgba(8, 12, 18, 0.8);
   padding: 8px;
-  min-height: 138px;
+  min-height: 0;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 6px;
-  align-content: start;
 }
 
 .pve2-deploy-editor-col-right {
@@ -1220,6 +1270,15 @@
 .pve2-deploy-editor-col-title {
   font-size: 11px;
   color: #cbd5e1;
+}
+
+.pve2-deploy-editor-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding-right: 2px;
 }
 
 .pve2-deploy-unit-card {

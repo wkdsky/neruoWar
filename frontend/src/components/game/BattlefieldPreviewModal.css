@@ -1,7 +1,7 @@
 .battlefield-modal-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 14;
+  z-index: 1200;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -153,6 +153,24 @@
 .battlefield-item-card span {
   font-size: 0.74rem;
   color: #cbd5e1;
+}
+
+.battlefield-defender-card {
+  width: 100%;
+}
+
+.battlefield-defender-card-head {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.42rem;
+}
+
+.battlefield-defender-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 .battlefield-item-card:hover:not(:disabled) {

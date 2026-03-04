@@ -1,3 +1,11 @@
+/**
+ * PVE battle runtime data contract notes (upgrade 2026-03):
+ * - Input unitTypes should already be normalized DTO rows from `normalizeUnitTypes`.
+ * - Runtime keeps compatibility fallbacks, but defaults should live in normalize layer.
+ * - Unit impostor instance layout is owned here and consumed by ImpostorRenderer.
+ * - Stride fields are written in fixed order; renderer attributes must stay in sync.
+ * - Deploy phase now supports formation rectangle state for slot expansion/reshape.
+ */
 import {
   createCrowdSim,
   updateCrowdSim,
@@ -6,6 +14,7 @@ import {
 import { buildBattleSummary } from './BattleSummary';
 import {
   buildRepConfig,
+  estimateRepAgents,
   normalizeUnitsMap,
   sumUnitsMap,
   withRepConfig
@@ -14,6 +23,7 @@ import { UNIT_INSTANCE_STRIDE } from '../render/ImpostorRenderer';
 import { BUILDING_INSTANCE_STRIDE } from '../render/BuildingRenderer';
 import { PROJECTILE_INSTANCE_STRIDE } from '../render/ProjectileRenderer';
 import { EFFECT_INSTANCE_STRIDE } from '../render/EffectRenderer';
+import { resolveTopLayer } from '../assets/ProceduralTextures';
 
 const DEFAULT_FIELD_WIDTH = 900;
 const DEFAULT_FIELD_HEIGHT = 620;
@@ -60,6 +70,12 @@ const SKILL_DESC_BY_CLASS = {
   archer: '箭雨压制，在目标区域持续打击。',
   artillery: '炮击轰炸，高爆范围并可伤建筑。'
 };
+const CLASS_TAG_SET = new Set(['infantry', 'cavalry', 'archer', 'artillery']);
+const DEPLOY_FORMATION_SPACING_DEFAULT = 12;
+const DEPLOY_FORMATION_RATIO_MIN = 1 / 6;
+const DEPLOY_FORMATION_RATIO_MAX = 6;
+const DEPLOY_FORMATION_MIN_EDGE = 8;
+const DEPLOY_FORMATION_MAX_EDGE_MUL = 5.8;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const clampToRange = (value, min, max) => {
@@ -79,8 +95,12 @@ const buildUnitTypeMap = (unitTypes = []) => {
     const tier = Math.max(1, Math.floor(Number(item?.tier ?? item?.level) || 1));
     const battleVisual = item?.visuals?.battle && typeof item.visuals.battle === 'object' ? item.visuals.battle : {};
     const previewVisual = item?.visuals?.preview && typeof item.visuals.preview === 'object' ? item.visuals.preview : {};
+    const explicitClassTag = typeof item?.classTag === 'string' ? item.classTag.trim().toLowerCase() : '';
+    // TODO(dto-v1): keep these runtime guards until all battle entries consume normalized DTO only.
     map.set(unitTypeId, {
       ...item,
+      schemaVersion: Math.max(1, Number(item?.schemaVersion) || 1),
+      id: unitTypeId,
       unitTypeId,
       tier,
       level: tier,
@@ -91,6 +111,7 @@ const buildUnitTypeMap = (unitTypes = []) => {
       range: Math.max(1, Number(item?.range) || 1),
       roleTag: item?.roleTag === '远程' ? '远程' : '近战',
       rpsType: item?.rpsType === 'ranged' || item?.rpsType === 'defense' ? item.rpsType : 'mobility',
+      classTag: CLASS_TAG_SET.has(explicitClassTag) ? explicitClassTag : null,
       professionId: typeof item?.professionId === 'string' ? item.professionId : '',
       rarity: typeof item?.rarity === 'string' ? item.rarity : 'common',
       visuals: {
@@ -99,7 +120,11 @@ const buildUnitTypeMap = (unitTypes = []) => {
           gearLayer: Math.max(0, Math.floor(Number(battleVisual.gearLayer) || 0)),
           vehicleLayer: Math.max(0, Math.floor(Number(battleVisual.vehicleLayer) || 0)),
           tint: Number.isFinite(Number(battleVisual.tint)) ? Number(battleVisual.tint) : 0,
-          silhouetteLayer: Math.max(0, Math.floor(Number(battleVisual.silhouetteLayer) || 0))
+          silhouetteLayer: Math.max(0, Math.floor(Number(battleVisual.silhouetteLayer) || 0)),
+          spriteFrontLayer: Math.max(0, Math.floor(Number(battleVisual.spriteFrontLayer ?? battleVisual.bodyLayer) || 0)),
+          spriteTopLayer: Number.isFinite(Number(battleVisual.spriteTopLayer))
+            ? Math.max(0, Math.floor(Number(battleVisual.spriteTopLayer)))
+            : null
         },
         preview: {
           style: typeof previewVisual.style === 'string' ? previewVisual.style : 'procedural',
@@ -124,6 +149,8 @@ const buildUnitTypeMap = (unitTypes = []) => {
 };
 
 const inferClassFromUnitType = (unitType = {}) => {
+  const explicit = typeof unitType?.classTag === 'string' ? unitType.classTag.trim().toLowerCase() : '';
+  if (CLASS_TAG_SET.has(explicit)) return explicit;
   const name = typeof unitType?.name === 'string' ? unitType.name : '';
   const roleTag = unitType?.roleTag === '远程' ? '远程' : '近战';
   const speed = Number(unitType?.speed) || 0;
@@ -178,8 +205,9 @@ const aggregateStats = (unitsMap = {}, unitTypeMap = new Map()) => {
 
   const mainType = unitTypeMap.get(mainTypeId) || {};
   const avgRange = totalRange / Math.max(1, total);
+  const mainClass = typeof mainType?.classTag === 'string' ? mainType.classTag : '';
   return {
-    classTag: inferClassFromUnitType(mainType),
+    classTag: CLASS_TAG_SET.has(mainClass) ? mainClass : inferClassFromUnitType(mainType),
     roleTag: mainType?.roleTag || (avgRange > 1.8 ? '远程' : '近战'),
     speed: totalSpeed / Math.max(1, total),
     hpAvg: totalHp / Math.max(1, total),
@@ -436,6 +464,120 @@ const normalizeDeploymentUnits = (deployment = {}) => {
     .filter((entry) => entry.unitTypeId && entry.count > 0);
 };
 
+const normalizeFormationFacing = (team = TEAM_ATTACKER, rawFacing = null) => {
+  const fallback = team === TEAM_DEFENDER ? Math.PI : 0;
+  const candidate = Number(rawFacing);
+  if (!Number.isFinite(candidate)) return fallback;
+  return candidate;
+};
+
+const resolveDeploySlotCount = (units = {}, repConfig = {}) => {
+  const normalized = normalizeUnitsMap(units || {});
+  const count = estimateRepAgents(normalized, Math.max(1, Number(repConfig?.maxAgentWeight) || 50));
+  return Math.max(1, Math.floor(Number(count) || 1));
+};
+
+const clampFormationByArea = (inputRect = {}) => {
+  const spacing = Math.max(4, Number(inputRect?.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT);
+  const baseArea = Math.max(spacing * spacing, Number(inputRect?.area) || (spacing * spacing));
+  const edgeMin = Math.max(DEPLOY_FORMATION_MIN_EDGE, spacing * 0.72);
+  const edgeMax = Math.max(edgeMin, Math.sqrt(baseArea) * DEPLOY_FORMATION_MAX_EDGE_MUL);
+  let width = Number(inputRect?.width);
+  let depth = Number(inputRect?.depth);
+  if (!Number.isFinite(width) && Number.isFinite(depth) && depth > 0) width = baseArea / depth;
+  if (!Number.isFinite(depth) && Number.isFinite(width) && width > 0) depth = baseArea / width;
+  if (!Number.isFinite(width) || width <= 0) width = Math.sqrt(baseArea);
+  if (!Number.isFinite(depth) || depth <= 0) depth = Math.sqrt(baseArea);
+
+  width = clamp(width, edgeMin, edgeMax);
+  depth = baseArea / Math.max(edgeMin, width);
+  depth = clamp(depth, edgeMin, edgeMax);
+  width = baseArea / Math.max(edgeMin, depth);
+  width = clamp(width, edgeMin, edgeMax);
+
+  let ratio = width / Math.max(1e-6, depth);
+  if (ratio < DEPLOY_FORMATION_RATIO_MIN) {
+    width = Math.sqrt(baseArea * DEPLOY_FORMATION_RATIO_MIN);
+    depth = baseArea / Math.max(edgeMin, width);
+  } else if (ratio > DEPLOY_FORMATION_RATIO_MAX) {
+    width = Math.sqrt(baseArea * DEPLOY_FORMATION_RATIO_MAX);
+    depth = baseArea / Math.max(edgeMin, width);
+  }
+  width = clamp(width, edgeMin, edgeMax);
+  depth = clamp(baseArea / Math.max(edgeMin, width), edgeMin, edgeMax);
+  ratio = width / Math.max(1e-6, depth);
+
+  return {
+    area: width * depth,
+    width,
+    depth,
+    spacing,
+    ratio
+  };
+};
+
+const buildFormationSlots = (slotCount = 1, formationRect = {}) => {
+  const total = Math.max(1, Math.floor(Number(slotCount) || 1));
+  const width = Math.max(DEPLOY_FORMATION_MIN_EDGE, Number(formationRect?.width) || DEPLOY_FORMATION_MIN_EDGE);
+  const depth = Math.max(DEPLOY_FORMATION_MIN_EDGE, Number(formationRect?.depth) || DEPLOY_FORMATION_MIN_EDGE);
+  const rows = Math.max(1, Math.ceil(Math.sqrt(total * (depth / Math.max(1, width)))));
+  const cols = Math.max(1, Math.ceil(total / rows));
+  const stepSide = width / Math.max(1, cols);
+  const stepFront = depth / Math.max(1, rows);
+  return Array.from({ length: total }, (_, index) => {
+    const row = Math.floor(index / cols);
+    const col = index % cols;
+    const side = ((col + 0.5) - (cols * 0.5)) * stepSide;
+    const front = (((rows - 1 - row) + 0.5) - (rows * 0.5)) * stepFront;
+    return { side, front, row, col };
+  });
+};
+
+const buildDeployGroupFormationState = (group = {}, team = TEAM_ATTACKER, repConfig = {}) => {
+  const units = normalizeUnitsMap(group?.units || {});
+  const slotCount = resolveDeploySlotCount(units, repConfig);
+  const spacing = Math.max(4, Number(group?.formationRect?.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT);
+  const facingRad = normalizeFormationFacing(team, group?.formationRect?.facingRad);
+  const prevRect = group?.formationRect && typeof group.formationRect === 'object' ? group.formationRect : {};
+  const fallbackCols = Math.max(1, Math.ceil(Math.sqrt(slotCount)));
+  const fallbackRows = Math.max(1, Math.ceil(slotCount / fallbackCols));
+  const baseRect = clampFormationByArea({
+    width: Number(prevRect.width) || (fallbackCols * spacing),
+    depth: Number(prevRect.depth) || (fallbackRows * spacing),
+    area: Number(prevRect.area) || ((fallbackCols * spacing) * (fallbackRows * spacing)),
+    spacing
+  });
+  const formationRect = {
+    area: baseRect.area,
+    width: baseRect.width,
+    depth: baseRect.depth,
+    spacing,
+    facingRad,
+    slotCount
+  };
+  return {
+    ...group,
+    formationRect,
+    deploySlots: buildFormationSlots(slotCount, formationRect)
+  };
+};
+
+const rotateFormationSlot = (group = {}, slot = {}) => {
+  const facing = Number(group?.formationRect?.facingRad);
+  const yaw = Number.isFinite(facing) ? facing : normalizeFormationFacing(group?.team, null);
+  const side = Number(slot?.side) || 0;
+  const front = Number(slot?.front) || 0;
+  const fx = Math.cos(yaw);
+  const fy = Math.sin(yaw);
+  const sx = -fy;
+  const sy = fx;
+  return {
+    x: (Number(group?.x) || 0) + (sx * side) + (fx * front),
+    y: (Number(group?.y) || 0) + (sy * side) + (fy * front),
+    yaw
+  };
+};
+
 const buildDefenderDeployGroups = (defenderUnits, defenderDeployments, field, unitTypeMap) => {
   const availableMap = new Map(
     Object.entries(normalizeUnitsList(defenderUnits)).map(([unitTypeId, count]) => [
@@ -620,6 +762,25 @@ const createSquad = ({
     professionId: stats.professionId || '',
     tier: Math.max(1, Number(stats.tier) || 1),
     mainUnitTypeId: stats.mainTypeId || '',
+    formationRect: group?.formationRect && typeof group.formationRect === 'object'
+      ? {
+        area: Math.max(1, Number(group.formationRect.area) || 1),
+        width: Math.max(1, Number(group.formationRect.width) || 1),
+        depth: Math.max(1, Number(group.formationRect.depth) || 1),
+        spacing: Math.max(1, Number(group.formationRect.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT),
+        facingRad: normalizeFormationFacing(team, group.formationRect.facingRad),
+        slotCount: Math.max(1, Math.floor(Number(group.formationRect.slotCount) || 1))
+      }
+      : null,
+    deploySlots: Array.isArray(group?.deploySlots)
+      ? group.deploySlots
+        .map((slot) => ({
+          side: Number(slot?.side) || 0,
+          front: Number(slot?.front) || 0,
+          row: Math.max(0, Math.floor(Number(slot?.row) || 0)),
+          col: Math.max(0, Math.floor(Number(slot?.col) || 0))
+        }))
+      : [],
     x: startX,
     y: startY,
     vx: 0,
@@ -710,11 +871,22 @@ const buildVisualResolver = (visualConfig, unitTypeMap = new Map()) => {
       ? unitType.visuals.battle
       : null;
     if (battleVisual) {
+      const bodyIndex = Math.max(0, Number(battleVisual.spriteFrontLayer ?? battleVisual.bodyLayer) || 0);
+      const gearIndex = Math.max(0, Number(battleVisual.gearLayer) || 0);
+      const vehicleIndex = Math.max(0, Number(battleVisual.vehicleLayer) || 0);
+      const silhouetteIndex = Math.max(0, Number(battleVisual.silhouetteLayer) || 0);
+      const explicitTop = Number.isFinite(Number(battleVisual.spriteTopLayer))
+        ? Math.max(0, Math.floor(Number(battleVisual.spriteTopLayer)))
+        : null;
       return {
-        bodyIndex: Math.max(0, Number(battleVisual.bodyLayer) || 0),
-        gearIndex: Math.max(0, Number(battleVisual.gearLayer) || 0),
-        vehicleIndex: Math.max(0, Number(battleVisual.vehicleLayer) || 0),
-        silhouetteIndex: Math.max(0, Number(battleVisual.silhouetteLayer) || 0),
+        bodyIndex,
+        gearIndex,
+        vehicleIndex,
+        silhouetteIndex,
+        bodyTopIndex: explicitTop !== null ? explicitTop : resolveTopLayer(bodyIndex),
+        gearTopIndex: resolveTopLayer(gearIndex),
+        vehicleTopIndex: resolveTopLayer(vehicleIndex),
+        silhouetteTopIndex: resolveTopLayer(silhouetteIndex),
         tint: Number.isFinite(Number(battleVisual.tint)) ? Number(battleVisual.tint) : 0
       };
     }
@@ -725,6 +897,10 @@ const buildVisualResolver = (visualConfig, unitTypeMap = new Map()) => {
       gearIndex: Math.max(0, Number(group?.gearIndex) || 0),
       vehicleIndex: Math.max(0, Number(group?.vehicleIndex) || 0),
       silhouetteIndex: Math.max(0, Number(group?.silhouetteIndex) || 0),
+      bodyTopIndex: resolveTopLayer(Math.max(0, Number(group?.bodyIndex) || 0)),
+      gearTopIndex: resolveTopLayer(Math.max(0, Number(group?.gearIndex) || 0)),
+      vehicleTopIndex: resolveTopLayer(Math.max(0, Number(group?.vehicleIndex) || 0)),
+      silhouetteTopIndex: resolveTopLayer(Math.max(0, Number(group?.silhouetteIndex) || 0)),
       tint: Number.isFinite(Number(group?.tint)) ? Number(group.tint) : 0
     };
   };
@@ -779,6 +955,8 @@ export default class BattleRuntime {
       this.field,
       this.unitTypeMap
     );
+    this.attackerDeployGroups = this.attackerDeployGroups.map((group) => this.hydrateDeployGroupFormation(group, TEAM_ATTACKER));
+    this.defenderDeployGroups = this.defenderDeployGroups.map((group) => this.hydrateDeployGroupFormation(group, TEAM_DEFENDER));
     this.initialBuildings = buildObstacleList(this.initData?.battlefield || {});
 
     this.selectedDeploySquadId = '';
@@ -863,6 +1041,66 @@ export default class BattleRuntime {
       || null;
   }
 
+  hydrateDeployGroupFormation(group = null, fallbackTeam = TEAM_ATTACKER) {
+    if (!group || typeof group !== 'object') return null;
+    const team = group?.team === TEAM_DEFENDER ? TEAM_DEFENDER : resolveTeamTag(fallbackTeam);
+    const hydrated = buildDeployGroupFormationState({
+      ...group,
+      team
+    }, team, this.repConfig);
+    Object.assign(group, hydrated);
+    return group;
+  }
+
+  getDeployGroupSlots(groupId = '', team = TEAM_ANY) {
+    const group = this.getDeployGroupById(groupId, team);
+    if (!group) return [];
+    this.hydrateDeployGroupFormation(group, group.team);
+    return Array.isArray(group.deploySlots)
+      ? group.deploySlots.map((slot) => ({ ...slot }))
+      : [];
+  }
+
+  setDeployGroupRect(groupId = '', partialRect = {}, team = TEAM_ANY) {
+    if (this.phase !== 'deploy') return { ok: false, reason: '仅部署阶段可调整阵型' };
+    const group = this.getDeployGroupById(groupId, team);
+    if (!group) return { ok: false, reason: '未找到部队' };
+    this.hydrateDeployGroupFormation(group, group.team);
+    const current = group.formationRect || {};
+    const nextFacing = Number.isFinite(Number(partialRect?.facingRad))
+      ? Number(partialRect.facingRad)
+      : normalizeFormationFacing(group.team, current.facingRad);
+    const spacing = Math.max(4, Number(partialRect?.spacing) || Number(current.spacing) || DEPLOY_FORMATION_SPACING_DEFAULT);
+    const slotCount = Math.max(1, Math.floor(Number(current.slotCount) || resolveDeploySlotCount(group.units || {}, this.repConfig)));
+    const requestedArea = Number.isFinite(Number(partialRect?.area))
+      ? Math.max(spacing * spacing, Number(partialRect.area))
+      : Math.max(spacing * spacing, Number(current.area) || (Number(current.width) || spacing) * (Number(current.depth) || spacing));
+    let requestedWidth = Number(partialRect?.width);
+    if (!Number.isFinite(requestedWidth) && Number.isFinite(Number(partialRect?.depth)) && Number(partialRect.depth) > 0) {
+      requestedWidth = requestedArea / Number(partialRect.depth);
+    }
+    if (!Number.isFinite(requestedWidth)) requestedWidth = Number(current.width) || Math.sqrt(requestedArea);
+    const normalizedRect = clampFormationByArea({
+      width: requestedWidth,
+      area: requestedArea,
+      spacing
+    });
+    group.formationRect = {
+      area: normalizedRect.area,
+      width: normalizedRect.width,
+      depth: normalizedRect.depth,
+      spacing,
+      facingRad: nextFacing,
+      slotCount
+    };
+    group.deploySlots = buildFormationSlots(slotCount, group.formationRect);
+    return {
+      ok: true,
+      formationRect: { ...group.formationRect },
+      slotCount: group.deploySlots.length
+    };
+  }
+
   getRosterRows(team = TEAM_ATTACKER) {
     const safeTeam = resolveTeamTag(team);
     const groupRows = safeTeam === TEAM_DEFENDER ? this.defenderDeployGroups : this.attackerDeployGroups;
@@ -941,7 +1179,7 @@ export default class BattleRuntime {
       this.field.height / 2 - 10
     );
     const groupId = `${safeTeam === TEAM_DEFENDER ? 'def' : 'atk'}_custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    targetGroups.push({
+    const nextGroup = this.hydrateDeployGroupFormation({
       id: groupId,
       team: safeTeam,
       name: groupName,
@@ -949,7 +1187,8 @@ export default class BattleRuntime {
       x: safeX,
       y: safeY,
       placed: placed !== false
-    });
+    }, safeTeam);
+    targetGroups.push(nextGroup);
     this.selectedDeploySquadId = groupId;
     this.focusSquadId = groupId;
     return { ok: true, groupId };
@@ -977,6 +1216,7 @@ export default class BattleRuntime {
     }
     target.units = nextUnits;
     if (typeof name === 'string' && name.trim()) target.name = name.trim();
+    this.hydrateDeployGroupFormation(target, safeTeam);
     return { ok: true };
   }
 
@@ -1066,7 +1306,9 @@ export default class BattleRuntime {
       const dx = (Number(group.x) || 0) - x;
       const dy = (Number(group.y) || 0) - y;
       const dist = Math.hypot(dx, dy);
-      const pickRadius = Math.max(radius, 12 + Math.sqrt(Math.max(1, sumUnitsMap(group.units || {}))) * 0.9);
+      const rect = group?.formationRect || {};
+      const footprintRadius = Math.hypot(Number(rect.width) || 0, Number(rect.depth) || 0) * 0.5;
+      const pickRadius = Math.max(radius, Math.max(12, footprintRadius * 0.6));
       if (dist <= pickRadius && dist < bestDist) {
         best = group;
         bestDist = dist;
@@ -1897,7 +2139,13 @@ export default class BattleRuntime {
   }
 
   getRenderSnapshot() {
-    const deployUnitCount = this.attackerDeployGroups.length + this.defenderDeployGroups.length;
+    const deployUnitCount = [...this.attackerDeployGroups, ...this.defenderDeployGroups]
+      .reduce((sum, group) => {
+        if (!group) return sum;
+        this.hydrateDeployGroupFormation(group, group.team);
+        const slots = Array.isArray(group.deploySlots) ? group.deploySlots : [];
+        return sum + Math.max(1, slots.length);
+      }, 0);
     const units = ensureBuffer(this.snapshotState, 'units', UNIT_INSTANCE_STRIDE, this.crowd?.allAgents?.length || deployUnitCount);
     const hideDefenderIntelInDeploy = !this.intelVisible && (!this.sim || this.phase === 'deploy');
     const activeBuildings = hideDefenderIntelInDeploy
@@ -1909,36 +2157,63 @@ export default class BattleRuntime {
 
     if (!this.sim || !this.crowd) {
       let previewCount = 0;
-      const fillPreviewGroup = (group, teamTag, selected, idx) => {
+      const fillPreviewGroup = (group, teamTag, selected) => {
         if (!group) return;
+        this.hydrateDeployGroupFormation(group, teamTag);
         const unitsMap = normalizeUnitsMap(group.units || {});
         const total = Math.max(1, sumUnitsMap(unitsMap));
-        const unitTypeId = Object.keys(unitsMap)[0] || '';
-        const classTag = inferClassFromUnitType(this.unitTypeMap.get(unitTypeId) || {});
-        const visual = this.visualConfig(unitTypeId, classTag);
-        const isFlying = !!this.unitTypeMap.get(unitTypeId)?.isFlying;
-        const base = previewCount * UNIT_INSTANCE_STRIDE;
-        units.data[base + 0] = Number(group.x) || 0;
-        units.data[base + 1] = Number(group.y) || 0;
-        units.data[base + 2] = isFlying ? 8.5 : 0;
-        units.data[base + 3] = Math.max(4.2, Math.min(12, Math.sqrt(total) * 0.52));
-        units.data[base + 4] = teamTag === TEAM_ATTACKER ? 0 : Math.PI;
-        units.data[base + 5] = teamTag === TEAM_ATTACKER ? 0 : 1;
-        units.data[base + 6] = 1;
-        units.data[base + 7] = visual.bodyIndex;
-        units.data[base + 8] = visual.gearIndex;
-        units.data[base + 9] = visual.vehicleIndex;
-        units.data[base + 10] = visual.silhouetteIndex || 0;
-        units.data[base + 11] = Number.isFinite(Number(visual.tint)) ? Number(visual.tint) : 1;
-        units.data[base + 12] = selected ? 1 : 0;
-        units.data[base + 13] = idx === 0 ? 1 : 0;
-        units.data[base + 14] = 0;
-        units.data[base + 15] = 0;
-        previewCount += 1;
+        const typeRows = Object.entries(unitsMap)
+          .map(([unitTypeId, count]) => ({ unitTypeId, count: Math.max(0, Number(count) || 0) }))
+          .filter((row) => row.unitTypeId && row.count > 0);
+        if (typeRows.length <= 0) return;
+        const slots = Array.isArray(group.deploySlots) && group.deploySlots.length > 0
+          ? group.deploySlots
+          : [{ side: 0, front: 0 }];
+        const slotCount = Math.max(1, slots.length);
+        for (let slotIndex = 0; slotIndex < slotCount; slotIndex += 1) {
+          const slot = slots[slotIndex] || { side: 0, front: 0 };
+          const targetWeight = ((slotIndex + 0.5) / slotCount) * total;
+          let pickedTypeId = typeRows[0].unitTypeId;
+          let accWeight = 0;
+          for (let rowIndex = 0; rowIndex < typeRows.length; rowIndex += 1) {
+            accWeight += typeRows[rowIndex].count;
+            if (targetWeight <= accWeight) {
+              pickedTypeId = typeRows[rowIndex].unitTypeId;
+              break;
+            }
+          }
+          const classTag = inferClassFromUnitType(this.unitTypeMap.get(pickedTypeId) || {});
+          const visual = this.visualConfig(pickedTypeId, classTag);
+          const isFlying = !!this.unitTypeMap.get(pickedTypeId)?.isFlying;
+          const world = rotateFormationSlot(group, slot);
+          const representedWeight = Math.max(1, total / slotCount);
+          const base = previewCount * UNIT_INSTANCE_STRIDE;
+          units.data[base + 0] = Number(world.x) || 0;
+          units.data[base + 1] = Number(world.y) || 0;
+          units.data[base + 2] = isFlying ? 8.5 : 0;
+          units.data[base + 3] = Math.max(2.5, Math.min(9.5, Math.sqrt(representedWeight) * 0.82));
+          units.data[base + 4] = Number(world.yaw) || (teamTag === TEAM_ATTACKER ? 0 : Math.PI);
+          units.data[base + 5] = teamTag === TEAM_ATTACKER ? 0 : 1;
+          units.data[base + 6] = 1;
+          units.data[base + 7] = visual.bodyIndex;
+          units.data[base + 8] = visual.gearIndex;
+          units.data[base + 9] = visual.vehicleIndex;
+          units.data[base + 10] = visual.silhouetteIndex || 0;
+          units.data[base + 11] = Number.isFinite(Number(visual.tint)) ? Number(visual.tint) : 1;
+          units.data[base + 12] = selected ? 1 : 0;
+          units.data[base + 13] = slotIndex === 0 ? 1 : 0;
+          units.data[base + 14] = 1;
+          units.data[base + 15] = 0;
+          units.data[base + 16] = visual.bodyTopIndex ?? resolveTopLayer(visual.bodyIndex);
+          units.data[base + 17] = visual.gearTopIndex ?? resolveTopLayer(visual.gearIndex);
+          units.data[base + 18] = visual.vehicleTopIndex ?? resolveTopLayer(visual.vehicleIndex);
+          units.data[base + 19] = visual.silhouetteTopIndex ?? resolveTopLayer(visual.silhouetteIndex || 0);
+          previewCount += 1;
+        }
       };
-      this.attackerDeployGroups.forEach((group, idx) => fillPreviewGroup(group, TEAM_ATTACKER, group.id === this.selectedDeploySquadId, idx));
+      this.attackerDeployGroups.forEach((group) => fillPreviewGroup(group, TEAM_ATTACKER, group.id === this.selectedDeploySquadId));
       if (!hideDefenderIntelInDeploy) {
-        this.defenderDeployGroups.forEach((group, idx) => fillPreviewGroup(group, TEAM_DEFENDER, group.id === this.selectedDeploySquadId, idx));
+        this.defenderDeployGroups.forEach((group) => fillPreviewGroup(group, TEAM_DEFENDER, group.id === this.selectedDeploySquadId));
       }
       units.count = previewCount;
 
@@ -1988,6 +2263,10 @@ export default class BattleRuntime {
       units.data[base + 13] = agent.isFlagBearer ? 1 : 0;
       units.data[base + 14] = 0;
       units.data[base + 15] = 0;
+      units.data[base + 16] = visual.bodyTopIndex ?? resolveTopLayer(visual.bodyIndex);
+      units.data[base + 17] = visual.gearTopIndex ?? resolveTopLayer(visual.gearIndex);
+      units.data[base + 18] = visual.vehicleTopIndex ?? resolveTopLayer(visual.vehicleIndex);
+      units.data[base + 19] = visual.silhouetteTopIndex ?? resolveTopLayer(visual.silhouetteIndex || 0);
       unitCount += 1;
     }
     units.count = unitCount;
@@ -2084,6 +2363,9 @@ export default class BattleRuntime {
     const unitModelCount = Math.max(0, Math.floor(Number(this.snapshotState?.units?.count) || 0));
     const anchorDx = (Number(this.cameraAnchorRaw?.x) || 0) - (Number(this.cameraAnchor?.x) || 0);
     const anchorDy = (Number(this.cameraAnchorRaw?.y) || 0) - (Number(this.cameraAnchor?.y) || 0);
+    const steeringWeights = this.sim?.steeringWeights && typeof this.sim.steeringWeights === 'object'
+      ? this.sim.steeringWeights
+      : null;
     return {
       ...this.debugStats,
       unitModelCount,
@@ -2102,7 +2384,8 @@ export default class BattleRuntime {
       clampChanged: !!this._lastMidlineClamp?.changed,
       clampRadius: Number(this._lastMidlineClamp?.radius) || 0,
       clampAllowedMinX: Number(this._lastMidlineClamp?.allowedMinX) || 0,
-      clampAllowedMaxX: Number(this._lastMidlineClamp?.allowedMaxX) || 0
+      clampAllowedMaxX: Number(this._lastMidlineClamp?.allowedMaxX) || 0,
+      steeringWeights
     };
   }
 

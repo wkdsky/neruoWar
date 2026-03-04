@@ -108,7 +108,6 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
   return (
     <div className="pve2-minimap-wrap">
       <canvas ref={canvasRef} className="pve2-minimap" width={220} height={140} onClick={handleClick} />
-      <span className="pve2-minimap-label">小地图</span>
     </div>
   );
 };

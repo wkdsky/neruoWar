@@ -1,5 +1,18 @@
 const clampByte = (v) => Math.max(0, Math.min(255, Math.round(v)));
 
+export const IMPOSTOR_LAYER_COUNT_FRONT = 64;
+export const IMPOSTOR_LAYER_OFFSET_TOP = IMPOSTOR_LAYER_COUNT_FRONT;
+export const IMPOSTOR_LAYER_COUNT_TOTAL = IMPOSTOR_LAYER_COUNT_FRONT * 2;
+
+export const resolveTopLayer = (frontLayer = 0, totalLayers = IMPOSTOR_LAYER_COUNT_TOTAL) => {
+  const total = Math.max(2, Math.floor(Number(totalLayers) || IMPOSTOR_LAYER_COUNT_TOTAL));
+  const frontCount = Math.max(1, Math.floor(total / 2));
+  const topOffset = frontCount;
+  const safeFront = Math.max(0, Math.min(frontCount - 1, Math.floor(Number(frontLayer) || 0)));
+  const candidate = safeFront + topOffset;
+  return Math.max(0, Math.min(total - 1, candidate));
+};
+
 const paintLayer = (size, painter) => {
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -83,12 +96,53 @@ const paintSmoke = (ctx, size) => {
   ctx.putImageData(img, 0, 0);
 };
 
+const paintTopImpostor = (ctx, size, hueDeg = 200, markerKind = 0) => {
+  ctx.clearRect(0, 0, size, size);
+  const fill = `hsla(${hueDeg}, 64%, 62%, 0.94)`;
+  const rim = `hsla(${hueDeg}, 72%, 38%, 0.96)`;
+  paintCircle(ctx, size, fill, 'rgba(12, 18, 28, 0)');
+  ctx.strokeStyle = rim;
+  ctx.lineWidth = Math.max(1, size * 0.06);
+  ctx.beginPath();
+  ctx.arc(size * 0.5, size * 0.5, size * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+
+  if (markerKind === 0) {
+    ctx.fillStyle = 'rgba(240, 248, 255, 0.88)';
+    ctx.beginPath();
+    ctx.arc(size * 0.5, size * 0.34, size * 0.08, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  if (markerKind === 1) {
+    ctx.fillStyle = 'rgba(255, 236, 186, 0.92)';
+    ctx.beginPath();
+    ctx.moveTo(size * 0.28, size * 0.65);
+    ctx.lineTo(size * 0.72, size * 0.5);
+    ctx.lineTo(size * 0.28, size * 0.35);
+    ctx.closePath();
+    ctx.fill();
+    return;
+  }
+  if (markerKind === 2) {
+    ctx.strokeStyle = 'rgba(244, 252, 255, 0.9)';
+    ctx.lineWidth = Math.max(1, size * 0.09);
+    ctx.beginPath();
+    ctx.arc(size * 0.5, size * 0.5, size * 0.25, Math.PI * 0.18, Math.PI * 1.82);
+    ctx.stroke();
+    return;
+  }
+  ctx.fillStyle = 'rgba(255, 248, 225, 0.9)';
+  ctx.fillRect(size * 0.42, size * 0.26, size * 0.16, size * 0.48);
+};
+
 export const createBattleProceduralTextures = (gl) => {
   if (!gl) return null;
-  const unitLayerCount = 64;
+  const frontLayerCount = IMPOSTOR_LAYER_COUNT_FRONT;
+  const unitLayerCount = IMPOSTOR_LAYER_COUNT_TOTAL;
   const unitPainters = [];
-  for (let i = 0; i < unitLayerCount; i += 1) {
-    const hue = (i % unitLayerCount) / Math.max(1, unitLayerCount);
+  for (let i = 0; i < frontLayerCount; i += 1) {
+    const hue = (i % frontLayerCount) / Math.max(1, frontLayerCount);
     const primary = `hsla(${Math.round(hue * 360)}, 76%, 70%, 0.95)`;
     const secondary = `hsla(${Math.round(hue * 360)}, 70%, 22%, 0)`;
     if (i % 11 === 0) {
@@ -100,6 +154,11 @@ export const createBattleProceduralTextures = (gl) => {
     } else {
       unitPainters.push((ctx, size) => paintCircle(ctx, size, primary, secondary));
     }
+  }
+  for (let i = 0; i < frontLayerCount; i += 1) {
+    const hue = (i % frontLayerCount) / Math.max(1, frontLayerCount);
+    const markerKind = i % 4;
+    unitPainters.push((ctx, size) => paintTopImpostor(ctx, size, Math.round(hue * 360), markerKind));
   }
   const unitTexArray = createTextureArray(gl, 64, unitLayerCount, unitPainters);
 
@@ -122,6 +181,8 @@ export const createBattleProceduralTextures = (gl) => {
   return {
     unitTexArray,
     unitTexLayerCount: unitLayerCount,
+    unitTexFrontLayerCount: frontLayerCount,
+    unitTexTopLayerOffset: IMPOSTOR_LAYER_OFFSET_TOP,
     projectileTexArray,
     effectTexArray,
     dispose() {

@@ -25,6 +25,7 @@ const {
 } = require('../services/siegeParticipantStore');
 const { fetchArmyUnitTypes } = require('../services/armyUnitTypeService');
 const { fetchUnitTypesWithComponents } = require('../services/unitRegistryService');
+const { UNIT_TYPE_DTO_VERSION } = require('../services/unitTypeDtoService');
 const {
   isNotificationCollectionReadEnabled,
   upsertNotificationsToCollection,
@@ -2098,13 +2099,16 @@ const normalizeBattlefieldStateInput = (input = {}) => (
 
 const findBattlefieldLayoutByGate = (battlefieldState = {}, gateKey = '', preferredLayoutId = '') => {
   const layouts = Array.isArray(battlefieldState?.layouts) ? battlefieldState.layouts : [];
+  const targetGate = normalizeBattlefieldGateKey(gateKey);
   const targetLayoutId = normalizeBattlefieldLayoutId(preferredLayoutId);
   if (targetLayoutId) {
-    const matched = layouts.find((item) => item?.layoutId === targetLayoutId);
+    const matched = layouts.find((item) => (
+      item?.layoutId === targetLayoutId
+      && (!targetGate || item?.gateKey === targetGate)
+    ));
     if (matched) return matched;
   }
 
-  const targetGate = normalizeBattlefieldGateKey(gateKey);
   const gateLayouts = layouts.filter((item) => item?.gateKey === targetGate);
   if (gateLayouts.length > 0) {
     gateLayouts.sort((a, b) => {
@@ -2240,13 +2244,19 @@ const mergeBattlefieldStateByGate = (currentState = {}, gateKey = '', payload = 
   const currentObjects = Array.isArray(normalizedCurrent.objects) ? normalizedCurrent.objects : [];
   const currentDefenderDeployments = Array.isArray(normalizedCurrent.defenderDeployments) ? normalizedCurrent.defenderDeployments : [];
   const existingLayout = findBattlefieldLayoutByGate(normalizedCurrent, targetGate, requestedLayoutId);
-  const fallbackLayoutId = requestedLayoutId || existingLayout?.layoutId || `${targetGate}_default`;
+  const hasCrossGateLayoutIdConflict = !!requestedLayoutId && currentLayouts.some((layout) => (
+    layout?.layoutId === requestedLayoutId
+    && layout?.gateKey
+    && layout.gateKey !== targetGate
+  ));
+  const safeRequestedLayoutId = hasCrossGateLayoutIdConflict ? '' : requestedLayoutId;
+  const fallbackLayoutId = safeRequestedLayoutId || existingLayout?.layoutId || `${targetGate}_default`;
+  const sourceLayoutId = typeof sourceLayout?.layoutId === 'string' ? sourceLayout.layoutId.trim() : '';
+  const safeSourceLayoutId = sourceLayoutId && !hasCrossGateLayoutIdConflict ? sourceLayoutId : '';
 
   const targetLayout = {
     ...(existingLayout || {}),
-    layoutId: typeof sourceLayout?.layoutId === 'string' && sourceLayout.layoutId.trim()
-      ? sourceLayout.layoutId.trim()
-      : fallbackLayoutId,
+    layoutId: safeSourceLayoutId || fallbackLayoutId,
     name: typeof sourceLayout?.name === 'string' && sourceLayout.name.trim()
       ? sourceLayout.name.trim()
       : (existingLayout?.name || (targetGate === 'cheng' ? '承门战场' : '启门战场')),
@@ -2320,9 +2330,9 @@ const mergeBattlefieldStateByGate = (currentState = {}, gateKey = '', payload = 
 };
 
 const getArmyUnitTypeId = (unit) => {
-  const id = typeof unit?.id === 'string' ? unit.id.trim() : '';
-  if (id) return id;
-  return typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : '';
+  const unitTypeId = typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : '';
+  if (unitTypeId) return unitTypeId;
+  return typeof unit?.id === 'string' ? unit.id.trim() : '';
 };
 
 const buildArmyUnitTypeMap = (unitTypes = []) => {
@@ -2493,7 +2503,6 @@ const buildBattlefieldGateDefenseSnapshotFromNode = (node = {}, unitTypeMap = ne
     ? battlefieldState.defenderDeployments
     : [];
   deployments.forEach((deployment) => {
-    if (deployment?.placed === false) return;
     const layoutId = normalizeBattlefieldLayoutId(deployment?.layoutId);
     const gateFromLayout = layoutId ? layoutGateByLayoutId.get(layoutId) : '';
     const gateFromRow = typeof deployment?.gateKey === 'string' ? deployment.gateKey.trim() : '';
@@ -7164,6 +7173,7 @@ router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
     }
     await hydrateNodeTitleStatesForNodes([node], {
       includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
       includeSiegeState: false
     });
 
@@ -7181,11 +7191,28 @@ router.get('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
     );
     const canViewGateDefense = canEdit || gateDefenseViewerAdminIds.includes(requestUserId);
     const serializedLayout = serializeDefenseLayout(defenseLayout);
+    const battlefieldGateDefenseSnapshot = buildBattlefieldGateDefenseSnapshotFromNode(node, new Map());
+    const hasBattlefieldGateDefense = hasAnyGateDefenseSnapshotEntries(battlefieldGateDefenseSnapshot.gateDefense);
+    const battlefieldGateDefense = CITY_GATE_KEYS.reduce((acc, key) => {
+      const entries = Array.isArray(battlefieldGateDefenseSnapshot?.gateDefense?.[key])
+        ? battlefieldGateDefenseSnapshot.gateDefense[key]
+        : [];
+      acc[key] = entries
+        .map((entry) => ({
+          unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '',
+          count: Math.max(0, Math.floor(Number(entry?.count) || 0))
+        }))
+        .filter((entry) => entry.unitTypeId && entry.count > 0);
+      return acc;
+    }, { cheng: [], qi: [] });
+    const effectiveGateDefense = hasBattlefieldGateDefense
+      ? battlefieldGateDefense
+      : serializedLayout.gateDefense;
     const layout = {
       ...serializedLayout,
       intelBuildingId: canEdit ? serializedLayout.intelBuildingId : '',
       gateDefense: canViewGateDefense
-        ? serializedLayout.gateDefense
+        ? effectiveGateDefense
         : { cheng: [], qi: [] },
       gateDefenseViewAdminIds: canEdit ? gateDefenseViewerAdminIds : []
     };
@@ -7334,7 +7361,11 @@ router.put('/:nodeId/defense-layout', authenticateToken, async (req, res) => {
 router.get('/:nodeId/battlefield-layout', authenticateToken, async (req, res) => {
   try {
     const { nodeId } = req.params;
-    const gateKey = normalizeBattlefieldGateKey(req.query?.gateKey);
+    const rawGateKey = typeof req.query?.gateKey === 'string' ? req.query.gateKey.trim() : '';
+    if (rawGateKey && !CITY_GATE_KEYS.includes(rawGateKey)) {
+      return res.status(400).json({ error: '无效的门向参数' });
+    }
+    const gateKey = normalizeBattlefieldGateKey(rawGateKey);
     const layoutId = normalizeBattlefieldLayoutId(req.query?.layoutId);
     if (!isValidObjectId(nodeId)) {
       return res.status(400).json({ error: '无效的知识域ID' });
@@ -7384,11 +7415,12 @@ router.get('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       .map((entry) => {
         const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
         const count = Math.max(0, Math.floor(Number(entry?.count) || 0));
-        if (!unitTypeId || count <= 0) return null;
+        const unitMeta = unitTypeMap.get(unitTypeId);
+        if (!unitTypeId || count <= 0 || !unitMeta) return null;
         return {
           unitTypeId,
-          unitName: unitTypeMap.get(unitTypeId)?.name || unitTypeId,
-          roleTag: unitTypeMap.get(unitTypeId)?.roleTag === '远程' ? '远程' : '近战',
+          unitName: unitMeta.name || unitTypeId,
+          roleTag: unitMeta.roleTag === '远程' ? '远程' : '近战',
           count
         };
       })
@@ -7414,7 +7446,13 @@ router.get('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
 router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) => {
   try {
     const { nodeId } = req.params;
-    const gateKey = normalizeBattlefieldGateKey(req.body?.gateKey || req.query?.gateKey);
+    const rawGateKey = typeof (req.body?.gateKey || req.query?.gateKey) === 'string'
+      ? String(req.body?.gateKey || req.query?.gateKey).trim()
+      : '';
+    if (rawGateKey && !CITY_GATE_KEYS.includes(rawGateKey)) {
+      return res.status(400).json({ error: '无效的门向参数' });
+    }
+    const gateKey = normalizeBattlefieldGateKey(rawGateKey);
     const layoutId = normalizeBattlefieldLayoutId(
       req.body?.layoutId || req.query?.layoutId || req.body?.layout?.layoutId
     );
@@ -7475,10 +7513,19 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       }
     }
 
-    const requestUser = await User.findById(requestUserId).select('armyRoster');
+    const [unitTypes, requestUser] = await Promise.all([
+      fetchArmyUnitTypes(),
+      User.findById(requestUserId).select('armyRoster')
+    ]);
     if (!requestUser) {
       return res.status(404).json({ error: '用户不存在' });
     }
+    const validUnitTypeIdSet = new Set(
+      unitTypes
+        .map((unit) => (typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : ''))
+        .filter((unitTypeId) => !!unitTypeId)
+    );
+    const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
     const targetLayout = findBattlefieldLayoutByGate(nextBattlefieldState, gateKey, layoutId);
     const targetLayoutId = typeof targetLayout?.layoutId === 'string' ? targetLayout.layoutId : '';
     const targetFieldWidth = Math.max(200, Number(targetLayout?.fieldWidth) || 900);
@@ -7492,12 +7539,11 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
         .filter(([unitTypeId]) => !!unitTypeId)
     );
     const defenderDeployments = (Array.isArray(nextBattlefieldState?.defenderDeployments) ? nextBattlefieldState.defenderDeployments : [])
-      .filter((item) => item?.placed !== false)
       .filter((item) => !targetLayoutId || item?.layoutId === targetLayoutId);
     const deployedUnitCounter = new Map();
     for (const deployment of defenderDeployments) {
       const x = Number(deployment?.x) || 0;
-      if (x < defenderZoneMinX - 0.001) {
+      if (deployment?.placed !== false && x < defenderZoneMinX - 0.001) {
         const deployName = (typeof deployment?.name === 'string' && deployment.name.trim())
           ? deployment.name.trim()
           : (typeof deployment?.deployId === 'string' ? deployment.deployId : 'unknown');
@@ -7510,7 +7556,7 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       for (const unitEntry of deploymentUnits) {
         const unitTypeId = typeof unitEntry?.unitTypeId === 'string' ? unitEntry.unitTypeId.trim() : '';
         const count = Math.max(1, Math.floor(Number(unitEntry?.count) || 1));
-        if (!unitTypeId || !defenseUnitLimitMap.has(unitTypeId)) {
+        if (!unitTypeId || !defenseUnitLimitMap.has(unitTypeId) || !validUnitTypeIdSet.has(unitTypeId)) {
           return res.status(400).json({ error: `守军布置存在无效兵种：${unitTypeId || 'empty'}` });
         }
         deployedUnitCounter.set(unitTypeId, (deployedUnitCounter.get(unitTypeId) || 0) + count);
@@ -7528,6 +7574,22 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
     await upsertNodeBattlefieldLayout({
       nodeId: node._id,
       battlefieldLayout: nextBattlefieldState,
+      actorUserId: requestUserId
+    });
+
+    const defenseLayout = resolveNodeDefenseLayout(node, {});
+    const battlefieldGateDefenseSnapshot = buildBattlefieldGateDefenseSnapshotFromNode(
+      { titleState: { battlefieldLayout: nextBattlefieldState } },
+      unitTypeMap
+    );
+    const nextDefenseLayout = {
+      ...normalizeDefenseLayoutInput(defenseLayout),
+      gateDefense: battlefieldGateDefenseSnapshot.gateDefense,
+      updatedAt: new Date()
+    };
+    await upsertNodeDefenseLayout({
+      nodeId: node._id,
+      layout: nextDefenseLayout,
       actorUserId: requestUserId
     });
 
@@ -7789,6 +7851,7 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
       serverTime: now.toISOString(),
       timeLimitSec: SIEGE_PVE_TIME_LIMIT_SEC,
       unitsPerSoldier: SIEGE_PVE_UNITS_PER_SOLDIER,
+      unitTypeDtoVersion: UNIT_TYPE_DTO_VERSION,
       unitTypes,
       attacker: {
         username: typeof user?.username === 'string' ? user.username : '',

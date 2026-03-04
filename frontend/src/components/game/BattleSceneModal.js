@@ -52,6 +52,18 @@ const BATTLE_UI_MODE_SKILL_PICK = 'SKILL_PICK';
 const BATTLE_UI_MODE_SKILL_CONFIRM = 'SKILL_CONFIRM';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const resolveBattleDebugSwitch = () => {
+  if (typeof window === 'undefined') return { enabled: false, steeringWeights: null };
+  const raw = window.__BATTLE_DEBUG__;
+  if (raw === true) return { enabled: true, steeringWeights: null };
+  if (!raw || typeof raw !== 'object') return { enabled: false, steeringWeights: null };
+  return {
+    enabled: raw.enabled !== false,
+    steeringWeights: raw.steeringWeights && typeof raw.steeringWeights === 'object'
+      ? raw.steeringWeights
+      : null
+  };
+};
 const normalizeDeg = (deg) => {
   const raw = Number(deg) || 0;
   const wrapped = ((raw % 360) + 360) % 360;
@@ -122,6 +134,17 @@ const unitsToSummary = (units = [], unitNameByTypeId = new Map()) => (
     .map((entry) => `${unitNameByTypeId.get(entry.unitTypeId) || entry.unitTypeId}x${entry.count}`)
     .join(' / ')
 );
+
+const normalizeUnitsMapCounts = (units = {}) => {
+  const map = {};
+  Object.entries(units || {}).forEach(([unitTypeId, rawCount]) => {
+    const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
+    const safeCount = Math.max(0, Math.floor(Number(rawCount) || 0));
+    if (!safeId || safeCount <= 0) return;
+    map[safeId] = safeCount;
+  });
+  return map;
+};
 
 const normalizeTemplateUnits = (units = []) => (
   (Array.isArray(units) ? units : [])
@@ -307,6 +330,41 @@ const buildDomLineStyle = (fromPoint, toPoint) => {
   };
 };
 
+const buildDeployFormationFootprint = (group = null) => {
+  if (!group || !group.formationRect) return null;
+  const width = Math.max(2, Number(group.formationRect.width) || 0);
+  const depth = Math.max(2, Number(group.formationRect.depth) || 0);
+  const yaw = Number.isFinite(Number(group.formationRect.facingRad))
+    ? Number(group.formationRect.facingRad)
+    : (group?.team === TEAM_DEFENDER ? Math.PI : 0);
+  const cx = Number(group.x) || 0;
+  const cy = Number(group.y) || 0;
+  const halfW = width * 0.5;
+  const halfD = depth * 0.5;
+  const fx = Math.cos(yaw);
+  const fy = Math.sin(yaw);
+  const sx = -fy;
+  const sy = fx;
+  const corner = (sideSign, frontSign) => ({
+    x: cx + (sx * halfW * sideSign) + (fx * halfD * frontSign),
+    y: cy + (sy * halfW * sideSign) + (fy * halfD * frontSign)
+  });
+  return {
+    width,
+    depth,
+    area: Math.max(1, Number(group.formationRect.area) || (width * depth)),
+    sideAxis: { x: sx, y: sy },
+    corners: [
+      corner(-1, 1),
+      corner(1, 1),
+      corner(1, -1),
+      corner(-1, -1)
+    ],
+    leftHandle: { x: cx - (sx * halfW), y: cy - (sy * halfW) },
+    rightHandle: { x: cx + (sx * halfW), y: cy + (sy * halfW) }
+  };
+};
+
 const computeDeployOverviewDistance = (field = null) => {
   const width = Math.max(120, Number(field?.width) || 900);
   const height = Math.max(120, Number(field?.height) || 620);
@@ -402,6 +460,7 @@ const BattleSceneModal = ({
   const pointerWorldRef = useRef({ x: 0, y: 0 });
   const panDragRef = useRef(null);
   const deployYawDragRef = useRef(null);
+  const deployRectDragRef = useRef(null);
   const spacePressedRef = useRef(false);
 
   const [glError, setGlError] = useState('');
@@ -504,6 +563,13 @@ const BattleSceneModal = ({
   });
   const [showMidlineDebug, setShowMidlineDebug] = useState(true);
   const [isPanning, setIsPanning] = useState(false);
+  const [runtimeDebugOverlay, setRuntimeDebugOverlay] = useState({
+    enabled: false,
+    phase: 'deploy',
+    pitchMix: 0,
+    formationRect: null,
+    steeringWeights: null
+  });
   const deployDraggingGroupId = String(deployDraggingGroup?.groupId || '');
   const deployDraggingTeam = deployDraggingGroup?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
 
@@ -651,8 +717,17 @@ const BattleSceneModal = ({
     setConfirmDeleteGroupId('');
     setConfirmDeletePos({ x: 0, y: 0 });
     setIsPanning(false);
+    const debugSwitch = resolveBattleDebugSwitch();
+    setRuntimeDebugOverlay({
+      enabled: debugSwitch.enabled,
+      phase: runtime.getPhase(),
+      pitchMix: 0,
+      formationRect: null,
+      steeringWeights: debugSwitch.steeringWeights
+    });
     panDragRef.current = null;
     deployYawDragRef.current = null;
+    deployRectDragRef.current = null;
     spacePressedRef.current = false;
   }, [open, battleInitData, isTrainingMode]);
 
@@ -993,6 +1068,27 @@ const BattleSceneModal = ({
           focusActualSquadId: String((followedSquad || followedDeployGroup)?.id || ''),
           focusActualResolved: !!(followedSquad || followedDeployGroup)
         });
+        const debugSwitch = resolveBattleDebugSwitch();
+        if (debugSwitch.enabled) {
+          const selectedDeployId = runtime.getDeployGroups?.()?.selectedId || '';
+          const selectedDeploy = runtime.getDeployGroupById?.(selectedDeployId, 'any');
+          const formationRect = selectedDeploy?.formationRect
+            ? {
+                width: Number(selectedDeploy.formationRect.width) || 0,
+                depth: Number(selectedDeploy.formationRect.depth) || 0,
+                area: Number(selectedDeploy.formationRect.area) || 0
+              }
+            : null;
+          setRuntimeDebugOverlay({
+            enabled: true,
+            phase: nowPhase,
+            pitchMix: Number(pitchMix) || 0,
+            formationRect,
+            steeringWeights: debugSwitch.steeringWeights
+          });
+        } else {
+          setRuntimeDebugOverlay((prev) => (prev.enabled ? { ...prev, enabled: false } : prev));
+        }
         if (debugEnabled) {
           setDebugStats(runtime.getDebugStats());
         }
@@ -1134,6 +1230,81 @@ const BattleSceneModal = ({
     if (!Number.isFinite(Number(world?.x)) || !Number.isFinite(Number(world?.y))) return null;
     return world;
   }, []);
+
+  const resolveDeployPlacementTeam = useCallback((worldPoint, fallbackTeam = TEAM_ATTACKER) => {
+    const runtime = runtimeRef.current;
+    const safeFallback = fallbackTeam === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    if (!runtime) return safeFallback;
+    if (runtime.canDeployAt(worldPoint, TEAM_ATTACKER, 10)) return TEAM_ATTACKER;
+    if (runtime.canDeployAt(worldPoint, TEAM_DEFENDER, 10)) return TEAM_DEFENDER;
+    const x = Number(worldPoint?.x);
+    if (Number.isFinite(x)) return x >= 0 ? TEAM_DEFENDER : TEAM_ATTACKER;
+    return safeFallback;
+  }, []);
+
+  const switchDeployGroupTeamForTraining = useCallback((groupId, nextTeam) => {
+    const runtime = runtimeRef.current;
+    const targetId = typeof groupId === 'string' ? groupId.trim() : '';
+    const safeNextTeam = nextTeam === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    if (!runtime || !targetId) {
+      return { ok: false, reason: '未找到待放置部队', groupId: targetId, team: safeNextTeam, switched: false };
+    }
+    const group = runtime.getDeployGroupById(targetId);
+    if (!group) {
+      return { ok: false, reason: '未找到待放置部队', groupId: targetId, team: safeNextTeam, switched: false };
+    }
+    const prevTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    if (prevTeam === safeNextTeam) {
+      return { ok: true, groupId: targetId, team: prevTeam, switched: false };
+    }
+    if (!isTrainingMode) {
+      return { ok: false, reason: '当前模式不支持切换阵营', groupId: targetId, team: prevTeam, switched: false };
+    }
+    const unitsMap = normalizeUnitsMapCounts(group.units || {});
+    if (Object.keys(unitsMap).length <= 0) {
+      return { ok: false, reason: '部队兵力配置无效', groupId: targetId, team: prevTeam, switched: false };
+    }
+    const snapshot = {
+      name: typeof group.name === 'string' ? group.name : '',
+      units: unitsMap,
+      x: Number(group.x) || 0,
+      y: Number(group.y) || 0
+    };
+    const removeResult = runtime.removeDeployGroup(prevTeam, targetId);
+    if (!removeResult?.ok) {
+      return { ok: false, reason: removeResult?.reason || '切换阵营失败', groupId: targetId, team: prevTeam, switched: false };
+    }
+    const createResult = runtime.createDeployGroup(safeNextTeam, {
+      ...snapshot,
+      placed: false
+    });
+    if (!createResult?.ok) {
+      const rollbackResult = runtime.createDeployGroup(prevTeam, {
+        ...snapshot,
+        placed: false
+      });
+      if (rollbackResult?.ok) {
+        const rollbackGroupId = String(rollbackResult.groupId || '');
+        runtime.setSelectedDeployGroup(rollbackGroupId);
+        runtime.setFocusSquad(rollbackGroupId);
+        runtime.setDeployGroupPlaced(prevTeam, rollbackGroupId, false);
+        setSelectedSquadId(rollbackGroupId);
+        setDeployDraggingGroup({ groupId: rollbackGroupId, team: prevTeam });
+        setCards(runtime.getCardRows());
+        setMinimapSnapshot(runtime.getMinimapSnapshot());
+      }
+      return { ok: false, reason: createResult?.reason || '切换阵营失败', groupId: targetId, team: prevTeam, switched: false };
+    }
+    const nextGroupId = String(createResult.groupId || '');
+    runtime.setSelectedDeployGroup(nextGroupId);
+    runtime.setFocusSquad(nextGroupId);
+    runtime.setDeployGroupPlaced(safeNextTeam, nextGroupId, false);
+    setSelectedSquadId(nextGroupId);
+    setDeployDraggingGroup({ groupId: nextGroupId, team: safeNextTeam });
+    setCards(runtime.getCardRows());
+    setMinimapSnapshot(runtime.getMinimapSnapshot());
+    return { ok: true, groupId: nextGroupId, team: safeNextTeam, switched: true };
+  }, [isTrainingMode]);
 
   const isPointInsideBattleField = useCallback((point) => {
     const runtime = runtimeRef.current;
@@ -1309,17 +1480,29 @@ const BattleSceneModal = ({
 
     if (runtime.getPhase() !== 'deploy') return;
     if (deployDraggingGroupId) {
-      if (!runtime.canDeployAt(world, deployDraggingTeam, 10)) {
-        setDeployNotice(deployDraggingTeam === TEAM_DEFENDER
+      let targetGroupId = deployDraggingGroupId;
+      let targetTeam = deployDraggingTeam;
+      if (isTrainingMode) {
+        const desiredTeam = resolveDeployPlacementTeam(world, targetTeam);
+        const switchResult = switchDeployGroupTeamForTraining(targetGroupId, desiredTeam);
+        if (!switchResult?.ok) {
+          setDeployNotice(switchResult?.reason || '切换部队阵营失败');
+          return;
+        }
+        targetGroupId = switchResult.groupId || targetGroupId;
+        targetTeam = switchResult.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+      }
+      if (!runtime.canDeployAt(world, targetTeam, 10)) {
+        setDeployNotice(targetTeam === TEAM_DEFENDER
           ? '中间交战区不可部署，请放置在右侧红色区域'
           : '中间交战区不可部署，请放置在左侧蓝色区域');
         return;
       }
-      runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
-      runtime.setDeployGroupPlaced(deployDraggingTeam, deployDraggingGroupId, true);
-      runtime.setSelectedDeployGroup(deployDraggingGroupId);
-      runtime.setFocusSquad(deployDraggingGroupId);
-      setSelectedSquadId(deployDraggingGroupId);
+      runtime.moveDeployGroup(targetGroupId, world, targetTeam);
+      runtime.setDeployGroupPlaced(targetTeam, targetGroupId, true);
+      runtime.setSelectedDeployGroup(targetGroupId);
+      runtime.setFocusSquad(targetGroupId);
+      setSelectedSquadId(targetGroupId);
       setDeployDraggingGroup({ groupId: '', team: TEAM_ATTACKER });
       setDeployActionAnchorMode('world');
       setDeployNotice(`部队已放置，可继续编辑或${isTrainingMode ? '开始训练' : '开战'}`);
@@ -1354,7 +1537,15 @@ const BattleSceneModal = ({
     }
     setDeployActionAnchorMode('');
     setCards(runtime.getCardRows());
-  }, [deployDraggingGroupId, deployDraggingTeam, isTrainingMode, selectedPaletteItemId, resolveEventWorldPoint]);
+  }, [
+    deployDraggingGroupId,
+    deployDraggingTeam,
+    isTrainingMode,
+    selectedPaletteItemId,
+    resolveEventWorldPoint,
+    resolveDeployPlacementTeam,
+    switchDeployGroupTeamForTraining
+  ]);
 
   const clearPanDrag = useCallback(() => {
     panDragRef.current = null;
@@ -1364,6 +1555,30 @@ const BattleSceneModal = ({
   const clearDeployYawDrag = useCallback(() => {
     deployYawDragRef.current = null;
   }, []);
+
+  const clearDeployRectDrag = useCallback(() => {
+    deployRectDragRef.current = null;
+  }, []);
+
+  const beginDeployRectResize = useCallback((event, group, sideSign = 1) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    if (!group || group.placed === false || deployDraggingGroupId) return;
+    const footprint = buildDeployFormationFootprint(group);
+    if (!footprint) return;
+    deployRectDragRef.current = {
+      groupId: String(group.id || ''),
+      team: group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER,
+      centerX: Number(group.x) || 0,
+      centerY: Number(group.y) || 0,
+      axisX: Number(footprint.sideAxis.x) || 0,
+      axisY: Number(footprint.sideAxis.y) || 0,
+      sideSign: sideSign >= 0 ? 1 : -1
+    };
+    setDeployActionAnchorMode('world');
+    event.preventDefault();
+    event.stopPropagation();
+  }, [deployDraggingGroupId]);
 
   const beginPanDrag = useCallback((event, buttonMask = 1) => {
     const canvas = glCanvasRef.current;
@@ -1540,17 +1755,29 @@ const BattleSceneModal = ({
     if (!runtime) return;
     if (runtime.getPhase() === 'deploy') {
       if (!deployDraggingGroupId) return;
-      if (!runtime.canDeployAt(worldPoint, deployDraggingTeam, 10)) {
-        setDeployNotice(deployDraggingTeam === TEAM_DEFENDER
+      let targetGroupId = deployDraggingGroupId;
+      let targetTeam = deployDraggingTeam;
+      if (isTrainingMode) {
+        const desiredTeam = resolveDeployPlacementTeam(worldPoint, targetTeam);
+        const switchResult = switchDeployGroupTeamForTraining(targetGroupId, desiredTeam);
+        if (!switchResult?.ok) {
+          setDeployNotice(switchResult?.reason || '切换部队阵营失败');
+          return;
+        }
+        targetGroupId = switchResult.groupId || targetGroupId;
+        targetTeam = switchResult.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+      }
+      if (!runtime.canDeployAt(worldPoint, targetTeam, 10)) {
+        setDeployNotice(targetTeam === TEAM_DEFENDER
           ? '中间交战区不可部署，请放置在右侧红色区域'
           : '中间交战区不可部署，请放置在左侧蓝色区域');
         return;
       }
-      runtime.moveDeployGroup(deployDraggingGroupId, worldPoint, deployDraggingTeam);
-      runtime.setDeployGroupPlaced(deployDraggingTeam, deployDraggingGroupId, true);
-      runtime.setSelectedDeployGroup(deployDraggingGroupId);
-      runtime.setFocusSquad(deployDraggingGroupId);
-      setSelectedSquadId(deployDraggingGroupId);
+      runtime.moveDeployGroup(targetGroupId, worldPoint, targetTeam);
+      runtime.setDeployGroupPlaced(targetTeam, targetGroupId, true);
+      runtime.setSelectedDeployGroup(targetGroupId);
+      runtime.setFocusSquad(targetGroupId);
+      setSelectedSquadId(targetGroupId);
       setDeployDraggingGroup({ groupId: '', team: TEAM_ATTACKER });
       setDeployActionAnchorMode('world');
       setDeployNotice(`部队已放置，可继续编辑或${isTrainingMode ? '开始训练' : '开战'}`);
@@ -1561,7 +1788,13 @@ const BattleSceneModal = ({
     if (runtime.getPhase() !== 'battle') return;
     cameraRef.current.centerX = Number(worldPoint?.x) || 0;
     cameraRef.current.centerY = Number(worldPoint?.y) || 0;
-  }, [deployDraggingGroupId, deployDraggingTeam, isTrainingMode]);
+  }, [
+    deployDraggingGroupId,
+    deployDraggingTeam,
+    isTrainingMode,
+    resolveDeployPlacementTeam,
+    switchDeployGroupTeamForTraining
+  ]);
 
   const handlePointerMove = useCallback((event) => {
     const runtime = runtimeRef.current;
@@ -1575,7 +1808,16 @@ const BattleSceneModal = ({
     pointerWorldRef.current = world;
 
     if (runtime.getPhase() === 'deploy' && deployDraggingGroupId) {
-      runtime.moveDeployGroup(deployDraggingGroupId, world, deployDraggingTeam);
+      let targetGroupId = deployDraggingGroupId;
+      let targetTeam = deployDraggingTeam;
+      if (isTrainingMode) {
+        const desiredTeam = resolveDeployPlacementTeam(world, targetTeam);
+        const switchResult = switchDeployGroupTeamForTraining(targetGroupId, desiredTeam);
+        if (!switchResult?.ok) return;
+        targetGroupId = switchResult.groupId || targetGroupId;
+        targetTeam = switchResult.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+      }
+      runtime.moveDeployGroup(targetGroupId, world, targetTeam);
       setCards(runtime.getCardRows());
       setMinimapSnapshot(runtime.getMinimapSnapshot());
       return;
@@ -1632,7 +1874,17 @@ const BattleSceneModal = ({
     const edge = worldToScreenRef.current ? worldToScreenRef.current({ x: world.x + skillAoeRadiusByClass(selected.classTag), y: world.y, z: 0 }) : null;
     const radiusPx = center && edge ? Math.hypot(edge.x - center.x, edge.y - center.y) : 22;
     setAimState((prev) => ({ ...prev, point: { x: world.x, y: world.y }, radiusPx }));
-  }, [aimState, deployDraggingGroupId, deployDraggingTeam, battleUiMode, skillConfirmState, isPathPointBlocked]);
+  }, [
+    aimState,
+    deployDraggingGroupId,
+    deployDraggingTeam,
+    battleUiMode,
+    skillConfirmState,
+    isPathPointBlocked,
+    isTrainingMode,
+    resolveDeployPlacementTeam,
+    switchDeployGroupTeamForTraining
+  ]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1646,6 +1898,28 @@ const BattleSceneModal = ({
       if (!isDeploy) {
         clearPanDrag();
         clearDeployYawDrag();
+        clearDeployRectDrag();
+        return;
+      }
+
+      const rectDrag = deployRectDragRef.current;
+      if (rectDrag && runtime) {
+        if ((event.buttons & 1) !== 1) {
+          clearDeployRectDrag();
+          return;
+        }
+        const px = ((event.clientX - rect.left) / Math.max(1, rect.width)) * canvas.width;
+        const py = ((event.clientY - rect.top) / Math.max(1, rect.height)) * canvas.height;
+        const world = cameraRef.current.screenToGround(px, py, { width: canvas.width, height: canvas.height });
+        if (Number.isFinite(Number(world?.x)) && Number.isFinite(Number(world?.y))) {
+          const dx = (Number(world.x) || 0) - (Number(rectDrag.centerX) || 0);
+          const dy = (Number(world.y) || 0) - (Number(rectDrag.centerY) || 0);
+          const projection = ((dx * (Number(rectDrag.axisX) || 0)) + (dy * (Number(rectDrag.axisY) || 0))) * (Number(rectDrag.sideSign) || 1);
+          const width = Math.max(8, Math.abs(projection) * 2);
+          runtime.setDeployGroupRect(rectDrag.groupId, { width }, rectDrag.team);
+          setCards(runtime.getCardRows());
+          setMinimapSnapshot(runtime.getMinimapSnapshot());
+        }
         return;
       }
 
@@ -1695,10 +1969,12 @@ const BattleSceneModal = ({
       }
       clearPanDrag();
       clearDeployYawDrag();
+      clearDeployRectDrag();
     };
     const handleWindowBlur = () => {
       clearPanDrag();
       clearDeployYawDrag();
+      clearDeployRectDrag();
       spacePressedRef.current = false;
     };
 
@@ -1710,7 +1986,7 @@ const BattleSceneModal = ({
       window.removeEventListener('mouseup', handleWindowMouseUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [open, clearPanDrag, clearDeployYawDrag, handleMapCommand]);
+  }, [open, clearPanDrag, clearDeployYawDrag, clearDeployRectDrag, handleMapCommand]);
 
   const handleSetSpeedMode = useCallback((mode) => {
     const runtime = runtimeRef.current;
@@ -1822,7 +2098,9 @@ const BattleSceneModal = ({
     const runtime = runtimeRef.current;
     if (!runtime || runtime.getPhase() !== 'deploy') return;
     const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
-    const rows = runtime.getRosterRows(safeTeam);
+    const rows = isTrainingMode
+      ? [...runtime.getRosterRows(TEAM_ATTACKER), ...runtime.getRosterRows(TEAM_DEFENDER)]
+      : runtime.getRosterRows(safeTeam);
     if (rows.length <= 0 || rows.every((row) => row.total <= 0)) {
       setDeployNotice('当前没有可用兵种库存，无法新建部队');
       return;
@@ -1839,7 +2117,7 @@ const BattleSceneModal = ({
       current: 1
     });
     setDeployNotice('');
-  }, []);
+  }, [isTrainingMode]);
 
   const handleOpenDeployEditorForGroup = useCallback((groupId) => {
     const runtime = runtimeRef.current;
@@ -1879,13 +2157,24 @@ const BattleSceneModal = ({
     if (!runtime) return 0;
     const safeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
     if (!safeId) return 0;
+    if (isTrainingMode && !deployEditingGroupId) {
+      const attackerAvailable = Math.max(
+        0,
+        Math.floor(Number(runtime.getRosterRows(TEAM_ATTACKER).find((row) => row.unitTypeId === safeId)?.available) || 0)
+      );
+      const defenderAvailable = Math.max(
+        0,
+        Math.floor(Number(runtime.getRosterRows(TEAM_DEFENDER).find((row) => row.unitTypeId === safeId)?.available) || 0)
+      );
+      return Math.max(attackerAvailable, defenderAvailable);
+    }
     const rosterRow = runtime.getRosterRows(deployEditorTeam).find((row) => row.unitTypeId === safeId);
     const baseAvailable = Math.max(0, Math.floor(Number(rosterRow?.available) || 0));
     if (!deployEditingGroupId) return baseAvailable;
     const editingGroup = runtime.getDeployGroupById(deployEditingGroupId, deployEditorTeam);
     const existing = Math.max(0, Math.floor(Number(editingGroup?.units?.[safeId]) || 0));
     return baseAvailable + existing;
-  }, [deployEditingGroupId, deployEditorTeam]);
+  }, [deployEditingGroupId, deployEditorTeam, isTrainingMode]);
 
   const openDeployQuantityDialog = useCallback((unitTypeId) => {
     const runtime = runtimeRef.current;
@@ -1897,7 +2186,9 @@ const BattleSceneModal = ({
       setDeployNotice('该兵种没有可分配数量');
       return;
     }
-    const unitName = runtime.getRosterRows(deployEditorTeam).find((row) => row.unitTypeId === safeId)?.unitName || safeId;
+    const attackerName = runtime.getRosterRows(TEAM_ATTACKER).find((row) => row.unitTypeId === safeId)?.unitName || '';
+    const defenderName = runtime.getRosterRows(TEAM_DEFENDER).find((row) => row.unitTypeId === safeId)?.unitName || '';
+    const unitName = attackerName || defenderName || runtime.getRosterRows(deployEditorTeam).find((row) => row.unitTypeId === safeId)?.unitName || safeId;
     const current = normalizeDraftUnits(deployEditorDraft.units).find((entry) => entry.unitTypeId === safeId)?.count || 1;
     setDeployQuantityDialog({
       open: true,
@@ -1958,6 +2249,21 @@ const BattleSceneModal = ({
     const unitsMap = unitsToMap(draftUnits);
     let targetGroupId = '';
     const safeTeam = deployEditorTeam === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const canCreateForTeam = (team) => {
+      const rows = runtime.getRosterRows(team);
+      return Object.entries(unitsMap).every(([unitTypeId, count]) => {
+        const row = rows.find((item) => item.unitTypeId === unitTypeId);
+        const available = Math.max(0, Math.floor(Number(row?.available) || 0));
+        return Math.max(0, Math.floor(Number(count) || 0)) <= available;
+      });
+    };
+    const createTeam = (!deployEditingGroupId && isTrainingMode)
+      ? (canCreateForTeam(TEAM_ATTACKER) ? TEAM_ATTACKER : TEAM_DEFENDER)
+      : safeTeam;
+    if (!deployEditingGroupId && isTrainingMode && !canCreateForTeam(TEAM_ATTACKER) && !canCreateForTeam(TEAM_DEFENDER)) {
+      setDeployNotice('当前编组在我方与敌方库存都不足，请调整兵种数量');
+      return;
+    }
     if (deployEditingGroupId) {
       const result = runtime.updateDeployGroup(safeTeam, deployEditingGroupId, {
         name: deployEditorDraft.name,
@@ -1969,7 +2275,7 @@ const BattleSceneModal = ({
       }
       targetGroupId = deployEditingGroupId;
     } else {
-      const result = runtime.createDeployGroup(safeTeam, {
+      const result = runtime.createDeployGroup(createTeam, {
         name: deployEditorDraft.name,
         units: unitsMap,
         x: pointerWorldRef.current.x,
@@ -1984,9 +2290,9 @@ const BattleSceneModal = ({
     }
     runtime.setSelectedDeployGroup(targetGroupId);
     runtime.setFocusSquad(targetGroupId);
-    runtime.setDeployGroupPlaced(safeTeam, targetGroupId, false);
+    runtime.setDeployGroupPlaced(createTeam, targetGroupId, false);
     setSelectedSquadId(targetGroupId);
-    setDeployDraggingGroup({ groupId: targetGroupId, team: safeTeam });
+    setDeployDraggingGroup({ groupId: targetGroupId, team: createTeam });
     setDeployActionAnchorMode('');
     setCards(runtime.getCardRows());
     setMinimapSnapshot(runtime.getMinimapSnapshot());
@@ -1994,8 +2300,12 @@ const BattleSceneModal = ({
     setDeployEditingGroupId('');
     setDeployEditorTeam(TEAM_ATTACKER);
     setDeployEditorDraft({ name: '', units: [] });
-    setDeployNotice(`部队已创建，移动鼠标并点击地图放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
-  }, [deployEditingGroupId, deployEditorDraft, deployEditorTeam]);
+    if (!deployEditingGroupId && isTrainingMode) {
+      setDeployNotice('部队已创建，移动鼠标并点击地图放置；左侧归我方，右侧归敌方');
+      return;
+    }
+    setDeployNotice(`部队已创建，移动鼠标并点击地图放置到${createTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
+  }, [deployEditingGroupId, deployEditorDraft, deployEditorTeam, isTrainingMode]);
 
   const buildTemplateFillSnapshot = useCallback((template, team = TEAM_ATTACKER) => {
     const runtime = runtimeRef.current;
@@ -2132,7 +2442,11 @@ const BattleSceneModal = ({
     setDeployActionAnchorMode('');
     setCards(runtime.getCardRows());
     setMinimapSnapshot(runtime.getMinimapSnapshot());
-    setDeployNotice(`已拾取部队，移动鼠标并点击地图可重新放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`);
+    setDeployNotice(
+      isTrainingMode
+        ? '已拾取部队，移动鼠标并点击地图重新放置；左侧归我方，右侧归敌方'
+        : `已拾取部队，移动鼠标并点击地图可重新放置到${safeTeam === TEAM_DEFENDER ? '右侧红色' : '左侧蓝色'}部署区`
+    );
   }, [isTrainingMode]);
 
   const handleDeployDelete = useCallback((groupId, event = null) => {
@@ -2441,6 +2755,11 @@ const BattleSceneModal = ({
           setDeployNotice('已取消部队拖拽放置');
           return;
         }
+        if (deployRectDragRef.current) {
+          clearDeployRectDrag();
+          setDeployNotice('已取消阵型调整');
+          return;
+        }
         if (battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM) {
           closeSkillConfirm(true);
           return;
@@ -2493,6 +2812,7 @@ const BattleSceneModal = ({
     deployQuantityDialog.open,
     quickDeployOpen,
     deployDraggingGroupId,
+    clearDeployRectDrag,
     battleUiMode,
     closeSkillConfirm,
     commitPathPlanning,
@@ -2583,7 +2903,33 @@ const BattleSceneModal = ({
   const pitchLabel = cameraRef.current.getPitchBlend() >= 0.5
     ? `${Math.round(Number(cameraRef.current.pitchHigh) || BATTLE_PITCH_HIGH_DEG)}°`
     : `${Math.round(Number(cameraRef.current.pitchLow) || BATTLE_PITCH_LOW_DEG)}°`;
-  const deployRosterRows = runtimeRef.current?.getRosterRows?.(deployEditorTeam) || [];
+  const deployEditorIsTeamAuto = isTrainingMode && !deployEditingGroupId;
+  const deployRosterRows = (() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return [];
+    if (!deployEditorIsTeamAuto) return runtime.getRosterRows(deployEditorTeam);
+    const byUnitType = new Map();
+    runtime.getRosterRows(TEAM_ATTACKER).forEach((row) => {
+      byUnitType.set(row.unitTypeId, {
+        ...row,
+        available: Math.max(0, Math.floor(Number(row?.available) || 0))
+      });
+    });
+    runtime.getRosterRows(TEAM_DEFENDER).forEach((row) => {
+      const safeAvailable = Math.max(0, Math.floor(Number(row?.available) || 0));
+      const prev = byUnitType.get(row.unitTypeId);
+      if (!prev) {
+        byUnitType.set(row.unitTypeId, { ...row, available: safeAvailable });
+        return;
+      }
+      byUnitType.set(row.unitTypeId, {
+        ...prev,
+        unitName: prev.unitName || row.unitName || row.unitTypeId,
+        available: Math.max(prev.available, safeAvailable)
+      });
+    });
+    return Array.from(byUnitType.values());
+  })();
   const deployEditingGroup = deployEditingGroupId ? runtimeRef.current?.getDeployGroupById?.(deployEditingGroupId, deployEditorTeam) : null;
   const deployEditingBaseUnits = deployEditingGroup?.units || {};
   const deployEditorAvailableRows = deployRosterRows
@@ -2596,8 +2942,39 @@ const BattleSceneModal = ({
     deployEditorDraft.units,
     new Map(deployRosterRows.map((row) => [row.unitTypeId, row.unitName]))
   );
+  const deployEditorTeamLabel = deployEditorIsTeamAuto
+    ? '落点决定阵营'
+    : (deployEditorTeam === TEAM_DEFENDER ? '敌方' : '我方');
   const deployEditorTotal = normalizeDraftUnits(deployEditorDraft.units).reduce((sum, entry) => sum + entry.count, 0);
   const selectedDeployGroup = phase === 'deploy' ? runtimeRef.current?.getDeployGroupById?.(selectedSquadId) : null;
+  const selectedDeployFormation = (
+    phase === 'deploy'
+    && selectedDeployGroup
+    && selectedDeployGroup.placed !== false
+    && !deployDraggingGroupId
+  ) ? buildDeployFormationFootprint(selectedDeployGroup) : null;
+  const selectedDeployFormationCornerDom = (
+    selectedDeployFormation
+    && worldToDomRef.current
+  ) ? selectedDeployFormation.corners.map((corner) => worldToDomRef.current({ x: corner.x, y: corner.y, z: 0 })) : [];
+  const selectedDeployFormationLines = selectedDeployFormationCornerDom.length === 4
+    ? [0, 1, 2, 3]
+      .map((idx) => {
+        const a = selectedDeployFormationCornerDom[idx];
+        const b = selectedDeployFormationCornerDom[(idx + 1) % 4];
+        if (!a || !b || a.visible === false || b.visible === false) return null;
+        return buildDomLineStyle(a, b);
+      })
+      .filter(Boolean)
+    : [];
+  const selectedDeployHandleLeftDom = (
+    selectedDeployFormation
+    && worldToDomRef.current
+  ) ? worldToDomRef.current({ x: selectedDeployFormation.leftHandle.x, y: selectedDeployFormation.leftHandle.y, z: 0 }) : null;
+  const selectedDeployHandleRightDom = (
+    selectedDeployFormation
+    && worldToDomRef.current
+  ) ? worldToDomRef.current({ x: selectedDeployFormation.rightHandle.x, y: selectedDeployFormation.rightHandle.y, z: 0 }) : null;
   const worldActionGroupId = selectedDeployGroup?.id || '';
   const worldActionPos = (
     phase === 'deploy'
@@ -2737,6 +3114,34 @@ const BattleSceneModal = ({
               planningHoverPoint={planningHoverPoint}
               skillConfirmState={skillConfirmState}
             />
+
+            {phase === 'deploy' && selectedDeployFormation ? (
+              <div className="pve2-formation-overlay">
+                {selectedDeployFormationLines.map((style, idx) => (
+                  <div key={`formation-line-${idx}`} className="pve2-formation-line" style={style} />
+                ))}
+                {selectedDeployHandleLeftDom?.visible !== false ? (
+                  <button
+                    type="button"
+                    className="pve2-formation-handle"
+                    style={{ left: `${selectedDeployHandleLeftDom.x}px`, top: `${selectedDeployHandleLeftDom.y}px` }}
+                    onMouseDown={(event) => beginDeployRectResize(event, selectedDeployGroup, -1)}
+                  >
+                    ↔
+                  </button>
+                ) : null}
+                {selectedDeployHandleRightDom?.visible !== false ? (
+                  <button
+                    type="button"
+                    className="pve2-formation-handle"
+                    style={{ left: `${selectedDeployHandleRightDom.x}px`, top: `${selectedDeployHandleRightDom.y}px` }}
+                    onMouseDown={(event) => beginDeployRectResize(event, selectedDeployGroup, 1)}
+                  >
+                    ↔
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             {canDrawMidlineDebug ? (
               <div className="pve2-midline-overlay">
@@ -3168,6 +3573,20 @@ const BattleSceneModal = ({
             {battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM ? (
               <div className="pve2-aim-tip">技能确认态：LMB 确认释放，RMB 取消</div>
             ) : null}
+            {runtimeDebugOverlay.enabled ? (
+              <div className="pve2-runtime-debug">
+                <div>{`phase: ${runtimeDebugOverlay.phase}`}</div>
+                <div>{`pitchMix: ${Number(runtimeDebugOverlay.pitchMix || 0).toFixed(3)}`}</div>
+                <div>{`formationRect: ${
+                  runtimeDebugOverlay.formationRect
+                    ? `w=${runtimeDebugOverlay.formationRect.width.toFixed(1)}, d=${runtimeDebugOverlay.formationRect.depth.toFixed(1)}, A=${runtimeDebugOverlay.formationRect.area.toFixed(1)}`
+                    : 'n/a'
+                }`}</div>
+                {runtimeDebugOverlay.steeringWeights ? (
+                  <div>{`steerW: ${JSON.stringify(runtimeDebugOverlay.steeringWeights)}`}</div>
+                ) : null}
+              </div>
+            ) : null}
 
             {debugEnabled ? (
               <BattleDebugPanel
@@ -3239,8 +3658,9 @@ const BattleSceneModal = ({
                 className="pve2-deploy-creator"
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => event.stopPropagation()}
+                onWheelCapture={(event) => event.stopPropagation()}
               >
-                <h4>{`${deployEditingGroupId ? '编辑部队' : '新建部队'}（${deployEditorTeam === TEAM_DEFENDER ? '敌方' : '我方'}）`}</h4>
+                <h4>{`${deployEditingGroupId ? '编辑部队' : '新建部队'}（${deployEditorTeamLabel}）`}</h4>
                 <label>
                   <span>部队名称</span>
                   <input
@@ -3254,25 +3674,27 @@ const BattleSceneModal = ({
                 <div className="pve2-deploy-editor-transfer">
                   <div className="pve2-deploy-editor-col">
                     <div className="pve2-deploy-editor-col-title">可用兵种（左侧）</div>
-                    {deployEditorAvailableRows.map((row) => (
-                      <button
-                        key={`${deployEditorTeam}-left-${row.unitTypeId}`}
-                        type="button"
-                        className="pve2-deploy-unit-card"
-                        draggable={row.availableForDraft > 0}
-                        disabled={row.availableForDraft <= 0}
-                        onDragStart={(event) => {
-                          event.dataTransfer?.setData('application/x-deploy-unit-id', row.unitTypeId);
-                          event.dataTransfer?.setData('text/plain', row.unitTypeId);
-                          setDeployEditorDragUnitId(row.unitTypeId);
-                        }}
-                        onDragEnd={() => setDeployEditorDragUnitId('')}
-                        onClick={() => openDeployQuantityDialog(row.unitTypeId)}
-                      >
-                        <strong>{row.unitName}</strong>
-                        <span>{`可用 ${row.availableForDraft}`}</span>
-                      </button>
-                    ))}
+                    <div className="pve2-deploy-editor-list">
+                      {deployEditorAvailableRows.map((row) => (
+                        <button
+                          key={`${deployEditorTeam}-left-${row.unitTypeId}`}
+                          type="button"
+                          className="pve2-deploy-unit-card"
+                          draggable={row.availableForDraft > 0}
+                          disabled={row.availableForDraft <= 0}
+                          onDragStart={(event) => {
+                            event.dataTransfer?.setData('application/x-deploy-unit-id', row.unitTypeId);
+                            event.dataTransfer?.setData('text/plain', row.unitTypeId);
+                            setDeployEditorDragUnitId(row.unitTypeId);
+                          }}
+                          onDragEnd={() => setDeployEditorDragUnitId('')}
+                          onClick={() => openDeployQuantityDialog(row.unitTypeId)}
+                        >
+                          <strong>{row.unitName}</strong>
+                          <span>{`可用 ${row.availableForDraft}`}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div
                     className={`pve2-deploy-editor-col pve2-deploy-editor-col-right ${deployEditorDragUnitId ? 'is-dropzone' : ''}`}
@@ -3280,18 +3702,20 @@ const BattleSceneModal = ({
                     onDrop={handleDeployEditorDrop}
                   >
                     <div className="pve2-deploy-editor-col-title">部队编组（右侧）</div>
-                    {normalizeDraftUnits(deployEditorDraft.units).length <= 0 ? (
-                      <div className="pve2-deploy-editor-tip">拖拽左侧兵种到这里后，会弹出数量输入框。</div>
-                    ) : null}
-                    {normalizeDraftUnits(deployEditorDraft.units).map((entry) => (
-                      <div key={`${deployEditorTeam}-right-${entry.unitTypeId}`} className="pve2-deploy-editor-row">
-                        <span>{`${deployEditorAvailableRows.find((row) => row.unitTypeId === entry.unitTypeId)?.unitName || entry.unitTypeId} x${entry.count}`}</span>
-                        <div className="pve2-deploy-editor-row-actions">
-                          <button type="button" className="btn btn-secondary btn-small" onClick={() => openDeployQuantityDialog(entry.unitTypeId)}>数量</button>
-                          <button type="button" className="btn btn-warning btn-small" onClick={() => handleRemoveDraftUnit(entry.unitTypeId)}>移除</button>
+                    <div className="pve2-deploy-editor-list">
+                      {normalizeDraftUnits(deployEditorDraft.units).length <= 0 ? (
+                        <div className="pve2-deploy-editor-tip">拖拽左侧兵种到这里后，会弹出数量输入框。</div>
+                      ) : null}
+                      {normalizeDraftUnits(deployEditorDraft.units).map((entry) => (
+                        <div key={`${deployEditorTeam}-right-${entry.unitTypeId}`} className="pve2-deploy-editor-row">
+                          <span>{`${deployEditorAvailableRows.find((row) => row.unitTypeId === entry.unitTypeId)?.unitName || entry.unitTypeId} x${entry.count}`}</span>
+                          <div className="pve2-deploy-editor-row-actions">
+                            <button type="button" className="btn btn-secondary btn-small" onClick={() => openDeployQuantityDialog(entry.unitTypeId)}>数量</button>
+                            <button type="button" className="btn btn-warning btn-small" onClick={() => handleRemoveDraftUnit(entry.unitTypeId)}>移除</button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </div>
                 <div className="pve2-deploy-editor-summary">

@@ -119,18 +119,31 @@ const NumberPadDialog = ({
           />
           <span className="number-pad-value-limit">{`范围 ${safeMin} - ${safeMax}`}</span>
         </div>
-        <input
-          type="range"
-          className="number-pad-slider"
-          min={safeMin}
-          max={safeMax}
-          step={1}
-          value={displayValue}
-          onChange={(event) => {
-            setError('');
-            normalizeRawValue(event.target.value);
-          }}
-        />
+        <div className="number-pad-slider-row">
+          <input
+            type="range"
+            className="number-pad-slider"
+            min={safeMin}
+            max={safeMax}
+            step={1}
+            value={displayValue}
+            onChange={(event) => {
+              setError('');
+              normalizeRawValue(event.target.value);
+            }}
+          />
+          <button
+            type="button"
+            className="number-pad-slider-max"
+            onClick={() => {
+              setError('');
+              normalizeRawValue(String(safeMax));
+            }}
+            disabled={displayValue >= safeMax}
+          >
+            MAX
+          </button>
+        </div>
         <div className="number-pad-grid">
           {NUMBER_PAD_ROWS.flat().map((key) => (
             <button

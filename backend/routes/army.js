@@ -4,11 +4,12 @@ const User = require('../models/User');
 const { authenticateToken } = require('../middleware/auth');
 const { fetchUnitTypesWithComponents } = require('../services/unitRegistryService');
 const { fetchBattlefieldItems } = require('../services/placeableCatalogService');
+const { UNIT_TYPE_DTO_VERSION } = require('../services/unitTypeDtoService');
 
 const getUnitTypeId = (unit) => {
-  const id = typeof unit?.id === 'string' ? unit.id.trim() : '';
-  if (id) return id;
-  return typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : '';
+  const unitTypeId = typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : '';
+  if (unitTypeId) return unitTypeId;
+  return typeof unit?.id === 'string' ? unit.id.trim() : '';
 };
 
 const fetchEnabledUnitTypes = async () => {
@@ -322,7 +323,10 @@ const executeRecruitCheckout = async ({ userId, recruitItems }) => {
 router.get('/unit-types', async (req, res) => {
   try {
     const unitTypes = await fetchEnabledUnitTypes();
-    return res.json({ unitTypes });
+    return res.json({
+      unitTypeDtoVersion: UNIT_TYPE_DTO_VERSION,
+      unitTypes
+    });
   } catch (error) {
     console.error('获取兵种列表失败:', error);
     return res.status(500).json({ error: '服务器错误' });
@@ -380,6 +384,7 @@ router.get('/training/init', authenticateToken, async (req, res) => {
         rosterUnits: unlimitedUnits,
         deployUnits: []
       },
+      unitTypeDtoVersion: UNIT_TYPE_DTO_VERSION,
       unitTypes: Array.isArray(unitTypes) ? unitTypes : [],
       battlefield: {
         intelVisible: true,

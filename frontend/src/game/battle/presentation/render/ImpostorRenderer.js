@@ -1,3 +1,11 @@
+/**
+ * Impostor renderer contract:
+ * - Unit instances are packed by BattleRuntime into fixed-stride float buffers.
+ * - This renderer only interprets that buffer and performs layered billboard draws.
+ * - Pitch-driven readability (front/top blend) is handled here, not in gameplay sim.
+ * - Keep attribute layout synced with `UNIT_INSTANCE_STRIDE` and runtime writes.
+ * - Any field reorder must update both shader attribute comments and runtime offsets.
+ */
 import {
   createProgram,
   createStaticQuadVao,
@@ -5,7 +13,7 @@ import {
   updateDynamicBuffer
 } from './WebGL2Context';
 
-export const UNIT_INSTANCE_STRIDE = 16;
+export const UNIT_INSTANCE_STRIDE = 20;
 
 const VS = `#version 300 es
 layout(location=0) in vec2 aQuadPos;
@@ -13,44 +21,76 @@ layout(location=1) in vec2 aUv;
 layout(location=2) in vec4 iData0; // x y z size
 layout(location=3) in vec4 iData1; // yaw team hp body
 layout(location=4) in vec4 iData2; // gear vehicle silhouette tint
-layout(location=5) in vec4 iData3; // selected flag reserved reserved
+layout(location=5) in vec4 iData3; // selected flag ghost reserved
+layout(location=6) in vec4 iData4; // bodyTop gearTop vehicleTop silhouetteTop
 
 uniform mat4 uViewProj;
 uniform vec3 uCameraRight;
 uniform float uLayer;
+uniform float uApplyYaw;
+uniform float uTopBlend;
 
 out vec2 vUv;
 out float vTeam;
 out float vHp;
-out float vSlice;
+out float vSliceFront;
+out float vSliceTop;
 out float vSelected;
 out float vFlag;
 out float vTint;
+out float vGhost;
 
 void main() {
   vec3 base = vec3(iData0.x, iData0.y, iData0.z);
   float size = max(1.0, iData0.w);
-  vec3 right = normalize(vec3(uCameraRight.x, uCameraRight.y, 0.0));
-  vec3 up = vec3(0.0, 0.0, 1.0);
+  vec3 rightV = normalize(vec3(uCameraRight.x, uCameraRight.y, 0.0));
+  if (length(rightV) <= 0.0001) {
+    rightV = vec3(1.0, 0.0, 0.0);
+  }
+  vec3 upV = vec3(0.0, 0.0, 1.0);
+  vec3 rightT = rightV;
+  vec3 upT = vec3(-rightV.y, rightV.x, 0.0);
 
-  vec3 world = base;
-  world += right * (aQuadPos.x * size);
-  world += up * (aQuadPos.y * size * 1.92);
+  vec2 quad = aQuadPos;
+  if (uApplyYaw > 0.5) {
+    float c = cos(iData1.x);
+    float s = sin(iData1.x);
+    quad = vec2(
+      (aQuadPos.x * c) - (aQuadPos.y * s),
+      (aQuadPos.x * s) + (aQuadPos.y * c)
+    );
+  }
+
+  vec3 worldV = base;
+  worldV += rightV * (quad.x * size);
+  worldV += upV * (quad.y * size * 1.92);
+
+  vec3 worldT = base;
+  worldT += rightT * (quad.x * size);
+  worldT += upT * (quad.y * size * 1.02);
+  worldT.z += size * 0.02;
+
+  vec3 world = mix(worldV, worldT, clamp(uTopBlend, 0.0, 1.0));
 
   vUv = aUv;
   vTeam = iData1.y;
   vHp = iData1.z;
   vSelected = iData3.x;
   vFlag = iData3.y;
+  vGhost = iData3.z;
   vTint = iData2.w;
   if (uLayer < 0.5) {
-    vSlice = iData1.w;
+    vSliceFront = iData1.w;
+    vSliceTop = iData4.x;
   } else if (uLayer < 1.5) {
-    vSlice = iData2.x;
+    vSliceFront = iData2.x;
+    vSliceTop = iData4.y;
   } else if (uLayer < 2.5) {
-    vSlice = iData2.y;
+    vSliceFront = iData2.y;
+    vSliceTop = iData4.z;
   } else {
-    vSlice = iData2.z;
+    vSliceFront = iData2.z;
+    vSliceTop = iData4.w;
   }
 
   gl_Position = uViewProj * vec4(world, 1.0);
@@ -64,13 +104,16 @@ precision highp sampler2DArray;
 in vec2 vUv;
 in float vTeam;
 in float vHp;
-in float vSlice;
+in float vSliceFront;
+in float vSliceTop;
 in float vSelected;
 in float vFlag;
 in float vTint;
+in float vGhost;
 
 uniform vec3 uLightDir;
 uniform float uPitchMix;
+uniform float uTopBlend;
 uniform sampler2DArray uTexArray;
 uniform float uUseTexArray;
 uniform float uLayer;
@@ -90,7 +133,7 @@ void main() {
   float lit = 0.35 + (lambert * 0.75);
 
   vec3 teamTint = (vTeam < 0.5) ? vec3(0.55, 0.76, 1.0) : vec3(1.0, 0.58, 0.58);
-  float pseudo = fract((vSlice + (uLayer * 7.0)) * 0.137);
+  float pseudo = fract((vSliceFront + (uLayer * 7.0)) * 0.137);
   vec3 palette = vec3(
     0.36 + (0.42 * fract(pseudo * 2.3)),
     0.34 + (0.38 * fract(pseudo * 3.7)),
@@ -103,14 +146,25 @@ void main() {
     color *= 0.72;
   }
   if (uUseTexArray > 0.5) {
-    float layer = floor(vSlice + 0.5);
-    layer = clamp(layer, 0.0, max(0.0, uTexLayerCount - 1.0));
-    vec4 texel = texture(uTexArray, vec3(vUv, layer));
-    color = mix(color, texel.rgb, clamp(texel.a, 0.0, 1.0) * 0.72);
+    float frontLayer = floor(vSliceFront + 0.5);
+    frontLayer = clamp(frontLayer, 0.0, max(0.0, uTexLayerCount - 1.0));
+    vec4 frontTexel = texture(uTexArray, vec3(vUv, frontLayer));
+    float topLayerRaw = floor(vSliceTop + 0.5);
+    float topLayer = clamp(topLayerRaw, 0.0, max(0.0, uTexLayerCount - 1.0));
+    vec4 topTexel = texture(uTexArray, vec3(vUv, topLayer));
+    float topValid = step(0.0, vSliceTop);
+    float topMix = clamp(uTopBlend, 0.0, 1.0) * topValid;
+    vec3 texRgb = mix(frontTexel.rgb, topTexel.rgb, topMix);
+    float texA = mix(frontTexel.a, topTexel.a, topMix);
+    color = mix(color, texRgb, clamp(texA, 0.0, 1.0) * 0.72);
   }
   color = mix(color, color * 1.18, clamp(uPitchMix, 0.0, 1.0) * 0.18);
   color *= lit;
   color *= mix(0.5, 1.0, clamp(vHp, 0.0, 1.0));
+  if (vGhost > 0.5) {
+    color = mix(color, vec3(0.8, 0.9, 1.0), 0.3);
+    color *= 0.82;
+  }
   if (vSelected > 0.5) {
     color = mix(color, vec3(1.0, 0.95, 0.5), 0.22);
   }
@@ -125,6 +179,7 @@ void main() {
 const SHAPE_BODY = 0;
 const SHAPE_GEAR = 1;
 const SHAPE_VEHICLE = 2;
+const clamp01 = (value) => Math.max(0, Math.min(1, Number(value) || 0));
 
 const fillTextureLayer = (size, layerIndex, totalLayers, angleMode, shapeMode, normalMode = false) => {
   const data = new Uint8Array(size * size * 4);
@@ -235,7 +290,8 @@ export default class ImpostorRenderer {
       iData0: 2,
       iData1: 3,
       iData2: 4,
-      iData3: 5
+      iData3: 5,
+      iData4: 6
     };
     const quad = createStaticQuadVao(gl, this.attrs);
     this.vao = quad.vao;
@@ -245,6 +301,8 @@ export default class ImpostorRenderer {
       uViewProj: gl.getUniformLocation(this.program, 'uViewProj'),
       uCameraRight: gl.getUniformLocation(this.program, 'uCameraRight'),
       uLayer: gl.getUniformLocation(this.program, 'uLayer'),
+      uApplyYaw: gl.getUniformLocation(this.program, 'uApplyYaw'),
+      uTopBlend: gl.getUniformLocation(this.program, 'uTopBlend'),
       uLightDir: gl.getUniformLocation(this.program, 'uLightDir'),
       uPitchMix: gl.getUniformLocation(this.program, 'uPitchMix'),
       uTexArray: gl.getUniformLocation(this.program, 'uTexArray'),
@@ -306,6 +364,10 @@ export default class ImpostorRenderer {
     gl.vertexAttribPointer(this.attrs.iData3, 4, gl.FLOAT, false, strideBytes, 48);
     gl.vertexAttribDivisor(this.attrs.iData3, 1);
 
+    gl.enableVertexAttribArray(this.attrs.iData4);
+    gl.vertexAttribPointer(this.attrs.iData4, 4, gl.FLOAT, false, strideBytes, 64);
+    gl.vertexAttribDivisor(this.attrs.iData4, 1);
+
     gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
@@ -328,16 +390,23 @@ export default class ImpostorRenderer {
     updateDynamicBuffer(this.gl, this.instanceBuffer, this.instanceData, needed);
   }
 
-  render(cameraState, pitchMix = 0) {
+  render(cameraState, pitchMix = 0, options = {}) {
     if (this.instanceCount <= 0) return;
     const gl = this.gl;
+    const applyYaw = options?.applyYaw === true;
+
+    const safePitchMix = Math.max(0, Math.min(1, Number(pitchMix) || 0));
+    const topBlend = clamp01((safePitchMix - 0.55) / Math.max(1e-6, (0.75 - 0.55)));
+    const smoothTopBlend = topBlend * topBlend * (3 - (2 * topBlend));
 
     gl.useProgram(this.program);
     gl.bindVertexArray(this.vao);
     gl.uniformMatrix4fv(this.uniforms.uViewProj, false, new Float32Array(cameraState.viewProjection));
     gl.uniform3fv(this.uniforms.uCameraRight, new Float32Array(cameraState.cameraRight));
+    gl.uniform1f(this.uniforms.uApplyYaw, applyYaw ? 1 : 0);
+    gl.uniform1f(this.uniforms.uTopBlend, smoothTopBlend);
     gl.uniform3f(this.uniforms.uLightDir, -0.24, -0.35, 0.91);
-    gl.uniform1f(this.uniforms.uPitchMix, Math.max(0, Math.min(1, Number(pitchMix) || 0)));
+    gl.uniform1f(this.uniforms.uPitchMix, safePitchMix);
     if (this.textureArray) {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textureArray);

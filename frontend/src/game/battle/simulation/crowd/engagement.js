@@ -35,6 +35,10 @@ export const MELEE_ENGAGEMENT_CONFIG = {
   blockedSquadRatio: 0.35,
   retargetCooldownSec: 0.9,
   detourDistance: 14,
+  detourTriggerSec: 0.2,
+  detourHoldSec: 0.5,
+  detourCooldownSec: 0.7,
+  detourReachRadius: 4.2,
   losPenalty: 44,
   losRejectDistance: 84,
   stickyTargetBonus: 18,
@@ -140,6 +144,34 @@ const canInjectDetourWaypoint = (squad = {}, nowSec = 0) => {
   const orderType = resolveOrderType(squad);
   if (orderType === ORDER_MOVE) return false;
   if (isChargeCommitted(squad, nowSec)) return false;
+  return true;
+};
+
+const canRefreshDetourWaypoint = (squad = {}, nowSec = 0, cfg = MELEE_ENGAGEMENT_CONFIG) => {
+  const waypoints = Array.isArray(squad?.waypoints) ? squad.waypoints : [];
+  if (waypoints.length <= 0) return true;
+  const holdUntil = Number(squad?._detourHoldUntil) || 0;
+  if (nowSec >= holdUntil) return true;
+  const reachRadius = Math.max(1, toSafeNumber(cfg?.detourReachRadius, 4.2));
+  const first = waypoints[0] || {};
+  const dist = Math.hypot((Number(first.x) || 0) - (Number(squad?.x) || 0), (Number(first.y) || 0) - (Number(squad?.y) || 0));
+  return dist <= reachRadius;
+};
+
+const shouldInjectDetourWaypoint = (squad = {}, blockedRatio = 0, dt = 0, nowSec = 0, cfg = MELEE_ENGAGEMENT_CONFIG) => {
+  const threshold = toSafeNumber(cfg?.blockedSquadRatio, 0.35);
+  const triggerSec = Math.max(0.05, toSafeNumber(cfg?.detourTriggerSec, 0.2));
+  const cooldownSec = Math.max(0.05, toSafeNumber(cfg?.detourCooldownSec, 0.7));
+  const isBlocked = blockedRatio >= threshold;
+  const prevAccum = Math.max(0, Number(squad?._detourBlockedAccumSec) || 0);
+  squad._detourBlockedAccumSec = isBlocked
+    ? Math.min(8, prevAccum + Math.max(0, Number(dt) || 0))
+    : Math.max(0, prevAccum - (Math.max(0, Number(dt) || 0) * 1.6));
+  if (!isBlocked) return false;
+  if (squad._detourBlockedAccumSec < triggerSec) return false;
+  if ((Number(squad?._detourCooldownUntil) || 0) > nowSec) return false;
+  if (!canRefreshDetourWaypoint(squad, nowSec, cfg)) return false;
+  squad._pendingDetourCooldownSec = cooldownSec;
   return true;
 };
 
@@ -519,7 +551,7 @@ export const syncMeleeEngagement = (crowd, sim, walls = [], dt = 0, nowSec = 0) 
       attacker._engageRetargetUntil = nextNow + toSafeNumber(cfg?.retargetCooldownSec, 0.9);
       attacker._engageBlockedTargetId = defender.id;
       if (
-        (!Array.isArray(attacker.waypoints) || attacker.waypoints.length <= 0)
+        shouldInjectDetourWaypoint(attacker, attackerMeta.blockedRatio, dt, nextNow, cfg)
         && attacker.behavior !== 'retreat'
         && canInjectDetourWaypoint(attacker, nextNow)
       ) {
@@ -528,13 +560,18 @@ export const syncMeleeEngagement = (crowd, sim, walls = [], dt = 0, nowSec = 0) 
           x: (attacker.x || 0) + (pair.tangentX * toSafeNumber(cfg?.detourDistance, 14) * driftSign),
           y: (attacker.y || 0) + (pair.tangentY * toSafeNumber(cfg?.detourDistance, 14) * driftSign)
         }];
+        attacker._detourBlockedAccumSec = 0;
+        attacker._detourCooldownUntil = nextNow + Math.max(0.05, Number(attacker._pendingDetourCooldownSec) || 0.7);
+        attacker._pendingDetourCooldownSec = 0;
+        attacker.lastDetourAt = nextNow;
+        attacker._detourHoldUntil = nextNow + Math.max(0.05, toSafeNumber(cfg?.detourHoldSec, 0.5));
       }
     }
     if (defenderMeta.blockedRatio >= toSafeNumber(cfg?.blockedSquadRatio, 0.35)) {
       defender._engageRetargetUntil = nextNow + toSafeNumber(cfg?.retargetCooldownSec, 0.9);
       defender._engageBlockedTargetId = attacker.id;
       if (
-        (!Array.isArray(defender.waypoints) || defender.waypoints.length <= 0)
+        shouldInjectDetourWaypoint(defender, defenderMeta.blockedRatio, dt, nextNow, cfg)
         && defender.behavior !== 'retreat'
         && canInjectDetourWaypoint(defender, nextNow)
       ) {
@@ -543,6 +580,11 @@ export const syncMeleeEngagement = (crowd, sim, walls = [], dt = 0, nowSec = 0) 
           x: (defender.x || 0) + (pair.tangentX * toSafeNumber(cfg?.detourDistance, 14) * driftSign),
           y: (defender.y || 0) + (pair.tangentY * toSafeNumber(cfg?.detourDistance, 14) * driftSign)
         }];
+        defender._detourBlockedAccumSec = 0;
+        defender._detourCooldownUntil = nextNow + Math.max(0.05, Number(defender._pendingDetourCooldownSec) || 0.7);
+        defender._pendingDetourCooldownSec = 0;
+        defender.lastDetourAt = nextNow;
+        defender._detourHoldUntil = nextNow + Math.max(0.05, toSafeNumber(cfg?.detourHoldSec, 0.5));
       }
     }
   });

@@ -99,6 +99,16 @@ const SKILL_COOLDOWN_BY_CLASS = {
   archer: 8.6,
   artillery: 13.5
 };
+const DEFAULT_STEERING_WEIGHTS = {
+  slot: 1,
+  separation: 1,
+  avoidance: 1,
+  anchor: 1,
+  pressure: 1,
+  leaderAvoidance: 1,
+  turnHz: 8.2,
+  maxTurnRate: LEADER_MAX_TURN_RATE
+};
 
 const sumUnitsMap = (map = {}) => Object.values(map || {}).reduce((sum, c) => sum + Math.max(0, Number(c) || 0), 0);
 
@@ -161,6 +171,10 @@ const hamiltonAllocate = (countsByType = {}, budget = 0) => {
 };
 
 const inferCategoryFromUnitType = (unitType = {}, fallbackClass = 'infantry') => {
+  const explicit = typeof unitType?.classTag === 'string' ? unitType.classTag.trim().toLowerCase() : '';
+  if (explicit === 'infantry' || explicit === 'cavalry' || explicit === 'archer' || explicit === 'artillery') {
+    return explicit;
+  }
   const name = typeof unitType?.name === 'string' ? unitType.name : '';
   const roleTag = unitType?.roleTag === '远程' || unitType?.roleTag === '近战' ? unitType.roleTag : '';
   const speed = Number(unitType?.speed) || 0;
@@ -183,6 +197,15 @@ const slotOffsetForIndex = (index, columns, spacing = (AGENT_RADIUS * 2) + AGENT
 };
 
 const teamForward = (team) => (team === TEAM_ATTACKER ? { x: 1, y: 0 } : { x: -1, y: 0 });
+
+const resolveSquadForward = (squad = {}) => {
+  const facing = Number(squad?.formationRect?.facingRad);
+  if (Number.isFinite(facing)) {
+    const dir = normalizeVec(Math.cos(facing), Math.sin(facing));
+    if (dir.len > 1e-4) return { x: dir.x, y: dir.y };
+  }
+  return teamForward(squad?.team);
+};
 
 const skillRangeByClass = (classTag = '') => {
   if (classTag === 'cavalry') return 220;
@@ -287,6 +310,26 @@ const resolveSquadOrderType = (squad = {}) => {
   const orderType = typeof squad?.order?.type === 'string' ? squad.order.type : '';
   if (orderType === ORDER_MOVE || orderType === ORDER_ATTACK_MOVE || orderType === ORDER_CHARGE) return orderType;
   return ORDER_IDLE;
+};
+
+const resolveSteeringWeights = (sim = null, crowd = null) => {
+  let source = null;
+  if (sim?.steeringWeights && typeof sim.steeringWeights === 'object') source = sim.steeringWeights;
+  if (!source && crowd?.steeringWeights && typeof crowd.steeringWeights === 'object') source = crowd.steeringWeights;
+  if (!source && typeof window !== 'undefined' && window?.__BATTLE_DEBUG__ && typeof window.__BATTLE_DEBUG__ === 'object') {
+    source = window.__BATTLE_DEBUG__.steeringWeights || null;
+  }
+  const input = source && typeof source === 'object' ? source : {};
+  return {
+    slot: Math.max(0, Number(input.slot ?? DEFAULT_STEERING_WEIGHTS.slot) || DEFAULT_STEERING_WEIGHTS.slot),
+    separation: Math.max(0, Number(input.separation ?? DEFAULT_STEERING_WEIGHTS.separation) || DEFAULT_STEERING_WEIGHTS.separation),
+    avoidance: Math.max(0, Number(input.avoidance ?? DEFAULT_STEERING_WEIGHTS.avoidance) || DEFAULT_STEERING_WEIGHTS.avoidance),
+    anchor: Math.max(0, Number(input.anchor ?? DEFAULT_STEERING_WEIGHTS.anchor) || DEFAULT_STEERING_WEIGHTS.anchor),
+    pressure: Math.max(0, Number(input.pressure ?? DEFAULT_STEERING_WEIGHTS.pressure) || DEFAULT_STEERING_WEIGHTS.pressure),
+    leaderAvoidance: Math.max(0, Number(input.leaderAvoidance ?? DEFAULT_STEERING_WEIGHTS.leaderAvoidance) || DEFAULT_STEERING_WEIGHTS.leaderAvoidance),
+    turnHz: Math.max(0.2, Number(input.turnHz ?? DEFAULT_STEERING_WEIGHTS.turnHz) || DEFAULT_STEERING_WEIGHTS.turnHz),
+    maxTurnRate: Math.max(0.2, Number(input.maxTurnRate ?? DEFAULT_STEERING_WEIGHTS.maxTurnRate) || DEFAULT_STEERING_WEIGHTS.maxTurnRate)
+  };
 };
 
 const clampVecLength = (x, y, maxLen = 1) => {
@@ -879,7 +922,35 @@ const createAgentsForSquad = (squad, crowd) => {
     ? { ...minRequiredByType }
     : hamiltonAllocate(countsByType, agentBudget);
   const agents = [];
-  const baseCols = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, Object.values(alloc).reduce((sum, c) => sum + c, 0)))));
+  const allocTotal = Math.max(1, Object.values(alloc).reduce((sum, c) => sum + c, 0));
+  const formationRect = squad?.formationRect && typeof squad.formationRect === 'object' ? squad.formationRect : null;
+  const formationSpacing = Math.max(0.1, Number(formationRect?.spacing) || ((AGENT_RADIUS * 2) + AGENT_GAP));
+  const hintedCols = formationRect
+    ? Math.max(1, Math.round(Math.max(1, Number(formationRect.width) || 1) / formationSpacing))
+    : 0;
+  const baseCols = Math.max(1, hintedCols || Math.ceil(Math.sqrt(allocTotal)));
+  const forwardVec = resolveSquadForward(squad);
+  const sideVec = { x: -forwardVec.y, y: forwardVec.x };
+  const deploySlots = Array.isArray(squad?.deploySlots)
+    ? squad.deploySlots.map((slot) => ({
+      side: Number(slot?.side) || 0,
+      front: Number(slot?.front) || 0
+    }))
+    : [];
+
+  const resolveSpawnPoint = (slotOrder, fallbackOffset) => {
+    if (deploySlots[slotOrder]) {
+      const slot = deploySlots[slotOrder];
+      return {
+        x: (Number(squad.x) || 0) + (sideVec.x * slot.side) + (forwardVec.x * slot.front),
+        y: (Number(squad.y) || 0) + (sideVec.y * slot.side) + (forwardVec.y * slot.front)
+      };
+    }
+    return {
+      x: (Number(squad.x) || 0) - fallbackOffset.back,
+      y: (Number(squad.y) || 0) + fallbackOffset.side
+    };
+  };
 
   let slotOrder = 0;
   Object.entries(alloc).forEach(([unitTypeId, count]) => {
@@ -893,14 +964,15 @@ const createAgentsForSquad = (squad, crowd) => {
     const moveSpeedMul = resolveAgentSpeedMul(unitType, category);
     for (let i = 0; i < safeCount; i += 1) {
       const offset = slotOffsetForIndex(slotOrder, baseCols);
+      const spawnPoint = resolveSpawnPoint(slotOrder, offset);
       agents.push(createAgent({
         id: `${squad.id}_ag_${slotOrder + 1}`,
         squadId: squad.id,
         team: squad.team,
         unitTypeId,
         category,
-        x: (Number(squad.x) || 0) - offset.back,
-        y: (Number(squad.y) || 0) + offset.side,
+        x: spawnPoint.x,
+        y: spawnPoint.y,
         weight: perAgentWeight,
         slotOrder,
         moveSpeedMul
@@ -924,13 +996,13 @@ const createAgentsForSquad = (squad, crowd) => {
     }));
   }
   squad._repMaxAgentWeight = repConfig.maxAgentWeight;
-  squad._crowdBaseColumns = Math.max(1, Math.ceil(Math.sqrt(agents.length)));
-  squad._crowdForward = teamForward(squad.team);
+  squad._crowdBaseColumns = Math.max(1, hintedCols || Math.ceil(Math.sqrt(agents.length)));
+  squad._crowdForward = { x: forwardVec.x, y: forwardVec.y };
   ensureFlagBearer(squad, agents);
   return agents;
 };
 
-const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
+const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEFAULT_STEERING_WEIGHTS) => {
   const actionState = ensureSquadActionState(squad);
   const actionKind = typeof actionState.kind === 'string' ? actionState.kind : 'none';
   const moralePenalty = squad.morale <= 0 ? (2 / 3) : (squad.morale < 20 ? 0.82 : 1);
@@ -1003,7 +1075,17 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
       }
     } else {
       const avoid = computeAvoidanceDirection({ x: squad.x, y: squad.y }, toTarget, walls, OBSTACLE_AVOID_PROBE);
-      desiredDir = normalizeVec(toTarget.x + (avoid.x * 0.68), toTarget.y + (avoid.y * 0.68));
+      const avoidWeight = Math.max(0, Number(steeringWeights?.leaderAvoidance) || DEFAULT_STEERING_WEIGHTS.leaderAvoidance);
+      const rawDesired = normalizeVec(toTarget.x + (avoid.x * 0.68 * avoidWeight), toTarget.y + (avoid.y * 0.68 * avoidWeight));
+      const prevSmooth = normalizeVec(Number(squad.smoothedDirX) || dir.x, Number(squad.smoothedDirY) || dir.y);
+      const blendK = 1 - Math.exp(-Math.max(0, dt) * Math.max(0.2, Number(steeringWeights?.turnHz) || DEFAULT_STEERING_WEIGHTS.turnHz));
+      const smooth = normalizeVec(
+        prevSmooth.x + ((rawDesired.x - prevSmooth.x) * blendK),
+        prevSmooth.y + ((rawDesired.y - prevSmooth.y) * blendK)
+      );
+      desiredDir = smooth;
+      squad.smoothedDirX = desiredDir.x;
+      squad.smoothedDirY = desiredDir.y;
       const arrivalRate = clamp((toTarget.len - LEADER_ARRIVAL_RADIUS) / Math.max(1, LEADER_SLOW_RADIUS - LEADER_ARRIVAL_RADIUS), 0.1, 1);
       desiredSpeed = Math.min(speedTargetMax, speedTargetMax * arrivalRate);
     }
@@ -1021,7 +1103,8 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
   if (angle > 1e-4) {
     const cross = (dir.x * desiredDir.y) - (dir.y * desiredDir.x);
     const sign = cross >= 0 ? 1 : -1;
-    const stepTurn = Math.min(angle, LEADER_MAX_TURN_RATE * dt) * sign;
+    const maxTurnRate = Math.max(0.2, Number(steeringWeights?.maxTurnRate) || LEADER_MAX_TURN_RATE);
+    const stepTurn = Math.min(angle, maxTurnRate * dt) * sign;
     const cosT = Math.cos(stepTurn);
     const sinT = Math.sin(stepTurn);
     const nextDir = normalizeVec((dir.x * cosT) - (dir.y * sinT), (dir.x * sinT) + (dir.y * cosT));
@@ -1040,10 +1123,21 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
   const halfH = (Number(sim?.field?.height) || 620) / 2;
   nx = clamp(nx, -halfW + 4, halfW - 4);
   ny = clamp(ny, -halfH + 4, halfH - 4);
+  let pushNx = 0;
+  let pushNy = 0;
   walls.forEach((wall) => {
+    const beforeX = nx;
+    const beforeY = ny;
     const pushed = pushOutOfRect({ x: nx, y: ny }, wall, AGENT_RADIUS + 1.8);
     nx = pushed.x;
     ny = pushed.y;
+    if (pushed?.pushed) {
+      const corr = normalizeVec(nx - beforeX, ny - beforeY);
+      if (corr.len > 1e-4) {
+        pushNx += corr.x;
+        pushNy += corr.y;
+      }
+    }
   });
   const movedX = nx - prevX;
   const movedY = ny - prevY;
@@ -1051,6 +1145,16 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec) => {
   squad.y = ny;
   squad.vx = movedX / Math.max(1e-4, dt);
   squad.vy = movedY / Math.max(1e-4, dt);
+  const pushN = normalizeVec(pushNx, pushNy);
+  if (pushN.len > 1e-4) {
+    const vn = (squad.vx * pushN.x) + (squad.vy * pushN.y);
+    if (vn > 0) {
+      const keep = vn * 0.2;
+      const remove = vn - keep;
+      squad.vx -= pushN.x * remove;
+      squad.vy -= pushN.y * remove;
+    }
+  }
   squad.speed = Math.hypot(squad.vx, squad.vy);
   squad.dirX = dir.x;
   squad.dirY = dir.y;
@@ -1533,6 +1637,9 @@ export const triggerCrowdSkill = (sim, crowd, squadId, targetInput) => {
 export const updateCrowdSim = (crowd, sim, dt) => {
   if (!crowd || !sim || sim.ended) return;
   const safeDt = Math.max(0.001, Number(dt) || 0.016);
+  const steeringWeights = resolveSteeringWeights(sim, crowd);
+  if (sim && typeof sim === 'object') sim.steeringWeights = steeringWeights;
+  if (crowd && typeof crowd === 'object') crowd.steeringWeights = steeringWeights;
   sim.timeElapsed = Math.max(0, Number(sim?.timeElapsed) || 0) + safeDt;
   const squads = Array.isArray(sim?.squads) ? sim.squads : [];
   const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((w) => !w?.destroyed) : [];
@@ -1686,7 +1793,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const toEnemy = normalizeVec((enemy.x || 0) - (squad.x || 0), (enemy.y || 0) - (squad.y || 0));
       if (toEnemy.len > 0.0001) forward = { x: toEnemy.x, y: toEnemy.y };
     }
-    forward = leaderMoveStep(squad, sim, crowd, safeDt, forward);
+    forward = leaderMoveStep(squad, sim, crowd, safeDt, forward, steeringWeights);
     squad._crowdForward = forward;
     updateSquadSpeedPolicyState(squad, agents, safeDt);
     const modeGroupSpeed = squad.speedMode === SPEED_MODE_C
@@ -1766,15 +1873,20 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         ? (agent.isFlagBearer ? STATIONARY_FLAG_SEPARATION_SCALE : STATIONARY_SEPARATION_SCALE)
         : 1;
       const avoid = computeAvoidanceDirection(agent, toDesired, walls, AGENT_AVOID_PROBE);
-      let desiredVx = (toDesired.x * speed * slotGain)
-        + (sep.x * 40 * sepScale * sepGain)
-        + (avoid.x * speed * avoidGain * 0.5);
-      let desiredVy = (toDesired.y * speed * slotGain)
-        + (sep.y * 40 * sepScale * sepGain)
-        + (avoid.y * speed * avoidGain * 0.5);
+      const slotW = Math.max(0, Number(steeringWeights?.slot) || DEFAULT_STEERING_WEIGHTS.slot);
+      const sepW = Math.max(0, Number(steeringWeights?.separation) || DEFAULT_STEERING_WEIGHTS.separation);
+      const avoidW = Math.max(0, Number(steeringWeights?.avoidance) || DEFAULT_STEERING_WEIGHTS.avoidance);
+      const anchorW = Math.max(0, Number(steeringWeights?.anchor) || DEFAULT_STEERING_WEIGHTS.anchor);
+      const pressureW = Math.max(0, Number(steeringWeights?.pressure) || DEFAULT_STEERING_WEIGHTS.pressure);
+      let desiredVx = (toDesired.x * speed * slotGain * slotW)
+        + (sep.x * 40 * sepScale * sepGain * sepW)
+        + (avoid.x * speed * avoidGain * 0.5 * avoidW);
+      let desiredVy = (toDesired.y * speed * slotGain * slotW)
+        + (sep.y * 40 * sepScale * sepGain * sepW)
+        + (avoid.y * speed * avoidGain * 0.5 * avoidW);
       if (hasAnchor) {
         const anchorDir = normalizeVec((Number(agent.engageAx) || 0) - (agent.x || 0), (Number(agent.engageAy) || 0) - (agent.y || 0));
-        const steerGain = clamp(Number(engagementCfg?.anchorSteerGain) || 0.72, 0.08, 1.8);
+        const steerGain = clamp((Number(engagementCfg?.anchorSteerGain) || 0.72) * anchorW, 0.08, 2.4);
         const steerCap = speed * clamp(Number(engagementCfg?.anchorSteerCapMul) || 0.58, 0.1, 1.4);
         let steerVx = anchorDir.x * speed * steerGain;
         let steerVy = anchorDir.y * speed * steerGain;
@@ -1787,8 +1899,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
         desiredVy += steerVy;
         const pressure = Math.max(0, Number(agent.engagePressure) || 0);
         if (pressure > 0.0001) {
-          desiredVx += (Number(agent.engageFrontDx) || 0) * pressure;
-          desiredVy += (Number(agent.engageFrontDy) || 0) * pressure;
+          desiredVx += (Number(agent.engageFrontDx) || 0) * pressure * pressureW;
+          desiredVy += (Number(agent.engageFrontDy) || 0) * pressure * pressureW;
         }
       }
       if (stationaryHold && toDesired.len <= AGENT_IDLE_DEADZONE) {
@@ -1810,15 +1922,36 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       }
       let nx = (Number(agent.x) || 0) + (vx * safeDt);
       let ny = (Number(agent.y) || 0) + (vy * safeDt);
+      let pushNx = 0;
+      let pushNy = 0;
       walls.forEach((wall) => {
+        const beforeX = nx;
+        const beforeY = ny;
         const pushed = pushOutOfRect({ x: nx, y: ny }, wall, (agent.radius || AGENT_RADIUS) + 0.5);
         nx = pushed.x;
         ny = pushed.y;
+        if (pushed?.pushed) {
+          const corr = normalizeVec(nx - beforeX, ny - beforeY);
+          if (corr.len > 1e-4) {
+            pushNx += corr.x;
+            pushNy += corr.y;
+          }
+        }
       });
       const halfW = (Number(sim?.field?.width) || 900) / 2;
       const halfH = (Number(sim?.field?.height) || 620) / 2;
       nx = clamp(nx, -halfW + 2, halfW - 2);
       ny = clamp(ny, -halfH + 2, halfH - 2);
+      const pushN = normalizeVec(pushNx, pushNy);
+      if (pushN.len > 1e-4) {
+        const vn = (vx * pushN.x) + (vy * pushN.y);
+        if (vn > 0) {
+          const keep = vn * 0.2;
+          const remove = vn - keep;
+          vx -= pushN.x * remove;
+          vy -= pushN.y * remove;
+        }
+      }
 
       agent.vx = vx;
       agent.vy = vy;
