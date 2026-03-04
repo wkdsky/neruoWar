@@ -11,7 +11,7 @@ const BATTLEFIELD_FIELD_WIDTH = 900;
 const BATTLEFIELD_FIELD_HEIGHT = 620;
 const BATTLEFIELD_MAX_STACK_LEVEL = 5;
 const BATTLEFIELD_LAYOUT_LIMIT = 24;
-const BATTLEFIELD_ITEM_LIMIT = 12;
+const BATTLEFIELD_ITEM_LIMIT = 240;
 const BATTLEFIELD_DEFAULT_MAX_ITEMS_PER_TYPE = 10;
 const BATTLEFIELD_OBJECT_LIMIT = 600;
 const BATTLEFIELD_DEFENDER_DEPLOYMENT_LIMIT = 400;
@@ -56,6 +56,25 @@ const normalizeRotation = (value, fallback = 0) => {
   while (next < 0) next += 360;
   while (next >= 360) next -= 360;
   return round3(next, 0);
+};
+
+const normalizeOptionalObject = (value, fallback = null) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback;
+  return value;
+};
+
+const normalizeOptionalAttach = (value) => {
+  const source = normalizeOptionalObject(value, null);
+  if (!source) return null;
+  const parentObjectId = typeof source?.parentObjectId === 'string' ? source.parentObjectId.trim() : '';
+  const parentSocketId = typeof source?.parentSocketId === 'string' ? source.parentSocketId.trim() : '';
+  const childSocketId = typeof source?.childSocketId === 'string' ? source.childSocketId.trim() : '';
+  if (!parentObjectId || !parentSocketId || !childSocketId) return null;
+  return {
+    parentObjectId,
+    parentSocketId,
+    childSocketId
+  };
 };
 
 const createDefaultBattlefieldLayouts = () => ([
@@ -271,13 +290,27 @@ const normalizeBattlefieldItems = (sourceItems = []) => {
     items.push({
       itemId,
       name: (typeof item?.name === 'string' && item.name.trim()) ? item.name.trim() : itemId,
+      description: typeof item?.description === 'string' ? item.description.trim().slice(0, 2048) : '',
       initialCount: Math.max(0, Math.floor(Number(item?.initialCount) || 0)),
       width: Math.max(12, Math.min(360, round3(item?.width, BATTLEFIELD_OBJECT_DEFAULTS.width))),
       depth: Math.max(12, Math.min(360, round3(item?.depth, BATTLEFIELD_OBJECT_DEFAULTS.depth))),
       height: Math.max(10, Math.min(360, round3(item?.height, BATTLEFIELD_OBJECT_DEFAULTS.height))),
       hp: Math.max(1, Math.floor(Number(item?.hp) || BATTLEFIELD_OBJECT_DEFAULTS.hp)),
       defense: Math.max(0.1, round3(item?.defense, BATTLEFIELD_OBJECT_DEFAULTS.defense)),
-      style: item?.style && typeof item.style === 'object' ? item.style : {}
+      style: item?.style && typeof item.style === 'object' ? item.style : {},
+      collider: normalizeOptionalObject(item?.collider, null),
+      renderProfile: normalizeOptionalObject(item?.renderProfile, null),
+      interactions: Array.isArray(item?.interactions)
+        ? item.interactions.filter((row) => row && typeof row === 'object').slice(0, 64)
+        : [],
+      sockets: Array.isArray(item?.sockets)
+        ? item.sockets.filter((row) => row && typeof row === 'object').slice(0, 64)
+        : [],
+      maxStack: Number.isFinite(Number(item?.maxStack))
+        ? Math.max(1, Math.min(31, Math.floor(Number(item.maxStack))))
+        : null,
+      requiresSupport: item?.requiresSupport === true,
+      snapPriority: Number.isFinite(Number(item?.snapPriority)) ? Number(item.snapPriority) : 0
     });
     if (items.length >= BATTLEFIELD_ITEM_LIMIT) break;
   }
@@ -318,6 +351,7 @@ const normalizeBattlefieldLayouts = (sourceLayouts = []) => {
 const normalizeBattlefieldObjects = (sourceObjects = [], options = {}) => {
   const source = Array.isArray(sourceObjects) ? sourceObjects : [];
   const layouts = Array.isArray(options.layouts) ? options.layouts : [];
+  const itemById = options.itemById instanceof Map ? options.itemById : new Map();
   const layoutById = new Map(layouts.map((item) => [item.layoutId, item]));
   const defaultLayoutId = options.defaultLayoutId
     || layouts.find((item) => item.gateKey === 'cheng')?.layoutId
@@ -347,6 +381,10 @@ const normalizeBattlefieldObjects = (sourceObjects = [], options = {}) => {
     const rawType = typeof item?.type === 'string' ? item.type.trim() : '';
     const itemId = rawItemId || rawItemType || rawType;
     if (!itemId) continue;
+    const itemDef = itemById.get(itemId) || null;
+    const itemStackLimit = Number.isFinite(Number(itemDef?.maxStack))
+      ? Math.max(1, Math.min(31, Math.floor(Number(itemDef.maxStack))))
+      : BATTLEFIELD_MAX_STACK_LEVEL;
 
     const minX = -(layout.fieldWidth / 2);
     const maxX = layout.fieldWidth / 2;
@@ -358,8 +396,10 @@ const normalizeBattlefieldObjects = (sourceObjects = [], options = {}) => {
       itemId,
       x: Math.max(minX, Math.min(maxX, round3(item?.x, 0))),
       y: Math.max(minY, Math.min(maxY, round3(item?.y, 0))),
-      z: Math.max(0, Math.min(BATTLEFIELD_MAX_STACK_LEVEL - 1, Math.floor(Number(item?.z) || 0))),
-      rotation: normalizeRotation(item?.rotation, 0)
+      z: Math.max(0, Math.min(itemStackLimit - 1, Math.floor(Number(item?.z) || 0))),
+      rotation: normalizeRotation(item?.rotation, 0),
+      attach: normalizeOptionalAttach(item?.attach),
+      groupId: typeof item?.groupId === 'string' ? item.groupId.trim() : ''
     });
     if (objects.length >= BATTLEFIELD_OBJECT_LIMIT) break;
   }
@@ -482,9 +522,11 @@ const normalizeBattlefieldState = (source = {}) => {
 
   const layouts = normalizeBattlefieldLayouts(sourceLayouts);
   const items = normalizeBattlefieldItems(sourceItems);
+  const itemById = new Map(items.map((item) => [item.itemId, item]));
   const objects = normalizeBattlefieldObjects(sourceObjects, {
     layouts,
-    defaultLayoutId: layouts.find((item) => item.gateKey === 'cheng')?.layoutId || layouts[0]?.layoutId
+    defaultLayoutId: layouts.find((item) => item.gateKey === 'cheng')?.layoutId || layouts[0]?.layoutId,
+    itemById
   });
   const defenderDeployments = normalizeBattlefieldDefenderDeployments(sourceDefenderDeployments, {
     layouts,
@@ -534,6 +576,8 @@ const toLegacyBattlefieldLayoutFromState = (battlefieldState = {}, preferredGate
         y: item.y,
         z: item.z,
         rotation: item.rotation,
+        attach: normalizeOptionalAttach(item?.attach),
+        groupId: typeof item?.groupId === 'string' ? item.groupId.trim() : '',
         width: itemDef.width,
         depth: itemDef.depth,
         height: itemDef.height,

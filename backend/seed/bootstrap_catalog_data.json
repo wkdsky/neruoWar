@@ -7,42 +7,953 @@
   "armyUnitTypes": [],
   "battlefieldItems": [
     {
-      "itemId": "wood_wall",
-      "name": "木墙",
-      "initialCount": 10,
-      "width": 104,
-      "depth": 24,
-      "height": 42,
-      "hp": 240,
-      "defense": 1.1,
+      "itemId": "it_build_wood_pillar",
+      "name": "木制立柱",
+      "description": "可承托板材与轻型结构的基础立柱。",
+      "initialCount": 5,
+      "width": 36,
+      "depth": 36,
+      "height": 148,
+      "hp": 210,
+      "defense": 1.05,
       "style": {
-        "color": "#8b6a3f",
+        "shape": "pillar",
+        "color": "#8a6747",
         "material": "wood"
       },
-      "sortOrder": 0,
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 62,
+            "w": 18,
+            "d": 18,
+            "h": 124,
+            "yawDeg": 0
+          },
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 8,
+            "w": 34,
+            "d": 34,
+            "h": 16,
+            "yawDeg": 0
+          },
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 138,
+            "w": 24,
+            "d": 24,
+            "h": 20,
+            "yawDeg": 0
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "pillar",
+          "topLayerKey": "pillar_top",
+          "sideLayerKey": "pillar_side",
+          "materialKey": "wood"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#8a6747",
+            "secondary": "#5e452f",
+            "accent": "#d2b48c"
+          },
+          "modelHints": {
+            "variant": "pillar"
+          }
+        }
+      },
+      "interactions": [],
+      "sockets": [
+        {
+          "socketId": "top_center",
+          "type": "point",
+          "localPose": {
+            "x": 0,
+            "y": 0,
+            "z": 148,
+            "yawDeg": 0
+          },
+          "compatibleTags": [
+            "wood_plank",
+            "bridge_piece"
+          ],
+          "snap": {
+            "dist": 16,
+            "yawStepDeg": 15
+          }
+        }
+      ],
+      "maxStack": 3,
+      "requiresSupport": false,
+      "snapPriority": 10,
+      "sortOrder": 20,
       "enabled": true
     },
     {
-      "itemId": "ju_ma",
-      "name": "拒马",
-      "initialCount": 4,
-      "width": 88,
-      "depth": 32,
-      "height": 38,
-      "hp": 180,
-      "defense": 1.05,
+      "itemId": "it_build_wood_plank",
+      "name": "木制板材",
+      "description": "可架设于立柱之间形成简易通道与掩蔽结构。",
+      "initialCount": 5,
+      "width": 124,
+      "depth": 20,
+      "height": 14,
+      "hp": 150,
+      "defense": 1.02,
+      "style": {
+        "shape": "plank",
+        "color": "#a07852",
+        "material": "wood"
+      },
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 7,
+            "w": 124,
+            "d": 20,
+            "h": 14,
+            "yawDeg": 0
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "plank",
+          "topLayerKey": "plank_top",
+          "sideLayerKey": "plank_side",
+          "materialKey": "wood"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#a07852",
+            "secondary": "#6f5237",
+            "accent": "#c8a37a"
+          },
+          "modelHints": {
+            "variant": "plank"
+          }
+        }
+      },
+      "interactions": [],
+      "sockets": [
+        {
+          "socketId": "edge_left",
+          "type": "edge",
+          "localPose": {
+            "x": -62,
+            "y": 0,
+            "z": 7,
+            "yawDeg": 180
+          },
+          "compatibleTags": [
+            "pillar",
+            "wood_pillar"
+          ],
+          "snap": {
+            "dist": 14,
+            "yawStepDeg": 15
+          }
+        },
+        {
+          "socketId": "edge_right",
+          "type": "edge",
+          "localPose": {
+            "x": 62,
+            "y": 0,
+            "z": 7,
+            "yawDeg": 0
+          },
+          "compatibleTags": [
+            "pillar",
+            "wood_pillar"
+          ],
+          "snap": {
+            "dist": 14,
+            "yawStepDeg": 15
+          }
+        }
+      ],
+      "maxStack": 5,
+      "requiresSupport": true,
+      "snapPriority": 12,
+      "sortOrder": 21,
+      "enabled": true
+    },
+    {
+      "itemId": "it_cover_sandbag",
+      "name": "沙袋掩体",
+      "description": "低矮沙袋构筑，提供稳定阻挡。",
+      "initialCount": 5,
+      "width": 132,
+      "depth": 52,
+      "height": 34,
+      "hp": 280,
+      "defense": 1.18,
+      "style": {
+        "shape": "sandbag",
+        "color": "#b39a72",
+        "material": "fabric"
+      },
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": -38,
+            "cy": 0,
+            "cz": 16,
+            "w": 44,
+            "d": 44,
+            "h": 32,
+            "yawDeg": -8
+          },
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 17,
+            "w": 46,
+            "d": 50,
+            "h": 34,
+            "yawDeg": 0
+          },
+          {
+            "cx": 38,
+            "cy": 0,
+            "cz": 16,
+            "w": 44,
+            "d": 44,
+            "h": 32,
+            "yawDeg": 8
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "sandbag",
+          "topLayerKey": "sandbag_top",
+          "sideLayerKey": "sandbag_side",
+          "materialKey": "fabric"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#b39a72",
+            "secondary": "#7b684c",
+            "accent": "#d8c9a7"
+          },
+          "modelHints": {
+            "variant": "sandbag"
+          }
+        }
+      },
+      "interactions": [],
+      "sockets": [],
+      "maxStack": 3,
+      "requiresSupport": false,
+      "snapPriority": 6,
+      "sortOrder": 22,
+      "enabled": true
+    },
+    {
+      "itemId": "it_cover_stone_wall",
+      "name": "石墙段",
+      "description": "由双段石墙组成，中间留有战术缺口。",
+      "initialCount": 5,
+      "width": 152,
+      "depth": 42,
+      "height": 72,
+      "hp": 420,
+      "defense": 1.35,
+      "style": {
+        "shape": "stone_wall",
+        "color": "#9aa0a8",
+        "material": "stone"
+      },
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": -44,
+            "cy": 0,
+            "cz": 36,
+            "w": 48,
+            "d": 38,
+            "h": 72,
+            "yawDeg": 0
+          },
+          {
+            "cx": 44,
+            "cy": 0,
+            "cz": 36,
+            "w": 48,
+            "d": 38,
+            "h": 72,
+            "yawDeg": 0
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "wall",
+          "topLayerKey": "stone_wall_top",
+          "sideLayerKey": "stone_wall_side",
+          "materialKey": "stone"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#9aa0a8",
+            "secondary": "#5f6670",
+            "accent": "#c9ced6"
+          },
+          "modelHints": {
+            "variant": "stone_wall_gap"
+          }
+        }
+      },
+      "interactions": [],
+      "sockets": [
+        {
+          "socketId": "edge_left",
+          "type": "edge",
+          "localPose": {
+            "x": -76,
+            "y": 0,
+            "z": 36,
+            "yawDeg": 180
+          },
+          "compatibleTags": [
+            "stone_wall",
+            "wall_segment"
+          ],
+          "snap": {
+            "dist": 12,
+            "yawStepDeg": 90
+          }
+        },
+        {
+          "socketId": "edge_right",
+          "type": "edge",
+          "localPose": {
+            "x": 76,
+            "y": 0,
+            "z": 36,
+            "yawDeg": 0
+          },
+          "compatibleTags": [
+            "stone_wall",
+            "wall_segment"
+          ],
+          "snap": {
+            "dist": 12,
+            "yawStepDeg": 90
+          }
+        }
+      ],
+      "maxStack": 3,
+      "requiresSupport": false,
+      "snapPriority": 8,
+      "sortOrder": 23,
+      "enabled": true
+    },
+    {
+      "itemId": "it_terrain_bush",
+      "name": "草丛掩蔽",
+      "description": "进入草丛可隐匿行踪，敌军近距离可破隐。",
+      "initialCount": 5,
+      "width": 96,
+      "depth": 88,
+      "height": 48,
+      "hp": 120,
+      "defense": 0.95,
+      "style": {
+        "shape": "bush",
+        "color": "#3f7d45",
+        "material": "foliage"
+      },
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": -20,
+            "cy": -14,
+            "cz": 20,
+            "w": 36,
+            "d": 30,
+            "h": 40,
+            "yawDeg": -12
+          },
+          {
+            "cx": 20,
+            "cy": -14,
+            "cz": 20,
+            "w": 36,
+            "d": 30,
+            "h": 40,
+            "yawDeg": 12
+          },
+          {
+            "cx": -20,
+            "cy": 14,
+            "cz": 20,
+            "w": 36,
+            "d": 30,
+            "h": 40,
+            "yawDeg": 14
+          },
+          {
+            "cx": 20,
+            "cy": 14,
+            "cz": 20,
+            "w": 36,
+            "d": 30,
+            "h": 40,
+            "yawDeg": -14
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "bush",
+          "topLayerKey": "bush_top",
+          "sideLayerKey": "bush_side",
+          "materialKey": "foliage"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#3f7d45",
+            "secondary": "#27502c",
+            "accent": "#84cc7e"
+          },
+          "modelHints": {
+            "variant": "bush_dense"
+          }
+        }
+      },
+      "interactions": [
+        {
+          "kind": "concealment",
+          "selector": {
+            "rpsType": [
+              "mobility",
+              "ranged",
+              "defense"
+            ],
+            "classTag": [
+              "infantry",
+              "cavalry",
+              "archer",
+              "artillery"
+            ],
+            "tags": []
+          },
+          "params": {
+            "revealRadius": 2.2
+          }
+        }
+      ],
+      "sockets": [],
+      "maxStack": 2,
+      "requiresSupport": false,
+      "snapPriority": 3,
+      "sortOrder": 24,
+      "enabled": true
+    },
+    {
+      "itemId": "it_trap_spikes",
+      "name": "尖刺陷阱",
+      "description": "触发后造成轻伤并施加高硬直打断。",
+      "initialCount": 5,
+      "width": 64,
+      "depth": 64,
+      "height": 18,
+      "hp": 90,
+      "defense": 0.9,
+      "style": {
+        "shape": "spikes",
+        "color": "#8c6b4e",
+        "material": "wood_iron"
+      },
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 9,
+            "w": 56,
+            "d": 56,
+            "h": 18,
+            "yawDeg": 0
+          },
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 9,
+            "w": 42,
+            "d": 42,
+            "h": 18,
+            "yawDeg": 45
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "trap",
+          "topLayerKey": "trap_spikes_top",
+          "sideLayerKey": "trap_spikes_side",
+          "materialKey": "wood_iron"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#8c6b4e",
+            "secondary": "#5f4a35",
+            "accent": "#b8bfc8"
+          },
+          "modelHints": {
+            "variant": "spike_trap"
+          }
+        }
+      },
+      "interactions": [
+        {
+          "kind": "trapStagger",
+          "selector": {
+            "rpsType": [
+              "mobility",
+              "ranged",
+              "defense"
+            ],
+            "classTag": [
+              "infantry",
+              "cavalry",
+              "archer",
+              "artillery"
+            ],
+            "tags": []
+          },
+          "params": {
+            "hpDamage": 10,
+            "poiseDamage": 96,
+            "staggerTier": "heavy",
+            "cooldownSec": 4.2
+          }
+        }
+      ],
+      "sockets": [],
+      "maxStack": 1,
+      "requiresSupport": false,
+      "snapPriority": 4,
+      "sortOrder": 25,
+      "enabled": true
+    },
+    {
+      "itemId": "it_trap_snare_net",
+      "name": "绊网陷阱",
+      "description": "触发后造成轻伤并显著提高过渡硬直压力。",
+      "initialCount": 5,
+      "width": 86,
+      "depth": 54,
+      "height": 12,
+      "hp": 95,
+      "defense": 0.92,
+      "style": {
+        "shape": "snare",
+        "color": "#6a7a58",
+        "material": "fiber"
+      },
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 6,
+            "w": 86,
+            "d": 54,
+            "h": 12,
+            "yawDeg": 0
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "trap",
+          "topLayerKey": "trap_snare_top",
+          "sideLayerKey": "trap_snare_side",
+          "materialKey": "fiber"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#6a7a58",
+            "secondary": "#445039",
+            "accent": "#d1c39d"
+          },
+          "modelHints": {
+            "variant": "snare_net"
+          }
+        }
+      },
+      "interactions": [
+        {
+          "kind": "trapStagger",
+          "selector": {
+            "rpsType": [
+              "mobility",
+              "ranged",
+              "defense"
+            ],
+            "classTag": [
+              "infantry",
+              "cavalry",
+              "archer",
+              "artillery"
+            ],
+            "tags": []
+          },
+          "params": {
+            "hpDamage": 7,
+            "poiseDamage": 120,
+            "staggerTier": "heavy",
+            "cooldownSec": 4.8
+          }
+        }
+      ],
+      "sockets": [],
+      "maxStack": 1,
+      "requiresSupport": false,
+      "snapPriority": 4,
+      "sortOrder": 26,
+      "enabled": true
+    },
+    {
+      "itemId": "it_hazard_cheval_de_frise",
+      "name": "战术拒马",
+      "description": "接触即受伤，持续接触将按间隔持续掉血，对机动兵种更致命。",
+      "initialCount": 5,
+      "width": 118,
+      "depth": 48,
+      "height": 40,
+      "hp": 210,
+      "defense": 1.08,
       "style": {
         "shape": "cheval_de_frise",
-        "color": "#8c6a44",
-        "spikeColor": "#9ca3af",
-        "material": "wood_iron",
-        "beamCount": 2,
-        "spikeCount": 8,
-        "spikeLengthRatio": 0.48,
-        "beamThicknessRatio": 0.13,
-        "beamSpreadDeg": 34
+        "color": "#8f6a44",
+        "spikeColor": "#aeb6bf",
+        "material": "wood_iron"
       },
-      "sortOrder": 1,
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 16,
+            "w": 112,
+            "d": 14,
+            "h": 14,
+            "yawDeg": 0
+          },
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 26,
+            "w": 110,
+            "d": 14,
+            "h": 14,
+            "yawDeg": 90
+          },
+          {
+            "cx": -18,
+            "cy": 0,
+            "cz": 20,
+            "w": 34,
+            "d": 30,
+            "h": 20,
+            "yawDeg": 38
+          },
+          {
+            "cx": 18,
+            "cy": 0,
+            "cz": 20,
+            "w": 34,
+            "d": 30,
+            "h": 20,
+            "yawDeg": -38
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "spikes",
+          "topLayerKey": "cheval_top",
+          "sideLayerKey": "cheval_side",
+          "materialKey": "wood_iron"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#8f6a44",
+            "secondary": "#5e442e",
+            "accent": "#aeb6bf"
+          },
+          "modelHints": {
+            "variant": "cheval"
+          }
+        }
+      },
+      "interactions": [
+        {
+          "kind": "contactDot",
+          "selector": {
+            "rpsType": [
+              "mobility",
+              "ranged",
+              "defense"
+            ],
+            "classTag": [
+              "infantry",
+              "cavalry",
+              "archer",
+              "artillery"
+            ],
+            "tags": []
+          },
+          "params": {
+            "hpDamageEnter": 8,
+            "hpDamageTick": 5,
+            "tickIntervalSec": 1,
+            "classMultiplier": {
+              "cavalry": 2
+            },
+            "rpsMultiplier": {
+              "mobility": 2
+            }
+          }
+        }
+      ],
+      "sockets": [
+        {
+          "socketId": "edge_left",
+          "type": "edge",
+          "localPose": {
+            "x": -59,
+            "y": 0,
+            "z": 20,
+            "yawDeg": 180
+          },
+          "compatibleTags": [
+            "hazard_line",
+            "cheval"
+          ],
+          "snap": {
+            "dist": 12,
+            "yawStepDeg": 90
+          }
+        },
+        {
+          "socketId": "edge_right",
+          "type": "edge",
+          "localPose": {
+            "x": 59,
+            "y": 0,
+            "z": 20,
+            "yawDeg": 0
+          },
+          "compatibleTags": [
+            "hazard_line",
+            "cheval"
+          ],
+          "snap": {
+            "dist": 12,
+            "yawStepDeg": 90
+          }
+        }
+      ],
+      "maxStack": 2,
+      "requiresSupport": false,
+      "snapPriority": 7,
+      "sortOrder": 27,
+      "enabled": true
+    },
+    {
+      "itemId": "it_hazard_poison_thorns",
+      "name": "毒刺地毯",
+      "description": "进入后持续中毒掉血，离开后立即停止。",
+      "initialCount": 5,
+      "width": 104,
+      "depth": 76,
+      "height": 10,
+      "hp": 110,
+      "defense": 0.96,
+      "style": {
+        "shape": "thorns",
+        "color": "#4c7a36",
+        "material": "poison_thorn"
+      },
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 5,
+            "w": 104,
+            "d": 76,
+            "h": 10,
+            "yawDeg": 0
+          },
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 5,
+            "w": 88,
+            "d": 60,
+            "h": 10,
+            "yawDeg": 28
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "spikes",
+          "topLayerKey": "poison_thorns_top",
+          "sideLayerKey": "poison_thorns_side",
+          "materialKey": "poison_thorn"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#4c7a36",
+            "secondary": "#2f4f22",
+            "accent": "#8adb60"
+          },
+          "modelHints": {
+            "variant": "thorns_patch"
+          }
+        }
+      },
+      "interactions": [
+        {
+          "kind": "contactDot",
+          "selector": {
+            "rpsType": [
+              "mobility",
+              "ranged",
+              "defense"
+            ],
+            "classTag": [
+              "infantry",
+              "cavalry",
+              "archer",
+              "artillery"
+            ],
+            "tags": []
+          },
+          "params": {
+            "hpDamageEnter": 4,
+            "hpDamageTick": 6,
+            "tickIntervalSec": 0.8
+          }
+        }
+      ],
+      "sockets": [],
+      "maxStack": 1,
+      "requiresSupport": false,
+      "snapPriority": 2,
+      "sortOrder": 28,
+      "enabled": true
+    },
+    {
+      "itemId": "it_support_watch_flag",
+      "name": "警戒旗帜",
+      "description": "轻型支援旗帜，可作为观察与识别辅助点位。",
+      "initialCount": 5,
+      "width": 46,
+      "depth": 30,
+      "height": 132,
+      "hp": 160,
+      "defense": 1,
+      "style": {
+        "shape": "flag",
+        "color": "#3d7ca8",
+        "accentColor": "#f3d36b",
+        "material": "cloth_metal"
+      },
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 56,
+            "w": 10,
+            "d": 10,
+            "h": 112,
+            "yawDeg": 0
+          },
+          {
+            "cx": 12,
+            "cy": 0,
+            "cz": 94,
+            "w": 24,
+            "d": 6,
+            "h": 36,
+            "yawDeg": 0
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "flag",
+          "topLayerKey": "watch_flag_top",
+          "sideLayerKey": "watch_flag_side",
+          "materialKey": "cloth_metal"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#3d7ca8",
+            "secondary": "#244963",
+            "accent": "#f3d36b"
+          },
+          "modelHints": {
+            "variant": "watch_flag"
+          }
+        }
+      },
+      "interactions": [
+        {
+          "kind": "spotterAura",
+          "selector": {
+            "rpsType": [
+              "mobility",
+              "ranged",
+              "defense"
+            ],
+            "classTag": [
+              "infantry",
+              "cavalry",
+              "archer",
+              "artillery"
+            ],
+            "tags": []
+          },
+          "params": {
+            "revealBonusRadius": 0.7
+          }
+        }
+      ],
+      "sockets": [],
+      "maxStack": 2,
+      "requiresSupport": false,
+      "snapPriority": 5,
+      "sortOrder": 29,
       "enabled": true
     }
   ],

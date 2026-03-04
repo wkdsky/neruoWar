@@ -40,6 +40,10 @@ const {
   fetchCityBuildingTypes
 } = require('../services/placeableCatalogService');
 const {
+  ensureUserBattlefieldInventory,
+  resolveUserItemLimitMap
+} = require('../services/battlefieldInventoryService');
+const {
   isNodeSenseCollectionReadEnabled,
   isNodeSenseRepairEnabled,
   hydrateNodeSensesForNodes,
@@ -2138,20 +2142,35 @@ const serializeBattlefieldItemCatalog = (items = []) => (
         ? item.itemId
         : (typeof item?.itemType === 'string' ? item.itemType : ''),
       name: typeof item?.name === 'string' ? item.name : '',
+      description: typeof item?.description === 'string' ? item.description : '',
       initialCount: Math.max(0, Math.floor(Number(item?.initialCount) || 0)),
       width: round3(item?.width, 104),
       depth: round3(item?.depth, 24),
       height: round3(item?.height, 42),
       hp: Math.max(1, Math.floor(Number(item?.hp) || 240)),
       defense: round3(item?.defense, 1.1),
-      style: item?.style && typeof item.style === 'object' ? item.style : {}
+      style: item?.style && typeof item.style === 'object' ? item.style : {},
+      collider: item?.collider && typeof item.collider === 'object' ? item.collider : null,
+      renderProfile: item?.renderProfile && typeof item.renderProfile === 'object' ? item.renderProfile : null,
+      interactions: Array.isArray(item?.interactions) ? item.interactions : [],
+      sockets: Array.isArray(item?.sockets) ? item.sockets : [],
+      maxStack: Number.isFinite(Number(item?.maxStack)) ? Math.max(1, Math.floor(Number(item.maxStack))) : null,
+      requiresSupport: item?.requiresSupport === true,
+      snapPriority: Number.isFinite(Number(item?.snapPriority)) ? Number(item.snapPriority) : 0
     }))
     .filter((item) => !!item.itemId)
 );
 
-const serializeBattlefieldObjectsForLayout = (battlefieldState = {}, layoutId = '') => (
+const serializeBattlefieldObjectsForLayout = (battlefieldState = {}, layoutId = '', validItemIdSet = null) => (
   (Array.isArray(battlefieldState?.objects) ? battlefieldState.objects : [])
     .filter((item) => !layoutId || item?.layoutId === layoutId)
+    .filter((item) => {
+      if (!(validItemIdSet instanceof Set) || validItemIdSet.size <= 0) return true;
+      const itemId = typeof item?.itemId === 'string'
+        ? item.itemId
+        : (typeof item?.itemType === 'string' ? item.itemType : '');
+      return validItemIdSet.has(itemId);
+    })
     .map((item) => ({
       id: typeof item?.objectId === 'string' ? item.objectId : '',
       objectId: typeof item?.objectId === 'string' ? item.objectId : '',
@@ -2162,7 +2181,15 @@ const serializeBattlefieldObjectsForLayout = (battlefieldState = {}, layoutId = 
       x: round3(item?.x, 0),
       y: round3(item?.y, 0),
       z: Math.max(0, Math.floor(Number(item?.z) || 0)),
-      rotation: round3(item?.rotation, 0)
+      rotation: round3(item?.rotation, 0),
+      attach: item?.attach && typeof item.attach === 'object'
+        ? {
+            parentObjectId: typeof item.attach.parentObjectId === 'string' ? item.attach.parentObjectId : '',
+            parentSocketId: typeof item.attach.parentSocketId === 'string' ? item.attach.parentSocketId : '',
+            childSocketId: typeof item.attach.childSocketId === 'string' ? item.attach.childSocketId : ''
+          }
+        : null,
+      groupId: typeof item?.groupId === 'string' ? item.groupId : ''
     }))
     .filter((item) => !!item.id)
 );
@@ -2211,14 +2238,20 @@ const serializeBattlefieldStateForGate = (battlefieldState = {}, gateKey = '', p
   const normalized = normalizeBattlefieldStateInput(battlefieldState);
   const rawItemCatalog = Array.isArray(battlefieldState?.items) ? battlefieldState.items : [];
   const itemCatalogSource = rawItemCatalog.length > 0 ? rawItemCatalog : normalized?.items;
+  const serializedCatalog = serializeBattlefieldItemCatalog(itemCatalogSource);
+  const validItemIdSet = new Set(
+    serializedCatalog
+      .map((item) => item.itemId)
+      .filter(Boolean)
+  );
   const activeLayout = findBattlefieldLayoutByGate(normalized, gateKey, preferredLayoutId);
   const activeLayoutId = activeLayout?.layoutId || '';
   return {
     version: Math.max(1, Math.floor(Number(normalized?.version) || 1)),
     activeLayout: activeLayout ? serializeBattlefieldLayoutMeta(activeLayout) : null,
     layouts: (Array.isArray(normalized?.layouts) ? normalized.layouts : []).map((layout) => serializeBattlefieldLayoutMeta(layout)),
-    itemCatalog: serializeBattlefieldItemCatalog(itemCatalogSource),
-    objects: serializeBattlefieldObjectsForLayout(normalized, activeLayoutId),
+    itemCatalog: serializedCatalog,
+    objects: serializeBattlefieldObjectsForLayout(normalized, activeLayoutId, validItemIdSet),
     defenderDeployments: serializeBattlefieldDefenderDeploymentsForLayout(normalized, activeLayoutId),
     updatedAt: normalized?.updatedAt || null
   };
@@ -2292,7 +2325,15 @@ const mergeBattlefieldStateByGate = (currentState = {}, gateKey = '', payload = 
     x: item?.x,
     y: item?.y,
     z: item?.z,
-    rotation: item?.rotation
+    rotation: item?.rotation,
+    attach: item?.attach && typeof item.attach === 'object'
+      ? {
+          parentObjectId: typeof item.attach.parentObjectId === 'string' ? item.attach.parentObjectId.trim() : '',
+          parentSocketId: typeof item.attach.parentSocketId === 'string' ? item.attach.parentSocketId.trim() : '',
+          childSocketId: typeof item.attach.childSocketId === 'string' ? item.attach.childSocketId.trim() : ''
+        }
+      : null,
+    groupId: typeof item?.groupId === 'string' ? item.groupId.trim() : ''
   }));
   const retainedObjects = currentObjects.filter((item) => item?.layoutId !== targetLayoutId);
   const nextObjectsRaw = [...retainedObjects, ...incomingObjectsRaw];
@@ -7398,18 +7439,44 @@ router.get('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
     }
 
     const domainMasterId = getIdString(node?.domainMaster);
-    const [battlefieldItemCatalog, unitTypes, domainMasterUser] = await Promise.all([
-      fetchBattlefieldItems({ enabledOnly: true }),
+    const [battlefieldItemCatalogAll, unitTypes, domainMasterUser, requestUser] = await Promise.all([
+      fetchBattlefieldItems({ enabledOnly: false }),
       fetchArmyUnitTypes(),
       isValidObjectId(domainMasterId)
         ? User.findById(domainMasterId).select('armyRoster')
-        : null
+        : null,
+      User.findById(requestUserId).select('role battlefieldItemInventory username')
     ]);
+    if (!requestUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    await ensureUserBattlefieldInventory(requestUser, {
+      defaultCount: 5,
+      persist: true,
+      reason: 'nodes:battlefield-layout-get'
+    });
+    const battlefieldItemCatalog = (Array.isArray(battlefieldItemCatalogAll) ? battlefieldItemCatalogAll : [])
+      .filter((item) => item?.enabled !== false);
+    console.log(
+      `[battlefield] Loaded BattlefieldItem catalog count=${battlefieldItemCatalogAll.length} enabled=${battlefieldItemCatalog.length}`
+    );
+    const inventoryLimitMap = resolveUserItemLimitMap(requestUser, battlefieldItemCatalog, { fallbackCount: 5 });
+    const battlefieldItemCatalogWithInventory = battlefieldItemCatalog.map((item) => ({
+      ...item,
+      initialCount: Math.max(
+        0,
+        Math.floor(
+          Number.isFinite(Number(inventoryLimitMap.get(item.itemId)))
+            ? Number(inventoryLimitMap.get(item.itemId))
+            : Number(item?.initialCount)
+        )
+      )
+    }));
     const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
     const battlefieldState = resolveNodeBattlefieldLayout(node, {});
     const mergedBattlefieldState = {
       ...battlefieldState,
-      items: battlefieldItemCatalog
+      items: battlefieldItemCatalogWithInventory
     };
     const defenderRoster = normalizeUnitCountEntries(Array.isArray(domainMasterUser?.armyRoster) ? domainMasterUser.armyRoster : [])
       .map((entry) => {
@@ -7480,7 +7547,12 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
 
     const payload = req.body && typeof req.body === 'object' ? req.body : {};
     const currentState = resolveNodeBattlefieldLayout(node, {});
-    const battlefieldItemCatalog = await fetchBattlefieldItems({ enabledOnly: true });
+    const battlefieldItemCatalogAll = await fetchBattlefieldItems({ enabledOnly: false });
+    const battlefieldItemCatalog = (Array.isArray(battlefieldItemCatalogAll) ? battlefieldItemCatalogAll : [])
+      .filter((item) => item?.enabled !== false);
+    console.log(
+      `[battlefield] Loaded BattlefieldItem catalog count=${battlefieldItemCatalogAll.length} enabled=${battlefieldItemCatalog.length}`
+    );
     const itemById = new Map(
       battlefieldItemCatalog
         .map((item) => [item?.itemId, item])
@@ -7491,6 +7563,20 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       layoutId
     });
     nextBattlefieldState.items = battlefieldItemCatalog;
+
+    const [unitTypes, requestUser] = await Promise.all([
+      fetchArmyUnitTypes(),
+      User.findById(requestUserId).select('armyRoster role battlefieldItemInventory username')
+    ]);
+    if (!requestUser) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
+    await ensureUserBattlefieldInventory(requestUser, {
+      defaultCount: 5,
+      persist: true,
+      reason: 'nodes:battlefield-layout-save'
+    });
+    const inventoryLimitMap = resolveUserItemLimitMap(requestUser, battlefieldItemCatalog, { fallbackCount: 5 });
 
     const counter = new Map();
     for (const obj of (Array.isArray(nextBattlefieldState.objects) ? nextBattlefieldState.objects : [])) {
@@ -7505,7 +7591,12 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
     for (const [key, count] of counter.entries()) {
       const [, itemId] = key.split(':');
       const item = itemById.get(itemId);
-      const stockLimit = Math.max(0, Math.floor(Number(item?.initialCount) || 0));
+      const fallbackLimit = Number.isFinite(Number(item?.initialCount)) ? Number(item.initialCount) : 5;
+      const stockLimit = Math.max(0, Math.floor(
+        Number.isFinite(Number(inventoryLimitMap.get(itemId)))
+          ? Number(inventoryLimitMap.get(itemId))
+          : fallbackLimit
+      ));
       if (count > stockLimit) {
         return res.status(400).json({
           error: `物品数量超限：${itemId} 可放置 ${stockLimit}，当前 ${count}`
@@ -7513,13 +7604,6 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
       }
     }
 
-    const [unitTypes, requestUser] = await Promise.all([
-      fetchArmyUnitTypes(),
-      User.findById(requestUserId).select('armyRoster')
-    ]);
-    if (!requestUser) {
-      return res.status(404).json({ error: '用户不存在' });
-    }
     const validUnitTypeIdSet = new Set(
       unitTypes
         .map((unit) => (typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : ''))

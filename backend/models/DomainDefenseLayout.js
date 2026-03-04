@@ -6,6 +6,7 @@ const BATTLEFIELD_FIELD_WIDTH = 900;
 const BATTLEFIELD_FIELD_HEIGHT = 620;
 const BATTLEFIELD_FIELD_LIMIT = 5000;
 const BATTLEFIELD_MAX_STACK_LEVEL = 5;
+const BATTLEFIELD_MAX_STACK_SCHEMA_LEVEL = 31;
 const BATTLEFIELD_GATE_KEYS = ['cheng', 'qi'];
 const BATTLEFIELD_OBJECT_DEFAULT = {
   itemId: '',
@@ -133,13 +134,38 @@ const BattlefieldObjectSchema = new mongoose.Schema({
     type: Number,
     default: 0,
     min: 0,
-    max: BATTLEFIELD_MAX_STACK_LEVEL - 1
+    max: BATTLEFIELD_MAX_STACK_SCHEMA_LEVEL - 1
   },
   rotation: {
     type: Number,
     default: 0,
     min: 0,
     max: 359.999
+  },
+  attach: {
+    type: new mongoose.Schema({
+      parentObjectId: {
+        type: String,
+        default: '',
+        trim: true
+      },
+      parentSocketId: {
+        type: String,
+        default: '',
+        trim: true
+      },
+      childSocketId: {
+        type: String,
+        default: '',
+        trim: true
+      }
+    }, { _id: false }),
+    default: null
+  },
+  groupId: {
+    type: String,
+    default: '',
+    trim: true
   }
 }, { _id: false });
 
@@ -258,6 +284,16 @@ const BattlefieldItemSchema = new mongoose.Schema({
     default: '',
     trim: true
   },
+  description: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  initialCount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   width: {
     type: Number,
     default: BATTLEFIELD_OBJECT_DEFAULT.width,
@@ -285,6 +321,48 @@ const BattlefieldItemSchema = new mongoose.Schema({
     type: Number,
     default: BATTLEFIELD_OBJECT_DEFAULT.defense,
     min: 0.1
+  },
+  style: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
+  collider: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+  renderProfile: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+  interactions: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: []
+  },
+  sockets: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: []
+  },
+  maxStack: {
+    type: Number,
+    default: null,
+    min: 1,
+    max: BATTLEFIELD_MAX_STACK_SCHEMA_LEVEL
+  },
+  requiresSupport: {
+    type: Boolean,
+    default: false
+  },
+  snapPriority: {
+    type: Number,
+    default: 0
+  },
+  sortOrder: {
+    type: Number,
+    default: 0
+  },
+  enabled: {
+    type: Boolean,
+    default: true
   }
 }, { _id: false });
 
@@ -348,6 +426,15 @@ const DomainDefenseLayoutSchema = new mongoose.Schema({
           y: { type: Number, default: 0 },
           z: { type: Number, default: 0 },
           rotation: { type: Number, default: 0 },
+          attach: {
+            type: new mongoose.Schema({
+              parentObjectId: { type: String, default: '', trim: true },
+              parentSocketId: { type: String, default: '', trim: true },
+              childSocketId: { type: String, default: '', trim: true }
+            }, { _id: false }),
+            default: null
+          },
+          groupId: { type: String, default: '', trim: true },
           width: { type: Number, default: BATTLEFIELD_OBJECT_DEFAULT.width },
           depth: { type: Number, default: BATTLEFIELD_OBJECT_DEFAULT.depth },
           height: { type: Number, default: BATTLEFIELD_OBJECT_DEFAULT.height },

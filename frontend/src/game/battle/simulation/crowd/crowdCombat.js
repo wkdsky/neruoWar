@@ -36,6 +36,11 @@ const RPS_MUL = {
 };
 
 const toEnemyTeam = (team) => (team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER);
+const isSquadHiddenForViewerTeam = (enemySquad, viewerTeam) => {
+  if (viewerTeam === TEAM_ATTACKER) return !!enemySquad?.hiddenFromAttacker;
+  if (viewerTeam === TEAM_DEFENDER) return !!enemySquad?.hiddenFromDefender;
+  return false;
+};
 
 const sqr = (v) => v * v;
 const distanceSq = (a, b) => sqr((a?.x || 0) - (b?.x || 0)) + sqr((a?.y || 0) - (b?.y || 0));
@@ -113,7 +118,7 @@ const resolveRpsMul = (attackerSquad, defenderSquad) => {
   return RPS_MUL.neutral;
 };
 
-const triggerSquadStagger = (squad, severity = 'medium') => {
+export const triggerSquadStagger = (squad, severity = 'medium') => {
   const actionState = ensureActionState(squad);
   const prevKind = actionState.kind || 'none';
   const reaction = squad?.staggerReaction?.durationSec && typeof squad.staggerReaction.durationSec === 'object'
@@ -129,7 +134,7 @@ const triggerSquadStagger = (squad, severity = 'medium') => {
   squad.action = '硬直';
 };
 
-const applySquadStabilityHit = (defenderSquad, attackerSquad, damage = 0, options = {}) => {
+export const applySquadStabilityHit = (defenderSquad, attackerSquad, damage = 0, options = {}) => {
   if (!defenderSquad) return;
   const stability = ensureStability(defenderSquad);
   if (!stability) return;
@@ -190,6 +195,7 @@ export const pickEnemySquadTarget = (squad, enemySquads = [], options = {}) => {
   let bestScore = -Infinity;
   enemySquads.forEach((enemy) => {
     if (!enemy || enemy.remain <= 0) return;
+    if (isSquadHiddenForViewerTeam(enemy, squad?.team)) return;
     const dist = Math.hypot((enemy.x || 0) - (squad.x || 0), (enemy.y || 0) - (squad.y || 0));
     const threat = Math.max(0, Number(enemy.stats?.atk) || 0) * 1.25;
     const weak = (1 - clamp((enemy.remain || 0) / Math.max(1, enemy.startCount || 1), 0, 1)) * 50;
@@ -239,9 +245,14 @@ const isMeleeAgent = (agent = {}) => {
   return category !== 'archer' && category !== 'artillery';
 };
 
-const pickEnemyAgentsFromSpatial = (crowd, agent, enemyTeam, radius = 24) => {
+const pickEnemyAgentsFromSpatial = (crowd, agent, enemyTeam, radius = 24, viewerTeam = '', squadMap = new Map()) => {
   const nearby = querySpatialNearby(crowd?.spatial, agent?.x, agent?.y, radius);
-  return nearby.filter((row) => row && !row.dead && row.team === enemyTeam);
+  return nearby.filter((row) => {
+    if (!row || row.dead || row.team !== enemyTeam) return false;
+    const enemySquad = squadMap instanceof Map ? squadMap.get(row.squadId) : null;
+    if (enemySquad && isSquadHiddenForViewerTeam(enemySquad, viewerTeam)) return false;
+    return true;
+  });
 };
 
 const pickEnemyFromEngagementCandidates = (agent, candidates = [], cfg = {}) => {
@@ -264,7 +275,7 @@ const pickEnemyFromEngagementCandidates = (agent, candidates = [], cfg = {}) => 
   return best;
 };
 
-const applyDamageToAgent = (sim, crowd, sourceAgent, targetAgent, amount = 0, hitType = 'hit', options = {}) => {
+export const applyDamageToAgent = (sim, crowd, sourceAgent, targetAgent, amount = 0, hitType = 'hit', options = {}) => {
   if (!targetAgent || targetAgent.dead) return 0;
   const squadMap = sim?._squadById instanceof Map ? sim._squadById : null;
   const targetSquad = squadMap ? (squadMap.get(targetAgent.squadId) || null) : (sim?.squads?.find((row) => row.id === targetAgent.squadId) || null);
@@ -546,6 +557,7 @@ const detonateProjectile = (sim, crowd, projectile, center, walls, hitWall = nul
 const stepProjectiles = (sim, crowd, dt) => {
   const live = crowd.effectsPool?.projectileLive || [];
   const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((wall) => wall && !wall.destroyed) : [];
+  const squadMap = sim?._squadById instanceof Map ? sim._squadById : new Map();
   for (let i = 0; i < live.length; i += 1) {
     const p = live[i];
     if (!p || p.hit) continue;
@@ -574,7 +586,12 @@ const stepProjectiles = (sim, crowd, dt) => {
     }
 
     const nearbyAgents = querySpatialNearby(crowd?.spatial, p.x, p.y, Math.max(8, (Number(p.radius) || 2) * 2.8));
-    const targetAgents = nearbyAgents.filter((agent) => agent && agent.team === p.targetTeam && !agent.dead);
+    const targetAgents = nearbyAgents.filter((agent) => {
+      if (!agent || agent.team !== p.targetTeam || agent.dead) return false;
+      const targetSquad = squadMap.get(agent.squadId);
+      if (targetSquad && isSquadHiddenForViewerTeam(targetSquad, p.team)) return false;
+      return true;
+    });
     for (let k = 0; k < targetAgents.length; k += 1) {
       const target = targetAgents[k];
       if (!withinGroundTargetArea(p, target.x, target.y)) continue;
@@ -624,6 +641,8 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     const enemySquads = squad.team === TEAM_ATTACKER ? defenders : attackers;
     const enemyTeam = toEnemyTeam(squad.team);
     if (enemySquads.length <= 0) return;
+    const visibleEnemySquads = enemySquads.filter((enemy) => !isSquadHiddenForViewerTeam(enemy, squad.team));
+    if (visibleEnemySquads.length <= 0) return;
     let targetSquad = null;
     const guard = squad?.guard?.enabled ? squad.guard : null;
     if (guard && nowSec >= (Number(squad._guardRetargetAt) || 0)) {
@@ -633,8 +652,8 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
       const gcy = Number(guard.cy) || (Number(squad.y) || 0);
       const guardRadius = Math.max(12, Number(guard.radius) || 48);
       const chaseRadius = Math.max(guardRadius + 10, Number(guard.chaseRadius) || (guardRadius * 1.45));
-      for (let i = 0; i < enemySquads.length; i += 1) {
-        const enemy = enemySquads[i];
+      for (let i = 0; i < visibleEnemySquads.length; i += 1) {
+        const enemy = visibleEnemySquads[i];
         if (!enemy || enemy.remain <= 0) continue;
         const distToCenter = Math.hypot((Number(enemy.x) || 0) - gcx, (Number(enemy.y) || 0) - gcy);
         if (distToCenter > chaseRadius) continue;
@@ -660,20 +679,21 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
       for (let i = 0; i < enemySquads.length; i += 1) {
         const enemy = enemySquads[i];
         if (!enemy || enemy.id !== squad.targetSquadId || enemy.remain <= 0) continue;
+        if (isSquadHiddenForViewerTeam(enemy, squad.team)) continue;
         targetSquad = enemy;
         break;
       }
     }
     if (chargeCommitted) {
       targetSquad = targetSquad
-        || enemySquads.find((row) => row.id === squad.targetSquadId && row.remain > 0)
-        || enemySquads
+        || visibleEnemySquads.find((row) => row.id === squad.targetSquadId && row.remain > 0)
+        || visibleEnemySquads
           .slice()
           .sort((a, b) => Math.hypot((a.x || 0) - (squad.x || 0), (a.y || 0) - (squad.y || 0))
             - Math.hypot((b.x || 0) - (squad.x || 0), (b.y || 0) - (squad.y || 0)))[0]
         || null;
     } else {
-      targetSquad = targetSquad || pickEnemySquadTarget(squad, enemySquads, {
+      targetSquad = targetSquad || pickEnemySquadTarget(squad, visibleEnemySquads, {
         engagementEnabled,
         config: engagementCfg,
         walls,
@@ -726,7 +746,9 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
           crowd,
           agent,
           enemyTeam,
-          Math.max(engageScanRadius * 1.4, attackRange * 1.1)
+          Math.max(engageScanRadius * 1.4, attackRange * 1.1),
+          squad.team,
+          squadMap
         );
         const pool = localEnemies;
         const target = engagementEnabled
@@ -759,7 +781,7 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
       const searchRadius = isRanged
         ? Math.max(engageScanRadius * 1.25, attackRange * 1.35)
         : Math.max(engageScanRadius, attackRange * 2);
-      const localEnemies = pickEnemyAgentsFromSpatial(crowd, agent, enemyTeam, searchRadius);
+      const localEnemies = pickEnemyAgentsFromSpatial(crowd, agent, enemyTeam, searchRadius, squad.team, squadMap);
       const pool = localEnemies;
       const target = (engagementEnabled && isMeleeAgent(agent))
         ? (pickEnemyFromEngagementCandidates(agent, pool, engagementCfg) || pickNearestEnemyAgent(agent, pool))

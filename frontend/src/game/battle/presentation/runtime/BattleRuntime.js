@@ -24,6 +24,11 @@ import { BUILDING_INSTANCE_STRIDE } from '../render/BuildingRenderer';
 import { PROJECTILE_INSTANCE_STRIDE } from '../render/ProjectileRenderer';
 import { EFFECT_INSTANCE_STRIDE } from '../render/EffectRenderer';
 import { resolveTopLayer } from '../assets/ProceduralTextures';
+import {
+  getItemGeometry,
+  buildWorldColliderParts,
+  resolveBattleLayerColors
+} from '../../../battlefield/items/itemGeometryRegistry';
 
 const DEFAULT_FIELD_WIDTH = 900;
 const DEFAULT_FIELD_HEIGHT = 620;
@@ -114,6 +119,9 @@ const buildUnitTypeMap = (unitTypes = []) => {
       classTag: CLASS_TAG_SET.has(explicitClassTag) ? explicitClassTag : null,
       professionId: typeof item?.professionId === 'string' ? item.professionId : '',
       rarity: typeof item?.rarity === 'string' ? item.rarity : 'common',
+      tags: Array.isArray(item?.tags)
+        ? item.tags.map((tag) => (typeof tag === 'string' ? tag.trim() : '')).filter(Boolean)
+        : [],
       visuals: {
         battle: {
           bodyLayer: Math.max(0, Math.floor(Number(battleVisual.bodyLayer) || 0)),
@@ -227,28 +235,59 @@ const buildObstacleList = (battlefield = {}) => {
       .map((item) => {
         const itemId = typeof item?.itemId === 'string' ? item.itemId.trim() : '';
         if (!itemId) return null;
-        return [itemId, item];
+        const geometry = getItemGeometry(item || {});
+        const colors = resolveBattleLayerColors(item || {}, { battleTone: true });
+        return [itemId, {
+          ...item,
+          collider: geometry.collider,
+          renderProfile: geometry.renderProfile,
+          interactions: geometry.interactions,
+          sockets: geometry.sockets,
+          renderColors: colors
+        }];
       })
       .filter(Boolean)
   );
   return (Array.isArray(battlefield?.objects) ? battlefield.objects : []).map((obj, index) => {
     const itemId = typeof obj?.itemId === 'string' ? obj.itemId.trim() : '';
     const item = itemById.get(itemId) || {};
-    return {
-      id: typeof obj?.objectId === 'string' ? obj.objectId : `wall_${index + 1}`,
-      itemId,
+    const width = Math.max(8, Number(item?.width ?? obj?.width) || 84);
+    const depth = Math.max(8, Number(item?.depth ?? obj?.depth) || 24);
+    const height = Math.max(6, Number(item?.height ?? obj?.height) || 38);
+    const instance = {
       x: Number(obj?.x) || 0,
       y: Number(obj?.y) || 0,
       z: Number(obj?.z) || 0,
       rotation: Number(obj?.rotation) || 0,
-      width: Math.max(8, Number(item?.width ?? obj?.width) || 84),
-      depth: Math.max(8, Number(item?.depth ?? obj?.depth) || 24),
-      height: Math.max(6, Number(item?.height ?? obj?.height) || 38),
+      width,
+      depth,
+      height
+    };
+    const obstacle = {
+      id: typeof obj?.objectId === 'string' ? obj.objectId : `wall_${index + 1}`,
+      itemId,
+      x: instance.x,
+      y: instance.y,
+      z: instance.z,
+      rotation: instance.rotation,
+      width,
+      depth,
+      height,
       maxHp: Math.max(1, Number(item?.hp ?? obj?.hp) || 180),
       hp: Math.max(1, Number(item?.hp ?? obj?.hp) || 180),
       defense: Math.max(0.1, Number(item?.defense ?? obj?.defense) || 1.1),
+      collider: item?.collider && typeof item.collider === 'object' ? item.collider : null,
+      renderProfile: item?.renderProfile && typeof item.renderProfile === 'object' ? item.renderProfile : {},
+      renderColors: item?.renderColors && typeof item.renderColors === 'object'
+        ? item.renderColors
+        : { top: [0.52, 0.58, 0.66], side: [0.38, 0.44, 0.52] },
+      interactions: Array.isArray(item?.interactions) ? item.interactions : [],
+      sockets: Array.isArray(item?.sockets) ? item.sockets : [],
+      attach: obj?.attach && typeof obj.attach === 'object' ? obj.attach : null,
+      groupId: typeof obj?.groupId === 'string' ? obj.groupId : '',
       destroyed: false
     };
+    return refreshObstacleGeometry(obstacle, item);
   });
 };
 
@@ -257,27 +296,94 @@ const buildItemCatalog = (battlefield = {}) => (
     .map((item) => {
       const itemId = typeof item?.itemId === 'string' ? item.itemId.trim() : '';
       if (!itemId) return null;
+      const geometry = getItemGeometry(item || {});
+      const colors = resolveBattleLayerColors(item || {}, { battleTone: true });
       return {
         itemId,
         name: typeof item?.name === 'string' && item.name.trim() ? item.name.trim() : itemId,
+        description: typeof item?.description === 'string' ? item.description : '',
         width: Math.max(8, Number(item?.width) || 84),
         depth: Math.max(8, Number(item?.depth) || 24),
         height: Math.max(6, Number(item?.height) || 38),
         hp: Math.max(1, Number(item?.hp) || 180),
         defense: Math.max(0.1, Number(item?.defense) || 1.1),
-        style: item?.style && typeof item.style === 'object' ? item.style : {}
+        style: item?.style && typeof item.style === 'object' ? item.style : {},
+        collider: geometry.collider,
+        renderProfile: geometry.renderProfile,
+        interactions: geometry.interactions,
+        sockets: geometry.sockets,
+        maxStack: Number.isFinite(Number(item?.maxStack)) ? Math.max(1, Math.floor(Number(item.maxStack))) : null,
+        requiresSupport: item?.requiresSupport === true,
+        snapPriority: Number.isFinite(Number(item?.snapPriority)) ? Number(item.snapPriority) : 0,
+        renderColors: colors
       };
     })
     .filter(Boolean)
 );
+
+const refreshObstacleGeometry = (obstacle = {}, itemDef = {}) => {
+  const normalizedItem = {
+    ...itemDef,
+    width: Math.max(8, Number(obstacle?.width) || Number(itemDef?.width) || 84),
+    depth: Math.max(8, Number(obstacle?.depth) || Number(itemDef?.depth) || 24),
+    height: Math.max(6, Number(obstacle?.height) || Number(itemDef?.height) || 38),
+    collider: itemDef?.collider || obstacle?.collider || null,
+    renderProfile: itemDef?.renderProfile || obstacle?.renderProfile || null,
+    interactions: Array.isArray(itemDef?.interactions) ? itemDef.interactions : (Array.isArray(obstacle?.interactions) ? obstacle.interactions : []),
+    sockets: Array.isArray(itemDef?.sockets) ? itemDef.sockets : (Array.isArray(obstacle?.sockets) ? obstacle.sockets : [])
+  };
+  const geometry = getItemGeometry(normalizedItem);
+  const colors = obstacle?.renderColors && typeof obstacle.renderColors === 'object'
+    ? obstacle.renderColors
+    : resolveBattleLayerColors(normalizedItem, { battleTone: true });
+  obstacle.collider = geometry.collider;
+  obstacle.renderProfile = geometry.renderProfile;
+  obstacle.interactions = geometry.interactions;
+  obstacle.sockets = geometry.sockets;
+  obstacle.renderColors = colors;
+  obstacle.colliderParts = buildWorldColliderParts(obstacle, normalizedItem, {
+    stackLayerHeight: Math.max(1, Number(obstacle?.height) || Number(itemDef?.height) || 32)
+  });
+  return obstacle;
+};
 
 const cloneObstacleList = (list = []) => (
   (Array.isArray(list) ? list : []).map((wall) => ({
     ...wall,
     hp: Number(wall?.hp) || Number(wall?.maxHp) || 1,
     destroyed: !!wall?.destroyed
-  }))
+  })).map((wall) => refreshObstacleGeometry(wall, wall))
 );
+
+const buildRenderableBuildingParts = (walls = []) => {
+  const out = [];
+  (Array.isArray(walls) ? walls : []).forEach((wall) => {
+    if (!wall) return;
+    const hpRatio = clamp((Number(wall?.hp) || 0) / Math.max(1, Number(wall?.maxHp) || 1), 0, 1);
+    const colors = wall?.renderColors && typeof wall.renderColors === 'object'
+      ? wall.renderColors
+      : { top: [0.52, 0.58, 0.66], side: [0.38, 0.44, 0.52] };
+    const localParts = Array.isArray(wall?.colliderParts) && wall.colliderParts.length > 0
+      ? wall.colliderParts
+      : buildWorldColliderParts(wall, wall, { stackLayerHeight: Number(wall?.height) || 32 });
+    localParts.forEach((part) => {
+      out.push({
+        x: Number(part?.cx) || 0,
+        y: Number(part?.cy) || 0,
+        z: Math.max(0, Number(part?.cz) || 0) - (Math.max(1, Number(part?.h) || 1) * 0.5),
+        width: Math.max(1, Number(part?.w) || 1),
+        depth: Math.max(1, Number(part?.d) || 1),
+        height: Math.max(1, Number(part?.h) || 1),
+        rotation: Number(part?.yawDeg) || 0,
+        hpRatio,
+        destroyed: wall.destroyed ? 1 : 0,
+        topColor: Array.isArray(colors.top) ? colors.top : [0.52, 0.58, 0.66],
+        sideColor: Array.isArray(colors.side) ? colors.side : [0.38, 0.44, 0.52]
+      });
+    });
+  });
+  return out;
+};
 
 const computeFieldSize = (battlefield = {}) => ({
   width: Math.max(280, Number(battlefield?.layoutMeta?.fieldWidth) || DEFAULT_FIELD_WIDTH),
@@ -760,6 +866,7 @@ const createSquad = ({
     roleTag: stats.roleTag,
     rpsType: stats.rpsType || 'mobility',
     professionId: stats.professionId || '',
+    tags: Array.isArray(mainType?.tags) ? mainType.tags : [],
     tier: Math.max(1, Number(stats.tier) || 1),
     mainUnitTypeId: stats.mainTypeId || '',
     formationRect: group?.formationRect && typeof group.formationRect === 'object'
@@ -947,6 +1054,9 @@ export default class BattleRuntime {
     this.attackerRoster = buildRosterMap(attackerRosterSource, this.unitTypeMap);
     this.defenderRoster = buildRosterMap(defenderRosterSource, this.unitTypeMap);
     this.itemCatalog = buildItemCatalog(this.initData?.battlefield || {});
+    console.log(
+      `[battlefield] Loaded BattlefieldItem catalog count=${this.itemCatalog.length} enabled=${this.itemCatalog.length}`
+    );
 
     this.attackerDeployGroups = [];
     this.defenderDeployGroups = buildDefenderDeployGroups(
@@ -1364,7 +1474,7 @@ export default class BattleRuntime {
     const radius = Math.max(4, Math.max(Number(item.width) || 0, Number(item.depth) || 0) * 0.5);
     const safePoint = clampPointToField({ x, y }, this.field, radius);
     const objectId = `obj_custom_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    this.initialBuildings.push({
+    const obstacle = {
       id: objectId,
       itemId: safeItemId,
       x: safePoint.x,
@@ -1378,7 +1488,8 @@ export default class BattleRuntime {
       hp: Math.max(1, Number(item.hp) || 180),
       defense: Math.max(0.1, Number(item.defense) || 1.1),
       destroyed: false
-    });
+    };
+    this.initialBuildings.push(refreshObstacleGeometry(obstacle, item));
     return { ok: true, objectId };
   }
 
@@ -1392,6 +1503,8 @@ export default class BattleRuntime {
     const safePoint = clampPointToField(worldPoint, this.field, radius);
     target.x = safePoint.x;
     target.y = safePoint.y;
+    const item = this.getItemCatalog().find((row) => row.itemId === target.itemId) || target;
+    refreshObstacleGeometry(target, item);
     return true;
   }
 
@@ -1402,6 +1515,8 @@ export default class BattleRuntime {
     const target = (Array.isArray(this.initialBuildings) ? this.initialBuildings : []).find((row) => row?.id === safeId);
     if (!target) return false;
     target.rotation = (Number(target.rotation) || 0) + (Number(deltaDeg) || 0);
+    const item = this.getItemCatalog().find((row) => row.itemId === target.itemId) || target;
+    refreshObstacleGeometry(target, item);
     return true;
   }
 
@@ -2151,7 +2266,8 @@ export default class BattleRuntime {
     const activeBuildings = hideDefenderIntelInDeploy
       ? []
       : (Array.isArray(this.sim?.buildings) ? this.sim.buildings : this.initialBuildings);
-    const buildings = ensureBuffer(this.snapshotState, 'buildings', BUILDING_INSTANCE_STRIDE, activeBuildings.length || 0);
+    const activeBuildingParts = buildRenderableBuildingParts(activeBuildings);
+    const buildings = ensureBuffer(this.snapshotState, 'buildings', BUILDING_INSTANCE_STRIDE, activeBuildingParts.length || 0);
     const projectiles = ensureBuffer(this.snapshotState, 'projectiles', PROJECTILE_INSTANCE_STRIDE, this.sim?.projectiles?.length || 0);
     const effects = ensureBuffer(this.snapshotState, 'effects', EFFECT_INSTANCE_STRIDE, this.sim?.hitEffects?.length || 0);
 
@@ -2218,18 +2334,26 @@ export default class BattleRuntime {
       units.count = previewCount;
 
       let wallCount = 0;
-      for (let i = 0; i < activeBuildings.length; i += 1) {
-        const wall = activeBuildings[i];
-        if (!wall) continue;
+      for (let i = 0; i < activeBuildingParts.length; i += 1) {
+        const part = activeBuildingParts[i];
+        if (!part) continue;
         const base = wallCount * BUILDING_INSTANCE_STRIDE;
-        buildings.data[base + 0] = Number(wall.x) || 0;
-        buildings.data[base + 1] = Number(wall.y) || 0;
-        buildings.data[base + 2] = Math.max(2, Number(wall.width) || 10);
-        buildings.data[base + 3] = Math.max(2, Number(wall.depth) || 10);
-        buildings.data[base + 4] = Math.max(2, Number(wall.height) || 8);
-        buildings.data[base + 5] = degToRad(wall.rotation);
-        buildings.data[base + 6] = clamp((Number(wall.hp) || 0) / Math.max(1, Number(wall.maxHp) || 1), 0, 1);
-        buildings.data[base + 7] = wall.destroyed ? 1 : 0;
+        buildings.data[base + 0] = Number(part.x) || 0;
+        buildings.data[base + 1] = Number(part.y) || 0;
+        buildings.data[base + 2] = Number(part.z) || 0;
+        buildings.data[base + 3] = degToRad(part.rotation);
+        buildings.data[base + 4] = Math.max(1, Number(part.width) || 1);
+        buildings.data[base + 5] = Math.max(1, Number(part.depth) || 1);
+        buildings.data[base + 6] = Math.max(1, Number(part.height) || 1);
+        buildings.data[base + 7] = clamp(Number(part.hpRatio) || 0, 0, 1);
+        buildings.data[base + 8] = Number(part.destroyed) || 0;
+        buildings.data[base + 9] = Number(part.topColor?.[0]) || 0.52;
+        buildings.data[base + 10] = Number(part.topColor?.[1]) || 0.58;
+        buildings.data[base + 11] = Number(part.topColor?.[2]) || 0.66;
+        buildings.data[base + 12] = Number(part.sideColor?.[0]) || 0.38;
+        buildings.data[base + 13] = Number(part.sideColor?.[1]) || 0.44;
+        buildings.data[base + 14] = Number(part.sideColor?.[2]) || 0.52;
+        buildings.data[base + 15] = 0;
         wallCount += 1;
       }
       buildings.count = wallCount;
@@ -2244,6 +2368,8 @@ export default class BattleRuntime {
       const agent = agents[i];
       if (!agent || agent.dead || (Number(agent.weight) || 0) <= 0.001) continue;
       const squad = this.getSquadById(agent.squadId);
+      const hiddenFromAttacker = !!squad?.hiddenFromAttacker;
+      if (agent.team === TEAM_DEFENDER && hiddenFromAttacker) continue;
       const visual = this.visualConfig(agent.unitTypeId, squad?.classTag || agent.typeCategory || 'infantry');
       const isFlying = !!this.unitTypeMap.get(agent.unitTypeId)?.isFlying;
       const base = unitCount * UNIT_INSTANCE_STRIDE;
@@ -2271,20 +2397,27 @@ export default class BattleRuntime {
     }
     units.count = unitCount;
 
-    const walls = activeBuildings;
     let wallCount = 0;
-    for (let i = 0; i < walls.length; i += 1) {
-      const wall = walls[i];
-      if (!wall) continue;
+    for (let i = 0; i < activeBuildingParts.length; i += 1) {
+      const part = activeBuildingParts[i];
+      if (!part) continue;
       const base = wallCount * BUILDING_INSTANCE_STRIDE;
-      buildings.data[base + 0] = Number(wall.x) || 0;
-      buildings.data[base + 1] = Number(wall.y) || 0;
-      buildings.data[base + 2] = Math.max(2, Number(wall.width) || 10);
-      buildings.data[base + 3] = Math.max(2, Number(wall.depth) || 10);
-      buildings.data[base + 4] = Math.max(2, Number(wall.height) || 8);
-      buildings.data[base + 5] = degToRad(wall.rotation);
-      buildings.data[base + 6] = clamp((Number(wall.hp) || 0) / Math.max(1, Number(wall.maxHp) || 1), 0, 1);
-      buildings.data[base + 7] = wall.destroyed ? 1 : 0;
+      buildings.data[base + 0] = Number(part.x) || 0;
+      buildings.data[base + 1] = Number(part.y) || 0;
+      buildings.data[base + 2] = Number(part.z) || 0;
+      buildings.data[base + 3] = degToRad(part.rotation);
+      buildings.data[base + 4] = Math.max(1, Number(part.width) || 1);
+      buildings.data[base + 5] = Math.max(1, Number(part.depth) || 1);
+      buildings.data[base + 6] = Math.max(1, Number(part.height) || 1);
+      buildings.data[base + 7] = clamp(Number(part.hpRatio) || 0, 0, 1);
+      buildings.data[base + 8] = Number(part.destroyed) || 0;
+      buildings.data[base + 9] = Number(part.topColor?.[0]) || 0.52;
+      buildings.data[base + 10] = Number(part.topColor?.[1]) || 0.58;
+      buildings.data[base + 11] = Number(part.topColor?.[2]) || 0.66;
+      buildings.data[base + 12] = Number(part.sideColor?.[0]) || 0.38;
+      buildings.data[base + 13] = Number(part.sideColor?.[1]) || 0.44;
+      buildings.data[base + 14] = Number(part.sideColor?.[2]) || 0.52;
+      buildings.data[base + 15] = 0;
       wallCount += 1;
     }
     buildings.count = wallCount;
@@ -2334,6 +2467,11 @@ export default class BattleRuntime {
 
   getMinimapSnapshot() {
     const hideDefenderIntelInDeploy = !this.intelVisible && this.phase === 'deploy';
+    const hiddenSquadIdSet = new Set(
+      (this.sim?.squads || [])
+        .filter((row) => row?.team === TEAM_DEFENDER && row?.hiddenFromAttacker)
+        .map((row) => row.id)
+    );
     const squads = this.phase === 'battle' || this.phase === 'ended'
       ? (this.sim?.squads || []).map((row) => ({
         id: row.id,
@@ -2342,7 +2480,7 @@ export default class BattleRuntime {
         team: row.team,
         remain: Number(row.remain) || 0,
         selected: row.id === this.focusSquadId
-      }))
+      })).filter((row) => !(row.team === TEAM_DEFENDER && hiddenSquadIdSet.has(row.id)))
       : [
         ...this.attackerDeployGroups.map((row) => ({ id: row.id, x: row.x, y: row.y, team: TEAM_ATTACKER, remain: sumUnitsMap(row.units), selected: row.id === this.selectedDeploySquadId })),
         ...(!hideDefenderIntelInDeploy
@@ -2355,7 +2493,9 @@ export default class BattleRuntime {
       deployRange: this.getDeployRange(),
       buildings: hideDefenderIntelInDeploy ? [] : (this.sim?.buildings || this.initialBuildings),
       squads,
-      visibilityMask: null
+      visibilityMask: {
+        hiddenDefenderSquadIds: Array.from(hiddenSquadIdSet)
+      }
     };
   }
 

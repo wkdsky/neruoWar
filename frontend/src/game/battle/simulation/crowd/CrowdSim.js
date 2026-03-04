@@ -15,6 +15,7 @@ import {
 } from '../effects/CombatEffects';
 import { updateCrowdCombat } from './crowdCombat';
 import { syncMeleeEngagement } from './engagement';
+import itemInteractionSystem from '../items/itemInteractionSystem';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
@@ -1653,6 +1654,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
   const spatial = buildSpatialHash(crowd.allAgents, 14);
   crowd.spatial = spatial;
   syncMeleeEngagement(crowd, sim, walls, safeDt, Number(sim?.timeElapsed) || 0);
+  itemInteractionSystem.step(sim, crowd, safeDt);
 
   squads.forEach((squad) => {
     if (!squad || squad.remain <= 0) return;

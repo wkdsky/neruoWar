@@ -94,7 +94,14 @@ const normalizeBattlefieldItemCatalog = (items = []) => {
       height: Math.max(10, Number(item?.height) || 32),
       hp: Math.max(1, Math.floor(Number(item?.hp) || 1)),
       defense: Math.max(0.1, Number(item?.defense) || 1),
-      style: item?.style && typeof item.style === 'object' ? item.style : {}
+      style: item?.style && typeof item.style === 'object' ? item.style : {},
+      collider: item?.collider && typeof item.collider === 'object' ? item.collider : null,
+      renderProfile: item?.renderProfile && typeof item.renderProfile === 'object' ? item.renderProfile : null,
+      interactions: Array.isArray(item?.interactions) ? item.interactions : [],
+      sockets: Array.isArray(item?.sockets) ? item.sockets : [],
+      maxStack: Number.isFinite(Number(item?.maxStack)) ? Math.max(1, Math.floor(Number(item.maxStack))) : null,
+      requiresSupport: item?.requiresSupport === true,
+      snapPriority: Number.isFinite(Number(item?.snapPriority)) ? Number(item.snapPriority) : 0
     });
   });
   return out;

@@ -9,6 +9,12 @@ import {
   getFormationFootprint
 } from '../../game/formation/ArmyFormationRenderer';
 import { BACKEND_ORIGIN } from '../../runtimeConfig';
+import {
+  getItemGeometry,
+  collidersOverlap2D,
+  pointInsideCollider2D,
+  getSocketWorldPose
+} from '../../game/battlefield/items/itemGeometryRegistry';
 
 const CAMERA_ANGLE_PREVIEW = 45;
 const CAMERA_ANGLE_EDIT = 45;
@@ -214,7 +220,19 @@ const createWallFromLike = (wallLike = {}, overrides = {}) => ({
   depth: Math.max(12, Number(overrides.depth ?? wallLike.depth ?? WALL_DEPTH) || WALL_DEPTH),
   height: Math.max(14, Number(overrides.height ?? wallLike.height ?? WALL_HEIGHT) || WALL_HEIGHT),
   hp: Math.max(1, Math.floor(Number(overrides.hp ?? wallLike.hp ?? BASE_HP) || BASE_HP)),
-  defense: Math.max(0.1, Number(overrides.defense ?? wallLike.defense ?? BASE_DEFENSE) || BASE_DEFENSE)
+  defense: Math.max(0.1, Number(overrides.defense ?? wallLike.defense ?? BASE_DEFENSE) || BASE_DEFENSE),
+  attach: (() => {
+    const sourceAttach = overrides.attach ?? wallLike.attach;
+    if (!sourceAttach || typeof sourceAttach !== 'object') return null;
+    const parentObjectId = typeof sourceAttach.parentObjectId === 'string' ? sourceAttach.parentObjectId.trim() : '';
+    const parentSocketId = typeof sourceAttach.parentSocketId === 'string' ? sourceAttach.parentSocketId.trim() : '';
+    const childSocketId = typeof sourceAttach.childSocketId === 'string' ? sourceAttach.childSocketId.trim() : '';
+    if (!parentObjectId || !parentSocketId || !childSocketId) return null;
+    return { parentObjectId, parentSocketId, childSocketId };
+  })(),
+  groupId: typeof (overrides.groupId ?? wallLike.groupId) === 'string'
+    ? String(overrides.groupId ?? wallLike.groupId).trim()
+    : ''
 });
 
 const sanitizeWalls = (rawWalls = []) => {
@@ -227,7 +245,9 @@ const sanitizeWalls = (rawWalls = []) => {
       itemId: typeof item?.itemId === 'string'
         ? item.itemId
         : (typeof item?.itemType === 'string' ? item.itemType : (typeof item?.type === 'string' ? item.type : '')),
-      z: Math.max(0, Math.min(MAX_STACK_LEVEL - 1, Math.floor(Number(item?.z) || 0)))
+      z: Math.max(0, Math.min(MAX_STACK_LEVEL - 1, Math.floor(Number(item?.z) || 0))),
+      attach: item?.attach && typeof item.attach === 'object' ? item.attach : null,
+      groupId: typeof item?.groupId === 'string' ? item.groupId : ''
     });
     if (!next.itemId) return;
     if (seen.has(next.id)) return;
@@ -372,13 +392,21 @@ const normalizeItemCatalog = (items = []) => {
     out.push({
       itemId,
       name: (typeof item?.name === 'string' && item.name.trim()) ? item.name.trim() : itemId,
+      description: typeof item?.description === 'string' ? item.description.trim() : '',
       initialCount: Math.max(0, Math.floor(Number(item?.initialCount) || 0)),
       width: Math.max(12, Number(item?.width) || WALL_WIDTH),
       depth: Math.max(12, Number(item?.depth) || WALL_DEPTH),
       height: Math.max(10, Number(item?.height) || WALL_HEIGHT),
       hp: Math.max(1, Math.floor(Number(item?.hp) || BASE_HP)),
       defense: Math.max(0.1, Number(item?.defense) || BASE_DEFENSE),
-      style: item?.style && typeof item.style === 'object' ? item.style : {}
+      style: item?.style && typeof item.style === 'object' ? item.style : {},
+      collider: item?.collider && typeof item.collider === 'object' ? item.collider : null,
+      renderProfile: item?.renderProfile && typeof item.renderProfile === 'object' ? item.renderProfile : null,
+      interactions: Array.isArray(item?.interactions) ? item.interactions : [],
+      sockets: Array.isArray(item?.sockets) ? item.sockets : [],
+      maxStack: Number.isFinite(Number(item?.maxStack)) ? Math.max(1, Math.floor(Number(item.maxStack))) : null,
+      requiresSupport: item?.requiresSupport === true,
+      snapPriority: Number.isFinite(Number(item?.snapPriority)) ? Number(item.snapPriority) : 0
     });
   });
   return out;
@@ -407,6 +435,8 @@ const mapLayoutBundleToWalls = (layoutBundle = {}) => {
       y: item?.y,
       z: item?.z,
       rotation: item?.rotation,
+      attach: item?.attach && typeof item.attach === 'object' ? item.attach : null,
+      groupId: typeof item?.groupId === 'string' ? item.groupId : '',
       width: itemDef?.width,
       depth: itemDef?.depth,
       height: itemDef?.height,
@@ -434,13 +464,21 @@ const buildLayoutPayload = ({ walls = [], defenderDeployments = [], layoutMeta =
   itemCatalog: normalizeItemCatalog(itemCatalog).map((item) => ({
     itemId: item.itemId,
     name: item.name,
+    description: item.description || '',
     initialCount: Math.max(0, Math.floor(Number(item.initialCount) || 0)),
     width: roundTo(item.width, 3),
     depth: roundTo(item.depth, 3),
     height: roundTo(item.height, 3),
     hp: Math.max(1, Math.floor(Number(item.hp) || BASE_HP)),
     defense: roundTo(Math.max(0.1, Number(item.defense) || BASE_DEFENSE), 3),
-    style: item?.style && typeof item.style === 'object' ? item.style : {}
+    style: item?.style && typeof item.style === 'object' ? item.style : {},
+    collider: item?.collider && typeof item.collider === 'object' ? item.collider : null,
+    renderProfile: item?.renderProfile && typeof item.renderProfile === 'object' ? item.renderProfile : null,
+    interactions: Array.isArray(item?.interactions) ? item.interactions : [],
+    sockets: Array.isArray(item?.sockets) ? item.sockets : [],
+    maxStack: Number.isFinite(Number(item?.maxStack)) ? Math.max(1, Math.floor(Number(item.maxStack))) : null,
+    requiresSupport: item?.requiresSupport === true,
+    snapPriority: Number.isFinite(Number(item?.snapPriority)) ? Number(item.snapPriority) : 0
   })),
   objects: sanitizeWalls(walls).map((item) => ({
     objectId: item.id,
@@ -448,7 +486,15 @@ const buildLayoutPayload = ({ walls = [], defenderDeployments = [], layoutMeta =
     x: roundTo(item.x, 3),
     y: roundTo(item.y, 3),
     z: Math.max(0, Math.floor(Number(item.z) || 0)),
-    rotation: roundTo(item.rotation, 3)
+    rotation: roundTo(item.rotation, 3),
+    attach: item?.attach && typeof item.attach === 'object'
+      ? {
+          parentObjectId: typeof item.attach.parentObjectId === 'string' ? item.attach.parentObjectId : '',
+          parentSocketId: typeof item.attach.parentSocketId === 'string' ? item.attach.parentSocketId : '',
+          childSocketId: typeof item.attach.childSocketId === 'string' ? item.attach.childSocketId : ''
+        }
+      : null,
+    groupId: typeof item?.groupId === 'string' ? item.groupId : ''
   })),
   defenderDeployments: sanitizeDefenderDeployments(defenderDeployments).map((item) => ({
     deployId: item.deployId,
@@ -566,24 +612,35 @@ const getRectContactMetrics = (rectA, rectB) => {
   };
 };
 
-const isRectOverlap = (rectA, rectB, epsilon = 0.4) => {
-  const metrics = getRectContactMetrics(rectA, rectB);
-  return metrics.minOverlap > epsilon;
-};
-
-const toLocalByWall = (point, wall) => {
-  const rotated = rotate2D(point.x - wall.x, point.y - wall.y, -wall.rotation);
+const resolveWallItemDef = (wall = {}, itemCatalogById = new Map()) => {
+  const itemId = typeof wall?.itemId === 'string' ? wall.itemId.trim() : '';
+  const fromCatalog = itemId && itemCatalogById instanceof Map ? itemCatalogById.get(itemId) : null;
+  if (fromCatalog) return fromCatalog;
   return {
-    x: rotated.x,
-    y: rotated.y
+    itemId,
+    width: Math.max(12, Number(wall?.width) || WALL_WIDTH),
+    depth: Math.max(12, Number(wall?.depth) || WALL_DEPTH),
+    height: Math.max(10, Number(wall?.height) || WALL_HEIGHT),
+    collider: null,
+    sockets: [],
+    maxStack: null
   };
 };
 
-const pointInWallFootprint = (point, wall, padding = 0) => {
-  const local = toLocalByWall(point, wall);
-  return (
-    Math.abs(local.x) <= ((wall.width / 2) + padding)
-    && Math.abs(local.y) <= ((wall.depth / 2) + padding)
+const resolveItemStackLimit = (itemDef = null) => {
+  if (Number.isFinite(Number(itemDef?.maxStack))) {
+    return Math.max(1, Math.min(31, Math.floor(Number(itemDef.maxStack))));
+  }
+  return MAX_STACK_LEVEL;
+};
+
+const pointInWallFootprint = (point, wall, itemCatalogById = new Map(), padding = 0) => {
+  const itemDef = resolveWallItemDef(wall, itemCatalogById);
+  return pointInsideCollider2D(
+    { x: Number(point?.x) || 0, y: Number(point?.y) || 0 },
+    wall,
+    itemDef,
+    padding
   );
 };
 
@@ -606,6 +663,52 @@ const getProjectedHalfExtent = (wallLike, normal) => {
   return (Math.abs(dot2(widthAxis, normal)) * hw) + (Math.abs(dot2(depthAxis, normal)) * hd);
 };
 
+const getWallFootprintCorners = (wallLike = {}, itemCatalogById = new Map()) => {
+  const itemDef = resolveWallItemDef(wallLike, itemCatalogById);
+  const geometry = getItemGeometry(itemDef);
+  if (geometry?.collider?.kind === 'polygon') {
+    const points = Array.isArray(geometry?.collider?.polygon?.points) ? geometry.collider.polygon.points : [];
+    return points.map((point) => {
+      const rotated = rotate2D(Number(point?.x) || 0, Number(point?.y) || 0, Number(wallLike?.rotation) || 0);
+      return {
+        x: (Number(wallLike?.x) || 0) + rotated.x,
+        y: (Number(wallLike?.y) || 0) + rotated.y
+      };
+    });
+  }
+  const parts = Array.isArray(geometry?.collider?.parts) ? geometry.collider.parts : [{
+    cx: 0,
+    cy: 0,
+    w: Number(wallLike?.width) || WALL_WIDTH,
+    d: Number(wallLike?.depth) || WALL_DEPTH,
+    yawDeg: 0
+  }];
+  const out = [];
+  parts.forEach((part) => {
+    const hw = Math.max(1, Number(part?.w) || 1) * 0.5;
+    const hd = Math.max(1, Number(part?.d) || 1) * 0.5;
+    const localCorners = [
+      { x: -hw, y: -hd },
+      { x: hw, y: -hd },
+      { x: hw, y: hd },
+      { x: -hw, y: hd }
+    ];
+    localCorners.forEach((corner) => {
+      const rotatedPart = rotate2D(corner.x, corner.y, Number(part?.yawDeg) || 0);
+      const local = {
+        x: (Number(part?.cx) || 0) + rotatedPart.x,
+        y: (Number(part?.cy) || 0) + rotatedPart.y
+      };
+      const rotatedWall = rotate2D(local.x, local.y, Number(wallLike?.rotation) || 0);
+      out.push({
+        x: (Number(wallLike?.x) || 0) + rotatedWall.x,
+        y: (Number(wallLike?.y) || 0) + rotatedWall.y
+      });
+    });
+  });
+  return out;
+};
+
 const angleDistanceDeg = (a, b) => {
   const da = normalizeDeg(a);
   const db = normalizeDeg(b);
@@ -613,9 +716,9 @@ const angleDistanceDeg = (a, b) => {
   return Math.min(diff, 360 - diff);
 };
 
-const clampGhostInsideField = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight = FIELD_HEIGHT) => {
+const clampGhostInsideField = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight = FIELD_HEIGHT, itemCatalogById = new Map()) => {
   const next = { ...ghostLike };
-  const corners = getRectCorners(next.x, next.y, next.width, next.depth, next.rotation);
+  const corners = getWallFootprintCorners(next, itemCatalogById);
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
@@ -643,10 +746,10 @@ const clampGhostInsideField = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight 
   return next;
 };
 
-const isOutOfBounds = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight = FIELD_HEIGHT) => {
+const isOutOfBounds = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight = FIELD_HEIGHT, itemCatalogById = new Map()) => {
   const safeFieldWidth = Math.max(200, Number(fieldWidth) || FIELD_WIDTH);
   const safeFieldHeight = Math.max(200, Number(fieldHeight) || FIELD_HEIGHT);
-  const corners = getRectCorners(ghostLike.x, ghostLike.y, ghostLike.width, ghostLike.depth, ghostLike.rotation);
+  const corners = getWallFootprintCorners(ghostLike, itemCatalogById);
   return corners.some((point) => (
     point.x < (-safeFieldWidth / 2) - SNAP_EPSILON
     || point.x > (safeFieldWidth / 2) + SNAP_EPSILON
@@ -655,11 +758,15 @@ const isOutOfBounds = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight = FIELD_
   ));
 };
 
-const hasCollision = (ghostLike, walls = []) => {
+const hasCollision = (ghostLike, walls = [], itemCatalogById = new Map(), ignoreIds = []) => {
+  const ghostItemDef = resolveWallItemDef(ghostLike, itemCatalogById);
+  const ignoreSet = new Set((Array.isArray(ignoreIds) ? ignoreIds : []).filter(Boolean));
   for (const wall of walls) {
+    if (ignoreSet.has(wall?.id)) continue;
     if (wall.id === ghostLike.id) continue;
     if (wall.z !== ghostLike.z) continue;
-    if (isRectOverlap(ghostLike, wall, 0.2)) return true;
+    const wallItemDef = resolveWallItemDef(wall, itemCatalogById);
+    if (collidersOverlap2D(ghostLike, ghostItemDef, wall, wallItemDef, 0.12)) return true;
   }
   return false;
 };
@@ -675,10 +782,103 @@ const buildYawCandidatesFromTarget = (targetYaw) => {
 };
 
 const getPlacementReasonText = (reason) => {
-  if (reason === 'stack_limit') return `堆叠上限为 ${MAX_STACK_LEVEL} 层`;
+  if (reason === 'stack_limit') return '该设置物已达到堆叠上限';
+  if (reason === 'support_required') return '该设置物需要吸附在支撑物上';
   if (reason === 'collision') return '当前位置发生碰撞，无法放置';
   if (reason === 'out_of_bounds') return '当前位置超出战场边界';
   return '';
+};
+
+const areSocketCompatible = (parentSocket = {}, childSocket = {}) => {
+  const parentTags = (Array.isArray(parentSocket?.compatibleTags) ? parentSocket.compatibleTags : [])
+    .map((tag) => (typeof tag === 'string' ? tag.trim() : ''))
+    .filter(Boolean);
+  const childTags = (Array.isArray(childSocket?.compatibleTags) ? childSocket.compatibleTags : [])
+    .map((tag) => (typeof tag === 'string' ? tag.trim() : ''))
+    .filter(Boolean);
+  if (parentTags.length <= 0 || childTags.length <= 0) return true;
+  return parentTags.some((tag) => childTags.includes(tag));
+};
+
+const solveSocketSnap = ({
+  ghostBase,
+  walls = [],
+  itemCatalogById = new Map(),
+  fieldWidth,
+  fieldHeight
+}) => {
+  const ghostItemDef = resolveWallItemDef(ghostBase, itemCatalogById);
+  const ghostSockets = getItemGeometry(ghostItemDef).sockets || [];
+  if (ghostSockets.length <= 0) return null;
+  let best = null;
+
+  walls.forEach((anchor) => {
+    if (!anchor || anchor.id === ghostBase.id) return;
+    if (anchor.z !== ghostBase.z) return;
+    const anchorItemDef = resolveWallItemDef(anchor, itemCatalogById);
+    const anchorSockets = getItemGeometry(anchorItemDef).sockets || [];
+    if (anchorSockets.length <= 0) return;
+
+    anchorSockets.forEach((parentSocket) => {
+      const parentPose = getSocketWorldPose(anchor, parentSocket);
+      ghostSockets.forEach((childSocket) => {
+        if (!areSocketCompatible(parentSocket, childSocket)) return;
+        const parentSnapDist = Number(parentSocket?.snap?.dist);
+        const childSnapDist = Number(childSocket?.snap?.dist);
+        const snapDist = Math.max(
+          2,
+          Number.isFinite(parentSnapDist)
+            ? parentSnapDist
+            : (Number.isFinite(childSnapDist) ? childSnapDist : 12)
+        );
+        const yawStep = Number.isFinite(Number(childSocket?.snap?.yawStepDeg))
+          ? Number(childSocket.snap.yawStepDeg)
+          : (Number.isFinite(Number(parentSocket?.snap?.yawStepDeg)) ? Number(parentSocket.snap.yawStepDeg) : null);
+
+        let rotation = normalizeDeg(parentPose.yawDeg - (Number(childSocket?.localPose?.yawDeg) || 0));
+        if (yawStep && yawStep > 0.0001) {
+          rotation = normalizeDeg(Math.round(rotation / yawStep) * yawStep);
+        }
+        const childOffset = rotate2D(
+          Number(childSocket?.localPose?.x) || 0,
+          Number(childSocket?.localPose?.y) || 0,
+          rotation
+        );
+        const candidate = {
+          ...ghostBase,
+          x: parentPose.x - childOffset.x,
+          y: parentPose.y - childOffset.y,
+          rotation,
+          attach: {
+            parentObjectId: anchor.id,
+            parentSocketId: parentSocket.socketId,
+            childSocketId: childSocket.socketId
+          },
+          groupId: ghostBase.groupId || anchor.groupId || anchor.id
+        };
+        const childWorldPose = getSocketWorldPose(candidate, childSocket);
+        const dist = Math.hypot(parentPose.x - childWorldPose.x, parentPose.y - childWorldPose.y);
+        if (dist > snapDist) return;
+        if (isOutOfBounds(candidate, fieldWidth, fieldHeight, itemCatalogById)) return;
+        if (hasCollision(candidate, walls, itemCatalogById, [anchor.id])) return;
+        const score = dist + (angleDistanceDeg(rotation, ghostBase.rotation) * 0.05);
+        if (!best || score < best.score) {
+          best = {
+            score,
+            ghost: candidate,
+            snap: {
+              type: 'socket',
+              anchorId: anchor.id,
+              parentSocketId: parentSocket.socketId,
+              childSocketId: childSocket.socketId
+            }
+          };
+        }
+      });
+    });
+  });
+
+  return best ? { ghost: best.ghost, snap: best.snap, blocked: false, reason: '' } : null;
 };
 
 const solveMagneticSnap = ({
@@ -686,19 +886,34 @@ const solveMagneticSnap = ({
   walls,
   mouseWorld,
   fieldWidth,
-  fieldHeight
+  fieldHeight,
+  itemCatalogById
 }) => {
+  const ghostItemDef = resolveWallItemDef(candidateGhost, itemCatalogById);
+  const ghostStackLimit = resolveItemStackLimit(ghostItemDef);
   const ghostBase = {
     ...candidateGhost,
-    z: Math.max(0, Math.min(MAX_STACK_LEVEL - 1, Math.floor(Number(candidateGhost?.z) || 0))),
-    rotation: normalizeDeg(candidateGhost?.rotation || 0)
+    z: Math.max(0, Math.min(ghostStackLimit - 1, Math.floor(Number(candidateGhost?.z) || 0))),
+    rotation: normalizeDeg(candidateGhost?.rotation || 0),
+    attach: candidateGhost?.attach && typeof candidateGhost.attach === 'object' ? candidateGhost.attach : null,
+    groupId: typeof candidateGhost?.groupId === 'string' ? candidateGhost.groupId : ''
   };
+
+  const socketSnap = solveSocketSnap({
+    ghostBase,
+    walls,
+    itemCatalogById,
+    fieldWidth,
+    fieldHeight
+  });
+  if (socketSnap) return socketSnap;
+
   const sortedWalls = [...walls].sort((a, b) => (b.z - a.z));
   let stackLimitHit = false;
 
   for (const wall of sortedWalls) {
-    if (!pointInWallFootprint(mouseWorld, wall, 0.2)) continue;
-    if (wall.z >= MAX_STACK_LEVEL - 1) {
+    if (!pointInWallFootprint(mouseWorld, wall, itemCatalogById, 0.2)) continue;
+    if (wall.z >= ghostStackLimit - 1) {
       stackLimitHit = true;
       continue;
     }
@@ -707,9 +922,11 @@ const solveMagneticSnap = ({
       x: wall.x,
       y: wall.y,
       z: wall.z + 1,
-      rotation: normalizeDeg(wall.rotation)
+      rotation: normalizeDeg(wall.rotation),
+      attach: null,
+      groupId: ''
     };
-    if (isOutOfBounds(topGhost, fieldWidth, fieldHeight)) {
+    if (isOutOfBounds(topGhost, fieldWidth, fieldHeight, itemCatalogById)) {
       return {
         ghost: topGhost,
         snap: { type: 'top', anchorId: wall.id },
@@ -717,7 +934,7 @@ const solveMagneticSnap = ({
         reason: 'out_of_bounds'
       };
     }
-    if (hasCollision(topGhost, walls)) {
+    if (hasCollision(topGhost, walls, itemCatalogById)) {
       return {
         ghost: topGhost,
         snap: { type: 'top', anchorId: wall.id },
@@ -763,7 +980,9 @@ const solveMagneticSnap = ({
         const ghostLike = {
           ...ghostBase,
           rotation: normalizeDeg(yaw),
-          z: anchor.z
+          z: anchor.z,
+          attach: null,
+          groupId: ''
         };
         const ghostHalf = getProjectedHalfExtent(ghostLike, normal);
         const candidate = {
@@ -772,8 +991,8 @@ const solveMagneticSnap = ({
           y: anchor.y + (normal.y * (anchorHalf + ghostHalf))
         };
 
-        if (isOutOfBounds(candidate, fieldWidth, fieldHeight)) return;
-        if (hasCollision(candidate, walls)) return;
+        if (isOutOfBounds(candidate, fieldWidth, fieldHeight, itemCatalogById)) return;
+        if (hasCollision(candidate, walls, itemCatalogById)) return;
 
         const requiredNormal = { x: -normal.x, y: -normal.y };
         const faceNormals = getGhostNormalsByYaw(candidate.rotation);
@@ -817,7 +1036,7 @@ const solveMagneticSnap = ({
     };
   }
 
-  const clamped = clampGhostInsideField({ ...ghostBase, z: 0 }, fieldWidth, fieldHeight);
+  const clamped = clampGhostInsideField({ ...ghostBase, z: 0, attach: null, groupId: '' }, fieldWidth, fieldHeight, itemCatalogById);
   const moved = Math.hypot(clamped.x - ghostBase.x, clamped.y - ghostBase.y);
   if (moved > 0.01) {
     const safeFieldWidth = Math.max(200, Number(fieldWidth) || FIELD_WIDTH);
@@ -829,7 +1048,7 @@ const solveMagneticSnap = ({
       { side: 'edge-bottom', dist: (safeFieldHeight / 2) - clamped.y }
     ];
     const edge = edgeDistances.reduce((acc, item) => (item.dist < acc.dist ? item : acc), edgeDistances[0]);
-    if (hasCollision(clamped, walls)) {
+    if (hasCollision(clamped, walls, itemCatalogById)) {
       return {
         ghost: clamped,
         snap: { type: edge.side, anchorId: '' },
@@ -845,7 +1064,15 @@ const solveMagneticSnap = ({
     };
   }
 
-  const freeGhost = { ...ghostBase, z: 0 };
+  const freeGhost = { ...ghostBase, z: 0, attach: null, groupId: '' };
+  if (ghostItemDef?.requiresSupport) {
+    return {
+      ghost: freeGhost,
+      snap: null,
+      blocked: true,
+      reason: 'support_required'
+    };
+  }
   if (stackLimitHit) {
     return {
       ghost: freeGhost,
@@ -854,7 +1081,7 @@ const solveMagneticSnap = ({
       reason: 'stack_limit'
     };
   }
-  if (isOutOfBounds(freeGhost, fieldWidth, fieldHeight)) {
+  if (isOutOfBounds(freeGhost, fieldWidth, fieldHeight, itemCatalogById)) {
     return {
       ghost: freeGhost,
       snap: null,
@@ -862,7 +1089,7 @@ const solveMagneticSnap = ({
       reason: 'out_of_bounds'
     };
   }
-  if (hasCollision(freeGhost, walls)) {
+  if (hasCollision(freeGhost, walls, itemCatalogById)) {
     return {
       ghost: freeGhost,
       snap: null,
@@ -883,17 +1110,19 @@ const evaluateGhostPlacement = (
   walls,
   mouseWorld,
   fieldWidth = FIELD_WIDTH,
-  fieldHeight = FIELD_HEIGHT
+  fieldHeight = FIELD_HEIGHT,
+  itemCatalogById = new Map()
 ) => solveMagneticSnap({
   candidateGhost,
   walls,
   mouseWorld,
   fieldWidth,
-  fieldHeight
+  fieldHeight,
+  itemCatalogById
 });
 
-const findTopWallAtPoint = (worldPoint, walls = []) => {
-  const matches = walls.filter((wall) => pointInWallFootprint(worldPoint, wall, 0.2));
+const findTopWallAtPoint = (worldPoint, walls = [], itemCatalogById = new Map()) => {
+  const matches = walls.filter((wall) => pointInWallFootprint(worldPoint, wall, itemCatalogById, 0.2));
   if (matches.length === 0) return null;
   matches.sort((a, b) => {
     if (b.z !== a.z) return b.z - a.z;
@@ -1550,13 +1779,13 @@ const BattlefieldPreviewModal = ({
       y: mouseWorldRef.current.y,
       z: 0
     };
-    const evaluated = evaluateGhostPlacement(candidate, walls, mouseWorldRef.current, fieldWidth, fieldHeight);
+    const evaluated = evaluateGhostPlacement(candidate, walls, mouseWorldRef.current, fieldWidth, fieldHeight, itemCatalogById);
     setGhost(evaluated.ghost);
     setGhostBlocked(evaluated.blocked);
     setSnapState(evaluated.snap);
     setInvalidReason(evaluated.reason || '');
     return evaluated;
-  }, [fieldHeight, fieldWidth, ghost, walls]);
+  }, [fieldHeight, fieldWidth, ghost, walls, itemCatalogById]);
 
   const cancelGhostPlacement = useCallback((tip = '已取消放置') => {
     setGhost(null);
@@ -1590,7 +1819,7 @@ const BattlefieldPreviewModal = ({
       z: 0,
       rotation: 0
     });
-    const evaluated = evaluateGhostPlacement(nextGhost, walls, mouseWorldRef.current, fieldWidth, fieldHeight);
+    const evaluated = evaluateGhostPlacement(nextGhost, walls, mouseWorldRef.current, fieldWidth, fieldHeight, itemCatalogById);
     setSelectedWallId('');
     setSelectedDeploymentId('');
     setSidebarTab('items');
@@ -1603,7 +1832,7 @@ const BattlefieldPreviewModal = ({
     setSnapState(evaluated.snap);
     setInvalidReason(evaluated.reason || '');
     setMessage(`已选中${itemDef.name || '物品'}：左键放置，右键或 ESC 取消，滚轮旋转，Space+左键平移`);
-  }, [effectiveCanEdit, editMode, normalizedItemCatalog, itemStockMetaMap, walls, fieldWidth, fieldHeight]);
+  }, [effectiveCanEdit, editMode, normalizedItemCatalog, itemStockMetaMap, walls, fieldWidth, fieldHeight, itemCatalogById]);
 
   const startMoveWall = useCallback((wallLike) => {
     if (!wallLike) return;
@@ -1612,7 +1841,7 @@ const BattlefieldPreviewModal = ({
       _mode: 'move',
       _sourceId: wallLike.id
     };
-    const evaluated = evaluateGhostPlacement(movingGhostSeed, walls, mouseWorldRef.current, fieldWidth, fieldHeight);
+    const evaluated = evaluateGhostPlacement(movingGhostSeed, walls, mouseWorldRef.current, fieldWidth, fieldHeight, itemCatalogById);
     setGhost({ ...evaluated.ghost, _mode: 'move', _sourceId: wallLike.id });
     setGhostBlocked(evaluated.blocked);
     setSnapState(evaluated.snap);
@@ -1621,7 +1850,7 @@ const BattlefieldPreviewModal = ({
     setSelectedDeploymentId('');
     setSelectedPaletteItem(wallLike.itemId || '');
     setMessage('移动模式：左键确认位置，右键或 ESC 取消');
-  }, [fieldHeight, fieldWidth, walls]);
+  }, [fieldHeight, fieldWidth, walls, itemCatalogById]);
 
   const recycleWallToPalette = useCallback((wallId) => {
     if (!wallId) return;
@@ -2429,20 +2658,23 @@ const BattlefieldPreviewModal = ({
         setDefenderRoster(rosterRows);
         const canEditByServer = !!data.canEdit;
         setServerCanEdit(canEditByServer);
+        const serverItemIdSet = new Set(nextCatalog.map((item) => item.itemId).filter(Boolean));
+        const filteredCacheWalls = cacheSnapshot.walls.filter((wall) => serverItemIdSet.has(wall?.itemId));
+        const removedLegacyCacheWalls = cacheSnapshot.walls.length - filteredCacheWalls.length;
 
         if (cacheSnapshot.needsSync && canEditByServer) {
-          setWalls(cacheSnapshot.walls);
+          setWalls(filteredCacheWalls);
           setDefenderDeployments(cacheSnapshot.defenderDeployments);
-          setItemCatalog(cacheSnapshot.itemCatalog);
+          setItemCatalog(nextCatalog);
           setActiveLayoutMeta(cacheSnapshot.layoutMeta);
           setCacheNeedsSync(true);
           pendingCacheSyncRef.current = {
-            walls: cacheSnapshot.walls,
+            walls: filteredCacheWalls,
             defenderDeployments: cacheSnapshot.defenderDeployments,
             layoutMeta: cacheSnapshot.layoutMeta,
-            itemCatalog: cacheSnapshot.itemCatalog
+            itemCatalog: nextCatalog
           };
-          setMessage(cacheSnapshot.clearedLegacy
+          setMessage((cacheSnapshot.clearedLegacy || removedLegacyCacheWalls > 0)
             ? '已清空旧版默认战场物体，正在回写服务端'
             : '检测到离线改动，正在尝试回写服务端');
         } else {
@@ -3533,7 +3765,7 @@ const BattlefieldPreviewModal = ({
     }
 
     if (ghost) {
-      const evaluated = evaluateGhostPlacement({ ...ghost, x: world.x, y: world.y }, walls, world, fieldWidth, fieldHeight);
+      const evaluated = evaluateGhostPlacement({ ...ghost, x: world.x, y: world.y }, walls, world, fieldWidth, fieldHeight, itemCatalogById);
       if (evaluated.blocked) {
         const reasonText = getPlacementReasonText(evaluated.reason) || '当前位置无法放置';
         setMessage(reasonText);
@@ -3659,7 +3891,7 @@ const BattlefieldPreviewModal = ({
             worldScale
           })
           : null)
-        || findTopWallAtPoint(world, walls);
+        || findTopWallAtPoint(world, walls, itemCatalogById);
       if (pickedWall) {
         setSelectedWallId(pickedWall.id);
         setSelectedDeploymentId('');

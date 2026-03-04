@@ -12,6 +12,11 @@ const BattlefieldItemSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  description: {
+    type: String,
+    default: '',
+    trim: true
+  },
   initialCount: {
     type: Number,
     default: 0,
@@ -48,6 +53,36 @@ const BattlefieldItemSchema = new mongoose.Schema({
   style: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
+  },
+  collider: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+  renderProfile: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+  interactions: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: []
+  },
+  sockets: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: []
+  },
+  maxStack: {
+    type: Number,
+    default: null,
+    min: 1,
+    max: 31
+  },
+  requiresSupport: {
+    type: Boolean,
+    default: false
+  },
+  snapPriority: {
+    type: Number,
+    default: 0
   },
   sortOrder: {
     type: Number,

@@ -1,72 +1,115 @@
 import {
   createProgram,
-  createStaticQuadVao,
   createDynamicInstanceBuffer,
   updateDynamicBuffer
 } from './WebGL2Context';
 
-export const BUILDING_INSTANCE_STRIDE = 8;
+export const BUILDING_INSTANCE_STRIDE = 16;
 
 const VS = `#version 300 es
-layout(location=0) in vec2 aQuadPos;
-layout(location=1) in vec2 aUv;
-layout(location=2) in vec4 iData0; // x y width depth
-layout(location=3) in vec4 iData1; // height rot hp destroyed
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec4 iData0; // x y z yaw
+layout(location=3) in vec4 iData1; // width depth height hp
+layout(location=4) in vec4 iData2; // destroyed topRGB
+layout(location=5) in vec4 iData3; // sideRGB aux
 
 uniform mat4 uViewProj;
 
-out vec2 vUv;
+out vec3 vNormal;
+out vec3 vTopColor;
+out vec3 vSideColor;
 out float vHp;
 out float vDestroyed;
 
 void main() {
-  float rot = iData1.y;
-  vec2 dirX = vec2(cos(rot), sin(rot));
-  vec2 dirY = vec2(-sin(rot), cos(rot));
-  vec2 local = vec2(aQuadPos.x * iData0.z, (aQuadPos.y - 0.5) * iData0.w);
-  vec2 world2 = vec2(iData0.x, iData0.y) + (dirX * local.x) + (dirY * local.y);
-  float z = max(2.0, iData1.x);
-  gl_Position = uViewProj * vec4(world2.x, world2.y, z, 1.0);
-  vUv = aUv;
-  vHp = iData1.z;
-  vDestroyed = iData1.w;
+  float yaw = iData0.w;
+  mat2 rot = mat2(cos(yaw), -sin(yaw), sin(yaw), cos(yaw));
+  vec2 scaled = aPos.xy * vec2(max(1.0, iData1.x), max(1.0, iData1.y));
+  vec2 worldXY = vec2(iData0.x, iData0.y) + (rot * scaled);
+  float worldZ = iData0.z + (aPos.z * max(1.0, iData1.z));
+  vec3 n = normalize(vec3(rot * aNormal.xy, aNormal.z));
+  gl_Position = uViewProj * vec4(worldXY.x, worldXY.y, worldZ, 1.0);
+  vNormal = n;
+  vTopColor = vec3(iData2.y, iData2.z, iData2.w);
+  vSideColor = vec3(iData3.x, iData3.y, iData3.z);
+  vHp = clamp(iData1.w, 0.0, 1.0);
+  vDestroyed = iData2.x;
 }
 `;
 
 const FS = `#version 300 es
 precision highp float;
 
-in vec2 vUv;
+in vec3 vNormal;
+in vec3 vTopColor;
+in vec3 vSideColor;
 in float vHp;
 in float vDestroyed;
 
-uniform float uPitchMix;
 out vec4 outColor;
-
-float bayer4x4(vec2 p) {
-  int x = int(mod(p.x, 4.0));
-  int y = int(mod(p.y, 4.0));
-  int idx = x + (y * 4);
-  float table[16] = float[16](
-    0.0, 8.0, 2.0, 10.0,
-    12.0, 4.0, 14.0, 6.0,
-    3.0, 11.0, 1.0, 9.0,
-    15.0, 7.0, 13.0, 5.0
-  );
-  return (table[idx] + 0.5) / 16.0;
-}
 
 void main() {
   if (vDestroyed > 0.5) discard;
-  float roofKeep = 1.0 - (uPitchMix * 0.95);
-  float d = bayer4x4(gl_FragCoord.xy + vec2(2.0, 1.0));
-  if (roofKeep < d) discard;
-  float edge = smoothstep(0.0, 0.04, min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y)));
-  vec3 base = mix(vec3(0.20, 0.24, 0.30), vec3(0.38, 0.45, 0.55), edge);
-  base *= mix(0.38, 1.0, clamp(vHp, 0.0, 1.0));
-  outColor = vec4(base, 1.0);
+  vec3 normal = normalize(vNormal);
+  vec3 lightDir = normalize(vec3(0.28, -0.44, 0.86));
+  float diffuse = max(0.15, dot(normal, lightDir));
+  float topMask = smoothstep(0.42, 0.92, normal.z);
+  vec3 base = mix(vSideColor, vTopColor, topMask);
+  float hpShade = mix(0.35, 1.0, clamp(vHp, 0.0, 1.0));
+  vec3 color = base * diffuse * hpShade;
+  outColor = vec4(color, 1.0);
 }
 `;
+
+const createBoxGeometry = () => {
+  // aPos.xy in [-0.5, 0.5], aPos.z in [0, 1]
+  const v = [
+    // top
+    -0.5, -0.5, 1, 0, 0, 1,
+    0.5, -0.5, 1, 0, 0, 1,
+    0.5, 0.5, 1, 0, 0, 1,
+    -0.5, -0.5, 1, 0, 0, 1,
+    0.5, 0.5, 1, 0, 0, 1,
+    -0.5, 0.5, 1, 0, 0, 1,
+    // front
+    -0.5, 0.5, 0, 0, 1, 0,
+    0.5, 0.5, 0, 0, 1, 0,
+    0.5, 0.5, 1, 0, 1, 0,
+    -0.5, 0.5, 0, 0, 1, 0,
+    0.5, 0.5, 1, 0, 1, 0,
+    -0.5, 0.5, 1, 0, 1, 0,
+    // back
+    0.5, -0.5, 0, 0, -1, 0,
+    -0.5, -0.5, 0, 0, -1, 0,
+    -0.5, -0.5, 1, 0, -1, 0,
+    0.5, -0.5, 0, 0, -1, 0,
+    -0.5, -0.5, 1, 0, -1, 0,
+    0.5, -0.5, 1, 0, -1, 0,
+    // left
+    -0.5, -0.5, 0, -1, 0, 0,
+    -0.5, 0.5, 0, -1, 0, 0,
+    -0.5, 0.5, 1, -1, 0, 0,
+    -0.5, -0.5, 0, -1, 0, 0,
+    -0.5, 0.5, 1, -1, 0, 0,
+    -0.5, -0.5, 1, -1, 0, 0,
+    // right
+    0.5, 0.5, 0, 1, 0, 0,
+    0.5, -0.5, 0, 1, 0, 0,
+    0.5, -0.5, 1, 1, 0, 0,
+    0.5, 0.5, 0, 1, 0, 0,
+    0.5, -0.5, 1, 1, 0, 0,
+    0.5, 0.5, 1, 1, 0, 0,
+    // bottom
+    -0.5, 0.5, 0, 0, 0, -1,
+    0.5, 0.5, 0, 0, 0, -1,
+    0.5, -0.5, 0, 0, 0, -1,
+    -0.5, 0.5, 0, 0, 0, -1,
+    0.5, -0.5, 0, 0, 0, -1,
+    -0.5, -0.5, 0, 0, 0, -1
+  ];
+  return new Float32Array(v);
+};
 
 export default class BuildingRenderer {
   constructor(gl) {
@@ -77,32 +120,36 @@ export default class BuildingRenderer {
     this.instanceData = new Float32Array(this.capacity * BUILDING_INSTANCE_STRIDE);
     this.count = 0;
 
-    this.attrs = { position: 0, uv: 1, iData0: 2, iData1: 3 };
-    const quad = createStaticQuadVao(gl, this.attrs);
-    this.vao = quad.vao;
-    this.quadBuffer = quad.quadBuffer;
-
     this.uniforms = {
-      uViewProj: gl.getUniformLocation(this.program, 'uViewProj'),
-      uPitchMix: gl.getUniformLocation(this.program, 'uPitchMix')
+      uViewProj: gl.getUniformLocation(this.program, 'uViewProj')
     };
 
+    this.vao = gl.createVertexArray();
+    this.vertexBuffer = gl.createBuffer();
+    this.vertexCount = 36;
     this.bindLayout();
   }
 
   bindLayout() {
     const gl = this.gl;
+    const geometry = createBoxGeometry();
     gl.bindVertexArray(this.vao);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, geometry, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     const stride = BUILDING_INSTANCE_STRIDE * 4;
-
-    gl.enableVertexAttribArray(this.attrs.iData0);
-    gl.vertexAttribPointer(this.attrs.iData0, 4, gl.FLOAT, false, stride, 0);
-    gl.vertexAttribDivisor(this.attrs.iData0, 1);
-
-    gl.enableVertexAttribArray(this.attrs.iData1);
-    gl.vertexAttribPointer(this.attrs.iData1, 4, gl.FLOAT, false, stride, 16);
-    gl.vertexAttribDivisor(this.attrs.iData1, 1);
+    for (let i = 0; i < 4; i += 1) {
+      const location = 2 + i;
+      gl.enableVertexAttribArray(location);
+      gl.vertexAttribPointer(location, 4, gl.FLOAT, false, stride, i * 16);
+      gl.vertexAttribDivisor(location, 1);
+    }
 
     gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
@@ -130,14 +177,13 @@ export default class BuildingRenderer {
     updateDynamicBuffer(this.gl, this.instanceBuffer, this.instanceData, floats);
   }
 
-  render(cameraState, pitchMix = 0) {
+  render(cameraState) {
     if (this.count <= 0) return;
     const gl = this.gl;
     gl.useProgram(this.program);
     gl.bindVertexArray(this.vao);
     gl.uniformMatrix4fv(this.uniforms.uViewProj, false, new Float32Array(cameraState.viewProjection));
-    gl.uniform1f(this.uniforms.uPitchMix, Math.max(0, Math.min(1, Number(pitchMix) || 0)));
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vertexCount, this.count);
     gl.bindVertexArray(null);
     gl.useProgram(null);
   }
@@ -147,7 +193,7 @@ export default class BuildingRenderer {
     if (!gl) return;
     if (this.program) gl.deleteProgram(this.program);
     if (this.instanceBuffer) gl.deleteBuffer(this.instanceBuffer);
-    if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer);
+    if (this.vertexBuffer) gl.deleteBuffer(this.vertexBuffer);
     if (this.vao) gl.deleteVertexArray(this.vao);
   }
 }

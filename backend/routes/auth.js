@@ -25,6 +25,9 @@ const {
   listApprovedNodesByNames
 } = require('../services/domainGraphTraversalService');
 const KnowledgeDistributionService = require('../services/KnowledgeDistributionService');
+const {
+  ensureUserBattlefieldInventory
+} = require('../services/battlefieldInventoryService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -1078,6 +1081,11 @@ router.post('/register', async (req, res) => {
       role: 'common'
     });
     await user.save();
+    await ensureUserBattlefieldInventory(user, {
+      defaultCount: 5,
+      persist: true,
+      reason: 'auth:register'
+    });
 
     // 生成token
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
@@ -1119,6 +1127,12 @@ router.post('/login', async (req, res) => {
     if (!validPassword) {
       return res.status(401).json({ error: '用户名或密码错误' });
     }
+
+    await ensureUserBattlefieldInventory(user, {
+      defaultCount: 5,
+      persist: true,
+      reason: 'auth:login'
+    });
 
     // 生成token
     const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });

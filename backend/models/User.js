@@ -180,6 +180,19 @@ const ArmyTemplateSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const BattlefieldItemInventoryEntrySchema = new mongoose.Schema({
+  itemId: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  count: {
+    type: Number,
+    default: 0,
+    min: 0
+  }
+}, { _id: false });
+
 const IntelGateDefenseEntrySchema = new mongoose.Schema({
   unitTypeId: {
     type: String,
@@ -391,6 +404,10 @@ const userSchema = new mongoose.Schema({
   },
   armyTemplates: {
     type: [ArmyTemplateSchema],
+    default: []
+  },
+  battlefieldItemInventory: {
+    type: [BattlefieldItemInventoryEntrySchema],
     default: []
   },
   intelDomainSnapshots: {

@@ -9,6 +9,7 @@ const ArmyUnitType = require('../models/ArmyUnitType');
 const UnitComponent = require('../models/UnitComponent');
 const BattlefieldItem = require('../models/BattlefieldItem');
 const CityBuildingType = require('../models/CityBuildingType');
+const DomainDefenseLayout = require('../models/DomainDefenseLayout');
 const { buildUnitCatalog } = require('../seed/unitCatalogFactory');
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/strategy-game';
@@ -93,6 +94,9 @@ const upsertByKey = async (Model, rows = [], keyName = '', { replace = false } =
 
 const run = async () => {
   const data = loadBootstrapData();
+  const battlefieldItemIds = uniqByKey(data.battlefieldItems, 'itemId')
+    .map((item) => item.itemId)
+    .filter(Boolean);
   const generatedCatalog = buildUnitCatalog({
     unitComponents: data.unitComponents,
     unitTypesPatch: data.unitTypesPatch
@@ -104,9 +108,28 @@ const run = async () => {
   const [armyResult, componentResult, itemResult, buildingResult] = await Promise.all([
     upsertByKey(ArmyUnitType, generatedCatalog.unitTypes, 'unitTypeId', { replace: true }),
     upsertByKey(UnitComponent, generatedCatalog.unitComponents, 'componentId', { replace: true }),
-    upsertByKey(BattlefieldItem, data.battlefieldItems, 'itemId'),
+    upsertByKey(BattlefieldItem, data.battlefieldItems, 'itemId', { replace: true }),
     upsertByKey(CityBuildingType, data.cityBuildingTypes, 'buildingTypeId')
   ]);
+
+  // 清理旧版/失效物品在布局中的残留数据（仅保留当前目录内 itemId）。
+  let cleanedLayouts = { matchedCount: 0, modifiedCount: 0 };
+  if (battlefieldItemIds.length > 0) {
+    const cleanupRes = await DomainDefenseLayout.updateMany(
+      {},
+      {
+        $pull: {
+          battlefieldObjects: { itemId: { $nin: battlefieldItemIds } },
+          battlefieldItems: { itemId: { $nin: battlefieldItemIds } },
+          'battlefieldLayout.objects': { itemId: { $nin: battlefieldItemIds } }
+        }
+      }
+    );
+    cleanedLayouts = {
+      matchedCount: Number(cleanupRes?.matchedCount || 0),
+      modifiedCount: Number(cleanupRes?.modifiedCount || 0)
+    };
+  }
 
   const [armyCount, componentCount, itemCount, buildingCount] = await Promise.all([
     ArmyUnitType.countDocuments(),
@@ -123,6 +146,10 @@ const run = async () => {
       unitComponents: componentResult,
       battlefieldItems: itemResult,
       cityBuildingTypes: buildingResult
+    },
+    cleanup: {
+      battlefieldCatalogReplace: true,
+      removedLegacyLayoutObjectsOutsideCatalog: cleanedLayouts
     },
     counts: {
       armyUnitTypes: armyCount,

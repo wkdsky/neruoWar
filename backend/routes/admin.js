@@ -442,6 +442,63 @@ const parseBattlefieldItemPayload = (body, { create = false } = {}) => {
   if (Object.prototype.hasOwnProperty.call(source, 'enabled')) {
     parsed.enabled = source.enabled !== false;
   }
+  if (Object.prototype.hasOwnProperty.call(source, 'description')) {
+    parsed.description = typeof source.description === 'string' ? source.description.trim().slice(0, 2048) : '';
+  }
+
+  const parseMixedObjectField = (key) => {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) return;
+    const value = source[key];
+    if (value === null) {
+      parsed[key] = null;
+      return;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      errors.push(`${key} 必须是对象`);
+      return;
+    }
+    parsed[key] = value;
+  };
+
+  const parseMixedArrayField = (key, maxLen = 64) => {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) return;
+    if (!Array.isArray(source[key])) {
+      errors.push(`${key} 必须是数组`);
+      return;
+    }
+    parsed[key] = source[key]
+      .filter((row) => row && typeof row === 'object')
+      .slice(0, maxLen);
+  };
+
+  parseMixedObjectField('collider');
+  parseMixedObjectField('renderProfile');
+  parseMixedArrayField('interactions', 64);
+  parseMixedArrayField('sockets', 64);
+
+  if (Object.prototype.hasOwnProperty.call(source, 'maxStack')) {
+    if (source.maxStack === null || source.maxStack === '') {
+      parsed.maxStack = null;
+    } else {
+      const value = Math.floor(Number(source.maxStack));
+      if (!Number.isFinite(value) || value < 1 || value > 31) {
+        errors.push('maxStack 必须是 1-31 或 null');
+      } else {
+        parsed.maxStack = value;
+      }
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'requiresSupport')) {
+    parsed.requiresSupport = !!source.requiresSupport;
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'snapPriority')) {
+    const value = Number(source.snapPriority);
+    if (!Number.isFinite(value)) {
+      errors.push('snapPriority 必须是数字');
+    } else {
+      parsed.snapPriority = value;
+    }
+  }
   parseStyleField(source, parsed, errors);
   return { parsed, errors };
 };
