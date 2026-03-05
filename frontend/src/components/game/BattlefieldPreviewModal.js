@@ -11,9 +11,11 @@ import {
 import { BACKEND_ORIGIN } from '../../runtimeConfig';
 import {
   getItemGeometry,
+  buildWorldColliderParts,
   collidersOverlap2D,
   pointInsideCollider2D,
-  getSocketWorldPose
+  getSocketWorldPose,
+  resolveBattleLayerColors
 } from '../../game/battlefield/items/itemGeometryRegistry';
 
 const CAMERA_ANGLE_PREVIEW = 45;
@@ -24,7 +26,7 @@ const CAMERA_ROTATE_SENSITIVITY = 0.38;
 const CAMERA_ROTATE_CLICK_THRESHOLD = 4;
 const FIELD_WIDTH = 900;
 const FIELD_HEIGHT = 620;
-const MAX_STACK_LEVEL = 5;
+const MAX_STACK_LEVEL = 31;
 const BASE_DEFENSE = 1.1;
 const BASE_HP = 240;
 const WALL_WIDTH = 104;
@@ -128,12 +130,6 @@ const parseHexColor = (value, fallback = 0xffffff) => {
   return Number.parseInt(text, 16);
 };
 
-const clampStyleNumber = (value, fallback, min, max) => {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return Math.max(min, Math.min(max, num));
-};
-
 const lerp = (a, b, t) => (a + ((b - a) * t));
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const easeOutCubic = (t) => (1 - ((1 - t) ** 3));
@@ -155,7 +151,8 @@ const getCameraConfig = (tiltDeg, yawDeg = CAMERA_YAW_DEFAULT) => {
 };
 
 const getWallBaseZ = (wall = {}) => (
-  Math.max(0, Math.floor(Number(wall?.z) || 0)) * STACK_LAYER_HEIGHT
+  Math.max(0, Math.floor(Number(wall?.z) || 0))
+  * Math.max(10, Number(wall?.height) || STACK_LAYER_HEIGHT)
 );
 
 const getWallTopZ = (wall = {}) => (
@@ -634,6 +631,83 @@ const resolveItemStackLimit = (itemDef = null) => {
   return MAX_STACK_LEVEL;
 };
 
+const isWoodPillarItem = (itemDef = {}) => {
+  const itemId = typeof itemDef?.itemId === 'string' ? itemDef.itemId.trim().toLowerCase() : '';
+  const shape = typeof itemDef?.style?.shape === 'string' ? itemDef.style.shape.trim().toLowerCase() : '';
+  return itemId === 'it_build_wood_pillar' || shape === 'pillar';
+};
+
+const isWoodPlankItem = (itemDef = {}) => {
+  const itemId = typeof itemDef?.itemId === 'string' ? itemDef.itemId.trim().toLowerCase() : '';
+  const shape = typeof itemDef?.style?.shape === 'string' ? itemDef.style.shape.trim().toLowerCase() : '';
+  return itemId === 'it_build_wood_plank' || shape === 'plank';
+};
+
+const deriveItemIdentityTags = (itemDef = {}) => {
+  const tags = new Set();
+  const rawItemId = typeof itemDef?.itemId === 'string' ? itemDef.itemId.trim().toLowerCase() : '';
+  if (rawItemId) {
+    tags.add(rawItemId);
+    rawItemId
+      .split('_')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .forEach((part) => tags.add(part));
+    const core = rawItemId
+      .replace(/^it_/, '')
+      .replace(/^(build|cover|terrain|trap|hazard|support)_/, '');
+    if (core) tags.add(core);
+  }
+  const styleShape = typeof itemDef?.style?.shape === 'string' ? itemDef.style.shape.trim().toLowerCase() : '';
+  if (styleShape) tags.add(styleShape);
+  return tags;
+};
+
+const getItemLocalMinZ = (itemDef = null) => {
+  const parts = getItemGeometry(itemDef || {}).collider?.parts || [];
+  if (!Array.isArray(parts) || parts.length <= 0) return 0;
+  let minZ = Infinity;
+  parts.forEach((part) => {
+    const cz = Number(part?.cz) || 0;
+    const h = Math.max(1, Number(part?.h) || 1);
+    minZ = Math.min(minZ, cz - (h * 0.5));
+  });
+  return Number.isFinite(minZ) ? minZ : 0;
+};
+
+const getItemLocalZBounds = (itemDef = null) => {
+  const parts = getItemGeometry(itemDef || {}).collider?.parts || [];
+  if (!Array.isArray(parts) || parts.length <= 0) {
+    const h = Math.max(1, Number(itemDef?.height) || WALL_HEIGHT);
+    return {
+      minZ: 0,
+      maxZ: h,
+      centerZ: h * 0.5
+    };
+  }
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  parts.forEach((part) => {
+    const cz = Number(part?.cz) || 0;
+    const h = Math.max(1, Number(part?.h) || 1);
+    minZ = Math.min(minZ, cz - (h * 0.5));
+    maxZ = Math.max(maxZ, cz + (h * 0.5));
+  });
+  if (!Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    const h = Math.max(1, Number(itemDef?.height) || WALL_HEIGHT);
+    return {
+      minZ: 0,
+      maxZ: h,
+      centerZ: h * 0.5
+    };
+  }
+  return {
+    minZ,
+    maxZ,
+    centerZ: (minZ + maxZ) * 0.5
+  };
+};
+
 const pointInWallFootprint = (point, wall, itemCatalogById = new Map(), padding = 0) => {
   const itemDef = resolveWallItemDef(wall, itemCatalogById);
   return pointInsideCollider2D(
@@ -789,40 +863,277 @@ const getPlacementReasonText = (reason) => {
   return '';
 };
 
-const areSocketCompatible = (parentSocket = {}, childSocket = {}) => {
+const areSocketCompatible = (parentSocket = {}, childSocket = {}, parentItemDef = null, childItemDef = null) => {
   const parentTags = (Array.isArray(parentSocket?.compatibleTags) ? parentSocket.compatibleTags : [])
     .map((tag) => (typeof tag === 'string' ? tag.trim() : ''))
+    .map((tag) => tag.toLowerCase())
     .filter(Boolean);
   const childTags = (Array.isArray(childSocket?.compatibleTags) ? childSocket.compatibleTags : [])
     .map((tag) => (typeof tag === 'string' ? tag.trim() : ''))
+    .map((tag) => tag.toLowerCase())
     .filter(Boolean);
+  if (parentTags.length <= 0 && childTags.length <= 0) return true;
+  const parentTagSet = new Set(parentTags);
+  const childTagSet = new Set(childTags);
+  const parentIdentity = deriveItemIdentityTags(parentItemDef || {});
+  const childIdentity = deriveItemIdentityTags(childItemDef || {});
+  if (parentTags.length > 0 && childIdentity.size > 0) {
+    for (const tag of childIdentity) {
+      if (parentTagSet.has(tag)) return true;
+    }
+  }
+  if (childTags.length > 0 && parentIdentity.size > 0) {
+    for (const tag of parentIdentity) {
+      if (childTagSet.has(tag)) return true;
+    }
+  }
   if (parentTags.length <= 0 || childTags.length <= 0) return true;
   return parentTags.some((tag) => childTags.includes(tag));
+};
+
+const dotAxis = (a = {}, b = {}) => (
+  ((Number(a?.x) || 0) * (Number(b?.x) || 0))
+  + ((Number(a?.y) || 0) * (Number(b?.y) || 0))
+);
+
+const solvePillarPlankFaceSnap = ({
+  ghostBase,
+  ghostItemDef,
+  walls = [],
+  itemCatalogById = new Map(),
+  mouseWorld = null,
+  mouseHint = null,
+  ignoreAnchorIds = [],
+  fieldWidth,
+  fieldHeight
+}) => {
+  if (!isWoodPlankItem(ghostItemDef) || !mouseWorld) return null;
+  if (!mouseHint || typeof mouseHint !== 'object' || typeof mouseHint?.anchorId !== 'string' || !mouseHint.anchorId) {
+    return null;
+  }
+  const mode = ghostBase?._pillarSnapMode === 'short' ? 'short' : 'long';
+  const ghostLayerHeight = Math.max(
+    1,
+    Number(ghostBase?.height) || Number(ghostItemDef?.height) || STACK_LAYER_HEIGHT
+  );
+  const ghostStackLimit = resolveItemStackLimit(ghostItemDef);
+  const ghostZBounds = getItemLocalZBounds(ghostItemDef);
+  const protrusionFaceDefs = [
+    { side: 'right', localNormal: { x: 1, y: 0 }, localTangent: { x: 0, y: 1 }, halfKey: 'w' },
+    { side: 'left', localNormal: { x: -1, y: 0 }, localTangent: { x: 0, y: 1 }, halfKey: 'w' },
+    { side: 'front', localNormal: { x: 0, y: 1 }, localTangent: { x: -1, y: 0 }, halfKey: 'd' },
+    { side: 'back', localNormal: { x: 0, y: -1 }, localTangent: { x: 1, y: 0 }, halfKey: 'd' }
+  ];
+  const ignoreSet = new Set((Array.isArray(ignoreAnchorIds) ? ignoreAnchorIds : []).filter(Boolean));
+  let best = null;
+
+  walls.forEach((anchor) => {
+    if (!anchor || anchor.id === ghostBase.id) return;
+    if (ignoreSet.has(anchor.id)) return;
+    if (anchor.id !== mouseHint.anchorId) return;
+    const anchorItemDef = resolveWallItemDef(anchor, itemCatalogById);
+    if (!isWoodPillarItem(anchorItemDef)) return;
+    const anchorGeomParts = Array.isArray(getItemGeometry(anchorItemDef)?.collider?.parts)
+      ? getItemGeometry(anchorItemDef).collider.parts
+      : [];
+    if (anchorGeomParts.length <= 0) return;
+
+    const minFootprintArea = anchorGeomParts.reduce(
+      (min, part) => Math.min(min, Math.max(1, Number(part?.w) || 1) * Math.max(1, Number(part?.d) || 1)),
+      Infinity
+    );
+    const protrusions = anchorGeomParts
+      .map((part, index) => ({ part, index }))
+      .filter((row) => {
+        const area = Math.max(1, Number(row?.part?.w) || 1) * Math.max(1, Number(row?.part?.d) || 1);
+        return area >= (minFootprintArea * 1.2);
+      });
+    const targetPartsRaw = protrusions.length > 0
+      ? protrusions
+      : anchorGeomParts.map((part, index) => ({ part, index }));
+    const anchorBaseZ = getWallBaseZ(anchor);
+    const targetParts = targetPartsRaw.map((row) => {
+      const part = row.part || {};
+      const area = Math.max(1, Number(part?.w) || 1) * Math.max(1, Number(part?.d) || 1);
+      const centerZ = anchorBaseZ + (Number(part?.cz) || 0);
+      return {
+        index: row.index,
+        part,
+        area,
+        centerZ
+      };
+    });
+    let targetRows = targetParts;
+    const hintMatchesAnchor = (
+      mouseHint
+      && typeof mouseHint === 'object'
+      && mouseHint.anchorId === anchor.id
+    );
+    if (hintMatchesAnchor) {
+      const hintedPartIndex = Number.isFinite(Number(mouseHint?.partIndex))
+        ? Math.floor(Number(mouseHint.partIndex))
+        : null;
+      if (hintedPartIndex !== null) {
+        const byPart = targetParts.filter((row) => row.index === hintedPartIndex);
+        if (byPart.length > 0) {
+          targetRows = byPart;
+        } else {
+          return;
+        }
+      } else if (Number.isFinite(Number(mouseHint?.hitZ))) {
+        const hitZ = Number(mouseHint.hitZ);
+        let bestRow = null;
+        let bestDist = Infinity;
+        targetParts.forEach((row) => {
+          const dist = Math.abs((Number(row?.centerZ) || 0) - hitZ);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestRow = row;
+          }
+        });
+        if (bestRow) targetRows = [bestRow];
+      }
+    }
+
+    targetRows.forEach((row) => {
+      const part = row.part || {};
+      const partIndex = row.index;
+      const partYaw = normalizeDeg((Number(anchor?.rotation) || 0) + (Number(part?.yawDeg) || 0));
+      const rotatedOffset = rotate2D(Number(part?.cx) || 0, Number(part?.cy) || 0, Number(anchor?.rotation) || 0);
+      const partCenter = {
+        x: (Number(anchor?.x) || 0) + rotatedOffset.x,
+        y: (Number(anchor?.y) || 0) + rotatedOffset.y
+      };
+      const partHalfW = Math.max(1, Number(part?.w) || 1) * 0.5;
+      const partHalfD = Math.max(1, Number(part?.d) || 1) * 0.5;
+      const partCenterZ = anchorBaseZ + (Number(part?.cz) || 0);
+      const partBottomZ = partCenterZ - (Math.max(1, Number(part?.h) || 1) * 0.5);
+      const partTopZ = partCenterZ + (Math.max(1, Number(part?.h) || 1) * 0.5);
+
+      protrusionFaceDefs.forEach((faceDef) => {
+        const normal = rotate2D(faceDef.localNormal.x, faceDef.localNormal.y, partYaw);
+        const tangent = rotate2D(faceDef.localTangent.x, faceDef.localTangent.y, partYaw);
+        const partHalf = faceDef.halfKey === 'w' ? partHalfW : partHalfD;
+        const faceCenter = {
+          x: partCenter.x + (normal.x * partHalf),
+          y: partCenter.y + (normal.y * partHalf)
+        };
+        const pointerX = (
+          hintMatchesAnchor
+          && Number.isFinite(Number(mouseHint?.hitX))
+          && (Number.isFinite(Number(mouseHint?.partIndex)) ? Math.floor(Number(mouseHint.partIndex)) === partIndex : true)
+        )
+          ? Number(mouseHint.hitX)
+          : (Number(mouseWorld?.x) || 0);
+        const pointerY = (
+          hintMatchesAnchor
+          && Number.isFinite(Number(mouseHint?.hitY))
+          && (Number.isFinite(Number(mouseHint?.partIndex)) ? Math.floor(Number(mouseHint.partIndex)) === partIndex : true)
+        )
+          ? Number(mouseHint.hitY)
+          : (Number(mouseWorld?.y) || 0);
+        const fromFace = {
+          x: pointerX - faceCenter.x,
+          y: pointerY - faceCenter.y
+        };
+        const faceDist = Math.abs(dotAxis(fromFace, normal));
+        const faceThickness = Math.max(4, partHalf * 0.35);
+        const faceActivationDist = mode === 'long'
+          ? Math.max(8, Math.min(16, faceThickness + 4))
+          : Math.max(6, Math.min(12, faceThickness + 2));
+        if (faceDist > faceActivationDist) return;
+
+        const slideRaw = dotAxis(fromFace, tangent);
+        const shortSnapTolerance = Math.max(6, Math.min(16, (faceDef.halfKey === 'w' ? partHalfD : partHalfW) * 0.5));
+        if (mode === 'short' && Math.abs(slideRaw) > shortSnapTolerance) return;
+        const slideLimit = mode === 'long'
+          ? Math.max(24, Math.min(84, (faceDef.halfKey === 'w' ? partHalfD : partHalfW) + 48))
+          : Math.max(10, (faceDef.halfKey === 'w' ? partHalfD : partHalfW));
+        const slide = mode === 'long'
+          ? Math.max(-slideLimit, Math.min(slideLimit, slideRaw))
+          : 0;
+        const normalYaw = normalizeDeg((Math.atan2(normal.y, normal.x) * 180) / Math.PI);
+        const rotation = mode === 'long' ? normalizeDeg(normalYaw + 90) : normalYaw;
+        const ghostLike = {
+          ...ghostBase,
+          rotation
+        };
+        const ghostHalfNormal = getProjectedHalfExtent(ghostLike, normal);
+        const candidateCenter = {
+          x: faceCenter.x + (normal.x * ghostHalfNormal) + (tangent.x * slide),
+          y: faceCenter.y + (normal.y * ghostHalfNormal) + (tangent.y * slide)
+        };
+        const desiredBaseZ = partCenterZ - ghostZBounds.centerZ;
+        const rawStackZ = Math.max(0, Math.round(desiredBaseZ / ghostLayerHeight));
+        const stackZ = Math.max(0, Math.min(ghostStackLimit - 1, rawStackZ));
+        const candidate = {
+          ...ghostBase,
+          x: candidateCenter.x,
+          y: candidateCenter.y,
+          z: stackZ,
+          rotation,
+          _pillarSnapMode: mode,
+          attach: {
+            parentObjectId: anchor.id,
+            parentSocketId: `pillar_protrusion_${partIndex}_${faceDef.side}`,
+            childSocketId: mode === 'long' ? 'long_edge' : 'short_edge'
+          },
+          groupId: ghostBase.groupId || anchor.groupId || anchor.id
+        };
+        const candidateMinZ = (stackZ * ghostLayerHeight) + ghostZBounds.minZ;
+        const candidateMaxZ = (stackZ * ghostLayerHeight) + ghostZBounds.maxZ;
+        const verticalOverlap = Math.min(candidateMaxZ, partTopZ) - Math.max(candidateMinZ, partBottomZ);
+        if (verticalOverlap < Math.max(2, Math.min(8, (Number(part?.h) || 1) * 0.3))) return;
+        if (isOutOfBounds(candidate, fieldWidth, fieldHeight, itemCatalogById)) return;
+        if (hasCollision(candidate, walls, itemCatalogById, [...ignoreSet, anchor.id])) return;
+        const score = (faceDist * 0.55) + (Math.abs(slideRaw - slide) * 0.1);
+        if (!best || score < best.score) {
+          best = {
+            score,
+            ghost: candidate,
+            snap: {
+              type: 'pillar-face',
+              anchorId: anchor.id,
+              face: faceDef.side,
+              protrusion: partIndex,
+              orientationMode: mode
+            }
+          };
+        }
+      });
+    });
+  });
+
+  return best ? { ghost: best.ghost, snap: best.snap, blocked: false, reason: '' } : null;
 };
 
 const solveSocketSnap = ({
   ghostBase,
   walls = [],
   itemCatalogById = new Map(),
+  mouseWorld = null,
+  ignoreAnchorIds = [],
   fieldWidth,
   fieldHeight
 }) => {
   const ghostItemDef = resolveWallItemDef(ghostBase, itemCatalogById);
   const ghostSockets = getItemGeometry(ghostItemDef).sockets || [];
   if (ghostSockets.length <= 0) return null;
+  const ignoreSet = new Set((Array.isArray(ignoreAnchorIds) ? ignoreAnchorIds : []).filter(Boolean));
   let best = null;
 
   walls.forEach((anchor) => {
     if (!anchor || anchor.id === ghostBase.id) return;
-    if (anchor.z !== ghostBase.z) return;
+    if (ignoreSet.has(anchor.id)) return;
     const anchorItemDef = resolveWallItemDef(anchor, itemCatalogById);
+    if (isWoodPlankItem(ghostItemDef) && isWoodPillarItem(anchorItemDef)) return;
     const anchorSockets = getItemGeometry(anchorItemDef).sockets || [];
     if (anchorSockets.length <= 0) return;
 
     anchorSockets.forEach((parentSocket) => {
       const parentPose = getSocketWorldPose(anchor, parentSocket);
       ghostSockets.forEach((childSocket) => {
-        if (!areSocketCompatible(parentSocket, childSocket)) return;
+        if (!areSocketCompatible(parentSocket, childSocket, anchorItemDef, ghostItemDef)) return;
         const parentSnapDist = Number(parentSocket?.snap?.dist);
         const childSnapDist = Number(childSocket?.snap?.dist);
         const snapDist = Math.max(
@@ -844,10 +1155,39 @@ const solveSocketSnap = ({
           Number(childSocket?.localPose?.y) || 0,
           rotation
         );
+        const ghostLayerHeight = Math.max(
+          1,
+          Number(ghostBase?.height) || Number(ghostItemDef?.height) || STACK_LAYER_HEIGHT
+        );
+        const desiredBaseZ = (Number(parentPose?.z) || 0) - (Number(childSocket?.localPose?.z) || 0);
+        const socketStackZ = Math.max(
+          0,
+          Math.round(desiredBaseZ / ghostLayerHeight)
+        );
+        const ghostStackLimit = resolveItemStackLimit(ghostItemDef);
+        const anchorHeight = Math.max(
+          1,
+          Number(anchor?.height) || Number(anchorItemDef?.height) || STACK_LAYER_HEIGHT
+        );
+        const anchorTopZ = getWallBaseZ(anchor) + anchorHeight;
+        const parentSocketLocalZ = Number(parentSocket?.localPose?.z) || 0;
+        const topSocketThreshold = anchorHeight - Math.max(4, anchorHeight * 0.12);
+        const ghostMinLocalZ = getItemLocalMinZ(ghostItemDef);
+        let adjustedStackZ = socketStackZ;
+        if (parentSocketLocalZ >= topSocketThreshold) {
+          const candidateMinWorldZ = (adjustedStackZ * ghostLayerHeight) + ghostMinLocalZ;
+          if (candidateMinWorldZ < anchorTopZ - 0.01) {
+            adjustedStackZ = Math.max(
+              adjustedStackZ,
+              Math.ceil((anchorTopZ - ghostMinLocalZ) / ghostLayerHeight)
+            );
+          }
+        }
         const candidate = {
           ...ghostBase,
           x: parentPose.x - childOffset.x,
           y: parentPose.y - childOffset.y,
+          z: Math.max(0, Math.min(ghostStackLimit - 1, adjustedStackZ)),
           rotation,
           attach: {
             parentObjectId: anchor.id,
@@ -856,12 +1196,15 @@ const solveSocketSnap = ({
           },
           groupId: ghostBase.groupId || anchor.groupId || anchor.id
         };
-        const childWorldPose = getSocketWorldPose(candidate, childSocket);
-        const dist = Math.hypot(parentPose.x - childWorldPose.x, parentPose.y - childWorldPose.y);
-        if (dist > snapDist) return;
+        const pointerDist = mouseWorld
+          ? Math.hypot((Number(mouseWorld?.x) || 0) - parentPose.x, (Number(mouseWorld?.y) || 0) - parentPose.y)
+          : Math.hypot(candidate.x - ghostBase.x, candidate.y - ghostBase.y);
+        const socketOffsetDist = Math.hypot(candidate.x - ghostBase.x, candidate.y - ghostBase.y);
+        const activationDist = Math.max(18, snapDist);
+        if (pointerDist > activationDist) return;
         if (isOutOfBounds(candidate, fieldWidth, fieldHeight, itemCatalogById)) return;
-        if (hasCollision(candidate, walls, itemCatalogById, [anchor.id])) return;
-        const score = dist + (angleDistanceDeg(rotation, ghostBase.rotation) * 0.05);
+        if (hasCollision(candidate, walls, itemCatalogById, [...ignoreSet, anchor.id])) return;
+        const score = pointerDist + (socketOffsetDist * 0.15) + (angleDistanceDeg(rotation, ghostBase.rotation) * 0.05);
         if (!best || score < best.score) {
           best = {
             score,
@@ -885,35 +1228,99 @@ const solveMagneticSnap = ({
   candidateGhost,
   walls,
   mouseWorld,
+  mouseHint = null,
   fieldWidth,
   fieldHeight,
   itemCatalogById
 }) => {
   const ghostItemDef = resolveWallItemDef(candidateGhost, itemCatalogById);
   const ghostStackLimit = resolveItemStackLimit(ghostItemDef);
+  const sourceId = (
+    candidateGhost?._mode === 'move'
+    && typeof candidateGhost?._sourceId === 'string'
+    && candidateGhost._sourceId.trim()
+  )
+    ? candidateGhost._sourceId.trim()
+    : '';
+  const ignoreAnchorIds = sourceId ? [sourceId] : [];
+  const wallsForSnap = Array.isArray(walls)
+    ? walls.filter((wall) => !(sourceId && wall?.id === sourceId))
+    : [];
   const ghostBase = {
     ...candidateGhost,
     z: Math.max(0, Math.min(ghostStackLimit - 1, Math.floor(Number(candidateGhost?.z) || 0))),
     rotation: normalizeDeg(candidateGhost?.rotation || 0),
+    _pillarSnapMode: candidateGhost?._pillarSnapMode === 'short' ? 'short' : 'long',
     attach: candidateGhost?.attach && typeof candidateGhost.attach === 'object' ? candidateGhost.attach : null,
     groupId: typeof candidateGhost?.groupId === 'string' ? candidateGhost.groupId : ''
   };
 
+  const pillarFaceSnap = solvePillarPlankFaceSnap({
+    ghostBase,
+    ghostItemDef,
+    walls: wallsForSnap,
+    itemCatalogById,
+    mouseWorld,
+    mouseHint,
+    ignoreAnchorIds,
+    fieldWidth,
+    fieldHeight
+  });
+  if (pillarFaceSnap) return pillarFaceSnap;
+
+  if (isWoodPlankItem(ghostItemDef)) {
+    const freeGhost = { ...ghostBase, z: 0, attach: null, groupId: '' };
+    if (isOutOfBounds(freeGhost, fieldWidth, fieldHeight, itemCatalogById)) {
+      return {
+        ghost: freeGhost,
+        snap: null,
+        blocked: true,
+        reason: 'out_of_bounds'
+      };
+    }
+    if (hasCollision(freeGhost, walls, itemCatalogById, ignoreAnchorIds)) {
+      return {
+        ghost: freeGhost,
+        snap: null,
+        blocked: true,
+        reason: 'collision'
+      };
+    }
+    return {
+      ghost: freeGhost,
+      snap: null,
+      blocked: false,
+      reason: ''
+    };
+  }
+
   const socketSnap = solveSocketSnap({
     ghostBase,
-    walls,
+    walls: wallsForSnap,
     itemCatalogById,
+    mouseWorld,
+    ignoreAnchorIds,
     fieldWidth,
     fieldHeight
   });
   if (socketSnap) return socketSnap;
 
-  const sortedWalls = [...walls].sort((a, b) => (b.z - a.z));
+  const sortedWalls = [...wallsForSnap].sort((a, b) => (b.z - a.z));
   let stackLimitHit = false;
 
   for (const wall of sortedWalls) {
     if (!pointInWallFootprint(mouseWorld, wall, itemCatalogById, 0.2)) continue;
-    if (wall.z >= ghostStackLimit - 1) {
+    const ghostLayerHeight = Math.max(
+      1,
+      Number(ghostBase?.height) || Number(ghostItemDef?.height) || STACK_LAYER_HEIGHT
+    );
+    const ghostMinLocalZ = getItemLocalMinZ(ghostItemDef);
+    const requiredBaseZ = getWallTopZ(wall);
+    const requiredStackZ = Math.max(
+      0,
+      Math.ceil((requiredBaseZ - ghostMinLocalZ) / ghostLayerHeight)
+    );
+    if (requiredStackZ >= ghostStackLimit) {
       stackLimitHit = true;
       continue;
     }
@@ -921,7 +1328,7 @@ const solveMagneticSnap = ({
       ...ghostBase,
       x: wall.x,
       y: wall.y,
-      z: wall.z + 1,
+      z: requiredStackZ,
       rotation: normalizeDeg(wall.rotation),
       attach: null,
       groupId: ''
@@ -934,7 +1341,7 @@ const solveMagneticSnap = ({
         reason: 'out_of_bounds'
       };
     }
-    if (hasCollision(topGhost, walls, itemCatalogById)) {
+    if (hasCollision(topGhost, walls, itemCatalogById, ignoreAnchorIds)) {
       return {
         ghost: topGhost,
         snap: { type: 'top', anchorId: wall.id },
@@ -960,7 +1367,7 @@ const solveMagneticSnap = ({
     { side: 'back', localNormal: { x: 0, y: -1 }, halfKey: 'depth' }
   ];
 
-  walls.forEach((anchor) => {
+  wallsForSnap.forEach((anchor) => {
     sideDefs.forEach((face) => {
       const normal = rotate2D(face.localNormal.x, face.localNormal.y, anchor.rotation);
       const anchorHalf = face.halfKey === 'width' ? (anchor.width / 2) : (anchor.depth / 2);
@@ -992,7 +1399,7 @@ const solveMagneticSnap = ({
         };
 
         if (isOutOfBounds(candidate, fieldWidth, fieldHeight, itemCatalogById)) return;
-        if (hasCollision(candidate, walls, itemCatalogById)) return;
+        if (hasCollision(candidate, walls, itemCatalogById, ignoreAnchorIds)) return;
 
         const requiredNormal = { x: -normal.x, y: -normal.y };
         const faceNormals = getGhostNormalsByYaw(candidate.rotation);
@@ -1048,7 +1455,7 @@ const solveMagneticSnap = ({
       { side: 'edge-bottom', dist: (safeFieldHeight / 2) - clamped.y }
     ];
     const edge = edgeDistances.reduce((acc, item) => (item.dist < acc.dist ? item : acc), edgeDistances[0]);
-    if (hasCollision(clamped, walls, itemCatalogById)) {
+    if (hasCollision(clamped, walls, itemCatalogById, ignoreAnchorIds)) {
       return {
         ghost: clamped,
         snap: { type: edge.side, anchorId: '' },
@@ -1089,7 +1496,7 @@ const solveMagneticSnap = ({
       reason: 'out_of_bounds'
     };
   }
-  if (hasCollision(freeGhost, walls, itemCatalogById)) {
+  if (hasCollision(freeGhost, walls, itemCatalogById, ignoreAnchorIds)) {
     return {
       ghost: freeGhost,
       snap: null,
@@ -1111,11 +1518,13 @@ const evaluateGhostPlacement = (
   mouseWorld,
   fieldWidth = FIELD_WIDTH,
   fieldHeight = FIELD_HEIGHT,
-  itemCatalogById = new Map()
+  itemCatalogById = new Map(),
+  mouseHint = null
 ) => solveMagneticSnap({
   candidateGhost,
   walls,
   mouseWorld,
+  mouseHint,
   fieldWidth,
   fieldHeight,
   itemCatalogById
@@ -1310,6 +1719,7 @@ const BattlefieldPreviewModal = ({
   gateKey = 'cheng',
   gateLabel = '',
   canEdit = false,
+  overlayTopOffsetPx = null,
   layoutBundleOverride = null,
   onSaved = null,
   onClose
@@ -1325,6 +1735,8 @@ const BattlefieldPreviewModal = ({
   const wallActionButtonsRef = useRef([]);
   const defenderActionButtonsRef = useRef([]);
   const mouseWorldRef = useRef({ x: 0, y: 0 });
+  const mouseScreenRef = useRef({ x: 0, y: 0, valid: false });
+  const mousePillarSnapHintRef = useRef(null);
   const panWorldRef = useRef({ x: 0, y: 0 });
   const editSessionWallsRef = useRef(null);
   const editSessionDefenderDeploymentsRef = useRef(null);
@@ -1624,7 +2036,7 @@ const BattlefieldPreviewModal = ({
     return unprojectScreen(sx, sy, viewport, cameraAngle, cameraYaw, worldScale);
   }, [cameraAngle, cameraYaw, viewport, worldScale]);
 
-  const pickWallFromScreenPoint = useCallback((sx, sy) => {
+  const pickWallMeshHitFromScreenPoint = useCallback((sx, sy) => {
     const three = threeRef.current;
     const camera = three?.camera;
     const pickableWallMeshes = Array.isArray(three?.pickableWallMeshes) ? three.pickableWallMeshes : [];
@@ -1641,10 +2053,31 @@ const BattlefieldPreviewModal = ({
     raycasterRef.current.setFromCamera(ndc, camera);
     const hits = raycasterRef.current.intersectObjects(pickableWallMeshes, false);
     if (!hits || hits.length === 0) return null;
-    const wallId = hits[0]?.object?.userData?.wallId;
+    const hit = hits[0];
+    const wallId = hit?.object?.userData?.wallId;
     if (!wallId) return null;
-    return walls.find((item) => item.id === wallId) || null;
+    const wall = walls.find((item) => item.id === wallId) || null;
+    if (!wall) return null;
+    const data = hit?.object?.userData && typeof hit.object.userData === 'object' ? hit.object.userData : {};
+    return {
+      wall,
+      wallId,
+      point: {
+        x: Number(hit?.point?.x) || 0,
+        y: Number(hit?.point?.y) || 0,
+        z: Number(hit?.point?.z) || 0
+      },
+      partIndex: Number.isFinite(Number(data?.partIndex)) ? Math.floor(Number(data.partIndex)) : null,
+      partMinZ: Number.isFinite(Number(data?.partMinZ)) ? Number(data.partMinZ) : null,
+      partMaxZ: Number.isFinite(Number(data?.partMaxZ)) ? Number(data.partMaxZ) : null,
+      partCenterZ: Number.isFinite(Number(data?.partCenterZ)) ? Number(data.partCenterZ) : null
+    };
   }, [viewport.height, viewport.width, walls]);
+
+  const pickWallFromScreenPoint = useCallback((sx, sy) => {
+    const hit = pickWallMeshHitFromScreenPoint(sx, sy);
+    return hit?.wall || null;
+  }, [pickWallMeshHitFromScreenPoint]);
 
   useEffect(() => {
     cameraAngleRef.current = cameraAngle;
@@ -1771,6 +2204,29 @@ const BattlefieldPreviewModal = ({
     zoomAnimRef.current = requestAnimationFrame(tick);
   }, []);
 
+  const resolveMousePillarSnapHint = useCallback((sx, sy) => {
+    const meshHit = pickWallMeshHitFromScreenPoint(sx, sy);
+    if (!meshHit?.wall) {
+      mousePillarSnapHintRef.current = null;
+      return null;
+    }
+    const hitItemDef = itemCatalogById.get(meshHit.wall.itemId) || null;
+    if (!isWoodPillarItem(hitItemDef)) {
+      mousePillarSnapHintRef.current = null;
+      return null;
+    }
+    const hint = {
+      anchorId: meshHit.wall.id,
+      partIndex: Number.isFinite(Number(meshHit.partIndex)) ? Number(meshHit.partIndex) : null,
+      hitX: Number(meshHit?.point?.x) || 0,
+      hitY: Number(meshHit?.point?.y) || 0,
+      hitZ: Number(meshHit?.point?.z) || 0,
+      partCenterZ: Number.isFinite(Number(meshHit?.partCenterZ)) ? Number(meshHit.partCenterZ) : null
+    };
+    mousePillarSnapHintRef.current = hint;
+    return hint;
+  }, [itemCatalogById, pickWallMeshHitFromScreenPoint]);
+
   const syncGhostByMouse = useCallback((sourceGhost = ghost) => {
     if (!sourceGhost) return null;
     const candidate = {
@@ -1779,7 +2235,15 @@ const BattlefieldPreviewModal = ({
       y: mouseWorldRef.current.y,
       z: 0
     };
-    const evaluated = evaluateGhostPlacement(candidate, walls, mouseWorldRef.current, fieldWidth, fieldHeight, itemCatalogById);
+    const evaluated = evaluateGhostPlacement(
+      candidate,
+      walls,
+      mouseWorldRef.current,
+      fieldWidth,
+      fieldHeight,
+      itemCatalogById,
+      mousePillarSnapHintRef.current
+    );
     setGhost(evaluated.ghost);
     setGhostBlocked(evaluated.blocked);
     setSnapState(evaluated.snap);
@@ -1792,6 +2256,7 @@ const BattlefieldPreviewModal = ({
     setGhostBlocked(false);
     setSnapState(null);
     setInvalidReason('');
+    mousePillarSnapHintRef.current = null;
     setSelectedPaletteItem('');
     if (tip) setMessage(tip);
   }, []);
@@ -1819,7 +2284,18 @@ const BattlefieldPreviewModal = ({
       z: 0,
       rotation: 0
     });
-    const evaluated = evaluateGhostPlacement(nextGhost, walls, mouseWorldRef.current, fieldWidth, fieldHeight, itemCatalogById);
+    if (isWoodPlankItem(itemDef)) {
+      nextGhost._pillarSnapMode = 'long';
+    }
+    const evaluated = evaluateGhostPlacement(
+      nextGhost,
+      walls,
+      mouseWorldRef.current,
+      fieldWidth,
+      fieldHeight,
+      itemCatalogById,
+      mousePillarSnapHintRef.current
+    );
     setSelectedWallId('');
     setSelectedDeploymentId('');
     setSidebarTab('items');
@@ -1831,17 +2307,35 @@ const BattlefieldPreviewModal = ({
     setGhostBlocked(evaluated.blocked);
     setSnapState(evaluated.snap);
     setInvalidReason(evaluated.reason || '');
-    setMessage(`已选中${itemDef.name || '物品'}：左键放置，右键或 ESC 取消，滚轮旋转，Space+左键平移`);
+    if (isWoodPlankItem(itemDef)) {
+      setMessage(`已选中${itemDef.name || '物品'}：左键放置，右键或 ESC 取消，靠近立柱可吸附，滚轮切换长端/短端贴面，Space+左键平移`);
+    } else {
+      setMessage(`已选中${itemDef.name || '物品'}：左键放置，右键或 ESC 取消，滚轮旋转，Space+左键平移`);
+    }
   }, [effectiveCanEdit, editMode, normalizedItemCatalog, itemStockMetaMap, walls, fieldWidth, fieldHeight, itemCatalogById]);
 
   const startMoveWall = useCallback((wallLike) => {
     if (!wallLike) return;
+    const moveItemDef = itemCatalogById.get(typeof wallLike?.itemId === 'string' ? wallLike.itemId : '') || null;
+    const sourceId = typeof wallLike?.id === 'string' ? wallLike.id : '';
+    const moveGhostId = sourceId
+      ? `moving_${sourceId}_${Date.now().toString(36)}`
+      : `moving_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const movingGhostSeed = {
-      ...createWallFromLike(wallLike, { id: wallLike.id }),
+      ...createWallFromLike(wallLike, { id: moveGhostId }),
+      _pillarSnapMode: isWoodPlankItem(moveItemDef) ? 'long' : undefined,
       _mode: 'move',
-      _sourceId: wallLike.id
+      _sourceId: sourceId
     };
-    const evaluated = evaluateGhostPlacement(movingGhostSeed, walls, mouseWorldRef.current, fieldWidth, fieldHeight, itemCatalogById);
+    const evaluated = evaluateGhostPlacement(
+      movingGhostSeed,
+      walls,
+      mouseWorldRef.current,
+      fieldWidth,
+      fieldHeight,
+      itemCatalogById,
+      mousePillarSnapHintRef.current
+    );
     setGhost({ ...evaluated.ghost, _mode: 'move', _sourceId: wallLike.id });
     setGhostBlocked(evaluated.blocked);
     setSnapState(evaluated.snap);
@@ -2388,11 +2882,55 @@ const BattlefieldPreviewModal = ({
         setCacheNeedsSync(true);
         return { ok: false, error };
       }
+      const serverLayoutBundle = (data?.layoutBundle && typeof data.layoutBundle === 'object')
+        ? data.layoutBundle
+        : null;
+      let persistedCatalog = normalizeItemCatalog(itemCatalogForSave);
+      let persistedLayoutMeta = layoutMetaForSave;
+      let persistedWalls = sanitizedWalls;
+      let persistedDefenderDeployments = sanitizedDefenderDeployments;
+      if (serverLayoutBundle) {
+        const serverCatalog = normalizeItemCatalog(serverLayoutBundle.itemCatalog);
+        if (serverCatalog.length > 0) persistedCatalog = serverCatalog;
+        const serverLayoutMeta = {
+          layoutId: typeof serverLayoutBundle?.activeLayout?.layoutId === 'string'
+            ? serverLayoutBundle.activeLayout.layoutId
+            : (typeof layoutMetaForSave?.layoutId === 'string' ? layoutMetaForSave.layoutId : `${gateKey || 'cheng'}_default`),
+          name: typeof serverLayoutBundle?.activeLayout?.name === 'string'
+            ? serverLayoutBundle.activeLayout.name
+            : (typeof layoutMetaForSave?.name === 'string' ? layoutMetaForSave.name : ''),
+          fieldWidth: Number.isFinite(Number(serverLayoutBundle?.activeLayout?.fieldWidth))
+            ? Number(serverLayoutBundle.activeLayout.fieldWidth)
+            : Number(layoutMetaForSave?.fieldWidth) || FIELD_WIDTH,
+          fieldHeight: Number.isFinite(Number(serverLayoutBundle?.activeLayout?.fieldHeight))
+            ? Number(serverLayoutBundle.activeLayout.fieldHeight)
+            : Number(layoutMetaForSave?.fieldHeight) || FIELD_HEIGHT,
+          maxItemsPerType: Number.isFinite(Number(serverLayoutBundle?.activeLayout?.maxItemsPerType))
+            ? Math.max(DEFAULT_MAX_ITEMS_PER_TYPE, Math.floor(Number(serverLayoutBundle.activeLayout.maxItemsPerType)))
+            : Math.max(DEFAULT_MAX_ITEMS_PER_TYPE, Math.floor(Number(layoutMetaForSave?.maxItemsPerType) || DEFAULT_MAX_ITEMS_PER_TYPE))
+        };
+        const serverWallSnapshot = sanitizeWallsWithLegacyCleanup(mapLayoutBundleToWalls({
+          ...serverLayoutBundle,
+          itemCatalog: persistedCatalog
+        }));
+        const serverDeployments = normalizeDefenderDeploymentsToRightZone(
+          mapLayoutBundleToDefenderDeployments(serverLayoutBundle),
+          serverLayoutMeta.fieldWidth,
+          serverLayoutMeta.fieldHeight
+        );
+        persistedLayoutMeta = serverLayoutMeta;
+        persistedWalls = serverWallSnapshot.walls;
+        persistedDefenderDeployments = serverDeployments;
+        setWalls(persistedWalls);
+        setDefenderDeployments(persistedDefenderDeployments);
+        setItemCatalog(persistedCatalog);
+        setActiveLayoutMeta(persistedLayoutMeta);
+      }
       writeBattlefieldCache(nodeId, gateKey, {
-        walls: sanitizedWalls,
-        defenderDeployments: sanitizedDefenderDeployments,
-        layoutMeta: layoutMetaForSave,
-        itemCatalog: itemCatalogForSave,
+        walls: persistedWalls,
+        defenderDeployments: persistedDefenderDeployments,
+        layoutMeta: persistedLayoutMeta,
+        itemCatalog: persistedCatalog,
         needsSync: false,
         message: ''
       });
@@ -2954,149 +3492,148 @@ const BattlefieldPreviewModal = ({
 
     const pickableWallMeshes = [];
     const buildWallMesh = (wallLike, options = {}) => {
+      const itemDef = resolveWallItemDef(wallLike, itemCatalogById);
       const safeHeight = Math.max(14, Number(wallLike.height) || WALL_HEIGHT);
       const safeWidth = Math.max(20, Number(wallLike.width) || WALL_WIDTH);
       const safeDepth = Math.max(12, Number(wallLike.depth) || WALL_DEPTH);
-      const baseZ = getWallBaseZ(wallLike);
       const selected = !!options.selected;
       const ghostMode = !!options.ghost;
+      const sourceShadow = !!options.sourceShadow;
       const blocked = !!options.blocked;
-      const itemId = typeof wallLike?.itemId === 'string' ? wallLike.itemId : '';
-      const itemStyle = itemCatalogById.get(itemId)?.style;
-      const style = itemStyle && typeof itemStyle === 'object' ? itemStyle : {};
-      const renderShape = typeof style.shape === 'string' ? style.shape.trim().toLowerCase() : '';
-      const color = ghostMode
-        ? (blocked ? 0xb91c1c : 0xf59e0b)
-        : (selected ? 0x60a5fa : parseHexColor(style.color, 0xc2783c));
+      const palette = resolveBattleLayerColors(itemDef, { battleTone: true });
+      const defaultTop = new THREE.Color(
+        Number(palette?.top?.[0]) || 0.52,
+        Number(palette?.top?.[1]) || 0.58,
+        Number(palette?.top?.[2]) || 0.66
+      ).getHex();
+      const defaultSide = new THREE.Color(
+        Number(palette?.side?.[0]) || 0.38,
+        Number(palette?.side?.[1]) || 0.44,
+        Number(palette?.side?.[2]) || 0.52
+      ).getHex();
 
-      if (renderShape === 'cheval_de_frise') {
-        const woodColor = ghostMode || selected ? color : parseHexColor(style.color, 0x8c6a44);
-        const spikeColor = ghostMode || selected ? color : parseHexColor(style.spikeColor, 0x9ca3af);
-        const beamCount = Math.round(clampStyleNumber(style.beamCount, 2, 2, 3));
-        const spikeCount = Math.round(clampStyleNumber(style.spikeCount, 8, 4, 14));
-        const beamSpreadDeg = clampStyleNumber(style.beamSpreadDeg, 34, 10, 60);
-        const beamThicknessRatio = clampStyleNumber(style.beamThicknessRatio, 0.13, 0.08, 0.24);
-        const spikeLengthRatio = clampStyleNumber(style.spikeLengthRatio, 0.48, 0.25, 0.8);
+      let topHex = defaultTop;
+      let sideHex = defaultSide;
+      if (selected) {
+        topHex = 0x60a5fa;
+        sideHex = 0x3b82f6;
+      } else if (ghostMode && !sourceShadow) {
+        topHex = blocked ? 0xb91c1c : 0xf59e0b;
+        sideHex = blocked ? 0x7f1d1d : 0xb45309;
+      }
 
-        const group = new THREE.Group();
-        group.position.set(Number(wallLike.x) || 0, Number(wallLike.y) || 0, baseZ);
-        group.rotation.set(0, 0, degToRad(wallLike.rotation || 0));
-        worldGroup.add(group);
+      const partRowsRaw = buildWorldColliderParts(
+        wallLike,
+        itemDef,
+        { stackLayerHeight: Math.max(1, Number(wallLike?.height) || Number(itemDef?.height) || STACK_LAYER_HEIGHT) }
+      );
+      const partRows = partRowsRaw.length > 0
+        ? partRowsRaw
+        : [{
+          cx: Number(wallLike?.x) || 0,
+          cy: Number(wallLike?.y) || 0,
+          cz: getWallBaseZ(wallLike) + (safeHeight * 0.5),
+          w: safeWidth,
+          d: safeDepth,
+          h: safeHeight,
+          yawDeg: normalizeDeg(wallLike?.rotation || 0)
+        }];
 
-        const beamLength = Math.max(safeWidth, safeDepth) * 1.08;
-        const beamRadius = Math.max(2.6, Math.min(10, Math.min(safeWidth, safeDepth) * beamThicknessRatio));
-        const beamZ = Math.max(beamRadius + 2, safeHeight * 0.3);
-        const beamGeometry = new THREE.CylinderGeometry(beamRadius, beamRadius, beamLength, 12);
-        const beamMaterial = new THREE.MeshStandardMaterial({
-          color: woodColor,
-          transparent: ghostMode,
-          opacity: ghostMode ? 0.52 : 1,
-          roughness: 0.86,
-          metalness: 0.04,
-          side: THREE.DoubleSide,
-          depthWrite: true
-        });
-
-        const beamAngles = [];
-        if (beamCount === 2) {
-          beamAngles.push(-beamSpreadDeg, beamSpreadDeg);
-        } else {
-          beamAngles.push(-beamSpreadDeg, 0, beamSpreadDeg);
-        }
-        beamAngles.forEach((angleDeg) => {
-          const beam = new THREE.Mesh(beamGeometry, beamMaterial);
-          beam.position.set(0, 0, beamZ);
-          beam.rotation.set(0, 0, degToRad(90 + angleDeg));
-          group.add(beam);
-          const beamEdges = new THREE.LineSegments(
-            new THREE.EdgesGeometry(beam.geometry),
-            new THREE.LineBasicMaterial({
-              color: selected ? 0xbfdbfe : 0x1f2937,
-              transparent: true,
-              opacity: selected ? 0.95 : 0.5
-            })
-          );
-          beamEdges.position.copy(beam.position);
-          beamEdges.rotation.copy(beam.rotation);
-          group.add(beamEdges);
-          if (!ghostMode && typeof wallLike.id === 'string') {
-            beam.userData.wallId = wallLike.id;
-            pickableWallMeshes.push(beam);
-          }
-        });
-
-        const spikeLength = Math.max(10, safeHeight * spikeLengthRatio);
-        const spikeRadius = Math.max(1.2, beamRadius * 0.45);
-        const spikeRingRadius = Math.max(beamLength * 0.32, Math.min(safeWidth, safeDepth) * 0.42);
-        const spikeGeometry = new THREE.ConeGeometry(spikeRadius, spikeLength, 10);
-        const spikeMaterial = new THREE.MeshStandardMaterial({
-          color: spikeColor,
-          transparent: ghostMode,
-          opacity: ghostMode ? 0.55 : 0.96,
-          roughness: 0.36,
-          metalness: 0.68,
-          side: THREE.DoubleSide,
-          depthWrite: true
-        });
-        for (let i = 0; i < spikeCount; i += 1) {
-          const angle = (Math.PI * 2 * i) / spikeCount;
-          const sx = Math.cos(angle) * spikeRingRadius;
-          const sy = Math.sin(angle) * spikeRingRadius;
-          const spike = new THREE.Mesh(spikeGeometry, spikeMaterial);
-          spike.position.set(sx, sy, beamZ + (spikeLength * 0.25));
-          spike.rotation.set(Math.PI / 2, 0, angle - (Math.PI / 2));
-          group.add(spike);
-          if (!ghostMode && typeof wallLike.id === 'string') {
-            spike.userData.wallId = wallLike.id;
-            pickableWallMeshes.push(spike);
-          }
-        }
-
-        // Invisible hitbox keeps click/selection reliable while preserving the visual shape.
-        const hitbox = new THREE.Mesh(
-          new THREE.BoxGeometry(safeWidth, safeDepth, safeHeight),
-          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
+      partRows.forEach((part, partIndex) => {
+        const materials = [
+          new THREE.MeshStandardMaterial({
+            color: sideHex,
+            transparent: ghostMode || sourceShadow,
+            opacity: sourceShadow ? 0.34 : (ghostMode ? 0.48 : 1),
+            roughness: sourceShadow ? 0.72 : (ghostMode ? 0.56 : 0.84),
+            metalness: sourceShadow ? 0.04 : (ghostMode ? 0.12 : 0.06),
+            side: THREE.DoubleSide,
+            depthWrite: true
+          }),
+          new THREE.MeshStandardMaterial({
+            color: sideHex,
+            transparent: ghostMode || sourceShadow,
+            opacity: sourceShadow ? 0.34 : (ghostMode ? 0.48 : 1),
+            roughness: sourceShadow ? 0.72 : (ghostMode ? 0.56 : 0.84),
+            metalness: sourceShadow ? 0.04 : (ghostMode ? 0.12 : 0.06),
+            side: THREE.DoubleSide,
+            depthWrite: true
+          }),
+          new THREE.MeshStandardMaterial({
+            color: sideHex,
+            transparent: ghostMode || sourceShadow,
+            opacity: sourceShadow ? 0.34 : (ghostMode ? 0.48 : 1),
+            roughness: sourceShadow ? 0.72 : (ghostMode ? 0.56 : 0.84),
+            metalness: sourceShadow ? 0.04 : (ghostMode ? 0.12 : 0.06),
+            side: THREE.DoubleSide,
+            depthWrite: true
+          }),
+          new THREE.MeshStandardMaterial({
+            color: sideHex,
+            transparent: ghostMode || sourceShadow,
+            opacity: sourceShadow ? 0.34 : (ghostMode ? 0.48 : 1),
+            roughness: sourceShadow ? 0.72 : (ghostMode ? 0.56 : 0.84),
+            metalness: sourceShadow ? 0.04 : (ghostMode ? 0.12 : 0.06),
+            side: THREE.DoubleSide,
+            depthWrite: true
+          }),
+          new THREE.MeshStandardMaterial({
+            color: topHex,
+            transparent: ghostMode || sourceShadow,
+            opacity: sourceShadow ? 0.38 : (ghostMode ? 0.54 : 1),
+            roughness: sourceShadow ? 0.68 : (ghostMode ? 0.52 : 0.76),
+            metalness: sourceShadow ? 0.05 : (ghostMode ? 0.14 : 0.08),
+            side: THREE.DoubleSide,
+            depthWrite: true
+          }),
+          new THREE.MeshStandardMaterial({
+            color: sideHex,
+            transparent: ghostMode || sourceShadow,
+            opacity: sourceShadow ? 0.34 : (ghostMode ? 0.48 : 1),
+            roughness: sourceShadow ? 0.72 : (ghostMode ? 0.56 : 0.84),
+            metalness: sourceShadow ? 0.04 : (ghostMode ? 0.12 : 0.06),
+            side: THREE.DoubleSide,
+            depthWrite: true
+          })
+        ];
+        const wallMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(
+            Math.max(1, Number(part?.w) || 1),
+            Math.max(1, Number(part?.d) || 1),
+            Math.max(1, Number(part?.h) || 1)
+          ),
+          materials
         );
-        hitbox.position.set(0, 0, safeHeight / 2);
-        group.add(hitbox);
-        if (!ghostMode && typeof wallLike.id === 'string') {
-          hitbox.userData.wallId = wallLike.id;
-          pickableWallMeshes.push(hitbox);
+        wallMesh.position.set(
+          Number(part?.cx) || 0,
+          Number(part?.cy) || 0,
+          Math.max(0.5, Number(part?.cz) || 0.5)
+        );
+        wallMesh.rotation.set(0, 0, degToRad(part?.yawDeg || 0));
+        worldGroup.add(wallMesh);
+        if (!ghostMode && !sourceShadow && typeof wallLike.id === 'string') {
+          const partHeight = Math.max(1, Number(part?.h) || 1);
+          const partCenterZ = Number(part?.cz) || 0;
+          wallMesh.userData.wallId = wallLike.id;
+          wallMesh.userData.partIndex = partIndex;
+          wallMesh.userData.partCenterZ = partCenterZ;
+          wallMesh.userData.partMinZ = partCenterZ - (partHeight * 0.5);
+          wallMesh.userData.partMaxZ = partCenterZ + (partHeight * 0.5);
+          pickableWallMeshes.push(wallMesh);
         }
-        return;
-      }
 
-      const wallMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(safeWidth, safeDepth, safeHeight),
-        new THREE.MeshStandardMaterial({
-          color,
-          transparent: ghostMode,
-          opacity: ghostMode ? 0.46 : 1,
-          roughness: ghostMode ? 0.5 : 0.82,
-          metalness: ghostMode ? 0.12 : 0.05,
-          side: THREE.DoubleSide,
-          depthWrite: true
-        })
-      );
-      wallMesh.position.set(Number(wallLike.x) || 0, Number(wallLike.y) || 0, baseZ + (safeHeight / 2));
-      wallMesh.rotation.set(0, 0, degToRad(wallLike.rotation || 0));
-      worldGroup.add(wallMesh);
-      if (!ghostMode && typeof wallLike.id === 'string') {
-        wallMesh.userData.wallId = wallLike.id;
-        pickableWallMeshes.push(wallMesh);
-      }
-
-      const edgeMesh = new THREE.LineSegments(
-        new THREE.EdgesGeometry(wallMesh.geometry),
-        new THREE.LineBasicMaterial({
-          color: selected ? 0xbfdbfe : 0x0f172a,
-          transparent: true,
-          opacity: selected ? 0.96 : 0.68
-        })
-      );
-      edgeMesh.position.copy(wallMesh.position);
-      edgeMesh.rotation.copy(wallMesh.rotation);
-      worldGroup.add(edgeMesh);
+        const edgeMesh = new THREE.LineSegments(
+          new THREE.EdgesGeometry(wallMesh.geometry),
+          new THREE.LineBasicMaterial({
+            color: selected ? 0xbfdbfe : 0x0f172a,
+            transparent: true,
+            opacity: selected ? 0.96 : 0.68
+          })
+        );
+        edgeMesh.position.copy(wallMesh.position);
+        edgeMesh.rotation.copy(wallMesh.rotation);
+        worldGroup.add(edgeMesh);
+      });
     };
 
     const buildDefenderSquadMesh = (deploymentLike, options = {}) => {
@@ -3310,9 +3847,11 @@ const BattlefieldPreviewModal = ({
       }
     };
 
+    const movingSourceId = ghost?._mode === 'move' && typeof ghost?._sourceId === 'string' ? ghost._sourceId : '';
     walls.forEach((wall) => {
+      const isMovingSource = !!movingSourceId && wall.id === movingSourceId;
       const isSelected = editMode && effectiveCanEdit && !ghost && selectedWallId && wall.id === selectedWallId;
-      buildWallMesh(wall, { selected: isSelected });
+      buildWallMesh(wall, isMovingSource ? { sourceShadow: true } : { selected: isSelected });
     });
 
     if (ghost) {
@@ -3737,8 +4276,10 @@ const BattlefieldPreviewModal = ({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     };
+    mouseScreenRef.current = { x: point.x, y: point.y, valid: true };
     const world = getWorldFromScreenPoint(point.x, point.y);
     mouseWorldRef.current = world;
+    resolveMousePillarSnapHint(point.x, point.y);
 
     if (event.button === 2) {
       event.preventDefault();
@@ -3765,14 +4306,22 @@ const BattlefieldPreviewModal = ({
     }
 
     if (ghost) {
-      const evaluated = evaluateGhostPlacement({ ...ghost, x: world.x, y: world.y }, walls, world, fieldWidth, fieldHeight, itemCatalogById);
-      if (evaluated.blocked) {
-        const reasonText = getPlacementReasonText(evaluated.reason) || '当前位置无法放置';
+      const sourceId = (
+        ghost?._mode === 'move'
+        && typeof ghost?._sourceId === 'string'
+        && ghost._sourceId.trim()
+      ) ? ghost._sourceId.trim() : '';
+      const ignoreIds = sourceId ? [sourceId] : [];
+      const blockedByBounds = isOutOfBounds(ghost, fieldWidth, fieldHeight, itemCatalogById);
+      const blockedByCollision = !blockedByBounds && hasCollision(ghost, walls, itemCatalogById, ignoreIds);
+      const blockedReason = blockedByBounds ? 'out_of_bounds' : (blockedByCollision ? 'collision' : '');
+      if (ghostBlocked || blockedByBounds || blockedByCollision) {
+        const reasonText = getPlacementReasonText(blockedReason || invalidReason) || '当前位置无法放置';
         setMessage(reasonText);
-        setGhost(evaluated.ghost);
+        setGhost(ghost);
         setGhostBlocked(true);
-        setSnapState(evaluated.snap);
-        setInvalidReason(evaluated.reason || '');
+        setSnapState(snapState);
+        setInvalidReason(blockedReason || invalidReason || '');
         return;
       }
       if (!effectiveCanEdit) {
@@ -3786,7 +4335,7 @@ const BattlefieldPreviewModal = ({
         setMessage(`物品「${ghostItemDef?.name || ghostItemId || '未知'}」库存不足，无法放置`);
         return;
       }
-      const nextWall = createWallFromLike(evaluated.ghost, {
+      const nextWall = createWallFromLike(ghost, {
         id: ghost?._sourceId || undefined
       });
       if (ghost?._mode === 'move' && ghost?._sourceId) {
@@ -3922,8 +4471,10 @@ const BattlefieldPreviewModal = ({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     };
+    mouseScreenRef.current = { x: point.x, y: point.y, valid: true };
     const world = getWorldFromScreenPoint(point.x, point.y);
     mouseWorldRef.current = world;
+    resolveMousePillarSnapHint(point.x, point.y);
 
     if (ghost) {
       if (!panDragRef.current && !rotateDragRef.current) {
@@ -4005,6 +4556,16 @@ const BattlefieldPreviewModal = ({
   useEffect(() => {
     if (!open) return undefined;
     const handleWindowMouseMove = (event) => {
+      const canvas = canvasRef.current;
+      const rect = canvas?.getBoundingClientRect();
+      if (rect) {
+        const sx = event.clientX - rect.left;
+        const sy = event.clientY - rect.top;
+        mouseScreenRef.current = { x: sx, y: sy, valid: true };
+        if (ghost) {
+          resolveMousePillarSnapHint(sx, sy);
+        }
+      }
       const rotateDrag = rotateDragRef.current;
       if (rotateDrag) {
         if ((event.buttons & 2) !== 2) {
@@ -4029,11 +4590,10 @@ const BattlefieldPreviewModal = ({
         clearPanDragging();
         return;
       }
-      const canvas = canvasRef.current;
-      const rect = canvas?.getBoundingClientRect();
-      if (!rect) return;
-      const sx = event.clientX - rect.left;
-      const sy = event.clientY - rect.top;
+      const panRect = canvasRef.current?.getBoundingClientRect();
+      if (!panRect) return;
+      const sx = event.clientX - panRect.left;
+      const sy = event.clientY - panRect.top;
       const world = getWorldFromScreenPoint(sx, sy);
       mouseWorldRef.current = world;
       const delta = getPanDeltaFromScreenPoints(
@@ -4068,7 +4628,7 @@ const BattlefieldPreviewModal = ({
       window.removeEventListener('mouseup', handleWindowMouseUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [cancelGhostPlacement, clearPanDragging, clearRotateDragging, getPanDeltaFromScreenPoints, getWorldFromScreenPoint, ghost, open]);
+  }, [cancelGhostPlacement, clearPanDragging, clearRotateDragging, getPanDeltaFromScreenPoints, getWorldFromScreenPoint, ghost, open, resolveMousePillarSnapHint]);
 
   const handleWheel = (event) => {
     event.preventDefault();
@@ -4100,6 +4660,29 @@ const BattlefieldPreviewModal = ({
     }
     if (!effectiveCanEdit) return;
 
+    if (snapState?.type === 'pillar-face') {
+      const nextMode = ghost?._pillarSnapMode === 'short' ? 'long' : 'short';
+      const nextGhost = {
+        ...ghost,
+        _pillarSnapMode: nextMode
+      };
+      const evaluated = evaluateGhostPlacement(
+        nextGhost,
+        walls,
+        mouseWorldRef.current,
+        fieldWidth,
+        fieldHeight,
+        itemCatalogById,
+        mousePillarSnapHintRef.current
+      );
+      setGhost(evaluated.ghost);
+      setGhostBlocked(evaluated.blocked);
+      setSnapState(evaluated.snap);
+      setInvalidReason(evaluated.reason || '');
+      setMessage(nextMode === 'long' ? '木制梁吸附模式：长端贴面（可沿面左右移动）' : '木制梁吸附模式：短端贴面');
+      return;
+    }
+
     const lockRotation = snapState?.type === 'top';
     setGhost((prevGhost) => {
       if (!prevGhost) return prevGhost;
@@ -4121,17 +4704,29 @@ const BattlefieldPreviewModal = ({
 
   useEffect(() => {
     if (!ghost) return;
+    const pointer = mouseScreenRef.current;
+    if (pointer?.valid) {
+      resolveMousePillarSnapHint(pointer.x, pointer.y);
+    }
     syncGhostByMouse(ghost);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fieldHeight, fieldWidth, ghost?.rotation, walls, cameraAngle, cameraYaw]);
+  }, [fieldHeight, fieldWidth, ghost?.rotation, walls, cameraAngle, cameraYaw, resolveMousePillarSnapHint]);
 
   const selectedDefenderDeployment = defenderDeploymentRows.find((item) => item.deployId === selectedDeploymentId) || null;
 
   if (!open) return null;
 
+  const overlayStyle = Number.isFinite(Number(overlayTopOffsetPx))
+    ? {
+        '--battlefield-modal-top': `${Math.max(16, Math.floor(Number(overlayTopOffsetPx)))}px`,
+        '--battlefield-modal-top-mobile': `${Math.max(12, Math.floor(Number(overlayTopOffsetPx) - 6))}px`
+      }
+    : null;
+
   return (
     <div
       className="battlefield-modal-overlay"
+      style={overlayStyle}
       onClick={onClose}
       onPointerDownCapture={(event) => event.stopPropagation()}
       onPointerMoveCapture={(event) => event.stopPropagation()}

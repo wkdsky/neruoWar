@@ -5,7 +5,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 52px 8px 12px;
+  padding: var(--battlefield-modal-top, 52px) 8px 12px;
   background: rgba(2, 6, 23, 0.62);
   pointer-events: auto;
 }
@@ -373,7 +373,7 @@
 
 @media (max-width: 960px) {
   .battlefield-modal-overlay {
-    padding: 48px 4px 8px;
+    padding: var(--battlefield-modal-top-mobile, 48px) 4px 8px;
   }
 
   .battlefield-modal {

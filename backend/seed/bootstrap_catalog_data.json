@@ -92,7 +92,7 @@
           }
         }
       ],
-      "maxStack": 3,
+      "maxStack": 31,
       "requiresSupport": false,
       "snapPriority": 10,
       "sortOrder": 20,
@@ -100,7 +100,7 @@
     },
     {
       "itemId": "it_build_wood_plank",
-      "name": "木制板材",
+      "name": "木制梁",
       "description": "可架设于立柱之间形成简易通道与掩蔽结构。",
       "initialCount": 5,
       "width": 124,
@@ -184,8 +184,8 @@
           }
         }
       ],
-      "maxStack": 5,
-      "requiresSupport": true,
+      "maxStack": 31,
+      "requiresSupport": false,
       "snapPriority": 12,
       "sortOrder": 21,
       "enabled": true

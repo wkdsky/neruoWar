@@ -4555,6 +4555,7 @@ const KnowledgeDomainScene = ({
         gateKey={battlefieldPreviewState.gateKey}
         gateLabel={CITY_GATE_LABELS[battlefieldPreviewState.gateKey] || ''}
         canEdit={canEditGateDefense}
+        overlayTopOffsetPx={105}
         onSaved={handleBattlefieldPreviewSaved}
         onClose={closeBattlefieldPreview}
       />

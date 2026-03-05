@@ -9,7 +9,7 @@
 | itemId | 名称 | renderProfile.battle.meshId | topLayerKey | sideLayerKey | collider.parts | sockets | interactions |
 |---|---|---|---|---|---:|---:|---|
 | `it_build_wood_pillar` | 木制立柱 | `pillar` | `pillar_top` | `pillar_side` | 3 | 1 | - |
-| `it_build_wood_plank` | 木制板材 | `plank` | `plank_top` | `plank_side` | 1 | 2 | - |
+| `it_build_wood_plank` | 木制梁 | `plank` | `plank_top` | `plank_side` | 1 | 2 | - |
 | `it_cover_sandbag` | 沙袋掩体 | `sandbag` | `sandbag_top` | `sandbag_side` | 3 | 0 | - |
 | `it_cover_stone_wall` | 石墙段 | `wall` | `stone_wall_top` | `stone_wall_side` | 2 | 2 | - |
 | `it_terrain_bush` | 草丛掩蔽 | `bush` | `bush_top` | `bush_side` | 4 | 0 | `concealment` |
@@ -33,7 +33,7 @@
 - sockets: `top_center`（`compatibleTags=[wood_plank,bridge_piece]`, `snap.dist=16`, `yawStepDeg=15`）
 - interactions: 无
 
-### 2) `it_build_wood_plank`
+### 2) `it_build_wood_plank`（木制梁）
 - collider.parts:
 ```json
 [{"cx":0,"cy":0,"cz":7,"w":124,"d":20,"h":14,"yawDeg":0}]
