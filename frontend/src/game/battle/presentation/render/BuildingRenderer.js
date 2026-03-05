@@ -5,6 +5,137 @@ import {
 } from './WebGL2Context';
 
 export const BUILDING_INSTANCE_STRIDE = 16;
+const DEV_BUILDING_ORIENTATION_CHECK = process.env.NODE_ENV !== 'production';
+const ORIENTATION_DIM_EPS = 1.5;
+const ORIENTATION_POS_EPS = 1.6;
+const ORIENTATION_WARN_TARGET_DEG = 90;
+const ORIENTATION_WARN_TOLERANCE_DEG = 9;
+const ORIENTATION_SAMPLE_LIMIT = 3;
+
+const normalizeDegSigned = (deg) => {
+  const raw = Number(deg) || 0;
+  const wrapped = ((raw + 180) % 360 + 360) % 360 - 180;
+  return wrapped === -180 ? 180 : wrapped;
+};
+
+const radToDeg = (rad) => (Number(rad) || 0) * (180 / Math.PI);
+
+const angleDeltaDeg = (a, b) => normalizeDegSigned((Number(a) || 0) - (Number(b) || 0));
+
+const buildRectCorners = (cx, cy, width, depth, ux, uy) => {
+  const hw = Math.max(0.5, Number(width) || 1) * 0.5;
+  const hd = Math.max(0.5, Number(depth) || 1) * 0.5;
+  const signs = [
+    { su: -1, sv: -1 },
+    { su: 1, sv: -1 },
+    { su: 1, sv: 1 },
+    { su: -1, sv: 1 }
+  ];
+  return signs.map(({ su, sv }) => ({
+    x: (Number(cx) || 0) + (ux.x * hw * su) + (uy.x * hd * sv),
+    y: (Number(cy) || 0) + (ux.y * hw * su) + (uy.y * hd * sv)
+  }));
+};
+
+const resolveLongAxisAngleDeg = (width, depth, ux, uy) => (
+  Math.max(1, Number(width) || 1) >= Math.max(1, Number(depth) || 1)
+    ? radToDeg(Math.atan2(ux.y, ux.x))
+    : radToDeg(Math.atan2(uy.y, uy.x))
+);
+
+const buildExpectedPartInfo = (part = {}, itemId = '') => {
+  const yawDeg = Number(part?.yawDeg) || 0;
+  const rad = (yawDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const width = Math.max(1, Number(part?.w) || 1);
+  const depth = Math.max(1, Number(part?.d) || 1);
+  const ux = { x: cos, y: sin };
+  const uy = { x: -sin, y: cos };
+  return {
+    itemId,
+    cx: Number(part?.cx) || 0,
+    cy: Number(part?.cy) || 0,
+    yawDeg,
+    width,
+    depth,
+    ux,
+    uy,
+    corners: buildRectCorners(part?.cx, part?.cy, width, depth, ux, uy),
+    longAxisDeg: resolveLongAxisAngleDeg(width, depth, ux, uy)
+  };
+};
+
+const buildRendererPartInfo = (row = {}) => {
+  const yaw = Number(row?.yawRad) || 0;
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  // Keep this basis consistent with the vertex shader rot mat2 definition.
+  const ux = { x: cos, y: sin };
+  const uy = { x: -sin, y: cos };
+  const width = Math.max(1, Number(row?.width) || 1);
+  const depth = Math.max(1, Number(row?.depth) || 1);
+  return {
+    x: Number(row?.x) || 0,
+    y: Number(row?.y) || 0,
+    yawDeg: radToDeg(yaw),
+    width,
+    depth,
+    ux,
+    uy,
+    corners: buildRectCorners(row?.x, row?.y, width, depth, ux, uy),
+    longAxisDeg: resolveLongAxisAngleDeg(width, depth, ux, uy)
+  };
+};
+
+const collectReferenceParts = (buildings = []) => {
+  const out = [];
+  (Array.isArray(buildings) ? buildings : []).forEach((building) => {
+    if (!building) return;
+    const itemId = typeof building?.itemId === 'string' ? building.itemId : '';
+    const sourceParts = Array.isArray(building?.colliderParts) && building.colliderParts.length > 0
+      ? building.colliderParts
+      : [{
+        cx: building?.x,
+        cy: building?.y,
+        w: building?.width,
+        d: building?.depth,
+        yawDeg: building?.rotation
+      }];
+    sourceParts.forEach((part) => {
+      const width = Math.max(1, Number(part?.w) || 1);
+      const depth = Math.max(1, Number(part?.d) || 1);
+      if (Math.abs(width - depth) < ORIENTATION_DIM_EPS) return;
+      out.push(buildExpectedPartInfo(part, itemId));
+    });
+  });
+  return out;
+};
+
+const readBuildingInstance = (buffer, index) => {
+  const base = index * BUILDING_INSTANCE_STRIDE;
+  return {
+    index,
+    x: Number(buffer[base + 0]) || 0,
+    y: Number(buffer[base + 1]) || 0,
+    yawRad: Number(buffer[base + 3]) || 0,
+    width: Math.max(1, Number(buffer[base + 4]) || 1),
+    depth: Math.max(1, Number(buffer[base + 5]) || 1)
+  };
+};
+
+const findBestInstance = (buffer, count, refPart) => {
+  let best = null;
+  for (let i = 0; i < count; i += 1) {
+    const row = readBuildingInstance(buffer, i);
+    const posErr = Math.hypot(row.x - refPart.cx, row.y - refPart.cy);
+    if (posErr > ORIENTATION_POS_EPS) continue;
+    const dimErr = Math.abs(row.width - refPart.width) + Math.abs(row.depth - refPart.depth);
+    const score = (posErr * 2) + dimErr;
+    if (!best || score < best.score) best = { row, score };
+  }
+  return best?.row || null;
+};
 
 const VS = `#version 300 es
 layout(location=0) in vec3 aPos;
@@ -24,7 +155,8 @@ out float vDestroyed;
 
 void main() {
   float yaw = iData0.w;
-  mat2 rot = mat2(cos(yaw), -sin(yaw), sin(yaw), cos(yaw));
+  // CCW yaw from +X axis: ux=(cos,sin), uy=(-sin,cos)
+  mat2 rot = mat2(cos(yaw), sin(yaw), -sin(yaw), cos(yaw));
   vec2 scaled = aPos.xy * vec2(max(1.0, iData1.x), max(1.0, iData1.y));
   vec2 worldXY = vec2(iData0.x, iData0.y) + (rot * scaled);
   float worldZ = iData0.z + (aPos.z * max(1.0, iData1.z));
@@ -119,6 +251,7 @@ export default class BuildingRenderer {
     this.capacity = 1024;
     this.instanceData = new Float32Array(this.capacity * BUILDING_INSTANCE_STRIDE);
     this.count = 0;
+    this.devOrientationChecked = false;
 
     this.uniforms = {
       uViewProj: gl.getUniformLocation(this.program, 'uViewProj')
@@ -164,7 +297,36 @@ export default class BuildingRenderer {
     this.bindLayout();
   }
 
-  updateFromSnapshot(buildings) {
+  runDevOrientationCheck(referenceBuildings = []) {
+    if (!DEV_BUILDING_ORIENTATION_CHECK) return false;
+    if (this.count <= 0) return false;
+    const referenceParts = collectReferenceParts(referenceBuildings).slice(0, ORIENTATION_SAMPLE_LIMIT);
+    if (referenceParts.length <= 0) return false;
+    referenceParts.forEach((refPart) => {
+      const matched = findBestInstance(this.instanceData, this.count, refPart);
+      if (!matched) return;
+      const dimErr = Math.abs(matched.width - refPart.width) + Math.abs(matched.depth - refPart.depth);
+      if (dimErr > (ORIENTATION_DIM_EPS * 2)) return;
+      const renderPart = buildRendererPartInfo(matched);
+      const expectedLong = refPart.longAxisDeg;
+      const renderLong = renderPart.longAxisDeg;
+      const delta = angleDeltaDeg(renderLong, expectedLong);
+      if (Math.abs(Math.abs(delta) - ORIENTATION_WARN_TARGET_DEG) <= ORIENTATION_WARN_TOLERANCE_DEG) {
+        console.warn(
+          `[BuildingRenderer][DEV] Orientation mismatch near 90deg: itemId=${refPart.itemId || '(unknown)'} ` +
+          `rotationDeg=${refPart.yawDeg.toFixed(2)} renderYawDeg=${renderPart.yawDeg.toFixed(2)} ` +
+          `size=${refPart.width.toFixed(2)}x${refPart.depth.toFixed(2)} biasDeg=${delta.toFixed(2)}`,
+          {
+            expectedCorners: refPart.corners,
+            rendererCorners: renderPart.corners
+          }
+        );
+      }
+    });
+    return true;
+  }
+
+  updateFromSnapshot(buildings, debugReferenceBuildings = null) {
     const count = Math.max(0, Number(buildings?.count) || 0);
     this.ensureCapacity(count);
     if (count <= 0 || !(buildings?.data instanceof Float32Array)) {
@@ -175,6 +337,9 @@ export default class BuildingRenderer {
     this.instanceData.set(buildings.data.subarray(0, floats), 0);
     this.count = count;
     updateDynamicBuffer(this.gl, this.instanceBuffer, this.instanceData, floats);
+    if (!this.devOrientationChecked && DEV_BUILDING_ORIENTATION_CHECK && Array.isArray(debugReferenceBuildings)) {
+      this.devOrientationChecked = this.runDevOrientationCheck(debugReferenceBuildings);
+    }
   }
 
   render(cameraState) {

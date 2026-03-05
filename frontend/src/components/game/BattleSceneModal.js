@@ -985,7 +985,17 @@ const BattleSceneModal = ({
       const field = runtime.getField();
       renderers.ground.setFieldSize(field?.width || 900, field?.height || 620);
       renderers.ground.setDeployRange(runtime.getDeployRange());
-      renderers.building.updateFromSnapshot(snapshot.buildings);
+      let orientationCheckBuildings = null;
+      if (
+        process.env.NODE_ENV !== 'production'
+        && renderers.building?.devOrientationChecked !== true
+      ) {
+        const devMinimapSnapshot = runtime.getMinimapSnapshot();
+        if (Array.isArray(devMinimapSnapshot?.buildings) && devMinimapSnapshot.buildings.length > 0) {
+          orientationCheckBuildings = devMinimapSnapshot.buildings;
+        }
+      }
+      renderers.building.updateFromSnapshot(snapshot.buildings, orientationCheckBuildings);
       renderers.impostor.updateFromSnapshot(snapshot.units);
       renderers.projectile.updateFromSnapshot(snapshot.projectiles);
       renderers.effect.updateFromSnapshot(snapshot.effects);

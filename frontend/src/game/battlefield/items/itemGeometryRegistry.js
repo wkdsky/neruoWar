@@ -5,6 +5,37 @@ const DEFAULT_DEPTH = 24;
 const DEFAULT_HEIGHT = 32;
 const PREVIEW_SCALE = 0.08;
 
+let previewBushBladeTexture = null;
+const getPreviewBushBladeTexture = () => {
+  if (previewBushBladeTexture) return previewBushBladeTexture;
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 96;
+  canvas.height = 160;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const gradient = ctx.createLinearGradient(0, canvas.height, 0, 0);
+  gradient.addColorStop(0, 'rgba(35,92,46,0)');
+  gradient.addColorStop(0.14, 'rgba(54,141,69,0.88)');
+  gradient.addColorStop(0.7, 'rgba(150,220,120,0.95)');
+  gradient.addColorStop(1, 'rgba(198,242,178,0)');
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.moveTo(canvas.width * 0.5, canvas.height * 0.03);
+  ctx.quadraticCurveTo(canvas.width * 0.13, canvas.height * 0.38, canvas.width * 0.34, canvas.height * 0.98);
+  ctx.quadraticCurveTo(canvas.width * 0.5, canvas.height * 0.86, canvas.width * 0.66, canvas.height * 0.98);
+  ctx.quadraticCurveTo(canvas.width * 0.87, canvas.height * 0.38, canvas.width * 0.5, canvas.height * 0.03);
+  ctx.closePath();
+  ctx.fill();
+  previewBushBladeTexture = new THREE.CanvasTexture(canvas);
+  previewBushBladeTexture.colorSpace = THREE.SRGBColorSpace;
+  previewBushBladeTexture.wrapS = THREE.ClampToEdgeWrapping;
+  previewBushBladeTexture.wrapT = THREE.ClampToEdgeWrapping;
+  previewBushBladeTexture.needsUpdate = true;
+  return previewBushBladeTexture;
+};
+
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 const normalizeDeg = (deg) => {
@@ -478,12 +509,101 @@ export const createPreviewMesh = (itemType = {}, options = {}) => {
     group.add(flag);
   }
   if (meshId.includes('bush')) {
-    const bush = new THREE.Mesh(
-      new THREE.SphereGeometry(0.8, 14, 12),
-      new THREE.MeshStandardMaterial({ color: topColor, roughness: 0.88, metalness: 0.02 })
+    const safeWidth = Math.max(1, Number(itemType?.width) || DEFAULT_WIDTH) * PREVIEW_SCALE;
+    const safeDepth = Math.max(1, Number(itemType?.depth) || DEFAULT_DEPTH) * PREVIEW_SCALE;
+    const safeHeight = Math.max(1, Number(itemType?.height) || DEFAULT_HEIGHT) * PREVIEW_SCALE;
+    const crownRadius = Math.max(0.5, Math.min(safeWidth, safeDepth) * 0.2);
+    const darkLeaf = topColor.clone().lerp(new THREE.Color('#1f3d24'), 0.28);
+    const brightLeaf = topColor.clone().lerp(new THREE.Color('#9fe783'), 0.14);
+    const buildLeafMaterial = (color, opacity = 0.96) => (
+      new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.9,
+        metalness: 0.01,
+        transparent: opacity < 1,
+        opacity
+      })
     );
-    bush.position.set(0, 0, Math.max(0.6, (Number(itemType?.height) || DEFAULT_HEIGHT) * PREVIEW_SCALE * 0.55));
-    group.add(bush);
+
+    const clumps = [
+      { x: 0, y: 0, s: 1.32, z: 0.56 },
+      { x: -safeWidth * 0.19, y: safeDepth * 0.06, s: 1.03, z: 0.46 },
+      { x: safeWidth * 0.2, y: safeDepth * 0.04, s: 0.99, z: 0.47 },
+      { x: -safeWidth * 0.14, y: -safeDepth * 0.17, s: 0.93, z: 0.37 },
+      { x: safeWidth * 0.14, y: -safeDepth * 0.17, s: 0.94, z: 0.37 },
+      { x: 0, y: safeDepth * 0.21, s: 0.95, z: 0.42 },
+      { x: -safeWidth * 0.25, y: -safeDepth * 0.01, s: 0.86, z: 0.34 },
+      { x: safeWidth * 0.25, y: 0, s: 0.87, z: 0.34 },
+      { x: -safeWidth * 0.05, y: safeDepth * 0.26, s: 0.83, z: 0.33 },
+      { x: safeWidth * 0.05, y: safeDepth * 0.25, s: 0.83, z: 0.33 },
+      { x: -safeWidth * 0.09, y: -safeDepth * 0.25, s: 0.79, z: 0.3 },
+      { x: safeWidth * 0.09, y: -safeDepth * 0.25, s: 0.79, z: 0.3 }
+    ];
+    clumps.forEach((clump, index) => {
+      const crown = new THREE.Mesh(
+        new THREE.SphereGeometry(crownRadius, 16, 14),
+        buildLeafMaterial(index % 2 === 0 ? brightLeaf : darkLeaf)
+      );
+      crown.scale.set(clump.s * 1.1, clump.s, Math.max(0.78, (safeHeight / Math.max(0.1, crownRadius)) * (0.44 + (index * 0.02))));
+      crown.position.set(clump.x, clump.y, Math.max(0.18, safeHeight * clump.z));
+      group.add(crown);
+    });
+
+    const bladeCount = 18;
+    for (let bladeIndex = 0; bladeIndex < bladeCount; bladeIndex += 1) {
+      const t = bladeIndex / bladeCount;
+      const angle = (Math.PI * 2 * t) + ((bladeIndex % 2) * 0.18);
+      const radius = Math.max(0.14, crownRadius * (0.26 + ((bladeIndex % 5) * 0.1)));
+      const blade = new THREE.Mesh(
+        new THREE.ConeGeometry(Math.max(0.08, crownRadius * 0.18), Math.max(0.26, safeHeight * 0.44), 5),
+        buildLeafMaterial(brightLeaf, 0.94)
+      );
+      blade.position.set(
+        Math.cos(angle) * radius,
+        Math.sin(angle) * radius,
+        Math.max(0.2, safeHeight * (0.24 + ((bladeIndex % 4) * 0.03)))
+      );
+      blade.rotation.x = Math.PI / 2;
+      blade.rotation.y = Math.PI * (0.06 + ((bladeIndex % 4) * 0.04));
+      blade.rotation.z = angle;
+      group.add(blade);
+    }
+
+    const bladeTexture = getPreviewBushBladeTexture();
+    if (bladeTexture) {
+      const spriteMatA = new THREE.SpriteMaterial({
+        map: bladeTexture,
+        color: brightLeaf,
+        transparent: true,
+        opacity: 0.72,
+        alphaTest: 0.12,
+        depthWrite: false
+      });
+      const spriteMatB = new THREE.SpriteMaterial({
+        map: bladeTexture,
+        color: darkLeaf,
+        transparent: true,
+        opacity: 0.67,
+        alphaTest: 0.12,
+        depthWrite: false
+      });
+      const spriteCount = 22;
+      for (let spriteIndex = 0; spriteIndex < spriteCount; spriteIndex += 1) {
+        const t = spriteIndex / spriteCount;
+        const angle = (Math.PI * 2 * t) + ((spriteIndex % 3) * 0.14);
+        const radius = crownRadius * (0.2 + ((spriteIndex % 7) * 0.1));
+        const sprite = new THREE.Sprite((spriteIndex % 2 === 0) ? spriteMatA : spriteMatB);
+        sprite.center.set(0.5, 0.04);
+        const spriteHeight = Math.max(0.28, safeHeight * (0.26 + ((spriteIndex % 5) * 0.03)));
+        sprite.scale.set(spriteHeight * 0.42, spriteHeight, 1);
+        sprite.position.set(
+          Math.cos(angle) * radius,
+          Math.sin(angle) * radius,
+          Math.max(0.16, safeHeight * (0.2 + ((spriteIndex % 4) * 0.02)))
+        );
+        group.add(sprite);
+      }
+    }
   }
 
   const sizeX = Math.max(1, Number(itemType?.width) || DEFAULT_WIDTH) * PREVIEW_SCALE;

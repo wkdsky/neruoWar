@@ -56,16 +56,27 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
 
     (snapshot.buildings || []).forEach((wall) => {
       if (!wall || wall.destroyed) return;
-      const p = toMap(wall.x, wall.y);
-      const bw = Math.max(1, (Number(wall.width) || 10) * sx);
-      const bh = Math.max(1, (Number(wall.depth) || 10) * sy);
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      // Canvas y-axis points downward, so invert rotation to keep world CCW consistent.
-      ctx.rotate(-degToRad(wall.rotation));
-      ctx.fillStyle = 'rgba(100, 116, 139, 0.65)';
-      ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
-      ctx.restore();
+      const sourceParts = Array.isArray(wall.colliderParts) && wall.colliderParts.length > 0
+        ? wall.colliderParts
+        : [{
+          cx: wall.x,
+          cy: wall.y,
+          w: wall.width,
+          d: wall.depth,
+          yawDeg: wall.rotation
+        }];
+      sourceParts.forEach((part) => {
+        const p = toMap(part?.cx, part?.cy);
+        const bw = Math.max(1, (Number(part?.w) || 10) * sx);
+        const bh = Math.max(1, (Number(part?.d) || 10) * sy);
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        // Canvas y-axis points downward, so invert rotation to keep world CCW consistent.
+        ctx.rotate(-degToRad(part?.yawDeg));
+        ctx.fillStyle = 'rgba(100, 116, 139, 0.65)';
+        ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
+        ctx.restore();
+      });
     });
 
     (snapshot.squads || []).forEach((squad) => {

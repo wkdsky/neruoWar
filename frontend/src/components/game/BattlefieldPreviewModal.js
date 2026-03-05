@@ -65,6 +65,39 @@ const PALETTE_WALL_TEMPLATE = {
   defense: BASE_DEFENSE
 };
 
+let bushBladeTexture = null;
+const getBushBladeTexture = () => {
+  if (bushBladeTexture) return bushBladeTexture;
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 96;
+  canvas.height = 160;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const gradient = ctx.createLinearGradient(0, canvas.height, 0, 0);
+  gradient.addColorStop(0, 'rgba(31,83,42,0)');
+  gradient.addColorStop(0.14, 'rgba(45,128,62,0.88)');
+  gradient.addColorStop(0.7, 'rgba(128,208,103,0.95)');
+  gradient.addColorStop(1, 'rgba(182,238,156,0)');
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.moveTo(canvas.width * 0.5, canvas.height * 0.03);
+  ctx.quadraticCurveTo(canvas.width * 0.13, canvas.height * 0.38, canvas.width * 0.34, canvas.height * 0.98);
+  ctx.quadraticCurveTo(canvas.width * 0.5, canvas.height * 0.86, canvas.width * 0.66, canvas.height * 0.98);
+  ctx.quadraticCurveTo(canvas.width * 0.87, canvas.height * 0.38, canvas.width * 0.5, canvas.height * 0.03);
+  ctx.closePath();
+  ctx.fill();
+
+  bushBladeTexture = new THREE.CanvasTexture(canvas);
+  bushBladeTexture.colorSpace = THREE.SRGBColorSpace;
+  bushBladeTexture.wrapS = THREE.ClampToEdgeWrapping;
+  bushBladeTexture.wrapT = THREE.ClampToEdgeWrapping;
+  bushBladeTexture.needsUpdate = true;
+  return bushBladeTexture;
+};
+
 const disposeThreeNode = (node) => {
   if (!node) return;
   if (node.geometry && typeof node.geometry.dispose === 'function') {
@@ -565,6 +598,162 @@ const getRectCorners = (centerX, centerY, width, depth, rotationDeg) => {
   });
 };
 
+const normalizeSnapFaceSide = (value) => {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (raw === 'right' || raw === 'left' || raw === 'front' || raw === 'back') return raw;
+  return '';
+};
+
+const inferSnapFaceFromSocketId = (socketId) => {
+  const raw = typeof socketId === 'string' ? socketId.trim().toLowerCase() : '';
+  if (!raw) return '';
+  if (raw.includes('right')) return 'right';
+  if (raw.includes('left')) return 'left';
+  if (raw.includes('front')) return 'front';
+  if (raw.includes('back')) return 'back';
+  if (raw.includes('top')) return 'top';
+  return '';
+};
+
+const resolveSocketSnapFace = (anchor = {}, snapState = {}, itemCatalogById = new Map()) => {
+  const byId = inferSnapFaceFromSocketId(snapState?.parentSocketId);
+  if (byId) return byId;
+  const itemDef = resolveWallItemDef(anchor, itemCatalogById);
+  const sockets = Array.isArray(getItemGeometry(itemDef)?.sockets) ? getItemGeometry(itemDef).sockets : [];
+  const socketId = typeof snapState?.parentSocketId === 'string' ? snapState.parentSocketId : '';
+  const parentSocket = sockets.find((entry) => (entry?.socketId || '') === socketId);
+  const local = parentSocket?.localPose && typeof parentSocket.localPose === 'object' ? parentSocket.localPose : null;
+  if (!local) return '';
+  const lx = Number(local?.x) || 0;
+  const ly = Number(local?.y) || 0;
+  const lz = Number(local?.z) || 0;
+  const anchorHeight = Math.max(10, Number(anchor?.height) || WALL_HEIGHT);
+  if (Math.abs(lz) >= (anchorHeight * 0.42) && Math.abs(lx) < 1 && Math.abs(ly) < 1) return 'top';
+  if (Math.abs(lx) >= Math.abs(ly)) return lx >= 0 ? 'right' : 'left';
+  return ly >= 0 ? 'front' : 'back';
+};
+
+const buildSnapFaceQuadPoints = ({
+  centerX = 0,
+  centerY = 0,
+  width = WALL_WIDTH,
+  depth = WALL_DEPTH,
+  rotationDeg = 0,
+  baseZ = 0,
+  topZ = WALL_HEIGHT,
+  side = ''
+}) => {
+  const faceSide = normalizeSnapFaceSide(side);
+  if (!faceSide) return [];
+  const halfW = Math.max(1, Number(width) || WALL_WIDTH) * 0.5;
+  const halfD = Math.max(1, Number(depth) || WALL_DEPTH) * 0.5;
+  const widthAxis = rotate2D(1, 0, rotationDeg);
+  const depthAxis = rotate2D(0, 1, rotationDeg);
+  const useWidthNormal = faceSide === 'right' || faceSide === 'left';
+  const normalSign = (faceSide === 'right' || faceSide === 'front') ? 1 : -1;
+  const normalAxis = useWidthNormal ? widthAxis : depthAxis;
+  const tangentAxis = useWidthNormal ? depthAxis : widthAxis;
+  const halfAlongNormal = useWidthNormal ? halfW : halfD;
+  const halfAlongTangent = useWidthNormal ? halfD : halfW;
+  const faceCenter = {
+    x: centerX + (normalAxis.x * halfAlongNormal * normalSign),
+    y: centerY + (normalAxis.y * halfAlongNormal * normalSign)
+  };
+  const minZ = Math.min(baseZ, topZ);
+  const maxZ = Math.max(baseZ, topZ);
+  return [
+    {
+      x: faceCenter.x - (tangentAxis.x * halfAlongTangent),
+      y: faceCenter.y - (tangentAxis.y * halfAlongTangent),
+      z: minZ
+    },
+    {
+      x: faceCenter.x + (tangentAxis.x * halfAlongTangent),
+      y: faceCenter.y + (tangentAxis.y * halfAlongTangent),
+      z: minZ
+    },
+    {
+      x: faceCenter.x + (tangentAxis.x * halfAlongTangent),
+      y: faceCenter.y + (tangentAxis.y * halfAlongTangent),
+      z: maxZ
+    },
+    {
+      x: faceCenter.x - (tangentAxis.x * halfAlongTangent),
+      y: faceCenter.y - (tangentAxis.y * halfAlongTangent),
+      z: maxZ
+    }
+  ];
+};
+
+const resolveSnapHighlightFacePoints = (anchor = {}, snapState = null, itemCatalogById = new Map()) => {
+  if (!anchor || !snapState || typeof snapState !== 'object') return null;
+  const type = typeof snapState?.type === 'string' ? snapState.type : '';
+  const baseZ = getWallBaseZ(anchor);
+  const topZ = getWallTopZ(anchor) + 0.8;
+  if (type === 'top') {
+    const topPoints = getRectCorners(anchor.x, anchor.y, anchor.width, anchor.depth, anchor.rotation)
+      .map((point) => ({ x: point.x, y: point.y, z: topZ }));
+    return topPoints.length === 4 ? { points: topPoints, kind: 'top' } : null;
+  }
+
+  let side = '';
+  if (type.startsWith('side-')) {
+    side = normalizeSnapFaceSide(type.slice(5));
+  } else if (type === 'pillar-face') {
+    side = normalizeSnapFaceSide(snapState?.face);
+    if (side) {
+      const itemDef = resolveWallItemDef(anchor, itemCatalogById);
+      const parts = Array.isArray(getItemGeometry(itemDef)?.collider?.parts) ? getItemGeometry(itemDef).collider.parts : [];
+      const protrusionIndex = Number.isFinite(Number(snapState?.protrusion))
+        ? Math.floor(Number(snapState.protrusion))
+        : -1;
+      if (protrusionIndex >= 0 && protrusionIndex < parts.length) {
+        const part = parts[protrusionIndex] || {};
+        const rotatedOffset = rotate2D(Number(part?.cx) || 0, Number(part?.cy) || 0, Number(anchor?.rotation) || 0);
+        const partCenterX = (Number(anchor?.x) || 0) + rotatedOffset.x;
+        const partCenterY = (Number(anchor?.y) || 0) + rotatedOffset.y;
+        const partYaw = normalizeDeg((Number(anchor?.rotation) || 0) + (Number(part?.yawDeg) || 0));
+        const partHeight = Math.max(1, Number(part?.h) || Number(anchor?.height) || WALL_HEIGHT);
+        const partCenterZ = baseZ + (Number(part?.cz) || (partHeight * 0.5));
+        const partBaseZ = partCenterZ - (partHeight * 0.5);
+        const partTopZ = partCenterZ + (partHeight * 0.5);
+        const partPoints = buildSnapFaceQuadPoints({
+          centerX: partCenterX,
+          centerY: partCenterY,
+          width: Math.max(1, Number(part?.w) || Number(anchor?.width) || WALL_WIDTH),
+          depth: Math.max(1, Number(part?.d) || Number(anchor?.depth) || WALL_DEPTH),
+          rotationDeg: partYaw,
+          baseZ: partBaseZ,
+          topZ: partTopZ,
+          side
+        });
+        if (partPoints.length === 4) return { points: partPoints, kind: 'side' };
+      }
+    }
+  } else if (type === 'socket') {
+    const socketFace = resolveSocketSnapFace(anchor, snapState, itemCatalogById);
+    if (socketFace === 'top') {
+      const topPoints = getRectCorners(anchor.x, anchor.y, anchor.width, anchor.depth, anchor.rotation)
+        .map((point) => ({ x: point.x, y: point.y, z: topZ }));
+      return topPoints.length === 4 ? { points: topPoints, kind: 'top' } : null;
+    }
+    side = normalizeSnapFaceSide(socketFace);
+  }
+
+  if (!side) return null;
+  const sidePoints = buildSnapFaceQuadPoints({
+    centerX: Number(anchor?.x) || 0,
+    centerY: Number(anchor?.y) || 0,
+    width: Math.max(1, Number(anchor?.width) || WALL_WIDTH),
+    depth: Math.max(1, Number(anchor?.depth) || WALL_DEPTH),
+    rotationDeg: Number(anchor?.rotation) || 0,
+    baseZ,
+    topZ: getWallTopZ(anchor),
+    side
+  });
+  return sidePoints.length === 4 ? { points: sidePoints, kind: 'side' } : null;
+};
+
 const buildAxesFromCorners = (corners) => {
   const axes = [];
   for (let i = 0; i < 2; i += 1) {
@@ -641,6 +830,15 @@ const isWoodPlankItem = (itemDef = {}) => {
   const itemId = typeof itemDef?.itemId === 'string' ? itemDef.itemId.trim().toLowerCase() : '';
   const shape = typeof itemDef?.style?.shape === 'string' ? itemDef.style.shape.trim().toLowerCase() : '';
   return itemId === 'it_build_wood_plank' || shape === 'plank';
+};
+
+const isBushItem = (itemDef = {}) => {
+  const itemId = typeof itemDef?.itemId === 'string' ? itemDef.itemId.trim().toLowerCase() : '';
+  const shape = typeof itemDef?.style?.shape === 'string' ? itemDef.style.shape.trim().toLowerCase() : '';
+  const meshId = typeof itemDef?.renderProfile?.battle?.meshId === 'string'
+    ? itemDef.renderProfile.battle.meshId.trim().toLowerCase()
+    : '';
+  return itemId === 'it_terrain_bush' || shape === 'bush' || meshId.includes('bush');
 };
 
 const deriveItemIdentityTags = (itemDef = {}) => {
@@ -832,6 +1030,31 @@ const isOutOfBounds = (ghostLike, fieldWidth = FIELD_WIDTH, fieldHeight = FIELD_
   ));
 };
 
+const overlapsDeployZone = (ghostLike, fieldWidth = FIELD_WIDTH, itemCatalogById = new Map()) => {
+  const safeFieldWidth = Math.max(200, Number(fieldWidth) || FIELD_WIDTH);
+  const zoneWidth = Math.max(0, safeFieldWidth * DEPLOY_ZONE_RATIO);
+  if (zoneWidth <= 0.001) return false;
+  const corners = getWallFootprintCorners(ghostLike, itemCatalogById);
+  if (!Array.isArray(corners) || corners.length <= 0) return false;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  corners.forEach((point) => {
+    minX = Math.min(minX, Number(point?.x) || 0);
+    maxX = Math.max(maxX, Number(point?.x) || 0);
+  });
+  const fieldMinX = -safeFieldWidth * 0.5;
+  const fieldMaxX = safeFieldWidth * 0.5;
+  const leftZoneMinX = fieldMinX;
+  const leftZoneMaxX = fieldMinX + zoneWidth;
+  const rightZoneMinX = fieldMaxX - zoneWidth;
+  const rightZoneMaxX = fieldMaxX;
+  const overlapLen = (aMin, aMax, bMin, bMax) => Math.min(aMax, bMax) - Math.max(aMin, bMin);
+  return (
+    overlapLen(minX, maxX, leftZoneMinX, leftZoneMaxX) > 0.01
+    || overlapLen(minX, maxX, rightZoneMinX, rightZoneMaxX) > 0.01
+  );
+};
+
 const hasCollision = (ghostLike, walls = [], itemCatalogById = new Map(), ignoreIds = []) => {
   const ghostItemDef = resolveWallItemDef(ghostLike, itemCatalogById);
   const ignoreSet = new Set((Array.isArray(ignoreIds) ? ignoreIds : []).filter(Boolean));
@@ -860,7 +1083,19 @@ const getPlacementReasonText = (reason) => {
   if (reason === 'support_required') return '该设置物需要吸附在支撑物上';
   if (reason === 'collision') return '当前位置发生碰撞，无法放置';
   if (reason === 'out_of_bounds') return '当前位置超出战场边界';
+  if (reason === 'deploy_zone_blocked') return '当前位置位于红蓝部署区，无法放置设置物';
   return '';
+};
+
+const getInteractionKindLabel = (kind = '') => {
+  const key = typeof kind === 'string' ? kind.trim().toLowerCase() : '';
+  if (key === 'concealment') return '隐匿';
+  if (key === 'cover') return '掩体';
+  if (key === 'trap') return '陷阱';
+  if (key === 'buff') return '增益';
+  if (key === 'debuff') return '减益';
+  if (key === 'healing') return '治疗';
+  return key || '未知';
 };
 
 const areSocketCompatible = (parentSocket = {}, childSocket = {}, parentItemDef = null, childItemDef = null) => {
@@ -895,6 +1130,12 @@ const dotAxis = (a = {}, b = {}) => (
   ((Number(a?.x) || 0) * (Number(b?.x) || 0))
   + ((Number(a?.y) || 0) * (Number(b?.y) || 0))
 );
+
+const getHintAnchorId = (mouseHint = null) => {
+  if (!mouseHint || typeof mouseHint !== 'object') return '';
+  const anchorId = typeof mouseHint?.anchorId === 'string' ? mouseHint.anchorId.trim() : '';
+  return anchorId;
+};
 
 const solvePillarPlankFaceSnap = ({
   ghostBase,
@@ -1085,6 +1326,7 @@ const solvePillarPlankFaceSnap = ({
         const verticalOverlap = Math.min(candidateMaxZ, partTopZ) - Math.max(candidateMinZ, partBottomZ);
         if (verticalOverlap < Math.max(2, Math.min(8, (Number(part?.h) || 1) * 0.3))) return;
         if (isOutOfBounds(candidate, fieldWidth, fieldHeight, itemCatalogById)) return;
+        if (overlapsDeployZone(candidate, fieldWidth, itemCatalogById)) return;
         if (hasCollision(candidate, walls, itemCatalogById, [...ignoreSet, anchor.id])) return;
         const score = (faceDist * 0.55) + (Math.abs(slideRaw - slide) * 0.1);
         if (!best || score < best.score) {
@@ -1112,6 +1354,7 @@ const solveSocketSnap = ({
   walls = [],
   itemCatalogById = new Map(),
   mouseWorld = null,
+  mouseHint = null,
   ignoreAnchorIds = [],
   fieldWidth,
   fieldHeight
@@ -1119,12 +1362,15 @@ const solveSocketSnap = ({
   const ghostItemDef = resolveWallItemDef(ghostBase, itemCatalogById);
   const ghostSockets = getItemGeometry(ghostItemDef).sockets || [];
   if (ghostSockets.length <= 0) return null;
+  const hintedAnchorId = getHintAnchorId(mouseHint);
+  if (!hintedAnchorId) return null;
   const ignoreSet = new Set((Array.isArray(ignoreAnchorIds) ? ignoreAnchorIds : []).filter(Boolean));
   let best = null;
 
   walls.forEach((anchor) => {
     if (!anchor || anchor.id === ghostBase.id) return;
     if (ignoreSet.has(anchor.id)) return;
+    if (anchor.id !== hintedAnchorId) return;
     const anchorItemDef = resolveWallItemDef(anchor, itemCatalogById);
     if (isWoodPlankItem(ghostItemDef) && isWoodPillarItem(anchorItemDef)) return;
     const anchorSockets = getItemGeometry(anchorItemDef).sockets || [];
@@ -1196,13 +1442,18 @@ const solveSocketSnap = ({
           },
           groupId: ghostBase.groupId || anchor.groupId || anchor.id
         };
-        const pointerDist = mouseWorld
-          ? Math.hypot((Number(mouseWorld?.x) || 0) - parentPose.x, (Number(mouseWorld?.y) || 0) - parentPose.y)
-          : Math.hypot(candidate.x - ghostBase.x, candidate.y - ghostBase.y);
+        const pointerX = Number.isFinite(Number(mouseHint?.hitX))
+          ? Number(mouseHint.hitX)
+          : (Number(mouseWorld?.x) || 0);
+        const pointerY = Number.isFinite(Number(mouseHint?.hitY))
+          ? Number(mouseHint.hitY)
+          : (Number(mouseWorld?.y) || 0);
+        const pointerDist = Math.hypot(pointerX - parentPose.x, pointerY - parentPose.y);
         const socketOffsetDist = Math.hypot(candidate.x - ghostBase.x, candidate.y - ghostBase.y);
-        const activationDist = Math.max(18, snapDist);
+        const activationDist = Math.max(6, snapDist);
         if (pointerDist > activationDist) return;
         if (isOutOfBounds(candidate, fieldWidth, fieldHeight, itemCatalogById)) return;
+        if (overlapsDeployZone(candidate, fieldWidth, itemCatalogById)) return;
         if (hasCollision(candidate, walls, itemCatalogById, [...ignoreSet, anchor.id])) return;
         const score = pointerDist + (socketOffsetDist * 0.15) + (angleDistanceDeg(rotation, ghostBase.rotation) * 0.05);
         if (!best || score < best.score) {
@@ -1270,6 +1521,14 @@ const solveMagneticSnap = ({
 
   if (isWoodPlankItem(ghostItemDef)) {
     const freeGhost = { ...ghostBase, z: 0, attach: null, groupId: '' };
+    if (overlapsDeployZone(freeGhost, fieldWidth, itemCatalogById)) {
+      return {
+        ghost: freeGhost,
+        snap: null,
+        blocked: true,
+        reason: 'deploy_zone_blocked'
+      };
+    }
     if (isOutOfBounds(freeGhost, fieldWidth, fieldHeight, itemCatalogById)) {
       return {
         ghost: freeGhost,
@@ -1299,65 +1558,85 @@ const solveMagneticSnap = ({
     walls: wallsForSnap,
     itemCatalogById,
     mouseWorld,
+    mouseHint,
     ignoreAnchorIds,
     fieldWidth,
     fieldHeight
   });
   if (socketSnap) return socketSnap;
 
+  const hintedAnchorId = getHintAnchorId(mouseHint);
+  const hintedFaceType = typeof mouseHint?.faceType === 'string' ? mouseHint.faceType : '';
   const sortedWalls = [...wallsForSnap].sort((a, b) => (b.z - a.z));
   let stackLimitHit = false;
 
-  for (const wall of sortedWalls) {
-    if (!pointInWallFootprint(mouseWorld, wall, itemCatalogById, 0.2)) continue;
-    const ghostLayerHeight = Math.max(
-      1,
-      Number(ghostBase?.height) || Number(ghostItemDef?.height) || STACK_LAYER_HEIGHT
-    );
-    const ghostMinLocalZ = getItemLocalMinZ(ghostItemDef);
-    const requiredBaseZ = getWallTopZ(wall);
-    const requiredStackZ = Math.max(
-      0,
-      Math.ceil((requiredBaseZ - ghostMinLocalZ) / ghostLayerHeight)
-    );
-    if (requiredStackZ >= ghostStackLimit) {
-      stackLimitHit = true;
-      continue;
-    }
-    const topGhost = {
-      ...ghostBase,
-      x: wall.x,
-      y: wall.y,
-      z: requiredStackZ,
-      rotation: normalizeDeg(wall.rotation),
-      attach: null,
-      groupId: ''
-    };
-    if (isOutOfBounds(topGhost, fieldWidth, fieldHeight, itemCatalogById)) {
+  if (hintedAnchorId && hintedFaceType === 'top') {
+    for (const wall of sortedWalls) {
+      if (!wall || wall.id !== hintedAnchorId) continue;
+      if (!pointInWallFootprint(mouseWorld, wall, itemCatalogById, 0.2)) continue;
+      const ghostLayerHeight = Math.max(
+        1,
+        Number(ghostBase?.height) || Number(ghostItemDef?.height) || STACK_LAYER_HEIGHT
+      );
+      const ghostMinLocalZ = getItemLocalMinZ(ghostItemDef);
+      const requiredBaseZ = getWallTopZ(wall);
+      const requiredStackZ = Math.max(
+        0,
+        Math.ceil((requiredBaseZ - ghostMinLocalZ) / ghostLayerHeight)
+      );
+      if (requiredStackZ >= ghostStackLimit) {
+        stackLimitHit = true;
+        continue;
+      }
+      const topGhost = {
+        ...ghostBase,
+        x: wall.x,
+        y: wall.y,
+        z: requiredStackZ,
+        rotation: normalizeDeg(wall.rotation),
+        attach: null,
+        groupId: ''
+      };
+      if (isOutOfBounds(topGhost, fieldWidth, fieldHeight, itemCatalogById)) {
+        return {
+          ghost: topGhost,
+          snap: { type: 'top', anchorId: wall.id },
+          blocked: true,
+          reason: 'out_of_bounds'
+        };
+      }
+      if (overlapsDeployZone(topGhost, fieldWidth, itemCatalogById)) {
+        return {
+          ghost: topGhost,
+          snap: { type: 'top', anchorId: wall.id },
+          blocked: true,
+          reason: 'deploy_zone_blocked'
+        };
+      }
+      if (hasCollision(topGhost, walls, itemCatalogById, ignoreAnchorIds)) {
+        return {
+          ghost: topGhost,
+          snap: { type: 'top', anchorId: wall.id },
+          blocked: true,
+          reason: 'collision'
+        };
+      }
       return {
         ghost: topGhost,
         snap: { type: 'top', anchorId: wall.id },
-        blocked: true,
-        reason: 'out_of_bounds'
+        blocked: false,
+        reason: ''
       };
     }
-    if (hasCollision(topGhost, walls, itemCatalogById, ignoreAnchorIds)) {
-      return {
-        ghost: topGhost,
-        snap: { type: 'top', anchorId: wall.id },
-        blocked: true,
-        reason: 'collision'
-      };
-    }
-    return {
-      ghost: topGhost,
-      snap: { type: 'top', anchorId: wall.id },
-      blocked: false,
-      reason: ''
-    };
   }
 
   let best = null;
+  const pointerX = Number.isFinite(Number(mouseHint?.hitX))
+    ? Number(mouseHint.hitX)
+    : (Number(mouseWorld?.x) || 0);
+  const pointerY = Number.isFinite(Number(mouseHint?.hitY))
+    ? Number(mouseHint.hitY)
+    : (Number(mouseWorld?.y) || 0);
   const minSize = Math.max(20, Math.min(ghostBase.width, ghostBase.depth));
   const snapRadius = minSize * 1.4;
   const sideDefs = [
@@ -1368,6 +1647,7 @@ const solveMagneticSnap = ({
   ];
 
   wallsForSnap.forEach((anchor) => {
+    if (!hintedAnchorId || anchor?.id !== hintedAnchorId) return;
     sideDefs.forEach((face) => {
       const normal = rotate2D(face.localNormal.x, face.localNormal.y, anchor.rotation);
       const anchorHalf = face.halfKey === 'width' ? (anchor.width / 2) : (anchor.depth / 2);
@@ -1375,7 +1655,7 @@ const solveMagneticSnap = ({
         x: anchor.x + (normal.x * anchorHalf),
         y: anchor.y + (normal.y * anchorHalf)
       };
-      const mouseDist = Math.hypot(mouseWorld.x - contactPoint.x, mouseWorld.y - contactPoint.y);
+      const mouseDist = Math.hypot(pointerX - contactPoint.x, pointerY - contactPoint.y);
       if (mouseDist > snapRadius) return;
 
       const yawCandidates = Array.from(new Set(
@@ -1399,6 +1679,7 @@ const solveMagneticSnap = ({
         };
 
         if (isOutOfBounds(candidate, fieldWidth, fieldHeight, itemCatalogById)) return;
+        if (overlapsDeployZone(candidate, fieldWidth, itemCatalogById)) return;
         if (hasCollision(candidate, walls, itemCatalogById, ignoreAnchorIds)) return;
 
         const requiredNormal = { x: -normal.x, y: -normal.y };
@@ -1408,7 +1689,7 @@ const solveMagneticSnap = ({
           bestAlign = Math.max(bestAlign, dot2(testNormal, requiredNormal));
         });
         const alignErr = 1 - Math.max(-1, Math.min(1, bestAlign));
-        if (alignErr > 0.2) return;
+        if (alignErr > 0.005) return;
 
         const rotateCost = angleDistanceDeg(candidate.rotation, ghostBase.rotation) / 180;
         const mouseCost = Math.min(1, mouseDist / snapRadius);
@@ -1486,6 +1767,14 @@ const solveMagneticSnap = ({
       snap: null,
       blocked: true,
       reason: 'stack_limit'
+    };
+  }
+  if (overlapsDeployZone(freeGhost, fieldWidth, itemCatalogById)) {
+    return {
+      ghost: freeGhost,
+      snap: null,
+      blocked: true,
+      reason: 'deploy_zone_blocked'
     };
   }
   if (isOutOfBounds(freeGhost, fieldWidth, fieldHeight, itemCatalogById)) {
@@ -1736,7 +2025,7 @@ const BattlefieldPreviewModal = ({
   const defenderActionButtonsRef = useRef([]);
   const mouseWorldRef = useRef({ x: 0, y: 0 });
   const mouseScreenRef = useRef({ x: 0, y: 0, valid: false });
-  const mousePillarSnapHintRef = useRef(null);
+  const mouseSnapHintRef = useRef(null);
   const panWorldRef = useRef({ x: 0, y: 0 });
   const editSessionWallsRef = useRef(null);
   const editSessionDefenderDeploymentsRef = useRef(null);
@@ -1781,6 +2070,7 @@ const BattlefieldPreviewModal = ({
   const [activeDefenderMoveId, setActiveDefenderMoveId] = useState('');
   const [defenderDragPreview, setDefenderDragPreview] = useState(null);
   const [sidebarTab, setSidebarTab] = useState('items');
+  const [itemDetailModalItemId, setItemDetailModalItemId] = useState('');
   const [defenderEditorOpen, setDefenderEditorOpen] = useState(false);
   const [defenderEditingDeployId, setDefenderEditingDeployId] = useState('');
   const [defenderEditorDraft, setDefenderEditorDraft] = useState({
@@ -1903,6 +2193,28 @@ const BattlefieldPreviewModal = ({
     () => new Map(normalizedItemCatalog.map((item) => [item.itemId, item])),
     [normalizedItemCatalog]
   );
+  const itemDetailModalItem = useMemo(() => (
+    itemDetailModalItemId ? (itemCatalogById.get(itemDetailModalItemId) || null) : null
+  ), [itemCatalogById, itemDetailModalItemId]);
+  const itemDetailModalStock = useMemo(() => (
+    itemDetailModalItem ? (itemStockMetaMap.get(itemDetailModalItem.itemId) || { used: 0, limit: 0, remaining: 0 }) : null
+  ), [itemDetailModalItem, itemStockMetaMap]);
+  const itemDetailInteractionLabels = useMemo(() => {
+    if (!itemDetailModalItem) return [];
+    const rows = Array.isArray(itemDetailModalItem?.interactions) ? itemDetailModalItem.interactions : [];
+    return Array.from(new Set(rows.map((row) => getInteractionKindLabel(row?.kind)).filter(Boolean)));
+  }, [itemDetailModalItem]);
+  const itemDetailSocketCount = useMemo(() => (
+    itemDetailModalItem && Array.isArray(itemDetailModalItem?.sockets) ? itemDetailModalItem.sockets.length : 0
+  ), [itemDetailModalItem]);
+  const itemDetailColliderPartCount = useMemo(() => {
+    if (!itemDetailModalItem) return 0;
+    if (Array.isArray(itemDetailModalItem?.collider?.parts)) return itemDetailModalItem.collider.parts.length;
+    if (Array.isArray(itemDetailModalItem?.collider?.polygon?.points)) {
+      return Math.max(0, itemDetailModalItem.collider.polygon.points.length);
+    }
+    return 0;
+  }, [itemDetailModalItem]);
   const totalItemLimit = useMemo(
     () => normalizedItemCatalog.reduce((sum, item) => sum + (itemStockMetaMap.get(item.itemId)?.limit || 0), 0),
     [itemStockMetaMap, normalizedItemCatalog]
@@ -2059,6 +2371,9 @@ const BattlefieldPreviewModal = ({
     const wall = walls.find((item) => item.id === wallId) || null;
     if (!wall) return null;
     const data = hit?.object?.userData && typeof hit.object.userData === 'object' ? hit.object.userData : {};
+    const localNormal = hit?.face?.normal || null;
+    const normalZ = Number(localNormal?.z) || 0;
+    const faceType = normalZ > 0.8 ? 'top' : (normalZ < -0.8 ? 'bottom' : 'side');
     return {
       wall,
       wallId,
@@ -2067,6 +2382,7 @@ const BattlefieldPreviewModal = ({
         y: Number(hit?.point?.y) || 0,
         z: Number(hit?.point?.z) || 0
       },
+      faceType,
       partIndex: Number.isFinite(Number(data?.partIndex)) ? Math.floor(Number(data.partIndex)) : null,
       partMinZ: Number.isFinite(Number(data?.partMinZ)) ? Number(data.partMinZ) : null,
       partMaxZ: Number.isFinite(Number(data?.partMaxZ)) ? Number(data.partMaxZ) : null,
@@ -2204,15 +2520,10 @@ const BattlefieldPreviewModal = ({
     zoomAnimRef.current = requestAnimationFrame(tick);
   }, []);
 
-  const resolveMousePillarSnapHint = useCallback((sx, sy) => {
+  const resolveMouseSnapHint = useCallback((sx, sy) => {
     const meshHit = pickWallMeshHitFromScreenPoint(sx, sy);
     if (!meshHit?.wall) {
-      mousePillarSnapHintRef.current = null;
-      return null;
-    }
-    const hitItemDef = itemCatalogById.get(meshHit.wall.itemId) || null;
-    if (!isWoodPillarItem(hitItemDef)) {
-      mousePillarSnapHintRef.current = null;
+      mouseSnapHintRef.current = null;
       return null;
     }
     const hint = {
@@ -2221,11 +2532,12 @@ const BattlefieldPreviewModal = ({
       hitX: Number(meshHit?.point?.x) || 0,
       hitY: Number(meshHit?.point?.y) || 0,
       hitZ: Number(meshHit?.point?.z) || 0,
-      partCenterZ: Number.isFinite(Number(meshHit?.partCenterZ)) ? Number(meshHit.partCenterZ) : null
+      partCenterZ: Number.isFinite(Number(meshHit?.partCenterZ)) ? Number(meshHit.partCenterZ) : null,
+      faceType: typeof meshHit?.faceType === 'string' ? meshHit.faceType : ''
     };
-    mousePillarSnapHintRef.current = hint;
+    mouseSnapHintRef.current = hint;
     return hint;
-  }, [itemCatalogById, pickWallMeshHitFromScreenPoint]);
+  }, [pickWallMeshHitFromScreenPoint]);
 
   const syncGhostByMouse = useCallback((sourceGhost = ghost) => {
     if (!sourceGhost) return null;
@@ -2242,7 +2554,7 @@ const BattlefieldPreviewModal = ({
       fieldWidth,
       fieldHeight,
       itemCatalogById,
-      mousePillarSnapHintRef.current
+      mouseSnapHintRef.current
     );
     setGhost(evaluated.ghost);
     setGhostBlocked(evaluated.blocked);
@@ -2256,7 +2568,7 @@ const BattlefieldPreviewModal = ({
     setGhostBlocked(false);
     setSnapState(null);
     setInvalidReason('');
-    mousePillarSnapHintRef.current = null;
+    mouseSnapHintRef.current = null;
     setSelectedPaletteItem('');
     if (tip) setMessage(tip);
   }, []);
@@ -2294,7 +2606,7 @@ const BattlefieldPreviewModal = ({
       fieldWidth,
       fieldHeight,
       itemCatalogById,
-      mousePillarSnapHintRef.current
+      mouseSnapHintRef.current
     );
     setSelectedWallId('');
     setSelectedDeploymentId('');
@@ -2309,6 +2621,8 @@ const BattlefieldPreviewModal = ({
     setInvalidReason(evaluated.reason || '');
     if (isWoodPlankItem(itemDef)) {
       setMessage(`已选中${itemDef.name || '物品'}：左键放置，右键或 ESC 取消，靠近立柱可吸附，滚轮切换长端/短端贴面，Space+左键平移`);
+    } else if (isBushItem(itemDef)) {
+      setMessage(`已选中${itemDef.name || '草丛'}：左键放置，右键或 ESC 取消；绿色半球罩及地面圆环为隐身范围`);
     } else {
       setMessage(`已选中${itemDef.name || '物品'}：左键放置，右键或 ESC 取消，滚轮旋转，Space+左键平移`);
     }
@@ -2334,7 +2648,7 @@ const BattlefieldPreviewModal = ({
       fieldWidth,
       fieldHeight,
       itemCatalogById,
-      mousePillarSnapHintRef.current
+      mouseSnapHintRef.current
     );
     setGhost({ ...evaluated.ghost, _mode: 'move', _sourceId: wallLike.id });
     setGhostBlocked(evaluated.blocked);
@@ -3303,6 +3617,7 @@ const BattlefieldPreviewModal = ({
       max: 0,
       current: 0
     });
+    setItemDetailModalItemId('');
     setSelectedPaletteItem('');
     setSelectedWallId('');
     setMessage('');
@@ -3335,6 +3650,13 @@ const BattlefieldPreviewModal = ({
     const exists = walls.some((item) => item.id === selectedWallId);
     if (!exists) setSelectedWallId('');
   }, [selectedWallId, walls]);
+
+  useEffect(() => {
+    if (!itemDetailModalItemId) return;
+    if (!itemCatalogById.has(itemDetailModalItemId)) {
+      setItemDetailModalItemId('');
+    }
+  }, [itemCatalogById, itemDetailModalItemId]);
 
   useEffect(() => {
     if (!selectedDeploymentId) return;
@@ -3493,6 +3815,7 @@ const BattlefieldPreviewModal = ({
     const pickableWallMeshes = [];
     const buildWallMesh = (wallLike, options = {}) => {
       const itemDef = resolveWallItemDef(wallLike, itemCatalogById);
+      const isBush = isBushItem(itemDef);
       const safeHeight = Math.max(14, Number(wallLike.height) || WALL_HEIGHT);
       const safeWidth = Math.max(20, Number(wallLike.width) || WALL_WIDTH);
       const safeDepth = Math.max(12, Number(wallLike.depth) || WALL_DEPTH);
@@ -3514,7 +3837,7 @@ const BattlefieldPreviewModal = ({
 
       let topHex = defaultTop;
       let sideHex = defaultSide;
-      if (selected) {
+      if (selected && !isBush) {
         topHex = 0x60a5fa;
         sideHex = 0x3b82f6;
       } else if (ghostMode && !sourceShadow) {
@@ -3604,6 +3927,16 @@ const BattlefieldPreviewModal = ({
           ),
           materials
         );
+        if (isBush) {
+          const applyOpacity = (mat, opacity) => {
+            if (!mat) return;
+            mat.transparent = true;
+            mat.opacity = opacity;
+            mat.depthWrite = false;
+            mat.depthTest = false;
+          };
+          materials.forEach((mat) => applyOpacity(mat, 0));
+        }
         wallMesh.position.set(
           Number(part?.cx) || 0,
           Number(part?.cy) || 0,
@@ -3611,6 +3944,7 @@ const BattlefieldPreviewModal = ({
         );
         wallMesh.rotation.set(0, 0, degToRad(part?.yawDeg || 0));
         worldGroup.add(wallMesh);
+
         if (!ghostMode && !sourceShadow && typeof wallLike.id === 'string') {
           const partHeight = Math.max(1, Number(part?.h) || 1);
           const partCenterZ = Number(part?.cz) || 0;
@@ -3622,18 +3956,193 @@ const BattlefieldPreviewModal = ({
           pickableWallMeshes.push(wallMesh);
         }
 
-        const edgeMesh = new THREE.LineSegments(
-          new THREE.EdgesGeometry(wallMesh.geometry),
-          new THREE.LineBasicMaterial({
-            color: selected ? 0xbfdbfe : 0x0f172a,
-            transparent: true,
-            opacity: selected ? 0.96 : 0.68
+        if (!isBush) {
+          const edgeMesh = new THREE.LineSegments(
+            new THREE.EdgesGeometry(wallMesh.geometry),
+            new THREE.LineBasicMaterial({
+              color: selected ? 0xbfdbfe : 0x0f172a,
+              transparent: true,
+              opacity: selected ? 0.96 : 0.68
+            })
+          );
+          edgeMesh.position.copy(wallMesh.position);
+          edgeMesh.rotation.copy(wallMesh.rotation);
+          worldGroup.add(edgeMesh);
+        }
+      });
+
+      if (isBush) {
+        const bushGroup = new THREE.Group();
+        const avgCenterZ = partRows.reduce((sum, row) => sum + (Number(row?.cz) || 0), 0) / Math.max(1, partRows.length);
+        bushGroup.position.set(
+          Number(wallLike?.x) || 0,
+          Number(wallLike?.y) || 0,
+          Number.isFinite(avgCenterZ) ? avgCenterZ : (getWallBaseZ(wallLike) + (safeHeight * 0.45))
+        );
+        bushGroup.rotation.set(0, 0, degToRad(wallLike?.rotation || 0));
+        worldGroup.add(bushGroup);
+
+        const partW = safeWidth;
+        const partD = safeDepth;
+        const partH = safeHeight;
+        const crownRadius = Math.max(5.5, Math.min(partW, partD) * 0.2);
+        const crownHeight = Math.max(8, partH * 0.5);
+        const bushTopColor = blocked ? 0xef4444 : (selected ? 0x8ed17f : topHex);
+        const bushSideColor = blocked ? 0x991b1b : (selected ? 0x5ea76a : sideHex);
+
+        const buildFoliageMaterial = (hex, opacity = 0.92, roughness = 0.9, metalness = 0.03) => (
+          new THREE.MeshStandardMaterial({
+            color: hex,
+            transparent: ghostMode || sourceShadow || opacity < 1,
+            opacity: sourceShadow ? Math.min(opacity, 0.35) : (ghostMode ? Math.min(opacity, 0.56) : opacity),
+            roughness,
+            metalness,
+            side: THREE.DoubleSide,
+            depthWrite: !ghostMode && !sourceShadow
           })
         );
-        edgeMesh.position.copy(wallMesh.position);
-        edgeMesh.rotation.copy(wallMesh.rotation);
-        worldGroup.add(edgeMesh);
-      });
+
+        const clumpOffsets = [
+          { x: 0, y: 0, s: 1.3, z: 0.56 },
+          { x: -partW * 0.18, y: partD * 0.06, s: 1.02, z: 0.46 },
+          { x: partW * 0.19, y: partD * 0.04, s: 0.98, z: 0.47 },
+          { x: -partW * 0.13, y: -partD * 0.17, s: 0.92, z: 0.37 },
+          { x: partW * 0.14, y: -partD * 0.16, s: 0.95, z: 0.37 },
+          { x: 0, y: partD * 0.2, s: 0.94, z: 0.42 },
+          { x: -partW * 0.24, y: -partD * 0.01, s: 0.86, z: 0.34 },
+          { x: partW * 0.24, y: 0, s: 0.87, z: 0.34 },
+          { x: -partW * 0.04, y: partD * 0.25, s: 0.83, z: 0.33 },
+          { x: partW * 0.05, y: partD * 0.24, s: 0.82, z: 0.33 },
+          { x: -partW * 0.08, y: -partD * 0.24, s: 0.78, z: 0.3 },
+          { x: partW * 0.08, y: -partD * 0.24, s: 0.79, z: 0.3 }
+        ];
+        clumpOffsets.forEach((row, idx) => {
+          const crown = new THREE.Mesh(
+            new THREE.SphereGeometry(crownRadius, 16, 14),
+            buildFoliageMaterial(idx % 2 === 0 ? bushTopColor : bushSideColor, 0.94, 0.88, 0.02)
+          );
+          crown.scale.set(row.s * 1.1, row.s, Math.max(0.72, (crownHeight / crownRadius) * (0.86 + (idx * 0.018))));
+          crown.position.set(row.x, row.y, Math.max(2.8, partH * row.z));
+          bushGroup.add(crown);
+        });
+
+        const bladeCount = 18;
+        for (let bladeIndex = 0; bladeIndex < bladeCount; bladeIndex += 1) {
+          const t = bladeIndex / bladeCount;
+          const angle = (Math.PI * 2 * t) + ((bladeIndex % 2) * 0.18);
+          const radius = Math.max(1.8, crownRadius * (0.26 + ((bladeIndex % 5) * 0.1)));
+          const blade = new THREE.Mesh(
+            new THREE.ConeGeometry(Math.max(0.38, crownRadius * 0.16), Math.max(3.8, partH * 0.44), 5),
+            buildFoliageMaterial(bushTopColor, 0.9, 0.84, 0.01)
+          );
+          blade.position.set(
+            Math.cos(angle) * radius,
+            Math.sin(angle) * radius,
+            Math.max(2.6, partH * (0.25 + ((bladeIndex % 4) * 0.03)))
+          );
+          blade.rotation.x = Math.PI / 2;
+          blade.rotation.y = Math.PI * (0.06 + ((bladeIndex % 4) * 0.03));
+          blade.rotation.z = angle;
+          bushGroup.add(blade);
+        }
+
+        const bladeTexture = getBushBladeTexture();
+        if (bladeTexture) {
+          const spriteOpacity = sourceShadow ? 0.22 : (ghostMode ? 0.46 : 0.74);
+          const spriteMatA = new THREE.SpriteMaterial({
+            map: bladeTexture,
+            color: bushTopColor,
+            transparent: true,
+            opacity: spriteOpacity,
+            alphaTest: 0.12,
+            depthWrite: false
+          });
+          const spriteMatB = new THREE.SpriteMaterial({
+            map: bladeTexture,
+            color: bushSideColor,
+            transparent: true,
+            opacity: spriteOpacity * 0.92,
+            alphaTest: 0.12,
+            depthWrite: false
+          });
+          const spriteCount = 26;
+          for (let spriteIndex = 0; spriteIndex < spriteCount; spriteIndex += 1) {
+            const t = spriteIndex / spriteCount;
+            const angle = (Math.PI * 2 * t) + ((spriteIndex % 3) * 0.14);
+            const radius = crownRadius * (0.2 + ((spriteIndex % 7) * 0.1));
+            const sprite = new THREE.Sprite((spriteIndex % 2 === 0) ? spriteMatA : spriteMatB);
+            sprite.center.set(0.5, 0.03);
+            const spriteHeight = Math.max(5.8, partH * (0.27 + ((spriteIndex % 5) * 0.03)));
+            sprite.scale.set(spriteHeight * 0.42, spriteHeight, 1);
+            sprite.position.set(
+              Math.cos(angle) * radius,
+              Math.sin(angle) * radius,
+              Math.max(2.1, partH * (0.19 + ((spriteIndex % 4) * 0.02)))
+            );
+            bushGroup.add(sprite);
+          }
+        }
+      }
+
+      if (isBush && ghostMode && !sourceShadow) {
+        const safeCenterX = Number(wallLike?.x) || 0;
+        const safeCenterY = Number(wallLike?.y) || 0;
+        const footprintCorners = getWallFootprintCorners(wallLike, itemCatalogById);
+        const fallbackRadius = Math.max(6, Math.hypot(safeWidth * 0.5, safeDepth * 0.5));
+        const stealthRadius = Math.max(
+          fallbackRadius,
+          footprintCorners.reduce(
+            (max, row) => Math.max(max, Math.hypot((Number(row?.x) || 0) - safeCenterX, (Number(row?.y) || 0) - safeCenterY)),
+            0
+          )
+        );
+        const rangeColor = blocked ? 0xef4444 : 0x22c55e;
+        const hemiDome = new THREE.Mesh(
+          new THREE.SphereGeometry(stealthRadius, 36, 22, 0, Math.PI * 2, 0, Math.PI * 0.5),
+          new THREE.MeshBasicMaterial({
+            color: rangeColor,
+            transparent: true,
+            opacity: blocked ? 0.14 : 0.17,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          })
+        );
+        hemiDome.position.set(safeCenterX, safeCenterY, 0);
+        hemiDome.rotation.x = Math.PI * 0.5;
+        worldGroup.add(hemiDome);
+
+        const groundDisk = new THREE.Mesh(
+          new THREE.CircleGeometry(stealthRadius, 64),
+          new THREE.MeshBasicMaterial({
+            color: rangeColor,
+            transparent: true,
+            opacity: blocked ? 0.12 : 0.14,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          })
+        );
+        groundDisk.position.set(safeCenterX, safeCenterY, 0.08);
+        worldGroup.add(groundDisk);
+
+        const ring = new THREE.LineLoop(
+          new THREE.BufferGeometry().setFromPoints(
+            Array.from({ length: 64 }, (_, idx) => {
+              const angle = (idx / 64) * Math.PI * 2;
+              return new THREE.Vector3(
+                safeCenterX + (Math.cos(angle) * stealthRadius),
+                safeCenterY + (Math.sin(angle) * stealthRadius),
+                0.54
+              );
+            })
+          ),
+          new THREE.LineBasicMaterial({
+            color: blocked ? 0xfca5a5 : 0x86efac,
+            transparent: true,
+            opacity: 0.95
+          })
+        );
+        worldGroup.add(ring);
+      }
     };
 
     const buildDefenderSquadMesh = (deploymentLike, options = {}) => {
@@ -3887,19 +4396,35 @@ const BattlefieldPreviewModal = ({
     if (snapState?.anchorId) {
       const anchor = walls.find((item) => item.id === snapState.anchorId);
       if (anchor) {
-        const topHighlight = new THREE.Mesh(
-          new THREE.PlaneGeometry(anchor.width, anchor.depth),
-          new THREE.MeshBasicMaterial({
-            color: 0x38bdf8,
-            transparent: true,
-            opacity: 0.12,
-            side: THREE.DoubleSide,
-            depthWrite: false
-          })
-        );
-        topHighlight.position.set(anchor.x, anchor.y, getWallTopZ(anchor) + 0.8);
-        topHighlight.rotation.set(0, 0, degToRad(anchor.rotation || 0));
-        worldGroup.add(topHighlight);
+        const highlight = resolveSnapHighlightFacePoints(anchor, snapState, itemCatalogById);
+        if (highlight?.points?.length === 4) {
+          const pointRows = highlight.points;
+          const vertices = new Float32Array(pointRows.flatMap((p) => [p.x, p.y, p.z]));
+          const faceGeometry = new THREE.BufferGeometry();
+          faceGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+          faceGeometry.setIndex([0, 1, 2, 0, 2, 3]);
+          faceGeometry.computeVertexNormals();
+          const faceMesh = new THREE.Mesh(
+            faceGeometry,
+            new THREE.MeshBasicMaterial({
+              color: 0x38bdf8,
+              transparent: true,
+              opacity: highlight.kind === 'top' ? 0.12 : 0.16,
+              side: THREE.DoubleSide,
+              depthWrite: false
+            })
+          );
+          worldGroup.add(faceMesh);
+          const edgeLoop = new THREE.LineLoop(
+            new THREE.BufferGeometry().setFromPoints(pointRows.map((p) => new THREE.Vector3(p.x, p.y, p.z + 0.06))),
+            new THREE.LineBasicMaterial({
+              color: 0x7dd3fc,
+              transparent: true,
+              opacity: 0.92
+            })
+          );
+          worldGroup.add(edgeLoop);
+        }
       }
     }
 
@@ -3939,7 +4464,7 @@ const BattlefieldPreviewModal = ({
     walls,
     ghost,
     ghostBlocked,
-    snapState?.anchorId,
+    snapState,
     viewport,
     cameraAngle,
     cameraYaw,
@@ -4011,9 +4536,15 @@ const BattlefieldPreviewModal = ({
     if (snapState?.anchorId) {
       const anchor = walls.find((item) => item.id === snapState.anchorId);
       if (anchor) {
-        const topCorners = getRectCorners(anchor.x, anchor.y, anchor.width, anchor.depth, anchor.rotation)
-          .map((point) => projectOverlayPoint(point.x, point.y, getWallTopZ(anchor)));
-        drawPolygon(topCorners, 'rgba(56, 189, 248, 0.08)', 'rgba(56, 189, 248, 0.82)');
+        const highlight = resolveSnapHighlightFacePoints(anchor, snapState, itemCatalogById);
+        if (highlight?.points?.length === 4) {
+          const projected = highlight.points.map((point) => projectOverlayPoint(point.x, point.y, point.z));
+          drawPolygon(
+            projected,
+            highlight.kind === 'top' ? 'rgba(56, 189, 248, 0.08)' : 'rgba(56, 189, 248, 0.11)',
+            'rgba(56, 189, 248, 0.82)'
+          );
+        }
       }
     }
 
@@ -4182,11 +4713,16 @@ const BattlefieldPreviewModal = ({
       ctx.fillStyle = '#fecaca';
       ctx.fillText(text, 21, y + 14);
     }
-  }, [open, walls, defenderDeployments, defenderRosterMap, selectedDeploymentId, ghost, ghostBlocked, snapState, viewport, cameraAngle, cameraYaw, wallGroups, worldScale, fieldHeight, fieldWidth, invalidReason, editMode, effectiveCanEdit, selectedWallId, panWorld.x, panWorld.y]);
+  }, [open, walls, defenderDeployments, defenderRosterMap, selectedDeploymentId, ghost, ghostBlocked, snapState, viewport, cameraAngle, cameraYaw, wallGroups, worldScale, fieldHeight, fieldWidth, invalidReason, editMode, effectiveCanEdit, selectedWallId, panWorld.x, panWorld.y, itemCatalogById]);
 
   useEffect(() => {
     if (!open) return undefined;
     const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && itemDetailModalItemId) {
+        event.preventDefault();
+        setItemDetailModalItemId('');
+        return;
+      }
       if (event.key === ' ') {
         spacePressedRef.current = true;
         event.preventDefault();
@@ -4217,7 +4753,7 @@ const BattlefieldPreviewModal = ({
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [activeDefenderMoveId, cancelGhostPlacement, ghost, open]);
+  }, [activeDefenderMoveId, cancelGhostPlacement, ghost, itemDetailModalItemId, open]);
 
   const getPanDeltaFromScreenPoints = useCallback((from, to) => {
     const start = getWorldFromScreenPoint(from.x, from.y);
@@ -4279,7 +4815,7 @@ const BattlefieldPreviewModal = ({
     mouseScreenRef.current = { x: point.x, y: point.y, valid: true };
     const world = getWorldFromScreenPoint(point.x, point.y);
     mouseWorldRef.current = world;
-    resolveMousePillarSnapHint(point.x, point.y);
+    resolveMouseSnapHint(point.x, point.y);
 
     if (event.button === 2) {
       event.preventDefault();
@@ -4474,7 +5010,7 @@ const BattlefieldPreviewModal = ({
     mouseScreenRef.current = { x: point.x, y: point.y, valid: true };
     const world = getWorldFromScreenPoint(point.x, point.y);
     mouseWorldRef.current = world;
-    resolveMousePillarSnapHint(point.x, point.y);
+    resolveMouseSnapHint(point.x, point.y);
 
     if (ghost) {
       if (!panDragRef.current && !rotateDragRef.current) {
@@ -4563,7 +5099,7 @@ const BattlefieldPreviewModal = ({
         const sy = event.clientY - rect.top;
         mouseScreenRef.current = { x: sx, y: sy, valid: true };
         if (ghost) {
-          resolveMousePillarSnapHint(sx, sy);
+          resolveMouseSnapHint(sx, sy);
         }
       }
       const rotateDrag = rotateDragRef.current;
@@ -4628,10 +5164,14 @@ const BattlefieldPreviewModal = ({
       window.removeEventListener('mouseup', handleWindowMouseUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [cancelGhostPlacement, clearPanDragging, clearRotateDragging, getPanDeltaFromScreenPoints, getWorldFromScreenPoint, ghost, open, resolveMousePillarSnapHint]);
+  }, [cancelGhostPlacement, clearPanDragging, clearRotateDragging, getPanDeltaFromScreenPoints, getWorldFromScreenPoint, ghost, open, resolveMouseSnapHint]);
 
   const handleWheel = (event) => {
     event.preventDefault();
+    const pointer = mouseScreenRef.current;
+    if (pointer?.valid) {
+      resolveMouseSnapHint(pointer.x, pointer.y);
+    }
     if (!ghost && editMode && effectiveCanEdit) {
       const rotatingDeployId = activeDefenderMoveId || selectedDeploymentId;
       if (rotatingDeployId) {
@@ -4660,7 +5200,15 @@ const BattlefieldPreviewModal = ({
     }
     if (!effectiveCanEdit) return;
 
-    if (snapState?.type === 'pillar-face') {
+    const wheelDelta = event.deltaY < 0 ? ROTATE_STEP : -ROTATE_STEP;
+    const hoveredAnchorId = getHintAnchorId(mouseSnapHintRef.current);
+    const isSnappedToHoveredAnchor = (
+      typeof snapState?.anchorId === 'string'
+      && !!snapState.anchorId
+      && snapState.anchorId === hoveredAnchorId
+    );
+
+    if (snapState?.type === 'pillar-face' && isSnappedToHoveredAnchor) {
       const nextMode = ghost?._pillarSnapMode === 'short' ? 'long' : 'short';
       const nextGhost = {
         ...ghost,
@@ -4673,7 +5221,7 @@ const BattlefieldPreviewModal = ({
         fieldWidth,
         fieldHeight,
         itemCatalogById,
-        mousePillarSnapHintRef.current
+        mouseSnapHintRef.current
       );
       setGhost(evaluated.ghost);
       setGhostBlocked(evaluated.blocked);
@@ -4684,33 +5232,75 @@ const BattlefieldPreviewModal = ({
     }
 
     const lockRotation = snapState?.type === 'top';
-    setGhost((prevGhost) => {
-      if (!prevGhost) return prevGhost;
-      if (lockRotation) {
-        const anchor = walls.find((item) => item.id === snapState?.anchorId);
-        if (!anchor) return prevGhost;
-        return {
-          ...prevGhost,
-          rotation: anchor.rotation
-        };
+    if (lockRotation) {
+      const anchor = walls.find((item) => item.id === snapState?.anchorId);
+      if (anchor) {
+        setGhost((prevGhost) => (
+          prevGhost
+            ? { ...prevGhost, rotation: anchor.rotation }
+            : prevGhost
+        ));
       }
-      const delta = event.deltaY < 0 ? ROTATE_STEP : -ROTATE_STEP;
-      return {
-        ...prevGhost,
-        rotation: normalizeDeg(prevGhost.rotation + delta)
-      };
-    });
+      return;
+    }
+
+    if (isSnappedToHoveredAnchor && snapState?.type && snapState.type !== 'top') {
+      const maxProbeCount = Math.max(1, Math.round(360 / Math.max(0.1, Math.abs(wheelDelta))));
+      let probeGhost = { ...ghost };
+      let matched = null;
+      for (let i = 0; i < maxProbeCount; i += 1) {
+        probeGhost = {
+          ...probeGhost,
+          rotation: normalizeDeg((Number(probeGhost?.rotation) || 0) + wheelDelta)
+        };
+        const evaluated = evaluateGhostPlacement(
+          probeGhost,
+          walls,
+          mouseWorldRef.current,
+          fieldWidth,
+          fieldHeight,
+          itemCatalogById,
+          mouseSnapHintRef.current
+        );
+        const nextAnchorId = getHintAnchorId(mouseSnapHintRef.current);
+        if (!nextAnchorId || nextAnchorId !== snapState.anchorId) break;
+        if (
+          evaluated?.snap
+          && evaluated.snap.anchorId === snapState.anchorId
+          && evaluated.snap.type !== 'top'
+        ) {
+          matched = evaluated;
+          break;
+        }
+      }
+      if (matched) {
+        setGhost(matched.ghost);
+        setGhostBlocked(matched.blocked);
+        setSnapState(matched.snap);
+        setInvalidReason(matched.reason || '');
+        setMessage(`吸附转向 ${Math.round(Number(matched?.ghost?.rotation) || 0)}°`);
+        return;
+      }
+      setMessage('当前吸附面没有可用转向');
+      return;
+    }
+
+    setGhost((prevGhost) => (
+      prevGhost
+        ? { ...prevGhost, rotation: normalizeDeg((Number(prevGhost?.rotation) || 0) + wheelDelta) }
+        : prevGhost
+    ));
   };
 
   useEffect(() => {
     if (!ghost) return;
     const pointer = mouseScreenRef.current;
     if (pointer?.valid) {
-      resolveMousePillarSnapHint(pointer.x, pointer.y);
+      resolveMouseSnapHint(pointer.x, pointer.y);
     }
     syncGhostByMouse(ghost);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fieldHeight, fieldWidth, ghost?.rotation, walls, cameraAngle, cameraYaw, resolveMousePillarSnapHint]);
+  }, [fieldHeight, fieldWidth, ghost?.rotation, walls, cameraAngle, cameraYaw, resolveMouseSnapHint]);
 
   const selectedDefenderDeployment = defenderDeploymentRows.find((item) => item.deployId === selectedDeploymentId) || null;
 
@@ -4930,18 +5520,37 @@ const BattlefieldPreviewModal = ({
                   )}
                   {normalizedItemCatalog.map((item) => {
                     const stockMeta = itemStockMetaMap.get(item.itemId) || { used: 0, limit: 0, remaining: 0 };
+                    const canPickItem = !!(effectiveCanEdit && editMode && stockMeta.remaining > 0);
                     return (
-                      <button
+                      <article
                         key={item.itemId}
-                        type="button"
-                        className={`battlefield-item-card ${selectedPaletteItem === item.itemId && ghost ? 'selected' : ''}`}
-                        disabled={!effectiveCanEdit || !editMode || stockMeta.remaining <= 0}
-                        onClick={() => pickPaletteItem(item.itemId)}
+                        className={`battlefield-item-card ${selectedPaletteItem === item.itemId && ghost ? 'selected' : ''} ${canPickItem ? '' : 'is-disabled'}`}
+                        onClick={() => {
+                          if (canPickItem) pickPaletteItem(item.itemId);
+                        }}
                       >
-                        <strong>{item.name || item.itemId}</strong>
-                        <span>{`库存 ${stockMeta.remaining}/${stockMeta.limit}`}</span>
-                        <span>{`属性 ${item.hp} / ${roundTo(item.defense, 2)}`}</span>
-                      </button>
+                        <div className="battlefield-item-card-head">
+                          <strong>{item.name || item.itemId}</strong>
+                          <button
+                            type="button"
+                            className="battlefield-item-detail-btn"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setItemDetailModalItemId(item.itemId);
+                            }}
+                          >
+                            详情
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="battlefield-item-card-main"
+                          disabled={!canPickItem}
+                        >
+                          <span>{`库存 ${stockMeta.remaining}/${stockMeta.limit}`}</span>
+                          <span>{`属性 ${item.hp} / ${roundTo(item.defense, 2)}`}</span>
+                        </button>
+                      </article>
                     );
                   })}
                   <div className="battlefield-sidebar-tip">
@@ -5094,6 +5703,76 @@ const BattlefieldPreviewModal = ({
         <div className="battlefield-footer">
           <span>{errorText || message || getPlacementReasonText(invalidReason) || '提示: 右键按住并拖动可旋转战场；右键点击可取消放置；Space+左键或中键平移；滚轮缩放/旋转'}</span>
         </div>
+        {itemDetailModalItem && (
+          <div
+            className="battlefield-item-detail-overlay"
+            onClick={() => setItemDetailModalItemId('')}
+          >
+            <div
+              className="battlefield-item-detail-modal"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="battlefield-item-detail-head">
+                <div>
+                  <strong>{itemDetailModalItem.name || itemDetailModalItem.itemId}</strong>
+                  <span>{itemDetailModalItem.itemId}</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-small btn-secondary"
+                  onClick={() => setItemDetailModalItemId('')}
+                >
+                  关闭
+                </button>
+              </div>
+              {itemDetailModalItem.description && (
+                <div className="battlefield-item-detail-desc">{itemDetailModalItem.description}</div>
+              )}
+              <div className="battlefield-item-detail-grid">
+                <div className="battlefield-item-detail-row">
+                  <span>尺寸</span>
+                  <em>{`${Math.round(itemDetailModalItem.width)} × ${Math.round(itemDetailModalItem.depth)} × ${Math.round(itemDetailModalItem.height)}`}</em>
+                </div>
+                <div className="battlefield-item-detail-row">
+                  <span>基础属性</span>
+                  <em>{`HP ${itemDetailModalItem.hp} / 防御 ${roundTo(itemDetailModalItem.defense, 2)}`}</em>
+                </div>
+                <div className="battlefield-item-detail-row">
+                  <span>库存</span>
+                  <em>{itemDetailModalStock ? `${itemDetailModalStock.remaining}/${itemDetailModalStock.limit}` : '-'}</em>
+                </div>
+                <div className="battlefield-item-detail-row">
+                  <span>样式</span>
+                  <em>{`${itemDetailModalItem?.style?.shape || '-'} / ${itemDetailModalItem?.style?.material || '-'}`}</em>
+                </div>
+                <div className="battlefield-item-detail-row">
+                  <span>碰撞体</span>
+                  <em>{`${itemDetailModalItem?.collider?.kind || '-'} (${itemDetailColliderPartCount})`}</em>
+                </div>
+                <div className="battlefield-item-detail-row">
+                  <span>插槽数</span>
+                  <em>{itemDetailSocketCount}</em>
+                </div>
+                <div className="battlefield-item-detail-row">
+                  <span>堆叠上限</span>
+                  <em>{itemDetailModalItem?.maxStack ?? '无限制'}</em>
+                </div>
+                <div className="battlefield-item-detail-row">
+                  <span>需要支撑</span>
+                  <em>{itemDetailModalItem?.requiresSupport ? '是' : '否'}</em>
+                </div>
+                <div className="battlefield-item-detail-row">
+                  <span>吸附优先级</span>
+                  <em>{Number.isFinite(Number(itemDetailModalItem?.snapPriority)) ? Number(itemDetailModalItem.snapPriority) : 0}</em>
+                </div>
+                <div className="battlefield-item-detail-row">
+                  <span>交互效果</span>
+                  <em>{itemDetailInteractionLabels.length > 0 ? itemDetailInteractionLabels.join(' / ') : '无'}</em>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         <NumberPadDialog
           open={defenderQuantityDialog.open}
           title={`设置兵力：${defenderQuantityDialog.unitName || defenderQuantityDialog.unitTypeId}`}
