@@ -30,8 +30,8 @@ import {
   resolveBattleLayerColors
 } from '../../../battlefield/items/itemGeometryRegistry';
 
-const DEFAULT_FIELD_WIDTH = 900;
-const DEFAULT_FIELD_HEIGHT = 620;
+const DEFAULT_FIELD_WIDTH = 1350;
+const DEFAULT_FIELD_HEIGHT = 744;
 const DEFAULT_TIME_LIMIT = 240;
 const DEFAULT_UNITS_PER_SOLDIER = 10;
 const TEAM_ATTACKER = 'attacker';

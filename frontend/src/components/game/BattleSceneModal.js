@@ -270,8 +270,8 @@ const randomPickUnique = (values = [], count = 1) => {
 
 const buildTeamPositions = ({ team, count, field, deployRange, jitter = true }) => {
   const safeCount = Math.max(1, Math.floor(Number(count) || 1));
-  const safeFieldW = Math.max(120, Number(field?.width) || 900);
-  const safeFieldH = Math.max(120, Number(field?.height) || 620);
+  const safeFieldW = Math.max(120, Number(field?.width) || 1350);
+  const safeFieldH = Math.max(120, Number(field?.height) || 744);
   const safeRange = deployRange && typeof deployRange === 'object'
     ? deployRange
     : {
@@ -366,8 +366,8 @@ const buildDeployFormationFootprint = (group = null) => {
 };
 
 const computeDeployOverviewDistance = (field = null) => {
-  const width = Math.max(120, Number(field?.width) || 900);
-  const height = Math.max(120, Number(field?.height) || 620);
+  const width = Math.max(120, Number(field?.width) || 1350);
+  const height = Math.max(120, Number(field?.height) || 744);
   const dominantSpan = Math.max(width, height * 1.2);
   return clamp(dominantSpan * 1.18, CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX);
 };
@@ -983,7 +983,7 @@ const BattleSceneModal = ({
       const renderStart = performance.now();
       const snapshot = runtime.getRenderSnapshot();
       const field = runtime.getField();
-      renderers.ground.setFieldSize(field?.width || 900, field?.height || 620);
+      renderers.ground.setFieldSize(field?.width || 1350, field?.height || 744);
       renderers.ground.setDeployRange(runtime.getDeployRange());
       let orientationCheckBuildings = null;
       if (
@@ -1320,8 +1320,8 @@ const BattleSceneModal = ({
     const runtime = runtimeRef.current;
     if (!runtime) return false;
     const field = runtime.getField?.();
-    const halfW = Math.max(10, Number(field?.width) || 900) * 0.5;
-    const halfH = Math.max(10, Number(field?.height) || 620) * 0.5;
+    const halfW = Math.max(10, Number(field?.width) || 1350) * 0.5;
+    const halfH = Math.max(10, Number(field?.height) || 744) * 0.5;
     const x = Number(point?.x);
     const y = Number(point?.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
@@ -3024,26 +3024,26 @@ const BattleSceneModal = ({
   const quickParsedDefenderTeams = parseQuickDeployNumber(quickDeployRandomForm.defenderTeamCount);
   const quickParsedAttackerTotal = parseQuickDeployNumber(quickDeployRandomForm.attackerTotal);
   const quickParsedDefenderTotal = parseQuickDeployNumber(quickDeployRandomForm.defenderTotal);
-  const currentField = runtimeRef.current?.getField?.() || { width: 900, height: 620 };
+  const currentField = runtimeRef.current?.getField?.() || { width: 1350, height: 744 };
   const canDrawMidlineDebug = debugEnabled && showMidlineDebug && !!worldToDomRef.current;
-  const midlineTop = canDrawMidlineDebug ? worldToDomRef.current({ x: 0, y: (Number(currentField?.height) || 620) * 0.5, z: 0 }) : null;
-  const midlineBottom = canDrawMidlineDebug ? worldToDomRef.current({ x: 0, y: -(Number(currentField?.height) || 620) * 0.5, z: 0 }) : null;
+  const midlineTop = canDrawMidlineDebug ? worldToDomRef.current({ x: 0, y: (Number(currentField?.height) || 744) * 0.5, z: 0 }) : null;
+  const midlineBottom = canDrawMidlineDebug ? worldToDomRef.current({ x: 0, y: -(Number(currentField?.height) || 744) * 0.5, z: 0 }) : null;
   const midlineLineStyle = (midlineTop?.visible !== false && midlineBottom?.visible !== false)
     ? buildDomLineStyle(midlineTop, midlineBottom)
     : null;
   const teamMinX = Number(debugStats?.clampAllowedMinX);
   const teamMaxX = Number(debugStats?.clampAllowedMaxX);
   const teamMinTop = canDrawMidlineDebug && Number.isFinite(teamMinX)
-    ? worldToDomRef.current({ x: teamMinX, y: (Number(currentField?.height) || 620) * 0.5, z: 0 })
+    ? worldToDomRef.current({ x: teamMinX, y: (Number(currentField?.height) || 744) * 0.5, z: 0 })
     : null;
   const teamMinBottom = canDrawMidlineDebug && Number.isFinite(teamMinX)
-    ? worldToDomRef.current({ x: teamMinX, y: -(Number(currentField?.height) || 620) * 0.5, z: 0 })
+    ? worldToDomRef.current({ x: teamMinX, y: -(Number(currentField?.height) || 744) * 0.5, z: 0 })
     : null;
   const teamMaxTop = canDrawMidlineDebug && Number.isFinite(teamMaxX)
-    ? worldToDomRef.current({ x: teamMaxX, y: (Number(currentField?.height) || 620) * 0.5, z: 0 })
+    ? worldToDomRef.current({ x: teamMaxX, y: (Number(currentField?.height) || 744) * 0.5, z: 0 })
     : null;
   const teamMaxBottom = canDrawMidlineDebug && Number.isFinite(teamMaxX)
-    ? worldToDomRef.current({ x: teamMaxX, y: -(Number(currentField?.height) || 620) * 0.5, z: 0 })
+    ? worldToDomRef.current({ x: teamMaxX, y: -(Number(currentField?.height) || 744) * 0.5, z: 0 })
     : null;
   const teamMinLineStyle = (teamMinTop?.visible !== false && teamMinBottom?.visible !== false)
     ? buildDomLineStyle(teamMinTop, teamMinBottom)

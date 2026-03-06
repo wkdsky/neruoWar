@@ -24,14 +24,14 @@ const CAMERA_YAW_DEFAULT = 0;
 const CAMERA_TWEEN_MS = 260;
 const CAMERA_ROTATE_SENSITIVITY = 0.38;
 const CAMERA_ROTATE_CLICK_THRESHOLD = 4;
-const FIELD_WIDTH = 900;
-const FIELD_HEIGHT = 620;
+const FIELD_WIDTH = 1350;
+const FIELD_HEIGHT = 744;
 const MAX_STACK_LEVEL = 31;
 const BASE_DEFENSE = 1.1;
 const BASE_HP = 240;
-const WALL_WIDTH = 104;
-const WALL_DEPTH = 24;
-const WALL_HEIGHT = 42;
+const WALL_WIDTH = 69.333;
+const WALL_DEPTH = 16;
+const WALL_HEIGHT = 28;
 const STACK_LAYER_HEIGHT = WALL_HEIGHT;
 const ROTATE_STEP = 7.5;
 const MIN_ZOOM = 0.75;
@@ -49,20 +49,23 @@ const DEPLOY_ZONE_RATIO = 0.2;
 const API_BASE = BACKEND_ORIGIN;
 const DEFAULT_MAX_ITEMS_PER_TYPE = 10;
 const SNAP_EPSILON = 1.2;
-const CACHE_VERSION = 2;
-const CACHE_PREFIX = 'battlefield_layout_cache_v2';
+const CACHE_VERSION = 3;
+const CACHE_PREFIX = 'battlefield_layout_cache_v3';
 const DEFENDER_SOLDIER_VISUAL_SCALE = 3.52;
 const DEFENDER_FORMATION_METRIC_BUDGET = 48;
 const DEFENDER_DEFAULT_FACING_DEG = 90;
 const DEFENDER_OVERLAP_RATIO = 0.82;
 const DEFENDER_OVERLAP_ALLOWANCE = 4;
+const MERGE_HP_SCALE_PER_LINK = 0.1;
+const MERGE_DEFENSE_SCALE_PER_LINK = 0.05;
 const PALETTE_WALL_TEMPLATE = {
   itemId: '',
   width: WALL_WIDTH,
   depth: WALL_DEPTH,
   height: WALL_HEIGHT,
   hp: BASE_HP,
-  defense: BASE_DEFENSE
+  defense: BASE_DEFENSE,
+  maxStack: null
 };
 
 let bushBladeTexture = null;
@@ -139,6 +142,11 @@ const roundTo = (value, digits = 2) => {
   return Math.round(n * p) / p;
 };
 
+const clampStackLimit = (value, fallback = MAX_STACK_LEVEL) => {
+  if (!Number.isFinite(Number(value))) return fallback;
+  return Math.max(1, Math.min(MAX_STACK_LEVEL, Math.floor(Number(value))));
+};
+
 const resolveFormationBudgetByZoom = (zoomValue) => {
   const minZoom = Math.max(0.01, MIN_ZOOM);
   const maxZoom = Math.max(minZoom + 0.01, MAX_ZOOM);
@@ -184,7 +192,7 @@ const getCameraConfig = (tiltDeg, yawDeg = CAMERA_YAW_DEFAULT) => {
 };
 
 const getWallBaseZ = (wall = {}) => (
-  Math.max(0, Math.floor(Number(wall?.z) || 0))
+  Math.max(0, Number(wall?.z) || 0)
   * Math.max(10, Number(wall?.height) || STACK_LAYER_HEIGHT)
 );
 
@@ -214,6 +222,7 @@ const readBattlefieldCache = (nodeId, gateKey) => {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
+    if (Number(parsed?.version) !== CACHE_VERSION) return null;
     return parsed;
   } catch (error) {
     return null;
@@ -244,13 +253,44 @@ const createWallFromLike = (wallLike = {}, overrides = {}) => ({
     : '',
   x: Number.isFinite(Number(overrides.x)) ? Number(overrides.x) : (Number(wallLike.x) || 0),
   y: Number.isFinite(Number(overrides.y)) ? Number(overrides.y) : (Number(wallLike.y) || 0),
-  z: Number.isFinite(Number(overrides.z)) ? Math.max(0, Math.floor(Number(overrides.z))) : Math.max(0, Math.floor(Number(wallLike.z) || 0)),
+  z: Number.isFinite(Number(overrides.z)) ? Math.max(0, Number(overrides.z)) : Math.max(0, Number(wallLike.z) || 0),
   rotation: normalizeDeg(overrides.rotation ?? wallLike.rotation ?? 0),
   width: Math.max(20, Number(overrides.width ?? wallLike.width ?? WALL_WIDTH) || WALL_WIDTH),
   depth: Math.max(12, Number(overrides.depth ?? wallLike.depth ?? WALL_DEPTH) || WALL_DEPTH),
-  height: Math.max(14, Number(overrides.height ?? wallLike.height ?? WALL_HEIGHT) || WALL_HEIGHT),
+  height: Math.max(10, Number(overrides.height ?? wallLike.height ?? WALL_HEIGHT) || WALL_HEIGHT),
   hp: Math.max(1, Math.floor(Number(overrides.hp ?? wallLike.hp ?? BASE_HP) || BASE_HP)),
   defense: Math.max(0.1, Number(overrides.defense ?? wallLike.defense ?? BASE_DEFENSE) || BASE_DEFENSE),
+  maxStack: Number.isFinite(Number(overrides.maxStack ?? wallLike.maxStack))
+    ? clampStackLimit(overrides.maxStack ?? wallLike.maxStack)
+    : null,
+  baseHp: Math.max(1, Math.floor(Number(
+    overrides.baseHp
+    ?? wallLike.baseHp
+    ?? overrides.hp
+    ?? wallLike.hp
+    ?? BASE_HP
+  ) || BASE_HP)),
+  baseDefense: Math.max(0.1, Number(
+    overrides.baseDefense
+    ?? wallLike.baseDefense
+    ?? overrides.defense
+    ?? wallLike.defense
+    ?? BASE_DEFENSE
+  ) || BASE_DEFENSE),
+  baseMaxStack: Number.isFinite(Number(
+    overrides.baseMaxStack
+    ?? wallLike.baseMaxStack
+    ?? overrides.maxStack
+    ?? wallLike.maxStack
+  ))
+    ? clampStackLimit(
+      overrides.baseMaxStack
+      ?? wallLike.baseMaxStack
+      ?? overrides.maxStack
+      ?? wallLike.maxStack
+    )
+    : null,
+  mergeCount: Math.max(1, Math.floor(Number(overrides.mergeCount ?? wallLike.mergeCount) || 1)),
   attach: (() => {
     const sourceAttach = overrides.attach ?? wallLike.attach;
     if (!sourceAttach || typeof sourceAttach !== 'object') return null;
@@ -275,7 +315,7 @@ const sanitizeWalls = (rawWalls = []) => {
       itemId: typeof item?.itemId === 'string'
         ? item.itemId
         : (typeof item?.itemType === 'string' ? item.itemType : (typeof item?.type === 'string' ? item.type : '')),
-      z: Math.max(0, Math.min(MAX_STACK_LEVEL - 1, Math.floor(Number(item?.z) || 0))),
+      z: Math.max(0, Math.min(MAX_STACK_LEVEL - 1, Number(item?.z) || 0)),
       attach: item?.attach && typeof item.attach === 'object' ? item.attach : null,
       groupId: typeof item?.groupId === 'string' ? item.groupId : ''
     });
@@ -471,7 +511,11 @@ const mapLayoutBundleToWalls = (layoutBundle = {}) => {
       depth: itemDef?.depth,
       height: itemDef?.height,
       hp: itemDef?.hp,
-      defense: itemDef?.defense
+      defense: itemDef?.defense,
+      maxStack: itemDef?.maxStack,
+      baseHp: itemDef?.hp,
+      baseDefense: itemDef?.defense,
+      baseMaxStack: itemDef?.maxStack
     };
   }));
 };
@@ -515,7 +559,7 @@ const buildLayoutPayload = ({ walls = [], defenderDeployments = [], layoutMeta =
     itemId: item.itemId || '',
     x: roundTo(item.x, 3),
     y: roundTo(item.y, 3),
-    z: Math.max(0, Math.floor(Number(item.z) || 0)),
+    z: roundTo(Math.max(0, Number(item.z) || 0), 4),
     rotation: roundTo(item.rotation, 3),
     attach: item?.attach && typeof item.attach === 'object'
       ? {
@@ -815,9 +859,16 @@ const resolveWallItemDef = (wall = {}, itemCatalogById = new Map()) => {
 
 const resolveItemStackLimit = (itemDef = null) => {
   if (Number.isFinite(Number(itemDef?.maxStack))) {
-    return Math.max(1, Math.min(31, Math.floor(Number(itemDef.maxStack))));
+    return clampStackLimit(itemDef.maxStack);
   }
   return MAX_STACK_LEVEL;
+};
+
+const resolveWallStackLimit = (wallLike = null, itemDef = null) => {
+  if (Number.isFinite(Number(wallLike?.maxStack))) {
+    return clampStackLimit(wallLike.maxStack);
+  }
+  return resolveItemStackLimit(itemDef);
 };
 
 const isWoodPillarItem = (itemDef = {}) => {
@@ -1061,7 +1112,7 @@ const hasCollision = (ghostLike, walls = [], itemCatalogById = new Map(), ignore
   for (const wall of walls) {
     if (ignoreSet.has(wall?.id)) continue;
     if (wall.id === ghostLike.id) continue;
-    if (wall.z !== ghostLike.z) continue;
+    if (Math.abs((Number(wall?.z) || 0) - (Number(ghostLike?.z) || 0)) > 0.0001) continue;
     const wallItemDef = resolveWallItemDef(wall, itemCatalogById);
     if (collidersOverlap2D(ghostLike, ghostItemDef, wall, wallItemDef, 0.12)) return true;
   }
@@ -1157,7 +1208,7 @@ const solvePillarPlankFaceSnap = ({
     1,
     Number(ghostBase?.height) || Number(ghostItemDef?.height) || STACK_LAYER_HEIGHT
   );
-  const ghostStackLimit = resolveItemStackLimit(ghostItemDef);
+  const ghostStackLimit = resolveWallStackLimit(ghostBase, ghostItemDef);
   const ghostZBounds = getItemLocalZBounds(ghostItemDef);
   const protrusionFaceDefs = [
     { side: 'right', localNormal: { x: 1, y: 0 }, localTangent: { x: 0, y: 1 }, halfKey: 'w' },
@@ -1305,7 +1356,7 @@ const solvePillarPlankFaceSnap = ({
           y: faceCenter.y + (normal.y * ghostHalfNormal) + (tangent.y * slide)
         };
         const desiredBaseZ = partCenterZ - ghostZBounds.centerZ;
-        const rawStackZ = Math.max(0, Math.round(desiredBaseZ / ghostLayerHeight));
+        const rawStackZ = Math.max(0, desiredBaseZ / ghostLayerHeight);
         const stackZ = Math.max(0, Math.min(ghostStackLimit - 1, rawStackZ));
         const candidate = {
           ...ghostBase,
@@ -1406,11 +1457,8 @@ const solveSocketSnap = ({
           Number(ghostBase?.height) || Number(ghostItemDef?.height) || STACK_LAYER_HEIGHT
         );
         const desiredBaseZ = (Number(parentPose?.z) || 0) - (Number(childSocket?.localPose?.z) || 0);
-        const socketStackZ = Math.max(
-          0,
-          Math.round(desiredBaseZ / ghostLayerHeight)
-        );
-        const ghostStackLimit = resolveItemStackLimit(ghostItemDef);
+        const socketStackZ = Math.max(0, desiredBaseZ / ghostLayerHeight);
+        const ghostStackLimit = resolveWallStackLimit(ghostBase, ghostItemDef);
         const anchorHeight = Math.max(
           1,
           Number(anchor?.height) || Number(anchorItemDef?.height) || STACK_LAYER_HEIGHT
@@ -1423,10 +1471,7 @@ const solveSocketSnap = ({
         if (parentSocketLocalZ >= topSocketThreshold) {
           const candidateMinWorldZ = (adjustedStackZ * ghostLayerHeight) + ghostMinLocalZ;
           if (candidateMinWorldZ < anchorTopZ - 0.01) {
-            adjustedStackZ = Math.max(
-              adjustedStackZ,
-              Math.ceil((anchorTopZ - ghostMinLocalZ) / ghostLayerHeight)
-            );
+            adjustedStackZ = Math.max(adjustedStackZ, (anchorTopZ - ghostMinLocalZ) / ghostLayerHeight);
           }
         }
         const candidate = {
@@ -1485,7 +1530,7 @@ const solveMagneticSnap = ({
   itemCatalogById
 }) => {
   const ghostItemDef = resolveWallItemDef(candidateGhost, itemCatalogById);
-  const ghostStackLimit = resolveItemStackLimit(ghostItemDef);
+  const ghostStackLimit = resolveWallStackLimit(candidateGhost, ghostItemDef);
   const sourceId = (
     candidateGhost?._mode === 'move'
     && typeof candidateGhost?._sourceId === 'string'
@@ -1499,7 +1544,7 @@ const solveMagneticSnap = ({
     : [];
   const ghostBase = {
     ...candidateGhost,
-    z: Math.max(0, Math.min(ghostStackLimit - 1, Math.floor(Number(candidateGhost?.z) || 0))),
+    z: Math.max(0, Math.min(ghostStackLimit - 1, Number(candidateGhost?.z) || 0)),
     rotation: normalizeDeg(candidateGhost?.rotation || 0),
     _pillarSnapMode: candidateGhost?._pillarSnapMode === 'short' ? 'short' : 'long',
     attach: candidateGhost?.attach && typeof candidateGhost.attach === 'object' ? candidateGhost.attach : null,
@@ -1518,40 +1563,6 @@ const solveMagneticSnap = ({
     fieldHeight
   });
   if (pillarFaceSnap) return pillarFaceSnap;
-
-  if (isWoodPlankItem(ghostItemDef)) {
-    const freeGhost = { ...ghostBase, z: 0, attach: null, groupId: '' };
-    if (overlapsDeployZone(freeGhost, fieldWidth, itemCatalogById)) {
-      return {
-        ghost: freeGhost,
-        snap: null,
-        blocked: true,
-        reason: 'deploy_zone_blocked'
-      };
-    }
-    if (isOutOfBounds(freeGhost, fieldWidth, fieldHeight, itemCatalogById)) {
-      return {
-        ghost: freeGhost,
-        snap: null,
-        blocked: true,
-        reason: 'out_of_bounds'
-      };
-    }
-    if (hasCollision(freeGhost, walls, itemCatalogById, ignoreAnchorIds)) {
-      return {
-        ghost: freeGhost,
-        snap: null,
-        blocked: true,
-        reason: 'collision'
-      };
-    }
-    return {
-      ghost: freeGhost,
-      snap: null,
-      blocked: false,
-      reason: ''
-    };
-  }
 
   const socketSnap = solveSocketSnap({
     ghostBase,
@@ -1574,17 +1585,16 @@ const solveMagneticSnap = ({
     for (const wall of sortedWalls) {
       if (!wall || wall.id !== hintedAnchorId) continue;
       if (!pointInWallFootprint(mouseWorld, wall, itemCatalogById, 0.2)) continue;
+      const anchorItemDef = resolveWallItemDef(wall, itemCatalogById);
+      const anchorStackLimit = resolveWallStackLimit(wall, anchorItemDef);
       const ghostLayerHeight = Math.max(
         1,
         Number(ghostBase?.height) || Number(ghostItemDef?.height) || STACK_LAYER_HEIGHT
       );
       const ghostMinLocalZ = getItemLocalMinZ(ghostItemDef);
       const requiredBaseZ = getWallTopZ(wall);
-      const requiredStackZ = Math.max(
-        0,
-        Math.ceil((requiredBaseZ - ghostMinLocalZ) / ghostLayerHeight)
-      );
-      if (requiredStackZ >= ghostStackLimit) {
+      const requiredStackZ = Math.max(0, (requiredBaseZ - ghostMinLocalZ) / ghostLayerHeight);
+      if (requiredStackZ > (ghostStackLimit - 1) || requiredStackZ > (anchorStackLimit - 1)) {
         stackLimitHit = true;
         continue;
       }
@@ -1923,21 +1933,178 @@ const findTopWallByScreenPoint = ({
 };
 
 const isPhysicallyConnected = (a, b) => {
-  const za = Math.max(0, Math.floor(Number(a?.z) || 0));
-  const zb = Math.max(0, Math.floor(Number(b?.z) || 0));
-  const zDelta = Math.abs(za - zb);
-  if (zDelta > 1) return false;
+  const aId = typeof a?.id === 'string' ? a.id.trim() : '';
+  const bId = typeof b?.id === 'string' ? b.id.trim() : '';
+  const aAttachParent = typeof a?.attach?.parentObjectId === 'string' ? a.attach.parentObjectId.trim() : '';
+  const bAttachParent = typeof b?.attach?.parentObjectId === 'string' ? b.attach.parentObjectId.trim() : '';
+  if ((aAttachParent && aAttachParent === bId) || (bAttachParent && bAttachParent === aId)) {
+    return true;
+  }
+
   const metrics = getRectContactMetrics(a, b);
   if (metrics.minOverlap < -SNAP_EPSILON) return false;
+
+  const aBaseZ = getWallBaseZ(a);
+  const aTopZ = getWallTopZ(a);
+  const bBaseZ = getWallBaseZ(b);
+  const bTopZ = getWallTopZ(b);
+  const zOverlap = Math.min(aTopZ, bTopZ) - Math.max(aBaseZ, bBaseZ);
+  const zTouchGap = Math.min(Math.abs(aTopZ - bBaseZ), Math.abs(bTopZ - aBaseZ));
+  const minHeight = Math.min(
+    Math.max(1, Number(a?.height) || STACK_LAYER_HEIGHT),
+    Math.max(1, Number(b?.height) || STACK_LAYER_HEIGHT)
+  );
+  const sameBand = zOverlap > Math.max(1, minHeight * 0.06);
+  const stackedTouch = zTouchGap <= Math.max(1.5, minHeight * 0.08);
+  if (!sameBand && !stackedTouch) return false;
+
   const minDim = Math.min(a.width, a.depth, b.width, b.depth);
-  if (zDelta === 1) {
+  if (stackedTouch) {
     const required = Math.max(4, minDim * 0.16);
     return metrics.overlaps.every((item) => item > required);
   }
   if (metrics.overlaps.every((item) => item > 0.6)) return true;
-  const touchingAxis = metrics.overlaps.some((item) => Math.abs(item) <= SNAP_EPSILON);
-  const strongOverlap = metrics.overlaps.some((item) => item > Math.max(5, minDim * 0.22));
+  const touchingAxis = metrics.overlaps.some((item) => Math.abs(item) <= Math.max(SNAP_EPSILON, 1.6));
+  const strongOverlap = metrics.overlaps.some((item) => item > Math.max(2, minDim * 0.1));
   return touchingAxis && strongOverlap;
+};
+
+const isStackSupportedBy = (upper = {}, lower = {}) => {
+  if (!upper || !lower) return false;
+  const upperBaseZ = getWallBaseZ(upper);
+  const lowerTopZ = getWallTopZ(lower);
+  const minHeight = Math.min(
+    Math.max(1, Number(upper?.height) || STACK_LAYER_HEIGHT),
+    Math.max(1, Number(lower?.height) || STACK_LAYER_HEIGHT)
+  );
+  const zTolerance = Math.max(1.2, minHeight * 0.08);
+  if (Math.abs(upperBaseZ - lowerTopZ) > zTolerance) return false;
+  const metrics = getRectContactMetrics(upper, lower);
+  if (metrics.minOverlap < -SNAP_EPSILON) return false;
+  const minDim = Math.min(upper.width, upper.depth, lower.width, lower.depth);
+  const requiredOverlap = Math.max(2, minDim * 0.14);
+  return metrics.overlaps.every((item) => item > requiredOverlap);
+};
+
+const collectCascadeRemovedWallIds = (rootWallId = '', walls = []) => {
+  const safeRootId = typeof rootWallId === 'string' ? rootWallId.trim() : '';
+  if (!safeRootId) return new Set();
+  const source = Array.isArray(walls) ? walls : [];
+  if (source.length <= 0) return new Set();
+  const byId = new Map(source.map((wall) => [wall.id, wall]));
+  if (!byId.has(safeRootId)) return new Set();
+  const removedIds = new Set([safeRootId]);
+  const groundTolerance = 0.8;
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const wall of source) {
+      if (!wall || removedIds.has(wall.id)) continue;
+      const attachParentId = typeof wall?.attach?.parentObjectId === 'string'
+        ? wall.attach.parentObjectId.trim()
+        : '';
+      if (attachParentId && removedIds.has(attachParentId)) {
+        removedIds.add(wall.id);
+        changed = true;
+        continue;
+      }
+
+      const wallBaseZ = getWallBaseZ(wall);
+      if (wallBaseZ <= groundTolerance) continue;
+
+      const supporters = source
+        .filter((candidate) => candidate && candidate.id !== wall.id)
+        .filter((candidate) => isStackSupportedBy(wall, candidate));
+      if (supporters.length <= 0) {
+        removedIds.add(wall.id);
+        changed = true;
+        continue;
+      }
+      const hasRemainingSupport = supporters.some((candidate) => !removedIds.has(candidate.id));
+      if (!hasRemainingSupport) {
+        removedIds.add(wall.id);
+        changed = true;
+      }
+    }
+  }
+  return removedIds;
+};
+
+const recomputeMergedWallAttributes = (walls = [], itemCatalogById = new Map()) => {
+  const source = sanitizeWalls(walls);
+  if (source.length <= 0) return [];
+  const byId = new Map(source.map((wall) => [wall.id, wall]));
+  const adjacency = new Map(source.map((wall) => [wall.id, new Set()]));
+  for (let i = 0; i < source.length; i += 1) {
+    for (let j = i + 1; j < source.length; j += 1) {
+      const a = source[i];
+      const b = source[j];
+      if (!isPhysicallyConnected(a, b)) continue;
+      adjacency.get(a.id)?.add(b.id);
+      adjacency.get(b.id)?.add(a.id);
+    }
+  }
+
+  const visited = new Set();
+  const derivedById = new Map();
+  source.forEach((wall) => {
+    if (visited.has(wall.id)) return;
+    const queue = [wall.id];
+    const members = [];
+    visited.add(wall.id);
+    while (queue.length > 0) {
+      const id = queue.shift();
+      const current = byId.get(id);
+      if (!current) continue;
+      members.push(current);
+      (adjacency.get(id) || []).forEach((nextId) => {
+        if (visited.has(nextId)) return;
+        visited.add(nextId);
+        queue.push(nextId);
+      });
+    }
+    if (members.length <= 0) return;
+    const memberIds = members
+      .map((item) => (typeof item?.id === 'string' ? item.id.trim() : ''))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, 'en'));
+    const componentId = memberIds[0] || `group_${Date.now()}`;
+    const mergeCount = members.length;
+    const hpScale = 1 + (Math.max(0, mergeCount - 1) * MERGE_HP_SCALE_PER_LINK);
+    const defenseScale = 1 + (Math.max(0, mergeCount - 1) * MERGE_DEFENSE_SCALE_PER_LINK);
+    const stackBonus = Math.max(0, mergeCount - 1);
+
+    members.forEach((member) => {
+      const itemDef = itemCatalogById instanceof Map
+        ? itemCatalogById.get(typeof member?.itemId === 'string' ? member.itemId : '')
+        : null;
+      const baseHp = Math.max(1, Math.floor(Number(member?.baseHp ?? itemDef?.hp ?? member?.hp ?? BASE_HP) || BASE_HP));
+      const baseDefense = Math.max(0.1, Number(member?.baseDefense ?? itemDef?.defense ?? member?.defense ?? BASE_DEFENSE) || BASE_DEFENSE);
+      const baseMaxStack = Number.isFinite(Number(
+        member?.baseMaxStack
+        ?? itemDef?.maxStack
+        ?? member?.maxStack
+      ))
+        ? clampStackLimit(member.baseMaxStack ?? itemDef?.maxStack ?? member?.maxStack)
+        : null;
+      const effectiveMaxStack = Number.isFinite(Number(baseMaxStack))
+        ? clampStackLimit(baseMaxStack + stackBonus)
+        : null;
+      derivedById.set(member.id, createWallFromLike(member, {
+        groupId: componentId,
+        mergeCount,
+        hp: Math.max(1, Math.round(baseHp * hpScale)),
+        defense: roundTo(Math.max(0.1, baseDefense * defenseScale), 3),
+        maxStack: effectiveMaxStack,
+        baseHp,
+        baseDefense,
+        baseMaxStack
+      }));
+    });
+  });
+
+  return source.map((wall) => derivedById.get(wall.id) || wall);
 };
 
 const getWallGroupMetrics = (walls) => {
@@ -1980,8 +2147,7 @@ const getWallGroupMetrics = (walls) => {
     }
     if (members.length === 0) return;
     const hp = members.reduce((sum, item) => sum + Math.max(0, Number(item.hp) || 0), 0);
-    const defenseBase = Number(members[0]?.defense) || BASE_DEFENSE;
-    const defense = members.length > 1 ? (defenseBase * 1.1) : defenseBase;
+    const defense = members.reduce((sum, item) => sum + Math.max(0.1, Number(item?.defense) || BASE_DEFENSE), 0) / members.length;
     const center = members.reduce((acc, item) => ({
       x: acc.x + item.x,
       y: acc.y + item.y
@@ -2193,6 +2359,18 @@ const BattlefieldPreviewModal = ({
     () => new Map(normalizedItemCatalog.map((item) => [item.itemId, item])),
     [normalizedItemCatalog]
   );
+  const recomputeWallsByCurrentCatalog = useCallback((sourceWalls = []) => (
+    recomputeMergedWallAttributes(sourceWalls, itemCatalogById)
+  ), [itemCatalogById]);
+  const setWallsWithRecompute = useCallback((updater) => {
+    setWalls((prev) => {
+      const nextRaw = typeof updater === 'function' ? updater(prev) : updater;
+      return recomputeWallsByCurrentCatalog(nextRaw);
+    });
+  }, [recomputeWallsByCurrentCatalog]);
+  useEffect(() => {
+    setWalls((prev) => recomputeWallsByCurrentCatalog(prev));
+  }, [recomputeWallsByCurrentCatalog]);
   const itemDetailModalItem = useMemo(() => (
     itemDetailModalItemId ? (itemCatalogById.get(itemDetailModalItemId) || null) : null
   ), [itemCatalogById, itemDetailModalItemId]);
@@ -2590,6 +2768,11 @@ const BattlefieldPreviewModal = ({
       height: itemDef.height,
       hp: itemDef.hp,
       defense: itemDef.defense,
+      maxStack: itemDef.maxStack,
+      baseHp: itemDef.hp,
+      baseDefense: itemDef.defense,
+      baseMaxStack: itemDef.maxStack,
+      mergeCount: 1,
       id: '',
       x: mouseWorldRef.current.x,
       y: mouseWorldRef.current.y,
@@ -2662,13 +2845,20 @@ const BattlefieldPreviewModal = ({
 
   const recycleWallToPalette = useCallback((wallId) => {
     if (!wallId) return;
-    setWalls((prev) => prev.filter((item) => item.id !== wallId));
+    let removedCount = 1;
+    setWallsWithRecompute((prev) => {
+      const removedIds = collectCascadeRemovedWallIds(wallId, prev);
+      removedCount = Math.max(1, removedIds.size || 1);
+      return prev.filter((item) => !removedIds.has(item.id));
+    });
     setHasDraftChanges(true);
     setSelectedWallId('');
     setSelectedDeploymentId('');
     cancelGhostPlacement('');
-    setMessage('物品已回收到物品栏');
-  }, [cancelGhostPlacement]);
+    setMessage(removedCount > 1
+      ? `已回收 ${removedCount} 个物品（含上层失去支撑物品）`
+      : '物品已回收到物品栏');
+  }, [cancelGhostPlacement, setWallsWithRecompute]);
 
   const resolveDefenderAvailableCount = useCallback((unitTypeId, draftUnits = []) => {
     const safeUnitTypeId = typeof unitTypeId === 'string' ? unitTypeId.trim() : '';
@@ -3235,7 +3425,7 @@ const BattlefieldPreviewModal = ({
         persistedLayoutMeta = serverLayoutMeta;
         persistedWalls = serverWallSnapshot.walls;
         persistedDefenderDeployments = serverDeployments;
-        setWalls(persistedWalls);
+        setWallsWithRecompute(persistedWalls);
         setDefenderDeployments(persistedDefenderDeployments);
         setItemCatalog(persistedCatalog);
         setActiveLayoutMeta(persistedLayoutMeta);
@@ -3281,7 +3471,7 @@ const BattlefieldPreviewModal = ({
     } finally {
       if (!silent) setSavingLayout(false);
     }
-  }, [activeLayoutMeta, defenderDeployments, effectiveCanEdit, gateKey, itemCatalog, nodeId, onSaved, open]);
+  }, [activeLayoutMeta, defenderDeployments, effectiveCanEdit, gateKey, itemCatalog, nodeId, onSaved, open, setWallsWithRecompute]);
 
   useEffect(() => {
     persistBattlefieldLayoutRef.current = persistBattlefieldLayout;
@@ -3308,7 +3498,7 @@ const BattlefieldPreviewModal = ({
     const snapshotWalls = editSessionWallsRef.current;
     const snapshotDeployments = editSessionDefenderDeploymentsRef.current;
     if (Array.isArray(snapshotWalls)) {
-      setWalls(cloneWalls(snapshotWalls));
+      setWallsWithRecompute(cloneWalls(snapshotWalls));
     }
     if (Array.isArray(snapshotDeployments)) {
       setDefenderDeployments(sanitizeDefenderDeployments(snapshotDeployments));
@@ -3325,7 +3515,7 @@ const BattlefieldPreviewModal = ({
     animateCameraAngle(CAMERA_ANGLE_PREVIEW);
     cancelGhostPlacement('');
     setMessage('已取消布置，已恢复到上一次战场布置状态');
-  }, [animateCameraAngle, cancelGhostPlacement]);
+  }, [animateCameraAngle, cancelGhostPlacement, setWallsWithRecompute]);
 
   const saveLayoutEditing = useCallback(async () => {
     if (!effectiveCanEdit) return;
@@ -3433,7 +3623,7 @@ const BattlefieldPreviewModal = ({
       if (overrideBundle) {
         const overrideSnapshot = resolveOverrideSnapshot();
         if (!cancelled) {
-          setWalls(overrideSnapshot.walls);
+          setWallsWithRecompute(overrideSnapshot.walls);
           setDefenderDeployments(overrideSnapshot.defenderDeployments);
           setItemCatalog(overrideSnapshot.itemCatalog);
           setDefenderRoster([]);
@@ -3449,7 +3639,7 @@ const BattlefieldPreviewModal = ({
       const cacheSnapshot = resolveCacheSnapshot();
       if (!token) {
         if (!cancelled) {
-          setWalls(cacheSnapshot.walls);
+          setWallsWithRecompute(cacheSnapshot.walls);
           setDefenderDeployments(cacheSnapshot.defenderDeployments);
           setItemCatalog(cacheSnapshot.itemCatalog);
           setDefenderRoster([]);
@@ -3475,7 +3665,7 @@ const BattlefieldPreviewModal = ({
         const data = await parseApiResponse(response);
         if (!response.ok || !data) {
           if (cancelled) return;
-          setWalls(cacheSnapshot.walls);
+          setWallsWithRecompute(cacheSnapshot.walls);
           setDefenderDeployments(cacheSnapshot.defenderDeployments);
           setItemCatalog(cacheSnapshot.itemCatalog);
           setDefenderRoster([]);
@@ -3515,7 +3705,7 @@ const BattlefieldPreviewModal = ({
         const removedLegacyCacheWalls = cacheSnapshot.walls.length - filteredCacheWalls.length;
 
         if (cacheSnapshot.needsSync && canEditByServer) {
-          setWalls(filteredCacheWalls);
+          setWallsWithRecompute(filteredCacheWalls);
           setDefenderDeployments(cacheSnapshot.defenderDeployments);
           setItemCatalog(nextCatalog);
           setActiveLayoutMeta(cacheSnapshot.layoutMeta);
@@ -3531,7 +3721,7 @@ const BattlefieldPreviewModal = ({
             : '检测到离线改动，正在尝试回写服务端');
         } else {
           const shouldSyncLegacyCleanup = serverWallSnapshot.clearedLegacy && canEditByServer;
-          setWalls(serverWalls);
+          setWallsWithRecompute(serverWalls);
           setDefenderDeployments(serverDefenderDeployments);
           setItemCatalog(nextCatalog);
           setActiveLayoutMeta(serverLayoutMeta);
@@ -3559,7 +3749,7 @@ const BattlefieldPreviewModal = ({
       } catch (error) {
         if (cancelled) return;
         const cacheSnapshot = resolveCacheSnapshot();
-        setWalls(cacheSnapshot.walls);
+        setWallsWithRecompute(cacheSnapshot.walls);
         setDefenderDeployments(cacheSnapshot.defenderDeployments);
         setItemCatalog(cacheSnapshot.itemCatalog);
         setDefenderRoster([]);
@@ -4875,12 +5065,12 @@ const BattlefieldPreviewModal = ({
         id: ghost?._sourceId || undefined
       });
       if (ghost?._mode === 'move' && ghost?._sourceId) {
-        setWalls((prev) => prev.map((item) => (item.id === ghost._sourceId ? nextWall : item)));
+        setWallsWithRecompute((prev) => prev.map((item) => (item.id === ghost._sourceId ? nextWall : item)));
         setHasDraftChanges(true);
         cancelGhostPlacement('');
         setMessage('物品位置已更新');
       } else {
-        setWalls((prev) => [...prev, nextWall]);
+        setWallsWithRecompute((prev) => [...prev, nextWall]);
         setHasDraftChanges(true);
         cancelGhostPlacement('');
         setMessage('物品已放置');

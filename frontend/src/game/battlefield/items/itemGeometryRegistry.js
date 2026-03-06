@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 
-const DEFAULT_WIDTH = 84;
-const DEFAULT_DEPTH = 24;
-const DEFAULT_HEIGHT = 32;
+const DEFAULT_WIDTH = 56;
+const DEFAULT_DEPTH = 16;
+const DEFAULT_HEIGHT = 21.333;
 const PREVIEW_SCALE = 0.08;
 
 let previewBushBladeTexture = null;
@@ -251,7 +251,7 @@ export const buildWorldColliderParts = (instance = {}, itemType = {}, options = 
   const stackLayerHeight = Number.isFinite(Number(options?.stackLayerHeight))
     ? Number(options.stackLayerHeight)
     : Math.max(0, Number(instance?.height) || DEFAULT_HEIGHT);
-  const stackZ = Math.max(0, Math.floor(Number(instance?.z) || 0)) * stackLayerHeight;
+  const stackZ = Math.max(0, Number(instance?.z) || 0) * stackLayerHeight;
   return collider.parts.map((part) => {
     const offset = rotate2D(part.cx, part.cy, yawDeg);
     return {
@@ -273,7 +273,7 @@ export const getSocketWorldPose = (instance = {}, socket = {}) => {
   return {
     x: (Number(instance?.x) || 0) + rotated.x,
     y: (Number(instance?.y) || 0) + rotated.y,
-    z: (Number(local?.z) || 0) + (Math.max(0, Math.floor(Number(instance?.z) || 0)) * (Number(instance?.height) || DEFAULT_HEIGHT)),
+    z: (Number(local?.z) || 0) + (Math.max(0, Number(instance?.z) || 0) * (Number(instance?.height) || DEFAULT_HEIGHT)),
     yawDeg: normalizeDeg(yaw + (Number(local?.yawDeg) || 0))
   };
 };

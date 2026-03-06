@@ -1,9 +1,10 @@
 const BattlefieldItem = require('../models/BattlefieldItem');
 const CityBuildingType = require('../models/CityBuildingType');
+const { normalizeBattlefieldItemGeometryScale } = require('./battlefieldScale');
 
 const serializeBattlefieldItem = (doc) => {
   const src = typeof doc?.toObject === 'function' ? doc.toObject() : (doc || {});
-  return {
+  const normalized = normalizeBattlefieldItemGeometryScale({
     id: src.itemId || '',
     itemId: src.itemId || '',
     name: src.name || '',
@@ -26,7 +27,8 @@ const serializeBattlefieldItem = (doc) => {
     enabled: src.enabled !== false,
     createdAt: src.createdAt || null,
     updatedAt: src.updatedAt || null
-  };
+  });
+  return normalized;
 };
 
 const serializeCityBuildingType = (doc) => {

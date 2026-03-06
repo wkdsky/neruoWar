@@ -695,7 +695,7 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
     return;
   }
   if (!Array.isArray(squad.waypoints)) squad.waypoints = [];
-  const fieldWidth = Number(sim?.field?.width) || 900;
+  const fieldWidth = Number(sim?.field?.width) || 1350;
   const halfW = fieldWidth / 2;
   const hasWaypoint = squad.waypoints.length > 0;
   const nearestEnemy = pickNearestEnemySquad(squad, sim?.squads || []);
@@ -1120,8 +1120,8 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
   const prevY = Number(squad.y) || 0;
   let nx = prevX + (dir.x * currentSpeed * dt);
   let ny = prevY + (dir.y * currentSpeed * dt);
-  const halfW = (Number(sim?.field?.width) || 900) / 2;
-  const halfH = (Number(sim?.field?.height) || 620) / 2;
+  const halfW = (Number(sim?.field?.width) || 1350) / 2;
+  const halfH = (Number(sim?.field?.height) || 744) / 2;
   nx = clamp(nx, -halfW + 4, halfW - 4);
   ny = clamp(ny, -halfH + 4, halfH - 4);
   let pushNx = 0;
@@ -1940,8 +1940,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           }
         }
       });
-      const halfW = (Number(sim?.field?.width) || 900) / 2;
-      const halfH = (Number(sim?.field?.height) || 620) / 2;
+      const halfW = (Number(sim?.field?.width) || 1350) / 2;
+      const halfH = (Number(sim?.field?.height) || 744) / 2;
       nx = clamp(nx, -halfW + 2, halfW - 2);
       ny = clamp(ny, -halfH + 2, halfH - 2);
       const pushN = normalizeVec(pushNx, pushNy);

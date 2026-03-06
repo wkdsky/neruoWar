@@ -2,13 +2,19 @@ const mongoose = require('mongoose');
 const DomainDefenseLayout = require('../models/DomainDefenseLayout');
 const DomainSiegeState = require('../models/DomainSiegeState');
 const SiegeParticipant = require('../models/SiegeParticipant');
+const {
+  BATTLEFIELD_FIELD_WIDTH,
+  BATTLEFIELD_FIELD_HEIGHT,
+  BATTLEFIELD_OBJECT_DEFAULT_WIDTH,
+  BATTLEFIELD_OBJECT_DEFAULT_DEPTH,
+  BATTLEFIELD_OBJECT_DEFAULT_HEIGHT,
+  normalizeBattlefieldItemGeometryScale
+} = require('./battlefieldScale');
 
 const CITY_GATE_KEYS = ['cheng', 'qi'];
 const CITY_BUILDING_LIMIT = 3;
 const CITY_BUILDING_DEFAULT_RADIUS = 0.17;
 const BATTLEFIELD_VERSION = 1;
-const BATTLEFIELD_FIELD_WIDTH = 900;
-const BATTLEFIELD_FIELD_HEIGHT = 620;
 const BATTLEFIELD_MAX_STACK_LEVEL = 5;
 const BATTLEFIELD_LAYOUT_LIMIT = 24;
 const BATTLEFIELD_ITEM_LIMIT = 240;
@@ -17,9 +23,9 @@ const BATTLEFIELD_OBJECT_LIMIT = 600;
 const BATTLEFIELD_DEFENDER_DEPLOYMENT_LIMIT = 400;
 const BATTLEFIELD_OBJECT_DEFAULTS = {
   itemId: '',
-  width: 104,
-  depth: 24,
-  height: 42,
+  width: BATTLEFIELD_OBJECT_DEFAULT_WIDTH,
+  depth: BATTLEFIELD_OBJECT_DEFAULT_DEPTH,
+  height: BATTLEFIELD_OBJECT_DEFAULT_HEIGHT,
   hp: 240,
   defense: 1.1
 };
@@ -280,7 +286,8 @@ const normalizeBattlefieldItems = (sourceItems = []) => {
   const seen = new Set();
   const items = [];
   for (let index = 0; index < source.length; index += 1) {
-    const item = source[index] || {};
+    const itemRaw = source[index] || {};
+    const item = normalizeBattlefieldItemGeometryScale(itemRaw);
     const rawItemId = typeof item?.itemId === 'string' ? item.itemId.trim() : '';
     const rawItemType = typeof item?.itemType === 'string' ? item.itemType.trim() : '';
     const fallbackType = typeof item?.type === 'string' ? item.type.trim() : '';
@@ -396,7 +403,7 @@ const normalizeBattlefieldObjects = (sourceObjects = [], options = {}) => {
       itemId,
       x: Math.max(minX, Math.min(maxX, round3(item?.x, 0))),
       y: Math.max(minY, Math.min(maxY, round3(item?.y, 0))),
-      z: Math.max(0, Math.min(itemStackLimit - 1, Math.floor(Number(item?.z) || 0))),
+      z: Math.max(0, Math.min(itemStackLimit - 1, round3(item?.z, 0))),
       rotation: normalizeRotation(item?.rotation, 0),
       attach: normalizeOptionalAttach(item?.attach),
       groupId: typeof item?.groupId === 'string' ? item.groupId.trim() : ''

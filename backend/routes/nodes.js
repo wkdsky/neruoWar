@@ -53,6 +53,8 @@ const {
 const DomainTitleProjection = require('../models/DomainTitleProjection');
 const {
   isDomainTitleStateCollectionReadEnabled,
+  BATTLEFIELD_FIELD_WIDTH,
+  BATTLEFIELD_FIELD_HEIGHT,
   hydrateNodeTitleStatesForNodes,
   resolveNodeDefenseLayout,
   resolveNodeBattlefieldLayout,
@@ -63,6 +65,12 @@ const {
   upsertNodeSiegeState,
   deleteNodeTitleStatesByNodeIds
 } = require('../services/domainTitleStateStore');
+const {
+  BATTLEFIELD_OBJECT_DEFAULT_WIDTH,
+  BATTLEFIELD_OBJECT_DEFAULT_DEPTH,
+  BATTLEFIELD_OBJECT_DEFAULT_HEIGHT,
+  normalizeBattlefieldItemGeometryScale
+} = require('../services/battlefieldScale');
 const {
   isDomainTitleProjectionReadEnabled,
   syncDomainTitleProjectionFromNode,
@@ -2129,14 +2137,15 @@ const serializeBattlefieldLayoutMeta = (layout = {}) => ({
   layoutId: typeof layout?.layoutId === 'string' ? layout.layoutId : '',
   name: typeof layout?.name === 'string' ? layout.name : '',
   gateKey: CITY_GATE_KEYS.includes(layout?.gateKey) ? layout.gateKey : '',
-  fieldWidth: round3(layout?.fieldWidth, 900),
-  fieldHeight: round3(layout?.fieldHeight, 620),
+  fieldWidth: round3(layout?.fieldWidth, BATTLEFIELD_FIELD_WIDTH),
+  fieldHeight: round3(layout?.fieldHeight, BATTLEFIELD_FIELD_HEIGHT),
   maxItemsPerType: Math.max(10, Math.floor(Number(layout?.maxItemsPerType) || 10)),
   updatedAt: layout?.updatedAt || null
 });
 
 const serializeBattlefieldItemCatalog = (items = []) => (
   (Array.isArray(items) ? items : [])
+    .map((item) => normalizeBattlefieldItemGeometryScale(item))
     .map((item) => ({
       itemId: typeof item?.itemId === 'string'
         ? item.itemId
@@ -2144,9 +2153,9 @@ const serializeBattlefieldItemCatalog = (items = []) => (
       name: typeof item?.name === 'string' ? item.name : '',
       description: typeof item?.description === 'string' ? item.description : '',
       initialCount: Math.max(0, Math.floor(Number(item?.initialCount) || 0)),
-      width: round3(item?.width, 104),
-      depth: round3(item?.depth, 24),
-      height: round3(item?.height, 42),
+      width: round3(item?.width, BATTLEFIELD_OBJECT_DEFAULT_WIDTH),
+      depth: round3(item?.depth, BATTLEFIELD_OBJECT_DEFAULT_DEPTH),
+      height: round3(item?.height, BATTLEFIELD_OBJECT_DEFAULT_HEIGHT),
       hp: Math.max(1, Math.floor(Number(item?.hp) || 240)),
       defense: round3(item?.defense, 1.1),
       style: item?.style && typeof item.style === 'object' ? item.style : {},
@@ -2180,7 +2189,7 @@ const serializeBattlefieldObjectsForLayout = (battlefieldState = {}, layoutId = 
         : (typeof item?.itemType === 'string' ? item.itemType : ''),
       x: round3(item?.x, 0),
       y: round3(item?.y, 0),
-      z: Math.max(0, Math.floor(Number(item?.z) || 0)),
+      z: Math.max(0, round3(item?.z, 0)),
       rotation: round3(item?.rotation, 0),
       attach: item?.attach && typeof item.attach === 'object'
         ? {
@@ -7612,7 +7621,7 @@ router.put('/:nodeId/battlefield-layout', authenticateToken, async (req, res) =>
     const unitTypeMap = buildArmyUnitTypeMap(unitTypes);
     const targetLayout = findBattlefieldLayoutByGate(nextBattlefieldState, gateKey, layoutId);
     const targetLayoutId = typeof targetLayout?.layoutId === 'string' ? targetLayout.layoutId : '';
-    const targetFieldWidth = Math.max(200, Number(targetLayout?.fieldWidth) || 900);
+    const targetFieldWidth = Math.max(200, Number(targetLayout?.fieldWidth) || BATTLEFIELD_FIELD_WIDTH);
     const defenderZoneMinX = (targetFieldWidth / 2) - (targetFieldWidth * BATTLEFIELD_DEPLOY_ZONE_RATIO);
     const defenseUnitLimitMap = new Map(
       normalizeUnitCountEntries(Array.isArray(requestUser?.armyRoster) ? requestUser.armyRoster : [])

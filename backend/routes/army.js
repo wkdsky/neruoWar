@@ -5,6 +5,10 @@ const { authenticateToken } = require('../middleware/auth');
 const { fetchUnitTypesWithComponents } = require('../services/unitRegistryService');
 const { fetchBattlefieldItems } = require('../services/placeableCatalogService');
 const { UNIT_TYPE_DTO_VERSION } = require('../services/unitTypeDtoService');
+const {
+  BATTLEFIELD_FIELD_WIDTH,
+  BATTLEFIELD_FIELD_HEIGHT
+} = require('../services/battlefieldScale');
 
 const getUnitTypeId = (unit) => {
   const unitTypeId = typeof unit?.unitTypeId === 'string' ? unit.unitTypeId.trim() : '';
@@ -389,8 +393,8 @@ router.get('/training/init', authenticateToken, async (req, res) => {
       battlefield: {
         intelVisible: true,
         layoutMeta: {
-          fieldWidth: 900,
-          fieldHeight: 620,
+          fieldWidth: BATTLEFIELD_FIELD_WIDTH,
+          fieldHeight: BATTLEFIELD_FIELD_HEIGHT,
           maxItemsPerType: 999999
         },
         itemCatalog: unlimitedItems,
