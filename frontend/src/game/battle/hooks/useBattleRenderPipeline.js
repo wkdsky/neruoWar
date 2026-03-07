@@ -125,7 +125,7 @@ export default function useBattleRenderPipeline({
         render: ({ cameraState, snapshot, runtime }) => {
           if (!cameraState || !snapshot) return;
           const field = runtime?.getField?.();
-          renderers.ground.setFieldSize(field?.width || 1350, field?.height || 744);
+          renderers.ground.setFieldSize(field?.width || 2700, field?.height || 1488);
           renderers.ground.setDeployRange(runtime?.getDeployRange?.());
           let orientationCheckBuildings = null;
           if (

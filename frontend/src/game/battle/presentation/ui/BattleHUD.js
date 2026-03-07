@@ -50,7 +50,7 @@ const BattleHUD = ({
           ) : null}
         </>
       )}
-      <button type="button" className="btn btn-secondary" onClick={onTogglePitch} disabled={interactionLocked}>视角 {pitchLabel}</button>
+      <button type="button" className="btn btn-secondary" onClick={onTogglePitch}>视角 {pitchLabel}</button>
       <button type="button" className="btn btn-secondary" onClick={onToggleDebug} disabled={interactionLocked}>{debugEnabled ? '关闭调试' : '调试'}</button>
       <button type="button" className="btn btn-danger" onClick={onExit} disabled={interactionLocked}>退出</button>
     </div>

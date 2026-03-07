@@ -284,12 +284,9 @@ export const createBattleInputController = ({
   const onWheel = (event) => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    if (runtime.getPhase() === 'battle') {
-      event.preventDefault();
-      return;
-    }
-    if (runtime.getPhase() !== 'deploy') return;
-    if (getters.getDeployDraggingGroupId?.()) {
+    const phase = runtime.getPhase?.();
+    if (phase !== 'deploy' && phase !== 'battle') return;
+    if (phase === 'deploy' && getters.getDeployDraggingGroupId?.()) {
       event.preventDefault();
       return;
     }

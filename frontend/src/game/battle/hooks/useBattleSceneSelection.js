@@ -257,8 +257,8 @@ export default function useBattleSceneSelection({
     const runtime = runtimeRef.current;
     if (!runtime) return false;
     const field = runtime.getField?.();
-    const halfW = Math.max(10, Number(field?.width) || 1350) * 0.5;
-    const halfH = Math.max(10, Number(field?.height) || 744) * 0.5;
+    const halfW = Math.max(10, Number(field?.width) || 2700) * 0.5;
+    const halfH = Math.max(10, Number(field?.height) || 1488) * 0.5;
     const x = Number(point?.x);
     const y = Number(point?.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;

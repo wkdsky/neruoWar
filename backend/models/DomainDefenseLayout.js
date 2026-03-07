@@ -8,7 +8,7 @@ const {
 } = require('../services/battlefieldScale');
 
 const CITY_BUILDING_DEFAULT_RADIUS = 0.17;
-const BATTLEFIELD_DEFAULT_VERSION = 1;
+const BATTLEFIELD_DEFAULT_VERSION = 2;
 const BATTLEFIELD_FIELD_LIMIT = 5000;
 const BATTLEFIELD_MAX_STACK_LEVEL = 5;
 const BATTLEFIELD_MAX_STACK_SCHEMA_LEVEL = 31;
@@ -399,6 +399,11 @@ const DomainDefenseLayoutSchema = new mongoose.Schema({
       ref: 'User'
     }],
     default: []
+  },
+  battlefieldVersion: {
+    type: Number,
+    default: BATTLEFIELD_DEFAULT_VERSION,
+    min: 1
   },
   battlefieldLayout: {
     // 兼容旧字段，后续迁移后可清理

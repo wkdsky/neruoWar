@@ -87,10 +87,13 @@ export default function useBattleLoop({
     if (nowPhase === 'deploy') {
       camera.yawDeg = Number(constants.DEPLOY_DEFAULT_YAW_DEG) || 0;
       camera.mirrorX = false;
-      camera.currentPitch = Number(constants.DEPLOY_PITCH_DEG) || 30;
-      camera.pitchFrom = camera.currentPitch;
-      camera.pitchTo = camera.currentPitch;
-      camera.pitchTweenSec = camera.pitchTweenDurationSec;
+      if (!Number.isFinite(Number(camera.currentPitch))) {
+        const fallbackPitch = Number(constants.DEPLOY_PITCH_DEG) || 30;
+        camera.currentPitch = fallbackPitch;
+        camera.pitchFrom = fallbackPitch;
+        camera.pitchTo = fallbackPitch;
+        camera.pitchTweenSec = camera.pitchTweenDurationSec;
+      }
     } else {
       camera.yawDeg = Number(constants.BATTLE_FOLLOW_YAW_DEG) || 0;
       if (!Number.isFinite(Number(camera.worldYawDeg))) {

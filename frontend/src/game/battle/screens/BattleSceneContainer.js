@@ -311,8 +311,8 @@ const BattleSceneContainer = ({
   const clampCameraCenterToField = useCallback((nextX, nextY) => {
     const runtime = runtimeRef.current;
     const field = runtime?.getField?.();
-    const halfFieldW = Math.max(50, Number(field?.width) || 1350) * 0.5;
-    const halfFieldH = Math.max(50, Number(field?.height) || 744) * 0.5;
+    const halfFieldW = Math.max(50, Number(field?.width) || 2700) * 0.5;
+    const halfFieldH = Math.max(50, Number(field?.height) || 1488) * 0.5;
     const viewHalfW = Math.max(1, Number(cameraViewRectRef.current?.widthWorld) || 240) * 0.5;
     const viewHalfH = Math.max(1, Number(cameraViewRectRef.current?.heightWorld) || 160) * 0.5;
     const edgeMargin = 8;
@@ -412,9 +412,8 @@ const BattleSceneContainer = ({
   }, [paused, setLoopPaused]);
 
   const handleTogglePitch = useCallback(() => {
-    if (runtimeRef.current?.getPhase() !== 'battle') return;
     cameraRef.current.togglePitchMode();
-  }, [runtimeRef]);
+  }, []);
 
   const {
     handleStartBattle,

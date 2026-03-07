@@ -14,7 +14,8 @@ const {
 const CITY_GATE_KEYS = ['cheng', 'qi'];
 const CITY_BUILDING_LIMIT = 3;
 const CITY_BUILDING_DEFAULT_RADIUS = 0.17;
-const BATTLEFIELD_VERSION = 1;
+const BATTLEFIELD_VERSION = 2;
+const BATTLEFIELD_SCALE_V2 = 2;
 const BATTLEFIELD_MAX_STACK_LEVEL = 5;
 const BATTLEFIELD_LAYOUT_LIMIT = 24;
 const BATTLEFIELD_ITEM_LIMIT = 240;
@@ -54,6 +55,12 @@ const round3 = (value, fallback = 0) => {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
   return Number(num.toFixed(3));
+};
+
+const toFiniteNumberOrNull = (value) => {
+  if (value === null || typeof value === 'undefined' || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
 };
 
 const normalizeRotation = (value, fallback = 0) => {
@@ -483,10 +490,123 @@ const normalizeBattlefieldDefenderDeployments = (sourceDeployments = [], options
   return deployments;
 };
 
+const resolveBattlefieldSourceVersion = (source = {}) => {
+  const version = toFiniteNumberOrNull(source?.version);
+  if (version !== null) {
+    return Math.max(1, Math.floor(version));
+  }
+  return null;
+};
+
+const scaleBattlefieldStateForV2 = (state = {}) => {
+  const sourceLayouts = Array.isArray(state?.layouts) ? state.layouts : [];
+  const sourceObjects = Array.isArray(state?.objects) ? state.objects : [];
+  const sourceDeployments = Array.isArray(state?.defenderDeployments) ? state.defenderDeployments : [];
+
+  const layoutScaleById = new Map();
+  const scaledLayouts = sourceLayouts.map((layout, index) => {
+    const layoutId = typeof layout?.layoutId === 'string' ? layout.layoutId.trim() : '';
+    const scaleKey = layoutId || `__idx_${index}`;
+    const width = Math.max(200, Math.min(5000, round3(layout?.fieldWidth, BATTLEFIELD_FIELD_WIDTH)));
+    const height = Math.max(200, Math.min(5000, round3(layout?.fieldHeight, BATTLEFIELD_FIELD_HEIGHT)));
+    const nextWidth = Math.max(200, Math.min(5000, round3(width * BATTLEFIELD_SCALE_V2, width)));
+    const nextHeight = Math.max(200, Math.min(5000, round3(height * BATTLEFIELD_SCALE_V2, height)));
+    const ratioX = width > 1e-6 ? (nextWidth / width) : 1;
+    const ratioY = height > 1e-6 ? (nextHeight / height) : 1;
+    layoutScaleById.set(scaleKey, {
+      ratioX,
+      ratioY,
+      minX: -(nextWidth / 2),
+      maxX: nextWidth / 2,
+      minY: -(nextHeight / 2),
+      maxY: nextHeight / 2
+    });
+    if (layoutId) {
+      layoutScaleById.set(layoutId, layoutScaleById.get(scaleKey));
+    }
+    return {
+      ...layout,
+      fieldWidth: nextWidth,
+      fieldHeight: nextHeight
+    };
+  });
+
+  const resolveScale = (layoutId = '', index = -1) => {
+    const layoutKey = typeof layoutId === 'string' ? layoutId.trim() : '';
+    if (layoutKey && layoutScaleById.has(layoutKey)) return layoutScaleById.get(layoutKey);
+    const indexKey = index >= 0 ? `__idx_${index}` : '';
+    if (indexKey && layoutScaleById.has(indexKey)) return layoutScaleById.get(indexKey);
+    const fallbackWidth = Math.max(200, Math.min(5000, round3(BATTLEFIELD_FIELD_WIDTH, BATTLEFIELD_FIELD_WIDTH)));
+    const fallbackHeight = Math.max(200, Math.min(5000, round3(BATTLEFIELD_FIELD_HEIGHT, BATTLEFIELD_FIELD_HEIGHT)));
+    return {
+      ratioX: BATTLEFIELD_SCALE_V2,
+      ratioY: BATTLEFIELD_SCALE_V2,
+      minX: -(fallbackWidth / 2),
+      maxX: fallbackWidth / 2,
+      minY: -(fallbackHeight / 2),
+      maxY: fallbackHeight / 2
+    };
+  };
+
+  const scalePoint = (value, ratio, min, max) => (
+    Math.max(min, Math.min(max, round3((Number(value) || 0) * ratio, 0)))
+  );
+
+  const scaledObjects = sourceObjects.map((item, index) => {
+    const scale = resolveScale(item?.layoutId, index);
+    return {
+      ...item,
+      x: scalePoint(item?.x, scale.ratioX, scale.minX, scale.maxX),
+      y: scalePoint(item?.y, scale.ratioY, scale.minY, scale.maxY)
+    };
+  });
+
+  const scaledDefenderDeployments = sourceDeployments.map((item, index) => {
+    const scale = resolveScale(item?.layoutId, index);
+    return {
+      ...item,
+      x: scalePoint(item?.x, scale.ratioX, scale.minX, scale.maxX),
+      y: scalePoint(item?.y, scale.ratioY, scale.minY, scale.maxY)
+    };
+  });
+
+  return {
+    ...state,
+    layouts: scaledLayouts,
+    objects: scaledObjects,
+    defenderDeployments: scaledDefenderDeployments
+  };
+};
+
+const finalizeBattlefieldState = (state = {}, sourceVersion = null) => {
+  const parsedSourceVersion = toFiniteNumberOrNull(sourceVersion);
+  const explicitVersion = parsedSourceVersion !== null
+    ? Math.max(1, Math.floor(parsedSourceVersion))
+    : null;
+  let next = {
+    ...state,
+    layouts: Array.isArray(state?.layouts) ? state.layouts : ensureBattlefieldLayoutsByGate(createDefaultBattlefieldLayouts()),
+    items: Array.isArray(state?.items) ? state.items : [],
+    objects: Array.isArray(state?.objects) ? state.objects : [],
+    defenderDeployments: Array.isArray(state?.defenderDeployments) ? state.defenderDeployments : [],
+    updatedAt: toValidDateOrNull(state?.updatedAt) || new Date()
+  };
+  let resolvedVersion = explicitVersion ?? BATTLEFIELD_VERSION;
+  if (explicitVersion !== null && explicitVersion < 2) {
+    next = scaleBattlefieldStateForV2(next);
+    resolvedVersion = 2;
+  }
+  return {
+    ...next,
+    version: Math.max(BATTLEFIELD_VERSION, resolvedVersion)
+  };
+};
+
 const normalizeBattlefieldState = (source = {}) => {
   if (!source || typeof source !== 'object') {
     return createDefaultBattlefieldState();
   }
+  const sourceVersion = resolveBattlefieldSourceVersion(source);
 
   const sourceLayouts = Array.isArray(source?.layouts)
     ? source.layouts
@@ -518,14 +638,13 @@ const normalizeBattlefieldState = (source = {}) => {
         legacyObjects.map((item) => ({ ...item, layoutId: chengLayout?.layoutId || 'cheng_default' })),
         { layouts: defaults.layouts, defaultLayoutId: chengLayout?.layoutId || 'cheng_default' }
       );
-      return {
-        version: Math.max(1, Math.floor(Number(source?.version) || BATTLEFIELD_VERSION)),
+      return finalizeBattlefieldState({
         layouts: defaults.layouts,
         items: defaults.items,
         objects,
         defenderDeployments: [],
         updatedAt: toValidDateOrNull(source?.updatedAt) || new Date()
-      };
+      }, sourceVersion);
     }
   }
 
@@ -542,14 +661,13 @@ const normalizeBattlefieldState = (source = {}) => {
     defaultLayoutId: layouts.find((item) => item.gateKey === 'cheng')?.layoutId || layouts[0]?.layoutId
   });
 
-  return {
-    version: Math.max(1, Math.floor(Number(source?.version) || BATTLEFIELD_VERSION)),
+  return finalizeBattlefieldState({
     layouts,
     items,
     objects: seedDefaultBattlefieldObjects(objects, layouts, items),
     defenderDeployments,
     updatedAt: toValidDateOrNull(source?.updatedAt) || new Date()
-  };
+  }, sourceVersion);
 };
 
 const toLegacyBattlefieldLayoutFromState = (battlefieldState = {}, preferredGateKey = 'cheng') => {
@@ -735,9 +853,14 @@ const toHydratedBattlefieldState = (doc = {}) => {
     || Array.isArray(doc?.battlefieldObjects)
     || Array.isArray(doc?.battlefieldDefenderDeployments)
   );
+  const resolvedVersion = toFiniteNumberOrNull(doc?.battlefieldVersion) !== null
+    ? Math.max(1, Math.floor(Number(doc.battlefieldVersion)))
+    : (toFiniteNumberOrNull(doc?.battlefieldLayout?.version) !== null
+      ? Math.max(1, Math.floor(Number(doc.battlefieldLayout.version)))
+      : (toFiniteNumberOrNull(doc?.version) !== null ? Math.max(1, Math.floor(Number(doc.version))) : null));
   if (hasNewStructure) {
     return normalizeBattlefieldState({
-      version: doc?.battlefieldVersion || doc?.version || BATTLEFIELD_VERSION,
+      version: resolvedVersion,
       layouts: doc?.battlefieldLayouts,
       items: doc?.battlefieldItems,
       objects: doc?.battlefieldObjects,
@@ -788,7 +911,7 @@ const loadDefenseAndBattlefieldMapsByNodeIds = async (nodeIds = [], options = {}
     selectFields.push('buildings', 'intelBuildingId', 'gateDefense', 'gateDefenseViewAdminIds', 'updatedAt');
   }
   if (includeBattlefieldLayout) {
-    selectFields.push('battlefieldLayouts', 'battlefieldItems', 'battlefieldObjects', 'battlefieldDefenderDeployments', 'battlefieldLayout');
+    selectFields.push('battlefieldVersion', 'battlefieldLayouts', 'battlefieldItems', 'battlefieldObjects', 'battlefieldDefenderDeployments', 'battlefieldLayout');
   }
 
   const rows = await DomainDefenseLayout.find({ nodeId: { $in: objectIds } })
@@ -929,6 +1052,11 @@ const resolveNodeBattlefieldState = (node, fallback = null) => {
   }
   if (node?.cityDefenseLayout?.battlefieldLayouts || node?.cityDefenseLayout?.battlefieldObjects || node?.cityDefenseLayout?.battlefieldItems) {
     return normalizeBattlefieldState({
+      version: toFiniteNumberOrNull(node?.cityDefenseLayout?.battlefieldVersion) !== null
+        ? Number(node.cityDefenseLayout.battlefieldVersion)
+        : (toFiniteNumberOrNull(node?.cityDefenseLayout?.battlefieldLayout?.version) !== null
+          ? Number(node.cityDefenseLayout.battlefieldLayout.version)
+          : null),
       layouts: node?.cityDefenseLayout?.battlefieldLayouts,
       items: node?.cityDefenseLayout?.battlefieldItems,
       objects: node?.cityDefenseLayout?.battlefieldObjects,
@@ -1005,6 +1133,7 @@ const upsertNodeBattlefieldState = async ({ nodeId, battlefieldState = {}, actor
     { nodeId: safeNodeId },
     {
       $set: {
+        battlefieldVersion: normalized.version,
         battlefieldLayouts: normalized.layouts,
         battlefieldItems: normalized.items,
         battlefieldObjects: normalized.objects,

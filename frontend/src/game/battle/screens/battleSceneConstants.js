@@ -16,7 +16,7 @@ export const DEPLOY_ROTATE_CLICK_THRESHOLD = 3;
 // Keep attacker (world -X) on web-left when using pitch > 90 deg.
 export const DEPLOY_DEFAULT_YAW_DEG = 0;
 export const DEPLOY_DEFAULT_WORLD_YAW_DEG = 0;
-export const DEPLOY_PITCH_DEG = 30;
+export const DEPLOY_PITCH_DEG = 40;
 
 export const BATTLE_PITCH_LOW_DEG = 40;
 export const BATTLE_PITCH_HIGH_DEG = 90;

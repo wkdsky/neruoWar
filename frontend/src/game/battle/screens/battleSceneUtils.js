@@ -154,8 +154,8 @@ export const randomPickUnique = (values = [], count = 1) => {
 
 export const buildTeamPositions = ({ team, count, field, deployRange, jitter = true }) => {
   const safeCount = Math.max(1, Math.floor(Number(count) || 1));
-  const safeFieldW = Math.max(120, Number(field?.width) || 1350);
-  const safeFieldH = Math.max(120, Number(field?.height) || 744);
+  const safeFieldW = Math.max(120, Number(field?.width) || 2700);
+  const safeFieldH = Math.max(120, Number(field?.height) || 1488);
   const safeRange = deployRange && typeof deployRange === 'object'
     ? deployRange
     : {
@@ -256,8 +256,8 @@ export const buildDeployFormationFootprint = (group = null) => {
 };
 
 export const computeDeployOverviewDistance = (field = null) => {
-  const width = Math.max(120, Number(field?.width) || 1350);
-  const height = Math.max(120, Number(field?.height) || 744);
+  const width = Math.max(120, Number(field?.width) || 2700);
+  const height = Math.max(120, Number(field?.height) || 1488);
   const dominantSpan = Math.max(width, height * 1.2);
   return clamp(dominantSpan * 1.18, 360, 980);
 };

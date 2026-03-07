@@ -403,8 +403,8 @@ const applyShellKnockback = (sim, targetAgent, projectile) => {
     nx = pushed.x;
     ny = pushed.y;
   });
-  const halfW = (Number(sim?.field?.width) || 1350) / 2;
-  const halfH = (Number(sim?.field?.height) || 744) / 2;
+  const halfW = (Number(sim?.field?.width) || 2700) / 2;
+  const halfH = (Number(sim?.field?.height) || 1488) / 2;
   targetAgent.x = clamp(nx, -halfW + 2, halfW - 2);
   targetAgent.y = clamp(ny, -halfH + 2, halfH - 2);
   targetAgent.vx = (Number(targetAgent.vx) || 0) + (dir.x * impulse * 10);

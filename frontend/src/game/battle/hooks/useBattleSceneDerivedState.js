@@ -184,10 +184,10 @@ const useBattleSceneDerivedState = ({
   const quickParsedAttackerTotal = parseQuickDeployNumber(quickDeployRandomForm.attackerTotal);
   const quickParsedDefenderTotal = parseQuickDeployNumber(quickDeployRandomForm.defenderTotal);
 
-  const currentField = runtime?.getField?.() || { width: 1350, height: 744 };
+  const currentField = runtime?.getField?.() || { width: 2700, height: 1488 };
   const canDrawMidlineDebug = debugEnabled && showMidlineDebug && !!worldToDom;
-  const midlineTop = canDrawMidlineDebug ? worldToDom({ x: 0, y: (Number(currentField?.height) || 744) * 0.5, z: 0 }) : null;
-  const midlineBottom = canDrawMidlineDebug ? worldToDom({ x: 0, y: -(Number(currentField?.height) || 744) * 0.5, z: 0 }) : null;
+  const midlineTop = canDrawMidlineDebug ? worldToDom({ x: 0, y: (Number(currentField?.height) || 1488) * 0.5, z: 0 }) : null;
+  const midlineBottom = canDrawMidlineDebug ? worldToDom({ x: 0, y: -(Number(currentField?.height) || 1488) * 0.5, z: 0 }) : null;
   const midlineLineStyle = (midlineTop?.visible !== false && midlineBottom?.visible !== false)
     ? buildDomLineStyle(midlineTop, midlineBottom)
     : null;
@@ -195,16 +195,16 @@ const useBattleSceneDerivedState = ({
   const teamMinX = Number(debugStats?.clampAllowedMinX);
   const teamMaxX = Number(debugStats?.clampAllowedMaxX);
   const teamMinTop = canDrawMidlineDebug && Number.isFinite(teamMinX)
-    ? worldToDom({ x: teamMinX, y: (Number(currentField?.height) || 744) * 0.5, z: 0 })
+    ? worldToDom({ x: teamMinX, y: (Number(currentField?.height) || 1488) * 0.5, z: 0 })
     : null;
   const teamMinBottom = canDrawMidlineDebug && Number.isFinite(teamMinX)
-    ? worldToDom({ x: teamMinX, y: -(Number(currentField?.height) || 744) * 0.5, z: 0 })
+    ? worldToDom({ x: teamMinX, y: -(Number(currentField?.height) || 1488) * 0.5, z: 0 })
     : null;
   const teamMaxTop = canDrawMidlineDebug && Number.isFinite(teamMaxX)
-    ? worldToDom({ x: teamMaxX, y: (Number(currentField?.height) || 744) * 0.5, z: 0 })
+    ? worldToDom({ x: teamMaxX, y: (Number(currentField?.height) || 1488) * 0.5, z: 0 })
     : null;
   const teamMaxBottom = canDrawMidlineDebug && Number.isFinite(teamMaxX)
-    ? worldToDom({ x: teamMaxX, y: -(Number(currentField?.height) || 744) * 0.5, z: 0 })
+    ? worldToDom({ x: teamMaxX, y: -(Number(currentField?.height) || 1488) * 0.5, z: 0 })
     : null;
   const teamMinLineStyle = (teamMinTop?.visible !== false && teamMinBottom?.visible !== false)
     ? buildDomLineStyle(teamMinTop, teamMinBottom)

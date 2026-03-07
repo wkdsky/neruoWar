@@ -85,15 +85,15 @@ export default class GroundRenderer {
     gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-    this.fieldWidth = 1350;
-    this.fieldHeight = 744;
+    this.fieldWidth = 2700;
+    this.fieldHeight = 1488;
     this.deployAttackerMaxX = -10;
     this.deployDefenderMinX = 10;
   }
 
   setFieldSize(width, height) {
-    this.fieldWidth = Math.max(100, Number(width) || 1350);
-    this.fieldHeight = Math.max(100, Number(height) || 744);
+    this.fieldWidth = Math.max(100, Number(width) || 2700);
+    this.fieldHeight = Math.max(100, Number(height) || 1488);
   }
 
   setDeployRange(range = null) {
