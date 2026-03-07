@@ -1,0 +1,1038 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import '../../../components/game/pveBattle.css';
+import CameraController from '../presentation/render/CameraController';
+import useBattleRuntime from '../hooks/useBattleRuntime';
+import useBattleRenderPipeline from '../hooks/useBattleRenderPipeline';
+import useBattleLoop from '../hooks/useBattleLoop';
+import useBattleUiSync from '../hooks/useBattleUiSync';
+import useArmyTemplates from '../hooks/useArmyTemplates';
+import useBattleSceneGlobalInput from '../hooks/useBattleSceneGlobalInput';
+import useBattleSceneDerivedState from '../hooks/useBattleSceneDerivedState';
+import useBattleQuickDeploy from '../hooks/useBattleQuickDeploy';
+import useBattleDeployEditor from '../hooks/useBattleDeployEditor';
+import useBattleDeployGroupActions from '../hooks/useBattleDeployGroupActions';
+import useBattleActions from '../hooks/useBattleActions';
+import useBattleSceneSelection from '../hooks/useBattleSceneSelection';
+import useBattleEscapeHandler from '../hooks/useBattleEscapeHandler';
+import useBattleSceneInputController from '../hooks/useBattleSceneInputController';
+import useBattleDeployFormationResize from '../hooks/useBattleDeployFormationResize';
+import useBattleSceneLifecycle from '../hooks/useBattleSceneLifecycle';
+import BattleHUD from '../presentation/ui/BattleHUD';
+import SquadCards from '../presentation/ui/SquadCards';
+import DeployActionButtons from '../presentation/ui/DeployActionButtons';
+import BattleActionButtons from '../presentation/ui/BattleActionButtons';
+import Minimap from '../presentation/ui/Minimap';
+import AimOverlayCanvas from '../presentation/ui/AimOverlayCanvas';
+import BattleDebugPanel from '../presentation/ui/BattleDebugPanel';
+import BattleDeploySidebar from '../presentation/ui/BattleDeploySidebar';
+import BattleQuickDeployModal from '../presentation/ui/BattleQuickDeployModal';
+import BattleTemplateFillModal from '../presentation/ui/BattleTemplateFillModal';
+import BattleDeployEditorPanel from '../presentation/ui/BattleDeployEditorPanel';
+import BattleMarchModeFloat from '../presentation/ui/BattleMarchModeFloat';
+import BattleSkillPickFloat from '../presentation/ui/BattleSkillPickFloat';
+import unitVisualConfig from '../presentation/assets/UnitVisualConfig.example.json';
+import NumberPadDialog from '../../../components/common/NumberPadDialog';
+import BattleDataService from '../data/BattleDataService';
+import {
+  BATTLE_FOLLOW_MIRROR_X,
+  BATTLE_FOLLOW_WORLD_YAW_DEG,
+  BATTLE_FOLLOW_YAW_DEG,
+  BATTLE_PITCH_HIGH_DEG,
+  BATTLE_PITCH_LOW_DEG,
+  BATTLE_UI_MODE_MARCH_PICK,
+  BATTLE_UI_MODE_NONE,
+  BATTLE_UI_MODE_PATH,
+  BATTLE_UI_MODE_SKILL_CONFIRM,
+  BATTLE_UI_MODE_SKILL_PICK,
+  CAMERA_DISTANCE_MAX,
+  CAMERA_DISTANCE_MIN,
+  CAMERA_ZOOM_STEP,
+  DEPLOY_DEFAULT_YAW_DEG,
+  DEPLOY_PITCH_DEG,
+  DEPLOY_ROTATE_CLICK_THRESHOLD,
+  DEPLOY_ROTATE_SENSITIVITY,
+  ORDER_MOVE,
+  TEAM_ATTACKER,
+  TEAM_DEFENDER,
+  createDefaultAimState,
+  createDefaultConfirmDeletePos,
+  createDefaultDeployDraggingGroup,
+  createDefaultDeployEditorDraft,
+  createDefaultDeployQuantityDialog,
+  createDefaultPopupPos,
+  createDefaultQuickDeployRandomForm,
+  createDefaultResultState,
+  createDefaultTemplateFillPreview,
+  speedModeLabel
+} from './battleSceneConstants';
+import {
+  buildCompatSummaryPayload,
+  resolveBattleDebugSwitch,
+  skillAoeRadiusByClass,
+  skillRangeByClass,
+  toCardsByTeam
+} from './battleSceneUtils';
+
+const BattleSceneContainer = ({
+  open = false,
+  loading = false,
+  error = '',
+  battleInitData = null,
+  mode = 'siege',
+  startLabel = '开战',
+  requireResultReport = false,
+  onClose,
+  onBattleFinished
+}) => {
+  const isTrainingMode = mode === 'training';
+  const glCanvasRef = useRef(null);
+  const cameraRef = useRef(new CameraController({
+    yawDeg: DEPLOY_DEFAULT_YAW_DEG,
+    pitchLow: BATTLE_PITCH_LOW_DEG,
+    pitchHigh: BATTLE_PITCH_HIGH_DEG,
+    distance: 560,
+    mirrorX: false
+  }));
+  const pointerWorldRef = useRef({ x: 0, y: 0 });
+  const panDragRef = useRef(null);
+  const deployYawDragRef = useRef(null);
+  const deployRectDragRef = useRef(null);
+  const spacePressedRef = useRef(false);
+  const runtimeInitRef = useRef(null);
+  const reportBattleResultRef = useRef(() => {});
+
+  const [paused, setPaused] = useState(false);
+  const [debugEnabled, setDebugEnabled] = useState(false);
+  const [aimState, setAimState] = useState(createDefaultAimState);
+  const [battleUiMode, setBattleUiMode] = useState(BATTLE_UI_MODE_NONE);
+  const [worldActionsVisibleForSquadId, setWorldActionsVisibleForSquadId] = useState('');
+  const [hoverSquadIdOnCard, setHoverSquadIdOnCard] = useState('');
+  const [pendingPathPoints, setPendingPathPoints] = useState([]);
+  const [planningHoverPoint, setPlanningHoverPoint] = useState(null);
+  const [skillConfirmState, setSkillConfirmState] = useState(null);
+  const [skillPopupSquadId, setSkillPopupSquadId] = useState('');
+  const [skillPopupPos, setSkillPopupPos] = useState(createDefaultPopupPos);
+  const [marchModePickOpen, setMarchModePickOpen] = useState(false);
+  const [marchPopupPos, setMarchPopupPos] = useState(createDefaultPopupPos);
+  const [selectedSquadId, setSelectedSquadId] = useState('');
+  const [resultState, setResultState] = useState(createDefaultResultState);
+  const [deployEditorOpen, setDeployEditorOpen] = useState(false);
+  const [deployEditingGroupId, setDeployEditingGroupId] = useState('');
+  const [deployEditorDraft, setDeployEditorDraft] = useState(createDefaultDeployEditorDraft);
+  const [deployQuantityDialog, setDeployQuantityDialog] = useState(createDefaultDeployQuantityDialog);
+  const [deployDraggingGroup, setDeployDraggingGroup] = useState(createDefaultDeployDraggingGroup);
+  const [deployActionAnchorMode, setDeployActionAnchorMode] = useState('');
+  const [deployNotice, setDeployNotice] = useState('');
+  const [deployEditorDragUnitId, setDeployEditorDragUnitId] = useState('');
+  const [deployEditorTeam, setDeployEditorTeam] = useState(TEAM_ATTACKER);
+  const [selectedPaletteItemId, setSelectedPaletteItemId] = useState('');
+  const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState('');
+  const [confirmDeletePos, setConfirmDeletePos] = useState(createDefaultConfirmDeletePos);
+  const [quickDeployOpen, setQuickDeployOpen] = useState(false);
+  const [quickDeployTab, setQuickDeployTab] = useState('standard');
+  const [quickDeployApplying, setQuickDeployApplying] = useState(false);
+  const [quickDeployError, setQuickDeployError] = useState('');
+  const [quickDeployRandomForm, setQuickDeployRandomForm] = useState(createDefaultQuickDeployRandomForm);
+  const [templateFillPreview, setTemplateFillPreview] = useState(createDefaultTemplateFillPreview);
+  const [showMidlineDebug, setShowMidlineDebug] = useState(true);
+  const [isPanning, setIsPanning] = useState(false);
+
+  const deployDraggingGroupId = String(deployDraggingGroup?.groupId || '');
+  const deployDraggingTeam = deployDraggingGroup?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+
+  const closeModal = useCallback(() => {
+    if (typeof onClose === 'function') onClose();
+  }, [onClose]);
+
+  const {
+    runtimeRef,
+    phase,
+    runtimeVersion,
+    setPhase,
+    api: { startBattle }
+  } = useBattleRuntime({
+    open,
+    initData: battleInitData,
+    mode,
+    visualConfig: unitVisualConfig
+  });
+
+  const {
+    battleStatus,
+    cardRows: cards,
+    minimapSnapshot,
+    setBattleStatus,
+    setCardRows: setCards,
+    setMinimapSnapshot
+  } = useBattleUiSync({
+    runtimeRef,
+    intervalMs: 120,
+    enabled: open && runtimeVersion > 0
+  });
+
+  const {
+    armyTemplates,
+    armyTemplatesLoading,
+    armyTemplatesError
+  } = useArmyTemplates({ open });
+
+  const {
+    pipelineRef,
+    isReady: renderReady,
+    glError
+  } = useBattleRenderPipeline({
+    canvasRef: glCanvasRef,
+    runtimeRef,
+    enabled: open,
+    loading,
+    error,
+    battleInitData
+  });
+
+  const {
+    stats: debugStats,
+    setPaused: setLoopPaused,
+    resetClock,
+    worldToScreenRef,
+    worldToDomRef,
+    cameraViewRectRef,
+    cameraMiniState,
+    cameraAssert,
+    runtimeDebugOverlay
+  } = useBattleLoop({
+    enabled: open && runtimeVersion > 0 && renderReady && !loading && !error && !glError,
+    canvasRef: glCanvasRef,
+    runtimeRef,
+    pipelineRef,
+    cameraControllerRef: cameraRef,
+    debugEnabled,
+    callbacks: {
+      onBattleEnded: (summary) => {
+        setResultState({ ...createDefaultResultState(), open: true, summary });
+        reportBattleResultRef.current(summary);
+      },
+      onPhaseChange: setPhase,
+      pointerWorldRef,
+      panDragRef,
+      resolveBattleDebugSwitch
+    },
+    constants: {
+      DEPLOY_DEFAULT_YAW_DEG,
+      DEPLOY_PITCH_DEG,
+      BATTLE_FOLLOW_YAW_DEG,
+      BATTLE_FOLLOW_WORLD_YAW_DEG,
+      BATTLE_FOLLOW_MIRROR_X
+    }
+  });
+
+  useBattleSceneLifecycle({
+    open,
+    phase,
+    runtimeRef,
+    runtimeVersion,
+    runtimeInitRef,
+    cameraRef,
+    resetClock,
+    setLoopPaused,
+    setPaused,
+    setBattleStatus,
+    setCards,
+    setMinimapSnapshot,
+    setSelectedSquadId,
+    setAimState,
+    setBattleUiMode,
+    setWorldActionsVisibleForSquadId,
+    setHoverSquadIdOnCard,
+    setPendingPathPoints,
+    setPlanningHoverPoint,
+    setSkillConfirmState,
+    setSkillPopupSquadId,
+    setSkillPopupPos,
+    setMarchModePickOpen,
+    setMarchPopupPos,
+    setResultState,
+    setDeployEditorOpen,
+    setDeployEditingGroupId,
+    setDeployEditorDraft,
+    setDeployQuantityDialog,
+    setDeployDraggingGroup,
+    setDeployActionAnchorMode,
+    setDeployNotice,
+    setDeployEditorDragUnitId,
+    setDeployEditorTeam,
+    setSelectedPaletteItemId,
+    setQuickDeployOpen,
+    setQuickDeployTab,
+    setQuickDeployApplying,
+    setQuickDeployError,
+    setQuickDeployRandomForm,
+    setShowMidlineDebug,
+    templateFillPreviewOpen: templateFillPreview.open,
+    setTemplateFillPreview
+  });
+
+  const reportBattleResult = useCallback(async (summary) => {
+    if (!summary) return;
+    if (!requireResultReport || !battleInitData?.nodeId) {
+      if (typeof onBattleFinished === 'function') onBattleFinished();
+      setResultState((prev) => ({ ...prev, submitting: false, recorded: true, error: '' }));
+      return;
+    }
+    setResultState((prev) => ({ ...prev, submitting: true, error: '' }));
+    try {
+      await BattleDataService.postPveBattleResult({
+        nodeId: battleInitData.nodeId,
+        payload: buildCompatSummaryPayload(summary)
+      });
+
+      setResultState((prev) => ({ ...prev, submitting: false, recorded: true, error: '' }));
+      if (typeof onBattleFinished === 'function') {
+        onBattleFinished();
+      }
+    } catch (submitError) {
+      setResultState((prev) => ({ ...prev, submitting: false, error: submitError.message || '上报失败' }));
+    }
+  }, [battleInitData, onBattleFinished, requireResultReport]);
+
+  useEffect(() => {
+    reportBattleResultRef.current = reportBattleResult;
+  }, [reportBattleResult]);
+
+
+  const handleTogglePause = useCallback(() => {
+    const next = !paused;
+    setPaused(next);
+    setLoopPaused(next);
+  }, [paused, setLoopPaused]);
+
+  const handleTogglePitch = useCallback(() => {
+    if (runtimeRef.current?.getPhase() !== 'battle') return;
+    cameraRef.current.togglePitchMode();
+  }, [runtimeRef]);
+
+  const {
+    handleStartBattle,
+    handleCardFocus,
+    handleCardSelect,
+    resolveDeployPlacementTeam,
+    switchDeployGroupTeamForTraining,
+    isPathPointBlocked
+  } = useBattleSceneSelection({
+    runtimeRef,
+    cameraRef,
+    startBattle,
+    isTrainingMode,
+    setPhase,
+    setBattleStatus,
+    setCards,
+    setSelectedSquadId,
+    setResultState,
+    setAimState,
+    setBattleUiMode,
+    setWorldActionsVisibleForSquadId,
+    setHoverSquadIdOnCard,
+    setPendingPathPoints,
+    setPlanningHoverPoint,
+    setSkillConfirmState,
+    setMarchModePickOpen,
+    setMarchPopupPos,
+    setDeployDraggingGroup,
+    setDeployActionAnchorMode,
+    setDeployEditorOpen,
+    setSelectedPaletteItemId,
+    setQuickDeployOpen,
+    setQuickDeployApplying,
+    setQuickDeployError,
+    setMinimapSnapshot
+  });
+
+  const setClockPaused = useCallback((nextPaused) => {
+    setPaused(!!nextPaused);
+    setLoopPaused(!!nextPaused);
+  }, [setLoopPaused]);
+
+  const {
+    syncBattleCards,
+    selectBattleSquad,
+    closeSkillConfirm,
+    closeSkillPick,
+    commitPathPlanning,
+    closeMarchModePick,
+    executeBattleAction,
+    handleCycleSpeedMode,
+    handleBattleActionClick,
+    handleSkillPick,
+    handleFinishPathPlanning,
+    handlePickMarchMode
+  } = useBattleActions({
+    runtimeRef,
+    cameraRef,
+    glCanvasRef,
+    worldToDomRef,
+    selectedSquadId,
+    battleUiMode,
+    pendingPathPoints,
+    setCards,
+    setSelectedSquadId,
+    setWorldActionsVisibleForSquadId,
+    setSkillConfirmState,
+    setBattleUiMode,
+    setClockPaused,
+    setPendingPathPoints,
+    setPlanningHoverPoint,
+    setMarchModePickOpen,
+    setMarchPopupPos,
+    setSkillPopupPos,
+    setSkillPopupSquadId
+  });
+
+  const { beginDeployRectResize } = useBattleDeployFormationResize({
+    runtimeRef,
+    deployRectDragRef,
+    deployDraggingGroupId,
+    setDeployActionAnchorMode
+  });
+
+  const {
+    onMouseDown: handleSceneMouseDown,
+    onMouseMove: handlePointerMove,
+    onWheel: handleSceneWheel,
+    onContextMenu: handleSceneContextMenu,
+    onMinimapClick: handleMinimapClick
+  } = useBattleSceneInputController({
+    open,
+    glCanvasRef,
+    runtimeRef,
+    cameraRef,
+    cameraViewRectRef,
+    worldToScreenRef,
+    pointerWorldRef,
+    panDragRef,
+    deployYawDragRef,
+    deployRectDragRef,
+    spacePressedRef,
+    selectedSquadId,
+    battleUiMode,
+    skillConfirmState,
+    aimState,
+    deployDraggingGroupId,
+    deployDraggingTeam,
+    selectedPaletteItemId,
+    isTrainingMode,
+    resolveDeployPlacementTeam,
+    switchDeployGroupTeamForTraining,
+    isPathPointBlocked,
+    syncBattleCards,
+    selectBattleSquad,
+    closeSkillConfirm,
+    closeSkillPick,
+    closeMarchModePick,
+    setClockPaused,
+    setCards,
+    setMinimapSnapshot,
+    setIsPanning,
+    setDeployNotice,
+    setSelectedSquadId,
+    setDeployDraggingGroup,
+    setDeployActionAnchorMode,
+    setPendingPathPoints,
+    setPlanningHoverPoint,
+    setBattleUiMode,
+    setSkillPopupSquadId,
+    setAimState,
+    setSkillConfirmState,
+    setWorldActionsVisibleForSquadId,
+    ORDER_MOVE,
+    CAMERA_ZOOM_STEP,
+    CAMERA_DISTANCE_MIN,
+    CAMERA_DISTANCE_MAX,
+    DEPLOY_ROTATE_SENSITIVITY,
+    DEPLOY_ROTATE_CLICK_THRESHOLD,
+    DEPLOY_PITCH_DEG,
+    BATTLE_UI_MODE_NONE,
+    BATTLE_UI_MODE_PATH,
+    BATTLE_UI_MODE_MARCH_PICK,
+    BATTLE_UI_MODE_SKILL_PICK,
+    BATTLE_UI_MODE_SKILL_CONFIRM,
+    skillRangeByClass,
+    skillAoeRadiusByClass
+  });
+
+
+  const {
+    closeDeployEditor,
+    handleOpenDeployCreator,
+    handleOpenDeployEditorForGroup,
+    openDeployQuantityDialog,
+    handleDeployEditorDrop,
+    handleConfirmDeployQuantity,
+    handleRemoveDraftUnit,
+    handleSaveDeployEditor,
+    handleCreateTrainingGroupByTemplate,
+    handleOpenTemplateFillPreview,
+    handleCloseTemplateFillPreview,
+    handleConfirmTemplateFillPreview
+  } = useBattleDeployEditor({
+    runtimeRef,
+    pointerWorldRef,
+    isTrainingMode,
+    deployEditingGroupId,
+    deployEditorDraft,
+    deployEditorTeam,
+    deployQuantityDialog,
+    templateFillPreview,
+    setDeployEditorOpen,
+    setDeployEditingGroupId,
+    setDeployEditorDraft,
+    setDeployQuantityDialog,
+    setDeployEditorDragUnitId,
+    setDeployEditorTeam,
+    setDeployNotice,
+    setSelectedSquadId,
+    setDeployDraggingGroup,
+    setDeployActionAnchorMode,
+    setCards,
+    setMinimapSnapshot,
+    setTemplateFillPreview
+  });
+
+  const {
+    syncDeployUiFromRuntime,
+    handleDeployMove,
+    handleDeployDelete,
+    handleConfirmDeployDelete
+  } = useBattleDeployGroupActions({
+    runtimeRef,
+    glCanvasRef,
+    pointerWorldRef,
+    isTrainingMode,
+    confirmDeleteGroupId,
+    setSelectedSquadId,
+    setDeployDraggingGroup,
+    setDeployActionAnchorMode,
+    setCards,
+    setMinimapSnapshot,
+    setDeployNotice,
+    setConfirmDeleteGroupId,
+    setConfirmDeletePos
+  });
+
+  const {
+    handleCloseQuickDeploy,
+    handleQuickDeployTabChange,
+    handleQuickDeployRandomFieldChange,
+    handleApplyStandardQuickDeploy,
+    handleApplyRandomQuickDeploy
+  } = useBattleQuickDeploy({
+    runtimeRef,
+    isTrainingMode,
+    quickDeployApplying,
+    quickDeployRandomForm,
+    syncDeployUiFromRuntime,
+    setQuickDeployOpen,
+    setQuickDeployTab,
+    setQuickDeployError,
+    setQuickDeployRandomForm,
+    setQuickDeployApplying,
+    setDeployDraggingGroup,
+    setDeployActionAnchorMode,
+    setDeployEditorOpen,
+    setDeployEditingGroupId,
+    setDeployEditorTeam,
+    setDeployEditorDraft,
+    setDeployEditorDragUnitId,
+    setDeployQuantityDialog,
+    setConfirmDeleteGroupId,
+    setConfirmDeletePos,
+    setSelectedPaletteItemId,
+    setDeployNotice
+  });
+
+  const { handleEscape } = useBattleEscapeHandler({
+    confirmDeleteGroupId,
+    deployQuantityDialogOpen: deployQuantityDialog.open,
+    quickDeployOpen,
+    deployEditorOpen,
+    deployDraggingGroupId,
+    deployRectDragRef,
+    battleUiMode,
+    worldActionsVisibleForSquadId,
+    aimStateActive: aimState.active,
+    setConfirmDeleteGroupId,
+    setConfirmDeletePos,
+    setDeployQuantityDialog,
+    handleCloseQuickDeploy,
+    closeDeployEditor,
+    setDeployDraggingGroup,
+    setDeployNotice,
+    closeSkillConfirm,
+    commitPathPlanning,
+    setBattleUiMode,
+    setSkillPopupSquadId,
+    setMarchModePickOpen,
+    setClockPaused,
+    setWorldActionsVisibleForSquadId,
+    setAimState,
+    closeModal
+  });
+
+  useBattleSceneGlobalInput({
+    open,
+    runtimeRef,
+    spacePressedRef,
+    marchModePickOpen,
+    isSkillPickMode: battleUiMode === BATTLE_UI_MODE_SKILL_PICK,
+    onEscape: handleEscape,
+    onTogglePause: handleTogglePause,
+    onTogglePitch: handleTogglePitch,
+    onCloseMarchModePick: closeMarchModePick,
+    onCloseSkillPick: closeSkillPick
+  });
+
+
+  const {
+    selectedSquad,
+    selectedCardRow,
+    skillPopupTargetSquadId,
+    skillPopupMeta,
+    selectedSpeedModeUi,
+    selectedWaypoints,
+    pitchLabel,
+    deployEditorAvailableRows,
+    deployEditorDraftSummary,
+    deployEditorTeamLabel,
+    deployEditorTotal,
+    selectedDeployGroup,
+    selectedDeployFormation,
+    selectedDeployFormationLines,
+    selectedDeployHandleLeftDom,
+    selectedDeployHandleRightDom,
+    worldActionGroupId,
+    worldActionPos,
+    selectedBattleActionSquad,
+    pathPlanningTailDom,
+    confirmDeleteGroup,
+    quickParsedAttackerTeams,
+    quickParsedDefenderTeams,
+    quickParsedAttackerTotal,
+    quickParsedDefenderTotal,
+    canDrawMidlineDebug,
+    midlineLineStyle,
+    teamMinLineStyle,
+    teamMaxLineStyle
+  } = useBattleSceneDerivedState({
+    runtimeRef,
+    phase,
+    cards,
+    selectedSquadId,
+    battleUiMode,
+    skillPopupSquadId,
+    cameraRef,
+    isTrainingMode,
+    deployEditingGroupId,
+    deployEditorTeam,
+    deployEditorDraft,
+    deployDraggingGroupId,
+    worldToDomRef,
+    deployActionAnchorMode,
+    worldActionsVisibleForSquadId,
+    pendingPathPoints,
+    confirmDeleteGroupId,
+    quickDeployRandomForm,
+    debugEnabled,
+    showMidlineDebug,
+    debugStats
+  });
+
+  if (!open) return null;
+
+  return (
+    <div className="pve2-overlay">
+      <div className="pve2-head">
+        <div className="pve2-title">
+          <strong>{battleInitData?.nodeName || (isTrainingMode ? '训练场' : '攻占战')}</strong>
+          <span>{battleInitData?.gateLabel || battleInitData?.gateKey || ''}</span>
+        </div>
+        <div className="pve2-side-info">
+          <div className="pve2-side attacker">
+            <span>我方</span>
+            <strong>{battleInitData?.attacker?.username || '-'}</strong>
+            <em>{battleInitData?.attacker?.totalCount || 0}</em>
+          </div>
+          <div className="pve2-side defender">
+            <span>{isTrainingMode ? '敌方' : '守军'}</span>
+            <strong>{battleInitData?.defender?.username || '-'}</strong>
+            <em>{battleInitData?.defender?.totalCount || 0}</em>
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="pve2-loading">加载战斗初始化数据...</div>
+      ) : null}
+      {!loading && error ? (
+        <div className="pve2-error">
+          <p>{error}</p>
+          <button type="button" className="btn btn-secondary" onClick={closeModal}>关闭</button>
+        </div>
+      ) : null}
+
+      {!loading && !error ? (
+        <div className="pve2-main">
+          <BattleHUD
+            phase={phase}
+            status={battleStatus}
+            paused={paused}
+            onTogglePause={handleTogglePause}
+            onTogglePitch={handleTogglePitch}
+            onExit={closeModal}
+            onStart={handleStartBattle}
+            canStart={runtimeRef.current?.canStartBattle?.()}
+            debugEnabled={debugEnabled}
+            onToggleDebug={() => setDebugEnabled((prev) => !prev)}
+            pitchLabel={pitchLabel}
+            startLabel={startLabel}
+            speedModeLabel={speedModeLabel(selectedSpeedModeUi)}
+            onCycleSpeedMode={phase === 'battle' ? handleCycleSpeedMode : null}
+          />
+
+          <div
+            className={`pve2-scene ${isPanning ? 'is-panning' : ''}`}
+            onMouseDown={handleSceneMouseDown}
+            onMouseMove={handlePointerMove}
+            onContextMenu={handleSceneContextMenu}
+            onWheel={handleSceneWheel}
+          >
+            <canvas ref={glCanvasRef} className="pve2-gl-canvas" />
+            <AimOverlayCanvas
+              width={glCanvasRef.current?.width || 1}
+              height={glCanvasRef.current?.height || 1}
+              worldToScreen={(world) => (worldToScreenRef.current ? worldToScreenRef.current(world) : { x: -9999, y: -9999, visible: false })}
+              selectedSquad={selectedSquad}
+              aimState={aimState}
+              waypoints={selectedWaypoints}
+              battleUiMode={battleUiMode}
+              pendingPathPoints={pendingPathPoints}
+              planningHoverPoint={planningHoverPoint}
+              skillConfirmState={skillConfirmState}
+            />
+
+            {phase === 'deploy' && selectedDeployFormation ? (
+              <div className="pve2-formation-overlay">
+                {selectedDeployFormationLines.map((style, idx) => (
+                  <div key={`formation-line-${idx}`} className="pve2-formation-line" style={style} />
+                ))}
+                {selectedDeployHandleLeftDom?.visible !== false ? (
+                  <button
+                    type="button"
+                    className="pve2-formation-handle"
+                    style={{ left: `${selectedDeployHandleLeftDom.x}px`, top: `${selectedDeployHandleLeftDom.y}px` }}
+                    onMouseDown={(event) => beginDeployRectResize(event, selectedDeployGroup, -1)}
+                  >
+                    ↔
+                  </button>
+                ) : null}
+                {selectedDeployHandleRightDom?.visible !== false ? (
+                  <button
+                    type="button"
+                    className="pve2-formation-handle"
+                    style={{ left: `${selectedDeployHandleRightDom.x}px`, top: `${selectedDeployHandleRightDom.y}px` }}
+                    onMouseDown={(event) => beginDeployRectResize(event, selectedDeployGroup, 1)}
+                  >
+                    ↔
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {canDrawMidlineDebug ? (
+              <div className="pve2-midline-overlay">
+                {midlineLineStyle ? <div className="pve2-midline-line midline" style={midlineLineStyle} /> : null}
+                {!debugStats?.allowCrossMidline && teamMinLineStyle ? (
+                  <div className="pve2-midline-line min-bound" style={teamMinLineStyle} />
+                ) : null}
+                {!debugStats?.allowCrossMidline && teamMaxLineStyle ? (
+                  <div className="pve2-midline-line max-bound" style={teamMaxLineStyle} />
+                ) : null}
+              </div>
+            ) : null}
+
+            <SquadCards
+              squads={toCardsByTeam(cards)}
+              phase={phase}
+              actionAnchorMode={deployActionAnchorMode}
+              deployActionTeam={isTrainingMode ? '' : TEAM_ATTACKER}
+              onFocus={handleCardFocus}
+              onSelect={handleCardSelect}
+              hoverSquadIdOnCard={hoverSquadIdOnCard}
+              onCardHoverChange={setHoverSquadIdOnCard}
+              onBattleAction={handleBattleActionClick}
+              onDeployMove={handleDeployMove}
+              onDeployEdit={handleOpenDeployEditorForGroup}
+              onDeployDelete={handleDeployDelete}
+            />
+
+            {phase === 'battle' ? (
+              <div className="pve2-action-pad">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={handleCycleSpeedMode}
+                >
+                  {`速度模式：${speedModeLabel(selectedSpeedModeUi)}`}
+                </button>
+                <span className="pve2-hint">{`交互态：${battleUiMode}`}</span>
+              </div>
+            ) : (
+              <BattleDeploySidebar
+                isTrainingMode={isTrainingMode}
+                armyTemplatesLoading={armyTemplatesLoading}
+                armyTemplatesError={armyTemplatesError}
+                armyTemplates={armyTemplates}
+                attackerTeam={TEAM_ATTACKER}
+                defenderTeam={TEAM_DEFENDER}
+                onCreateDeployGroup={handleOpenDeployCreator}
+                onCreateTemplateGroup={handleCreateTrainingGroupByTemplate}
+                onOpenTemplateFillPreview={handleOpenTemplateFillPreview}
+              />
+            )}
+
+            {phase === 'battle' ? (
+              <BattleMarchModeFloat
+                open={marchModePickOpen}
+                popupPos={marchPopupPos}
+                onPickMode={handlePickMarchMode}
+              />
+            ) : null}
+
+            {phase === 'battle' ? (
+              <BattleSkillPickFloat
+                open={battleUiMode === BATTLE_UI_MODE_SKILL_PICK}
+                popupPos={skillPopupPos}
+                squadId={skillPopupTargetSquadId}
+                skillPopupMeta={skillPopupMeta}
+                onPickSkill={handleSkillPick}
+              />
+            ) : null}
+
+            {phase === 'deploy' && !isTrainingMode ? (
+              <BattleTemplateFillModal
+                open={templateFillPreview.open}
+                preview={templateFillPreview}
+                onClose={handleCloseTemplateFillPreview}
+                onConfirm={handleConfirmTemplateFillPreview}
+              />
+            ) : null}
+
+            {phase === 'deploy' && isTrainingMode ? (
+              <BattleQuickDeployModal
+                open={quickDeployOpen}
+                quickDeployTab={quickDeployTab}
+                quickDeployApplying={quickDeployApplying}
+                quickDeployError={quickDeployError}
+                quickDeployRandomForm={quickDeployRandomForm}
+                quickParsedAttackerTeams={quickParsedAttackerTeams}
+                quickParsedDefenderTeams={quickParsedDefenderTeams}
+                quickParsedAttackerTotal={quickParsedAttackerTotal}
+                quickParsedDefenderTotal={quickParsedDefenderTotal}
+                onClose={handleCloseQuickDeploy}
+                onTabChange={handleQuickDeployTabChange}
+                onChangeRandomForm={handleQuickDeployRandomFieldChange}
+                onApplyStandardPreset={handleApplyStandardQuickDeploy}
+                onApplyRandom={handleApplyRandomQuickDeploy}
+              />
+            ) : null}
+
+            <Minimap
+              snapshot={minimapSnapshot}
+              cameraCenter={cameraMiniState.center}
+              cameraViewport={cameraMiniState.viewport}
+              onMapClick={handleMinimapClick}
+            />
+
+            {battleUiMode === BATTLE_UI_MODE_PATH ? (
+              <div className="pve2-aim-tip">路径规划中：LMB 添加路点，RMB 撤销，点击最后路径点“√”执行</div>
+            ) : null}
+            {battleUiMode === BATTLE_UI_MODE_SKILL_CONFIRM ? (
+              <div className="pve2-aim-tip">技能确认态：LMB 确认释放，RMB 取消</div>
+            ) : null}
+            {runtimeDebugOverlay.enabled ? (
+              <div className="pve2-runtime-debug">
+                <div>{`phase: ${runtimeDebugOverlay.phase}`}</div>
+                <div>{`pitchMix: ${Number(runtimeDebugOverlay.pitchMix || 0).toFixed(3)}`}</div>
+                <div>{`formationRect: ${
+                  runtimeDebugOverlay.formationRect
+                    ? `w=${runtimeDebugOverlay.formationRect.width.toFixed(1)}, d=${runtimeDebugOverlay.formationRect.depth.toFixed(1)}, A=${runtimeDebugOverlay.formationRect.area.toFixed(1)}`
+                    : 'n/a'
+                }`}</div>
+                {runtimeDebugOverlay.steeringWeights ? (
+                  <div>{`steerW: ${JSON.stringify(runtimeDebugOverlay.steeringWeights)}`}</div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {debugEnabled ? (
+              <BattleDebugPanel
+                phase={phase}
+                stats={debugStats}
+                camera={cameraAssert}
+                selectedSquad={selectedCardRow}
+                showMidlineDebug={showMidlineDebug}
+                onToggleMidlineDebug={() => setShowMidlineDebug((prev) => !prev)}
+              />
+            ) : null}
+
+            {glError ? (
+              <div className="pve2-error-overlay">{glError}</div>
+            ) : null}
+
+            {phase === 'battle' && pathPlanningTailDom?.visible ? (
+              <button
+                type="button"
+                className="pve2-path-confirm-btn"
+                style={{ left: `${pathPlanningTailDom.x}px`, top: `${pathPlanningTailDom.y}px` }}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleFinishPathPlanning();
+                }}
+              >
+                √
+              </button>
+            ) : null}
+
+            {phase === 'battle' ? (
+              <BattleActionButtons
+                visible={!!worldActionsVisibleForSquadId}
+                mode="world"
+                anchorWorldPos={selectedBattleActionSquad ? {
+                  x: Number(selectedBattleActionSquad.x) || 0,
+                  y: Number(selectedBattleActionSquad.y) || 0,
+                  z: Math.max(3, Number(selectedBattleActionSquad.radius) || 12) * 0.25
+                } : null}
+                camera={(world) => (worldToDomRef.current ? worldToDomRef.current(world) : null)}
+                onAction={(actionId, payload) => {
+                  if (!worldActionsVisibleForSquadId) return;
+                  executeBattleAction(worldActionsVisibleForSquadId, actionId, payload);
+                }}
+              />
+            ) : null}
+
+            {phase === 'deploy' && worldActionPos?.visible ? (
+              <div
+                className="pve2-world-actions"
+                style={{ left: `${worldActionPos.x}px`, top: `${worldActionPos.y}px` }}
+                onMouseDown={(event) => event.stopPropagation()}
+                onMouseUp={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <DeployActionButtons
+                  layout="arc"
+                  onMove={(event) => handleDeployMove(worldActionGroupId, event)}
+                  onEdit={(event) => handleOpenDeployEditorForGroup(worldActionGroupId, event)}
+                  onDelete={(event) => handleDeployDelete(worldActionGroupId, event)}
+                />
+              </div>
+            ) : null}
+
+            {phase === 'deploy' ? (
+              <BattleDeployEditorPanel
+                open={deployEditorOpen}
+                deployEditingGroupId={deployEditingGroupId}
+                deployEditorTeamLabel={deployEditorTeamLabel}
+                deployEditorDraft={deployEditorDraft}
+                deployEditorTeam={deployEditorTeam}
+                deployEditorAvailableRows={deployEditorAvailableRows}
+                deployEditorDragUnitId={deployEditorDragUnitId}
+                deployEditorTotal={deployEditorTotal}
+                deployEditorDraftSummary={deployEditorDraftSummary}
+                onChangeDraftName={(name) => setDeployEditorDraft((prev) => ({ ...prev, name }))}
+                onSetDragUnitId={setDeployEditorDragUnitId}
+                onOpenQuantityDialog={openDeployQuantityDialog}
+                onDropUnit={handleDeployEditorDrop}
+                onRemoveDraftUnit={handleRemoveDraftUnit}
+                onCancel={closeDeployEditor}
+                onConfirm={handleSaveDeployEditor}
+              />
+            ) : null}
+
+            {phase === 'deploy' && deployNotice ? (
+              <div className="pve2-deploy-notice">{deployNotice}</div>
+            ) : null}
+
+            {phase === 'deploy' && confirmDeleteGroup ? (
+              <div
+                className="pve2-confirm"
+                style={{ left: `${confirmDeletePos.x}px`, top: `${confirmDeletePos.y}px` }}
+                onMouseDown={(event) => event.stopPropagation()}
+                onMouseUp={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <p>{`确认删除部队「${confirmDeleteGroup.name || '未命名部队'}」吗？`}</p>
+                <div className="pve2-confirm-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => {
+                      setConfirmDeleteGroupId('');
+                      setConfirmDeletePos(createDefaultConfirmDeletePos());
+                    }}
+                  >
+                    取消
+                  </button>
+                  <button type="button" className="btn btn-warning btn-small" onClick={handleConfirmDeployDelete}>确认删除</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {resultState.open ? (
+            <div className="pve2-result">
+              <h3>{isTrainingMode ? '训练结算' : '战斗结算'}</h3>
+              {resultState.summary ? (
+                <>
+                  <p>{resultState.summary.endReason || (isTrainingMode ? '训练结束' : '战斗结束')}</p>
+                  <div className="pve2-result-grid">
+                    <div>
+                      <strong>我方</strong>
+                      <span>{resultState.summary.attacker?.remain || 0}/{resultState.summary.attacker?.start || 0}</span>
+                      <span>击杀 {resultState.summary.attacker?.kills || 0}</span>
+                    </div>
+                    <div>
+                      <strong>{isTrainingMode ? '敌方' : '守军'}</strong>
+                      <span>{resultState.summary.defender?.remain || 0}/{resultState.summary.defender?.start || 0}</span>
+                      <span>击杀 {resultState.summary.defender?.kills || 0}</span>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {requireResultReport && resultState.submitting ? <p>正在上报战斗结果...</p> : null}
+              {resultState.error ? <p className="error">{resultState.error}</p> : null}
+              {requireResultReport && resultState.recorded ? <p className="ok">战报已记录</p> : null}
+              <div className="pve2-result-actions">
+                <button type="button" className="btn btn-secondary" onClick={closeModal}>{isTrainingMode ? '返回训练场' : '返回围城'}</button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      <NumberPadDialog
+        open={phase === 'deploy' && deployQuantityDialog.open}
+        title={`设置兵力：${deployQuantityDialog.unitName || deployQuantityDialog.unitTypeId}`}
+        description="可滑动或直接输入数量"
+        min={1}
+        max={Math.max(1, Math.floor(Number(deployQuantityDialog.max) || 1))}
+        initialValue={Math.max(1, Math.floor(Number(deployQuantityDialog.current) || 1))}
+        zIndex={36010}
+        confirmLabel="确定"
+        cancelLabel="取消"
+        onCancel={() => setDeployQuantityDialog(createDefaultDeployQuantityDialog())}
+        onConfirm={handleConfirmDeployQuantity}
+      />
+    </div>
+  );
+};
+
+export default BattleSceneContainer;

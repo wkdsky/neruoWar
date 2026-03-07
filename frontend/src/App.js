@@ -19,6 +19,7 @@ import CreateNodeModal from './components/modals/CreateNodeModal';
 import PveBattleModal from './components/game/PveBattleModal';
 import BattlefieldPreviewModal from './components/game/BattlefieldPreviewModal';
 import { API_BASE, BACKEND_ORIGIN } from './runtimeConfig';
+import BattleDataService from './game/battle/data/BattleDataService';
 
 // 导入头像
 import defaultMale1 from './assets/avatars/default_male_1.svg';
@@ -3190,31 +3191,14 @@ const App = () => {
             data: null
         });
 
-        try {
-            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/pve/battle-init?gateKey=${encodeURIComponent(gateKey)}`, {
-                headers: {
-                    Authorization: `Bearer ${token}`
-                }
-            });
-            const parsed = await parseApiResponse(response);
-            if (!response.ok || !parsed.data) {
-                setPveBattleState({
-                    open: true,
-                    loading: false,
-                    error: getApiErrorMessage(parsed, '初始化战斗失败'),
-                    nodeId,
-                    gateKey,
-                    data: null
-                });
-                return;
-            }
+        try {            const data = await BattleDataService.getPveBattleInit({ nodeId, gateKey });
             setPveBattleState({
                 open: true,
                 loading: false,
                 error: '',
                 nodeId,
                 gateKey,
-                data: parsed.data
+                data
             });
         } catch (error) {
             setPveBattleState({

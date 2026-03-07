@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { createPreviewMesh } from '../../../game/battlefield/items/itemGeometryRegistry';
+import { getItemGeometry } from '../../../game/battlefield/items/ItemGeometryRegistry';
 
 const clearObject3D = (root) => {
   if (!root || typeof root.traverse !== 'function') return;
@@ -20,7 +20,11 @@ const clearObject3D = (root) => {
 };
 
 const buildBattlefieldItemMesh = (item = {}, options = {}) => {
-  return createPreviewMesh(item, { battleTone: options?.battleTone === true });
+  const geometry = getItemGeometry(item || {});
+  const builder = geometry?.previewBuilder;
+  return typeof builder === 'function'
+    ? builder(null, options?.paletteOverride || null, options?.hintsOverride || null)
+    : null;
 };
 
 const updateRendererSize = (canvas, renderer, camera) => {

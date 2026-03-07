@@ -232,6 +232,10 @@ const BattlefieldDefenderDeploymentSchema = new mongoose.Schema({
     min: -(BATTLEFIELD_FIELD_LIMIT / 2),
     max: BATTLEFIELD_FIELD_LIMIT / 2
   },
+  rotation: {
+    type: Number,
+    default: undefined
+  },
   placed: {
     type: Boolean,
     default: true
@@ -465,6 +469,7 @@ const DomainDefenseLayoutSchema = new mongoose.Schema({
           count: { type: Number, default: 1, min: 1 },
           x: { type: Number, default: 0 },
           y: { type: Number, default: 0 },
+          rotation: { type: Number, default: undefined },
           placed: { type: Boolean, default: true }
         }, { _id: false })],
         default: []

@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
+import { degToRad, normalizeDeg } from '../../shared/angle';
+import { minimapToWorld, worldToMinimap } from '../../shared/coords';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-const degToRad = (deg) => (Number(deg) || 0) * (Math.PI / 180);
 
 const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
   const canvasRef = useRef(null);
@@ -22,17 +23,19 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
     const sx = width / fw;
     const sy = height / fh;
 
-    // Standard minimap orientation: world left/right matches screen left/right.
-    const toMap = (x, y) => ({
-      x: ((Number(x) || 0) + fw / 2) * sx,
-      y: ((fh / 2) - (Number(y) || 0)) * sy
-    });
+    const toMap = (x, y) => {
+      const point = worldToMinimap(x, y, fw, fh);
+      return {
+        x: point.mx * sx,
+        y: point.my * sy
+      };
+    };
 
     const deployRange = snapshot.deployRange || {};
     const attackerMaxX = Number.isFinite(Number(deployRange.attackerMaxX)) ? Number(deployRange.attackerMaxX) : 0;
     const defenderMinX = Number.isFinite(Number(deployRange.defenderMinX)) ? Number(deployRange.defenderMinX) : 0;
-    const attackerRight = clamp(((attackerMaxX + fw / 2) * sx), 0, width);
-    const defenderLeft = clamp(((defenderMinX + fw / 2) * sx), attackerRight, width);
+    const attackerRight = clamp(worldToMinimap(attackerMaxX, 0, fw, fh).mx * sx, 0, width);
+    const defenderLeft = clamp(worldToMinimap(defenderMinX, 0, fw, fh).mx * sx, attackerRight, width);
 
     ctx.fillStyle = 'rgba(11, 40, 70, 0.78)';
     ctx.fillRect(0, 0, attackerRight, height);
@@ -71,8 +74,7 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
         const bh = Math.max(1, (Number(part?.d) || 10) * sy);
         ctx.save();
         ctx.translate(p.x, p.y);
-        // Canvas y-axis points downward, so invert rotation to keep world CCW consistent.
-        ctx.rotate(-degToRad(part?.yawDeg));
+        ctx.rotate(-degToRad(normalizeDeg(part?.yawDeg)));
         ctx.fillStyle = 'rgba(100, 116, 139, 0.65)';
         ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
         ctx.restore();
@@ -111,9 +113,8 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
     const ry = event.clientY - rect.top;
     const fw = Math.max(1, Number(snapshot.field.width) || 1);
     const fh = Math.max(1, Number(snapshot.field.height) || 1);
-    const worldX = (rx / rect.width) * fw - fw / 2;
-    const worldY = (fh / 2) - ((ry / rect.height) * fh);
-    onMapClick({ x: worldX, y: worldY });
+    const { x, y } = minimapToWorld((rx / rect.width) * fw, (ry / rect.height) * fh, fw, fh);
+    onMapClick({ x, y });
   };
 
   return (

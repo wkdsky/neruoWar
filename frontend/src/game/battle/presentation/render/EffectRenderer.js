@@ -4,8 +4,9 @@ import {
   createDynamicInstanceBuffer,
   updateDynamicBuffer
 } from './WebGL2Context';
+import { EFFECT_INSTANCE_STRIDE } from '../snapshot/BattleSnapshotSchema';
 
-export const EFFECT_INSTANCE_STRIDE = 8;
+export { EFFECT_INSTANCE_STRIDE };
 
 const VS = `#version 300 es
 layout(location=0) in vec2 aQuadPos;

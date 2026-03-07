@@ -15,7 +15,7 @@ import {
 } from '../effects/CombatEffects';
 import { updateCrowdCombat } from './crowdCombat';
 import { syncMeleeEngagement } from './engagement';
-import itemInteractionSystem from '../items/itemInteractionSystem';
+import itemInteractionSystem from '../items/ItemInteractionSystem';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
@@ -651,12 +651,19 @@ const updateActiveGroundSkill = (sim, crowd, squad, dt) => {
   }
 };
 
+const isEnemyHiddenForViewer = (enemySquad = {}, viewerTeam = TEAM_ATTACKER) => {
+  if (viewerTeam === TEAM_ATTACKER) return !!enemySquad?.hiddenFromAttacker;
+  if (viewerTeam === TEAM_DEFENDER) return !!enemySquad?.hiddenFromDefender;
+  return false;
+};
+
 const pickNearestEnemySquad = (squad, squads = []) => {
   const enemyTeam = squad?.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
   let best = null;
   let bestDist = Infinity;
   squads.forEach((row) => {
     if (!row || row.team !== enemyTeam || row.remain <= 0) return;
+    if (isEnemyHiddenForViewer(row, squad?.team)) return;
     const dist = Math.hypot((row.x || 0) - (squad.x || 0), (row.y || 0) - (squad.y || 0));
     if (dist < bestDist) {
       bestDist = dist;

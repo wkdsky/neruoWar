@@ -2237,7 +2237,8 @@ const serializeBattlefieldDefenderDeploymentsForLayout = (battlefieldState = {},
         unitTypeId: primary.unitTypeId,
         count: primary.count,
         x: round3(item?.x, 0),
-        y: round3(item?.y, 0)
+        y: round3(item?.y, 0),
+        rotation: Number.isFinite(Number(item?.rotation)) ? round3(item.rotation, 0) : undefined
       };
     })
     .filter((item) => !!item?.id)
@@ -2363,7 +2364,8 @@ const mergeBattlefieldStateByGate = (currentState = {}, gateKey = '', payload = 
       unitTypeId: primary.unitTypeId,
       count: primary.count,
       x: item?.x,
-      y: item?.y
+      y: item?.y,
+      rotation: item?.rotation
     };
   }).filter((item) => !!item?.deployId);
   const retainedDefenderDeployments = currentDefenderDeployments.filter((item) => item?.layoutId !== targetLayoutId);
@@ -7920,6 +7922,12 @@ router.get('/:nodeId/siege/pve/battle-init', authenticateToken, async (req, res)
     };
     const layoutBundle = serializeBattlefieldStateForGate(mergedBattlefieldState, gateKey, '');
     const defenderDeployments = Array.isArray(layoutBundle?.defenderDeployments) ? layoutBundle.defenderDeployments : [];
+    if (process.env.NODE_ENV !== 'production') {
+      const rotationCount = defenderDeployments.filter((entry) => Number.isFinite(Number(entry?.rotation))).length;
+      if (rotationCount > 0) {
+        console.debug(`[battle-init] defenderDeployments with rotation=${rotationCount}`);
+      }
+    }
     const defenderUnitCountMap = new Map();
     defenderDeployments.forEach((entry) => {
       if (entry?.placed === false) return;

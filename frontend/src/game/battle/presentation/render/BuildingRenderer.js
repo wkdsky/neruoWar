@@ -3,8 +3,9 @@ import {
   createDynamicInstanceBuffer,
   updateDynamicBuffer
 } from './WebGL2Context';
+import { BUILDING_INSTANCE_STRIDE } from '../snapshot/BattleSnapshotSchema';
 
-export const BUILDING_INSTANCE_STRIDE = 16;
+export { BUILDING_INSTANCE_STRIDE };
 const DEV_BUILDING_ORIENTATION_CHECK = process.env.NODE_ENV !== 'production';
 const ORIENTATION_DIM_EPS = 1.5;
 const ORIENTATION_POS_EPS = 1.6;

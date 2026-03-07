@@ -464,6 +464,7 @@ const normalizeBattlefieldDefenderDeployments = (sourceDeployments = [], options
     const maxX = layout.fieldWidth / 2;
     const minY = -(layout.fieldHeight / 2);
     const maxY = layout.fieldHeight / 2;
+    const rotationValue = Number(item?.rotation);
     deployments.push({
       layoutId,
       deployId: rawDeployId,
@@ -474,6 +475,7 @@ const normalizeBattlefieldDefenderDeployments = (sourceDeployments = [], options
       count: primaryUnit.count,
       x: Math.max(minX, Math.min(maxX, round3(item?.x, 0))),
       y: Math.max(minY, Math.min(maxY, round3(item?.y, 0))),
+      rotation: Number.isFinite(rotationValue) ? normalizeRotation(rotationValue, 0) : undefined,
       placed: item?.placed !== false
     });
     if (deployments.length >= BATTLEFIELD_DEFENDER_DEPLOYMENT_LIMIT) break;
@@ -604,13 +606,15 @@ const toLegacyBattlefieldLayoutFromState = (battlefieldState = {}, preferredGate
           const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId.trim() : '';
           const count = Math.max(1, Math.floor(Number(entry?.count) || 1));
           if (!unitTypeId) return null;
+          const rotationValue = Number(item?.rotation);
           return {
             layoutId: item.layoutId,
             deployId: idx === 0 ? item.deployId : `${item.deployId}_${idx + 1}`,
             unitTypeId,
             count,
             x: round3(item.x, 0),
-            y: round3(item.y, 0)
+            y: round3(item.y, 0),
+            rotation: Number.isFinite(rotationValue) ? normalizeRotation(rotationValue, 0) : undefined
           };
         })
         .filter(Boolean);

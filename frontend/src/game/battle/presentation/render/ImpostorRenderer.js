@@ -12,8 +12,9 @@ import {
   createDynamicInstanceBuffer,
   updateDynamicBuffer
 } from './WebGL2Context';
+import { UNIT_INSTANCE_STRIDE } from '../snapshot/BattleSnapshotSchema';
 
-export const UNIT_INSTANCE_STRIDE = 20;
+export { UNIT_INSTANCE_STRIDE };
 
 const VS = `#version 300 es
 layout(location=0) in vec2 aQuadPos;

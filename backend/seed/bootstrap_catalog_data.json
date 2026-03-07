@@ -83,8 +83,10 @@
             "yawDeg": 0
           },
           "compatibleTags": [
-            "wood_plank",
-            "bridge_piece"
+            "beam",
+            "bridge_piece",
+            "wood_beam",
+            "wood_plank"
           ],
           "snap": {
             "dist": 10.667,
@@ -525,7 +527,7 @@
       },
       "interactions": [
         {
-          "kind": "trapStagger",
+          "kind": "trap",
           "selector": {
             "rpsType": [
               "mobility",
@@ -542,9 +544,9 @@
           },
           "params": {
             "hpDamage": 10,
-            "poiseDamage": 96,
+            "poiseDamage": 104,
             "staggerTier": "heavy",
-            "cooldownSec": 4.2
+            "cooldownSec": 8.8
           }
         }
       ],
@@ -604,7 +606,7 @@
       },
       "interactions": [
         {
-          "kind": "trapStagger",
+          "kind": "trap",
           "selector": {
             "rpsType": [
               "mobility",
@@ -621,9 +623,9 @@
           },
           "params": {
             "hpDamage": 7,
-            "poiseDamage": 120,
+            "poiseDamage": 128,
             "staggerTier": "heavy",
-            "cooldownSec": 4.8
+            "cooldownSec": 10.5
           }
         }
       ],
@@ -929,7 +931,7 @@
       },
       "interactions": [
         {
-          "kind": "spotterAura",
+          "kind": "auraReveal",
           "selector": {
             "rpsType": [
               "mobility",
@@ -945,7 +947,7 @@
             "tags": []
           },
           "params": {
-            "revealBonusRadius": 0.7
+            "revealBonusRadius": 0.9
           }
         }
       ],
@@ -954,6 +956,98 @@
       "requiresSupport": false,
       "snapPriority": 5,
       "sortOrder": 29,
+      "enabled": true
+    },
+    {
+      "itemId": "it_build_wood_beam",
+      "name": "木制梁",
+      "description": "可架设于立柱之间形成简易通道与掩蔽结构。",
+      "initialCount": 5,
+      "width": 82.667,
+      "depth": 13.333,
+      "height": 10,
+      "hp": 150,
+      "defense": 1.02,
+      "style": {
+        "shape": "beam",
+        "color": "#a07852",
+        "material": "wood"
+      },
+      "collider": {
+        "kind": "compositeObb",
+        "parts": [
+          {
+            "cx": 0,
+            "cy": 0,
+            "cz": 5,
+            "w": 82.667,
+            "d": 13.333,
+            "h": 10,
+            "yawDeg": 0
+          }
+        ]
+      },
+      "renderProfile": {
+        "battle": {
+          "meshId": "beam",
+          "topLayerKey": "beam_top",
+          "sideLayerKey": "beam_side",
+          "materialKey": "wood"
+        },
+        "preview": {
+          "palette": {
+            "primary": "#a07852",
+            "secondary": "#6f5237",
+            "accent": "#c8a37a"
+          },
+          "modelHints": {
+            "variant": "beam"
+          }
+        }
+      },
+      "interactions": [],
+      "sockets": [
+        {
+          "socketId": "edge_left",
+          "type": "edge",
+          "localPose": {
+            "x": -41.333,
+            "y": 0,
+            "z": 5,
+            "yawDeg": 180
+          },
+          "compatibleTags": [
+            "pillar",
+            "wood_pillar"
+          ],
+          "snap": {
+            "dist": 9.333,
+            "yawStepDeg": 15
+          }
+        },
+        {
+          "socketId": "edge_right",
+          "type": "edge",
+          "localPose": {
+            "x": 41.333,
+            "y": 0,
+            "z": 5,
+            "yawDeg": 0
+          },
+          "compatibleTags": [
+            "pillar",
+            "wood_pillar"
+          ],
+          "snap": {
+            "dist": 9.333,
+            "yawStepDeg": 15
+          }
+        }
+      ],
+      "maxStack": 31,
+      "requiresSupport": false,
+      "snapPriority": 12,
+      "sortOrder": 21.5,
       "enabled": true
     }
   ],

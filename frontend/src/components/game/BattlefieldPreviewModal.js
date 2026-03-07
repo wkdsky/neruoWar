@@ -8,7 +8,7 @@ import {
   renderFormation,
   getFormationFootprint
 } from '../../game/formation/ArmyFormationRenderer';
-import { BACKEND_ORIGIN } from '../../runtimeConfig';
+import BattleDataService from '../../game/battle/data/BattleDataService';
 import {
   getItemGeometry,
   buildWorldColliderParts,
@@ -16,7 +16,7 @@ import {
   pointInsideCollider2D,
   getSocketWorldPose,
   resolveBattleLayerColors
-} from '../../game/battlefield/items/itemGeometryRegistry';
+} from '../../game/battlefield/items/ItemGeometryRegistry';
 
 const CAMERA_ANGLE_PREVIEW = 45;
 const CAMERA_ANGLE_EDIT = 45;
@@ -46,7 +46,6 @@ const WALL_ACTION_ICON_GAP = 34;
 const WALL_ACTION_ICON_RISE = 32;
 const SCREEN_HIT_TOLERANCE_PX = 4;
 const DEPLOY_ZONE_RATIO = 0.2;
-const API_BASE = BACKEND_ORIGIN;
 const DEFAULT_MAX_ITEMS_PER_TYPE = 10;
 const SNAP_EPSILON = 1.2;
 const CACHE_VERSION = 3;
@@ -434,18 +433,7 @@ const normalizeDefenderDeploymentsToRightZone = (rawDeployments = [], fieldWidth
   }));
 };
 
-const parseApiResponse = async (response) => {
-  const raw = await response.text();
-  try {
-    return raw ? JSON.parse(raw) : null;
-  } catch (error) {
-    return null;
-  }
-};
 
-const getApiError = (data, fallback = '请求失败') => (
-  data?.error || data?.message || fallback
-);
 
 const normalizeItemCatalog = (items = []) => {
   const source = Array.isArray(items) ? items : [];
@@ -3356,36 +3344,18 @@ const BattlefieldPreviewModal = ({
     }
 
     if (!silent) setSavingLayout(true);
-    try {
-      const response = await fetch(`${API_BASE}/api/nodes/${nodeId}/battlefield-layout`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify(buildLayoutPayload({
+    try {      const data = await BattleDataService.putBattlefieldLayout({
+        nodeId,
+        gateKey,
+        payload: buildLayoutPayload({
           walls: sanitizedWalls,
           defenderDeployments: sanitizedDefenderDeployments,
           layoutMeta: layoutMetaForSave,
           itemCatalog: itemCatalogForSave,
           gateKey
-        }))
+        })
       });
-      const data = await parseApiResponse(response);
-      if (!response.ok || !data) {
-        const error = getApiError(data, '保存战场布局失败');
-        setErrorText(error);
-        writeBattlefieldCache(nodeId, gateKey, {
-          walls: sanitizedWalls,
-          defenderDeployments: sanitizedDefenderDeployments,
-          layoutMeta: layoutMetaForSave,
-          itemCatalog: itemCatalogForSave,
-          needsSync: true,
-          message: error
-        });
-        setCacheNeedsSync(true);
-        return { ok: false, error };
-      }
+
       const serverLayoutBundle = (data?.layoutBundle && typeof data.layoutBundle === 'object')
         ? data.layoutBundle
         : null;
@@ -3658,25 +3628,11 @@ const BattlefieldPreviewModal = ({
         }
         return;
       }
-      try {
-        const response = await fetch(`${API_BASE}/api/nodes/${nodeId}/battlefield-layout?gateKey=${encodeURIComponent(gateKey || 'cheng')}`, {
-          headers: { Authorization: `Bearer ${token}` }
+      try {        const data = await BattleDataService.getBattlefieldLayout({
+          nodeId,
+          gateKey: gateKey || 'cheng'
         });
-        const data = await parseApiResponse(response);
-        if (!response.ok || !data) {
-          if (cancelled) return;
-          setWallsWithRecompute(cacheSnapshot.walls);
-          setDefenderDeployments(cacheSnapshot.defenderDeployments);
-          setItemCatalog(cacheSnapshot.itemCatalog);
-          setDefenderRoster([]);
-          setActiveLayoutMeta(cacheSnapshot.layoutMeta);
-          setServerCanEdit(!!canEdit);
-          setCacheNeedsSync(cacheSnapshot.needsSync);
-          setErrorText(getApiError(data, '加载战场布局失败，已使用本地缓存'));
-          setLoadingLayout(false);
-          setLayoutReady(true);
-          return;
-        }
+
         if (cancelled) return;
         const layoutBundle = (data?.layoutBundle && typeof data.layoutBundle === 'object') ? data.layoutBundle : {};
         const nextCatalog = normalizeItemCatalog(layoutBundle.itemCatalog);
