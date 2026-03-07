@@ -132,3 +132,10 @@ export const createDefaultTemplateFillPreview = () => ({
 export const createDefaultQuickDeployRandomForm = () => ({ ...QUICK_DEPLOY_RANDOM_DEFAULT });
 
 export const createDefaultConfirmDeletePos = () => ({ x: 0, y: 0 });
+
+export const createDefaultDeployInfoState = () => ({
+  open: false,
+  groupId: '',
+  x: 0,
+  y: 0
+});

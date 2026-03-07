@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '../../../components/game/pveBattle.css';
 import CameraController from '../presentation/render/CameraController';
 import useBattleRuntime from '../hooks/useBattleRuntime';
@@ -30,6 +30,9 @@ import BattleTemplateFillModal from '../presentation/ui/BattleTemplateFillModal'
 import BattleDeployEditorPanel from '../presentation/ui/BattleDeployEditorPanel';
 import BattleMarchModeFloat from '../presentation/ui/BattleMarchModeFloat';
 import BattleSkillPickFloat from '../presentation/ui/BattleSkillPickFloat';
+import DeployGroupInfoPanel from '../presentation/ui/DeployGroupInfoPanel';
+import BattleMapDial from '../presentation/ui/BattleMapDial';
+import useDraggablePanel from '../presentation/ui/useDraggablePanel';
 import unitVisualConfig from '../presentation/assets/UnitVisualConfig.example.json';
 import NumberPadDialog from '../../../components/common/NumberPadDialog';
 import BattleDataService from '../data/BattleDataService';
@@ -58,6 +61,7 @@ import {
   createDefaultConfirmDeletePos,
   createDefaultDeployDraggingGroup,
   createDefaultDeployEditorDraft,
+  createDefaultDeployInfoState,
   createDefaultDeployQuantityDialog,
   createDefaultPopupPos,
   createDefaultQuickDeployRandomForm,
@@ -66,6 +70,7 @@ import {
   speedModeLabel
 } from './battleSceneConstants';
 import {
+  clamp,
   buildCompatSummaryPayload,
   resolveBattleDebugSwitch,
   skillAoeRadiusByClass,
@@ -86,6 +91,7 @@ const BattleSceneContainer = ({
 }) => {
   const isTrainingMode = mode === 'training';
   const glCanvasRef = useRef(null);
+  const sceneRef = useRef(null);
   const cameraRef = useRef(new CameraController({
     yawDeg: DEPLOY_DEFAULT_YAW_DEG,
     pitchLow: BATTLE_PITCH_LOW_DEG,
@@ -128,6 +134,7 @@ const BattleSceneContainer = ({
   const [selectedPaletteItemId, setSelectedPaletteItemId] = useState('');
   const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState('');
   const [confirmDeletePos, setConfirmDeletePos] = useState(createDefaultConfirmDeletePos);
+  const [deployInfoState, setDeployInfoState] = useState(createDefaultDeployInfoState);
   const [quickDeployOpen, setQuickDeployOpen] = useState(false);
   const [quickDeployTab, setQuickDeployTab] = useState('standard');
   const [quickDeployApplying, setQuickDeployApplying] = useState(false);
@@ -136,6 +143,7 @@ const BattleSceneContainer = ({
   const [templateFillPreview, setTemplateFillPreview] = useState(createDefaultTemplateFillPreview);
   const [showMidlineDebug, setShowMidlineDebug] = useState(true);
   const [isPanning, setIsPanning] = useState(false);
+  const [mapDialCommand, setMapDialCommand] = useState('');
 
   const deployDraggingGroupId = String(deployDraggingGroup?.groupId || '');
   const deployDraggingTeam = deployDraggingGroup?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
@@ -156,6 +164,7 @@ const BattleSceneContainer = ({
     mode,
     visualConfig: unitVisualConfig
   });
+  const deployPlacementLocked = phase === 'deploy' && !!deployDraggingGroupId;
 
   const {
     battleStatus,
@@ -256,6 +265,7 @@ const BattleSceneContainer = ({
     setDeployEditorDraft,
     setDeployQuantityDialog,
     setDeployDraggingGroup,
+    setDeployInfoState,
     setDeployActionAnchorMode,
     setDeployNotice,
     setDeployEditorDragUnitId,
@@ -297,6 +307,102 @@ const BattleSceneContainer = ({
   useEffect(() => {
     reportBattleResultRef.current = reportBattleResult;
   }, [reportBattleResult]);
+
+  const clampCameraCenterToField = useCallback((nextX, nextY) => {
+    const runtime = runtimeRef.current;
+    const field = runtime?.getField?.();
+    const halfFieldW = Math.max(50, Number(field?.width) || 1350) * 0.5;
+    const halfFieldH = Math.max(50, Number(field?.height) || 744) * 0.5;
+    const viewHalfW = Math.max(1, Number(cameraViewRectRef.current?.widthWorld) || 240) * 0.5;
+    const viewHalfH = Math.max(1, Number(cameraViewRectRef.current?.heightWorld) || 160) * 0.5;
+    const edgeMargin = 8;
+
+    const minX = -halfFieldW - viewHalfW + edgeMargin;
+    const maxX = halfFieldW + viewHalfW - edgeMargin;
+    const minY = -halfFieldH - viewHalfH + edgeMargin;
+    const maxY = halfFieldH + viewHalfH - edgeMargin;
+
+    return {
+      x: Math.min(maxX, Math.max(minX, Number(nextX) || 0)),
+      y: Math.min(maxY, Math.max(minY, Number(nextY) || 0))
+    };
+  }, [cameraViewRectRef, runtimeRef]);
+
+  useEffect(() => {
+    if (!open || !mapDialCommand) return undefined;
+    let rafId = 0;
+    let lastTs = performance.now();
+    const step = (ts) => {
+      const runtime = runtimeRef.current;
+      const camera = cameraRef.current;
+      if (runtime && camera) {
+        const dt = Math.min(0.05, Math.max(0.001, (ts - lastTs) / 1000));
+        lastTs = ts;
+        const panSpeed = Math.max(70, (Number(camera.distance) || 560) * 0.42);
+        const rotateSpeed = 58;
+        const worldYawRad = (Number(camera.worldYawDeg) || 0) * (Math.PI / 180);
+        // Default/fallback basis: world aligned.
+        let rightX = Math.sin(worldYawRad);
+        let rightY = Math.cos(worldYawRad);
+        let forwardX = Math.cos(worldYawRad);
+        let forwardY = -Math.sin(worldYawRad);
+        const canvas = glCanvasRef.current;
+        if (canvas) {
+          const viewportWidth = Math.max(1, Number(canvas.width) || 1);
+          const viewportHeight = Math.max(1, Number(canvas.height) || 1);
+          const centerPxX = viewportWidth * 0.5;
+          const centerPxY = viewportHeight * 0.5;
+          const samplePx = Math.max(24, Math.min(viewportWidth, viewportHeight) * 0.08);
+          const centerWorld = camera.screenToGround(centerPxX, centerPxY, { width: viewportWidth, height: viewportHeight });
+          const rightWorld = camera.screenToGround(centerPxX + samplePx, centerPxY, { width: viewportWidth, height: viewportHeight });
+          const upWorld = camera.screenToGround(centerPxX, centerPxY - samplePx, { width: viewportWidth, height: viewportHeight });
+          const rx = (Number(rightWorld?.x) || 0) - (Number(centerWorld?.x) || 0);
+          const ry = (Number(rightWorld?.y) || 0) - (Number(centerWorld?.y) || 0);
+          const fx = (Number(upWorld?.x) || 0) - (Number(centerWorld?.x) || 0);
+          const fy = (Number(upWorld?.y) || 0) - (Number(centerWorld?.y) || 0);
+          const rightLen = Math.hypot(rx, ry);
+          const forwardLen = Math.hypot(fx, fy);
+          if (rightLen > 1e-4) {
+            rightX = rx / rightLen;
+            rightY = ry / rightLen;
+          }
+          if (forwardLen > 1e-4) {
+            forwardX = fx / forwardLen;
+            forwardY = fy / forwardLen;
+          }
+        }
+        let nextCenterX = Number(camera.centerX) || 0;
+        let nextCenterY = Number(camera.centerY) || 0;
+
+        if (mapDialCommand === 'forward') {
+          nextCenterX += forwardX * panSpeed * dt;
+          nextCenterY += forwardY * panSpeed * dt;
+        } else if (mapDialCommand === 'backward') {
+          nextCenterX -= forwardX * panSpeed * dt;
+          nextCenterY -= forwardY * panSpeed * dt;
+        } else if (mapDialCommand === 'left') {
+          nextCenterX -= rightX * panSpeed * dt;
+          nextCenterY -= rightY * panSpeed * dt;
+        } else if (mapDialCommand === 'right') {
+          nextCenterX += rightX * panSpeed * dt;
+          nextCenterY += rightY * panSpeed * dt;
+        } else if (mapDialCommand === 'rotate_ccw') {
+          camera.worldYawDeg -= rotateSpeed * dt;
+        } else if (mapDialCommand === 'rotate_cw') {
+          camera.worldYawDeg += rotateSpeed * dt;
+        }
+
+        const clampedCenter = clampCameraCenterToField(nextCenterX, nextCenterY);
+        camera.centerX = clampedCenter.x;
+        camera.centerY = clampedCenter.y;
+      }
+      rafId = requestAnimationFrame(step);
+    };
+    rafId = requestAnimationFrame(step);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [clampCameraCenterToField, mapDialCommand, open, runtimeRef]);
 
 
   const handleTogglePause = useCallback(() => {
@@ -394,6 +500,44 @@ const BattleSceneContainer = ({
   });
 
   const {
+    closeDeployEditor,
+    handleOpenDeployCreator,
+    handleOpenDeployEditorForGroup,
+    openDeployQuantityDialog,
+    handleDeployEditorDrop,
+    handleConfirmDeployQuantity,
+    handleRemoveDraftUnit,
+    handleSaveDeployEditor,
+    handleRecallDeployDraggingGroup,
+    handleCreateTrainingGroupByTemplate,
+    handleOpenTemplateFillPreview,
+    handleCloseTemplateFillPreview,
+    handleConfirmTemplateFillPreview
+  } = useBattleDeployEditor({
+    runtimeRef,
+    pointerWorldRef,
+    isTrainingMode,
+    deployEditingGroupId,
+    deployEditorDraft,
+    deployEditorTeam,
+    deployQuantityDialog,
+    templateFillPreview,
+    setDeployEditorOpen,
+    setDeployEditingGroupId,
+    setDeployEditorDraft,
+    setDeployQuantityDialog,
+    setDeployEditorDragUnitId,
+    setDeployEditorTeam,
+    setDeployNotice,
+    setSelectedSquadId,
+    setDeployDraggingGroup,
+    setDeployActionAnchorMode,
+    setCards,
+    setMinimapSnapshot,
+    setTemplateFillPreview
+  });
+
+  const {
     onMouseDown: handleSceneMouseDown,
     onMouseMove: handlePointerMove,
     onWheel: handleSceneWheel,
@@ -427,6 +571,7 @@ const BattleSceneContainer = ({
     closeSkillConfirm,
     closeSkillPick,
     closeMarchModePick,
+    recallDeployDraggingGroup: handleRecallDeployDraggingGroup,
     setClockPaused,
     setCards,
     setMinimapSnapshot,
@@ -458,44 +603,6 @@ const BattleSceneContainer = ({
     skillAoeRadiusByClass
   });
 
-
-  const {
-    closeDeployEditor,
-    handleOpenDeployCreator,
-    handleOpenDeployEditorForGroup,
-    openDeployQuantityDialog,
-    handleDeployEditorDrop,
-    handleConfirmDeployQuantity,
-    handleRemoveDraftUnit,
-    handleSaveDeployEditor,
-    handleCreateTrainingGroupByTemplate,
-    handleOpenTemplateFillPreview,
-    handleCloseTemplateFillPreview,
-    handleConfirmTemplateFillPreview
-  } = useBattleDeployEditor({
-    runtimeRef,
-    pointerWorldRef,
-    isTrainingMode,
-    deployEditingGroupId,
-    deployEditorDraft,
-    deployEditorTeam,
-    deployQuantityDialog,
-    templateFillPreview,
-    setDeployEditorOpen,
-    setDeployEditingGroupId,
-    setDeployEditorDraft,
-    setDeployQuantityDialog,
-    setDeployEditorDragUnitId,
-    setDeployEditorTeam,
-    setDeployNotice,
-    setSelectedSquadId,
-    setDeployDraggingGroup,
-    setDeployActionAnchorMode,
-    setCards,
-    setMinimapSnapshot,
-    setTemplateFillPreview
-  });
-
   const {
     syncDeployUiFromRuntime,
     handleDeployMove,
@@ -516,6 +623,64 @@ const BattleSceneContainer = ({
     setConfirmDeleteGroupId,
     setConfirmDeletePos
   });
+
+  const closeDeployInfoPanel = useCallback(() => {
+    setDeployInfoState(createDefaultDeployInfoState());
+  }, []);
+
+  const handleOpenDeployInfo = useCallback((groupId, event = null) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') return;
+    const group = runtime.getDeployGroupById(groupId);
+    if (!group) return;
+    if (!isTrainingMode && group.team === TEAM_DEFENDER) return;
+    const groupInfo = runtime.getDeployGroupInfo?.(groupId);
+    if (!groupInfo) return;
+
+    const canvas = glCanvasRef.current;
+    const rect = canvas?.getBoundingClientRect();
+    let x = (Number(window?.innerWidth) || 640) * 0.5;
+    let y = (Number(window?.innerHeight) || 420) * 0.5;
+    if (event?.currentTarget?.getBoundingClientRect) {
+      const targetRect = event.currentTarget.getBoundingClientRect();
+      x = targetRect.left + (targetRect.width * 0.5);
+      y = targetRect.top + (targetRect.height * 0.5);
+    } else if (Number.isFinite(Number(event?.clientX)) && Number.isFinite(Number(event?.clientY))) {
+      x = Number(event.clientX);
+      y = Number(event.clientY);
+    } else if (rect) {
+      x = rect.left + (rect.width * 0.5);
+      y = rect.top + (rect.height * 0.5);
+    }
+    const viewportW = Math.max(320, Number(window?.innerWidth) || 0);
+    const viewportH = Math.max(240, Number(window?.innerHeight) || 0);
+    setDeployInfoState({
+      open: true,
+      groupId: String(groupId || ''),
+      x: clamp(x, 8, Math.max(8, viewportW - 8)),
+      y: clamp(y, 8, Math.max(8, viewportH - 8))
+    });
+  }, [glCanvasRef, isTrainingMode, runtimeRef]);
+
+  const handleDeployMoveWithInfoClose = useCallback((groupId, event) => {
+    closeDeployInfoPanel();
+    handleDeployMove(groupId, event);
+  }, [closeDeployInfoPanel, handleDeployMove]);
+
+  const handleDeployEditWithInfoClose = useCallback((groupId, event) => {
+    closeDeployInfoPanel();
+    handleOpenDeployEditorForGroup(groupId, event);
+  }, [closeDeployInfoPanel, handleOpenDeployEditorForGroup]);
+
+  const handleDeployDeleteWithInfoClose = useCallback((groupId, event) => {
+    closeDeployInfoPanel();
+    handleDeployDelete(groupId, event);
+  }, [closeDeployInfoPanel, handleDeployDelete]);
+
+  const handleConfirmDeployDeleteWithInfoClose = useCallback(() => {
+    closeDeployInfoPanel();
+    handleConfirmDeployDelete();
+  }, [closeDeployInfoPanel, handleConfirmDeployDelete]);
 
   const {
     handleCloseQuickDeploy,
@@ -551,9 +716,11 @@ const BattleSceneContainer = ({
   const { handleEscape } = useBattleEscapeHandler({
     confirmDeleteGroupId,
     deployQuantityDialogOpen: deployQuantityDialog.open,
+    deployInfoOpen: deployInfoState.open,
     quickDeployOpen,
     deployEditorOpen,
     deployDraggingGroupId,
+    deployDraggingTeam,
     deployRectDragRef,
     battleUiMode,
     worldActionsVisibleForSquadId,
@@ -561,10 +728,12 @@ const BattleSceneContainer = ({
     setConfirmDeleteGroupId,
     setConfirmDeletePos,
     setDeployQuantityDialog,
+    setDeployInfoState,
     handleCloseQuickDeploy,
     closeDeployEditor,
     setDeployDraggingGroup,
     setDeployNotice,
+    onRecallDeployDraggingGroup: handleRecallDeployDraggingGroup,
     closeSkillConfirm,
     commitPathPlanning,
     setBattleUiMode,
@@ -644,10 +813,59 @@ const BattleSceneContainer = ({
     debugStats
   });
 
+  const deployInfoData = (
+    phase === 'deploy'
+    && deployInfoState.open
+    && runtimeRef.current
+  )
+    ? runtimeRef.current.getDeployGroupInfo?.(deployInfoState.groupId)
+    : null;
+
+  useEffect(() => {
+    if (!deployInfoState.open) return;
+    if (phase !== 'deploy') {
+      setDeployInfoState(createDefaultDeployInfoState());
+      return;
+    }
+    if (!deployInfoData) {
+      setDeployInfoState(createDefaultDeployInfoState());
+    }
+  }, [deployInfoData, deployInfoState.open, phase, setDeployInfoState]);
+
+  const confirmOpen = phase === 'deploy' && !!confirmDeleteGroup && !deployPlacementLocked;
+  const confirmInitialPosition = useMemo(() => {
+    if (!confirmOpen) return null;
+    const sceneRect = sceneRef.current?.getBoundingClientRect();
+    if (!sceneRect) return null;
+    return {
+      x: sceneRect.left + (Number(confirmDeletePos?.x) || 0) - 160,
+      y: sceneRect.top + (Number(confirmDeletePos?.y) || 0) - 72
+    };
+  }, [confirmDeletePos?.x, confirmDeletePos?.y, confirmOpen]);
+
+  const {
+    panelRef: confirmPanelRef,
+    panelStyle: confirmPanelStyle,
+    handleHeaderPointerDown: handleConfirmHeaderPointerDown
+  } = useDraggablePanel({
+    open: confirmOpen,
+    initialPosition: confirmInitialPosition,
+    defaultSize: { width: 360, height: 180 }
+  });
+
+  const {
+    panelRef: resultPanelRef,
+    panelStyle: resultPanelStyle,
+    handleHeaderPointerDown: handleResultHeaderPointerDown
+  } = useDraggablePanel({
+    open: !!resultState.open,
+    defaultSize: { width: 520, height: 320 }
+  });
+
   if (!open) return null;
 
   return (
-    <div className="pve2-overlay">
+    <div className={`pve2-overlay ${deployPlacementLocked ? 'is-deploy-placement-lock' : ''}`}>
       <div className="pve2-head">
         <div className="pve2-title">
           <strong>{battleInitData?.nodeName || (isTrainingMode ? '训练场' : '攻占战')}</strong>
@@ -694,9 +912,11 @@ const BattleSceneContainer = ({
             startLabel={startLabel}
             speedModeLabel={speedModeLabel(selectedSpeedModeUi)}
             onCycleSpeedMode={phase === 'battle' ? handleCycleSpeedMode : null}
+            interactionLocked={deployPlacementLocked}
           />
 
           <div
+            ref={sceneRef}
             className={`pve2-scene ${isPanning ? 'is-panning' : ''}`}
             onMouseDown={handleSceneMouseDown}
             onMouseMove={handlePointerMove}
@@ -717,7 +937,7 @@ const BattleSceneContainer = ({
               skillConfirmState={skillConfirmState}
             />
 
-            {phase === 'deploy' && selectedDeployFormation ? (
+            {phase === 'deploy' && selectedDeployFormation && !deployPlacementLocked ? (
               <div className="pve2-formation-overlay">
                 {selectedDeployFormationLines.map((style, idx) => (
                   <div key={`formation-line-${idx}`} className="pve2-formation-line" style={style} />
@@ -762,14 +982,16 @@ const BattleSceneContainer = ({
               phase={phase}
               actionAnchorMode={deployActionAnchorMode}
               deployActionTeam={isTrainingMode ? '' : TEAM_ATTACKER}
+              disabled={deployPlacementLocked}
               onFocus={handleCardFocus}
               onSelect={handleCardSelect}
               hoverSquadIdOnCard={hoverSquadIdOnCard}
               onCardHoverChange={setHoverSquadIdOnCard}
               onBattleAction={handleBattleActionClick}
-              onDeployMove={handleDeployMove}
-              onDeployEdit={handleOpenDeployEditorForGroup}
-              onDeployDelete={handleDeployDelete}
+              onDeployInfo={handleOpenDeployInfo}
+              onDeployMove={handleDeployMoveWithInfoClose}
+              onDeployEdit={handleDeployEditWithInfoClose}
+              onDeployDelete={handleDeployDeleteWithInfoClose}
             />
 
             {phase === 'battle' ? (
@@ -790,7 +1012,7 @@ const BattleSceneContainer = ({
                 armyTemplatesError={armyTemplatesError}
                 armyTemplates={armyTemplates}
                 attackerTeam={TEAM_ATTACKER}
-                defenderTeam={TEAM_DEFENDER}
+                disabled={deployPlacementLocked}
                 onCreateDeployGroup={handleOpenDeployCreator}
                 onCreateTemplateGroup={handleCreateTrainingGroupByTemplate}
                 onOpenTemplateFillPreview={handleOpenTemplateFillPreview}
@@ -815,7 +1037,7 @@ const BattleSceneContainer = ({
               />
             ) : null}
 
-            {phase === 'deploy' && !isTrainingMode ? (
+            {phase === 'deploy' && !isTrainingMode && !deployPlacementLocked ? (
               <BattleTemplateFillModal
                 open={templateFillPreview.open}
                 preview={templateFillPreview}
@@ -824,7 +1046,7 @@ const BattleSceneContainer = ({
               />
             ) : null}
 
-            {phase === 'deploy' && isTrainingMode ? (
+            {phase === 'deploy' && isTrainingMode && !deployPlacementLocked ? (
               <BattleQuickDeployModal
                 open={quickDeployOpen}
                 quickDeployTab={quickDeployTab}
@@ -848,7 +1070,9 @@ const BattleSceneContainer = ({
               cameraCenter={cameraMiniState.center}
               cameraViewport={cameraMiniState.viewport}
               onMapClick={handleMinimapClick}
+              interactive={!deployPlacementLocked}
             />
+            <BattleMapDial activeCommand={mapDialCommand} onHoverCommandChange={setMapDialCommand} />
 
             {battleUiMode === BATTLE_UI_MODE_PATH ? (
               <div className="pve2-aim-tip">路径规划中：LMB 添加路点，RMB 撤销，点击最后路径点“√”执行</div>
@@ -871,7 +1095,7 @@ const BattleSceneContainer = ({
               </div>
             ) : null}
 
-            {debugEnabled ? (
+            {debugEnabled && !deployPlacementLocked ? (
               <BattleDebugPanel
                 phase={phase}
                 stats={debugStats}
@@ -918,7 +1142,7 @@ const BattleSceneContainer = ({
               />
             ) : null}
 
-            {phase === 'deploy' && worldActionPos?.visible ? (
+            {phase === 'deploy' && worldActionPos?.visible && !deployPlacementLocked ? (
               <div
                 className="pve2-world-actions"
                 style={{ left: `${worldActionPos.x}px`, top: `${worldActionPos.y}px` }}
@@ -929,14 +1153,24 @@ const BattleSceneContainer = ({
               >
                 <DeployActionButtons
                   layout="arc"
-                  onMove={(event) => handleDeployMove(worldActionGroupId, event)}
-                  onEdit={(event) => handleOpenDeployEditorForGroup(worldActionGroupId, event)}
-                  onDelete={(event) => handleDeployDelete(worldActionGroupId, event)}
+                  onInfo={(event) => handleOpenDeployInfo(worldActionGroupId, event)}
+                  onMove={(event) => handleDeployMoveWithInfoClose(worldActionGroupId, event)}
+                  onEdit={(event) => handleDeployEditWithInfoClose(worldActionGroupId, event)}
+                  onDelete={(event) => handleDeployDeleteWithInfoClose(worldActionGroupId, event)}
                 />
               </div>
             ) : null}
 
-            {phase === 'deploy' ? (
+            {phase === 'deploy' && !deployPlacementLocked && deployInfoState.open && deployInfoData ? (
+              <DeployGroupInfoPanel
+                open
+                info={deployInfoData}
+                position={deployInfoState}
+                onClose={closeDeployInfoPanel}
+              />
+            ) : null}
+
+            {phase === 'deploy' && !deployPlacementLocked ? (
               <BattleDeployEditorPanel
                 open={deployEditorOpen}
                 deployEditingGroupId={deployEditingGroupId}
@@ -961,20 +1195,25 @@ const BattleSceneContainer = ({
               <div className="pve2-deploy-notice">{deployNotice}</div>
             ) : null}
 
-            {phase === 'deploy' && confirmDeleteGroup ? (
+            {confirmOpen ? (
               <div
+                ref={confirmPanelRef}
                 className="pve2-confirm"
-                style={{ left: `${confirmDeletePos.x}px`, top: `${confirmDeletePos.y}px` }}
+                style={confirmPanelStyle}
                 onMouseDown={(event) => event.stopPropagation()}
                 onMouseUp={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => event.stopPropagation()}
               >
-                <p>{`确认删除部队「${confirmDeleteGroup.name || '未命名部队'}」吗？`}</p>
+                <div className="pve2-confirm-head pve2-drag-handle" onPointerDown={handleConfirmHeaderPointerDown}>
+                  <p>{`确认删除部队「${confirmDeleteGroup.name || '未命名部队'}」吗？`}</p>
+                </div>
                 <div className="pve2-confirm-actions">
                   <button
                     type="button"
                     className="btn btn-secondary btn-small"
+                    data-no-drag
+                    onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => {
                       setConfirmDeleteGroupId('');
                       setConfirmDeletePos(createDefaultConfirmDeletePos());
@@ -982,15 +1221,31 @@ const BattleSceneContainer = ({
                   >
                     取消
                   </button>
-                  <button type="button" className="btn btn-warning btn-small" onClick={handleConfirmDeployDelete}>确认删除</button>
+                  <button
+                    type="button"
+                    className="btn btn-warning btn-small"
+                    data-no-drag
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={handleConfirmDeployDeleteWithInfoClose}
+                  >
+                    确认删除
+                  </button>
                 </div>
               </div>
             ) : null}
           </div>
 
           {resultState.open ? (
-            <div className="pve2-result">
-              <h3>{isTrainingMode ? '训练结算' : '战斗结算'}</h3>
+            <div
+              ref={resultPanelRef}
+              className="pve2-result"
+              style={resultPanelStyle}
+              onMouseDown={(event) => event.stopPropagation()}
+              onMouseUp={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="pve2-drag-handle" onPointerDown={handleResultHeaderPointerDown}>{isTrainingMode ? '训练结算' : '战斗结算'}</h3>
               {resultState.summary ? (
                 <>
                   <p>{resultState.summary.endReason || (isTrainingMode ? '训练结束' : '战斗结束')}</p>

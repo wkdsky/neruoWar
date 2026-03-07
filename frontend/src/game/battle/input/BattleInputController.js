@@ -142,7 +142,7 @@ export const createBattleInputController = ({
     if (
       target
       && typeof target.closest === 'function'
-      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .number-pad-dialog-overlay, .number-pad-dialog')
+      && target.closest('.pve2-world-actions, .pve2-battle-actions, .pve2-card-actions, .pve2-deploy-creator, .pve2-deploy-sidebar, .pve2-minimap-wrap, .pve2-map-dial-wrap, .pve2-action-pad, .pve2-skill-float, .pve2-march-float, .pve2-path-confirm-btn, .pve2-hud, .pve2-confirm, .pve2-quick-deploy-backdrop, .pve2-quick-deploy-panel, .number-pad-dialog-overlay, .number-pad-dialog')
     ) {
       return;
     }
@@ -150,6 +150,24 @@ export const createBattleInputController = ({
     if (!runtime) return;
     const currentPhase = runtime.getPhase();
     if (currentPhase === 'deploy') {
+      const deployDraggingGroupId = getters.getDeployDraggingGroupId?.() || '';
+      const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
+      if (deployDraggingGroupId && event.button === 2) {
+        event.preventDefault();
+        const recallResult = callbacks.recallDeployDraggingGroup?.(deployDraggingGroupId, deployDraggingTeam);
+        if (!recallResult?.ok) {
+          callbacks.setDeployNotice?.(recallResult?.reason || '撤回待部署部队失败');
+        }
+        return;
+      }
+      if (deployDraggingGroupId && event.button !== 0) {
+        event.preventDefault();
+        return;
+      }
+      if (deployDraggingGroupId && event.button === 0 && spacePressedRef.current) {
+        event.preventDefault();
+        return;
+      }
       if (event.button === 2) {
         deployYawDragRef.current = {
           startX: Number(event.clientX) || 0,
@@ -271,6 +289,10 @@ export const createBattleInputController = ({
       return;
     }
     if (runtime.getPhase() !== 'deploy') return;
+    if (getters.getDeployDraggingGroupId?.()) {
+      event.preventDefault();
+      return;
+    }
     if (panDragRef.current) return;
     event.preventDefault();
     const nextDistance = cameraControllerRef.current.distance + (event.deltaY < 0 ? -(constants.CAMERA_ZOOM_STEP || 24) : (constants.CAMERA_ZOOM_STEP || 24));
@@ -282,35 +304,8 @@ export const createBattleInputController = ({
     if (!runtime) return;
     if (runtime.getPhase() === 'deploy') {
       const deployDraggingGroupId = getters.getDeployDraggingGroupId?.() || '';
-      const deployDraggingTeam = getters.getDeployDraggingTeam?.() || 'attacker';
       if (!deployDraggingGroupId) return;
-      let targetGroupId = deployDraggingGroupId;
-      let targetTeam = deployDraggingTeam;
-      if (getters.isTrainingMode?.()) {
-        const desiredTeam = callbacks.resolveDeployPlacementTeam?.(worldPoint, targetTeam);
-        const switchResult = callbacks.switchDeployGroupTeamForTraining?.(targetGroupId, desiredTeam);
-        if (!switchResult?.ok) {
-          callbacks.setDeployNotice?.(switchResult?.reason || '切换部队阵营失败');
-          return;
-        }
-        targetGroupId = switchResult.groupId || targetGroupId;
-        targetTeam = switchResult.team === 'defender' ? 'defender' : 'attacker';
-      }
-      if (!runtime.canDeployAt(worldPoint, targetTeam, 10)) {
-        callbacks.setDeployNotice?.(targetTeam === 'defender'
-          ? '中间交战区不可部署，请放置在右侧红色区域'
-          : '中间交战区不可部署，请放置在左侧蓝色区域');
-        return;
-      }
-      runtime.moveDeployGroup(targetGroupId, worldPoint, targetTeam);
-      runtime.setDeployGroupPlaced(targetTeam, targetGroupId, true);
-      runtime.setSelectedDeployGroup(targetGroupId);
-      runtime.setFocusSquad(targetGroupId);
-      callbacks.setSelectedSquadId?.(targetGroupId);
-      callbacks.setDeployDraggingGroup?.({ groupId: '', team: 'attacker' });
-      callbacks.setDeployActionAnchorMode?.('world');
-      callbacks.setDeployNotice?.(`部队已放置，可继续编辑或${getters.isTrainingMode?.() ? '开始训练' : '开战'}`);
-      syncCardsAndMinimap();
+      callbacks.setDeployNotice?.('待部署阶段请在主战场左键放置，或右键撤回');
       return;
     }
     if (runtime.getPhase() !== 'battle') return;
@@ -416,6 +411,11 @@ export const createBattleInputController = ({
         clearDeployYawDrag();
         clearDeployRectDrag();
         return;
+      }
+      if (getters.getDeployDraggingGroupId?.()) {
+        clearPanDrag();
+        clearDeployYawDrag();
+        clearDeployRectDrag();
       }
 
       const rectDrag = deployRectDragRef.current;

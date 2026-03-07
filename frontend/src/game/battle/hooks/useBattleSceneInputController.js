@@ -29,6 +29,7 @@ export default function useBattleSceneInputController({
   closeSkillConfirm,
   closeSkillPick,
   closeMarchModePick,
+  recallDeployDraggingGroup,
   setClockPaused,
   setCards,
   setMinimapSnapshot,
@@ -120,7 +121,8 @@ export default function useBattleSceneInputController({
       selectBattleSquad,
       closeSkillConfirm,
       closeSkillPick,
-      closeMarchModePick
+      closeMarchModePick,
+      recallDeployDraggingGroup
     }
   }), [
     open,
@@ -143,6 +145,7 @@ export default function useBattleSceneInputController({
     closeSkillConfirm,
     closeSkillPick,
     closeMarchModePick,
+    recallDeployDraggingGroup,
     setClockPaused,
     setCards,
     setMinimapSnapshot,

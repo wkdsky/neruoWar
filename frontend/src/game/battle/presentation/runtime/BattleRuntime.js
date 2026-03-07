@@ -75,6 +75,34 @@ const SKILL_DESC_BY_CLASS = {
   archer: '箭雨压制，在目标区域持续打击。',
   artillery: '炮击轰炸，高爆范围并可伤建筑。'
 };
+const SKILL_POWER_CONFIG_BY_CLASS = {
+  infantry: {
+    durationSec: 7.5,
+    atkMul: 1.22,
+    defMul: 1.3,
+    speedMul: 0.78
+  },
+  cavalry: {
+    impactAtkMul: 0.11,
+    speed: 172,
+    minDistance: 18,
+    maxDistance: 220
+  },
+  archer: {
+    damageAtkMul: 0.065,
+    damageMul: 2.05,
+    waves: 4,
+    shotsPerWave: 12,
+    durationSec: 1.22
+  },
+  artillery: {
+    damageAtkMul: 0.11,
+    damageMul: 2.75,
+    waves: 3,
+    shotsPerWave: 6,
+    durationSec: 1.65
+  }
+};
 const CLASS_TAG_SET = new Set(['infantry', 'cavalry', 'archer', 'artillery']);
 const DEPLOY_FORMATION_SPACING_DEFAULT = 12;
 const DEPLOY_FORMATION_RATIO_MIN = 1 / 6;
@@ -487,6 +515,193 @@ const buildSkillMetaFromSquad = (squad = null, unitTypeMap = new Map()) => {
   return {
     cooldownRemain: maxRemain,
     skills
+  };
+};
+
+const estimateDeploySkillPower = ({
+  classTag = 'infantry',
+  classCount = 0,
+  classAtkAvg = 0,
+  totalCount = 0,
+  repConfig = {}
+} = {}) => {
+  const safeCount = Math.max(1, Number(classCount) || 1);
+  const safeAtk = Math.max(0.1, Number(classAtkAvg) || 0.1);
+  const safeTotal = Math.max(1, Number(totalCount) || 1);
+  const exponent = Math.max(0.2, Math.min(1.25, Number(repConfig?.damageExponent) || 0.75));
+  const maxAgentWeight = Math.max(1, Number(repConfig?.maxAgentWeight) || 50);
+  const repAgentCount = Math.max(1, Math.ceil(safeCount / maxAgentWeight));
+  const representativeWeight = Math.max(1, safeCount / repAgentCount);
+  const countWeight = Math.pow(representativeWeight, exponent);
+  if (classTag === 'cavalry') {
+    const cfg = SKILL_POWER_CONFIG_BY_CLASS.cavalry;
+    const impact = safeAtk * cfg.impactAtkMul * countWeight;
+    return {
+      score: impact,
+      unit: '冲击伤害估值',
+      formula: `atk×${cfg.impactAtkMul}×repWeight^${exponent.toFixed(2)}`,
+      details: [
+        `代表权重 ${representativeWeight.toFixed(2)}`,
+        `冲锋距离 ${cfg.minDistance}-${cfg.maxDistance}`,
+        `冲锋速度 ${cfg.speed}`
+      ]
+    };
+  }
+  if (classTag === 'archer' || classTag === 'artillery') {
+    const cfg = SKILL_POWER_CONFIG_BY_CLASS[classTag];
+    const perShot = Math.max(0.22, safeAtk * cfg.damageAtkMul) * cfg.damageMul * countWeight;
+    const shooterCountCandidate = classTag === 'artillery'
+      ? Math.max(2, Math.min(6, Math.floor(Math.sqrt(repAgentCount)) + 1))
+      : Math.max(3, Math.min(14, Math.floor(Math.sqrt(repAgentCount)) + 3));
+    const shooterCount = Math.max(1, Math.min(repAgentCount, shooterCountCandidate));
+    const shooterWeightSum = shooterCount * representativeWeight;
+    const shotWeightRef = classTag === 'artillery' ? 18 : 24;
+    const shotScale = clamp(shooterWeightSum / shotWeightRef, 0.12, 1);
+    const shotsPerWaveCap = Math.max(1, Number(cfg.shotsPerWave) || (classTag === 'artillery' ? 6 : 12));
+    const scaledShotBudget = Math.max(1, Math.round(shotsPerWaveCap * shotScale));
+    const floorByShooters = classTag === 'artillery'
+      ? Math.max(1, Math.ceil(shooterCount * 0.5))
+      : Math.max(1, Math.ceil(shooterCount * 0.8));
+    const shotsPerWave = Math.max(
+      1,
+      Math.min(
+        shotsPerWaveCap,
+        Math.max(floorByShooters, scaledShotBudget)
+      )
+    );
+    const shotCount = Math.max(1, cfg.waves * shotsPerWave);
+    return {
+      score: perShot * shotCount,
+      unit: '总伤害估值',
+      formula: `max(0.22, atk×${cfg.damageAtkMul})×${cfg.damageMul}×repWeight^${exponent.toFixed(2)}×${shotCount}发`,
+      details: [
+        `代表权重 ${representativeWeight.toFixed(2)} / 代表射手 ${shooterCount}`,
+        `持续 ${cfg.durationSec}s`,
+        `${cfg.waves} 波 / 每波 ${shotsPerWave} 发（按当前兵力缩放）`
+      ]
+    };
+  }
+  const cfg = SKILL_POWER_CONFIG_BY_CLASS.infantry;
+  const squadAtk = safeAtk * safeTotal;
+  const uplift = squadAtk * (cfg.atkMul - 1) * (safeCount / safeTotal);
+  return {
+    score: uplift,
+    unit: '增益攻击估值',
+    formula: '队伍总atk×(atk倍率-1)×(兵种占比)',
+    details: [
+      `持续 ${cfg.durationSec}s`,
+      `攻${Math.round((cfg.atkMul - 1) * 100)}% / 防${Math.round((cfg.defMul - 1) * 100)}% / 速-${Math.round((1 - cfg.speedMul) * 100)}%`
+    ]
+  };
+};
+
+const buildDeployGroupInfo = (group = null, unitTypeMap = new Map(), repConfig = {}) => {
+  if (!group || typeof group !== 'object') return null;
+  const units = normalizeUnitsMap(group?.units || {});
+  const totalCount = sumUnitsMap(units);
+  if (totalCount <= 0) return null;
+
+  const composition = Object.entries(units)
+    .map(([unitTypeId, rawCount]) => {
+      const unitType = unitTypeMap.get(unitTypeId) || {};
+      const count = Math.max(0, Number(rawCount) || 0);
+      const speed = Math.max(0.2, Number(unitType?.speed) || 1);
+      const atk = Math.max(0.1, Number(unitType?.atk) || 1);
+      const range = Math.max(1, Number(unitType?.range) || 1);
+      const classTag = inferClassFromUnitType(unitType);
+      const roleTag = unitType?.roleTag === '远程' ? '远程' : '近战';
+      return {
+        unitTypeId,
+        unitName: unitType?.name || unitTypeId,
+        count,
+        percent: (count / Math.max(1, totalCount)) * 100,
+        classTag,
+        roleTag,
+        speed,
+        atk,
+        range
+      };
+    })
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.unitName.localeCompare(b.unitName, 'zh-Hans-CN');
+    });
+
+  const classSummary = {
+    infantry: { count: 0, atkTotal: 0 },
+    cavalry: { count: 0, atkTotal: 0 },
+    archer: { count: 0, atkTotal: 0 },
+    artillery: { count: 0, atkTotal: 0 }
+  };
+  let totalAtk = 0;
+  let speedReciprocalSum = 0;
+  let looseSpeed = 0;
+  let hasRanged = false;
+  let hasMelee = false;
+
+  composition.forEach((row) => {
+    const safeCount = Math.max(0, Number(row.count) || 0);
+    const safeAtk = Math.max(0.1, Number(row.atk) || 0.1);
+    const safeSpeed = Math.max(0.2, Number(row.speed) || 1);
+    totalAtk += safeAtk * safeCount;
+    speedReciprocalSum += safeCount / safeSpeed;
+    looseSpeed = Math.max(looseSpeed, safeSpeed);
+    if (row.roleTag === '远程' || row.range >= 2.2) hasRanged = true;
+    if (row.roleTag === '近战' || row.range < 2.2) hasMelee = true;
+    classSummary[row.classTag].count += safeCount;
+    classSummary[row.classTag].atkTotal += safeAtk * safeCount;
+  });
+
+  const skills = SKILL_CLASS_ORDER
+    .map((classTag) => {
+      const count = Math.max(0, Number(classSummary[classTag]?.count) || 0);
+      if (count <= 0) return null;
+      const avgAtk = (Number(classSummary[classTag]?.atkTotal) || 0) / Math.max(1, count);
+      const power = estimateDeploySkillPower({
+        classTag,
+        classCount: count,
+        classAtkAvg: avgAtk,
+        totalCount,
+        repConfig
+      });
+      const skillMeta = SKILL_META_BY_CLASS[classTag] || SKILL_META_BY_CLASS.infantry;
+      return {
+        id: skillMeta.id,
+        classTag,
+        name: skillMeta.name,
+        icon: skillMeta.icon,
+        description: SKILL_DESC_BY_CLASS[classTag] || '',
+        count,
+        ratio: (count / Math.max(1, totalCount)) * 100,
+        power
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    groupId: String(group?.id || ''),
+    team: group?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER,
+    name: String(group?.name || '未命名部队'),
+    totalCount: Math.max(0, Math.round(totalCount)),
+    composition,
+    skills,
+    mobility: {
+      cohesiveSpeed: speedReciprocalSum > 0 ? (totalCount / speedReciprocalSum) : 1,
+      looseSpeed: Math.max(0.2, looseSpeed || 1),
+      perTypeLoose: composition.map((row) => ({
+        unitTypeId: row.unitTypeId,
+        unitName: row.unitName,
+        speed: Math.max(0.2, Number(row.speed) || 1)
+      }))
+    },
+    attack: {
+      totalAtk,
+      avgAtk: totalAtk / Math.max(1, totalCount),
+      modes: [
+        ...(hasMelee ? ['近'] : []),
+        ...(hasRanged ? ['远'] : [])
+      ]
+    }
   };
 };
 
@@ -1091,6 +1306,12 @@ export default class BattleRuntime {
     return this.attackerDeployGroups.find((row) => row.id === safeId)
       || this.defenderDeployGroups.find((row) => row.id === safeId)
       || null;
+  }
+
+  getDeployGroupInfo(groupId = '', team = TEAM_ANY) {
+    const group = this.getDeployGroupById(groupId, team);
+    if (!group) return null;
+    return buildDeployGroupInfo(group, this.unitTypeMap, this.repConfig);
   }
 
   hydrateDeployGroupFormation(group = null, fallbackTeam = TEAM_ATTACKER) {

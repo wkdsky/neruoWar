@@ -31,9 +31,11 @@ const SquadCards = ({
   hoverSquadIdOnCard = '',
   onCardHoverChange = null,
   onBattleAction = null,
+  onDeployInfo,
   onDeployMove,
   onDeployEdit,
-  onDeployDelete
+  onDeployDelete,
+  disabled = false
 }) => {
   const attacker = squads.filter((row) => row.team === 'attacker');
   const defender = squads.filter((row) => row.team === 'defender');
@@ -42,13 +44,19 @@ const SquadCards = ({
     <div
       key={row.id}
       className="pve2-card-wrap"
-      onMouseEnter={() => onCardHoverChange?.(row.id)}
-      onMouseLeave={() => onCardHoverChange?.('')}
+      onMouseEnter={() => {
+        if (!disabled) onCardHoverChange?.(row.id);
+      }}
+      onMouseLeave={() => {
+        if (!disabled) onCardHoverChange?.('');
+      }}
     >
       <button
         type="button"
         className={`pve2-card ${row.team === 'attacker' ? 'ally' : 'enemy'} ${row.selected ? 'selected' : ''} ${!row.alive ? 'dead' : ''}`}
+        disabled={disabled}
         onClick={() => {
+          if (disabled) return;
           if (typeof onFocus === 'function') onFocus(row.id);
           if (typeof onSelect === 'function') onSelect(row.id);
         }}
@@ -69,7 +77,7 @@ const SquadCards = ({
         <div className="pve2-card-row">士气 {Math.round(row.morale)}</div>
         <div className="pve2-card-row">{row.action || '待命'}</div>
       </button>
-      {phase === 'battle' && row.team === 'attacker' && row.alive && row.selected && hoverSquadIdOnCard === row.id ? (
+      {phase === 'battle' && !disabled && row.team === 'attacker' && row.alive && row.selected && hoverSquadIdOnCard === row.id ? (
         <div className="pve2-card-actions pve2-card-actions-battle">
           <BattleActionButtons
             visible
@@ -78,7 +86,7 @@ const SquadCards = ({
           />
         </div>
       ) : null}
-      {phase === 'deploy' && actionAnchorMode === 'card' && (!deployActionTeam || row.team === deployActionTeam) && row.selected ? (
+      {phase === 'deploy' && !disabled && actionAnchorMode === 'card' && (!deployActionTeam || row.team === deployActionTeam) && row.selected ? (
         <div
           className="pve2-card-actions"
           onPointerDown={(event) => event.stopPropagation()}
@@ -86,6 +94,7 @@ const SquadCards = ({
         >
           <DeployActionButtons
             layout="line"
+            onInfo={(event) => onDeployInfo?.(row.id, event)}
             onMove={(event) => onDeployMove?.(row.id, event)}
             onEdit={(event) => onDeployEdit?.(row.id, event)}
             onDelete={(event) => onDeployDelete?.(row.id, event)}
@@ -98,13 +107,13 @@ const SquadCards = ({
   return (
     <>
       <div
-        className={`pve2-card-strip left ${cardSizeClassByCount(attacker.length)}`}
+        className={`pve2-card-strip left ${cardSizeClassByCount(attacker.length)} ${disabled ? 'is-disabled' : ''}`}
         onWheelCapture={(event) => event.stopPropagation()}
       >
         {attacker.map(renderCard)}
       </div>
       <div
-        className={`pve2-card-strip right ${cardSizeClassByCount(defender.length)}`}
+        className={`pve2-card-strip right ${cardSizeClassByCount(defender.length)} ${disabled ? 'is-disabled' : ''}`}
         onWheelCapture={(event) => event.stopPropagation()}
       >
         {defender.map(renderCard)}

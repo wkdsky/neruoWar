@@ -1,5 +1,6 @@
 import React from 'react';
 import { normalizeDraftUnits } from '../../screens/battleSceneUtils';
+import useDraggablePanel from './useDraggablePanel';
 
 const BattleDeployEditorPanel = ({
   open = false,
@@ -19,18 +20,27 @@ const BattleDeployEditorPanel = ({
   onCancel,
   onConfirm
 }) => {
+  const { panelRef, panelStyle, handleHeaderPointerDown } = useDraggablePanel({
+    open,
+    initialPosition: { x: 348, y: 90 },
+    defaultSize: { width: 500, height: 540 }
+  });
   if (!open) return null;
 
   const draftUnits = normalizeDraftUnits(deployEditorDraft?.units || []);
 
   return (
     <div
+      ref={panelRef}
       className="pve2-deploy-creator"
+      style={panelStyle}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
       onWheelCapture={(event) => event.stopPropagation()}
     >
-      <h4>{`${deployEditingGroupId ? '编辑部队' : '新建部队'}（${deployEditorTeamLabel}）`}</h4>
+      <div className="pve2-deploy-creator-head pve2-drag-handle" onPointerDown={handleHeaderPointerDown}>
+        <h4>{`${deployEditingGroupId ? '编辑部队' : '新建部队'}（${deployEditorTeamLabel}）`}</h4>
+      </div>
       <label>
         <span>部队名称</span>
         <input

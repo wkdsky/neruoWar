@@ -562,9 +562,21 @@ const emitGroundSkillWave = (sim, crowd, squad, activeSkill, waveIndex = 0) => {
   const shooters = rankedShooters.slice(0, shooterCount);
   if (shooters.length <= 0) return 0;
 
-  const totalShots = classTag === 'artillery'
-    ? Math.max(shooters.length, Math.min(10, Number(config?.shotsPerWave) || 6))
-    : Math.max(shooters.length * 2, Math.min(22, Number(config?.shotsPerWave) || 12));
+  const shotsPerWaveCap = Math.max(1, Math.floor(Number(config?.shotsPerWave) || (classTag === 'artillery' ? 6 : 12)));
+  const shooterWeightSum = shooters.reduce((sum, shooter) => sum + Math.max(0.1, Number(shooter?.weight) || 0.1), 0);
+  const shotWeightRef = classTag === 'artillery' ? 18 : 24;
+  const shotScale = clamp(shooterWeightSum / shotWeightRef, 0.12, 1);
+  const scaledShotBudget = Math.max(1, Math.round(shotsPerWaveCap * shotScale));
+  const floorByShooters = classTag === 'artillery'
+    ? Math.max(1, Math.ceil(shooters.length * 0.5))
+    : Math.max(1, Math.ceil(shooters.length * 0.8));
+  const totalShots = Math.max(
+    1,
+    Math.min(
+      shotsPerWaveCap,
+      Math.max(floorByShooters, scaledShotBudget)
+    )
+  );
   const enemyTeam = squad.team === TEAM_ATTACKER ? TEAM_DEFENDER : TEAM_ATTACKER;
   let fired = 0;
   for (let shotIndex = 0; shotIndex < totalShots; shotIndex += 1) {

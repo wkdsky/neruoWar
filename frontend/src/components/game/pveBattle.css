@@ -132,7 +132,7 @@
 .pve2-scene {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  overflow: visible;
   user-select: none;
 }
 
@@ -214,6 +214,15 @@
 .pve2-card-strip.right {
   right: 16px;
   top: var(--pve2-card-zone-top);
+}
+
+.pve2-card-strip.is-disabled .pve2-card {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.pve2-card-strip.is-disabled .pve2-card:hover {
+  transform: none;
 }
 
 .pve2-card {
@@ -401,6 +410,11 @@
   color: #fcd34d;
 }
 
+.pve2-icon-btn.info {
+  border-color: rgba(129, 140, 248, 0.84);
+  color: #c7d2fe;
+}
+
 .pve2-icon-btn.delete {
   border-color: rgba(248, 113, 113, 0.84);
   color: #fca5a5;
@@ -421,6 +435,111 @@
   border: 1px solid rgba(148, 163, 184, 0.38);
   background: rgba(10, 16, 24, 0.86);
   cursor: crosshair;
+}
+
+.pve2-minimap.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+  filter: saturate(0.68);
+}
+
+.pve2-map-dial-wrap {
+  position: absolute;
+  right: 18px;
+  bottom: 178px;
+  z-index: 12;
+  pointer-events: auto;
+}
+
+.pve2-map-dial {
+  width: 122px;
+  height: 122px;
+  border-radius: 999px;
+  position: relative;
+  border: 2px solid rgba(15, 23, 42, 0.92);
+  background: rgba(226, 232, 240, 0.22);
+  box-shadow: 0 10px 22px rgba(2, 6, 23, 0.32);
+  backdrop-filter: blur(3px);
+  overflow: hidden;
+}
+
+.pve2-map-dial-ring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+}
+
+.pve2-map-dial-sector-path {
+  fill: transparent;
+  cursor: pointer;
+  transition: fill 0.12s ease;
+}
+
+.pve2-map-dial-sector-path.active,
+.pve2-map-dial-sector-path:hover {
+  fill: rgba(56, 189, 248, 0.2);
+}
+
+.pve2-map-dial-ring-separator {
+  stroke: rgba(15, 23, 42, 0.92);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.pve2-map-dial-arrow-text {
+  fill: rgba(15, 23, 42, 0.95);
+  font-size: 24px;
+  font-weight: 500;
+  pointer-events: none;
+  user-select: none;
+}
+
+.pve2-map-dial-core {
+  position: absolute;
+  inset: 28px;
+  border-radius: 999px;
+  border: 2px solid rgba(15, 23, 42, 0.92);
+  background: rgba(226, 232, 240, 0.16);
+  z-index: 6;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow: hidden;
+}
+
+.pve2-map-dial-core-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.92);
+  pointer-events: none;
+}
+
+.pve2-map-dial-core-btn {
+  border: none;
+  background: transparent;
+  color: rgba(31, 41, 55, 0.95);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.12s ease;
+}
+
+.pve2-map-dial-core-btn:hover,
+.pve2-map-dial-core-btn.active {
+  background: rgba(56, 189, 248, 0.16);
+}
+
+.pve2-map-dial-core-btn svg {
+  width: 30px;
+  height: 30px;
+  fill: currentColor;
 }
 
 .pve2-minimap-label {
@@ -522,6 +641,15 @@
   grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
   pointer-events: auto;
+}
+
+.pve2-deploy-sidebar.is-disabled {
+  opacity: 0.58;
+}
+
+.pve2-deploy-sidebar.is-disabled .btn,
+.pve2-deploy-sidebar.is-disabled .pve2-template-row-main {
+  pointer-events: none;
 }
 
 .pve2-deploy-sidebar-section {
@@ -635,13 +763,6 @@
   text-overflow: ellipsis;
 }
 
-.pve2-template-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-  align-self: center;
-}
-
 .pve2-template-direct {
   font-size: 11px;
   color: #bae6fd;
@@ -654,7 +775,7 @@
 .pve2-template-fill-backdrop {
   position: absolute;
   inset: 0;
-  z-index: 18;
+  z-index: 64;
   display: grid;
   place-items: center;
   background: rgba(3, 8, 16, 0.5);
@@ -662,6 +783,7 @@
 }
 
 .pve2-template-fill-panel {
+  position: fixed;
   width: min(760px, calc(100vw - 36px));
   max-height: min(78vh, 680px);
   overflow: auto;
@@ -754,7 +876,7 @@
 .pve2-quick-deploy-backdrop {
   position: absolute;
   inset: 0;
-  z-index: 17;
+  z-index: 64;
   display: grid;
   place-items: center;
   background: rgba(3, 8, 16, 0.42);
@@ -763,6 +885,7 @@
 }
 
 .pve2-quick-deploy-panel {
+  position: fixed;
   width: min(760px, calc(100vw - 36px));
   max-height: min(78vh, 680px);
   overflow: auto;
@@ -918,9 +1041,9 @@
 
 .pve2-world-actions {
   position: absolute;
-  z-index: 12;
-  width: 116px;
-  height: 66px;
+  z-index: 32;
+  width: 154px;
+  height: 72px;
   transform: translate(-50%, -100%);
   pointer-events: auto;
 }
@@ -941,7 +1064,7 @@
 
 .pve2-world-actions .pve2-icon-btn.move {
   left: 8px;
-  top: 30px;
+  top: 34px;
 }
 
 .pve2-battle-actions {
@@ -953,7 +1076,7 @@
 
 .pve2-battle-actions-world {
   position: absolute;
-  z-index: 14;
+  z-index: 34;
   width: 176px;
   transform: translate(-50%, -100%);
 }
@@ -1071,7 +1194,7 @@
 .pve2-skill-float {
   position: absolute;
   transform: translate(-40%, -52%);
-  z-index: 20;
+  z-index: 70;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1155,7 +1278,7 @@
 .pve2-march-float {
   position: absolute;
   transform: translate(-50%, -110%);
-  z-index: 20;
+  z-index: 70;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -1165,7 +1288,7 @@
 .pve2-path-confirm-btn {
   position: absolute;
   transform: translate(-50%, -120%);
-  z-index: 20;
+  z-index: 70;
   width: 28px;
   height: 28px;
   border: 1px solid rgba(250, 204, 21, 0.88);
@@ -1184,27 +1307,178 @@
 }
 
 .pve2-world-actions .pve2-icon-btn.edit {
-  left: 42px;
+  left: 46px;
+  top: 4px;
+}
+
+.pve2-world-actions .pve2-icon-btn.info {
+  left: 84px;
   top: 4px;
 }
 
 .pve2-world-actions .pve2-icon-btn.delete {
-  left: 76px;
-  top: 30px;
+  left: 122px;
+  top: 34px;
+}
+
+.pve2-deploy-info {
+  position: fixed;
+  transform: none;
+  z-index: 72;
+  width: min(560px, calc(100vw - 28px));
+  max-height: calc(100vh - 20px);
+  overflow: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(96, 165, 250, 0.48);
+  background: rgba(8, 14, 24, 0.95);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.pve2-deploy-info-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.pve2-deploy-info-head strong {
+  display: block;
+  font-size: 14px;
+}
+
+.pve2-deploy-info-head span {
+  display: block;
+  font-size: 11px;
+  color: #cbd5e1;
+  margin-top: 2px;
+}
+
+.pve2-deploy-info-section {
+  display: grid;
+  gap: 8px;
+}
+
+.pve2-deploy-info-section h4 {
+  margin: 0;
+  font-size: 12px;
+  color: #bfdbfe;
+}
+
+.pve2-deploy-info-rows {
+  display: grid;
+  gap: 4px;
+}
+
+.pve2-deploy-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.52);
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.pve2-deploy-info-row em {
+  font-style: normal;
+  color: #dbeafe;
+  text-align: right;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.pve2-deploy-skill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pve2-deploy-skill-btn {
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.68);
+  color: #dbeafe;
+  min-width: 90px;
+  padding: 5px 8px;
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+}
+
+.pve2-deploy-skill-btn strong {
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.pve2-deploy-skill-btn span {
+  font-size: 10px;
+  color: #cbd5e1;
+  line-height: 1.2;
+}
+
+.pve2-deploy-skill-btn.is-active {
+  border-color: rgba(96, 165, 250, 0.9);
+  background: rgba(30, 58, 138, 0.5);
+}
+
+.pve2-deploy-skill-detail {
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.45);
+  padding: 7px 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.pve2-deploy-skill-detail p {
+  margin: 0;
+  font-size: 12px;
+  color: #e2e8f0;
+}
+
+.pve2-deploy-skill-power {
+  font-size: 12px;
+  color: #93c5fd;
+}
+
+.pve2-deploy-skill-meta {
+  font-size: 11px;
+  color: #cbd5e1;
 }
 
 .pve2-deploy-creator {
-  position: absolute;
-  left: 348px;
-  bottom: 76px;
-  z-index: 16;
+  position: fixed;
+  z-index: 72;
   width: min(500px, calc(100vw - 36px));
+  max-height: calc(100vh - 20px);
+  overflow: auto;
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 10px;
   background: rgba(8, 14, 24, 0.9);
   padding: 10px;
   display: grid;
   gap: 8px;
+}
+
+.pve2-deploy-creator-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pve2-drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.pve2-drag-handle:active {
+  cursor: grabbing;
 }
 
 .pve2-deploy-creator h4 {
@@ -1355,11 +1629,13 @@
 }
 
 .pve2-confirm {
-  position: absolute;
-  transform: translate(-50%, -112%);
-  z-index: 14;
+  position: fixed;
+  transform: none;
+  z-index: 74;
   min-width: 320px;
   max-width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 20px);
+  overflow: auto;
   border-radius: 10px;
   border: 1px solid rgba(248, 113, 113, 0.42);
   background: rgba(18, 10, 10, 0.94);
@@ -1368,7 +1644,7 @@
   gap: 10px;
 }
 
-.pve2-confirm p {
+.pve2-confirm-head p {
   margin: 0;
   font-size: 13px;
   color: #fecaca;
@@ -1397,7 +1673,7 @@
 .pve2-error-overlay {
   position: absolute;
   inset: 0;
-  z-index: 15;
+  z-index: 78;
   display: grid;
   place-items: center;
   background: rgba(10, 10, 10, 0.72);
@@ -1406,12 +1682,12 @@
 }
 
 .pve2-result {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 20;
+  position: fixed;
+  transform: none;
+  z-index: 80;
   width: min(520px, calc(100vw - 28px));
+  max-height: calc(100vh - 20px);
+  overflow: auto;
   border-radius: 14px;
   border: 1px solid rgba(148, 163, 184, 0.34);
   background: rgba(6, 11, 20, 0.93);
@@ -1465,6 +1741,20 @@
     height: 116px;
   }
 
+  .pve2-map-dial-wrap {
+    right: 10px;
+    bottom: 152px;
+  }
+
+  .pve2-map-dial {
+    width: 106px;
+    height: 106px;
+  }
+
+  .pve2-map-dial-core {
+    inset: 24px;
+  }
+
   .pve2-hud {
     top: 8px;
     left: 8px;
@@ -1482,8 +1772,6 @@
   }
 
   .pve2-deploy-creator {
-    left: 8px;
-    bottom: 76px;
     width: min(560px, calc(100vw - 16px));
   }
 
@@ -1498,5 +1786,9 @@
   .pve2-quick-standard-item {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .pve2-deploy-info {
+    max-height: min(64vh, 520px);
   }
 }

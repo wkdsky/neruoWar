@@ -21,7 +21,8 @@ const BattleHUD = ({
   pitchLabel = '40°',
   startLabel = '开战',
   speedModeLabel = '',
-  onCycleSpeedMode = null
+  onCycleSpeedMode = null,
+  interactionLocked = false
 }) => (
   <div className="pve2-hud">
     <div className="pve2-hud-left">
@@ -31,20 +32,27 @@ const BattleHUD = ({
     </div>
     <div className="pve2-hud-right">
       {phase === 'deploy' ? (
-        <button type="button" className="btn btn-warning" disabled={!canStart} onClick={onStart}>{startLabel}</button>
+        <button
+          type="button"
+          className="btn btn-warning"
+          disabled={!canStart || interactionLocked}
+          onClick={onStart}
+        >
+          {startLabel}
+        </button>
       ) : (
         <>
-          <button type="button" className="btn btn-secondary" onClick={onTogglePause}>{paused ? '继续' : '暂停'}</button>
+          <button type="button" className="btn btn-secondary" onClick={onTogglePause} disabled={interactionLocked}>{paused ? '继续' : '暂停'}</button>
           {typeof onCycleSpeedMode === 'function' ? (
-            <button type="button" className="btn btn-secondary btn-small" onClick={onCycleSpeedMode}>
+            <button type="button" className="btn btn-secondary btn-small" onClick={onCycleSpeedMode} disabled={interactionLocked}>
               {`速度 ${speedModeLabel || '-'}`}
             </button>
           ) : null}
         </>
       )}
-      <button type="button" className="btn btn-secondary" onClick={onTogglePitch}>视角 {pitchLabel}</button>
-      <button type="button" className="btn btn-secondary" onClick={onToggleDebug}>{debugEnabled ? '关闭调试' : '调试'}</button>
-      <button type="button" className="btn btn-danger" onClick={onExit}>退出</button>
+      <button type="button" className="btn btn-secondary" onClick={onTogglePitch} disabled={interactionLocked}>视角 {pitchLabel}</button>
+      <button type="button" className="btn btn-secondary" onClick={onToggleDebug} disabled={interactionLocked}>{debugEnabled ? '关闭调试' : '调试'}</button>
+      <button type="button" className="btn btn-danger" onClick={onExit} disabled={interactionLocked}>退出</button>
     </div>
   </div>
 );

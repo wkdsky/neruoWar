@@ -7,16 +7,25 @@ const BattleDeploySidebar = ({
   armyTemplatesError = '',
   armyTemplates = [],
   attackerTeam = 'attacker',
-  defenderTeam = 'defender',
   onCreateDeployGroup,
   onCreateTemplateGroup,
-  onOpenTemplateFillPreview
+  onOpenTemplateFillPreview,
+  disabled = false
 }) => (
-  <div className="pve2-deploy-sidebar">
+  <div className={`pve2-deploy-sidebar ${disabled ? 'is-disabled' : ''}`}>
     <section className="pve2-deploy-sidebar-section">
       <div className="pve2-deploy-sidebar-title">新建部队</div>
       <div className="pve2-deploy-sidebar-body">
-        <button type="button" className="btn btn-primary" onClick={() => onCreateDeployGroup?.(attackerTeam)}>新建部队</button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={disabled}
+          onClick={() => {
+            if (!disabled) onCreateDeployGroup?.(attackerTeam);
+          }}
+        >
+          新建部队
+        </button>
       </div>
     </section>
 
@@ -46,7 +55,9 @@ const BattleDeploySidebar = ({
                   <button
                     type="button"
                     className="pve2-template-row-main"
+                    disabled={disabled}
                     onClick={() => {
+                      if (disabled) return;
                       if (isTrainingMode) {
                         onCreateTemplateGroup?.(template, attackerTeam);
                         return;
@@ -63,17 +74,6 @@ const BattleDeploySidebar = ({
                       <span className="pve2-template-direct">填充</span>
                     ) : null}
                   </button>
-                  {isTrainingMode ? (
-                    <span className="pve2-template-actions">
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-small"
-                        onClick={() => onCreateTemplateGroup?.(template, defenderTeam)}
-                      >
-                        敌方
-                      </button>
-                    </span>
-                  ) : null}
                 </div>
               );
             })}

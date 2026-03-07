@@ -4,6 +4,7 @@ import {
   QUICK_DEPLOY_TEAM_SHORTCUTS,
   QUICK_DEPLOY_TOTAL_SHORTCUTS
 } from '../../screens/battleSceneConstants';
+import useDraggablePanel from './useDraggablePanel';
 
 const BattleQuickDeployModal = ({
   open = false,
@@ -21,6 +22,10 @@ const BattleQuickDeployModal = ({
   onApplyStandardPreset,
   onApplyRandom
 }) => {
+  const { panelRef, panelStyle, handleHeaderPointerDown } = useDraggablePanel({
+    open,
+    defaultSize: { width: 760, height: 620 }
+  });
   if (!open) return null;
 
   return (
@@ -33,15 +38,20 @@ const BattleQuickDeployModal = ({
       }}
     >
       <div
+        ref={panelRef}
         className="pve2-quick-deploy-panel"
+        style={panelStyle}
         onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
+        onWheelCapture={(event) => event.stopPropagation()}
       >
-        <div className="pve2-quick-deploy-head">
+        <div className="pve2-quick-deploy-head pve2-drag-handle" onPointerDown={handleHeaderPointerDown}>
           <h4>一键布置</h4>
           <button
             type="button"
             className="btn btn-secondary btn-small"
+            data-no-drag
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={() => onClose?.()}
           >
             关闭

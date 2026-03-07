@@ -4,7 +4,13 @@ import { minimapToWorld, worldToMinimap } from '../../shared/coords';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
-const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
+const Minimap = ({
+  snapshot,
+  cameraCenter,
+  cameraViewport,
+  onMapClick,
+  interactive = true
+}) => {
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -106,8 +112,10 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
   }, [snapshot, cameraCenter, cameraViewport]);
 
   const handleClick = (event) => {
+    if (!interactive) return;
     if (typeof onMapClick !== 'function' || !snapshot?.field) return;
     const canvas = canvasRef.current;
+    if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const rx = event.clientX - rect.left;
     const ry = event.clientY - rect.top;
@@ -119,7 +127,13 @@ const Minimap = ({ snapshot, cameraCenter, cameraViewport, onMapClick }) => {
 
   return (
     <div className="pve2-minimap-wrap">
-      <canvas ref={canvasRef} className="pve2-minimap" width={220} height={140} onClick={handleClick} />
+      <canvas
+        ref={canvasRef}
+        className={`pve2-minimap ${interactive ? '' : 'is-disabled'}`}
+        width={220}
+        height={140}
+        onClick={handleClick}
+      />
     </div>
   );
 };

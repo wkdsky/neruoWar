@@ -297,6 +297,62 @@ export default function useBattleDeployEditor({
     syncCardsAndMinimap
   ]);
 
+  const handleRecallDeployDraggingGroup = useCallback((groupId = '', team = TEAM_ATTACKER) => {
+    const runtime = runtimeRef.current;
+    if (!runtime || runtime.getPhase() !== 'deploy') {
+      return { ok: false, reason: '当前不在部署阶段' };
+    }
+    const safeGroupId = typeof groupId === 'string' ? groupId.trim() : '';
+    const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    if (!safeGroupId) {
+      setDeployNotice('未找到待放置部队，无法撤回');
+      return { ok: false, reason: '未找到待放置部队' };
+    }
+    const group = runtime.getDeployGroupById(safeGroupId, safeTeam) || runtime.getDeployGroupById(safeGroupId, 'any');
+    if (!group) {
+      setDeployNotice('未找到待放置部队，无法撤回');
+      return { ok: false, reason: '未找到待放置部队' };
+    }
+    const resolvedTeam = group.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+    const draftUnits = Object.entries(group.units || {}).map(([unitTypeId, count]) => ({
+      unitTypeId,
+      count: Math.max(1, Math.floor(Number(count) || 1))
+    }));
+
+    runtime.setSelectedDeployGroup(group.id);
+    runtime.setFocusSquad(group.id);
+    runtime.setDeployGroupPlaced(resolvedTeam, group.id, false);
+    setSelectedSquadId(group.id);
+    setDeployDraggingGroup({ groupId: '', team: TEAM_ATTACKER });
+    setDeployActionAnchorMode('');
+    syncCardsAndMinimap(runtime);
+
+    setDeployEditorTeam(resolvedTeam);
+    setDeployEditingGroupId(group.id);
+    setDeployEditorDraft({
+      name: group.name || '',
+      units: normalizeDraftUnits(draftUnits)
+    });
+    setDeployQuantityDialog(createDefaultDeployQuantityDialog());
+    setDeployEditorDragUnitId('');
+    setDeployEditorOpen(true);
+    setDeployNotice('已撤回到编组页面，可继续调整士兵数量');
+    return { ok: true, groupId: group.id, team: resolvedTeam };
+  }, [
+    runtimeRef,
+    setDeployNotice,
+    setSelectedSquadId,
+    setDeployDraggingGroup,
+    setDeployActionAnchorMode,
+    syncCardsAndMinimap,
+    setDeployEditorTeam,
+    setDeployEditingGroupId,
+    setDeployEditorDraft,
+    setDeployQuantityDialog,
+    setDeployEditorDragUnitId,
+    setDeployEditorOpen
+  ]);
+
   const buildTemplateFillSnapshot = useCallback((template, team = TEAM_ATTACKER) => {
     const runtime = runtimeRef.current;
     const safeTeam = team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
@@ -428,6 +484,7 @@ export default function useBattleDeployEditor({
     handleConfirmDeployQuantity,
     handleRemoveDraftUnit,
     handleSaveDeployEditor,
+    handleRecallDeployDraggingGroup,
     handleCreateTrainingGroupByTemplate,
     handleOpenTemplateFillPreview,
     handleCloseTemplateFillPreview,

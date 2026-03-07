@@ -1,6 +1,13 @@
 import React from 'react';
 
 const ActionIcon = ({ type }) => {
+  if (type === 'info') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
+      </svg>
+    );
+  }
   if (type === 'move') {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -24,6 +31,7 @@ const ActionIcon = ({ type }) => {
 
 const DeployActionButtons = ({
   layout = 'line',
+  onInfo,
   onMove,
   onEdit,
   onDelete
@@ -35,6 +43,20 @@ const DeployActionButtons = ({
     onPointerDown={(event) => event.stopPropagation()}
     onClick={(event) => event.stopPropagation()}
   >
+    <button
+      type="button"
+      className="pve2-icon-btn info"
+      title="信息"
+      aria-label="信息"
+      onMouseDown={(event) => event.stopPropagation()}
+      onMouseUp={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (typeof onInfo === 'function') onInfo(event);
+      }}
+    >
+      <ActionIcon type="info" />
+    </button>
     <button
       type="button"
       className="pve2-icon-btn move"

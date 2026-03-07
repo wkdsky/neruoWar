@@ -10,6 +10,7 @@ import {
   createDefaultAimState,
   createDefaultDeployDraggingGroup,
   createDefaultDeployEditorDraft,
+  createDefaultDeployInfoState,
   createDefaultDeployQuantityDialog,
   createDefaultPopupPos,
   createDefaultQuickDeployRandomForm,
@@ -49,6 +50,7 @@ export default function useBattleSceneLifecycle({
   setDeployEditorDraft,
   setDeployQuantityDialog,
   setDeployDraggingGroup,
+  setDeployInfoState,
   setDeployActionAnchorMode,
   setDeployNotice,
   setDeployEditorDragUnitId,
@@ -110,6 +112,7 @@ export default function useBattleSceneLifecycle({
     setDeployEditorDraft(createDefaultDeployEditorDraft());
     setDeployQuantityDialog(createDefaultDeployQuantityDialog());
     setDeployDraggingGroup(createDefaultDeployDraggingGroup());
+    setDeployInfoState(createDefaultDeployInfoState());
     setDeployActionAnchorMode('');
     setDeployNotice('');
     setDeployEditorDragUnitId('');
@@ -151,6 +154,7 @@ export default function useBattleSceneLifecycle({
     setDeployEditorDraft,
     setDeployQuantityDialog,
     setDeployDraggingGroup,
+    setDeployInfoState,
     setDeployActionAnchorMode,
     setDeployNotice,
     setDeployEditorDragUnitId,
@@ -186,6 +190,7 @@ export default function useBattleSceneLifecycle({
     setSkillConfirmState(null);
     setMarchModePickOpen(false);
     setMarchPopupPos(createDefaultPopupPos());
+    setDeployInfoState(createDefaultDeployInfoState());
     setPaused(false);
     setLoopPaused(false);
   }, [
@@ -198,6 +203,7 @@ export default function useBattleSceneLifecycle({
     setSkillConfirmState,
     setMarchModePickOpen,
     setMarchPopupPos,
+    setDeployInfoState,
     setPaused,
     setLoopPaused
   ]);

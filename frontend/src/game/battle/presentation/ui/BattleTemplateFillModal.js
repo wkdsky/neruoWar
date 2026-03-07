@@ -1,4 +1,5 @@
 import React from 'react';
+import useDraggablePanel from './useDraggablePanel';
 
 const BattleTemplateFillModal = ({
   open = false,
@@ -6,6 +7,10 @@ const BattleTemplateFillModal = ({
   onClose,
   onConfirm
 }) => {
+  const { panelRef, panelStyle, handleHeaderPointerDown } = useDraggablePanel({
+    open,
+    defaultSize: { width: 760, height: 600 }
+  });
   if (!open) return null;
 
   const totalRequested = Math.max(0, Number(preview?.totalRequested) || 0);
@@ -22,13 +27,24 @@ const BattleTemplateFillModal = ({
       }}
     >
       <div
+        ref={panelRef}
         className="pve2-template-fill-panel"
+        style={panelStyle}
         onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
+        onWheelCapture={(event) => event.stopPropagation()}
       >
-        <div className="pve2-template-fill-head">
+        <div className="pve2-template-fill-head pve2-drag-handle" onPointerDown={handleHeaderPointerDown}>
           <h4>{`模板填充：${preview?.template?.name || '未命名模板'}`}</h4>
-          <button type="button" className="btn btn-secondary btn-small" onClick={() => onClose?.()}>关闭</button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            data-no-drag
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={() => onClose?.()}
+          >
+            关闭
+          </button>
         </div>
         <div className="pve2-template-fill-summary">
           <span>{`模板总兵力 ${totalRequested}`}</span>

@@ -9,15 +9,18 @@ import {
   createDefaultAimState,
   createDefaultConfirmDeletePos,
   createDefaultDeployDraggingGroup,
+  createDefaultDeployInfoState,
   createDefaultDeployQuantityDialog
 } from '../screens/battleSceneConstants';
 
 export default function useBattleEscapeHandler({
   confirmDeleteGroupId = '',
   deployQuantityDialogOpen = false,
+  deployInfoOpen = false,
   quickDeployOpen = false,
   deployEditorOpen = false,
   deployDraggingGroupId = '',
+  deployDraggingTeam = '',
   deployRectDragRef,
   battleUiMode = BATTLE_UI_MODE_NONE,
   worldActionsVisibleForSquadId = '',
@@ -25,10 +28,12 @@ export default function useBattleEscapeHandler({
   setConfirmDeleteGroupId,
   setConfirmDeletePos,
   setDeployQuantityDialog,
+  setDeployInfoState,
   handleCloseQuickDeploy,
   closeDeployEditor,
   setDeployDraggingGroup,
   setDeployNotice,
+  onRecallDeployDraggingGroup,
   closeSkillConfirm,
   commitPathPlanning,
   setBattleUiMode,
@@ -49,6 +54,10 @@ export default function useBattleEscapeHandler({
       setDeployQuantityDialog(createDefaultDeployQuantityDialog());
       return;
     }
+    if (deployInfoOpen) {
+      setDeployInfoState(createDefaultDeployInfoState());
+      return;
+    }
     if (quickDeployOpen) {
       handleCloseQuickDeploy();
       return;
@@ -58,8 +67,11 @@ export default function useBattleEscapeHandler({
       return;
     }
     if (deployDraggingGroupId) {
-      setDeployDraggingGroup(createDefaultDeployDraggingGroup());
-      setDeployNotice('已取消部队拖拽放置');
+      const recalled = onRecallDeployDraggingGroup?.(deployDraggingGroupId, deployDraggingTeam);
+      if (!recalled?.ok) {
+        setDeployDraggingGroup(createDefaultDeployDraggingGroup());
+        setDeployNotice('已取消部队拖拽放置');
+      }
       return;
     }
     if (deployRectDragRef.current) {
@@ -100,7 +112,9 @@ export default function useBattleEscapeHandler({
     commitPathPlanning,
     confirmDeleteGroupId,
     deployDraggingGroupId,
+    deployDraggingTeam,
     deployEditorOpen,
+    deployInfoOpen,
     deployQuantityDialogOpen,
     deployRectDragRef,
     handleCloseQuickDeploy,
@@ -112,10 +126,12 @@ export default function useBattleEscapeHandler({
     setConfirmDeletePos,
     setDeployNotice,
     setDeployDraggingGroup,
+    setDeployInfoState,
     setDeployQuantityDialog,
     setMarchModePickOpen,
     setSkillPopupSquadId,
     setWorldActionsVisibleForSquadId,
+    onRecallDeployDraggingGroup,
     worldActionsVisibleForSquadId
   ]);
 

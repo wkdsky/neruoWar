@@ -93,7 +93,9 @@ export default function useBattleLoop({
       camera.pitchTweenSec = camera.pitchTweenDurationSec;
     } else {
       camera.yawDeg = Number(constants.BATTLE_FOLLOW_YAW_DEG) || 0;
-      camera.worldYawDeg = Number(constants.BATTLE_FOLLOW_WORLD_YAW_DEG) || 0;
+      if (!Number.isFinite(Number(camera.worldYawDeg))) {
+        camera.worldYawDeg = Number(constants.BATTLE_FOLLOW_WORLD_YAW_DEG) || 0;
+      }
       camera.mirrorX = !!constants.BATTLE_FOLLOW_MIRROR_X;
     }
 
