@@ -6,6 +6,13 @@ import {
   applySquadStabilityHit,
   triggerSquadStagger
 } from '../crowd/crowdCombat';
+import {
+  isConcealmentObstacle,
+  resolveConcealmentMaskRadius,
+  resolveConcealmentMaskTriggerRadius,
+  resolveObstacleMoveSpeedMul,
+  resolveViewerTeam
+} from './itemObstacleUtils';
 
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
@@ -136,6 +143,26 @@ const scaleDamageBySelector = (baseDamage, squad, params = {}) => {
   return Math.max(0, Number(baseDamage) || 0) * classMul * rpsMul;
 };
 
+const clearTargetLocksAgainstHiddenSquads = (sim, crowd, hiddenFromAttackerIds = new Set(), hiddenFromDefenderIds = new Set()) => {
+  const squads = Array.isArray(sim?.squads) ? sim.squads : [];
+  squads.forEach((squad) => {
+    if (!squad) return;
+    const hiddenTargets = squad.team === 'attacker' ? hiddenFromAttackerIds : hiddenFromDefenderIds;
+    const targetId = typeof squad?.targetSquadId === 'string' ? squad.targetSquadId : '';
+    if (targetId && hiddenTargets.has(targetId)) {
+      squad.targetSquadId = '';
+      const agents = crowd?.agentsBySquad?.get(squad.id) || [];
+      agents.forEach((agent) => {
+        if (!agent) return;
+        agent.targetAgentId = '';
+      });
+    }
+    if (squad?.guard?.activeTargetId && hiddenTargets.has(squad.guard.activeTargetId)) {
+      squad.guard.activeTargetId = '';
+    }
+  });
+};
+
 const applyItemDamage = (sim, crowd, squad, item, damage, hitType = 'hit') => {
   const safeDamage = Math.max(0, Number(damage) || 0);
   if (safeDamage <= 0.001) return 0;
@@ -182,18 +209,25 @@ const buildPseudoAttacker = (squad = {}, item = {}, params = {}) => ({
 const step = (sim, crowd, dt) => {
   if (!sim || !crowd) return;
   const squads = Array.isArray(sim?.squads) ? sim.squads : [];
+  const viewerTeam = resolveViewerTeam(sim);
   const items = (Array.isArray(sim?.buildings) ? sim.buildings : [])
     .filter((item) => item && !item.destroyed && Array.isArray(item?.interactions) && item.interactions.length > 0)
-    .map((item) => ({
-      ...item,
-      interactionRadius: getItemContactRadius(item)
-    }));
-  if (items.length <= 0) {
-    squads.forEach((squad) => {
-      if (!squad) return;
-      squad.hiddenFromAttacker = false;
-      squad.hiddenFromDefender = false;
+    .map((item) => {
+      item.interactionRadius = getItemContactRadius(item);
+      item.occupiedByAttacker = false;
+      item.occupiedByDefender = false;
+      if (isConcealmentObstacle(item)) item.renderOpacity = 0.94;
+      item.renderMaskAlpha = 0;
+      item.renderMaskRadius = resolveConcealmentMaskRadius(item);
+      return item;
     });
+  squads.forEach((squad) => {
+    if (!squad) return;
+    squad.hiddenFromAttacker = false;
+    squad.hiddenFromDefender = false;
+    squad.terrainMoveSpeedMul = 1;
+  });
+  if (items.length <= 0) {
     return;
   }
 
@@ -215,6 +249,8 @@ const step = (sim, crowd, dt) => {
   const concealedSquadSet = new Set();
   const concealmentRevealRadiusBySquad = new Map();
   const revealBonusBySquad = new Map();
+  const hiddenFromAttackerIds = new Set();
+  const hiddenFromDefenderIds = new Set();
 
   squads.forEach((squad) => {
     if (!squad || (Number(squad?.remain) || 0) <= 0) return;
@@ -248,6 +284,21 @@ const step = (sim, crowd, dt) => {
             concealedSquadSet.add(squad.id);
             const revealRadius = Math.max(1.2, Number(interaction?.params?.revealRadius) || 2.2);
             concealmentRevealRadiusBySquad.set(squad.id, Math.max(concealmentRevealRadiusBySquad.get(squad.id) || 0, revealRadius));
+            squad.terrainMoveSpeedMul = Math.min(
+              Math.max(0.72, Number(squad?.terrainMoveSpeedMul) || 1),
+              resolveObstacleMoveSpeedMul(item, 0.84)
+            );
+            if (squad.team === 'defender') item.occupiedByDefender = true;
+            else item.occupiedByAttacker = true;
+          }
+          if (squad.team === viewerTeam) {
+            const maskTriggerRadius = resolveConcealmentMaskTriggerRadius(item);
+            const distToBush = Math.hypot((Number(squad.x) || 0) - (Number(item.x) || 0), (Number(squad.y) || 0) - (Number(item.y) || 0));
+            if (distToBush <= maskTriggerRadius) {
+              const nearAlpha = isInside ? 0.18 : 0.14;
+              item.renderMaskAlpha = Math.max(Number(item.renderMaskAlpha) || 0, nearAlpha);
+              item.renderMaskRadius = resolveConcealmentMaskRadius(item);
+            }
           }
           prev.inside = isInside;
           contacts.set(key, prev);
@@ -330,24 +381,37 @@ const step = (sim, crowd, dt) => {
 
   squads.forEach((squad) => {
     if (!squad) return;
-    squad.hiddenFromAttacker = false;
-    squad.hiddenFromDefender = false;
     if (!concealedSquadSet.has(squad.id)) return;
     const revealRadius = concealmentRevealRadiusBySquad.get(squad.id) || 2.2;
     if (squad.team === 'defender') {
       squad.hiddenFromAttacker = !shouldRevealHiddenSquad(squad, attackers, revealRadius, revealBonusBySquad);
+      if (squad.hiddenFromAttacker) hiddenFromAttackerIds.add(squad.id);
       return;
     }
     if (squad.team === 'attacker') {
       squad.hiddenFromDefender = !shouldRevealHiddenSquad(squad, defenders, revealRadius, revealBonusBySquad);
+      if (squad.hiddenFromDefender) hiddenFromDefenderIds.add(squad.id);
     }
   });
+
+  items.forEach((item) => {
+    if (!isConcealmentObstacle(item)) return;
+    const viewerOccupies = viewerTeam === 'defender' ? item.occupiedByDefender : item.occupiedByAttacker;
+    item.renderOpacity = viewerOccupies ? 0.26 : 0.94;
+    if (!Number.isFinite(Number(item.renderMaskRadius)) || Number(item.renderMaskRadius) <= 0) {
+      item.renderMaskRadius = resolveConcealmentMaskRadius(item);
+    }
+  });
+
+  clearTargetLocksAgainstHiddenSquads(sim, crowd, hiddenFromAttackerIds, hiddenFromDefenderIds);
 
   sim.itemInteractionDebug = {
     activeItems: items.length,
     activeContacts: contacts.size,
     concealedSquads: concealedSquadSet.size,
     revealBonusSquads: revealBonusBySquad.size,
+    hiddenFromAttacker: hiddenFromAttackerIds.size,
+    hiddenFromDefender: hiddenFromDefenderIds.size,
     dt: clamp(Number(dt) || 0, 0, 1)
   };
 };
@@ -357,4 +421,3 @@ const itemInteractionSystem = {
 };
 
 export default itemInteractionSystem;
-

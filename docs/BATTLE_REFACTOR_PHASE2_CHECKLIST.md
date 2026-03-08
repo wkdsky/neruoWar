@@ -31,5 +31,5 @@
 
 6. BattleSceneModal / PreviewModal / App 不再散落直连这些 battle/layout endpoint
    - 运行：
-     - `rg -n "battle-init|battle-result|battlefield-layout" frontend/src/App.js frontend/src/components/game/BattleSceneModal.js frontend/src/components/game/BattlefieldPreviewModal.js frontend/src/game/battle`
+     - `rg -n "battle-init|battle-result|battlefield-layout" frontend/src/App.js frontend/src/game/battle/screens/BattleSceneContainer.js frontend/src/components/game/BattlefieldPreviewModal.js frontend/src/game/battle`
    - 预期：endpoint 字符串只出现在 `frontend/src/game/battle/data/BattleDataService.js`。

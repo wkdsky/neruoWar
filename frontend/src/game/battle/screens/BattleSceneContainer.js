@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import '../../../components/game/pveBattle.css';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import '../presentation/ui/Battle.css';
 import CameraController from '../presentation/render/CameraController';
 import useBattleRuntime from '../hooks/useBattleRuntime';
 import useBattleRenderPipeline from '../hooks/useBattleRenderPipeline';
@@ -17,6 +17,7 @@ import useBattleEscapeHandler from '../hooks/useBattleEscapeHandler';
 import useBattleSceneInputController from '../hooks/useBattleSceneInputController';
 import useBattleDeployFormationResize from '../hooks/useBattleDeployFormationResize';
 import useBattleSceneLifecycle from '../hooks/useBattleSceneLifecycle';
+import useBattleSceneUiState from '../hooks/useBattleSceneUiState';
 import BattleHUD from '../presentation/ui/BattleHUD';
 import SquadCards from '../presentation/ui/SquadCards';
 import DeployActionButtons from '../presentation/ui/DeployActionButtons';
@@ -57,16 +58,10 @@ import {
   ORDER_MOVE,
   TEAM_ATTACKER,
   TEAM_DEFENDER,
-  createDefaultAimState,
   createDefaultConfirmDeletePos,
-  createDefaultDeployDraggingGroup,
-  createDefaultDeployEditorDraft,
   createDefaultDeployInfoState,
-  createDefaultDeployQuantityDialog,
-  createDefaultPopupPos,
-  createDefaultQuickDeployRandomForm,
   createDefaultResultState,
-  createDefaultTemplateFillPreview,
+  createDefaultDeployQuantityDialog,
   speedModeLabel
 } from './battleSceneConstants';
 import {
@@ -107,46 +102,83 @@ const BattleSceneContainer = ({
   const runtimeInitRef = useRef(null);
   const reportBattleResultRef = useRef(() => {});
 
-  const [paused, setPaused] = useState(false);
-  const [debugEnabled, setDebugEnabled] = useState(false);
-  const [aimState, setAimState] = useState(createDefaultAimState);
-  const [battleUiMode, setBattleUiMode] = useState(BATTLE_UI_MODE_NONE);
-  const [worldActionsVisibleForSquadId, setWorldActionsVisibleForSquadId] = useState('');
-  const [hoverSquadIdOnCard, setHoverSquadIdOnCard] = useState('');
-  const [pendingPathPoints, setPendingPathPoints] = useState([]);
-  const [planningHoverPoint, setPlanningHoverPoint] = useState(null);
-  const [skillConfirmState, setSkillConfirmState] = useState(null);
-  const [skillPopupSquadId, setSkillPopupSquadId] = useState('');
-  const [skillPopupPos, setSkillPopupPos] = useState(createDefaultPopupPos);
-  const [marchModePickOpen, setMarchModePickOpen] = useState(false);
-  const [marchPopupPos, setMarchPopupPos] = useState(createDefaultPopupPos);
-  const [selectedSquadId, setSelectedSquadId] = useState('');
-  const [resultState, setResultState] = useState(createDefaultResultState);
-  const [deployEditorOpen, setDeployEditorOpen] = useState(false);
-  const [deployEditingGroupId, setDeployEditingGroupId] = useState('');
-  const [deployEditorDraft, setDeployEditorDraft] = useState(createDefaultDeployEditorDraft);
-  const [deployQuantityDialog, setDeployQuantityDialog] = useState(createDefaultDeployQuantityDialog);
-  const [deployDraggingGroup, setDeployDraggingGroup] = useState(createDefaultDeployDraggingGroup);
-  const [deployActionAnchorMode, setDeployActionAnchorMode] = useState('');
-  const [deployNotice, setDeployNotice] = useState('');
-  const [deployEditorDragUnitId, setDeployEditorDragUnitId] = useState('');
-  const [deployEditorTeam, setDeployEditorTeam] = useState(TEAM_ATTACKER);
-  const [selectedPaletteItemId, setSelectedPaletteItemId] = useState('');
-  const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState('');
-  const [confirmDeletePos, setConfirmDeletePos] = useState(createDefaultConfirmDeletePos);
-  const [deployInfoState, setDeployInfoState] = useState(createDefaultDeployInfoState);
-  const [quickDeployOpen, setQuickDeployOpen] = useState(false);
-  const [quickDeployTab, setQuickDeployTab] = useState('standard');
-  const [quickDeployApplying, setQuickDeployApplying] = useState(false);
-  const [quickDeployError, setQuickDeployError] = useState('');
-  const [quickDeployRandomForm, setQuickDeployRandomForm] = useState(createDefaultQuickDeployRandomForm);
-  const [templateFillPreview, setTemplateFillPreview] = useState(createDefaultTemplateFillPreview);
-  const [showMidlineDebug, setShowMidlineDebug] = useState(true);
-  const [isPanning, setIsPanning] = useState(false);
-  const [mapDialCommand, setMapDialCommand] = useState('');
-
-  const deployDraggingGroupId = String(deployDraggingGroup?.groupId || '');
-  const deployDraggingTeam = deployDraggingGroup?.team === TEAM_DEFENDER ? TEAM_DEFENDER : TEAM_ATTACKER;
+  const {
+    paused,
+    setPaused,
+    debugEnabled,
+    setDebugEnabled,
+    aimState,
+    setAimState,
+    battleUiMode,
+    setBattleUiMode,
+    worldActionsVisibleForSquadId,
+    setWorldActionsVisibleForSquadId,
+    hoverSquadIdOnCard,
+    setHoverSquadIdOnCard,
+    pendingPathPoints,
+    setPendingPathPoints,
+    planningHoverPoint,
+    setPlanningHoverPoint,
+    skillConfirmState,
+    setSkillConfirmState,
+    skillPopupSquadId,
+    setSkillPopupSquadId,
+    skillPopupPos,
+    setSkillPopupPos,
+    marchModePickOpen,
+    setMarchModePickOpen,
+    marchPopupPos,
+    setMarchPopupPos,
+    selectedSquadId,
+    setSelectedSquadId,
+    resultState,
+    setResultState,
+    deployEditorOpen,
+    setDeployEditorOpen,
+    deployEditingGroupId,
+    setDeployEditingGroupId,
+    deployEditorDraft,
+    setDeployEditorDraft,
+    deployQuantityDialog,
+    setDeployQuantityDialog,
+    setDeployDraggingGroup,
+    deployActionAnchorMode,
+    setDeployActionAnchorMode,
+    deployNotice,
+    setDeployNotice,
+    deployEditorDragUnitId,
+    setDeployEditorDragUnitId,
+    deployEditorTeam,
+    setDeployEditorTeam,
+    selectedPaletteItemId,
+    setSelectedPaletteItemId,
+    confirmDeleteGroupId,
+    setConfirmDeleteGroupId,
+    confirmDeletePos,
+    setConfirmDeletePos,
+    deployInfoState,
+    setDeployInfoState,
+    quickDeployOpen,
+    setQuickDeployOpen,
+    quickDeployTab,
+    setQuickDeployTab,
+    quickDeployApplying,
+    setQuickDeployApplying,
+    quickDeployError,
+    setQuickDeployError,
+    quickDeployRandomForm,
+    setQuickDeployRandomForm,
+    templateFillPreview,
+    setTemplateFillPreview,
+    showMidlineDebug,
+    setShowMidlineDebug,
+    isPanning,
+    setIsPanning,
+    mapDialCommand,
+    setMapDialCommand,
+    deployDraggingGroupId,
+    deployDraggingTeam
+  } = useBattleSceneUiState();
 
   const closeModal = useCallback(() => {
     if (typeof onClose === 'function') onClose();
@@ -302,7 +334,7 @@ const BattleSceneContainer = ({
     } catch (submitError) {
       setResultState((prev) => ({ ...prev, submitting: false, error: submitError.message || '上报失败' }));
     }
-  }, [battleInitData, onBattleFinished, requireResultReport]);
+  }, [battleInitData, onBattleFinished, requireResultReport, setResultState]);
 
   useEffect(() => {
     reportBattleResultRef.current = reportBattleResult;
@@ -409,7 +441,7 @@ const BattleSceneContainer = ({
     const next = !paused;
     setPaused(next);
     setLoopPaused(next);
-  }, [paused, setLoopPaused]);
+  }, [paused, setLoopPaused, setPaused]);
 
   const handleTogglePitch = useCallback(() => {
     cameraRef.current.togglePitchMode();
@@ -454,7 +486,7 @@ const BattleSceneContainer = ({
   const setClockPaused = useCallback((nextPaused) => {
     setPaused(!!nextPaused);
     setLoopPaused(!!nextPaused);
-  }, [setLoopPaused]);
+  }, [setLoopPaused, setPaused]);
 
   const {
     syncBattleCards,
@@ -625,7 +657,7 @@ const BattleSceneContainer = ({
 
   const closeDeployInfoPanel = useCallback(() => {
     setDeployInfoState(createDefaultDeployInfoState());
-  }, []);
+  }, [setDeployInfoState]);
 
   const handleOpenDeployInfo = useCallback((groupId, event = null) => {
     const runtime = runtimeRef.current;
@@ -659,7 +691,7 @@ const BattleSceneContainer = ({
       x: clamp(x, 8, Math.max(8, viewportW - 8)),
       y: clamp(y, 8, Math.max(8, viewportH - 8))
     });
-  }, [glCanvasRef, isTrainingMode, runtimeRef]);
+  }, [glCanvasRef, isTrainingMode, runtimeRef, setDeployInfoState]);
 
   const handleDeployMoveWithInfoClose = useCallback((groupId, event) => {
     closeDeployInfoPanel();

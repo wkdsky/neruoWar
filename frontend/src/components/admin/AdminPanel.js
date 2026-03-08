@@ -2739,6 +2739,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = getSenseEditToken(nodeId, senseId);
         const title = String(editingSenseForm.title || '').trim();
         const content = String(editingSenseForm.content || '').trim();
+        if (content !== String(sense?.content || '').trim()) {
+            alert('百科正式正文已迁移到修订系统；管理员面板这里只保留题目兼容编辑。');
+            return;
+        }
         if (!title) {
             alert('释义题目不能为空');
             return;
@@ -6806,15 +6810,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                             className="edit-textarea admin-domain-sense-edit-textarea"
                                                             rows={4}
                                                             value={editingSenseForm.content}
-                                                            onChange={(e) => setEditingSenseForm((prev) => ({
-                                                                ...prev,
-                                                                content: e.target.value
-                                                            }))}
-                                                            placeholder="释义内容"
+                                                            readOnly
+                                                            placeholder="百科正文已迁移到修订系统"
                                                         />
-                                                        {String(editingSenseForm.content || '').trim() === '' && (
-                                                            <span className="error-text inline-field-error">释义内容不能为空</span>
-                                                        )}
+                                                        <span className="error-text inline-field-error">百科正文已迁移到修订系统，请在百科阅读/编辑页通过修订流修改。</span>
                                                     </div>
                                                 )}
                                             </div>
@@ -6827,7 +6826,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                             className="btn-action btn-save"
                                                             disabled={editingSenseActionToken === getSenseEditToken(node._id, sense.senseId)}
                                                         >
-                                                            {editingSenseActionToken === getSenseEditToken(node._id, sense.senseId) ? '保存中...' : '保存文本'}
+                                                            {editingSenseActionToken === getSenseEditToken(node._id, sense.senseId) ? '保存中...' : '保存题目'}
                                                         </button>
                                                         <button
                                                             onClick={cancelEditSenseText}

@@ -44,7 +44,7 @@ const BattleSnapshotSchema = {
       'x', 'y', 'z', 'yawRad',
       'width', 'depth', 'height', 'hpRatio',
       'destroyedFlag', 'topR', 'topG', 'topB',
-      'sideR', 'sideG', 'sideB', 'reserved'
+      'sideR', 'sideG', 'sideB', 'foliageOpacity'
     ],
     notes: 'width -> local X, depth -> local Y; yawRad follows world CCW from +X'
   },

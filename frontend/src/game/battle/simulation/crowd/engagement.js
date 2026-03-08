@@ -142,8 +142,10 @@ const isChargeCommitted = (squad = {}, nowSec = 0) => (
 
 const canInjectDetourWaypoint = (squad = {}, nowSec = 0) => {
   const orderType = resolveOrderType(squad);
+  const behavior = typeof squad?.behavior === 'string' ? squad.behavior : '';
   if (orderType === ORDER_MOVE) return false;
   if (isChargeCommitted(squad, nowSec)) return false;
+  if (behavior === 'idle' || behavior === 'standby' || behavior === 'defend') return false;
   return true;
 };
 

@@ -1,19 +1,5 @@
 const mongoose = require('mongoose');
-
-const NOTIFICATION_TYPES = [
-  'domain_admin_invite',
-  'domain_admin_invite_result',
-  'domain_admin_resign_request',
-  'domain_admin_resign_result',
-  'domain_master_apply',
-  'domain_master_apply_result',
-  'alliance_join_apply',
-  'alliance_join_apply_result',
-  'domain_distribution_announcement',
-  'alliance_announcement',
-  'domain_distribution_result',
-  'info'
-];
+const { NOTIFICATION_STATUSES, NOTIFICATION_TYPES } = require('../constants/senseArticle');
 
 const NotificationSchema = new mongoose.Schema({
   userId: {
@@ -34,13 +20,17 @@ const NotificationSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  payload: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
   read: {
     type: Boolean,
     default: false
   },
   status: {
     type: String,
-    enum: ['pending', 'accepted', 'rejected', 'info'],
+    enum: NOTIFICATION_STATUSES,
     default: 'info'
   },
   nodeId: {

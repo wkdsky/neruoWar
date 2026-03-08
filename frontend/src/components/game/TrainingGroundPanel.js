@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import BattleSceneModal from './BattleSceneModal';
+import { BattleSceneModal } from '../../game/battle';
 import { API_BASE } from '../../runtimeConfig';
 
 const createTrainingState = () => ({

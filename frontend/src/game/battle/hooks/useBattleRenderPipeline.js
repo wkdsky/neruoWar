@@ -138,7 +138,11 @@ export default function useBattleRenderPipeline({
               orientationCheckBuildings = devMinimapSnapshot.buildings;
             }
           }
-          renderers.building.updateFromSnapshot(snapshot.buildings, orientationCheckBuildings);
+          renderers.building.updateFromSnapshot(
+            snapshot.buildings,
+            orientationCheckBuildings,
+            Array.isArray(runtime?.sim?.buildings) ? runtime.sim.buildings : (Array.isArray(runtime?.initialBuildings) ? runtime.initialBuildings : [])
+          );
           renderers.impostor.updateFromSnapshot(snapshot.units);
           renderers.projectile.updateFromSnapshot(snapshot.projectiles);
           renderers.effect.updateFromSnapshot(snapshot.effects);

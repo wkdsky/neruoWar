@@ -3,6 +3,7 @@ import { normalizeUnitsMap, sumUnitsMap } from '../runtime/RepMapping';
 import { degToRad } from '../../shared/angle';
 import BattleSnapshotSchema from './BattleSnapshotSchema';
 import BattleSnapshotPool from './BattleSnapshotPool';
+import { isConcealmentObstacle } from '../../simulation/items/itemObstacleUtils';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
@@ -52,6 +53,25 @@ const buildRenderableBuildingParts = (walls = []) => {
     const colors = wall?.renderColors && typeof wall.renderColors === 'object'
       ? wall.renderColors
       : { top: [0.52, 0.58, 0.66], side: [0.38, 0.44, 0.52] };
+    const meshId = typeof wall?.renderProfile?.battle?.meshId === 'string' ? wall.renderProfile.battle.meshId : '';
+    const isBush = /bush/i.test(meshId) || isConcealmentObstacle(wall);
+    if (isBush) {
+      out.push({
+        x: Number(wall?.x) || 0,
+        y: Number(wall?.y) || 0,
+        z: Math.max(0, Number(wall?.z) || 0),
+        width: Math.max(1, Number(wall?.width) || 1),
+        depth: Math.max(1, Number(wall?.depth) || 1),
+        height: Math.max(1, Number(wall?.height) || 1),
+        rotation: Number(wall?.rotation) || 0,
+        hpRatio,
+        destroyed: wall.destroyed ? 1 : 0,
+        topColor: Array.isArray(colors.top) ? colors.top : [0.52, 0.58, 0.66],
+        sideColor: Array.isArray(colors.side) ? colors.side : [0.38, 0.44, 0.52],
+        foliageOpacity: clamp(Number(wall?.renderOpacity) || 0.94, 0.14, 1)
+      });
+      return;
+    }
     const localParts = Array.isArray(wall?.colliderParts) && wall.colliderParts.length > 0
       ? wall.colliderParts
       : buildWorldColliderParts(wall, wall, { stackLayerHeight: Number(wall?.height) || 32 });
@@ -67,7 +87,8 @@ const buildRenderableBuildingParts = (walls = []) => {
         hpRatio,
         destroyed: wall.destroyed ? 1 : 0,
         topColor: Array.isArray(colors.top) ? colors.top : [0.52, 0.58, 0.66],
-        sideColor: Array.isArray(colors.side) ? colors.side : [0.38, 0.44, 0.52]
+        sideColor: Array.isArray(colors.side) ? colors.side : [0.38, 0.44, 0.52],
+        foliageOpacity: 0
       });
     });
   });
@@ -191,7 +212,7 @@ export default class BattleSnapshotBuilder {
         buildings.data[base + 12] = Number(part.sideColor?.[0]) || 0.38;
         buildings.data[base + 13] = Number(part.sideColor?.[1]) || 0.44;
         buildings.data[base + 14] = Number(part.sideColor?.[2]) || 0.52;
-        buildings.data[base + 15] = 0;
+        buildings.data[base + 15] = Number(part.foliageOpacity) || 0;
         wallCount += 1;
       }
       buildings.count = wallCount;
@@ -255,7 +276,7 @@ export default class BattleSnapshotBuilder {
       buildings.data[base + 12] = Number(part.sideColor?.[0]) || 0.38;
       buildings.data[base + 13] = Number(part.sideColor?.[1]) || 0.44;
       buildings.data[base + 14] = Number(part.sideColor?.[2]) || 0.52;
-      buildings.data[base + 15] = 0;
+      buildings.data[base + 15] = Number(part.foliageOpacity) || 0;
       wallCount += 1;
     }
     buildings.count = wallCount;

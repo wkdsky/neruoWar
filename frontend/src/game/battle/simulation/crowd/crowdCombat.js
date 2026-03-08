@@ -15,6 +15,7 @@ import {
   getMeleeEngagementConfig,
   isMeleeEngagementEnabled
 } from './engagement';
+import { filterBlockingObstacles } from '../items/itemObstacleUtils';
 
 const TEAM_ATTACKER = 'attacker';
 const TEAM_DEFENDER = 'defender';
@@ -396,7 +397,7 @@ const applyShellKnockback = (sim, targetAgent, projectile) => {
   const impulse = baseImpulse * cavalryMul;
   let nx = (Number(targetAgent.x) || 0) + (dir.x * impulse);
   let ny = (Number(targetAgent.y) || 0) + (dir.y * impulse);
-  const walls = Array.isArray(sim?.buildings) ? sim.buildings : [];
+  const walls = filterBlockingObstacles(sim?.buildings || []);
   walls.forEach((wall) => {
     if (!wall || wall.destroyed) return;
     const pushed = pushOutOfRect({ x: nx, y: ny }, wall, Math.max(0.8, Number(targetAgent.radius) || 2.2));
@@ -556,7 +557,7 @@ const detonateProjectile = (sim, crowd, projectile, center, walls, hitWall = nul
 
 const stepProjectiles = (sim, crowd, dt) => {
   const live = crowd.effectsPool?.projectileLive || [];
-  const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((wall) => wall && !wall.destroyed) : [];
+  const walls = filterBlockingObstacles(sim?.buildings || []);
   const squadMap = sim?._squadById instanceof Map ? sim._squadById : new Map();
   for (let i = 0; i < live.length; i += 1) {
     const p = live[i];
@@ -619,7 +620,7 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     else if (row.team === TEAM_DEFENDER) defenders.push(row);
   }
   sim._squadById = squadMap;
-  const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((wall) => wall && !wall.destroyed) : [];
+  const walls = filterBlockingObstacles(sim?.buildings || []);
   const engagementEnabled = crowd?.engagement ? !!crowd.engagement.enabled : isMeleeEngagementEnabled();
   const engagementCfg = crowd?.engagement?.config || getMeleeEngagementConfig();
   const engageScanRadius = Math.max(8, Number(engagementCfg?.engageScanRadius) || 26);
@@ -642,7 +643,15 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     const enemyTeam = toEnemyTeam(squad.team);
     if (enemySquads.length <= 0) return;
     const visibleEnemySquads = enemySquads.filter((enemy) => !isSquadHiddenForViewerTeam(enemy, squad.team));
-    if (visibleEnemySquads.length <= 0) return;
+    if (visibleEnemySquads.length <= 0) {
+      squad.targetSquadId = '';
+      const agents = crowd.agentsBySquad.get(squad.id) || [];
+      agents.forEach((agent) => {
+        if (!agent) return;
+        agent.targetAgentId = '';
+      });
+      return;
+    }
     let targetSquad = null;
     const guard = squad?.guard?.enabled ? squad.guard : null;
     if (guard && nowSec >= (Number(squad._guardRetargetAt) || 0)) {
@@ -700,7 +709,15 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
         nowSec
       });
     }
-    if (!targetSquad) return;
+    if (!targetSquad) {
+      squad.targetSquadId = '';
+      const agents = crowd.agentsBySquad.get(squad.id) || [];
+      agents.forEach((agent) => {
+        if (!agent) return;
+        agent.targetAgentId = '';
+      });
+      return;
+    }
     squad.targetSquadId = targetSquad.id;
     const rpsMul = resolveRpsMul(squad, targetSquad);
 
@@ -720,10 +737,13 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
     const movingPenalty = !!guard && speedRatio > 0.05 && !squad.activeSkill;
     const moveOrder = orderType === ORDER_MOVE;
     const attackMoveOrder = orderType === ORDER_ATTACK_MOVE;
+    const strictPlayerControl = squad.team === TEAM_ATTACKER && !guard && !attackMoveOrder && !chargeCommitted;
     let idleCanRetaliate = behavior !== 'idle'
       || (Number(squad.underAttackTimer) || 0) > 0.18
       || squadDistToTarget < (attackRange * 0.92);
-    if (moveOrder) {
+    if (strictPlayerControl) {
+      idleCanRetaliate = false;
+    } else if (moveOrder) {
       idleCanRetaliate = ((Number(squad.underAttackTimer) || 0) > 0.42)
         || squadDistToTarget < (attackRange * 0.45);
     } else if (attackMoveOrder || chargeCommitted) {
@@ -786,7 +806,10 @@ export const updateCrowdCombat = (sim, crowd, dt) => {
       const target = (engagementEnabled && isMeleeAgent(agent))
         ? (pickEnemyFromEngagementCandidates(agent, pool, engagementCfg) || pickNearestEnemyAgent(agent, pool))
         : pickNearestEnemyAgent(agent, pool);
-      if (!target) return;
+      if (!target) {
+        agent.targetAgentId = '';
+        return;
+      }
       const distSq = distanceSq(agent, target);
       const dist = Math.sqrt(distSq);
       agent.targetAgentId = target.id;

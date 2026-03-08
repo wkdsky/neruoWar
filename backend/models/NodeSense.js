@@ -21,6 +21,11 @@ const NodeSenseSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  legacySummary: {
+    type: String,
+    default: '',
+    trim: true
+  },
   order: {
     type: Number,
     default: 0,

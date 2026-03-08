@@ -182,7 +182,7 @@ PVE攻占部署流程（当前实现约束）
 - 前端 `normalizeUnitTypes` 是白名单归一化：
   - 仅返回固定字段（`id/unitTypeId/name/.../components`），未知字段不会透传（`frontend/src/game/unit/normalizeUnitTypes.js`）。
 - 战斗技能/行为对 `classTag` 有固定四类硬编码：
-  - `infantry/cavalry/archer/artillery`（`frontend/src/game/battle/presentation/runtime/BattleRuntime.js`、`frontend/src/components/game/BattleSceneModal.js`、`frontend/src/game/battle/simulation/crowd/CrowdSim.js`）。
+  - `infantry/cavalry/archer/artillery`（`frontend/src/game/battle/presentation/runtime/BattleRuntime.js`、`frontend/src/game/battle/screens/BattleSceneContainer.js`、`frontend/src/game/battle/simulation/crowd/CrowdSim.js`）。
 
 新增/更新后如何生效：
 - 兵营：重新进入兵营页（重新请求 `/api/army/unit-types`）。

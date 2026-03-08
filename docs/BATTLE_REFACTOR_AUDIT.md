@@ -1,12 +1,12 @@
 # 0. Executive Summary（结论）
 
-- 当前“战场模块”并不是一个清晰的模块边界，而是由 `frontend/src/components/game/BattleSceneModal.js:420`、`frontend/src/game/battle/presentation/runtime/BattleRuntime.js:1031`、`frontend/src/game/battle/simulation/crowd/CrowdSim.js:1441` 和 `frontend/src/components/game/BattlefieldPreviewModal.js:2171` 四个大块相互穿透组成。
+- 当前“战场模块”并不是一个清晰的模块边界，而是由 `frontend/src/game/battle/screens/BattleSceneContainer.js:420`、`frontend/src/game/battle/presentation/runtime/BattleRuntime.js:1031`、`frontend/src/game/battle/simulation/crowd/CrowdSim.js:1441` 和 `frontend/src/components/game/BattlefieldPreviewModal.js:2171` 四个大块相互穿透组成。
 - 最大耦合点在 `BattleSceneModal -> BattleRuntime -> render stride / snapshot packing -> renderers` 这一条链：UI 组件直接持有 runtime、相机、渲染器、RAF 主循环和结果上报，runtime 又直接依赖 renderer stride 与贴图层规则。
 - 第二个高风险点是“布防编辑器”和“实战运行时”对同一战场概念使用了不同实现：预览端有自己的投影、旋转、碰撞、部队 footprint、缓存和保存逻辑；实战端有另一套部署/阵型/碰撞/小地图逻辑。
 - 坐标与朝向约定没有被封装成稳定协议：同一条链路中同时存在 `rotation`(度)、`facingRad`(弧度)、`yawDeg`(度)、`agent.yaw`(弧度)、`worldYawDeg`(度)；小地图还要额外对画布 Y 轴做反向旋转。
 - 最严重的真实数据风险是“守军朝向丢失”：预览保存 `defenderDeployments.rotation`，但后端归一化与序列化没有稳定保留，runtime 构建 defender deploy group 时也没有消费它，导致 preview/editor 与 battle 结果不一致。
 - 第三个维护风险是文件体量失控：`backend/routes/nodes.js:7411`/`:7522`/`:7887`/`:7983` 在一个 10k+ 行文件中同时承载 layout、battle-init、battle-result；前端 `BattlefieldPreviewModal.js` 近 6k 行，`BattleSceneModal.js` 近 4k 行。
-- 第四个风险是状态散落：`BattleSceneModal.js:435-566`、`BattlefieldPreviewModal.js:2182-2236` 都包含大量 `useRef/useState`；同一状态既存在 React state，又存在 runtime 内部状态、localStorage cache、后端 layout state。
+- 第四个风险是状态散落：`BattleSceneContainer.js:435-566`、`BattlefieldPreviewModal.js:2182-2236` 都包含大量 `useRef/useState`；同一状态既存在 React state，又存在 runtime 内部状态、localStorage cache、后端 layout state。
 - 第五个风险是硬编码扩展成本高：兵种四分类、技能范围/AOE、堆叠上限、布局上限、默认墙体尺寸、缩放与镜头常量分散在 UI、runtime、sim、后端 schema/normalize 中。
 - 现状最优先该拆的边界不是“先拆渲染器”，而是先把 `BattleRuntime` 从“UI+状态+渲染快照打包+sim 启动器”降为稳定 façade，再把输入与渲染管线从 `BattleSceneModal` 拆开。
 - 第二优先级是统一 battle/preview/minimap 的数学协议：世界坐标、部署区、rotation/yaw、deg/rad、屏幕投影、碰撞 footprint；这是后续分阶段重构能否稳定推进的前提。
@@ -40,11 +40,11 @@
   - 不做什么：不直接驱动 sim 内部对象，不直接持有 WebGL/Three 渲染生命周期，不直接拼后端 payload。
 - 关键入口文件
   - `frontend/src/App.js:3194`
-  - `frontend/src/components/game/PveBattleModal.js:4`
-  - `frontend/src/components/game/BattleSceneModal.js:420`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js:4`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js:420`
 - 关键模块
-  - `frontend/src/components/game/PveBattleModal.js`：`PveBattleModal`
-  - `frontend/src/components/game/BattleSceneModal.js`：`BattleSceneModal`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js`：`BattleSceneModal`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js`：`BattleSceneModal`
   - `frontend/src/game/battle/presentation/ui/BattleHUD.js`：`BattleHUD`
   - `frontend/src/game/battle/presentation/ui/SquadCards.js`：`SquadCards`
   - `frontend/src/game/battle/presentation/ui/BattleActionButtons.js`：`BattleActionButtons`
@@ -59,11 +59,11 @@
   - 做什么：把 DOM 事件、小地图点击、技能确认、路径规划、部署拖拽翻译为统一 `Command`。
   - 不做什么：不直接改 React state，不直接调用 sim/renderer 细节。
 - 关键入口文件
-  - `frontend/src/components/game/BattleSceneModal.js:1232`
-  - `frontend/src/components/game/BattleSceneModal.js:1611`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js:1232`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js:1611`
   - `frontend/src/components/game/BattlefieldPreviewModal.js:3330`
 - 关键模块
-  - `frontend/src/components/game/BattleSceneModal.js`：`resolveEventWorldPoint`、`handleSceneMouseDown`、`handleSceneWheel`、`handlePointerMove`、`handleMinimapClick`、`executeBattleAction`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js`：`resolveEventWorldPoint`、`handleSceneMouseDown`、`handleSceneWheel`、`handlePointerMove`、`handleMinimapClick`、`executeBattleAction`
   - `frontend/src/components/game/BattlefieldPreviewModal.js`：`getWorldFromScreenPoint`（通过 `unprojectScreen`）、`handleWheel`、`handleCanvasDrop`、`moveDefenderDeployment`
   - `frontend/src/game/battle/presentation/ui/Minimap.js`：`handleClick`
 - 依赖方向
@@ -186,27 +186,27 @@
 
 1. `frontend/src/App.js:3168` 的 `handleOpenSiegePveBattle` 读取 `nodeId/gateKey/token`。
 2. `App.js:3194` 发起 `GET /api/nodes/:nodeId/siege/pve/battle-init?gateKey=...`。
-3. battle-init 响应写入 `pveBattleState.data`，由 `frontend/src/components/game/PveBattleModal.js:4` 透传给 `BattleSceneModal`。
-4. `BattleSceneModal.js:601` 的 `setupRuntime` 调 `normalizeUnitTypes`，然后 `new BattleRuntime(normalizedInitData, ...)`。
-5. 同一个组件在 `BattleSceneModal.js:799` 初始化 `WebGL2Context`、`GroundRenderer`、`BuildingRenderer`、`ImpostorRenderer`、`ProjectileRenderer`、`EffectRenderer`、`ProceduralTextures`。
-6. deploy 阶段，UI 通过 `BattleSceneModal.js:1485`、`:1763`、`:2251` 等 handler 直接调用 runtime 的部署接口（移动/创建/编辑/删除/放置）。
-7. 点击开始后，`BattleSceneModal.js:1140` 调 `runtime.startBattle()`，内部在 `BattleRuntime.js:1543` 生成 squads、复制 buildings、创建 `CrowdSim`。
-8. RAF 主循环在 `BattleSceneModal.js:896` 启动；每帧用 `BattleClock.tick` 推进 `runtime.step`，后者再调用 `updateCrowdSim`。
+3. battle-init 响应写入 `pveBattleState.data`，由 `frontend/src/App.js` 直接传给 `BattleSceneModal`。
+4. `BattleSceneContainer.js:601` 的 `setupRuntime` 调 `normalizeUnitTypes`，然后 `new BattleRuntime(normalizedInitData, ...)`。
+5. 同一个组件在 `BattleSceneContainer.js:799` 初始化 `WebGL2Context`、`GroundRenderer`、`BuildingRenderer`、`ImpostorRenderer`、`ProjectileRenderer`、`EffectRenderer`、`ProceduralTextures`。
+6. deploy 阶段，UI 通过 `BattleSceneContainer.js:1485`、`:1763`、`:2251` 等 handler 直接调用 runtime 的部署接口（移动/创建/编辑/删除/放置）。
+7. 点击开始后，`BattleSceneContainer.js:1140` 调 `runtime.startBattle()`，内部在 `BattleRuntime.js:1543` 生成 squads、复制 buildings、创建 `CrowdSim`。
+8. RAF 主循环在 `BattleSceneContainer.js:896` 启动；每帧用 `BattleClock.tick` 推进 `runtime.step`，后者再调用 `updateCrowdSim`。
 9. 同一帧内调用 `BattleRuntime.getRenderSnapshot()`，把 sim/deploy state 打包成四类 instance buffer：`units/buildings/projectiles/effects`。
-10. `BattleSceneModal.js:998-1001` 把 snapshot 喂给各 renderer，随后 `:1005-1009` 逐个 draw。
-11. 每约 120ms，`BattleSceneModal.js:1015-1023` 拉取 `getBattleStatus/getCardRows/getMinimapSnapshot` 回写 React UI。
-12. 当 `runtime.isEnded()` 为真时，`BattleSceneModal.js:1106-1110` 取 `runtime.getSummary()`，打开结果框并调用 `reportBattleResult`。
-13. `BattleSceneModal.js:875` 发起 `POST /api/nodes/:nodeId/siege/pve/battle-result`；成功后触发 `onBattleFinished` 关闭或回收战斗上下文。
+10. `BattleSceneContainer.js:998-1001` 把 snapshot 喂给各 renderer，随后 `:1005-1009` 逐个 draw。
+11. 每约 120ms，`BattleSceneContainer.js:1015-1023` 拉取 `getBattleStatus/getCardRows/getMinimapSnapshot` 回写 React UI。
+12. 当 `runtime.isEnded()` 为真时，`BattleSceneContainer.js:1106-1110` 取 `runtime.getSummary()`，打开结果框并调用 `reportBattleResult`。
+13. `BattleSceneContainer.js:875` 发起 `POST /api/nodes/:nodeId/siege/pve/battle-result`；成功后触发 `onBattleFinished` 关闭或回收战斗上下文。
 
 ## 关键 API 请求与 payload
 
 | API | 方向 | 关键请求参数 / payload | 关键响应字段 | 当前消费方 |
 | --- | --- | --- | --- | --- |
 | `GET /api/nodes/:nodeId/siege/pve/battle-init` | battle init | query: `gateKey` | `battleId,nodeId,gateKey,timeLimitSec,unitTypes,attacker,defender,battlefield{layouts,itemCatalog,objects,defenderDeployments}` | `frontend/src/App.js:3194` |
-| `POST /api/nodes/:nodeId/siege/pve/battle-result` | battle result | `battleId,gateKey,durationSec,attacker,defender,details,startedAt,endedAt,endReason` | `success,battleId,recorded,duplicate?` | `frontend/src/components/game/BattleSceneModal.js:865` |
+| `POST /api/nodes/:nodeId/siege/pve/battle-result` | battle result | `battleId,gateKey,durationSec,attacker,defender,details,startedAt,endedAt,endReason` | `success,battleId,recorded,duplicate?` | `frontend/src/game/battle/screens/BattleSceneContainer.js:865` |
 | `GET /api/nodes/:nodeId/battlefield-layout` | layout load | query: `gateKey,layoutId?` | `layoutBundle,defenderRoster,canEdit,canView` | `frontend/src/components/game/BattlefieldPreviewModal.js:3662` |
 | `PUT /api/nodes/:nodeId/battlefield-layout` | layout save | `gateKey,layout{layoutId,name,fieldWidth,fieldHeight,maxItemsPerType},itemCatalog,objects,defenderDeployments` | `layoutBundle` | `frontend/src/components/game/BattlefieldPreviewModal.js:3360` |
-| `GET /api/army/templates` | deploy helper data | bearer token | `templates[]` | `frontend/src/components/game/BattleSceneModal.js:768` |
+| `GET /api/army/templates` | deploy helper data | bearer token | `templates[]` | `frontend/src/game/battle/screens/BattleSceneContainer.js:768` |
 | `GET /api/army/unit-types` / `GET /api/army/me` | preview/editor setup | bearer token | unitTypes / roster | `frontend/src/components/game/KnowledgeDomainScene.js:1452-1455` |
 
 ### layout save payload 关键结构
@@ -237,7 +237,7 @@
 
 1. **preview 守军默认朝向是 90°**：`DEFENDER_DEFAULT_FACING_DEG = 90`（`BattlefieldPreviewModal.js:56`）。
 2. **runtime 阵型默认朝向是 defender = π（180°）**：`normalizeFormationFacing`（`BattleRuntime.js:573`）。
-3. **battle scene 相机 deploy/battle 默认 yaw 都是 0°**：`BattleSceneModal.js:35-44`。
+3. **battle scene 相机 deploy/battle 默认 yaw 都是 0°**：`BattleSceneContainer.js:35-44`。
 4. **preview 存的是 deployment.rotation（度）**，但 runtime deploy group 目前不消费这个 rotation，后端序列化也未稳定保留。
 5. **preview / battleMath / camera / minimap** 至少存在四套投影/反投影或旋转实现，公式相似但边界条件和坐标翻转不同。
 
@@ -247,7 +247,7 @@
 
 `App.handleOpenSiegePveBattle`
 -> `GET battle-init`
--> `BattleSceneModal.setupRuntime`
+-> `BattleSceneContainer.setupRuntime`
 -> `new BattleRuntime(initData)`
 -> `BattleRuntime.getRenderSnapshot()`
 -> `Ground/Building/Impostor/Projectile/EffectRenderer.updateFromSnapshot()`
@@ -277,9 +277,8 @@
 
 | file_path | layer | responsibilities | key_exports | key_deps | risk_notes |
 | --- | --- | --- | --- | --- | --- |
-| `frontend/src/App.js` | other | 负责打开 PVE 战斗并拉取 `battle-init` | `App`, `handleOpenSiegePveBattle` | `PveBattleModal`, `runtimeConfig`, `parseApiResponse` | 6k+ 行；battle 入口埋在全局 App 中 |
-| `frontend/src/components/game/PveBattleModal.js` | ui | 对 `BattleSceneModal` 的 PVE 包装 | `PveBattleModal` | `BattleSceneModal` | 仅透传，说明入口层很薄 |
-| `frontend/src/components/game/BattleSceneModal.js` | other | 战斗主场景：UI、输入、RAF、runtime、renderer、结果上报 | `BattleSceneModal` | `BattleRuntime`, `BattleClock`, `CameraController`, renderers, `Minimap`, `AimOverlayCanvas` | 3.8k+ 行；多职责；状态与输入高度集中 |
+| `frontend/src/App.js` | other | 负责打开 PVE 战斗并拉取 `battle-init` | `App`, `handleOpenSiegePveBattle` | `BattleSceneModal`, `runtimeConfig`, `parseApiResponse` | 6k+ 行；battle 入口埋在全局 App 中 |
+| `frontend/src/game/battle/screens/BattleSceneContainer.js` | other | 战斗主场景：UI、输入、RAF、runtime、renderer、结果上报 | `BattleSceneModal` | `BattleRuntime`, `BattleClock`, `CameraController`, renderers, `Minimap`, `AimOverlayCanvas` | 3.8k+ 行；多职责；状态与输入高度集中 |
 | `frontend/src/components/game/BattlefieldPreviewModal.js` | other | 布防编辑器：Three 场景、碰撞/吸附、缓存、保存、守军部署编辑 | `BattlefieldPreviewModal`, `buildLayoutPayload`, `persistBattlefieldLayout` | `three`, `ArmyFormationRenderer`, `itemGeometryRegistry`, `runtimeConfig` | 5.9k+ 行；编辑/渲染/数据写入混在一起 |
 | `frontend/src/components/game/KnowledgeDomainScene.js` | other | 领域场景入口，负责打开 battlefield preview | `KnowledgeDomainScene`, `openBattlefieldPreview` | `BattlefieldPreviewModal`, 多个业务 API | 5.1k+ 行；入口与其他领域 UI 强耦合 |
 | `frontend/src/components/game/battleMath.js` | input | 提供投影/旋转/碰撞数学工具（当前未被 battle 主链复用） | `normalizeDeg`, `degToRad`, `projectWorld`, `unprojectScreen`, `getRectCorners` | 无 | 实际无引用；和 preview 本地实现重复 |
@@ -330,7 +329,7 @@
 | 2 | `frontend/src/App.js` | 6729 |
 | 3 | `frontend/src/components/game/BattlefieldPreviewModal.js` | 5983 |
 | 4 | `frontend/src/components/game/KnowledgeDomainScene.js` | 5165 |
-| 5 | `frontend/src/components/game/BattleSceneModal.js` | 3838 |
+| 5 | `frontend/src/game/battle/screens/BattleSceneContainer.js` | 3838 |
 | 6 | `frontend/src/game/battle/presentation/runtime/BattleRuntime.js` | 2539 |
 | 7 | `frontend/src/game/battle/simulation/crowd/CrowdSim.js` | 1989 |
 | 8 | `backend/services/domainTitleStateStore.js` | 1165 |
@@ -343,8 +342,7 @@
 
 ```mermaid
 flowchart TD
-  App[App.js] --> Pve[PveBattleModal.js]
-  Pve --> Scene[BattleSceneModal.js]
+  App[App.js] --> Scene[BattleSceneModal.js]
 
   Scene --> Runtime[BattleRuntime.js]
   Scene --> Clock[BattleClock.js]
@@ -421,7 +419,7 @@ flowchart LR
 
 1. **`BattleSceneModal` 是典型 God Component**
    - 影响：可测试性差；改一个交互容易牵动渲染、sim、网络和状态。
-   - 证据：`frontend/src/components/game/BattleSceneModal.js:420` 组件定义；`436-566` 大量 `useRef/useState`；`601` 初始化 runtime；`799` 初始化 renderers；`865` 结果上报；`896` RAF 主循环。
+   - 证据：`frontend/src/game/battle/screens/BattleSceneContainer.js:420` 组件定义；`436-566` 大量 `useRef/useState`；`601` 初始化 runtime；`799` 初始化 renderers；`865` 结果上报；`896` RAF 主循环。
 
 2. **`BattlefieldPreviewModal` 同时承担编辑器、渲染器、缓存层、数据写层**
    - 影响：布防编辑功能难以分阶段替换；任何保存逻辑修改都可能影响渲染和吸附。
@@ -437,7 +435,7 @@ flowchart LR
 
 5. **UI 直接调用 runtime 内部命令方法，没有统一 Command 总线**
    - 影响：输入逻辑分散，不利于回放、录制、AI/网络输入复用。
-   - 证据：`BattleSceneModal.js:1408` `runtime.commandSetWaypoints`；`:1455` `runtime.commandGuard`；`:1473` `runtime.commandBehavior`；`:1676` `runtime.commandMove`；`:1692-1706` `runtime.commandSkill`；`:1786-1789` 直接 `moveDeployGroup/setDeployGroupPlaced`。
+   - 证据：`BattleSceneContainer.js:1408` `runtime.commandSetWaypoints`；`:1455` `runtime.commandGuard`；`:1473` `runtime.commandBehavior`；`:1676` `runtime.commandMove`；`:1692-1706` `runtime.commandSkill`；`:1786-1789` 直接 `moveDeployGroup/setDeployGroupPlaced`。
 
 6. **preview 保存了 defender rotation，但后端 normalize 不保留 rotation**
    - 影响：编辑器看到的守军朝向不能稳定进入 battle-init，真实布防与战斗不一致。
@@ -453,7 +451,7 @@ flowchart LR
 
 9. **默认朝向定义不一致：preview 90°，runtime defender 默认 π，camera 默认 0°**
    - 影响：守军看起来“朝向对了”但开战后阵型方向变化，定位困难。
-   - 证据：`BattlefieldPreviewModal.js:56` `DEFENDER_DEFAULT_FACING_DEG = 90`；`BattleRuntime.js:573` `normalizeFormationFacing` defender fallback 为 `Math.PI`；`BattleSceneModal.js:35-44` 相机 deploy/battle yaw 默认都是 `0`。
+   - 证据：`BattlefieldPreviewModal.js:56` `DEFENDER_DEFAULT_FACING_DEG = 90`；`BattleRuntime.js:573` `normalizeFormationFacing` defender fallback 为 `Math.PI`；`BattleSceneContainer.js:35-44` 相机 deploy/battle yaw 默认都是 `0`。
 
 10. **degree / radian / yaw / rotation 命名混用，且缺少共享协议**
    - 影响：易出现“传了 90 结果按 90rad 用”或反之类 bug；阅读成本高。
@@ -485,15 +483,15 @@ flowchart LR
 
 17. **render loop 同时承担状态轮询与 UI 派生计算**
    - 影响：RAF 主循环过重，任何 UI 更新都可能影响渲染稳定性。
-   - 证据：`BattleSceneModal.js:1015-1023` 在渲染循环中周期性执行 `getBattleStatus/getCardRows/getMinimapSnapshot` 并 `setState`。
+   - 证据：`BattleSceneContainer.js:1015-1023` 在渲染循环中周期性执行 `getBattleStatus/getCardRows/getMinimapSnapshot` 并 `setState`。
 
 18. **开发态建筑朝向校验反向依赖 minimap snapshot**
    - 影响：renderer 和 runtime/minimap 的边界被打穿，调试逻辑侵入正式链路。
-   - 证据：`BattleSceneModal.js:988-998` 先取 `runtime.getMinimapSnapshot().buildings` 再传给 `BuildingRenderer.updateFromSnapshot(..., orientationCheckBuildings)`；`BuildingRenderer.js:300-329` 做 dev orientation check。
+   - 证据：`BattleSceneContainer.js:988-998` 先取 `runtime.getMinimapSnapshot().buildings` 再传给 `BuildingRenderer.updateFromSnapshot(..., orientationCheckBuildings)`；`BuildingRenderer.js:300-329` 做 dev orientation check。
 
 19. **兵种四分类硬编码横跨 backend DTO、runtime、sim、UI**
    - 影响：新增兵种/技能类别会引发全链路修改，回归面大。
-   - 证据：`backend/services/unitTypeDtoService.js:3-22`、`BattleRuntime.js:59-78`、`CrowdSim.js:65-99`、`BattleSceneModal.js:78-87` 都写死 `infantry/cavalry/archer/artillery` 及其技能常量。
+   - 证据：`backend/services/unitTypeDtoService.js:3-22`、`BattleRuntime.js:59-78`、`CrowdSim.js:65-99`、`BattleSceneContainer.js:78-87` 都写死 `infantry/cavalry/archer/artillery` 及其技能常量。
 
 20. **布局/物体/堆叠上限常量分散在前后端多处**
    - 影响：同一限制可能在编辑器、后端 normalize、schema 校验中不一致。
@@ -509,7 +507,7 @@ flowchart LR
 
 23. **`BattleSceneModal` 内还耦合了 army template 读取与预填充逻辑**
    - 影响：部署 UI 与外部 army 数据管理强绑定，增大组件职责面。
-   - 证据：`BattleSceneModal.js:739-798` 在打开战斗时额外请求 `/api/army/templates`，并维护 `armyTemplates/templateFillPreview` 状态。
+   - 证据：`BattleSceneContainer.js:739-798` 在打开战斗时额外请求 `/api/army/templates`，并维护 `armyTemplates/templateFillPreview` 状态。
 
 24. **新旧 battlefield schema 并存，兼容镜像会持续放大分叉风险**
    - 影响：任何字段新增都必须同时考虑 `battlefieldLayout` 旧镜像与 `battlefieldLayouts/battlefieldObjects/...` 新结构。
@@ -521,7 +519,7 @@ flowchart LR
 
 26. **React 组件状态过密，且与 runtime 内部状态重复存在**
    - 影响：源状态不唯一，容易出现“UI 选中”和“runtime 选中”错位。
-   - 证据：`BattleSceneModal.js:467-566` 大量 `phase/cards/selectedSquadId/minimapSnapshot/cameraAssert/...`；`BattlefieldPreviewModal.js:2207-2236` 大量 `walls/camera/ghost/layout/cache/deployments/...`。
+   - 证据：`BattleSceneContainer.js:467-566` 大量 `phase/cards/selectedSquadId/minimapSnapshot/cameraAssert/...`；`BattlefieldPreviewModal.js:2207-2236` 大量 `walls/camera/ghost/layout/cache/deployments/...`。
 
 # 6. 建议的目标架构接口（Public Interfaces）
 
@@ -635,7 +633,7 @@ interface CatalogService {
 - 目标
   - 先定义并文档化：世界坐标、部署区、rotation/yaw、deg/rad、snapshot DTO、layout DTO。
 - 具体改动范围（文件清单）
-  - `frontend/src/components/game/BattleSceneModal.js`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js`
   - `frontend/src/components/game/BattlefieldPreviewModal.js`
   - `frontend/src/components/game/battleMath.js`
   - `frontend/src/game/battle/presentation/render/CameraController.js`
@@ -655,7 +653,7 @@ interface CatalogService {
   - 把 battle-init/layout/catalog/result 的前端访问入口从组件中收敛到 service/adaptor。
 - 具体改动范围（文件清单）
   - `frontend/src/App.js`
-  - `frontend/src/components/game/BattleSceneModal.js`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js`
   - `frontend/src/components/game/BattlefieldPreviewModal.js`
   - `backend/routes/nodes.js`
   - `backend/services/placeableCatalogService.js`
@@ -675,7 +673,7 @@ interface CatalogService {
   - `frontend/src/game/battle/presentation/runtime/BattleRuntime.js`
   - `frontend/src/game/battle/presentation/runtime/BattleSummary.js`
   - `frontend/src/game/battle/presentation/runtime/RepMapping.js`
-  - `frontend/src/components/game/BattleSceneModal.js`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js`
 - 风险与回滚策略
   - 风险：BattleSceneModal 现有直接方法调用非常多，切换成本高。
   - 回滚：先提供 façade 包裹旧方法，再逐步替换调用点。
@@ -706,7 +704,7 @@ interface CatalogService {
 - 目标
   - 把 battle 场景主循环和 DOM 事件从 `BattleSceneModal` 拆出去。
 - 具体改动范围（文件清单）
-  - `frontend/src/components/game/BattleSceneModal.js`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js`
   - `frontend/src/game/battle/presentation/render/CameraController.js`
   - `frontend/src/game/battle/presentation/render/WebGL2Context.js`
   - `frontend/src/game/battle/presentation/render/*.js`
@@ -740,40 +738,39 @@ interface CatalogService {
 # 附录A：关键搜索命中（Search Hits）
 
 - `frontend/src/App.js:3194` | `battle-init` | 打开 PVE 战斗时的 battle-init 请求入口。
-- `frontend/src/components/game/PveBattleModal.js:4` | `BattleSceneModal` | PVE 包装层，说明 battle scene 真实入口仍是 BattleSceneModal。
-- `frontend/src/components/game/BattleSceneModal.js:420` | `BattleSceneModal` | 主战斗组件定义。
-- `frontend/src/components/game/BattleSceneModal.js:601` | `BattleRuntime` | `setupRuntime`，battle-init -> runtime 的接入点。
-- `frontend/src/components/game/BattleSceneModal.js:768` | `templates` | 战斗弹窗内额外拉取部队模板。
-- `frontend/src/components/game/BattleSceneModal.js:865` | `battle-result` | 结果上报入口。
-- `frontend/src/components/game/BattleSceneModal.js:896` | `BattleClock` | RAF 主循环起点。
-- `frontend/src/components/game/BattleSceneModal.js:960` | `buildMatrices` | 每帧构建 camera matrix。
-- `frontend/src/components/game/BattleSceneModal.js:963` | `screenToGround` | 用相机计算视口世界矩形。
-- `frontend/src/components/game/BattleSceneModal.js:970` | `worldToScreen` | 把世界坐标转成 UI/overlay 坐标。
-- `frontend/src/components/game/BattleSceneModal.js:984` | `getRenderSnapshot` | runtime -> renderer 的关键快照接口。
-- `frontend/src/components/game/BattleSceneModal.js:993` | `Minimap` | dev 模式从 minimap snapshot 取建筑参考数据。
-- `frontend/src/components/game/BattleSceneModal.js:998` | `Renderer` | `BuildingRenderer.updateFromSnapshot`。
-- `frontend/src/components/game/BattleSceneModal.js:999` | `Renderer` | `ImpostorRenderer.updateFromSnapshot`。
-- `frontend/src/components/game/BattleSceneModal.js:1000` | `Renderer` | `ProjectileRenderer.updateFromSnapshot`。
-- `frontend/src/components/game/BattleSceneModal.js:1001` | `Renderer` | `EffectRenderer.updateFromSnapshot`。
-- `frontend/src/components/game/BattleSceneModal.js:1005` | `Renderer` | `GroundRenderer.render`。
-- `frontend/src/components/game/BattleSceneModal.js:1006` | `Renderer` | `BuildingRenderer.render`。
-- `frontend/src/components/game/BattleSceneModal.js:1007` | `Renderer` | `ImpostorRenderer.render`。
-- `frontend/src/components/game/BattleSceneModal.js:1020` | `Minimap` | UI 同步阶段刷新 minimap snapshot。
-- `frontend/src/components/game/BattleSceneModal.js:1143` | `startBattle` | 从 deploy 切到 battle 的入口。
-- `frontend/src/components/game/BattleSceneModal.js:1238` | `screenToGround` | 把点击坐标转成世界点。
-- `frontend/src/components/game/BattleSceneModal.js:1408` | `command` | 路径规划提交到 `runtime.commandSetWaypoints`。
-- `frontend/src/components/game/BattleSceneModal.js:1488` | `selection` | `handleMapCommand` 中读取地图点击。
-- `frontend/src/components/game/BattleSceneModal.js:1676` | `command` | 右键移动命令 `runtime.commandMove`。
-- `frontend/src/components/game/BattleSceneModal.js:1692` | `command` | infantry 技能命令。
-- `frontend/src/components/game/BattleSceneModal.js:1697` | `command` | cavalry 技能命令。
-- `frontend/src/components/game/BattleSceneModal.js:1706` | `command` | ranged 技能命令。
-- `frontend/src/components/game/BattleSceneModal.js:1763` | `Minimap` | `handleMinimapClick`，部署与镜头的双重入口。
-- `frontend/src/components/game/BattleSceneModal.js:1817` | `selection` | 指针移动时持续做世界坐标解析。
-- `frontend/src/components/game/BattleSceneModal.js:1931` | `Minimap` | 拖拽部署过程中同步 minimap snapshot。
-- `frontend/src/components/game/BattleSceneModal.js:1943` | `yaw` | deploy 旋转拖拽直接改 `camera.worldYawDeg`。
-- `frontend/src/components/game/BattleSceneModal.js:2023` | `command` | `executeBattleAction` 的统一动作分发。
-- `frontend/src/components/game/BattleSceneModal.js:2053` | `selection` | 技能确认后再次落到 runtime.commandSkill。
-- `frontend/src/components/game/BattleSceneModal.js:3575` | `Minimap` | 战斗场景 JSX 中的小地图挂载点。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:420` | `BattleSceneModal` | 主战斗组件定义。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:601` | `BattleRuntime` | `setupRuntime`，battle-init -> runtime 的接入点。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:768` | `templates` | 战斗弹窗内额外拉取部队模板。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:865` | `battle-result` | 结果上报入口。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:896` | `BattleClock` | RAF 主循环起点。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:960` | `buildMatrices` | 每帧构建 camera matrix。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:963` | `screenToGround` | 用相机计算视口世界矩形。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:970` | `worldToScreen` | 把世界坐标转成 UI/overlay 坐标。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:984` | `getRenderSnapshot` | runtime -> renderer 的关键快照接口。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:993` | `Minimap` | dev 模式从 minimap snapshot 取建筑参考数据。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:998` | `Renderer` | `BuildingRenderer.updateFromSnapshot`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:999` | `Renderer` | `ImpostorRenderer.updateFromSnapshot`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1000` | `Renderer` | `ProjectileRenderer.updateFromSnapshot`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1001` | `Renderer` | `EffectRenderer.updateFromSnapshot`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1005` | `Renderer` | `GroundRenderer.render`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1006` | `Renderer` | `BuildingRenderer.render`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1007` | `Renderer` | `ImpostorRenderer.render`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1020` | `Minimap` | UI 同步阶段刷新 minimap snapshot。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1143` | `startBattle` | 从 deploy 切到 battle 的入口。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1238` | `screenToGround` | 把点击坐标转成世界点。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1408` | `command` | 路径规划提交到 `runtime.commandSetWaypoints`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1488` | `selection` | `handleMapCommand` 中读取地图点击。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1676` | `command` | 右键移动命令 `runtime.commandMove`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1692` | `command` | infantry 技能命令。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1697` | `command` | cavalry 技能命令。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1706` | `command` | ranged 技能命令。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1763` | `Minimap` | `handleMinimapClick`，部署与镜头的双重入口。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1817` | `selection` | 指针移动时持续做世界坐标解析。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1931` | `Minimap` | 拖拽部署过程中同步 minimap snapshot。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:1943` | `yaw` | deploy 旋转拖拽直接改 `camera.worldYawDeg`。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:2023` | `command` | `executeBattleAction` 的统一动作分发。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:2053` | `selection` | 技能确认后再次落到 runtime.commandSkill。
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:3575` | `Minimap` | 战斗场景 JSX 中的小地图挂载点。
 - `frontend/src/components/game/BattlefieldPreviewModal.js:56` | `deg` | `DEFENDER_DEFAULT_FACING_DEG = 90`。
 - `frontend/src/components/game/BattlefieldPreviewModal.js:129` | `deg` | preview 局部 `normalizeDeg`。
 - `frontend/src/components/game/BattlefieldPreviewModal.js:136` | `rad` | preview 局部 `degToRad`。

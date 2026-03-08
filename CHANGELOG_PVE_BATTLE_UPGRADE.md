@@ -2,7 +2,7 @@
 
 ## 变更范围
 本次仅改造“攻占知识域 PVE 战斗链路”：
-- `App -> PveBattleModal/BattleSceneModal`
+- `App -> BattleSceneModal`
 - `BattleRuntime / CrowdSim / engagement / ImpostorRenderer`
 - 后端 unitTypes 下发序列化（DTO v1）
 
@@ -20,8 +20,8 @@
 - `frontend/src/game/unit/normalizeUnitTypes.js`
 - `frontend/src/game/battle/presentation/runtime/BattleRuntime.js`
 - `frontend/src/game/battle/presentation/render/ImpostorRenderer.js`
-- `frontend/src/components/game/BattleSceneModal.js`
-- `frontend/src/components/game/pveBattle.css`
+- `frontend/src/game/battle/screens/BattleSceneContainer.js`
+- `frontend/src/game/battle/presentation/ui/Battle.css`
 
 ### 主要变更
 1. 后端引入 `UnitTypeDTO v1`
@@ -114,8 +114,8 @@
 ### 修改文件
 - `frontend/src/game/battle/presentation/runtime/BattleRuntime.js`
 - `frontend/src/game/battle/simulation/crowd/CrowdSim.js`
-- `frontend/src/components/game/BattleSceneModal.js`
-- `frontend/src/components/game/pveBattle.css`
+- `frontend/src/game/battle/screens/BattleSceneContainer.js`
+- `frontend/src/game/battle/presentation/ui/Battle.css`
 
 ### 主要变更
 1. deployGroup 新增权威阵型状态

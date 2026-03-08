@@ -61,7 +61,15 @@ const LEADER_MAX_ACCEL = 120;
 const LEADER_MAX_DECEL = 170;
 const LEADER_ARRIVAL_RADIUS = 5.4;
 const LEADER_SLOW_RADIUS = 38;
+const LEADER_WAYPOINT_SLOW_RADIUS = 18;
+const LEADER_WAYPOINT_MIN_SPEED_RATIO = 0.72;
+const LEADER_FINAL_MIN_SPEED_RATIO = 0.08;
 const OBSTACLE_AVOID_PROBE = 20;
+const AVOID_SIDE_LOCK_SEC = 0.32;
+const AVOID_KEY_GRID = 6;
+const AGENT_SETTLE_RADIUS = 2.4;
+const AGENT_SETTLE_DEADZONE = 1.08;
+const AGENT_SETTLE_SPEED = 16;
 const GROUND_SKILL_CONFIG = {
   archer: {
     radius: 72,
@@ -343,21 +351,57 @@ const clampVecLength = (x, y, maxLen = 1) => {
   };
 };
 
-const computeAvoidanceDirection = (origin, desiredDir, walls = [], probe = OBSTACLE_AVOID_PROBE) => {
+const smoothstep01 = (value) => {
+  const t = clamp(Number(value) || 0, 0, 1);
+  return t * t * (3 - (2 * t));
+};
+
+const clearAvoidanceMemory = (subject) => {
+  if (!subject) return;
+  subject._avoidSide = 0;
+  subject._avoidSideUntil = 0;
+  subject._avoidObstacleKey = '';
+};
+
+const makeAvoidanceObstacleKey = (wall) => {
+  if (!wall) return '';
+  if (typeof wall.id === 'string' && wall.id) return `id:${wall.id}`;
+  const snap = (value) => Math.round((Number(value) || 0) / AVOID_KEY_GRID);
+  return [snap(wall.x), snap(wall.y), snap(wall.w), snap(wall.h)].join(':');
+};
+
+const computeAvoidanceDirection = (origin, desiredDir, walls = [], probe = OBSTACLE_AVOID_PROBE, subject = null, nowSec = 0) => {
   const dir = normalizeVec(desiredDir?.x || 0, desiredDir?.y || 0);
-  if (dir.len <= 1e-4) return { x: 0, y: 0 };
+  if (dir.len <= 1e-4) {
+    clearAvoidanceMemory(subject);
+    return { x: 0, y: 0 };
+  }
   const ahead = {
     x: (Number(origin?.x) || 0) + (dir.x * probe),
     y: (Number(origin?.y) || 0) + (dir.y * probe)
   };
   const hit = raycastObstacles(origin, ahead, walls, 1);
-  if (!hit?.obstacle) return { x: 0, y: 0 };
+  if (!hit?.obstacle) {
+    if ((Number(subject?._avoidSideUntil) || 0) <= nowSec) clearAvoidanceMemory(subject);
+    return { x: 0, y: 0 };
+  }
   const wall = hit.obstacle;
   const away = normalizeVec((Number(hit.x) || 0) - (Number(wall.x) || 0), (Number(hit.y) || 0) - (Number(wall.y) || 0));
   const tangentA = { x: -away.y, y: away.x };
   const tangentB = { x: away.y, y: -away.x };
   const dotA = (tangentA.x * dir.x) + (tangentA.y * dir.y);
-  const pick = dotA >= 0 ? tangentA : tangentB;
+  const dotB = (tangentB.x * dir.x) + (tangentB.y * dir.y);
+  const obstacleKey = makeAvoidanceObstacleKey(wall);
+  let side = dotA >= dotB ? 1 : -1;
+  if (subject) {
+    const sameObstacle = obstacleKey && subject._avoidObstacleKey === obstacleKey;
+    const stickyActive = sameObstacle && (Number(subject._avoidSide) || 0) !== 0 && (Number(subject._avoidSideUntil) || 0) > nowSec;
+    if (stickyActive) side = Number(subject._avoidSide) || side;
+    subject._avoidSide = side;
+    subject._avoidSideUntil = nowSec + AVOID_SIDE_LOCK_SEC;
+    subject._avoidObstacleKey = obstacleKey;
+  }
+  const pick = side >= 0 ? tangentA : tangentB;
   return { x: pick.x, y: pick.y };
 };
 
@@ -816,13 +860,17 @@ const updateSquadBehaviorPlan = (squad, sim, nowSec = 0) => {
   }
 
   if (squad.behavior === 'idle') {
+    squad.targetSquadId = '';
+    squad.waypoints = [];
     squad.action = '待命';
-    if ((Number(squad.underAttackTimer) || 0) > 0.2) {
-      squad.behavior = 'auto';
-      squad.action = '自动攻击';
-    } else {
-      return;
-    }
+    return;
+  }
+
+  const playerExplicitOnly = squad.team === TEAM_ATTACKER && !guard && orderType !== ORDER_ATTACK_MOVE && !chargeCommitted;
+  if (playerExplicitOnly && !hasWaypoint) {
+    squad.targetSquadId = '';
+    squad.action = squad.behavior === 'defend' ? '防御' : '待命';
+    return;
   }
 
   if (!nearestEnemy) {
@@ -1091,6 +1139,9 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
     if (toTarget.len <= LEADER_ARRIVAL_RADIUS) {
       if (Array.isArray(squad.waypoints) && squad.waypoints.length > 0) squad.waypoints.shift();
       if ((resolveSquadOrderType(squad) === ORDER_MOVE || resolveSquadOrderType(squad) === ORDER_CHARGE) && (!squad.waypoints || squad.waypoints.length <= 0)) {
+        squad.behavior = 'idle';
+        squad.targetSquadId = '';
+        squad.action = '待命';
         squad.order = { type: ORDER_IDLE, issuedAt: nowSec, commitUntil: 0, targetPoint: null, targetSquadId: '' };
       }
     } else {
@@ -1106,7 +1157,12 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
       desiredDir = smooth;
       squad.smoothedDirX = desiredDir.x;
       squad.smoothedDirY = desiredDir.y;
-      const arrivalRate = clamp((toTarget.len - LEADER_ARRIVAL_RADIUS) / Math.max(1, LEADER_SLOW_RADIUS - LEADER_ARRIVAL_RADIUS), 0.1, 1);
+      const hasMoreWaypoints = Array.isArray(squad.waypoints) && squad.waypoints.length > 1;
+      const slowRadius = hasMoreWaypoints ? LEADER_WAYPOINT_SLOW_RADIUS : LEADER_SLOW_RADIUS;
+      const arrivalT = clamp((toTarget.len - LEADER_ARRIVAL_RADIUS) / Math.max(1, slowRadius - LEADER_ARRIVAL_RADIUS), 0, 1);
+      const easedArrival = smoothstep01(arrivalT);
+      const minSpeedRatio = hasMoreWaypoints ? LEADER_WAYPOINT_MIN_SPEED_RATIO : LEADER_FINAL_MIN_SPEED_RATIO;
+      const arrivalRate = minSpeedRatio + ((1 - minSpeedRatio) * easedArrival);
       desiredSpeed = Math.min(speedTargetMax, speedTargetMax * arrivalRate);
     }
     squad.stamina = clamp((Number(squad.stamina) || 0) - (STAMINA_MOVE_COST * dt), 0, STAMINA_MAX);
@@ -1198,6 +1254,7 @@ const leaderMoveStep = (squad, sim, crowd, dt, forwardVec, steeringWeights = DEF
 
   if ((Number(squad.stamina) || 0) < STAMINA_MOVE_THRESHOLD && !(squad.skillRush?.ttl > 0)) {
     squad.waypoints = [];
+    squad.targetSquadId = '';
     if (squad.behavior === 'move' && resolveSquadOrderType(squad) !== ORDER_ATTACK_MOVE) {
       squad.behavior = 'idle';
       squad.action = '待命';
@@ -1661,6 +1718,7 @@ export const updateCrowdSim = (crowd, sim, dt) => {
   if (sim && typeof sim === 'object') sim.steeringWeights = steeringWeights;
   if (crowd && typeof crowd === 'object') crowd.steeringWeights = steeringWeights;
   sim.timeElapsed = Math.max(0, Number(sim?.timeElapsed) || 0) + safeDt;
+  const nowSec = Number(sim?.timeElapsed) || 0;
   const squads = Array.isArray(sim?.squads) ? sim.squads : [];
   const walls = Array.isArray(sim?.buildings) ? sim.buildings.filter((w) => !w?.destroyed) : [];
 
@@ -1893,18 +1951,24 @@ export const updateCrowdSim = (crowd, sim, dt) => {
       const sepScale = stationaryHold
         ? (agent.isFlagBearer ? STATIONARY_FLAG_SEPARATION_SCALE : STATIONARY_SEPARATION_SCALE)
         : 1;
-      const avoid = computeAvoidanceDirection(agent, toDesired, walls, AGENT_AVOID_PROBE);
+      const leaderSettling = !leaderMoving || (Math.hypot(Number(squad.vx) || 0, Number(squad.vy) || 0) <= AGENT_SETTLE_SPEED);
+      const settleBlend = leaderSettling
+        ? clamp((toDesired.len - AGENT_SETTLE_DEADZONE) / Math.max(0.2, AGENT_SETTLE_RADIUS - AGENT_SETTLE_DEADZONE), 0, 1)
+        : 1;
+      const avoid = computeAvoidanceDirection(agent, toDesired, walls, AGENT_AVOID_PROBE, agent, nowSec);
       const slotW = Math.max(0, Number(steeringWeights?.slot) || DEFAULT_STEERING_WEIGHTS.slot);
       const sepW = Math.max(0, Number(steeringWeights?.separation) || DEFAULT_STEERING_WEIGHTS.separation);
       const avoidW = Math.max(0, Number(steeringWeights?.avoidance) || DEFAULT_STEERING_WEIGHTS.avoidance);
       const anchorW = Math.max(0, Number(steeringWeights?.anchor) || DEFAULT_STEERING_WEIGHTS.anchor);
       const pressureW = Math.max(0, Number(steeringWeights?.pressure) || DEFAULT_STEERING_WEIGHTS.pressure);
+      const sepGainLocal = sepGain * settleBlend;
+      const avoidGainLocal = avoidGain * (leaderSettling ? settleBlend : 1);
       let desiredVx = (toDesired.x * speed * slotGain * slotW)
-        + (sep.x * 40 * sepScale * sepGain * sepW)
-        + (avoid.x * speed * avoidGain * 0.5 * avoidW);
+        + (sep.x * 40 * sepScale * sepGainLocal * sepW)
+        + (avoid.x * speed * avoidGainLocal * 0.5 * avoidW);
       let desiredVy = (toDesired.y * speed * slotGain * slotW)
-        + (sep.y * 40 * sepScale * sepGain * sepW)
-        + (avoid.y * speed * avoidGain * 0.5 * avoidW);
+        + (sep.y * 40 * sepScale * sepGainLocal * sepW)
+        + (avoid.y * speed * avoidGainLocal * 0.5 * avoidW);
       if (hasAnchor) {
         const anchorDir = normalizeVec((Number(agent.engageAx) || 0) - (agent.x || 0), (Number(agent.engageAy) || 0) - (agent.y || 0));
         const steerGain = clamp((Number(engagementCfg?.anchorSteerGain) || 0.72) * anchorW, 0.08, 2.4);
@@ -1924,7 +1988,8 @@ export const updateCrowdSim = (crowd, sim, dt) => {
           desiredVy += (Number(agent.engageFrontDy) || 0) * pressure * pressureW;
         }
       }
-      if (stationaryHold && toDesired.len <= AGENT_IDLE_DEADZONE) {
+      if ((stationaryHold && toDesired.len <= AGENT_IDLE_DEADZONE) || (leaderSettling && toDesired.len <= AGENT_SETTLE_DEADZONE)) {
+        clearAvoidanceMemory(agent);
         desiredVx = 0;
         desiredVy = 0;
       }

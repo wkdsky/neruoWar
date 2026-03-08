@@ -14,6 +14,7 @@ const {
   resolveNodeSensesForNode,
   saveNodeSenses
 } = require('../services/nodeSenseStore');
+const { bootstrapArticleFromNodeSense } = require('../services/senseArticleService');
 
 const router = express.Router();
 const ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS = process.env.ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS === 'true';
@@ -131,9 +132,17 @@ const ensureApprovedNode = async (nodeId) => {
 const ensureSenseMutationPathEnabled = (res) => {
   if (ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS) return true;
   res.status(409).json({
-    error: '释义写操作已统一到 /api/nodes 规范接口。请使用 /api/nodes/:nodeId/admin/senses 系列接口；若需临时回退可设置 ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS=true'
+    error: '旧释义直写入口已降级为兼容路径。新增释义元信息请使用 /api/nodes/:nodeId/admin/senses；百科正文必须改走 /api/sense-articles/:nodeId/:senseId/revisions。若需临时回退可设置 ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS=true',
+    code: 'legacy_sense_mutation_disabled'
   });
   return false;
+};
+
+const rejectLegacyArticleContentMutation = (res, message = '百科正式正文已迁移到修订系统，请改用 /api/sense-articles/:nodeId/:senseId/revisions') => {
+  res.status(409).json({
+    error: message,
+    code: 'sense_article_revision_flow_required'
+  });
 };
 
 const sendSenseRouteError = (res, error, fallbackMessage = '服务器错误') => {
@@ -211,11 +220,19 @@ router.post('/node/:nodeId', authenticateToken, async (req, res) => {
       title,
       content
     }]);
+    const newSenseId = nextSenses[nextSenses.length - 1]?.senseId || '';
     const savedSenses = await persistNodeSenses({
       node,
       nextSenses,
       actorUserId: req.user.userId
     });
+    if (newSenseId) {
+      await bootstrapArticleFromNodeSense({
+        nodeId: node._id,
+        senseId: newSenseId,
+        userId: req.user.userId
+      });
+    }
 
     res.json({
       success: true,
@@ -246,8 +263,13 @@ router.put('/node/:nodeId/:senseId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: '释义不存在' });
     }
 
-    const nextTitle = typeof req.body?.title === 'string' ? req.body.title.trim() : currentSense.title;
-    const nextContent = typeof req.body?.content === 'string' ? req.body.content.trim() : currentSense.content;
+    const requestedTitle = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const hasContentPayload = typeof req.body?.content === 'string';
+    const nextTitle = requestedTitle || currentSense.title;
+    const nextContent = currentSense.content;
+    if (hasContentPayload && String(req.body.content || '').trim() !== String(currentSense.content || '').trim()) {
+      return rejectLegacyArticleContentMutation(res);
+    }
     if (!nextTitle || !nextContent) {
       return res.status(400).json({ error: '释义标题和内容不能为空' });
     }
@@ -257,7 +279,7 @@ router.put('/node/:nodeId/:senseId', authenticateToken, async (req, res) => {
 
     const nextSenses = currentSenses.map((item) => (
       item.senseId === currentSense.senseId
-        ? { ...item, title: nextTitle, content: nextContent }
+        ? { ...item, title: nextTitle, content: item.content }
         : item
     ));
     const savedSenses = await persistNodeSenses({
@@ -340,6 +362,9 @@ router.post('/node/:nodeId/:senseId/suggestions', authenticateToken, async (req,
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     if (!proposedTitle && !proposedContent) {
       return res.status(400).json({ error: '至少需要提交一个修改项（标题或内容）' });
+    }
+    if (proposedContent) {
+      return rejectLegacyArticleContentMutation(res, '旧 suggestion 正文提案已停用，请在百科阅读页或编辑页通过修订流提交正文修改');
     }
     if (proposedTitle && !ensureSenseTitleUnique(senses, proposedTitle, currentSense.senseId)) {
       return res.status(400).json({ error: '同一知识域下多个释义题目不能重名' });
@@ -439,6 +464,9 @@ router.post('/node/:nodeId/:senseId/suggestions/:suggestionId/review', authentic
     const action = req.body?.action === 'approve' ? 'approve' : (req.body?.action === 'reject' ? 'reject' : '');
     if (!action) return res.status(400).json({ error: '无效审核动作' });
     if (action === 'approve' && !ensureSenseMutationPathEnabled(res)) return;
+    if (action === 'approve' && suggestion.proposedContent) {
+      return rejectLegacyArticleContentMutation(res, '旧 suggestion 正文审批已停用，请改走百科 revision 审核流');
+    }
 
     const reviewComment = typeof req.body?.reviewComment === 'string' ? req.body.reviewComment.trim() : '';
     suggestion.status = action === 'approve' ? 'approved' : 'rejected';
@@ -453,7 +481,7 @@ router.post('/node/:nodeId/:senseId/suggestions/:suggestionId/review', authentic
         return res.status(404).json({ error: '对应释义不存在' });
       }
       const nextTitle = suggestion.proposedTitle ? suggestion.proposedTitle.trim() : currentSense.title;
-      const nextContent = suggestion.proposedContent ? suggestion.proposedContent.trim() : currentSense.content;
+      const nextContent = currentSense.content;
       if (!nextTitle || !nextContent) {
         return res.status(400).json({ error: '建议内容无效，无法应用' });
       }

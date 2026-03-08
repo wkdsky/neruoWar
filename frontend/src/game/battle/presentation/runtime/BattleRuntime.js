@@ -717,6 +717,47 @@ const hashWaypoints = (waypoints = []) => {
   return out;
 };
 
+const clearPlannedMoveRoute = (squad) => {
+  if (!squad) return;
+  squad._plannedMoveWaypoints = [];
+  squad._plannedMoveWaypointIndex = 0;
+  if (squad.order && typeof squad.order === 'object') {
+    squad.order.pathPoints = [];
+    squad.order.pathIndex = 0;
+  }
+};
+
+const getOrderPlannedMoveRoute = (squad) => (Array.isArray(squad?.order?.pathPoints) ? squad.order.pathPoints : []);
+
+const getPlannedMoveRouteRemaining = (squad) => {
+  if (!squad) return [];
+  const orderPoints = getOrderPlannedMoveRoute(squad);
+  const rawPoints = orderPoints.length > 0
+    ? orderPoints
+    : (Array.isArray(squad._plannedMoveWaypoints) ? squad._plannedMoveWaypoints : []);
+  const indexSource = orderPoints.length > 0
+    ? Number(squad?.order?.pathIndex)
+    : Number(squad._plannedMoveWaypointIndex);
+  const index = Math.max(0, Math.floor(indexSource || 0));
+  return index > 0 ? rawPoints.slice(index) : rawPoints.slice();
+};
+
+const setPlannedMoveRoute = (squad, waypoints = []) => {
+  if (!squad) return [];
+  const next = (Array.isArray(waypoints) ? waypoints : []).map((point) => ({
+    x: Number(point?.x) || 0,
+    y: Number(point?.y) || 0
+  }));
+  squad._plannedMoveWaypoints = next;
+  squad._plannedMoveWaypointIndex = 0;
+  if (squad.order && typeof squad.order === 'object') {
+    squad.order.pathPoints = next.slice();
+    squad.order.pathIndex = 0;
+  }
+  squad.waypoints = next.slice();
+  return next;
+};
+
 const buildRosterMap = (list = [], unitTypeMap = new Map()) => {
   const rows = {};
   (Array.isArray(list) ? list : []).forEach((entry) => {
@@ -1738,6 +1779,7 @@ export default class BattleRuntime {
       nodeId: this.initData?.nodeId || '',
       gateKey: this.initData?.gateKey || '',
       nodeName: this.initData?.nodeName || '',
+      viewerTeam: TEAM_ATTACKER,
       startedAt: new Date().toISOString(),
       timeLimitSec: Math.max(30, Number(this.initData?.timeLimitSec) || DEFAULT_TIME_LIMIT),
       timerSec: Math.max(30, Number(this.initData?.timeLimitSec) || DEFAULT_TIME_LIMIT),
@@ -1896,17 +1938,23 @@ export default class BattleRuntime {
     if (!squad) return;
     const prevOrder = typeof squad?.order?.type === 'string' ? squad.order.type : ORDER_IDLE;
     squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
+    squad.targetSquadId = '';
     const now = Math.max(0, Number(this.sim?.timeElapsed) || 0);
     const kind = orderType === ORDER_ATTACK_MOVE
       ? ORDER_ATTACK_MOVE
       : (orderType === ORDER_CHARGE ? ORDER_CHARGE : ORDER_MOVE);
+    const prevPathPoints = Array.isArray(squad?.order?.pathPoints) ? squad.order.pathPoints.map((point) => ({ x: Number(point?.x) || 0, y: Number(point?.y) || 0 })) : [];
+    const prevPathIndex = Math.max(0, Math.floor(Number(squad?.order?.pathIndex) || 0));
     squad.order = {
       type: kind,
       issuedAt: now,
       commitUntil: kind === ORDER_CHARGE ? now + 1.35 : 0,
       targetPoint: safePoint ? { x: safePoint.x, y: safePoint.y } : null,
-      targetSquadId: ''
+      targetSquadId: '',
+      pathPoints: kind === ORDER_MOVE ? prevPathPoints : [],
+      pathIndex: kind === ORDER_MOVE ? prevPathIndex : 0
     };
+    if (kind !== ORDER_MOVE) clearPlannedMoveRoute(squad);
     if (kind === ORDER_CHARGE) {
       this.beginSquadTransition(squad, prevOrder === ORDER_MOVE ? 'move' : 'attack', 'charge');
       squad.behavior = 'move';
@@ -2003,10 +2051,11 @@ export default class BattleRuntime {
     if (!this.rules.allowCrossMidline) {
       safe.x = clampXToTeamZone(safe.x, this.field.width, Math.max(6, Number(squad.radius) || 10), squad.team);
     }
+    const currentRoute = append ? getPlannedMoveRouteRemaining(squad) : [];
     if (append) {
-      squad.waypoints.push(safe);
+      setPlannedMoveRoute(squad, [...currentRoute, safe]);
     } else {
-      squad.waypoints = [safe];
+      setPlannedMoveRoute(squad, [safe]);
     }
     squad.lastMoveMarker = { x: safe.x, y: safe.y, ttl: 1.2 };
     squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
@@ -2031,6 +2080,8 @@ export default class BattleRuntime {
       this.beginSquadTransition(squad, 'move', 'standby');
       squad.behavior = 'standby';
       squad.waypoints = [];
+      clearPlannedMoveRoute(squad);
+      squad.targetSquadId = '';
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '待命';
       squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
@@ -2041,6 +2092,8 @@ export default class BattleRuntime {
       this.beginSquadTransition(squad, 'move', 'idle');
       squad.behavior = 'idle';
       squad.waypoints = [];
+      clearPlannedMoveRoute(squad);
+      squad.targetSquadId = '';
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '待命';
       squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
@@ -2060,15 +2113,18 @@ export default class BattleRuntime {
       this.beginSquadTransition(squad, 'idle', 'defend');
       squad.behavior = 'defend';
       squad.waypoints = [];
+      clearPlannedMoveRoute(squad);
+      squad.targetSquadId = '';
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '防御';
-      squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
+      squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
       this.markCommandIssued('behavior_defend');
       return true;
     }
     if (behavior === 'retreat') {
       this.beginSquadTransition(squad, 'forward', 'retreat');
       squad.behavior = 'retreat';
+      clearPlannedMoveRoute(squad);
       squad.waypoints = [squad.rallyPoint];
       squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
       squad.action = '撤退';
@@ -2099,7 +2155,7 @@ export default class BattleRuntime {
       }
       next.push({ x: safe.x, y: safe.y });
     }
-    squad.waypoints = next;
+    setPlannedMoveRoute(squad, next);
     squad.guard = { enabled: false, cx: Number(squad.x) || 0, cy: Number(squad.y) || 0, radius: 0, returnRadius: 0, chaseRadius: 0, activeTargetId: '' };
     if (next.length > 0) {
       const tail = next[next.length - 1];
@@ -2108,6 +2164,7 @@ export default class BattleRuntime {
     } else {
       squad.behavior = 'idle';
       squad.action = '待命';
+      clearPlannedMoveRoute(squad);
       squad.order = { type: ORDER_IDLE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: null, targetSquadId: '' };
     }
     this.markCommandIssued(options?.inputType || 'set_waypoints');
@@ -2132,6 +2189,7 @@ export default class BattleRuntime {
     };
     squad.behavior = 'guard';
     squad.waypoints = [];
+    clearPlannedMoveRoute(squad);
     squad.action = '自由攻击';
     squad.order = { type: ORDER_ATTACK_MOVE, issuedAt: Math.max(0, Number(this.sim?.timeElapsed) || 0), commitUntil: 0, targetPoint: { x: cx, y: cy }, targetSquadId: '' };
     this.markCommandIssued('guard');

@@ -19,6 +19,7 @@ const nodeRoutes = require('./routes/nodes');
 const allianceRoutes = require('./routes/alliance');
 const armyRoutes = require('./routes/army');
 const senseRoutes = require('./routes/senses');
+const senseArticleRoutes = require('./routes/senseArticles');
 const usersRoutes = require('./routes/users');
 // 初始化Express
 const app = express();
@@ -88,6 +89,7 @@ app.use('/api/nodes', nodeRoutes);
 app.use('/api/alliances', allianceRoutes);
 app.use('/api/army', armyRoutes);
 app.use('/api/senses', senseRoutes);
+app.use('/api/sense-articles', senseArticleRoutes);
 app.use('/api/users', usersRoutes);
 // 连接数据库
 connectDB();

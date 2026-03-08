@@ -76,7 +76,7 @@
 ### frontend/components
 - 兵营：`frontend/src/components/game/ArmyPanel.js`
 - 训练营：`frontend/src/components/game/TrainingGroundPanel.js`
-- 战场：`frontend/src/components/game/BattleSceneModal.js` + `PveBattleModal.js` + `App.js`
+- 战场：`frontend/src/game/battle/screens/BattleSceneContainer.js` + `App.js`
 
 ### frontend unitTypes 获取方式
 - 兵营：直接 fetch `/army/unit-types`，本地 state 缓存。`ArmyPanel.js:73,204-243`
@@ -87,7 +87,7 @@
 ### 战斗仿真/渲染对 unitTypes 的使用
 - `BattleRuntime`：按 unitTypes 构建 map，读取 `speed/hp/atk/def/range`，并读取 `components.behaviorProfile/stabilityProfile`。`BattleRuntime.js:74-124,543-583`
 - `CrowdSim/crowdCombat/engagement`：行为和技能主要按 `classTag` 四类分支。`CrowdSim.js`、`crowdCombat.js`、`engagement.js`
-- `ImpostorRenderer/ProceduralTextures`：纹理数组层数固定（64）。`BattleSceneModal.js:743-747`，`ProceduralTextures.js:88-105`
+- `ImpostorRenderer/ProceduralTextures`：纹理数组层数固定（64）。`BattleSceneContainer.js:743-747`，`ProceduralTextures.js:88-105`
 
 ## Current Data Flow
 ```text
@@ -105,7 +105,7 @@ API
   - GET /api/nodes/:nodeId/siege/pve/battle-init
       ↓
 Frontend
-  - ArmyPanel / TrainingGroundPanel / App(PveBattleModal)
+  - ArmyPanel / TrainingGroundPanel / App(BattleSceneModal)
   - normalizeUnitTypes (白名单归一化)
       ↓
 Battle
@@ -250,7 +250,7 @@ Battle
 6. 缺口：渲染纹理层数硬上限
 - 描述：程序纹理和 impostor layer 当前按 64 固定。
 - 建议修改：
-  - `frontend/src/components/game/BattleSceneModal.js`
+  - `frontend/src/game/battle/screens/BattleSceneContainer.js`
   - `frontend/src/game/battle/presentation/assets/ProceduralTextures.js`
   - `frontend/src/game/battle/presentation/render/ImpostorRenderer.js`
   - 建议：根据 catalog 动态分配 layer 或建立 atlas/分页策略。

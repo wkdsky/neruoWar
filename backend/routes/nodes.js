@@ -50,6 +50,7 @@ const {
   resolveNodeSensesForNode,
   saveNodeSenses
 } = require('../services/nodeSenseStore');
+const { bootstrapArticleFromNodeSense } = require('../services/senseArticleService');
 const DomainTitleProjection = require('../models/DomainTitleProjection');
 const {
   isDomainTitleStateCollectionReadEnabled,
@@ -4584,8 +4585,16 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
 
     await hydrateNodeSensesForNodes([node]);
     const existingSenses = normalizeNodeSenseList(node);
+    const currentSense = sourceSenses[targetIndex] || null;
     const trimmedTitle = typeof title === 'string' ? title.trim() : '';
-    const trimmedContent = typeof content === 'string' ? content.trim() : '';
+    const hasContentPayload = typeof content === 'string';
+    const trimmedContent = hasContentPayload ? content.trim() : String(currentSense?.content || '').trim();
+    if (hasContentPayload && trimmedContent !== String(currentSense?.content || '').trim()) {
+      return res.status(409).json({
+        error: '管理员直改百科正文已停用，请改用 /api/sense-articles/:nodeId/:senseId/revisions 进入修订流',
+        code: 'sense_article_revision_flow_required'
+      });
+    }
     if (!trimmedTitle) {
       return res.status(400).json({ error: '释义题目不能为空' });
     }
@@ -4689,6 +4698,11 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
       actorUserId: req.user.userId,
       fallbackDescription: node.description || ''
     });
+    await bootstrapArticleFromNodeSense({
+      nodeId: node._id,
+      senseId: nextSenseId,
+      userId: req.user.userId
+    });
     await syncDomainTitleProjectionFromNode(node);
 
     if (insertPlans.length > 0) {
@@ -4745,8 +4759,16 @@ router.put('/:nodeId/admin/senses/:senseId/text', authenticateToken, isAdmin, as
       return res.status(404).json({ error: '释义不存在' });
     }
 
+    const currentSense = sourceSenses[targetIndex] || null;
     const trimmedTitle = typeof title === 'string' ? title.trim() : '';
-    const trimmedContent = typeof content === 'string' ? content.trim() : '';
+    const hasContentPayload = typeof content === 'string';
+    const trimmedContent = hasContentPayload ? content.trim() : String(currentSense?.content || '').trim();
+    if (hasContentPayload && trimmedContent !== String(currentSense?.content || '').trim()) {
+      return res.status(409).json({
+        error: '管理员直改百科正文已停用，请改用 /api/sense-articles/:nodeId/:senseId/revisions 进入修订流',
+        code: 'sense_article_revision_flow_required'
+      });
+    }
     if (!trimmedTitle) {
       return res.status(400).json({ error: '释义题目不能为空' });
     }
@@ -4765,7 +4787,7 @@ router.put('/:nodeId/admin/senses/:senseId/text', authenticateToken, isAdmin, as
 
     const nextSenses = sourceSenses.map((sense, index) => (
       index === targetIndex
-        ? { ...sense, title: trimmedTitle, content: trimmedContent }
+        ? { ...sense, title: trimmedTitle, content: sense.content }
         : sense
     ));
 
@@ -4783,7 +4805,7 @@ router.put('/:nodeId/admin/senses/:senseId/text', authenticateToken, isAdmin, as
 
     return res.json({
       success: true,
-      message: '释义文本已更新',
+      message: '释义元信息已更新；百科正文请走修订流',
       sense: canonicalSense || nextSenses[targetIndex],
       node: canonicalNode || node.toObject()
     });

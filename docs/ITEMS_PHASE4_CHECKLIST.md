@@ -41,7 +41,7 @@
 ## 结构检查
 
 - 运行：
-  - `rg -n "battlefield-layout|battle-init|battle-result" frontend/src/App.js frontend/src/components/game/BattleSceneModal.js frontend/src/components/game/BattlefieldPreviewModal.js frontend/src/game/battle`
+  - `rg -n "battlefield-layout|battle-init|battle-result" frontend/src/App.js frontend/src/game/battle/screens/BattleSceneContainer.js frontend/src/components/game/BattlefieldPreviewModal.js frontend/src/game/battle`
   - endpoint 字符串仍应只集中在 `BattleDataService`
 - 运行：
   - `rg -n "ItemGeometryRegistry|ItemInteractionSystem" frontend/src/game frontend/src/components/game`

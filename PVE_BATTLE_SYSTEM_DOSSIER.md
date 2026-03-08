@@ -21,7 +21,7 @@
 - 可行改造是：按 `CameraController.getPitchBlend()`（`frontend/src/game/battle/presentation/render/CameraController.js:280-283`）在 `ImpostorRenderer.render()`切换 front/top atlas layer。
 
 4. 行为逻辑集中在 CrowdSim/CrowdCombat，分层清楚但有抖动风险点。
-- 固定步长驱动：`BattleClock.tick()`（`frontend/src/game/battle/presentation/runtime/BattleClock.js:21-37`）+ `runtime.step()`（`BattleSceneModal.js:867`）。
+- 固定步长驱动：`BattleClock.tick()`（`frontend/src/game/battle/presentation/runtime/BattleClock.js:21-37`）+ `runtime.step()`（`BattleSceneContainer.js:867`）。
 - 移动/避障/群体：`updateCrowdSim()`（`CrowdSim.js:1533-1854`）+ `crowdPhysics`空间哈希/LOS/推离（`crowdPhysics.js:163-243`）。
 - 攻击/射弹/命中：`updateCrowdCombat()`（`crowdCombat.js:589-816`）+ `stepProjectiles()`（`crowdCombat.js:546-587`）。
 - 主要风险：多次目标重选、避障推离与分离力耦合、随机散布与CD抖动、战斗与渲染同步窗口差。
@@ -33,7 +33,7 @@
 
 必须区分两套流程（避免误改）：
 - **布防编辑/预览**：`BattlefieldPreviewModal` + `/api/nodes/:nodeId/battlefield-layout` + `/api/nodes/:nodeId/siege/battlefield-preview`。
-- **攻占 PVE 战斗**：`PveBattleModal/BattleSceneModal` + `/api/nodes/:nodeId/siege/pve/battle-init` + `/api/nodes/:nodeId/siege/pve/battle-result`。
+- **攻占 PVE 战斗**：`BattleSceneModal` + `/api/nodes/:nodeId/siege/pve/battle-init` + `/api/nodes/:nodeId/siege/pve/battle-result`。
 
 ---
 
@@ -67,7 +67,6 @@ backend/
 frontend/src/
   App.js
   components/game/
-    PveBattleModal.js
     BattleSceneModal.js
     BattlefieldPreviewModal.js
     KnowledgeDomainScene.js
@@ -111,7 +110,7 @@ frontend/src/
 | Rank | 文件 | 角色与职责 |
 |---|---|---|
 | 1 | `backend/routes/nodes.js` | 围城状态、战场布局、PVE battle-init/battle-result 主路由与校验中心。 |
-| 2 | `frontend/src/components/game/BattleSceneModal.js` | PVE 战斗前端主入口：runtime 初始化、RAF loop、结果上报。 |
+| 2 | `frontend/src/game/battle/screens/BattleSceneContainer.js` | PVE 战斗前端主入口：runtime 初始化、RAF loop、结果上报。 |
 | 3 | `frontend/src/game/battle/presentation/runtime/BattleRuntime.js` | 战斗运行时聚合层：部署组→squad、snapshot 输出、命令入口。 |
 | 4 | `frontend/src/game/battle/simulation/crowd/CrowdSim.js` | agent 级移动/群集/技能触发总循环。 |
 | 5 | `frontend/src/game/battle/simulation/crowd/crowdCombat.js` | 目标选择、普通攻击、射弹、命中、建筑受伤/摧毁。 |
@@ -122,7 +121,6 @@ frontend/src/
 | 10 | `backend/services/armyUnitTypeService.js` | 单位序列化输出（含 id/unitTypeId 双字段）。 |
 | 11 | `backend/routes/army.js` | `/api/army/unit-types`、`/training/init` 下发单位数据。 |
 | 12 | `frontend/src/App.js` | “进攻”按钮、battle-init 拉取、modal 装配。 |
-| 13 | `frontend/src/components/game/PveBattleModal.js` | PVE 对 `BattleSceneModal` 的轻封装。 |
 | 14 | `frontend/src/components/game/BattlefieldPreviewModal.js` | 布防编辑器（非战斗），物体吸附/旋转/保存。 |
 | 15 | `frontend/src/components/game/KnowledgeDomainScene.js` | 域主打开布防编辑器入口。 |
 | 16 | `backend/models/DomainDefenseLayout.js` | 战场布局/守军部署持久化结构。 |
@@ -154,7 +152,7 @@ frontend/src/
 - 情报预览：`GET /api/nodes/:nodeId/siege/battlefield-preview`（`backend/routes/nodes.js:7704-7785`，会清空 defenderDeployments 返回）。
 
 2. 攻占 PVE 战斗链路（你要改造的主链）
-- 前端入口：`App` 进攻按钮（`frontend/src/App.js:6620-6628`）→ `handleOpenSiegePveBattle()` 拉 `battle-init`（`3174-3218`）→ `PveBattleModal`（`6645-6652`）→ `BattleSceneModal`（`PveBattleModal.js:4-10`）。
+- 前端入口：`App` 进攻按钮（`frontend/src/App.js:6620-6628`）→ `handleOpenSiegePveBattle()` 拉 `battle-init`（`3174-3218`）→ `BattleSceneModal`（`6644-6653`）。
 - 后端 init：`GET /api/nodes/:nodeId/siege/pve/battle-init`（`backend/routes/nodes.js:7793-7877`）。
 - 前端仿真：`BattleRuntime + CrowdSim + renderers`（见 3.3）。
 - 后端结果：`POST /api/nodes/:nodeId/siege/pve/battle-result`（`backend/routes/nodes.js:7888-7963`）。
@@ -164,7 +162,7 @@ frontend/src/
 ```mermaid
 flowchart TD
   A[App 进攻按钮] --> B[GET /api/nodes/:nodeId/siege/pve/battle-init]
-  B --> C[PveBattleModal -> BattleSceneModal]
+  B --> C[BattleSceneModal]
   C --> D[normalizeUnitTypes]
   D --> E[BattleRuntime(start deploy)]
   E --> F[BattleClock fixed-step]
@@ -182,11 +180,11 @@ flowchart TD
 ### 3.3 关键证据点
 
 - battle-init 拉取：`frontend/src/App.js:3194-3199`。
-- runtime 启动前 normalize：`frontend/src/components/game/BattleSceneModal.js:551-557`。
-- runtime 构造：`BattleSceneModal.js:558-567`。
-- 固定步长推进：`BattleClock.js:21-37` + `BattleSceneModal.js:867`。
-- 主循环（RAF + render order）：`BattleSceneModal.js:841-935`。
-- 战斗结束判断与上报：`BattleSceneModal.js:1011-1016, 811-818`。
+- runtime 启动前 normalize：`frontend/src/game/battle/screens/BattleSceneContainer.js:551-557`。
+- runtime 构造：`BattleSceneContainer.js:558-567`。
+- 固定步长推进：`BattleClock.js:21-37` + `BattleSceneContainer.js:867`。
+- 主循环（RAF + render order）：`BattleSceneContainer.js:841-935`。
+- 战斗结束判断与上报：`BattleSceneContainer.js:1011-1016, 811-818`。
 - summary 构造：`BattleRuntime.js:1810-1816` + `BattleSummary.js:9-40`。
 - 后端结果处理：`battle-result`只做 sanitize + 幂等插入 `SiegeBattleRecord`（`nodes.js:7908-7942`），未重算战斗过程。
 
@@ -195,7 +193,7 @@ flowchart TD
 结论：**胜负/伤亡是前端仿真结果，后端只做记录与基础校验**。
 
 证据：
-- 前端调用 `runtime.getSummary()`后直接 POST（`BattleSceneModal.js:1013-1016, 811-818`）。
+- 前端调用 `runtime.getSummary()`后直接 POST（`BattleSceneContainer.js:1013-1016, 811-818`）。
 - 后端 `normalizeBattleResultSide`/`sanitizeBattleResultDetails` 后写库（`nodes.js:3110-3138, 7930-7942`）。
 - `battle-result`没有回放重算、没有基于 server sim 的一致性验证。
 
@@ -250,7 +248,7 @@ flowchart TD
 文件：`frontend/src/game/unit/normalizeUnitTypes.js:46-103`
 
 何时执行：
-- 战斗 init 后，`BattleSceneModal.setupRuntime` 先做 normalize（`BattleSceneModal.js:551-557`）。
+- 战斗 init 后，`BattleSceneContainer.setupRuntime` 先做 normalize（`BattleSceneContainer.js:551-557`）。
 
 做了什么：
 - 合并 `unitTypeId/id`（`normalizeUnitType`:47-58）。
@@ -304,7 +302,7 @@ flowchart TD
 - `UnitComponent`有 `version`（`UnitComponent.js:39-43`），但 unit 本体没有。
 
 7. 类别体系硬编码为四类
-- `infantry/cavalry/archer/artillery`贯穿 runtime/sim/UI（`BattleRuntime.js:44-62`, `CrowdSim.js:96-101, 1416-1420`, `BattleSceneModal.js:66-76`）。
+- `infantry/cavalry/archer/artillery`贯穿 runtime/sim/UI（`BattleRuntime.js:44-62`, `CrowdSim.js:96-101, 1416-1420`, `BattleSceneContainer.js:66-76`）。
 
 8. 战场布局中部署旋转字段前后不一致
 - 前端保存 defender deployment 带 `rotation`（`BattlefieldPreviewModal.js:453-467`）。
@@ -318,9 +316,9 @@ flowchart TD
 ### 5.1 当前战斗渲染栈
 
 - 技术栈：React + 自研 WebGL2 renderer（非 Three.js 主战斗）。
-- 初始化位置：`BattleSceneModal` 创建 `Ground/Building/Impostor/Projectile/Effect`（`BattleSceneModal.js:738-755`）。
+- 初始化位置：`BattleSceneModal` 创建 `Ground/Building/Impostor/Projectile/Effect`（`BattleSceneContainer.js:738-755`）。
 - 数据输入：`BattleRuntime.getRenderSnapshot()`输出四类 instance buffer（`BattleRuntime.js:1899-2035`）。
-- draw 顺序：ground → building → impostor → projectile → effect（`BattleSceneModal.js:931-935`）。
+- draw 顺序：ground → building → impostor → projectile → effect（`BattleSceneContainer.js:931-935`）。
 
 ### 5.2 “垂直视角变线”原因
 
@@ -338,7 +336,7 @@ flowchart TD
 
 2. 选择逻辑
 - 可复用 `CameraController.getPitchBlend()`（`CameraController.js:280-283`）。
-- 在 `BattleSceneModal`已拿到 `pitchMix`并传给 renderer（`BattleSceneModal.js:930-934`）。
+- 在 `BattleSceneModal`已拿到 `pitchMix`并传给 renderer（`BattleSceneContainer.js:930-934`）。
 - 建议阈值：`pitchMix >= 0.7`切 top；`0.55~0.7`做 front/top blend（避免跳变）。
 
 3. 修改入口
@@ -375,9 +373,9 @@ flowchart TD
 
 ### 6.1 Tick 更新入口
 
-- 驱动：`requestAnimationFrame`（`BattleSceneModal.js:841-1023`）。
+- 驱动：`requestAnimationFrame`（`BattleSceneContainer.js:841-1023`）。
 - 仿真时间步：固定步长 `1/30`（`BattleClock.js:2-5`），`tick`中 accumulator 消耗固定 step（`21-37`）。
-- 实际调用：`clock.tick(deltaSec, (fixedStep)=>runtime.step(fixedStep))`（`BattleSceneModal.js:867`）。
+- 实际调用：`clock.tick(deltaSec, (fixedStep)=>runtime.step(fixedStep))`（`BattleSceneContainer.js:867`）。
 
 ### 6.2 Crowd 移动/避障/群集
 
@@ -451,7 +449,7 @@ flowchart TD
 当前不支持。
 
 缺口分层：
-- UI 层：没有“矩形控制柄”交互，只能拖组中心（`BattleSceneModal.js:1396-1426`）。
+- UI 层：没有“矩形控制柄”交互，只能拖组中心（`BattleSceneContainer.js:1396-1426`）。
 - 状态层：`deployGroup`无 `width/depth/area`字段（`BattleRuntime.js:944-951`）。
 - sim 层：agent slots 由 `createAgentsForSquad`按列数自动生成（`CrowdSim.js:882-907`），不接受外部矩形约束。
 
@@ -540,7 +538,7 @@ slot 重新分配策略（最小可行）：
 - 相关代码
   - `BattleRuntime.js:894-955, 1186-1246`
   - `CrowdSim.js:862-931`
-  - `BattleSceneModal.js:1396-1426`
+  - `BattleSceneContainer.js:1396-1426`
 - 缺口
   - 缺少宽深参数、手柄交互、slot 重分配策略。
 - 最小切入点
@@ -570,7 +568,7 @@ rg -n "Impostor|billboard|sprite|atlas|texture|top-view|minimap|camera" frontend
 #### A.3 命中最多文件（节选）
 
 - `backend/routes/nodes.js`（619）
-- `frontend/src/components/game/BattleSceneModal.js`（529）
+- `frontend/src/game/battle/screens/BattleSceneContainer.js`（529）
 - `frontend/src/App.js`（382）
 - `frontend/src/game/battle/presentation/runtime/BattleRuntime.js`（315）
 - `frontend/src/components/game/BattlefieldPreviewModal.js`（290）
@@ -585,7 +583,7 @@ rg -n "Impostor|billboard|sprite|atlas|texture|top-view|minimap|camera" frontend
 - `frontend/src/App.js:3194` -> GET `/nodes/:nodeId/siege/pve/battle-init`
 - `backend/routes/nodes.js:7793` -> `router.get('/:nodeId/siege/pve/battle-init'...)`
 - `backend/routes/nodes.js:7888` -> `router.post('/:nodeId/siege/pve/battle-result'...)`
-- `frontend/src/components/game/BattleSceneModal.js:553` -> `normalizeUnitTypes(...)`
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:553` -> `normalizeUnitTypes(...)`
 - `frontend/src/game/battle/presentation/render/ImpostorRenderer.js:34` -> billboard `right`
 - `frontend/src/game/battle/presentation/render/ImpostorRenderer.js:122` -> `uPitchMix`仅颜色混合
 
@@ -695,7 +693,7 @@ export const normalizeUnitType = (unit = {}) => {
 #### B.5 战斗循环（固定步长 + 渲染）
 
 ```js
-// frontend/src/components/game/BattleSceneModal.js:865-935
+// frontend/src/game/battle/screens/BattleSceneContainer.js:865-935
 const nowPhase = runtime.getPhase();
 if (nowPhase === 'battle') {
   clockRef.current.tick(deltaSec, (fixedStep) => runtime.step(fixedStep));
@@ -852,7 +850,7 @@ defenderDeployments: sanitizeDefenderDeployments(defenderDeployments).map((item)
 | GET | `/api/nodes/:nodeId/siege` | `gate/participants`相关 query | 围城状态、可参战门、参与者分页 | `App` 围城状态刷新（`frontend/src/App.js`） |
 | GET | `/api/nodes/:nodeId/siege/battlefield-preview` | `gateKey` | `layoutBundle`（隐藏 defenderDeployments） | `App.handleOpenSiegeBattlefieldPreview` (`App.js:3118-3163`) |
 | GET | `/api/nodes/:nodeId/siege/pve/battle-init` | `gateKey` | `battleId,nodeId,unitTypes,attacker,defender,battlefield` | `App.handleOpenSiegePveBattle` (`App.js:3174-3218`) |
-| POST | `/api/nodes/:nodeId/siege/pve/battle-result` | `battleId,gateKey,durationSec,attacker,defender,details,startedAt,endedAt` | `success,battleId,recorded,duplicate?` | `BattleSceneModal.reportBattleResult` (`BattleSceneModal.js:801-830`) |
+| POST | `/api/nodes/:nodeId/siege/pve/battle-result` | `battleId,gateKey,durationSec,attacker,defender,details,startedAt,endedAt` | `success,battleId,recorded,duplicate?` | `BattleSceneContainer.reportBattleResult` (`BattleSceneContainer.js:801-830`) |
 | GET | `/api/nodes/:nodeId/battlefield-layout` | `gateKey,layoutId` | `layoutBundle,defenderRoster,canEdit/canView` | `BattlefieldPreviewModal` (`2391-2429`) |
 | PUT | `/api/nodes/:nodeId/battlefield-layout` | `gateKey,layout,itemCatalog,objects,defenderDeployments` | `layoutBundle` | `BattlefieldPreviewModal.persistBattlefieldLayout` (`2103-2203`) |
 | GET | `/api/army/unit-types` | 无 | `unitTypes[]` | `ArmyPanel` (`frontend/src/components/game/ArmyPanel.js:205`) |
@@ -866,7 +864,7 @@ defenderDeployments: sanitizeDefenderDeployments(defenderDeployments).map((item)
 ## 附：本次审计中的“攻占战斗 vs 布防编辑”边界定义
 
 - **攻占战斗（改造目标）**：
-  - UI: `PveBattleModal` / `BattleSceneModal`
+  - UI: `BattleSceneModal`
   - API: `/siege/pve/battle-init`, `/siege/pve/battle-result`
   - Runtime: `BattleRuntime + CrowdSim + crowdCombat + renderers`
 
@@ -874,4 +872,3 @@ defenderDeployments: sanitizeDefenderDeployments(defenderDeployments).map((item)
   - UI: `BattlefieldPreviewModal`（Three.js + 2D overlay）
   - API: `/battlefield-layout`, `/siege/battlefield-preview`
   - 作用：编辑障碍与守军部署，不执行 PVE 仿真结算
-

@@ -6,8 +6,7 @@
 - `frontend/src/App.js`（页面入口与 view 状态路由）
 - `frontend/src/components/game/ArmyPanel.js`（兵营）
 - `frontend/src/components/game/TrainingGroundPanel.js`（训练营入口）
-- `frontend/src/components/game/PveBattleModal.js`（围城战斗 modal 包装）
-- `frontend/src/components/game/BattleSceneModal.js`（战斗场景核心 React 入口）
+- `frontend/src/game/battle/screens/BattleSceneContainer.js`（战斗场景核心 React 入口）
 - `frontend/src/game/battle/presentation/runtime/BattleRuntime.js`（战斗运行时）
 - `frontend/src/game/battle/simulation/crowd/CrowdSim.js`
 - `frontend/src/game/battle/simulation/crowd/crowdCombat.js`
@@ -111,7 +110,7 @@ const connectDB = async () => {
 - 入口按钮：`setView('army')`、`setView('trainingGround')`。
 - 战场：
   - 训练场路径：`TrainingGroundPanel -> BattleSceneModal`
-  - 围城路径：`App.handleOpenSiegePveBattle -> /api/nodes/:nodeId/siege/pve/battle-init -> PveBattleModal -> BattleSceneModal`
+  - 围城路径：`App.handleOpenSiegePveBattle -> /api/nodes/:nodeId/siege/pve/battle-init -> BattleSceneModal`
 
 ### 实现状态
 - 兵营/训练营/战场入口链路：✅
@@ -353,7 +352,7 @@ const TrainingGroundPanel = ({ onExit }) => {
 
 ### 关键代码片段（战斗帧主链路）
 ```js
-// frontend/src/components/game/BattleSceneModal.js:845-905
+// frontend/src/game/battle/screens/BattleSceneContainer.js:845-905
 if (nowPhase === 'battle') {
   clockRef.current.tick(deltaSec, (fixedStep) => runtime.step(fixedStep));
 }
@@ -635,7 +634,7 @@ connectDB();
   - 调用端：`App.handleOpenSiegePveBattle`
 - `POST /api/nodes/:nodeId/siege/pve/battle-result`
   - 记录结果到 `SiegeBattleRecord`
-  - 调用端：`BattleSceneModal.reportBattleResult`
+  - 调用端：`BattleSceneContainer.reportBattleResult`
 
 ### Admin 兵种目录 API（`backend/routes/admin.js`）
 - `GET /api/admin/army/unit-types`
@@ -720,7 +719,7 @@ router.get('/training/init', authenticateToken, async (req, res) => {
 - `backend/routes/admin.js`
 - `backend/routes/nodes.js`（battle init payload）
 - `frontend/src/components/game/ArmyPanel.js`
-- `frontend/src/components/game/BattleSceneModal.js`
+- `frontend/src/game/battle/screens/BattleSceneContainer.js`
 - `frontend/src/game/battle/presentation/runtime/BattleRuntime.js`
 
 ---
@@ -834,7 +833,7 @@ void main() {
 ## 6.1 BattleSceneModal / BattleRuntime：单位实例是怎么创建/销毁的
 
 ### 创建链路
-- `BattleSceneModal.setupRuntime()` -> `new BattleRuntime(battleInitData, ...)`
+- `BattleSceneContainer.setupRuntime()` -> `new BattleRuntime(battleInitData, ...)`
 - `runtime.startBattle()`：deployGroup -> squad
 - `createCrowdSim(sim)`：squad -> `agentsBySquad/allAgents`
 
@@ -1070,7 +1069,7 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
 
 ### 关键修改文件
 - `frontend/src/components/game/TrainingGroundPanel.js`
-- `frontend/src/components/game/BattleSceneModal.js`
+- `frontend/src/game/battle/screens/BattleSceneContainer.js`
 - `frontend/src/game/battle/presentation/runtime/BattleRuntime.js`
 - `frontend/src/game/battle/simulation/crowd/CrowdSim.js`
 - `frontend/src/game/battle/simulation/crowd/crowdCombat.js`
@@ -1105,7 +1104,7 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
 - `backend/routes/admin.js:/army/unit-types*`（后台管理入口）
 - `frontend/src/components/game/ArmyPanel.js:fetchArmyData`（兵营消费入口）
 - `frontend/src/components/game/TrainingGroundPanel.js:fetchTrainingInit`（训练营入口）
-- `frontend/src/components/game/BattleSceneModal.js:setupRuntime/frame`（战斗 UI->runtime 桥接）
+- `frontend/src/game/battle/screens/BattleSceneContainer.js:setupRuntime/frame`（战斗 UI->runtime 桥接）
 - `frontend/src/game/battle/presentation/runtime/BattleRuntime.js:buildUnitTypeMap/createSquad/startBattle`（战斗单位装配核心）
 - `frontend/src/game/battle/simulation/crowd/CrowdSim.js:createCrowdSim/triggerCrowdSkill/updateCrowdSim`（仿真核心）
 - `frontend/src/game/battle/simulation/crowd/crowdCombat.js:updateCrowdCombat`（伤害/命中/投射物）
@@ -1123,7 +1122,7 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
 4. `frontend/src/App.js:6191` | `view === "trainingGround"` | 训练营页面挂载点
 5. `frontend/src/App.js:3145` | `handleOpenSiegePveBattle` | 围城战斗入口函数
 6. `frontend/src/App.js:3165` | `siege/pve/battle-init` | 围城战斗初始化 API 调用
-7. `frontend/src/App.js:6616` | `PveBattleModal` | 战斗 modal 挂载
+7. `frontend/src/App.js:6616` | `BattleSceneModal` | 战斗 modal 挂载
 8. `frontend/src/components/game/TrainingGroundPanel.js:33` | `/api/army/training/init` | 训练营初始化 API
 9. `frontend/src/components/game/TrainingGroundPanel.js:58` | `BattleSceneModal` | 训练营复用战斗场景
 10. `frontend/src/components/game/ArmyPanel.js:181` | `fetchArmyData` | 兵营数据聚合入口
@@ -1131,11 +1130,11 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
 12. `frontend/src/components/game/ArmyPanel.js:194` | `/army/me` | 用户 roster 拉取
 13. `frontend/src/components/game/ArmyPanel.js:199` | `/army/templates` | 用户模板拉取
 14. `frontend/src/components/game/ArmyPanel.js:266` | `beginDetailRotationDrag` | 详情拖拽旋转
-15. `frontend/src/components/game/BattleSceneModal.js:539` | `new BattleRuntime` | 战斗运行时创建
-16. `frontend/src/components/game/BattleSceneModal.js:375` | `new BattleClock` | 固定步长时钟
-17. `frontend/src/components/game/BattleSceneModal.js:376` | `new CameraController` | 相机控制器创建
-18. `frontend/src/components/game/BattleSceneModal.js:845` | `clockRef.current.tick` | 固定步长驱动 runtime.step
-19. `frontend/src/components/game/BattleSceneModal.js:898` | `getRenderSnapshot` | 仿真到渲染快照桥接
+15. `frontend/src/game/battle/screens/BattleSceneContainer.js:539` | `new BattleRuntime` | 战斗运行时创建
+16. `frontend/src/game/battle/screens/BattleSceneContainer.js:375` | `new BattleClock` | 固定步长时钟
+17. `frontend/src/game/battle/screens/BattleSceneContainer.js:376` | `new CameraController` | 相机控制器创建
+18. `frontend/src/game/battle/screens/BattleSceneContainer.js:845` | `clockRef.current.tick` | 固定步长驱动 runtime.step
+19. `frontend/src/game/battle/screens/BattleSceneContainer.js:898` | `getRenderSnapshot` | 仿真到渲染快照桥接
 20. `frontend/src/game/battle/presentation/runtime/BattleRuntime.js:1044` | `startBattle` | deploy->battle 转换入口
 21. `frontend/src/game/battle/presentation/runtime/BattleRuntime.js:1134` | `pickSquadAtPoint` | 地图选中 squad
 22. `frontend/src/game/battle/presentation/runtime/BattleRuntime.js:1307` | `commandMove` | 右键移动命令
@@ -1147,4 +1146,3 @@ const spawnRangedProjectiles = (sim, crowd, attackerSquad, sourceAgent, targetAg
 28. `frontend/src/game/battle/simulation/crowd/crowdPhysics.js:215` | `buildSpatialHash` | 空间哈希
 29. `backend/routes/army.js:327` | `/training/init` | 训练场战斗初始化后端
 30. `backend/routes/nodes.js:7726` | `/siege/pve/battle-init` | 围城战斗初始化后端
-

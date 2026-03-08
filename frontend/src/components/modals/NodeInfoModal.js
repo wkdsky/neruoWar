@@ -7,6 +7,7 @@ import defaultMale3 from '../../assets/avatars/default_male_3.svg';
 import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
 import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
 import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
+import { SENSE_ARTICLE_ENTRY_LABEL } from '../senseArticle/senseArticleUi';
 
 const avatarMap = {
     default_male_1: defaultMale1,
@@ -102,6 +103,7 @@ const NodeInfoModal = ({
     onClose,
     nodeDetail,
     onEnterKnowledgeDomain,
+    onOpenSenseArticle,
     simpleOnly = false,
     canApplyDomainMaster = false,
     isApplyingDomainMaster = false,
@@ -143,6 +145,12 @@ const NodeInfoModal = ({
                         </div>
                     </div>
                     <div className="modal-footer">
+                        <button
+                            className="btn btn-primary"
+                            onClick={() => onOpenSenseArticle && onOpenSenseArticle(nodeDetail)}
+                        >
+                            {SENSE_ARTICLE_ENTRY_LABEL}
+                        </button>
                         <button className="btn btn-secondary" onClick={onClose}>关闭</button>
                     </div>
                 </div>
@@ -299,6 +307,12 @@ const NodeInfoModal = ({
                     >
                         <Compass size={18} />
                         进入知识域
+                    </button>
+                    <button
+                        className="btn btn-blue"
+                        onClick={() => onOpenSenseArticle && onOpenSenseArticle(nodeDetail)}
+                    >
+                        {SENSE_ARTICLE_ENTRY_LABEL}
                     </button>
                     <button
                         className="btn btn-secondary"

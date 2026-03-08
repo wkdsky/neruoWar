@@ -24,8 +24,8 @@
 ## 1. 战场渲染与视角系统（40°/90°）
 
 ### 1.1 战场视角切换实现（40°/90°）
-- 40/90 常量：`frontend/src/components/game/BattleSceneModal.js:42-43` (`BATTLE_PITCH_LOW_DEG=40`, `BATTLE_PITCH_HIGH_DEG=90`)。
-- 切换入口：`handleTogglePitch` 在 `frontend/src/components/game/BattleSceneModal.js:1125`。
+- 40/90 常量：`frontend/src/game/battle/screens/BattleSceneContainer.js:42-43` (`BATTLE_PITCH_LOW_DEG=40`, `BATTLE_PITCH_HIGH_DEG=90`)。
+- 切换入口：`handleTogglePitch` 在 `frontend/src/game/battle/screens/BattleSceneContainer.js:1125`。
 - 相机切换核心：
   - `togglePitchMode`：`frontend/src/game/battle/presentation/render/CameraController.js:267`
   - `setPitchMode`：`.../CameraController.js:272`
@@ -34,13 +34,13 @@
 ### 1.2 相机参数与投影；切换是否影响 picking/raycast
 - 相机参数：构造函数含 `yawDeg/pitchLow/pitchHigh/distance`：`CameraController.js:233-236`。
 - `distance` 即缩放半径（zoom）；在场景中可被滚轮与双指手势更新：
-  - 滚轮缩放：`BattleSceneModal.js:1749-1750`
-  - 双指缩放：`BattleSceneModal.js:1693`
-  - 进入部署时会重设 overview 距离：`BattleSceneModal.js:639`
+  - 滚轮缩放：`BattleSceneContainer.js:1749-1750`
+  - 双指缩放：`BattleSceneContainer.js:1693`
+  - 进入部署时会重设 overview 距离：`BattleSceneContainer.js:639`
 - 投影矩阵：固定透视投影 `mat4Perspective(48°)`：`CameraController.js:358` 附近。
 - 视图矩阵与修正：`buildMatrices`：`CameraController.js:337`；含 pitch 接近 90° 时的 flip 修正逻辑。
 - picking/raycast：`screenToGround` 用逆 VP 矩阵射线求与 `z=0` 平面交点：`CameraController.js:441`。
-- UI 点击世界坐标：`resolveEventWorldPoint` 调 `screenToGround`：`BattleSceneModal.js:1222-1228`。
+- UI 点击世界坐标：`resolveEventWorldPoint` 调 `screenToGround`：`BattleSceneContainer.js:1222-1228`。
 - 结论：**会随相机切换同步影响 picking**（同一矩阵源），不是独立旧坐标系。
 
 ### 1.3 顶视（90°）可见性机制
@@ -327,13 +327,13 @@
 | 4 | `frontend/src/game/battle/presentation/render/CameraController.js:280` | `getPitchBlend` | 渲染混合系数来源 |
 | 5 | `frontend/src/game/battle/presentation/render/CameraController.js:337` | `buildMatrices` | 相机矩阵构建 |
 | 6 | `frontend/src/game/battle/presentation/render/CameraController.js:441` | `screenToGround` | 屏幕点到地面拾取 |
-| 7 | `frontend/src/components/game/BattleSceneModal.js:42` | `BATTLE_PITCH_LOW_DEG` | 低俯角常量 40° |
-| 8 | `frontend/src/components/game/BattleSceneModal.js:43` | `BATTLE_PITCH_HIGH_DEG` | 高俯角常量 90° |
-| 9 | `frontend/src/components/game/BattleSceneModal.js:994` | `pitchMix` | 当前 pitch 混合值 |
-| 10 | `frontend/src/components/game/BattleSceneModal.js:996` | `renderers.building.render` | 设置物渲染调用点 |
-| 11 | `frontend/src/components/game/BattleSceneModal.js:997` | `renderers.impostor.render` | 单位渲染调用点 |
-| 12 | `frontend/src/components/game/BattleSceneModal.js:1125` | `handleTogglePitch` | UI切换视角入口 |
-| 13 | `frontend/src/components/game/BattleSceneModal.js:1222` | `resolveEventWorldPoint` | 鼠标事件世界坐标 |
+| 7 | `frontend/src/game/battle/screens/BattleSceneContainer.js:42` | `BATTLE_PITCH_LOW_DEG` | 低俯角常量 40° |
+| 8 | `frontend/src/game/battle/screens/BattleSceneContainer.js:43` | `BATTLE_PITCH_HIGH_DEG` | 高俯角常量 90° |
+| 9 | `frontend/src/game/battle/screens/BattleSceneContainer.js:994` | `pitchMix` | 当前 pitch 混合值 |
+| 10 | `frontend/src/game/battle/screens/BattleSceneContainer.js:996` | `renderers.building.render` | 设置物渲染调用点 |
+| 11 | `frontend/src/game/battle/screens/BattleSceneContainer.js:997` | `renderers.impostor.render` | 单位渲染调用点 |
+| 12 | `frontend/src/game/battle/screens/BattleSceneContainer.js:1125` | `handleTogglePitch` | UI切换视角入口 |
+| 13 | `frontend/src/game/battle/screens/BattleSceneContainer.js:1222` | `resolveEventWorldPoint` | 鼠标事件世界坐标 |
 | 14 | `frontend/src/game/battle/presentation/render/BuildingRenderer.js:8` | `BUILDING_INSTANCE_STRIDE` | 设置物实例步长=8 |
 | 15 | `frontend/src/game/battle/presentation/render/BuildingRenderer.js:12` | `iData0` | 实例属性 x/y/width/depth |
 | 16 | `frontend/src/game/battle/presentation/render/BuildingRenderer.js:13` | `iData1` | 实例属性 height/rot/hp/destroyed |

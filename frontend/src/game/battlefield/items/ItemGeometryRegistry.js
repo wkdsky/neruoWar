@@ -6,8 +6,7 @@ const DEFAULT_HEIGHT = 21.333;
 const PREVIEW_SCALE = 0.08;
 
 let previewBushBladeTexture = null;
-const getPreviewBushBladeTexture = () => {
-  if (previewBushBladeTexture) return previewBushBladeTexture;
+export const createBushBladeCanvas = () => {
   if (typeof document === 'undefined') return null;
   const canvas = document.createElement('canvas');
   canvas.width = 96;
@@ -28,6 +27,13 @@ const getPreviewBushBladeTexture = () => {
   ctx.quadraticCurveTo(canvas.width * 0.87, canvas.height * 0.38, canvas.width * 0.5, canvas.height * 0.03);
   ctx.closePath();
   ctx.fill();
+  return canvas;
+};
+
+const getPreviewBushBladeTexture = () => {
+  if (previewBushBladeTexture) return previewBushBladeTexture;
+  const canvas = createBushBladeCanvas();
+  if (!canvas) return null;
   previewBushBladeTexture = new THREE.CanvasTexture(canvas);
   previewBushBladeTexture.colorSpace = THREE.SRGBColorSpace;
   previewBushBladeTexture.wrapS = THREE.ClampToEdgeWrapping;

@@ -16,8 +16,27 @@ import LocationSelectionModal from './LocationSelectionModal';
 import AssociationModal from './components/modals/AssociationModal';
 import NodeInfoModal from './components/modals/NodeInfoModal';
 import CreateNodeModal from './components/modals/CreateNodeModal';
-import PveBattleModal from './components/game/PveBattleModal';
+import { BattleSceneModal } from './game/battle';
 import BattlefieldPreviewModal from './components/game/BattlefieldPreviewModal';
+import SenseArticlePage from './components/senseArticle/SenseArticlePage';
+import SenseArticleEditor from './components/senseArticle/SenseArticleEditor';
+import SenseArticleReviewPage from './components/senseArticle/SenseArticleReviewPage';
+import SenseArticleHistoryPage from './components/senseArticle/SenseArticleHistoryPage';
+import SenseArticleDashboardPage from './components/senseArticle/SenseArticleDashboardPage';
+import {
+    findEditableSenseArticleRevision,
+    getSenseArticleEntryActionLabel,
+    SENSE_ARTICLE_ENTRY_LABEL,
+    SENSE_ARTICLE_ENTRY_SHORT_LABEL
+} from './components/senseArticle/senseArticleUi';
+import {
+    buildSenseArticleNavigationState,
+    buildSenseArticleSubViewContext,
+    createSenseArticleContext,
+    resolveSenseArticleBackTarget,
+    resolveSenseArticleNotificationNavigation
+} from './components/senseArticle/senseArticleNavigation';
+import { senseArticleApi } from './utils/senseArticleApi';
 import { API_BASE, BACKEND_ORIGIN } from './runtimeConfig';
 import BattleDataService from './game/battle/data/BattleDataService';
 
@@ -143,6 +162,28 @@ const getNodePrimarySense = (node) => {
     }
     return senses[0] || null;
 };
+const getNodeSenseArticleTarget = (node, requestedSenseId = '') => {
+    const nodeId = normalizeObjectId(node?._id || node?.nodeId);
+    if (!nodeId) return null;
+    const normalizedSenseId = typeof requestedSenseId === 'string' ? requestedSenseId.trim() : '';
+    if (normalizedSenseId) {
+        return {
+            nodeId,
+            senseId: normalizedSenseId
+        };
+    }
+    const primarySense = getNodePrimarySense(node);
+    const fallbackSenseId = typeof node?.activeSenseId === 'string' && node.activeSenseId.trim()
+        ? node.activeSenseId.trim()
+        : (typeof primarySense?.senseId === 'string' ? primarySense.senseId.trim() : '');
+    if (!fallbackSenseId) return null;
+    return {
+        nodeId,
+        senseId: fallbackSenseId
+    };
+};
+const isSenseArticleNotification = (notification) => typeof notification?.type === 'string' && notification.type.startsWith('sense_article_');
+
 const getNodeDisplayName = (node) => {
     if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
     const name = typeof node?.name === 'string' ? node.name.trim() : '';
@@ -571,7 +612,17 @@ const App = () => {
     const [senseSelectorOverviewNode, setSenseSelectorOverviewNode] = useState(null);
     const [senseSelectorOverviewLoading, setSenseSelectorOverviewLoading] = useState(false);
     const [senseSelectorOverviewError, setSenseSelectorOverviewError] = useState('');
+    const [senseArticleEntryStatusMap, setSenseArticleEntryStatusMap] = useState({});
     const [showNodeInfoModal, setShowNodeInfoModal] = useState(false);
+    const [senseArticleContext, setSenseArticleContext] = useState(null);
+    const buildSenseArticleContext = useCallback((patch = {}, base = null) => createSenseArticleContext(patch, base), []);
+    const patchSenseArticleContext = useCallback((patch = {}) => {
+        setSenseArticleContext((prev) => buildSenseArticleContext(patch, prev));
+    }, [buildSenseArticleContext]);
+    const navigateSenseArticleSubView = useCallback((nextView, patch = {}, options = {}) => {
+        setSenseArticleContext((prev) => buildSenseArticleSubViewContext(prev, view, patch, options));
+        setView(nextView);
+    }, [view]);
     const [isApplyingDomainMaster, setIsApplyingDomainMaster] = useState(false);
     const [intelHeistStatus, setIntelHeistStatus] = useState(createEmptyIntelHeistStatus);
     const [intelHeistDialog, setIntelHeistDialog] = useState({
@@ -2191,7 +2242,7 @@ const App = () => {
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
 
     const currentView = (showKnowledgeDomain || isTransitioningToDomain) ? 'knowledgeDomain' : view;
-    if (currentView === 'trainingGround') {
+    if (currentView === 'trainingGround' || String(currentView).startsWith('senseArticle')) {
       localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
       return;
     }
@@ -2225,7 +2276,7 @@ const App = () => {
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
     if (view === 'login') return;
 
-    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround'].includes(view);
+    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround', 'senseArticle', 'senseArticleEditor', 'senseArticleReview', 'senseArticleHistory'].includes(view);
     if (!isKnownView) {
       setView('home');
       return;
@@ -4390,6 +4441,82 @@ const App = () => {
         senseSelectorSourceNode
     ]);
 
+    useEffect(() => {
+        if (!isSenseSelectorVisible) return undefined;
+        const overviewNode = senseSelectorOverviewNode || currentNodeDetail || currentTitleDetail || senseSelectorSourceNode || null;
+        const nodeId = normalizeObjectId(overviewNode?._id || overviewNode?.nodeId);
+        if (!nodeId) return undefined;
+
+        const senses = Array.isArray(overviewNode?.synonymSenses) && overviewNode.synonymSenses.length > 0
+            ? overviewNode.synonymSenses
+            : [{ senseId: overviewNode?.activeSenseId || 'sense_1' }];
+        const pendingTargets = senses
+            .map((sense) => {
+                const senseId = typeof sense?.senseId === 'string' ? sense.senseId.trim() : '';
+                if (!senseId) return null;
+                const key = `${nodeId}:${senseId}`;
+                const cached = senseArticleEntryStatusMap[key];
+                if (cached?.resolved) return null;
+                return { key, nodeId, senseId };
+            })
+            .filter(Boolean);
+        if (pendingTargets.length === 0) return undefined;
+
+        setSenseArticleEntryStatusMap((prev) => {
+            const next = { ...prev };
+            pendingTargets.forEach(({ key }) => {
+                next[key] = { ...(prev[key] || {}), loading: true, resolved: false, hasPublishedRevision: false };
+            });
+            return next;
+        });
+
+        let cancelled = false;
+        (async () => {
+            const results = await Promise.all(pendingTargets.map(async ({ key, nodeId: targetNodeId, senseId }) => {
+                try {
+                    const data = await senseArticleApi.getOverview(targetNodeId, senseId);
+                    return {
+                        key,
+                        hasPublishedRevision: !!data?.currentRevision?._id,
+                        articleId: data?.article?._id || '',
+                        currentRevisionId: data?.article?.currentRevisionId || data?.currentRevision?._id || ''
+                    };
+                } catch (_error) {
+                    return {
+                        key,
+                        hasPublishedRevision: false,
+                        articleId: '',
+                        currentRevisionId: ''
+                    };
+                }
+            }));
+            if (cancelled) return;
+            setSenseArticleEntryStatusMap((prev) => {
+                const next = { ...prev };
+                results.forEach((item) => {
+                    next[item.key] = {
+                        loading: false,
+                        resolved: true,
+                        hasPublishedRevision: !!item.hasPublishedRevision,
+                        articleId: item.articleId || '',
+                        currentRevisionId: item.currentRevisionId || ''
+                    };
+                });
+                return next;
+            });
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        currentNodeDetail,
+        currentTitleDetail,
+        isSenseSelectorVisible,
+        senseSelectorOverviewNode,
+        senseSelectorSourceNode
+    ]);
+
 
     // 新节点创建相关函数
     const openCreateNodeModal = () => {
@@ -5257,6 +5384,10 @@ const App = () => {
                                                 handleArrivalNotificationClick(notification);
                                                 return;
                                             }
+                                            if (isSenseArticleNotification(notification)) {
+                                                handleSenseArticleNotificationClick(notification);
+                                                return;
+                                            }
                                             if (!notification.read) {
                                                 markNotificationRead(notification._id);
                                             }
@@ -5427,6 +5558,182 @@ const App = () => {
         setIsSenseSelectorVisible(false);
     };
 
+    const openSenseArticleView = (target = {}, options = {}) => {
+        const nextContext = buildSenseArticleNavigationState({
+            target,
+            options,
+            currentView: view,
+            currentContext: senseArticleContext,
+            currentNodeId: normalizeObjectId(currentNodeDetail?._id),
+            currentTitleId: normalizeObjectId(currentTitleDetail?._id)
+        });
+        if (!nextContext) return;
+        setShowNodeInfoModal(false);
+        setNodeInfoModalTarget(null);
+        setIsSenseSelectorVisible(false);
+        setSenseArticleContext(nextContext);
+        setView(options.view || 'senseArticle');
+    };
+
+    const openSenseArticleFromNode = (node, options = {}) => {
+        const target = getNodeSenseArticleTarget(node, options.senseId);
+        if (!target) {
+            window.alert('当前节点没有可打开的释义百科页');
+            return;
+        }
+        openSenseArticleView(target, options);
+    };
+
+    const resolveEditableSenseArticleRevision = useCallback(async (nodeId, senseId) => {
+        const data = await senseArticleApi.getRevisions(nodeId, senseId, { pageSize: 20 });
+        return {
+            articleId: data?.article?._id || '',
+            currentRevisionId: data?.currentRevisionId || '',
+            revision: findEditableSenseArticleRevision({
+                revisions: data?.revisions || [],
+                currentUserId: normalizeObjectId(userId) || normalizeObjectId(localStorage.getItem('userId')),
+                isSystemAdmin: !!isAdmin || !!data?.permissions?.isSystemAdmin
+            })
+        };
+    }, [isAdmin, userId]);
+
+    const handleSenseArticleBack = async (payload = null) => {
+        if (payload?.action === 'openArticle') {
+            openSenseArticleView({ nodeId: payload.nodeId, senseId: payload.senseId }, {
+                originView: 'senseArticle',
+                sourceHint: payload.sourceHint || '',
+                returnTarget: { ...(senseArticleContext || {}), view }
+            });
+            return;
+        }
+        const backTarget = resolveSenseArticleBackTarget({ context: senseArticleContext });
+        if (backTarget.kind === 'article' && backTarget.context) {
+            setSenseArticleContext(backTarget.context);
+            setView(backTarget.view || 'senseArticle');
+            return;
+        }
+        if (backTarget.view === 'titleDetail' && currentTitleDetail) {
+            setView('titleDetail');
+            return;
+        }
+        if (backTarget.view === 'nodeDetail' && currentNodeDetail) {
+            setView('nodeDetail');
+            return;
+        }
+        if (backTarget.view === 'home') {
+            await navigateToHomeWithDockCollapse();
+            return;
+        }
+        await navigateToHomeWithDockCollapse();
+    };
+
+    const handleOpenSenseArticleEditor = async ({ mode = 'full', anchor = null, headingId = '', preferExisting = false, revisionId = '' } = {}) => {
+        const targetNodeId = normalizeObjectId(senseArticleContext?.nodeId);
+        const targetSenseId = typeof senseArticleContext?.senseId === 'string' ? senseArticleContext.senseId.trim() : '';
+        if (!targetNodeId || !targetSenseId) return;
+        try {
+            let data = null;
+            const requestedRevisionId = normalizeObjectId(revisionId);
+            if (requestedRevisionId) {
+                navigateSenseArticleSubView('senseArticleEditor', {
+                    nodeId: targetNodeId,
+                    senseId: targetSenseId,
+                    articleId: senseArticleContext?.articleId || '',
+                    currentRevisionId: senseArticleContext?.currentRevisionId || '',
+                    selectedRevisionId: requestedRevisionId,
+                    revisionId: requestedRevisionId
+                });
+                return;
+            }
+            if (mode === 'selection') {
+                data = await senseArticleApi.createFromSelection(targetNodeId, targetSenseId, {
+                    selectedRangeAnchor: anchor,
+                    proposerNote: '从阅读页选段发起修订'
+                });
+            } else if (mode === 'heading') {
+                data = await senseArticleApi.createFromHeading(targetNodeId, targetSenseId, {
+                    targetHeadingId: headingId,
+                    proposerNote: headingId ? ('从小节 ' + headingId + ' 发起修订') : '从小节发起修订'
+                });
+            } else {
+                if (preferExisting || mode === 'full') {
+                    const existing = await resolveEditableSenseArticleRevision(targetNodeId, targetSenseId);
+                    if (existing?.revision?._id) {
+                        navigateSenseArticleSubView('senseArticleEditor', {
+                            nodeId: targetNodeId,
+                            senseId: targetSenseId,
+                            articleId: existing.articleId || senseArticleContext?.articleId || '',
+                            currentRevisionId: existing.currentRevisionId || senseArticleContext?.currentRevisionId || '',
+                            selectedRevisionId: existing.revision._id,
+                            revisionId: existing.revision._id
+                        });
+                        return;
+                    }
+                }
+                data = await senseArticleApi.createDraft(targetNodeId, targetSenseId, {
+                    proposerNote: '整页百科修订草稿'
+                });
+            }
+            navigateSenseArticleSubView('senseArticleEditor', {
+                nodeId: targetNodeId,
+                senseId: targetSenseId,
+                articleId: data?.article?._id || senseArticleContext?.articleId || '',
+                currentRevisionId: data?.article?.currentRevisionId || senseArticleContext?.currentRevisionId || '',
+                selectedRevisionId: data?.revision?._id || '',
+                revisionId: data?.revision?._id || ''
+            });
+        } catch (error) {
+            window.alert(error.message);
+        }
+    };
+
+    const handleOpenSenseArticleHistory = () => {
+        if (!senseArticleContext?.nodeId || !senseArticleContext?.senseId) return;
+        navigateSenseArticleSubView('senseArticleHistory');
+    };
+
+    const handleOpenSenseArticleDashboard = () => {
+        if (!senseArticleContext?.nodeId) return;
+        navigateSenseArticleSubView('senseArticleDashboard');
+    };
+
+    const handleOpenSenseArticleReview = async ({ latest = false, revision = null } = {}) => {
+        const targetNodeId = normalizeObjectId(senseArticleContext?.nodeId);
+        const targetSenseId = typeof senseArticleContext?.senseId === 'string' ? senseArticleContext.senseId.trim() : '';
+        if (!targetNodeId || !targetSenseId) return;
+        let targetRevisionId = revision?._id || revision?.revisionId || senseArticleContext?.revisionId || '';
+        if (latest || !targetRevisionId) {
+            try {
+                const data = await senseArticleApi.getRevisions(targetNodeId, targetSenseId, { pageSize: 20 });
+                const revisions = Array.isArray(data?.revisions) ? data.revisions : [];
+                const preferred = revisions.find((item) => item.status === 'pending_domain_admin_review' || item.status === 'pending_domain_master_review') || revisions[0];
+                targetRevisionId = preferred?._id || '';
+            } catch (error) {
+                window.alert(error.message);
+                return;
+            }
+        }
+        if (!targetRevisionId) {
+            window.alert('当前没有可审阅的修订');
+            return;
+        }
+        navigateSenseArticleSubView('senseArticleReview', {
+            nodeId: targetNodeId,
+            senseId: targetSenseId,
+            selectedRevisionId: targetRevisionId,
+            revisionId: targetRevisionId
+        });
+    };
+
+    const handleSenseArticleNotificationClick = async (notification) => {
+        const navigation = resolveSenseArticleNotificationNavigation(notification);
+        if (!navigation) return;
+        if (!notification.read && notification._id) {
+            await markNotificationRead(notification._id);
+        }
+        openSenseArticleView(navigation.target, navigation.options);
+    };
+
     const renderSenseSelectorPanel = () => {
         if (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail') return null;
         const selectorNode = resolveSenseSelectorNode();
@@ -5539,15 +5846,29 @@ const App = () => {
                 <div className="sense-selector-list">
                     {senses.map((sense) => {
                         const isActive = !!activeSenseId && sense?.senseId === activeSenseId;
+                        const entryKey = `${normalizeObjectId(overviewNode?._id) || ''}:${typeof sense?.senseId === 'string' ? sense.senseId.trim() : ''}`;
+                        const articleEntryState = senseArticleEntryStatusMap[entryKey] || null;
                         return (
-                            <button
-                                key={sense?.senseId || sense?.title}
-                                type="button"
-                                className={`sense-selector-item ${isActive ? 'active' : ''}`}
-                                onClick={() => handleSwitchSenseView(sense?.senseId)}
-                            >
-                                {sense?.title || '未命名释义'}
-                            </button>
+                            <div key={sense?.senseId || sense?.title} className="sense-selector-item-row">
+                                <button
+                                    type="button"
+                                    className={`sense-selector-item ${isActive ? 'active' : ''}`}
+                                    onClick={() => handleSwitchSenseView(sense?.senseId)}
+                                >
+                                    {sense?.title || '未命名释义'}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="sense-selector-item-article-btn"
+                                    onClick={() => openSenseArticleFromNode(overviewNode, { senseId: sense?.senseId })}
+                                    disabled={!!articleEntryState?.loading && !articleEntryState?.resolved}
+                                >
+                                    {getSenseArticleEntryActionLabel({
+                                        hasPublishedRevision: !!articleEntryState?.hasPublishedRevision,
+                                        loading: !!articleEntryState?.loading && !articleEntryState?.resolved
+                                    }) || SENSE_ARTICLE_ENTRY_SHORT_LABEL}
+                                </button>
+                            </div>
                         );
                     })}
                 </div>
@@ -6180,7 +6501,98 @@ const App = () => {
                             }}
                             webglCanvasRef={webglCanvasRef}
                         />
+                        <div className="sense-article-entry-banner">
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                onClick={() => openSenseArticleFromNode(currentNodeDetail)}
+                            >
+                                {SENSE_ARTICLE_ENTRY_LABEL}
+                            </button>
+                        </div>
                     </>
+                )}
+                {view === "senseArticle" && senseArticleContext?.nodeId && senseArticleContext?.senseId && (
+                    <SenseArticlePage
+                        nodeId={senseArticleContext.nodeId}
+                        senseId={senseArticleContext.senseId}
+                        articleContext={senseArticleContext}
+                        onContextPatch={patchSenseArticleContext}
+                        onBack={handleSenseArticleBack}
+                        onOpenEditor={handleOpenSenseArticleEditor}
+                        onOpenHistory={handleOpenSenseArticleHistory}
+                        onOpenReview={handleOpenSenseArticleReview}
+                        onOpenDashboard={handleOpenSenseArticleDashboard}
+                    />
+                )}
+                {view === "senseArticleEditor" && senseArticleContext?.nodeId && senseArticleContext?.senseId && senseArticleContext?.revisionId && (
+                    <SenseArticleEditor
+                        nodeId={senseArticleContext.nodeId}
+                        senseId={senseArticleContext.senseId}
+                        revisionId={senseArticleContext.revisionId || senseArticleContext.selectedRevisionId}
+                        articleContext={senseArticleContext}
+                        onContextPatch={patchSenseArticleContext}
+                        onBack={handleSenseArticleBack}
+                        onOpenDashboard={handleOpenSenseArticleDashboard}
+                        onSubmitted={(revision) => {
+                            navigateSenseArticleSubView('senseArticleHistory', { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
+                            fetchNotifications(true);
+                        }}
+                    />
+                )}
+                {view === "senseArticleReview" && senseArticleContext?.nodeId && senseArticleContext?.senseId && senseArticleContext?.revisionId && (
+                    <SenseArticleReviewPage
+                        nodeId={senseArticleContext.nodeId}
+                        senseId={senseArticleContext.senseId}
+                        revisionId={senseArticleContext.revisionId || senseArticleContext.selectedRevisionId}
+                        articleContext={senseArticleContext}
+                        onContextPatch={patchSenseArticleContext}
+                        onBack={handleSenseArticleBack}
+                        onOpenDashboard={handleOpenSenseArticleDashboard}
+                        onReviewed={(revision) => {
+                            navigateSenseArticleSubView('senseArticleHistory', { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
+                            fetchNotifications(true);
+                        }}
+                    />
+                )}
+                {view === "senseArticleHistory" && senseArticleContext?.nodeId && senseArticleContext?.senseId && (
+                    <SenseArticleHistoryPage
+                        nodeId={senseArticleContext.nodeId}
+                        senseId={senseArticleContext.senseId}
+                        articleContext={senseArticleContext}
+                        onContextPatch={patchSenseArticleContext}
+                        onBack={handleSenseArticleBack}
+                        onOpenDashboard={handleOpenSenseArticleDashboard}
+                        onOpenRevision={(revision) => handleOpenSenseArticleReview({ revision })}
+                        onEditRevision={(revision) => {
+                            navigateSenseArticleSubView('senseArticleEditor', { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
+                        }}
+                    />
+                )}
+                {view === "senseArticleDashboard" && senseArticleContext?.nodeId && (
+                    <SenseArticleDashboardPage
+                        nodeId={senseArticleContext.nodeId}
+                        articleContext={senseArticleContext}
+                        onContextPatch={patchSenseArticleContext}
+                        onBack={handleSenseArticleBack}
+                        onOpenReview={(revision) => {
+                            navigateSenseArticleSubView('senseArticleReview', {
+                                nodeId: revision?.nodeId || senseArticleContext.nodeId,
+                                senseId: revision?.senseId || senseArticleContext.senseId,
+                                selectedRevisionId: revision?._id || '',
+                                revisionId: revision?._id || ''
+                            });
+                        }}
+                        onOpenHistory={(revision) => {
+                            navigateSenseArticleSubView('senseArticleHistory', {
+                                nodeId: revision?.nodeId || senseArticleContext.nodeId,
+                                senseId: revision?.senseId || senseArticleContext.senseId,
+                                selectedRevisionId: revision?._id || '',
+                                revisionId: revision?._id || ''
+                            });
+                        }}
+                        onOpenArticle={(target) => openSenseArticleView({ nodeId: target.nodeId, senseId: target.senseId }, { returnTarget: { ...(senseArticleContext || {}), view } })}
+                    />
                 )}
                 {renderSenseSelectorPanel()}
                 {renderUnifiedRightDock()}
@@ -6227,7 +6639,11 @@ const App = () => {
                  view !== "profile" &&
                  !(view === "army" && !isAdmin) &&
                  !(view === "equipment" && !isAdmin) &&
-                 !(view === "trainingGround" && !isAdmin) && (
+                 !(view === "trainingGround" && !isAdmin) &&
+                 view !== "senseArticle" &&
+                 view !== "senseArticleEditor" &&
+                 view !== "senseArticleReview" &&
+                 view !== "senseArticleHistory" && (
                     <div className="no-pending-nodes">
                         <p>页面状态异常，已为你回退到首页</p>
                         <button
@@ -6641,11 +7057,14 @@ const App = () => {
                     </div>
                 )}
 
-                <PveBattleModal
+                <BattleSceneModal
                     open={pveBattleState.open}
                     loading={pveBattleState.loading}
                     error={pveBattleState.error}
                     battleInitData={pveBattleState.data}
+                    mode="siege"
+                    startLabel="开战"
+                    requireResultReport
                     onClose={closeSiegePveBattle}
                     onBattleFinished={handlePveBattleFinished}
                 />
@@ -6674,6 +7093,7 @@ const App = () => {
                     }}
                     nodeDetail={nodeInfoModalTarget}
                     onEnterKnowledgeDomain={handleEnterKnowledgeDomain}
+                    onOpenSenseArticle={openSenseArticleFromNode}
                     simpleOnly
                     canApplyDomainMaster={canApplyDomainMaster}
                     isApplyingDomainMaster={isApplyingDomainMaster}
