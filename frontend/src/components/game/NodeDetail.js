@@ -196,21 +196,21 @@ const NodeDetail = ({
         // Draw center node (last to be on top)
         // Glow
         const centerGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, centerRadius);
-        centerGradient.addColorStop(0, 'rgba(168, 85, 247, 0.4)');
-        centerGradient.addColorStop(1, 'rgba(168, 85, 247, 0)');
+        centerGradient.addColorStop(0, 'rgba(103, 232, 249, 0.34)');
+        centerGradient.addColorStop(1, 'rgba(103, 232, 249, 0)');
         ctx.fillStyle = centerGradient;
         ctx.beginPath();
         ctx.arc(centerX, centerY, centerRadius * 1.5, 0, Math.PI * 2);
         ctx.fill();
 
         // Body
-        ctx.fillStyle = '#a855f7';
+        ctx.fillStyle = '#67e8f9';
         ctx.beginPath();
         ctx.arc(centerX, centerY, centerRadius, 0, Math.PI * 2);
         ctx.fill();
 
         // Border
-        ctx.strokeStyle = '#7c3aed';
+        ctx.strokeStyle = '#0f766e';
         ctx.lineWidth = 4;
         ctx.stroke();
 
@@ -222,12 +222,12 @@ const NodeDetail = ({
 
         // Knowledge Points
         ctx.font = 'bold 16px sans-serif';
-        ctx.fillStyle = '#e9d5ff';
+        ctx.fillStyle = '#eef8ff';
         ctx.fillText(`${(node.knowledgePoint?.value || 0).toFixed(2)}`, centerX, centerY + 10);
 
         // Content Score
         ctx.font = '12px sans-serif';
-        ctx.fillStyle = '#c4b5fd';
+        ctx.fillStyle = '#c7dff7';
         ctx.fillText(`分数: ${node.contentScore || 1}/分钟`, centerX, centerY + 28);
 
     }, [node]);
@@ -430,7 +430,7 @@ const NodeDetail = ({
                                         onClick={() => onSearchResultClick(node)}
                                     >
                                         <div className="search-card-title">{renderKeywordHighlight(getSearchNodeDisplayName(node), searchQuery)}</div>
-                                        <div className="search-card-desc">{node.senseContent || node.description}</div>
+                                        <div className="search-card-desc">{node.description}</div>
                                     </div>
                                 ))}
                             </div>

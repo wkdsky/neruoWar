@@ -20,18 +20,19 @@ const selectSupersedeCandidates = ({ revisions = [], publishedRevisionId = '', b
 
 const resolveSubmitOperation = (revision = {}) => {
   const status = revision?.status || '';
-  if (status === 'pending_domain_admin_review') return noop('already_pending_domain_admin_review');
+  if (status === 'pending_review' || status === 'pending_domain_admin_review' || status === 'pending_domain_master_review') {
+    return noop('already_pending_domain_admin_review');
+  }
   if (DRAFT_EDITABLE_STATUSES.includes(status)) {
     return apply({
-      status: 'pending_domain_admin_review',
-      reviewStage: 'domain_admin'
+      status: 'pending_review',
+      reviewStage: 'review'
     }, 'submitted_for_domain_admin_review');
   }
-  if (status === 'pending_domain_master_review') return invalid('already_approved_by_domain_admin');
   if (status === 'published') return invalid('already_published');
   if (status === 'superseded') return invalid('revision_superseded');
   if (status === 'withdrawn') return invalid('revision_withdrawn');
-  if (status === 'rejected_by_domain_admin' || status === 'rejected_by_domain_master') return invalid('revision_rejected');
+  if (status === 'rejected' || status === 'rejected_by_domain_admin' || status === 'rejected_by_domain_master') return invalid('revision_rejected');
   return invalid('status_not_submittable');
 };
 

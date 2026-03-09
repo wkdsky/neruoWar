@@ -586,7 +586,7 @@ class KnowledgeDomainRenderer {
     this.roadColor = '#2d3555';
     this.roadBorderColor = '#4a5580';
     this.centerColor = '#252b45';
-    this.glowColor = 'rgba(168, 85, 247, 0.3)';
+    this.glowColor = 'rgba(103, 232, 249, 0.24)';
 
     // 动画状态
     this.particles = [];
@@ -662,8 +662,8 @@ class KnowledgeDomainRenderer {
       centerX, centerY, 0,
       centerX, centerY, radiusX
     );
-    gradient.addColorStop(0, 'rgba(168, 85, 247, 0.15)');
-    gradient.addColorStop(0.7, 'rgba(168, 85, 247, 0.05)');
+    gradient.addColorStop(0, 'rgba(103, 232, 249, 0.15)');
+    gradient.addColorStop(0.7, 'rgba(103, 232, 249, 0.05)');
     gradient.addColorStop(1, 'transparent');
 
     ctx.fillStyle = gradient;
@@ -678,12 +678,12 @@ class KnowledgeDomainRenderer {
     ctx.fill();
 
     // 绘制边框
-    ctx.strokeStyle = 'rgba(168, 85, 247, 0.5)';
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.34)';
     ctx.lineWidth = 3;
     ctx.stroke();
 
     // 绘制内圈装饰
-    ctx.strokeStyle = 'rgba(168, 85, 247, 0.2)';
+    ctx.strokeStyle = 'rgba(103, 232, 249, 0.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.ellipse(centerX, centerY, radiusX * 0.8, radiusY * 0.8, 0, 0, Math.PI * 2);
@@ -747,7 +747,7 @@ class KnowledgeDomainRenderer {
 
     // 道路中线（虚线）
     ctx.setLineDash([15, 10]);
-    ctx.strokeStyle = 'rgba(168, 85, 247, 0.4)';
+    ctx.strokeStyle = 'rgba(103, 232, 249, 0.34)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(centerX, outerY);
@@ -832,7 +832,7 @@ class KnowledgeDomainRenderer {
 
       // 只绘制在可见区域内的粒子
       if (projX > 0 && projX < width && projY > 0 && projY < height) {
-        ctx.fillStyle = `rgba(168, 85, 247, ${p.alpha * 0.5})`;
+        ctx.fillStyle = `rgba(103, 232, 249, ${p.alpha * 0.5})`;
         ctx.beginPath();
         ctx.arc(projX, projY, p.size, 0, Math.PI * 2);
         ctx.fill();
@@ -854,7 +854,7 @@ class KnowledgeDomainRenderer {
       const scale = 0.5 + phase * 0.5;
       const alpha = (1 - phase) * 0.3;
 
-      ctx.strokeStyle = `rgba(168, 85, 247, ${alpha})`;
+      ctx.strokeStyle = `rgba(56, 189, 248, ${alpha})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.ellipse(centerX, centerY, radiusX * scale, radiusY * scale, 0, 0, Math.PI * 2);
@@ -928,6 +928,7 @@ const KnowledgeDomainScene = ({
     resignPending: false,
     domainMaster: null,
     domainAdmins: [],
+    availablePermissions: [],
     gateDefenseViewerAdminIds: [],
     pendingInvites: []
   });
@@ -943,6 +944,10 @@ const KnowledgeDomainScene = ({
   const [gateDefenseViewerDraftIds, setGateDefenseViewerDraftIds] = useState([]);
   const [gateDefenseViewerDirty, setGateDefenseViewerDirty] = useState(false);
   const [isSavingGateDefenseViewerPerms, setIsSavingGateDefenseViewerPerms] = useState(false);
+  const [isDomainAdminPermissionModalOpen, setIsDomainAdminPermissionModalOpen] = useState(false);
+  const [domainAdminPermissionDraftMap, setDomainAdminPermissionDraftMap] = useState({});
+  const [domainAdminPermissionDirty, setDomainAdminPermissionDirty] = useState(false);
+  const [isSavingDomainAdminPermissions, setIsSavingDomainAdminPermissions] = useState(false);
   const [distributionState, setDistributionState] = useState(createDefaultDistributionState);
   const [distributionUserKeyword, setDistributionUserKeyword] = useState('');
   const [distributionUserResults, setDistributionUserResults] = useState([]);
@@ -1022,6 +1027,23 @@ const KnowledgeDomainScene = ({
     }
     return { response, data, rawText };
   };
+  const buildDomainAdminPermissionDraft = (admins = []) => (
+    (Array.isArray(admins) ? admins : []).reduce((acc, adminItem) => {
+      const adminId = typeof adminItem?._id === 'string' ? adminItem._id : '';
+      if (!adminId) return acc;
+      const permissions = adminItem?.permissions && typeof adminItem.permissions === 'object'
+        ? adminItem.permissions
+        : {};
+      acc[adminId] = Object.keys(permissions).filter((key) => !!permissions[key]);
+      return acc;
+    }, {})
+  );
+
+  const normalizePermissionLabels = (adminItem) => {
+    const labels = Array.isArray(adminItem?.permissionLabels) ? adminItem.permissionLabels.filter((item) => typeof item === 'string' && item) : [];
+    return labels;
+  };
+
 
   const getApiError = (parsed, fallback) => (
     parsed?.data?.error ||
@@ -2221,12 +2243,15 @@ const KnowledgeDomainScene = ({
             isSystemAdmin: false,
             canResign: false,
             resignPending: false,
+            availablePermissions: [],
             gateDefenseViewerAdminIds: [],
             pendingInvites: [],
             error: ''
           }));
           setGateDefenseViewerDraftIds([]);
           setGateDefenseViewerDirty(false);
+          setDomainAdminPermissionDraftMap({});
+          setDomainAdminPermissionDirty(false);
           return;
         }
 
@@ -2238,12 +2263,15 @@ const KnowledgeDomainScene = ({
           isSystemAdmin: false,
           canResign: false,
           resignPending: false,
+          availablePermissions: [],
           gateDefenseViewerAdminIds: [],
           pendingInvites: [],
           error: getApiError(parsed, '获取域相列表失败')
         }));
         setGateDefenseViewerDraftIds([]);
         setGateDefenseViewerDirty(false);
+        setDomainAdminPermissionDraftMap({});
+        setDomainAdminPermissionDirty(false);
         return;
       }
 
@@ -2253,6 +2281,7 @@ const KnowledgeDomainScene = ({
           .filter((id) => !!id)))
         : [];
 
+      const domainAdmins = Array.isArray(data.domainAdmins) ? data.domainAdmins : [];
       setDomainAdminState({
         loading: false,
         error: '',
@@ -2262,12 +2291,15 @@ const KnowledgeDomainScene = ({
         canResign: !!data.canResign,
         resignPending: !!data.resignPending,
         domainMaster: data.domainMaster || null,
-        domainAdmins: data.domainAdmins || [],
+        domainAdmins,
+        availablePermissions: Array.isArray(data.availablePermissions) ? data.availablePermissions : [],
         gateDefenseViewerAdminIds,
         pendingInvites: data.pendingInvites || []
       });
       setGateDefenseViewerDraftIds(gateDefenseViewerAdminIds);
       setGateDefenseViewerDirty(false);
+      setDomainAdminPermissionDraftMap(buildDomainAdminPermissionDraft(domainAdmins));
+      setDomainAdminPermissionDirty(false);
     } catch (error) {
       setDomainAdminState((prev) => ({
         ...prev,
@@ -2275,12 +2307,15 @@ const KnowledgeDomainScene = ({
         isSystemAdmin: false,
         canResign: false,
         resignPending: false,
+        availablePermissions: [],
         gateDefenseViewerAdminIds: [],
         pendingInvites: [],
         error: `获取域相列表失败: ${error.message}`
       }));
       setGateDefenseViewerDraftIds([]);
       setGateDefenseViewerDirty(false);
+      setDomainAdminPermissionDraftMap({});
+      setDomainAdminPermissionDirty(false);
     }
   };
 
@@ -2487,6 +2522,83 @@ const KnowledgeDomainScene = ({
       setManageFeedback(`保存承口/启口可查看权限失败: ${error.message}`);
     } finally {
       setIsSavingGateDefenseViewerPerms(false);
+    }
+  };
+
+  const openDomainAdminPermissionModal = () => {
+    if (!domainAdminState.canEdit) return;
+    setDomainAdminPermissionDraftMap(buildDomainAdminPermissionDraft(domainAdminState.domainAdmins));
+    setDomainAdminPermissionDirty(false);
+    setIsDomainAdminPermissionModalOpen(true);
+    setManageFeedback('');
+  };
+
+  const closeDomainAdminPermissionModal = () => {
+    if (isSavingDomainAdminPermissions) return;
+    setIsDomainAdminPermissionModalOpen(false);
+  };
+
+  const toggleDomainAdminPermission = (adminUserId, permissionKey) => {
+    if (!adminUserId || !permissionKey) return;
+    setDomainAdminPermissionDraftMap((prev) => {
+      const currentKeys = Array.isArray(prev?.[adminUserId]) ? prev[adminUserId] : [];
+      const exists = currentKeys.includes(permissionKey);
+      const nextKeys = exists ? currentKeys.filter((item) => item !== permissionKey) : [...currentKeys, permissionKey];
+      return {
+        ...prev,
+        [adminUserId]: nextKeys
+      };
+    });
+    setDomainAdminPermissionDirty(true);
+    setManageFeedback('');
+  };
+
+  const saveDomainAdminPermissions = async () => {
+    const token = localStorage.getItem('token');
+    if (!token || !node?._id || !domainAdminState.canEdit) return;
+
+    setIsSavingDomainAdminPermissions(true);
+    setManageFeedback('');
+    try {
+      const response = await fetch(`${API_BASE}/nodes/${node._id}/domain-admins/permissions`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          permissionsByUserId: domainAdminPermissionDraftMap
+        })
+      });
+      const parsed = await parseApiResponse(response);
+      const data = parsed.data;
+      if (!response.ok || !data) {
+        setManageFeedback(getApiError(parsed, '保存域相权限失败'));
+        return;
+      }
+
+      const savedViewerIds = Array.isArray(data.gateDefenseViewerAdminIds)
+        ? Array.from(new Set(data.gateDefenseViewerAdminIds
+          .map((id) => (typeof id === 'string' ? id : ''))
+          .filter((id) => !!id)))
+        : [];
+      const domainAdmins = Array.isArray(data.domainAdmins) ? data.domainAdmins : [];
+      setDomainAdminState((prev) => ({
+        ...prev,
+        domainAdmins,
+        availablePermissions: Array.isArray(data.availablePermissions) ? data.availablePermissions : prev.availablePermissions,
+        gateDefenseViewerAdminIds: savedViewerIds
+      }));
+      setGateDefenseViewerDraftIds(savedViewerIds);
+      setGateDefenseViewerDirty(false);
+      setDomainAdminPermissionDraftMap(buildDomainAdminPermissionDraft(domainAdmins));
+      setDomainAdminPermissionDirty(false);
+      setIsDomainAdminPermissionModalOpen(false);
+      setManageFeedback(data.message || '域相权限已保存');
+    } catch (error) {
+      setManageFeedback(`保存域相权限失败: ${error.message}`);
+    } finally {
+      setIsSavingDomainAdminPermissions(false);
     }
   };
 
@@ -3697,10 +3809,6 @@ const KnowledgeDomainScene = ({
     }
   });
   const displayAdmins = Array.from(adminUserMap.values());
-  const gateDefenseViewerIdSet = new Set(
-    (domainAdminState.canEdit ? gateDefenseViewerDraftIds : domainAdminState.gateDefenseViewerAdminIds)
-      .filter((id) => typeof id === 'string' && id)
-  );
   const showDefenseManagerCard = defenseLayoutState.canEdit;
   const displayDefenseBuildings = defenseBuildings.map((building, index) => ({
     ...building,
@@ -4212,41 +4320,35 @@ const KnowledgeDomainScene = ({
                             <div className="domain-manage-tip">当前暂无其他域相</div>
                           ) : (
                             <div className="domain-admin-list">
-                              {domainAdminState.domainAdmins.map((adminUser) => (
-                                <div key={adminUser._id} className="domain-admin-row">
-                                  {domainAdminState.canEdit ? (
-                                    <label className="domain-admin-viewer-toggle">
-                                      <input
-                                        type="checkbox"
-                                        checked={gateDefenseViewerIdSet.has(adminUser._id)}
-                                        onChange={() => toggleGateDefenseViewerAdmin(adminUser._id)}
-                                      />
+                              {domainAdminState.domainAdmins.map((adminUser) => {
+                                const permissionLabels = normalizePermissionLabels(adminUser);
+                                return (
+                                  <div key={adminUser._id} className="domain-admin-row">
+                                    <div className="domain-admin-row-main">
                                       <span className="domain-admin-name">{adminUser.username}</span>
-                                    </label>
-                                  ) : (
-                                    <span className="domain-admin-name">{adminUser.username}</span>
-                                  )}
-                                  {domainAdminState.canEdit ? (
-                                    <div className="domain-admin-row-actions">
-                                      {gateDefenseViewerIdSet.has(adminUser._id) && (
-                                        <span className="domain-admin-badge readonly">可查看承口/启口</span>
-                                      )}
-                                      <button
-                                        type="button"
-                                        className="btn btn-small btn-danger"
-                                        onClick={() => removeDomainAdmin(adminUser._id)}
-                                        disabled={removingAdminId === adminUser._id}
-                                      >
-                                        {removingAdminId === adminUser._id ? '移除中...' : '移除'}
-                                      </button>
+                                      <div className="domain-admin-permission-badges">
+                                        {permissionLabels.length > 0 ? permissionLabels.map((label) => (
+                                          <span key={`${adminUser._id}-${label}`} className="domain-admin-badge readonly">{label}</span>
+                                        )) : (
+                                          <span className="domain-admin-badge readonly">未授予额外权限</span>
+                                        )}
+                                      </div>
                                     </div>
-                                  ) : (
-                                    <span className="domain-admin-badge readonly">
-                                      {gateDefenseViewerIdSet.has(adminUser._id) ? '可查看承口/启口' : '仅查看'}
-                                    </span>
-                                  )}
-                                </div>
-                              ))}
+                                    {domainAdminState.canEdit ? (
+                                      <div className="domain-admin-row-actions">
+                                        <button
+                                          type="button"
+                                          className="btn btn-small btn-danger"
+                                          onClick={() => removeDomainAdmin(adminUser._id)}
+                                          disabled={removingAdminId === adminUser._id}
+                                        >
+                                          {removingAdminId === adminUser._id ? '移除中...' : '移除'}
+                                        </button>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
                               {domainAdminState.canEdit && (domainAdminState.pendingInvites || []).map((pendingItem) => (
                                 <div key={pendingItem.notificationId} className="domain-admin-row pending">
                                   <span className="domain-admin-name pending">{pendingItem.username}</span>
@@ -4270,14 +4372,13 @@ const KnowledgeDomainScene = ({
                           )}
                           {domainAdminState.canEdit && domainAdminState.domainAdmins.length > 0 && (
                             <div className="domain-admin-permission-actions">
-                              <div className="domain-manage-tip">勾选域相可授予“承口/启口兵力可查看权限”（仅查看，不可编辑）。</div>
+                              <div className="domain-manage-tip">域主可在权限弹窗中统一决定每个域相是否拥有“百科审核”“承口/启口查看”等权限。</div>
                               <button
                                 type="button"
                                 className="btn btn-small btn-primary"
-                                onClick={saveGateDefenseViewerPermissions}
-                                disabled={!gateDefenseViewerDirty || isSavingGateDefenseViewerPerms}
+                                onClick={openDomainAdminPermissionModal}
                               >
-                                {isSavingGateDefenseViewerPerms ? '保存中...' : '保存查看权限'}
+                                权限设置
                               </button>
                             </div>
                           )}
@@ -4377,6 +4478,68 @@ const KnowledgeDomainScene = ({
                             )}
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {isDomainAdminPermissionModalOpen && domainAdminState.canEdit && (
+                      <div className="domain-admin-permission-modal-backdrop" onClick={closeDomainAdminPermissionModal}>
+                        <div className="domain-admin-permission-modal" onClick={(event) => event.stopPropagation()}>
+                          <div className="domain-admin-permission-modal-header">
+                            <div>
+                              <div className="domain-admins-subtitle">域相权限设置</div>
+                              <div className="domain-manage-tip">勾选后立即纳入对应能力；百科审核权限决定该域相是否参与百科共审。</div>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-small btn-secondary"
+                              onClick={closeDomainAdminPermissionModal}
+                              disabled={isSavingDomainAdminPermissions}
+                            >
+                              关闭
+                            </button>
+                          </div>
+                          <div className="domain-admin-permission-modal-body">
+                            {domainAdminState.domainAdmins.map((adminUser) => (
+                              <div key={`permission-${adminUser._id}`} className="domain-admin-permission-row">
+                                <div className="domain-admin-permission-user">{adminUser.username}</div>
+                                <div className="domain-admin-permission-grid">
+                                  {(Array.isArray(domainAdminState.availablePermissions) ? domainAdminState.availablePermissions : []).map((permissionItem) => {
+                                    const permissionKey = typeof permissionItem?.key === 'string' ? permissionItem.key : '';
+                                    const currentKeys = Array.isArray(domainAdminPermissionDraftMap?.[adminUser._id]) ? domainAdminPermissionDraftMap[adminUser._id] : [];
+                                    return (
+                                      <label key={`${adminUser._id}-${permissionKey}`} className="domain-admin-permission-option">
+                                        <input
+                                          type="checkbox"
+                                          checked={currentKeys.includes(permissionKey)}
+                                          onChange={() => toggleDomainAdminPermission(adminUser._id, permissionKey)}
+                                        />
+                                        <span>{permissionItem?.label || permissionKey}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="domain-admin-permission-modal-actions">
+                            <button
+                              type="button"
+                              className="btn btn-small btn-secondary"
+                              onClick={closeDomainAdminPermissionModal}
+                              disabled={isSavingDomainAdminPermissions}
+                            >
+                              取消
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-small btn-primary"
+                              onClick={saveDomainAdminPermissions}
+                              disabled={!domainAdminPermissionDirty || isSavingDomainAdminPermissions}
+                            >
+                              {isSavingDomainAdminPermissions ? '保存中...' : '保存权限'}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     )}
 

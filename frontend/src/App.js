@@ -23,6 +23,7 @@ import SenseArticleEditor from './components/senseArticle/SenseArticleEditor';
 import SenseArticleReviewPage from './components/senseArticle/SenseArticleReviewPage';
 import SenseArticleHistoryPage from './components/senseArticle/SenseArticleHistoryPage';
 import SenseArticleDashboardPage from './components/senseArticle/SenseArticleDashboardPage';
+import SenseArticleErrorBoundary from './components/senseArticle/SenseArticleErrorBoundary';
 import {
     findEditableSenseArticleRevision,
     getSenseArticleEntryActionLabel,
@@ -33,6 +34,7 @@ import {
     buildSenseArticleNavigationState,
     buildSenseArticleSubViewContext,
     createSenseArticleContext,
+    areSenseArticleContextsEqual,
     resolveSenseArticleBackTarget,
     resolveSenseArticleNotificationNavigation
 } from './components/senseArticle/senseArticleNavigation';
@@ -75,6 +77,15 @@ const resolveAvatarSrc = (avatarKey = '') => {
 };
 
 const PAGE_STATE_STORAGE_KEY = 'app:lastPageState';
+const isDevEnvironment = process.env.NODE_ENV !== 'production';
+const SENSE_ARTICLE_SUB_VIEWS = Object.freeze([
+    'senseArticle',
+    'senseArticleEditor',
+    'senseArticleReview',
+    'senseArticleHistory',
+    'senseArticleDashboard'
+]);
+const isSenseArticleSubView = (value = '') => SENSE_ARTICLE_SUB_VIEWS.includes(String(value || ''));
 const createDefaultHeaderUserStats = () => ({
     loading: false,
     level: 0,
@@ -617,7 +628,10 @@ const App = () => {
     const [senseArticleContext, setSenseArticleContext] = useState(null);
     const buildSenseArticleContext = useCallback((patch = {}, base = null) => createSenseArticleContext(patch, base), []);
     const patchSenseArticleContext = useCallback((patch = {}) => {
-        setSenseArticleContext((prev) => buildSenseArticleContext(patch, prev));
+        setSenseArticleContext((prev) => {
+            const next = buildSenseArticleContext(patch, prev);
+            return areSenseArticleContextsEqual(prev, next) ? prev : next;
+        });
     }, [buildSenseArticleContext]);
     const navigateSenseArticleSubView = useCallback((nextView, patch = {}, options = {}) => {
         setSenseArticleContext((prev) => buildSenseArticleSubViewContext(prev, view, patch, options));
@@ -2276,8 +2290,12 @@ const App = () => {
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
     if (view === 'login') return;
 
-    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround', 'senseArticle', 'senseArticleEditor', 'senseArticleReview', 'senseArticleHistory'].includes(view);
+    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround'].includes(view)
+      || isSenseArticleSubView(view);
     if (!isKnownView) {
+      if (isDevEnvironment) {
+        console.debug('[view-guard] fallback to home: unknown view', { view, reason: 'unknown_view' });
+      }
       setView('home');
       return;
     }
@@ -5585,7 +5603,7 @@ const App = () => {
     };
 
     const resolveEditableSenseArticleRevision = useCallback(async (nodeId, senseId) => {
-        const data = await senseArticleApi.getRevisions(nodeId, senseId, { pageSize: 20 });
+        const data = await senseArticleApi.getRevisions(nodeId, senseId, { status: 'draft', pageSize: 20 });
         return {
             articleId: data?.article?._id || '',
             currentRevisionId: data?.currentRevisionId || '',
@@ -5645,6 +5663,20 @@ const App = () => {
                 });
                 return;
             }
+            if (preferExisting) {
+                const existing = await resolveEditableSenseArticleRevision(targetNodeId, targetSenseId);
+                if (existing?.revision?._id) {
+                    navigateSenseArticleSubView('senseArticleEditor', {
+                        nodeId: targetNodeId,
+                        senseId: targetSenseId,
+                        articleId: existing.articleId || senseArticleContext?.articleId || '',
+                        currentRevisionId: existing.currentRevisionId || senseArticleContext?.currentRevisionId || '',
+                        selectedRevisionId: existing.revision._id,
+                        revisionId: existing.revision._id
+                    });
+                    return;
+                }
+            }
             if (mode === 'selection') {
                 data = await senseArticleApi.createFromSelection(targetNodeId, targetSenseId, {
                     selectedRangeAnchor: anchor,
@@ -5656,20 +5688,6 @@ const App = () => {
                     proposerNote: headingId ? ('从小节 ' + headingId + ' 发起修订') : '从小节发起修订'
                 });
             } else {
-                if (preferExisting || mode === 'full') {
-                    const existing = await resolveEditableSenseArticleRevision(targetNodeId, targetSenseId);
-                    if (existing?.revision?._id) {
-                        navigateSenseArticleSubView('senseArticleEditor', {
-                            nodeId: targetNodeId,
-                            senseId: targetSenseId,
-                            articleId: existing.articleId || senseArticleContext?.articleId || '',
-                            currentRevisionId: existing.currentRevisionId || senseArticleContext?.currentRevisionId || '',
-                            selectedRevisionId: existing.revision._id,
-                            revisionId: existing.revision._id
-                        });
-                        return;
-                    }
-                }
                 data = await senseArticleApi.createDraft(targetNodeId, targetSenseId, {
                     proposerNote: '整页百科修订草稿'
                 });
@@ -5693,8 +5711,21 @@ const App = () => {
     };
 
     const handleOpenSenseArticleDashboard = () => {
-        if (!senseArticleContext?.nodeId) return;
-        navigateSenseArticleSubView('senseArticleDashboard');
+        const targetNodeId = normalizeObjectId(senseArticleContext?.nodeId);
+        const targetSenseId = typeof senseArticleContext?.senseId === 'string' ? senseArticleContext.senseId.trim() : '';
+        if (!targetNodeId) return;
+        if (isDevEnvironment) {
+            console.debug('[sense-article] open dashboard', {
+                currentView: view,
+                nextView: 'senseArticleDashboard',
+                nodeId: targetNodeId,
+                senseId: targetSenseId
+            });
+        }
+        navigateSenseArticleSubView('senseArticleDashboard', {
+            nodeId: targetNodeId,
+            senseId: targetSenseId
+        });
     };
 
     const handleOpenSenseArticleReview = async ({ latest = false, revision = null } = {}) => {
@@ -5706,7 +5737,7 @@ const App = () => {
             try {
                 const data = await senseArticleApi.getRevisions(targetNodeId, targetSenseId, { pageSize: 20 });
                 const revisions = Array.isArray(data?.revisions) ? data.revisions : [];
-                const preferred = revisions.find((item) => item.status === 'pending_domain_admin_review' || item.status === 'pending_domain_master_review') || revisions[0];
+                const preferred = revisions.find((item) => item.status === 'pending_review' || item.status === 'pending_domain_admin_review' || item.status === 'pending_domain_master_review') || revisions[0];
                 targetRevisionId = preferred?._id || '';
             } catch (error) {
                 window.alert(error.message);
@@ -6160,180 +6191,194 @@ const App = () => {
                         </h1>
                         <div className="header-right">
                             <div className="header-buttons">
-                                <div className="user-identity-group">
-                                    <div
-                                        className="user-avatar-container"
-                                        onClick={async () => {
-                                            await prepareForPrimaryNavigation();
-                                            setView('profile');
-                                        }}
-                                        title={profession ? `点击进入个人中心（${profession}）` : '点击进入个人中心'}
-                                    >
-                                        <img
-                                            src={avatarMap[userAvatar] || avatarMap['default_male_1']}
-                                            alt="头像"
-                                            className="user-avatar-small"
-                                        />
-                                        <div className="user-avatar-main">
-                                            <div className="user-avatar-top-row">
-                                                <span className="user-level-badge">{`Lv.${headerLevel}`}</span>
-                                                <span className="user-avatar-username">{username}</span>
-                                            </div>
-                                            <div className="user-exp-row">
-                                                <div className="user-exp-track">
-                                                    <div
-                                                        className="user-exp-fill"
-                                                        style={{ width: `${headerExpProgress}%` }}
-                                                    />
+                                <div className="header-action-shell">
+                                    <div className="user-identity-group">
+                                        <div
+                                            className="user-avatar-container"
+                                            onClick={async () => {
+                                                await prepareForPrimaryNavigation();
+                                                setView('profile');
+                                            }}
+                                            title={profession ? `点击进入个人中心（${profession}）` : '点击进入个人中心'}
+                                        >
+                                            <img
+                                                src={avatarMap[userAvatar] || avatarMap['default_male_1']}
+                                                alt="头像"
+                                                className="user-avatar-small"
+                                            />
+                                            <div className="user-avatar-main">
+                                                <div className="user-avatar-top-row">
+                                                    <span className="user-level-badge">{`Lv.${headerLevel}`}</span>
+                                                    <span className="user-avatar-username">{username}</span>
                                                 </div>
-                                                <span className="user-exp-text">{`${headerExperience}/${headerExpTarget}`}</span>
-                                            </div>
-                                            <div className="user-resource-row">
-                                                <span className="user-resource-item">{`兵力 ${headerArmyCount}`}</span>
-                                                <span className="user-resource-item">{`知识点 ${headerKnowledgeBalance.toFixed(2)}`}</span>
+                                                <div className="user-exp-row">
+                                                    <div className="user-exp-track">
+                                                        <div
+                                                            className="user-exp-fill"
+                                                            style={{ width: `${headerExpProgress}%` }}
+                                                        />
+                                                    </div>
+                                                    <span className="user-exp-text">{`${headerExperience}/${headerExpTarget}`}</span>
+                                                </div>
+                                                <div className="user-resource-row">
+                                                    <span className="user-resource-item">{`兵力 ${headerArmyCount}`}</span>
+                                                    <span className="user-resource-item">{`知识点 ${headerKnowledgeBalance.toFixed(2)}`}</span>
+                                                </div>
                                             </div>
                                         </div>
+                                        <button
+                                            onClick={handleLogout}
+                                            className="btn btn-logout"
+                                        >
+                                            退出
+                                        </button>
                                     </div>
-                                    <button
-                                        onClick={handleLogout}
-                                        className="btn btn-logout"
-                                    >
-                                        退出
-                                    </button>
                                 </div>
-                                <div className="notifications-wrapper" ref={notificationsWrapperRef}>
-                                    <button
-                                        type="button"
-                                        className="btn btn-secondary notification-trigger-btn"
-                                        onClick={async () => {
-                                            const nextVisible = !showNotificationsPanel;
-                                            setShowNotificationsPanel(nextVisible);
-                                            setShowRelatedDomainsPanel(false);
-                                            setShowMilitaryMenu(false);
-                                            if (nextVisible) {
-                                                await fetchNotifications(false);
-                                                if (isAdmin) {
-                                                    await fetchAdminPendingNodeReminders(false);
-                                                }
-                                            }
-                                        }}
-                                    >
-                                        <Bell size={18} />
-                                        通知
-                                        {notificationBadgeCount > 0 && (
-                                            <span className="notification-badge">
-                                                {notificationBadgeCount > 99 ? '99+' : notificationBadgeCount}
-                                            </span>
-                                        )}
-                                    </button>
-                                    {renderNotificationsPanel()}
-                                </div>
-                                <div className="related-domains-wrapper" ref={relatedDomainsWrapperRef}>
-                                    <button
-                                        type="button"
-                                        className="btn btn-secondary related-domains-trigger-btn"
-                                        onClick={() => {
-                                            const nextVisible = !showRelatedDomainsPanel;
-                                            setShowNotificationsPanel(false);
-                                            setShowRelatedDomainsPanel(nextVisible);
-                                            setShowMilitaryMenu(false);
-                                        }}
-                                    >
-                                        <Layers size={18} />
-                                        我的知识域
-                                        {relatedDomainCount > 0 && (
-                                            <span className="notification-badge">
-                                                {relatedDomainCount > 99 ? '99+' : relatedDomainCount}
-                                            </span>
-                                        )}
-                                    </button>
-                                    {renderRelatedDomainsPanel()}
-                                </div>
-                                <button
-                                    onClick={async () => {
-                                        setShowMilitaryMenu(false);
-                                        await navigateToHomeWithDockCollapse();
-                                    }}
-                                    className="btn btn-primary"
-                                >
-                                    <Home size={18} />
-                                    首页
-                                </button>
-                                <button
-                                    onClick={async () => {
-                                        setShowMilitaryMenu(false);
-                                        await prepareForPrimaryNavigation();
-                                        setView('alliance');
-                                    }}
-                                    className="btn btn-secondary"
-                                >
-                                    <Shield size={18} />
-                                    熵盟
-                                </button>
-                                {!isAdmin && (
-                                    <div className="military-menu-wrapper" ref={militaryMenuWrapperRef}>
+                                <div className="header-action-shell">
+                                    <div className="notifications-wrapper" ref={notificationsWrapperRef}>
                                         <button
                                             type="button"
-                                            className="btn btn-secondary military-menu-trigger"
-                                            onClick={() => {
-                                                const nextVisible = !showMilitaryMenu;
-                                                setShowNotificationsPanel(false);
+                                            className="btn btn-secondary notification-trigger-btn"
+                                            onClick={async () => {
+                                                const nextVisible = !showNotificationsPanel;
+                                                setShowNotificationsPanel(nextVisible);
                                                 setShowRelatedDomainsPanel(false);
-                                                setShowMilitaryMenu(nextVisible);
+                                                setShowMilitaryMenu(false);
+                                                if (nextVisible) {
+                                                    await fetchNotifications(false);
+                                                    if (isAdmin) {
+                                                        await fetchAdminPendingNodeReminders(false);
+                                                    }
+                                                }
                                             }}
                                         >
-                                            <Users size={18} />
-                                            军事
+                                            <Bell size={18} />
+                                            通知
+                                            {notificationBadgeCount > 0 && (
+                                                <span className="notification-badge">
+                                                    {notificationBadgeCount > 99 ? '99+' : notificationBadgeCount}
+                                                </span>
+                                            )}
                                         </button>
-                                        {showMilitaryMenu && (
-                                            <div className="military-menu-panel">
-                                                <button
-                                                    type="button"
-                                                    className="military-menu-item"
-                                                    onClick={async () => {
-                                                        setShowMilitaryMenu(false);
-                                                        await prepareForPrimaryNavigation();
-                                                        setView('army');
-                                                    }}
-                                                >
-                                                    兵营
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="military-menu-item"
-                                                    onClick={async () => {
-                                                        setShowMilitaryMenu(false);
-                                                        await prepareForPrimaryNavigation();
-                                                        setView('trainingGround');
-                                                    }}
-                                                >
-                                                    训练场
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="military-menu-item"
-                                                    onClick={async () => {
-                                                        setShowMilitaryMenu(false);
-                                                        await prepareForPrimaryNavigation();
-                                                        setView('equipment');
-                                                    }}
-                                                >
-                                                    装备库
-                                                </button>
-                                            </div>
-                                        )}
+                                        {renderNotificationsPanel()}
+                                    </div>
+                                </div>
+                                <div className="header-action-shell">
+                                    <div className="related-domains-wrapper" ref={relatedDomainsWrapperRef}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary related-domains-trigger-btn"
+                                            onClick={() => {
+                                                const nextVisible = !showRelatedDomainsPanel;
+                                                setShowNotificationsPanel(false);
+                                                setShowRelatedDomainsPanel(nextVisible);
+                                                setShowMilitaryMenu(false);
+                                            }}
+                                        >
+                                            <Layers size={18} />
+                                            我的知识域
+                                            {relatedDomainCount > 0 && (
+                                                <span className="notification-badge">
+                                                    {relatedDomainCount > 99 ? '99+' : relatedDomainCount}
+                                                </span>
+                                            )}
+                                        </button>
+                                        {renderRelatedDomainsPanel()}
+                                    </div>
+                                </div>
+                                <div className="header-action-shell">
+                                    <button
+                                        onClick={async () => {
+                                            setShowMilitaryMenu(false);
+                                            await navigateToHomeWithDockCollapse();
+                                        }}
+                                        className="btn btn-primary"
+                                    >
+                                        <Home size={18} />
+                                        首页
+                                    </button>
+                                </div>
+                                <div className="header-action-shell">
+                                    <button
+                                        onClick={async () => {
+                                            setShowMilitaryMenu(false);
+                                            await prepareForPrimaryNavigation();
+                                            setView('alliance');
+                                        }}
+                                        className="btn btn-secondary"
+                                    >
+                                        <Shield size={18} />
+                                        熵盟
+                                    </button>
+                                </div>
+                                {!isAdmin && (
+                                    <div className="header-action-shell">
+                                        <div className="military-menu-wrapper" ref={militaryMenuWrapperRef}>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary military-menu-trigger"
+                                                onClick={() => {
+                                                    const nextVisible = !showMilitaryMenu;
+                                                    setShowNotificationsPanel(false);
+                                                    setShowRelatedDomainsPanel(false);
+                                                    setShowMilitaryMenu(nextVisible);
+                                                }}
+                                            >
+                                                <Users size={18} />
+                                                军事
+                                            </button>
+                                            {showMilitaryMenu && (
+                                                <div className="military-menu-panel">
+                                                    <button
+                                                        type="button"
+                                                        className="military-menu-item"
+                                                        onClick={async () => {
+                                                            setShowMilitaryMenu(false);
+                                                            await prepareForPrimaryNavigation();
+                                                            setView('army');
+                                                        }}
+                                                    >
+                                                        兵营
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="military-menu-item"
+                                                        onClick={async () => {
+                                                            setShowMilitaryMenu(false);
+                                                            await prepareForPrimaryNavigation();
+                                                            setView('trainingGround');
+                                                        }}
+                                                    >
+                                                        训练场
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="military-menu-item"
+                                                        onClick={async () => {
+                                                            setShowMilitaryMenu(false);
+                                                            await prepareForPrimaryNavigation();
+                                                            setView('equipment');
+                                                        }}
+                                                    >
+                                                        装备库
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                                 {isAdmin && (
-                                    <button
-                                        onClick={() => {
-                                            setShowMilitaryMenu(false);
-                                            openAdminPanel('users');
-                                        }}
-                                        className="btn btn-warning"
-                                    >
-                                        管理员面板
-                                    </button>
+                                    <div className="header-action-shell">
+                                        <button
+                                            onClick={() => {
+                                                setShowMilitaryMenu(false);
+                                                openAdminPanel('users');
+                                            }}
+                                            className="btn btn-warning"
+                                        >
+                                            管理员面板
+                                        </button>
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -6513,86 +6558,125 @@ const App = () => {
                     </>
                 )}
                 {view === "senseArticle" && senseArticleContext?.nodeId && senseArticleContext?.senseId && (
-                    <SenseArticlePage
-                        nodeId={senseArticleContext.nodeId}
-                        senseId={senseArticleContext.senseId}
-                        articleContext={senseArticleContext}
-                        onContextPatch={patchSenseArticleContext}
+                    <SenseArticleErrorBoundary
+                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
                         onBack={handleSenseArticleBack}
-                        onOpenEditor={handleOpenSenseArticleEditor}
-                        onOpenHistory={handleOpenSenseArticleHistory}
-                        onOpenReview={handleOpenSenseArticleReview}
-                        onOpenDashboard={handleOpenSenseArticleDashboard}
-                    />
+                        title="释义百科页渲染失败"
+                    >
+                        <SenseArticlePage
+                            nodeId={senseArticleContext.nodeId}
+                            senseId={senseArticleContext.senseId}
+                            articleContext={senseArticleContext}
+                            onContextPatch={patchSenseArticleContext}
+                            onBack={handleSenseArticleBack}
+                            onOpenEditor={handleOpenSenseArticleEditor}
+                            onOpenHistory={handleOpenSenseArticleHistory}
+                            onOpenDashboard={handleOpenSenseArticleDashboard}
+                            onOpenReview={(revision) => handleOpenSenseArticleReview({ revision })}
+                        />
+                    </SenseArticleErrorBoundary>
                 )}
                 {view === "senseArticleEditor" && senseArticleContext?.nodeId && senseArticleContext?.senseId && senseArticleContext?.revisionId && (
-                    <SenseArticleEditor
-                        nodeId={senseArticleContext.nodeId}
-                        senseId={senseArticleContext.senseId}
-                        revisionId={senseArticleContext.revisionId || senseArticleContext.selectedRevisionId}
-                        articleContext={senseArticleContext}
-                        onContextPatch={patchSenseArticleContext}
+                    <SenseArticleErrorBoundary
+                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
                         onBack={handleSenseArticleBack}
-                        onOpenDashboard={handleOpenSenseArticleDashboard}
-                        onSubmitted={(revision) => {
-                            navigateSenseArticleSubView('senseArticleHistory', { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
-                            fetchNotifications(true);
-                        }}
-                    />
+                        title="释义编辑页发生异常"
+                    >
+                        <SenseArticleEditor
+                            nodeId={senseArticleContext.nodeId}
+                            senseId={senseArticleContext.senseId}
+                            revisionId={senseArticleContext.revisionId || senseArticleContext.selectedRevisionId}
+                            articleContext={senseArticleContext}
+                            onContextPatch={patchSenseArticleContext}
+                            onBack={handleSenseArticleBack}
+                            onOpenDashboard={handleOpenSenseArticleDashboard}
+                            onSubmitted={() => {
+                                navigateSenseArticleSubView('senseArticle', { selectedRevisionId: '', revisionId: '', revisionStatus: '' });
+                                fetchNotifications(true);
+                            }}
+                        />
+                    </SenseArticleErrorBoundary>
                 )}
                 {view === "senseArticleReview" && senseArticleContext?.nodeId && senseArticleContext?.senseId && senseArticleContext?.revisionId && (
-                    <SenseArticleReviewPage
-                        nodeId={senseArticleContext.nodeId}
-                        senseId={senseArticleContext.senseId}
-                        revisionId={senseArticleContext.revisionId || senseArticleContext.selectedRevisionId}
-                        articleContext={senseArticleContext}
-                        onContextPatch={patchSenseArticleContext}
+                    <SenseArticleErrorBoundary
+                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
                         onBack={handleSenseArticleBack}
-                        onOpenDashboard={handleOpenSenseArticleDashboard}
-                        onReviewed={(revision) => {
-                            navigateSenseArticleSubView('senseArticleHistory', { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
-                            fetchNotifications(true);
-                        }}
-                    />
+                        title="释义审核页发生异常"
+                    >
+                        <SenseArticleReviewPage
+                            nodeId={senseArticleContext.nodeId}
+                            senseId={senseArticleContext.senseId}
+                            revisionId={senseArticleContext.revisionId || senseArticleContext.selectedRevisionId}
+                            articleContext={senseArticleContext}
+                            onContextPatch={patchSenseArticleContext}
+                            onBack={handleSenseArticleBack}
+                            onOpenDashboard={handleOpenSenseArticleDashboard}
+                            onReviewed={(revision) => {
+                                const nextView = revision?.status === 'published' ? 'senseArticleHistory' : 'senseArticleReview';
+                                navigateSenseArticleSubView(nextView, { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
+                                fetchNotifications(true);
+                            }}
+                        />
+                    </SenseArticleErrorBoundary>
                 )}
                 {view === "senseArticleHistory" && senseArticleContext?.nodeId && senseArticleContext?.senseId && (
-                    <SenseArticleHistoryPage
-                        nodeId={senseArticleContext.nodeId}
-                        senseId={senseArticleContext.senseId}
-                        articleContext={senseArticleContext}
-                        onContextPatch={patchSenseArticleContext}
+                    <SenseArticleErrorBoundary
+                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
                         onBack={handleSenseArticleBack}
-                        onOpenDashboard={handleOpenSenseArticleDashboard}
-                        onOpenRevision={(revision) => handleOpenSenseArticleReview({ revision })}
-                        onEditRevision={(revision) => {
-                            navigateSenseArticleSubView('senseArticleEditor', { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
-                        }}
-                    />
+                        title="释义历史页发生异常"
+                    >
+                        <SenseArticleHistoryPage
+                            nodeId={senseArticleContext.nodeId}
+                            senseId={senseArticleContext.senseId}
+                            articleContext={senseArticleContext}
+                            onContextPatch={patchSenseArticleContext}
+                            onBack={handleSenseArticleBack}
+                            onOpenDashboard={handleOpenSenseArticleDashboard}
+                            onOpenRevision={(revision) => handleOpenSenseArticleReview({ revision })}
+                            onEditRevision={(revision) => {
+                                navigateSenseArticleSubView('senseArticleEditor', { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
+                            }}
+                        />
+                    </SenseArticleErrorBoundary>
                 )}
                 {view === "senseArticleDashboard" && senseArticleContext?.nodeId && (
-                    <SenseArticleDashboardPage
-                        nodeId={senseArticleContext.nodeId}
-                        articleContext={senseArticleContext}
-                        onContextPatch={patchSenseArticleContext}
+                    <SenseArticleErrorBoundary
+                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId || ''}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
                         onBack={handleSenseArticleBack}
-                        onOpenReview={(revision) => {
-                            navigateSenseArticleSubView('senseArticleReview', {
-                                nodeId: revision?.nodeId || senseArticleContext.nodeId,
-                                senseId: revision?.senseId || senseArticleContext.senseId,
-                                selectedRevisionId: revision?._id || '',
-                                revisionId: revision?._id || ''
-                            });
-                        }}
-                        onOpenHistory={(revision) => {
-                            navigateSenseArticleSubView('senseArticleHistory', {
-                                nodeId: revision?.nodeId || senseArticleContext.nodeId,
-                                senseId: revision?.senseId || senseArticleContext.senseId,
-                                selectedRevisionId: revision?._id || '',
-                                revisionId: revision?._id || ''
-                            });
-                        }}
-                        onOpenArticle={(target) => openSenseArticleView({ nodeId: target.nodeId, senseId: target.senseId }, { returnTarget: { ...(senseArticleContext || {}), view } })}
-                    />
+                        title="词条管理页面发生异常"
+                    >
+                        <SenseArticleDashboardPage
+                            nodeId={senseArticleContext.nodeId}
+                            articleContext={senseArticleContext}
+                            onContextPatch={patchSenseArticleContext}
+                            onBack={handleSenseArticleBack}
+                            onOpenReview={(revision) => {
+                                navigateSenseArticleSubView('senseArticleReview', {
+                                    nodeId: revision?.nodeId || senseArticleContext.nodeId,
+                                    senseId: revision?.senseId || senseArticleContext.senseId,
+                                    selectedRevisionId: revision?._id || '',
+                                    revisionId: revision?._id || ''
+                                });
+                            }}
+                            onOpenHistory={(revision) => {
+                                navigateSenseArticleSubView('senseArticleHistory', {
+                                    nodeId: revision?.nodeId || senseArticleContext.nodeId,
+                                    senseId: revision?.senseId || senseArticleContext.senseId,
+                                    selectedRevisionId: revision?._id || '',
+                                    revisionId: revision?._id || ''
+                                });
+                            }}
+                            onEditRevision={(revision) => {
+                                navigateSenseArticleSubView('senseArticleEditor', {
+                                    nodeId: revision?.nodeId || senseArticleContext.nodeId,
+                                    senseId: revision?.senseId || senseArticleContext.senseId,
+                                    selectedRevisionId: revision?._id || '',
+                                    revisionId: revision?._id || ''
+                                });
+                            }}
+                            onOpenArticle={(target) => openSenseArticleView({ nodeId: target.nodeId, senseId: target.senseId }, { returnTarget: { ...(senseArticleContext || {}), view } })}
+                        />
+                    </SenseArticleErrorBoundary>
                 )}
                 {renderSenseSelectorPanel()}
                 {renderUnifiedRightDock()}
@@ -6640,10 +6724,7 @@ const App = () => {
                  !(view === "army" && !isAdmin) &&
                  !(view === "equipment" && !isAdmin) &&
                  !(view === "trainingGround" && !isAdmin) &&
-                 view !== "senseArticle" &&
-                 view !== "senseArticleEditor" &&
-                 view !== "senseArticleReview" &&
-                 view !== "senseArticleHistory" && (
+                 !isSenseArticleSubView(view) && (
                     <div className="no-pending-nodes">
                         <p>页面状态异常，已为你回退到首页</p>
                         <button

@@ -6,11 +6,11 @@
     background: rgba(30, 41, 59, 0.95);
     border-radius: 12px;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    border: 2px solid rgba(168, 85, 247, 0.5);
+    border: 2px solid rgba(56, 189, 248, 0.34);
 }
 
 .navigation-tree-modal .modal-header {
-    border-bottom: 2px solid rgba(168, 85, 247, 0.3);
+    border-bottom: 2px solid rgba(103, 232, 249, 0.24);
     padding: 1.5rem;
     display: flex;
     justify-content: space-between;
@@ -18,7 +18,7 @@
 }
 
 .navigation-tree-modal .modal-header h2 {
-    color: #a855f7;
+    color: var(--topbar-accent);
     font-size: 1.5rem;
     font-weight: 600;
     margin: 0;
@@ -65,7 +65,7 @@
 }
 
 .navigation-tree-canvas-container::-webkit-scrollbar-thumb {
-    background: rgba(168, 85, 247, 0.5);
+    background: rgba(56, 189, 248, 0.34);
     border-radius: 4px;
 }
 

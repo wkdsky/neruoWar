@@ -9,18 +9,20 @@ export const SENSE_ARTICLE_PAGE_LABELS = {
   senseArticleEditor: '编辑页',
   senseArticleReview: '审阅页',
   senseArticleHistory: '历史页',
-  senseArticleDashboard: '治理面板'
+  senseArticleDashboard: '词条管理'
 };
 
 export const REVISION_STATUS_META = {
   draft: { label: '草稿', tone: 'neutral' },
   submitted: { label: '已提交', tone: 'info' },
-  pending_domain_admin_review: { label: '待域相审核', tone: 'info' },
+  pending_review: { label: '待审核', tone: 'info' },
+  pending_domain_admin_review: { label: '待审核', tone: 'info' },
   changes_requested_by_domain_admin: { label: '域相要求修改', tone: 'warning' },
   rejected_by_domain_admin: { label: '域相驳回', tone: 'danger' },
-  pending_domain_master_review: { label: '待域主终审', tone: 'info' },
+  pending_domain_master_review: { label: '待审核', tone: 'info' },
   changes_requested_by_domain_master: { label: '域主要求修改', tone: 'warning' },
-  rejected_by_domain_master: { label: '域主驳回', tone: 'danger' },
+  rejected_by_domain_master: { label: '修订驳回', tone: 'danger' },
+  rejected: { label: '修订驳回', tone: 'danger' },
   published: { label: '已发布', tone: 'success' },
   superseded: { label: '已被覆盖', tone: 'muted' },
   withdrawn: { label: '已撤回', tone: 'muted' }
@@ -85,23 +87,34 @@ export const getSourceModeLabel = (mode = '') => ({
   selection: '选段修订'
 }[mode] || mode || '整页修订');
 
+export const buildDefaultRevisionTitle = (username = '') => `来自 ${String(username || '').trim() || '该用户'} 的修订`;
+
+export const getRevisionDisplayTitle = (revision = {}, fallbackUsername = '') => {
+  const customTitle = String(revision?.revisionTitle || '').trim();
+  if (customTitle) return customTitle;
+  const proposerUsername = String(revision?.proposerUsername || fallbackUsername || '').trim();
+  return buildDefaultRevisionTitle(proposerUsername);
+};
+
 export const formatRevisionLabel = (revisionNumber = null) => Number.isFinite(Number(revisionNumber))
   ? `修订 #${Number(revisionNumber)}`
   : '修订 #--';
 
-export const buildSenseArticleBreadcrumb = ({ nodeName = '', senseTitle = '', pageType = '', revisionNumber = null }) => {
+export const buildSenseArticleBreadcrumb = ({ nodeName = '', senseTitle = '', pageType = '', revisionNumber = null, revisionTitle = '' }) => {
   const items = ['释义百科页'];
   if (nodeName) items.push(nodeName);
   if (senseTitle) items.push(senseTitle);
   const pageLabel = SENSE_ARTICLE_PAGE_LABELS[pageType] || '';
   if (pageLabel) items.push(pageLabel);
-  if (Number.isFinite(Number(revisionNumber))) items.push(formatRevisionLabel(revisionNumber));
+  if (String(revisionTitle || '').trim()) items.push(String(revisionTitle || '').trim());
+  else if (Number.isFinite(Number(revisionNumber))) items.push(formatRevisionLabel(revisionNumber));
   return items;
 };
 
-export const buildSenseArticleTitle = ({ nodeName = '', senseTitle = '', revisionNumber = null }) => {
+export const buildSenseArticleTitle = ({ nodeName = '', senseTitle = '', revisionNumber = null, revisionTitle = '' }) => {
   const items = [nodeName || '未命名词条', senseTitle || '未命名释义'];
-  if (Number.isFinite(Number(revisionNumber))) items.push(formatRevisionLabel(revisionNumber));
+  if (String(revisionTitle || '').trim()) items.push(String(revisionTitle || '').trim());
+  else if (Number.isFinite(Number(revisionNumber))) items.push(formatRevisionLabel(revisionNumber));
   return items.join(' / ');
 };
 

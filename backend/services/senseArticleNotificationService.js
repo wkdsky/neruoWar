@@ -5,7 +5,16 @@ const {
   SENSE_ARTICLE_NOTIFICATION_PAYLOAD_SCHEMA
 } = require('../constants/senseArticle');
 const { writeNotificationsToCollection } = require('./notificationStore');
+const { getSenseArticleReviewerEntries } = require('../utils/domainAdminPermissions');
 const { getIdString, toObjectIdOrNull } = require('../utils/objectId');
+
+
+const resolveSenseArticleLabel = ({ node = null, article = null, revision = null }) => {
+  const targetSenseId = String(revision?.senseId || article?.senseId || '').trim();
+  const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+  const matched = senses.find((item) => String(item?.senseId || '').trim() === targetSenseId) || null;
+  return String(matched?.title || targetSenseId || '').trim();
+};
 
 const uniqueUserIds = (items = []) => Array.from(new Set(
   (Array.isArray(items) ? items : []).map((item) => getIdString(item)).filter(Boolean)
@@ -88,16 +97,16 @@ const writeSenseArticleNotifications = async (notifications = []) => {
 };
 
 const notifyRevisionSubmitted = async ({ node, article, revision, actorId = null }) => {
-  const reviewerIds = uniqueUserIds([...(node?.domainAdmins || []), node?.domainMaster]);
+  const reviewerIds = uniqueUserIds(getSenseArticleReviewerEntries(node).map((item) => item.userId));
   const notifications = reviewerIds.map((userId) => createNotificationDoc({
     userId,
     type: 'sense_article_domain_admin_review_requested',
-    title: '百科修订待域相审核',
-    message: `${node?.name || '知识域'} / ${revision?.senseId || ''} 有新的百科修订待域相审核。`,
+    title: '百科修订待审阅',
+    message: `${node?.name || '知识域'} / ${resolveSenseArticleLabel({ node, article, revision })} 有新的百科修订待共同审阅。`,
     node,
     article,
     revision,
-    stage: 'domain_admin',
+    stage: 'review',
     action: 'review',
     actorId: actorId || revision?.proposerId
   }));
@@ -105,11 +114,11 @@ const notifyRevisionSubmitted = async ({ node, article, revision, actorId = null
     userId: revision?.proposerId,
     type: 'sense_article_revision_submitted',
     title: '百科修订已提交',
-    message: '你的百科修订已进入双阶段审核。',
+    message: '你的百科修订已进入共同审阅。',
     node,
     article,
     revision,
-    stage: 'domain_admin',
+    stage: 'review',
     action: 'submitted',
     actorId: actorId || revision?.proposerId
   }));
@@ -149,7 +158,7 @@ const notifyDomainAdminDecision = async ({ node, article, revision, action, acto
       userId: node.domainMaster,
       type: 'sense_article_domain_master_review_requested',
       title: '百科修订待域主终审',
-      message: `${node?.name || '知识域'} / ${revision?.senseId || ''} 有一条修订待域主终审。`,
+      message: `${node?.name || '知识域'} / ${resolveSenseArticleLabel({ node, article, revision })} 有一条修订待域主终审。`,
       node,
       article,
       revision,
@@ -169,13 +178,13 @@ const notifyDomainMasterDecision = async ({ node, article, revision, action, act
   };
   const titleMap = {
     approved: '百科修订已发布',
-    rejected: '百科修订被终审驳回',
-    changes_requested: '百科修订终审要求修改'
+    rejected: '百科修订已被驳回',
+    changes_requested: '百科修订需要修改'
   };
   const messageMap = {
     approved: '你的修订已成为当前正式版本。',
-    rejected: '域主已驳回该修订。',
-    changes_requested: '域主要求你继续修改后再提交。'
+    rejected: '共同审阅中已有成员投出驳回票，当前修订不会被采用。',
+    changes_requested: '当前修订需要修改后再提交。'
   };
   return writeSenseArticleNotifications([
     createNotificationDoc({
@@ -186,7 +195,7 @@ const notifyDomainMasterDecision = async ({ node, article, revision, action, act
       node,
       article,
       revision,
-      stage: 'domain_master',
+      stage: action === 'approved' ? 'completed' : 'review',
       action,
       actorId
     })

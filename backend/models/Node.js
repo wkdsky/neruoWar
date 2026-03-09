@@ -639,6 +639,11 @@ const NodeSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   }],
+  domainAdminPermissions: {
+    type: Map,
+    of: [String],
+    default: {}
+  },
   name: {
     type: String,
     required: true,
@@ -913,6 +918,24 @@ NodeSchema.pre('validate', function ensureDomainRoleConsistency(next) {
   }
 
   this.domainAdmins = normalizedAdmins;
+
+  const domainAdminPermissionEntries = this.domainAdminPermissions instanceof Map
+    ? Array.from(this.domainAdminPermissions.entries())
+    : (this.domainAdminPermissions && typeof this.domainAdminPermissions === 'object'
+      ? Object.entries(typeof this.domainAdminPermissions.toObject === 'function' ? this.domainAdminPermissions.toObject() : this.domainAdminPermissions)
+      : []);
+  const normalizedDomainAdminPermissions = new Map();
+  for (const [adminId, permissionKeys] of domainAdminPermissionEntries) {
+    const adminIdStr = getIdString(adminId);
+    if (!adminIdStr || !seen.has(adminIdStr) || adminIdStr === domainMasterId) continue;
+    const normalizedPermissionKeys = Array.from(new Set(
+      (Array.isArray(permissionKeys) ? permissionKeys : [])
+        .map((item) => String(item || '').trim())
+        .filter((item) => item === 'senseArticleReview' || item === 'gateDefenseView')
+    ));
+    normalizedDomainAdminPermissions.set(adminIdStr, normalizedPermissionKeys);
+  }
+  this.domainAdminPermissions = normalizedDomainAdminPermissions;
 
   const domainAdminSet = new Set(normalizedAdmins.map((adminId) => getIdString(adminId)).filter(Boolean));
 

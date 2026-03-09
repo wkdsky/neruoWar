@@ -29,16 +29,18 @@ const PARSER_ERROR_CODES = {
 };
 
 const REVISION_SOURCE_MODES = ['full', 'section', 'selection'];
-const REVISION_REVIEW_STAGES = ['domain_admin', 'domain_master', 'completed'];
+const REVISION_REVIEW_STAGES = ['review', 'domain_admin', 'domain_master', 'completed'];
 const REVISION_STATUSES = [
   'draft',
   'submitted',
+  'pending_review',
   'pending_domain_admin_review',
   'changes_requested_by_domain_admin',
   'rejected_by_domain_admin',
   'pending_domain_master_review',
   'changes_requested_by_domain_master',
   'rejected_by_domain_master',
+  'rejected',
   'published',
   'superseded',
   'withdrawn'
@@ -55,6 +57,7 @@ const DRAFT_EDITABLE_STATUSES = [
 
 const ACTIVE_REVIEW_STATUSES = [
   'submitted',
+  'pending_review',
   'pending_domain_admin_review',
   'pending_domain_master_review'
 ];
@@ -62,6 +65,7 @@ const ACTIVE_REVIEW_STATUSES = [
 const ACTIVE_SUPERSEDE_STATUSES = [
   'draft',
   'submitted',
+  'pending_review',
   'pending_domain_admin_review',
   'changes_requested_by_domain_admin',
   'pending_domain_master_review',

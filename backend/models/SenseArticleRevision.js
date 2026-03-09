@@ -7,6 +7,47 @@ const {
   REVISION_STATUSES
 } = require('../constants/senseArticle');
 
+
+const ReviewParticipantSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  role: {
+    type: String,
+    enum: ['domain_master', 'domain_admin', 'system_admin'],
+    default: 'domain_admin'
+  }
+}, { _id: false });
+
+const ReviewVoteSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  role: {
+    type: String,
+    enum: ['domain_master', 'domain_admin', 'system_admin'],
+    default: 'domain_admin'
+  },
+  decision: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
+  },
+  comment: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  reviewedAt: {
+    type: Date,
+    default: null
+  }
+}, { _id: false });
+
 const AnchorSchema = new mongoose.Schema({
   revisionId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -150,12 +191,26 @@ const SenseArticleRevisionSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: null
   },
+  scopedChange: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
   proposerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   },
   proposerNote: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  revisionTitle: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  proposedSenseTitle: {
     type: String,
     default: '',
     trim: true
@@ -207,6 +262,14 @@ const SenseArticleRevisionSchema = new mongoose.Schema({
     type: String,
     default: '',
     trim: true
+  },
+  reviewParticipants: {
+    type: [ReviewParticipantSchema],
+    default: []
+  },
+  reviewVotes: {
+    type: [ReviewVoteSchema],
+    default: []
   },
   finalDecision: {
     type: String,

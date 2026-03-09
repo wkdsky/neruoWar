@@ -63,11 +63,9 @@ const getNodeSenseTitle = (node) => {
     return typeof sense?.title === 'string' ? sense.title.trim() : '';
 };
 
-const getNodeSenseContent = (node) => {
-    if (typeof node?.activeSenseContent === 'string' && node.activeSenseContent.trim()) return node.activeSenseContent.trim();
-    const sense = getNodePrimarySense(node);
-    if (typeof sense?.content === 'string' && sense.content.trim()) return sense.content.trim();
+const getNodeSenseSummary = (node) => {
     if (typeof node?.knowledge === 'string' && node.knowledge.trim()) return node.knowledge.trim();
+    if (typeof node?.description === 'string' && node.description.trim()) return node.description.trim();
     return '';
 };
 
@@ -122,7 +120,7 @@ const NodeInfoModal = ({
     if (!isOpen || !nodeDetail) return null;
 
     const nodeSenseTitle = getNodeSenseTitle(nodeDetail);
-    const nodeSenseContent = getNodeSenseContent(nodeDetail);
+    const nodeSenseSummary = getNodeSenseSummary(nodeDetail);
     if (simpleOnly) {
         return (
             <div className="modal-backdrop" onClick={onClose}>
@@ -139,8 +137,8 @@ const NodeInfoModal = ({
                             {nodeSenseTitle && (
                                 <p className="info-section-desc">释义题目：{nodeSenseTitle}</p>
                             )}
-                            {nodeSenseContent && (
-                                <p className="info-section-desc">释义内容：{nodeSenseContent}</p>
+                            {nodeSenseSummary && (
+                                <p className="info-section-desc">概述：{nodeSenseSummary}</p>
                             )}
                         </div>
                     </div>
@@ -209,8 +207,8 @@ const NodeInfoModal = ({
                         {nodeSenseTitle && (
                             <p className="info-section-desc">当前释义：{nodeSenseTitle}</p>
                         )}
-                        {nodeSenseContent && (
-                            <p className="info-section-desc">释义内容：{nodeSenseContent}</p>
+                        {nodeSenseSummary && (
+                            <p className="info-section-desc">概述：{nodeSenseSummary}</p>
                         )}
                     </div>
 

@@ -26,10 +26,8 @@ const getNodeSenseTitle = (node) => {
     return typeof sense?.title === 'string' ? sense.title.trim() : '';
 };
 
-const getNodeSenseContent = (node) => {
-    if (typeof node?.activeSenseContent === 'string' && node.activeSenseContent.trim()) return node.activeSenseContent.trim();
-    const sense = getNodePrimarySense(node);
-    if (typeof sense?.content === 'string' && sense.content.trim()) return sense.content.trim();
+const getNodeSenseSummary = (node) => {
+    if (typeof node?.description === 'string' && node.description.trim()) return node.description.trim();
     if (typeof node?.knowledge === 'string' && node.knowledge.trim()) return node.knowledge.trim();
     return '';
 };
@@ -125,7 +123,7 @@ const Home = ({
             .filter(Boolean);
     })();
     const locationSenseTitle = getNodeSenseTitle(currentLocationNodeDetail);
-    const locationSenseContent = getNodeSenseContent(currentLocationNodeDetail);
+    const locationSenseSummary = getNodeSenseSummary(currentLocationNodeDetail);
     const formatSeconds = (seconds) => {
         if (!Number.isFinite(seconds) || seconds <= 0) return '0 秒';
         const rounded = Math.round(seconds);
@@ -224,7 +222,7 @@ const Home = ({
                                         onClick={() => onSearchResultClick(node)}
                                     >
                                         <div className="search-card-title">{renderKeywordHighlight(getNodeDisplayName(node), searchQuery)}</div>
-                                        <div className="search-card-desc">{getNodeSenseContent(node) || node.description}</div>
+                                        <div className="search-card-desc">{getNodeSenseSummary(node) || node.description}</div>
                                     </div>
                                 ))}
                             </div>
@@ -438,14 +436,7 @@ const Home = ({
                                             </div>
                                         )}
 
-                                        {locationSenseContent && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">释义内容</div>
-                                                <div className="section-content knowledge-content">
-                                                    {locationSenseContent}
-                                                </div>
-                                            </div>
-                                        )}
+
                                     </div>
                                 ) : (
                                     <div className="location-sidebar-empty">

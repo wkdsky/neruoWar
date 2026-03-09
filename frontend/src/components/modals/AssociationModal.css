@@ -5,11 +5,11 @@
     background: rgba(30, 41, 59, 0.95);
     border-radius: 12px;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    border: 2px solid rgba(168, 85, 247, 0.5);
+    border: 2px solid rgba(56, 189, 248, 0.34);
 }
 
 .association-modal .modal-header {
-    border-bottom: 2px solid rgba(168, 85, 247, 0.3);
+    border-bottom: 2px solid rgba(103, 232, 249, 0.24);
     padding: 1.5rem;
     display: flex;
     justify-content: space-between;
@@ -17,7 +17,7 @@
 }
 
 .association-modal .modal-header h2 {
-    color: #a855f7;
+    color: var(--topbar-accent);
     font-size: 1.5rem;
     font-weight: 600;
     margin: 0;
@@ -39,22 +39,22 @@
 }
 
 .association-info {
-    background: rgba(168, 85, 247, 0.1);
+    background: rgba(103, 232, 249, 0.1);
     padding: 1rem;
     border-radius: 8px;
     margin-bottom: 1.5rem;
-    border-left: 4px solid #a855f7;
+    border-left: 4px solid var(--topbar-accent);
 }
 
 .association-info .node-title {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.25rem;
     font-weight: 600;
     margin-bottom: 0.5rem;
 }
 
 .association-info .node-desc {
-    color: #c4b5fd;
+    color: #c7dff7;
     font-size: 0.95rem;
     line-height: 1.5;
 }
@@ -64,7 +64,7 @@
 }
 
 .association-section .section-title {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.1rem;
     font-weight: 600;
     margin-bottom: 0.75rem;
@@ -86,7 +86,7 @@
 }
 
 .domain-item {
-    background: rgba(168, 85, 247, 0.1);
+    background: rgba(103, 232, 249, 0.1);
     padding: 0.75rem;
     border-radius: 6px;
     margin-bottom: 0.5rem;
@@ -102,7 +102,7 @@
 }
 
 .domain-item:hover {
-    background: rgba(168, 85, 247, 0.2);
+    background: rgba(103, 232, 249, 0.2);
     transform: translateX(4px);
 }
 

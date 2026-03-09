@@ -31,3 +31,13 @@ test('sub view context keeps return target and notification routing stays struct
   expect(notificationNav.options.view).toBe('senseArticleEditor');
   expect(notificationNav.options.revisionId).toBe('rev-9');
 });
+
+test('rejected notifications open review page', () => {
+  expect(resolveSenseArticleNotificationNavigation({
+    type: 'sense_article_domain_master_rejected',
+    payload: { nodeId: 'node-1', senseId: 'sense-1', revisionId: 'rev-1' }
+  })).toEqual({
+    target: { nodeId: 'node-1', senseId: 'sense-1' },
+    options: { view: 'senseArticleReview', revisionId: 'rev-1', selectedRevisionId: 'rev-1' }
+  });
+});

@@ -30,7 +30,10 @@ const serializeRevisionSummary = (revision = {}) => ({
   sourceMode: revision?.sourceMode || 'full',
   targetHeadingId: revision?.targetHeadingId || '',
   proposerId: revision?.proposerId || null,
+  proposerUsername: revision?.proposerUsername || '',
   proposerNote: revision?.proposerNote || '',
+  revisionTitle: revision?.revisionTitle || '',
+  proposedSenseTitle: revision?.proposedSenseTitle || '',
   status: revision?.status || 'draft',
   reviewStage: revision?.reviewStage || 'domain_admin',
   domainAdminDecision: revision?.domainAdminDecision || 'pending',
@@ -41,6 +44,8 @@ const serializeRevisionSummary = (revision = {}) => ({
   domainMasterReviewerId: revision?.domainMasterReviewerId || null,
   domainMasterReviewedAt: revision?.domainMasterReviewedAt || null,
   domainMasterComment: revision?.domainMasterComment || '',
+  reviewParticipants: Array.isArray(revision?.reviewParticipants) ? revision.reviewParticipants : [],
+  reviewVotes: Array.isArray(revision?.reviewVotes) ? revision.reviewVotes : [],
   finalDecision: revision?.finalDecision || null,
   finalDecisionAt: revision?.finalDecisionAt || null,
   publishedBy: revision?.publishedBy || null,
@@ -61,7 +66,17 @@ const serializeRevisionDetail = (revision = {}) => ({
   symbolRefs: Array.isArray(revision?.symbolRefs) ? revision.symbolRefs : [],
   plainTextSnapshot: revision?.plainTextSnapshot || '',
   renderSnapshot: revision?.renderSnapshot || null,
-  diffFromBase: revision?.diffFromBase || null
+  diffFromBase: revision?.diffFromBase || null,
+  scopedChange: revision?.scopedChange || null
+});
+
+const serializeRevisionMutationResult = (revision = {}) => ({
+  ...serializeRevisionSummary(revision),
+  parseErrors: Array.isArray(revision?.parseErrors) ? revision.parseErrors : [],
+  headingCount: Array.isArray(revision?.headingIndex) ? revision.headingIndex.length : 0,
+  referenceCount: Array.isArray(revision?.referenceIndex) ? revision.referenceIndex.length : 0,
+  plainTextLength: typeof revision?.plainTextSnapshot === 'string' ? revision.plainTextSnapshot.length : 0,
+  saved: true
 });
 
 const serializeAnnotation = (annotation = {}, relocation = null) => ({
@@ -87,6 +102,7 @@ const serializePermissions = (permissions = {}, currentUserId = '') => ({
   isDomainAdmin: !!permissions.isDomainAdmin,
   canRead: !!permissions.canRead,
   canCreateRevision: !!permissions.canCreateRevision,
+  canReviewSenseArticle: !!permissions.canReviewSenseArticle,
   canReviewDomainAdmin: !!permissions.canReviewDomainAdmin,
   canReviewDomainMaster: !!permissions.canReviewDomainMaster,
   canManageGraphAssociations: !!permissions.canManageGraphAssociations,
@@ -159,6 +175,7 @@ module.exports = {
   serializeBacklinkEntry,
   serializePermissions,
   serializeReferencePreview,
+  serializeRevisionMutationResult,
   serializeRevisionDetail,
   serializeRevisionSummary,
   serializeSearchGroup,

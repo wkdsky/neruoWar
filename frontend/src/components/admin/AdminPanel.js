@@ -76,7 +76,6 @@ const buildSenseKey = (nodeId = '', senseId = '') => {
 
 const createEmptyNewSenseForm = () => ({
     title: '',
-    content: '',
     relationType: ASSOC_RELATION_TYPES.CONTAINS,
     selectedTarget: null,
     insertLeftTarget: null,
@@ -203,7 +202,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const [isSavingNewSense, setIsSavingNewSense] = useState(false);
     const [isSavingNodeEdit, setIsSavingNodeEdit] = useState(false);
     const [editingSenseToken, setEditingSenseToken] = useState('');
-    const [editingSenseForm, setEditingSenseForm] = useState({ title: '', content: '' });
+    const [editingSenseForm, setEditingSenseForm] = useState({ title: '' });
     const [editingSenseActionToken, setEditingSenseActionToken] = useState('');
     const [showDeleteSenseModal, setShowDeleteSenseModal] = useState(false);
     const [deletingSenseContext, setDeletingSenseContext] = useState(null);
@@ -2632,13 +2631,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const saveNewSense = async () => {
         if (!addingSenseNode?._id) return;
         const trimmedTitle = String(newSenseForm.title || '').trim();
-        const trimmedContent = String(newSenseForm.content || '').trim();
         if (!trimmedTitle) {
             alert('释义题目不能为空');
-            return;
-        }
-        if (!trimmedContent) {
-            alert('释义内容不能为空');
             return;
         }
         const duplicated = normalizeNodeSenses(addingSenseNode).some((item) => (
@@ -2692,7 +2686,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                 },
                 body: JSON.stringify({
                     title: trimmedTitle,
-                    content: trimmedContent,
                     associations
                 })
             });
@@ -2721,15 +2714,14 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         if (!token) return;
         setEditingSenseToken(token);
         setEditingSenseForm({
-            title: sense?.title || '',
-            content: sense?.content || ''
+            title: sense?.title || ''
         });
     };
 
     const cancelEditSenseText = () => {
         if (editingSenseActionToken) return;
         setEditingSenseToken('');
-        setEditingSenseForm({ title: '', content: '' });
+        setEditingSenseForm({ title: '' });
     };
 
     const saveSenseTextEdit = async (node, sense) => {
@@ -2738,17 +2730,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         if (!nodeId || !senseId) return;
         const token = getSenseEditToken(nodeId, senseId);
         const title = String(editingSenseForm.title || '').trim();
-        const content = String(editingSenseForm.content || '').trim();
-        if (content !== String(sense?.content || '').trim()) {
-            alert('百科正式正文已迁移到修订系统；管理员面板这里只保留题目兼容编辑。');
-            return;
-        }
         if (!title) {
             alert('释义题目不能为空');
-            return;
-        }
-        if (!content) {
-            alert('释义内容不能为空');
             return;
         }
         setEditingSenseActionToken(token);
@@ -2760,7 +2743,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${authToken}`
                 },
-                body: JSON.stringify({ title, content })
+                body: JSON.stringify({ title })
             });
             const data = await response.json();
             if (!response.ok) {
@@ -2769,7 +2752,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
             }
             alert(data?.message || '释义已更新');
             setEditingSenseToken('');
-            setEditingSenseForm({ title: '', content: '' });
+            setEditingSenseForm({ title: '' });
             fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
         } catch (error) {
             console.error('释义编辑失败:', error);
@@ -6678,7 +6661,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                 submitAdminDomainSearch();
                                             }
                                         }}
-                                        placeholder="搜索标题/释义内容（回车确认）"
+                                        placeholder="搜索标题/概述（回车确认）"
                                         className="admin-search-input"
                                     />
                                     {adminDomainSearchKeyword && (
@@ -6708,7 +6691,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                 className="btn btn-primary"
                                 disabled={isAdminDomainLoading}
                             >
-                                {isAdminDomainLoading ? '刷新中...' : '刷新最新状态'}
+                                {isAdminDomainLoading ? '刷新中...' : '刷新列表'}
                             </button>
                         </div>
                     </div>
@@ -6804,18 +6787,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                         关联 {getEditableSenseAssociationCount(node, sense.senseId)}
                                                     </span>
                                                 </div>
-                                                {editingSenseToken === getSenseEditToken(node._id, sense.senseId) && (
-                                                    <div className="admin-field-with-error">
-                                                        <textarea
-                                                            className="edit-textarea admin-domain-sense-edit-textarea"
-                                                            rows={4}
-                                                            value={editingSenseForm.content}
-                                                            readOnly
-                                                            placeholder="百科正文已迁移到修订系统"
-                                                        />
-                                                        <span className="error-text inline-field-error">百科正文已迁移到修订系统，请在百科阅读/编辑页通过修订流修改。</span>
-                                                    </div>
-                                                )}
                                             </div>
 
                                             <div className="admin-domain-sense-actions">
@@ -6840,8 +6811,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                     <button
                                                         onClick={() => startEditSenseText(node, sense)}
                                                         className="btn-action btn-edit"
-                                                    >
-                                                        编辑文本
+>
+                                                        编辑释义题目
                                                     </button>
                                                 )}
                                                 <button
@@ -7311,19 +7282,6 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                     <span className="error-text inline-field-error">释义题目不能为空</span>
                                 )}
                             </div>
-                            <div className="form-group">
-                                <label>释义内容</label>
-                                <textarea
-                                    className="form-textarea"
-                                    rows={4}
-                                    value={newSenseForm.content}
-                                    onChange={(e) => setNewSenseForm((prev) => ({ ...prev, content: e.target.value }))}
-                                />
-                                {String(newSenseForm.content || '').trim() === '' && (
-                                    <span className="error-text inline-field-error">释义内容不能为空</span>
-                                )}
-                            </div>
-
                             <div className="admin-add-sense-relations">
                                 <div className="admin-add-sense-relations-header">
                                     <h4>关联管理</h4>

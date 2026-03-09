@@ -43,11 +43,13 @@ const normalizeSenseList = (source = [], fallbackDescription = '') => {
   const seenIds = new Set();
   const seenTitles = new Set();
 
+  const fallbackContent = typeof fallbackDescription === 'string' ? fallbackDescription.trim() : '';
   list.forEach((item, index) => {
     const senseId = normalizeSenseId(item?.senseId, index);
     const title = typeof item?.title === 'string' ? item.title.trim() : '';
-    const content = typeof item?.content === 'string' ? item.content.trim() : '';
-    if (!title || !content) return;
+    const rawContent = typeof item?.content === 'string' ? item.content.trim() : '';
+    const content = rawContent || fallbackContent;
+    if (!title) return;
     const titleKey = title.toLowerCase();
     if (seenIds.has(senseId) || seenTitles.has(titleKey)) return;
     seenIds.add(senseId);
@@ -61,9 +63,7 @@ const normalizeSenseList = (source = [], fallbackDescription = '') => {
   });
 
   if (deduped.length > 0) return deduped;
-  const content = typeof fallbackDescription === 'string' && fallbackDescription.trim()
-    ? fallbackDescription.trim()
-    : '暂无释义内容';
+  const content = fallbackContent || '';
   return [{
     senseId: 'sense_1',
     title: '基础释义',

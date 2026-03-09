@@ -878,7 +878,7 @@ class WebGLNodeRenderer {
       glow: fallback.glow,
       patternType: PATTERN_TYPE_MAP.none,
       textColor: node?.labelColor || '#ffffff',
-      subTextColor: '#e9d5ff',
+      subTextColor: '#dbeafe',
       opacityFactor: 1
     };
   }
@@ -1491,12 +1491,12 @@ class WebGLNodeRenderer {
           ctx.fill();
 
           // tooltip 边框
-          ctx.strokeStyle = 'rgba(168, 85, 247, 0.5)';
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.34)';
           ctx.lineWidth = 1;
           ctx.stroke();
 
           // tooltip 文字
-          ctx.fillStyle = '#e9d5ff';
+          ctx.fillStyle = '#eef8ff';
           ctx.fillText(button.tooltip, tooltipX, tooltipY);
         }
       }

@@ -19,7 +19,8 @@ const {
   searchReferenceTargets,
   submitRevision,
   updateAnnotation,
-  updateDraftRevision
+  updateDraftRevision,
+  updateSenseMetadata
 } = require('../services/senseArticleService');
 
 const router = express.Router();
@@ -52,7 +53,7 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
     });
     res.json(data);
   } catch (error) {
-    sendError(res, error, '获取内容治理面板失败');
+    sendError(res, error, '获取词条管理失败');
   }
 });
 
@@ -156,6 +157,20 @@ router.put('/:nodeId/:senseId/revisions/:revisionId', authenticateToken, async (
   }
 });
 
+router.put('/:nodeId/:senseId/metadata', authenticateToken, async (req, res) => {
+  try {
+    const data = await updateSenseMetadata({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      userId: req.user.userId,
+      payload: req.body || {}
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '更新释义元信息失败');
+  }
+});
+
 router.post('/:nodeId/:senseId/revisions/:revisionId/submit', authenticateToken, async (req, res) => {
   try {
     const data = await submitRevision({
@@ -201,6 +216,22 @@ router.post('/:nodeId/:senseId/revisions/from-heading', authenticateToken, async
     res.status(201).json(data);
   } catch (error) {
     sendError(res, error, '从小节创建修订失败');
+  }
+});
+
+router.post('/:nodeId/:senseId/revisions/:revisionId/review', authenticateToken, async (req, res) => {
+  try {
+    const data = await reviewByDomainAdmin({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      revisionId: req.params.revisionId,
+      userId: req.user.userId,
+      action: req.body?.action,
+      comment: req.body?.comment || ''
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '百科审阅失败');
   }
 });
 

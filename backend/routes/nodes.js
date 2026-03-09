@@ -51,6 +51,13 @@ const {
   saveNodeSenses
 } = require('../services/nodeSenseStore');
 const { bootstrapArticleFromNodeSense } = require('../services/senseArticleService');
+const {
+  DOMAIN_ADMIN_PERMISSION_DEFINITIONS,
+  DOMAIN_ADMIN_PERMISSION_KEYS,
+  buildDomainAdminPermissionState,
+  getNodeDomainAdminPermissionMap,
+  normalizePermissionKeys
+} = require('../utils/domainAdminPermissions');
 const DomainTitleProjection = require('../models/DomainTitleProjection');
 const {
   isDomainTitleStateCollectionReadEnabled,
@@ -3851,10 +3858,10 @@ router.post('/create', authenticateToken, async (req, res) => {
         title: typeof item?.title === 'string' ? item.title.trim() : '',
         content: typeof item?.content === 'string' ? item.content.trim() : ''
       }))
-      .filter((item) => item.title && item.content);
+      .filter((item) => item.title);
 
     if (rawSenseList.length === 0) {
-      return res.status(400).json({ error: '创建知识域时至少需要一个同义词释义（题目 + 内容）' });
+      return res.status(400).json({ error: '创建知识域时至少需要一个同义词释义题目' });
     }
 
     const seenSenseTitleKeys = new Set();
@@ -3869,7 +3876,7 @@ router.post('/create', authenticateToken, async (req, res) => {
     const uniqueSenses = rawSenseList.map((item, index) => ({
       senseId: `sense_${index + 1}`,
       title: item.title,
-      content: item.content
+      content: item.content || String(description || '').trim()
     }));
 
     const approvedNodeCount = await Node.countDocuments({ status: 'approved' });
@@ -4573,9 +4580,9 @@ router.put('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
 router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { nodeId } = req.params;
-    const { title, content, associations } = req.body || {};
+    const { title, associations } = req.body || {};
 
-    const node = await Node.findById(nodeId).select('name status synonymSenses associations relatedParentDomains relatedChildDomains');
+    const node = await Node.findById(nodeId).select('name description status synonymSenses associations relatedParentDomains relatedChildDomains');
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
@@ -4585,21 +4592,10 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
 
     await hydrateNodeSensesForNodes([node]);
     const existingSenses = normalizeNodeSenseList(node);
-    const currentSense = sourceSenses[targetIndex] || null;
     const trimmedTitle = typeof title === 'string' ? title.trim() : '';
-    const hasContentPayload = typeof content === 'string';
-    const trimmedContent = hasContentPayload ? content.trim() : String(currentSense?.content || '').trim();
-    if (hasContentPayload && trimmedContent !== String(currentSense?.content || '').trim()) {
-      return res.status(409).json({
-        error: '管理员直改百科正文已停用，请改用 /api/sense-articles/:nodeId/:senseId/revisions 进入修订流',
-        code: 'sense_article_revision_flow_required'
-      });
-    }
+    const trimmedContent = String(node.description || '').trim();
     if (!trimmedTitle) {
       return res.status(400).json({ error: '释义题目不能为空' });
-    }
-    if (!trimmedContent) {
-      return res.status(400).json({ error: '释义内容不能为空' });
     }
 
     const titleKey = trimmedTitle.toLowerCase();
@@ -4686,7 +4682,7 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
       }
     }
 
-    const nextSenses = [...existingSenses, { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent }];
+    const nextSenses = [...existingSenses, { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent || String(node.description || '').trim() }];
     if (rawAssociations.length > 0) {
       node.associations = nextAssociations;
       await rebuildRelatedDomainNamesForNodes([node]);
@@ -4728,7 +4724,7 @@ router.post('/:nodeId/admin/senses', authenticateToken, isAdmin, async (req, res
     return res.json({
       success: true,
       message: '释义已新增',
-      sense: canonicalSense || { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent },
+      sense: canonicalSense || { senseId: nextSenseId, title: trimmedTitle, content: trimmedContent || String(node.description || '').trim() },
       node: canonicalNode || node.toObject()
     });
   } catch (error) {
@@ -4743,7 +4739,7 @@ router.put('/:nodeId/admin/senses/:senseId/text', authenticateToken, isAdmin, as
     const { nodeId, senseId } = req.params;
     const { title, content } = req.body || {};
 
-    const node = await Node.findById(nodeId).select('status synonymSenses associations');
+    const node = await Node.findById(nodeId).select('description status synonymSenses associations');
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
@@ -4771,9 +4767,6 @@ router.put('/:nodeId/admin/senses/:senseId/text', authenticateToken, isAdmin, as
     }
     if (!trimmedTitle) {
       return res.status(400).json({ error: '释义题目不能为空' });
-    }
-    if (!trimmedContent) {
-      return res.status(400).json({ error: '释义内容不能为空' });
     }
 
     const titleKey = trimmedTitle.toLowerCase();
@@ -4872,7 +4865,7 @@ router.delete('/:nodeId/admin/senses/:senseId', authenticateToken, isAdmin, asyn
     const { nodeId, senseId } = req.params;
     const { onRemovalStrategy, bridgeDecisions } = req.body || {};
 
-    const node = await Node.findById(nodeId).select('name status synonymSenses associations relatedParentDomains relatedChildDomains');
+    const node = await Node.findById(nodeId).select('name description status synonymSenses associations relatedParentDomains relatedChildDomains');
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
     }
@@ -6545,7 +6538,7 @@ router.post('/:nodeId/domain-admins/resign', authenticateToken, async (req, res)
       return res.status(401).json({ error: '无效的用户身份' });
     }
 
-    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins');
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins domainAdminPermissions');
     if (!node || node.status !== 'approved') {
       return res.status(404).json({ error: '知识域不存在或不可操作' });
     }
@@ -6651,7 +6644,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: '无效的知识域ID' });
     }
 
-    const node = await Node.findById(nodeId).select('name domainMaster domainAdmins');
+    const node = await Node.findById(nodeId).select('name domainMaster domainAdmins domainAdminPermissions');
 
     if (!node) {
       return res.status(404).json({ error: '节点不存在' });
@@ -6693,11 +6686,18 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       .map((adminId) => {
         const adminUser = relatedUserMap.get(adminId);
         if (!adminUser) return null;
+        const permissionState = buildDomainAdminPermissionState({ node, userId: adminId });
         return {
           _id: getIdString(adminUser._id),
           username: adminUser.username,
           profession: adminUser.profession,
-          role: adminUser.role
+          role: adminUser.role,
+          permissions: {
+            ...permissionState.permissions,
+            [DOMAIN_ADMIN_PERMISSION_KEYS.GATE_DEFENSE_VIEW]: false
+          },
+          grantedPermissionKeys: permissionState.grantedKeys,
+          permissionLabels: []
         };
       })
       .filter(Boolean);
@@ -6706,6 +6706,18 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
       defenseLayout?.gateDefenseViewAdminIds,
       domainAdminIds
     );
+    admins.forEach((adminItem) => {
+      const nextPermissionState = buildDomainAdminPermissionState({
+        node,
+        userId: adminItem._id,
+        gateDefenseViewerAdminIds
+      });
+      adminItem.permissions = nextPermissionState.permissions;
+      adminItem.grantedPermissionKeys = nextPermissionState.grantedKeys;
+      adminItem.permissionLabels = DOMAIN_ADMIN_PERMISSION_DEFINITIONS
+        .filter((permissionDef) => nextPermissionState.permissions[permissionDef.key])
+        .map((permissionDef) => permissionDef.label);
+    });
 
     let pendingInvites = [];
     if (canEdit) {
@@ -6788,6 +6800,7 @@ router.get('/:nodeId/domain-admins', authenticateToken, async (req, res) => {
           }
         : null,
       domainAdmins: admins,
+      availablePermissions: DOMAIN_ADMIN_PERMISSION_DEFINITIONS,
       gateDefenseViewerAdminIds,
       pendingInvites
     });
@@ -7035,6 +7048,103 @@ router.delete('/:nodeId/domain-admins/:adminUserId', authenticateToken, async (r
   }
 });
 
+// 域主批量配置域相权限
+router.put('/:nodeId/domain-admins/permissions', authenticateToken, async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestUserId = getIdString(req?.user?.userId);
+    if (!isValidObjectId(requestUserId)) {
+      return res.status(401).json({ error: '无效的用户身份' });
+    }
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的知识域ID' });
+    }
+
+    const node = await Node.findById(nodeId).select('name status domainMaster domainAdmins domainAdminPermissions');
+    if (!node || node.status !== 'approved') {
+      return res.status(404).json({ error: '知识域不存在或不可操作' });
+    }
+    await hydrateNodeTitleStatesForNodes([node], {
+      includeDefenseLayout: true,
+      includeBattlefieldLayout: true,
+      includeSiegeState: false
+    });
+    if (!isDomainMaster(node, requestUserId)) {
+      return res.status(403).json({ error: '只有域主可以配置域相权限' });
+    }
+
+    const allowedAdminIds = (node.domainAdmins || []).map((id) => getIdString(id)).filter((id) => isValidObjectId(id));
+    const incomingPermissionsByUserId = req.body?.permissionsByUserId && typeof req.body.permissionsByUserId === 'object'
+      ? req.body.permissionsByUserId
+      : {};
+    const nextPermissionMap = {};
+    allowedAdminIds.forEach((adminId) => {
+      const rawValue = incomingPermissionsByUserId?.[adminId];
+      const permissionKeys = Array.isArray(rawValue)
+        ? rawValue
+        : (rawValue && typeof rawValue === 'object'
+          ? Object.keys(rawValue).filter((key) => !!rawValue[key])
+          : []);
+      nextPermissionMap[adminId] = normalizePermissionKeys(permissionKeys);
+    });
+
+    node.domainAdminPermissions = nextPermissionMap;
+    await node.save();
+
+    const gateDefenseViewerAdminIds = allowedAdminIds.filter((adminId) => (
+      Array.isArray(nextPermissionMap[adminId])
+      && nextPermissionMap[adminId].includes(DOMAIN_ADMIN_PERMISSION_KEYS.GATE_DEFENSE_VIEW)
+    ));
+    const currentLayout = serializeDefenseLayout(resolveNodeDefenseLayout(node, {}));
+    const nextLayout = {
+      ...currentLayout,
+      gateDefenseViewAdminIds: gateDefenseViewerAdminIds,
+      updatedAt: new Date()
+    };
+    await upsertNodeDefenseLayout({
+      nodeId: node._id,
+      layout: nextLayout,
+      actorUserId: requestUserId
+    });
+
+    const adminUsers = allowedAdminIds.length > 0
+      ? await User.find({ _id: { $in: allowedAdminIds } }).select('_id username profession role').lean()
+      : [];
+    const adminUserMap = new Map(adminUsers.map((item) => [getIdString(item._id), item]));
+    const domainAdmins = allowedAdminIds.map((adminId) => {
+      const userItem = adminUserMap.get(adminId);
+      if (!userItem) return null;
+      const permissionState = buildDomainAdminPermissionState({
+        node: { ...node.toObject(), domainAdminPermissions: nextPermissionMap },
+        userId: adminId,
+        gateDefenseViewerAdminIds
+      });
+      return {
+        _id: adminId,
+        username: userItem.username,
+        profession: userItem.profession,
+        role: userItem.role,
+        permissions: permissionState.permissions,
+        grantedPermissionKeys: permissionState.grantedKeys,
+        permissionLabels: DOMAIN_ADMIN_PERMISSION_DEFINITIONS
+          .filter((permissionDef) => permissionState.permissions[permissionDef.key])
+          .map((permissionDef) => permissionDef.label)
+      };
+    }).filter(Boolean);
+
+    res.json({
+      success: true,
+      message: '域相权限已保存',
+      availablePermissions: DOMAIN_ADMIN_PERMISSION_DEFINITIONS,
+      gateDefenseViewerAdminIds,
+      domainAdmins
+    });
+  } catch (error) {
+    console.error('保存域相权限错误:', error);
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
+  }
+});
+
 // 域主配置可查看承口/启口兵力的域相
 router.put('/:nodeId/domain-admins/gate-defense-viewers', authenticateToken, async (req, res) => {
   try {
@@ -7064,6 +7174,18 @@ router.put('/:nodeId/domain-admins/gate-defense-viewers', authenticateToken, asy
       req.body?.viewerAdminIds,
       (node.domainAdmins || []).map((id) => getIdString(id))
     );
+
+    const currentPermissionMap = getNodeDomainAdminPermissionMap(node);
+    const nextPermissionMap = {};
+    (node.domainAdmins || []).map((id) => getIdString(id)).filter((id) => isValidObjectId(id)).forEach((adminId) => {
+      const currentKeys = Array.isArray(currentPermissionMap[adminId]) ? currentPermissionMap[adminId] : [];
+      const nextKeys = viewerAdminIds.includes(adminId)
+        ? normalizePermissionKeys([...currentKeys, DOMAIN_ADMIN_PERMISSION_KEYS.GATE_DEFENSE_VIEW])
+        : normalizePermissionKeys(currentKeys.filter((key) => key !== DOMAIN_ADMIN_PERMISSION_KEYS.GATE_DEFENSE_VIEW));
+      nextPermissionMap[adminId] = nextKeys;
+    });
+    node.domainAdminPermissions = nextPermissionMap;
+    await node.save();
 
     const currentLayout = serializeDefenseLayout(resolveNodeDefenseLayout(node, {}));
     const nextLayout = {

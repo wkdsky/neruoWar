@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const { DOMAIN_ADMIN_PERMISSION_KEYS, hasDomainAdminPermission } = require('../utils/domainAdminPermissions');
 const { getIdString } = require('../utils/objectId');
 
 const deriveUserRoleInfo = ({ user = null, userId = '', node = null }) => {
@@ -6,6 +7,11 @@ const deriveUserRoleInfo = ({ user = null, userId = '', node = null }) => {
   const isSystemAdmin = user?.role === 'admin';
   const isDomainMaster = getIdString(node?.domainMaster) === userIdText;
   const isDomainAdmin = (Array.isArray(node?.domainAdmins) ? node.domainAdmins : []).some((item) => getIdString(item) === userIdText);
+  const canReviewSenseArticle = isSystemAdmin || isDomainMaster || hasDomainAdminPermission({
+    node,
+    userId: userIdText,
+    permissionKey: DOMAIN_ADMIN_PERMISSION_KEYS.SENSE_ARTICLE_REVIEW
+  });
   return {
     user,
     userId: userIdText,
@@ -14,7 +20,8 @@ const deriveUserRoleInfo = ({ user = null, userId = '', node = null }) => {
     isDomainAdmin,
     canRead: true,
     canCreateRevision: true,
-    canReviewDomainAdmin: isSystemAdmin || isDomainAdmin || isDomainMaster,
+    canReviewSenseArticle,
+    canReviewDomainAdmin: canReviewSenseArticle,
     canReviewDomainMaster: isSystemAdmin || isDomainMaster,
     canManageGraphAssociations: isSystemAdmin || isDomainMaster
   };

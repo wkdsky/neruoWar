@@ -7,6 +7,13 @@ const normalizeId = (value) => {
 
 export const isSenseArticleView = (view = '') => String(view || '').startsWith('senseArticle');
 
+
+const stableSerialize = (value = null) => JSON.stringify(value || null);
+
+export const areSenseArticleContextsEqual = (left = null, right = null) => (
+  stableSerialize(left) === stableSerialize(right)
+);
+
 export const createSenseArticleContext = (patch = {}, base = null) => ({
   nodeId: '',
   senseId: '',
@@ -126,9 +133,14 @@ export const resolveSenseArticleNotificationNavigation = (notification = {}) => 
       options: { view: 'senseArticleEditor', revisionId: payload.revisionId, selectedRevisionId: payload.revisionId }
     };
   }
+  if (notificationType === 'sense_article_domain_master_rejected' && payload.revisionId) {
+    return {
+      target: { nodeId: targetNodeId, senseId: targetSenseId },
+      options: { view: 'senseArticleReview', revisionId: payload.revisionId, selectedRevisionId: payload.revisionId }
+    };
+  }
   if ((notificationType === 'sense_article_published'
-    || notificationType === 'sense_article_revision_superseded'
-    || notificationType === 'sense_article_domain_master_rejected') && payload.revisionId) {
+    || notificationType === 'sense_article_revision_superseded') && payload.revisionId) {
     return {
       target: { nodeId: targetNodeId, senseId: targetSenseId },
       options: { view: 'senseArticleHistory', revisionId: payload.revisionId, selectedRevisionId: payload.revisionId }

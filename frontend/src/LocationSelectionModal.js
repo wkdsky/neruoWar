@@ -299,7 +299,7 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
         // 画连线
-        ctx.strokeStyle = '#a855f7';
+        ctx.strokeStyle = '#67e8f9';
         ctx.lineWidth = 2;
 
         nodePositions.forEach(nodePos => {
@@ -322,8 +322,8 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
                     nodePos.x - nodeWidth / 2, nodePos.y,
                     nodePos.x + nodeWidth / 2, nodePos.y
                 );
-                gradient.addColorStop(0, '#7c3aed');
-                gradient.addColorStop(1, '#a855f7');
+                gradient.addColorStop(0, '#0e7490');
+                gradient.addColorStop(1, '#67e8f9');
                 ctx.fillStyle = gradient;
             } else if (nodePos.isSelected) {
                 ctx.fillStyle = 'rgba(16, 185, 129, 0.8)';
@@ -353,13 +353,13 @@ const LocationSelectionModal = ({ onConfirm, featuredNodes = [], onClose, userna
                 ctx.strokeStyle = '#fbbf24';
                 ctx.lineWidth = 2;
             } else {
-                ctx.strokeStyle = 'rgba(168, 85, 247, 0.5)';
+                ctx.strokeStyle = 'rgba(56, 189, 248, 0.34)';
                 ctx.lineWidth = 2;
             }
             ctx.stroke();
 
             // 文字
-            ctx.fillStyle = '#e9d5ff';
+            ctx.fillStyle = '#eef8ff';
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';

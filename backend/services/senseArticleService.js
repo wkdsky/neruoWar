@@ -1,7 +1,12 @@
 const mongoose = require('mongoose');
 const Node = require('../models/Node');
+const User = require('../models/User');
+const EntropyAlliance = require('../models/EntropyAlliance');
 const NodeSense = require('../models/NodeSense');
+const NodeSenseFavorite = require('../models/NodeSenseFavorite');
 const SenseArticle = require('../models/SenseArticle');
+const { hydrateNodeSensesForNodes, saveNodeSenses } = require('./nodeSenseStore');
+const { syncDomainTitleProjectionFromNode } = require('./domainTitleProjectionStore');
 const SenseArticleRevision = require('../models/SenseArticleRevision');
 const SenseAnnotation = require('../models/SenseAnnotation');
 const { ACTIVE_SUPERSEDE_STATUSES, DRAFT_EDITABLE_STATUSES } = require('../constants/senseArticle');
@@ -25,6 +30,7 @@ const {
   serializePermissions,
   serializeReferencePreview,
   serializeRevisionDetail,
+  serializeRevisionMutationResult,
   serializeRevisionSummary,
   serializeSearchGroup,
   serializeSearchMatch,
@@ -37,6 +43,7 @@ const {
   resolveSubmitOperation,
   selectSupersedeCandidates
 } = require('./senseArticleWorkflow');
+const { DOMAIN_ADMIN_PERMISSION_KEYS, getSenseArticleReviewerEntries, hasDomainAdminPermission } = require('../utils/domainAdminPermissions');
 const { getIdString, isValidObjectId, toObjectIdOrNull } = require('../utils/objectId');
 
 const createExposeError = (message, statusCode = 400, code = '') => {
@@ -45,6 +52,179 @@ const createExposeError = (message, statusCode = 400, code = '') => {
   error.statusCode = statusCode;
   error.code = code;
   return error;
+};
+
+const normalizeTrimmedText = (value = '') => (typeof value === 'string' ? value.trim() : '');
+
+const buildDefaultRevisionTitle = (username = '') => `来自 ${normalizeTrimmedText(username) || '该用户'} 的修订`;
+
+const resolveRevisionTitleInput = ({ revisionTitle = '', fallbackUsername = '' } = {}) => {
+  const normalized = normalizeTrimmedText(revisionTitle);
+  return normalized || buildDefaultRevisionTitle(fallbackUsername);
+};
+
+const canUserUpdateSenseMetadata = (permissions = {}) => (
+  !!permissions.canReviewSenseArticle || !!permissions.isDomainMaster || !!permissions.isSystemAdmin
+);
+
+const loadRevisionProposerMap = async (revisions = []) => {
+  const proposerIds = Array.from(new Set((Array.isArray(revisions) ? revisions : [])
+    .map((item) => getIdString(item?.proposerId))
+    .filter(Boolean)));
+  if (proposerIds.length === 0) return new Map();
+  const rows = await User.find({ _id: { $in: proposerIds } }).select('_id username').lean();
+  return new Map(rows.map((item) => [String(item._id), normalizeTrimmedText(item.username)]));
+};
+
+const decorateRevisionRecords = async ({ revisions = [], fallbackSenseTitle = '' } = {}) => {
+  const rows = Array.isArray(revisions) ? revisions : [];
+  if (rows.length === 0) return [];
+  const proposerMap = await loadRevisionProposerMap(rows);
+  const normalizedFallbackSenseTitle = normalizeTrimmedText(fallbackSenseTitle);
+  return rows.map((item) => {
+    const revision = item?.toObject ? item.toObject() : { ...(item || {}) };
+    const proposerUsername = proposerMap.get(getIdString(revision.proposerId)) || '';
+    return {
+      ...revision,
+      proposerUsername,
+      revisionTitle: resolveRevisionTitleInput({
+        revisionTitle: revision.revisionTitle,
+        fallbackUsername: proposerUsername
+      }),
+      proposedSenseTitle: normalizeTrimmedText(revision.proposedSenseTitle) || normalizedFallbackSenseTitle
+    };
+  });
+};
+
+const resolveProposedSenseTitle = async ({ bundle, senseId, proposedSenseTitle = '', allowChange = false } = {}) => {
+  const currentTitle = normalizeTrimmedText(bundle?.nodeSense?.title || senseId || '');
+  const nextTitle = normalizeTrimmedText(proposedSenseTitle) || currentTitle;
+  if (!nextTitle) {
+    throw createExposeError('释义名称不能为空', 400, 'sense_title_required');
+  }
+  if (nextTitle === currentTitle) return currentTitle;
+  ensurePermission(allowChange, '当前用户不能修改释义名称', 403, 'sense_title_forbidden');
+
+  const nodeDoc = await Node.findById(bundle.nodeId).select('_id description synonymSenses').lean();
+  if (!nodeDoc) {
+    throw createExposeError('知识域不存在', 404, 'node_not_found');
+  }
+  await hydrateNodeSensesForNodes([nodeDoc]);
+  const currentSenses = Array.isArray(nodeDoc.__senseCollectionRows) && nodeDoc.__senseCollectionRows.length > 0
+    ? nodeDoc.__senseCollectionRows
+    : (Array.isArray(nodeDoc.synonymSenses) ? nodeDoc.synonymSenses : []);
+  const targetSense = currentSenses.find((item) => String(item?.senseId || '').trim() === String(senseId || '').trim());
+  if (!targetSense) {
+    throw createExposeError('释义不存在', 404, 'sense_not_found');
+  }
+  const duplicated = currentSenses.some((item) => (
+    String(item?.senseId || '').trim() !== String(senseId || '').trim()
+    && String(item?.title || '').trim().toLowerCase() === nextTitle.toLowerCase()
+  ));
+  if (duplicated) {
+    throw createExposeError('同一知识域下多个释义题目不能重名', 400, 'sense_title_duplicated');
+  }
+  return nextTitle;
+};
+
+const applyPublishedSenseTitle = async ({ bundle, revision, userId }) => {
+  const nextTitle = await resolveProposedSenseTitle({
+    bundle,
+    senseId: bundle?.senseId || revision?.senseId || '',
+    proposedSenseTitle: revision?.proposedSenseTitle || bundle?.nodeSense?.title || '',
+    allowChange: true
+  });
+  const currentTitle = normalizeTrimmedText(bundle?.nodeSense?.title || '');
+  if (!nextTitle || nextTitle === currentTitle) return nextTitle;
+
+  const nodeDoc = await Node.findById(bundle.nodeId).select('_id description synonymSenses').lean();
+  if (!nodeDoc) {
+    throw createExposeError('知识域不存在', 404, 'node_not_found');
+  }
+  await hydrateNodeSensesForNodes([nodeDoc]);
+  const currentSenses = Array.isArray(nodeDoc.__senseCollectionRows) && nodeDoc.__senseCollectionRows.length > 0
+    ? nodeDoc.__senseCollectionRows
+    : (Array.isArray(nodeDoc.synonymSenses) ? nodeDoc.synonymSenses : []);
+  const nextSenses = currentSenses.map((item) => (
+    String(item?.senseId || '').trim() === String(bundle.senseId || '').trim()
+      ? { ...item, title: nextTitle, content: typeof item?.content === 'string' ? item.content : String(nodeDoc.description || '').trim() }
+      : item
+  ));
+  await saveNodeSenses({
+    nodeId: bundle.nodeId,
+    senses: nextSenses,
+    actorUserId: userId,
+    fallbackDescription: nodeDoc.description || ''
+  });
+  const freshNode = await Node.findById(bundle.nodeId).select('_id name domainMaster domainAdmins domainAdminPermissions synonymSenses description').lean();
+  if (freshNode) {
+    await hydrateNodeSensesForNodes([freshNode]);
+    await syncDomainTitleProjectionFromNode(freshNode);
+  }
+  return nextTitle;
+};
+
+const serializeAllianceThemePayload = (alliance = null) => {
+  if (!alliance || typeof alliance !== 'object') return null;
+  return {
+    _id: alliance._id || null,
+    name: alliance.name || '',
+    flag: alliance.flag || '',
+    visualStyles: Array.isArray(alliance.visualStyles) ? alliance.visualStyles : [],
+    activeVisualStyleId: alliance.activeVisualStyleId || null
+  };
+};
+
+const enrichNodeDomainMasterAlliance = async (node = null) => {
+  if (!node || typeof node !== 'object') return node;
+  const domainMasterId = getIdString(node.domainMaster);
+  if (!domainMasterId) return node;
+
+  const domainMasterUser = await User.findById(domainMasterId)
+    .select('_id username avatar profession allianceId')
+    .lean();
+  if (!domainMasterUser) return node;
+
+  const allianceId = getIdString(domainMasterUser.allianceId);
+  const alliance = allianceId
+    ? await EntropyAlliance.findById(allianceId)
+      .select('_id name flag visualStyles activeVisualStyleId')
+      .lean()
+    : null;
+
+  return {
+    ...node,
+    domainMaster: {
+      _id: domainMasterUser._id || null,
+      username: domainMasterUser.username || '',
+      avatar: domainMasterUser.avatar || '',
+      profession: domainMasterUser.profession || '',
+      allianceId: domainMasterUser.allianceId || null,
+      alliance: serializeAllianceThemePayload(alliance)
+    }
+  };
+};
+
+const resolveSenseArticleReadingMeta = async ({ revision = null, nodeId = '', senseId = '' }) => {
+  const favoritePromise = (nodeId && senseId)
+    ? NodeSenseFavorite.countDocuments({ nodeId: toObjectIdOrNull(nodeId), senseId: String(senseId || '').trim() })
+    : Promise.resolve(0);
+
+  const preferredAuthorId = getIdString(revision?.proposerId || revision?.publishedBy);
+  const authorPromise = preferredAuthorId
+    ? User.findById(preferredAuthorId).select('_id username avatar profession').lean()
+    : Promise.resolve(null);
+
+  const [favoriteCount, author] = await Promise.all([favoritePromise, authorPromise]);
+  return {
+    favoriteCount: Number(favoriteCount || 0),
+    revisionAuthor: author ? {
+      _id: author._id || null,
+      username: author.username || '',
+      avatar: author.avatar || '',
+      profession: author.profession || ''
+    } : null
+  };
 };
 
 const reasonToMessage = (reason = '') => ({
@@ -66,6 +246,121 @@ const reasonToMessage = (reason = '') => ({
   publish_base_outdated: '该修订基线已过期，已有其他版本发布，当前修订不能再发布'
 }[reason] || '当前操作不被允许');
 
+const isPendingReviewStatus = (status = '') => ['pending_review', 'pending_domain_admin_review', 'pending_domain_master_review'].includes(String(status || '').trim());
+
+const buildReviewParticipantsFromNode = (node = null) => getSenseArticleReviewerEntries(node).map((item) => ({
+  userId: item.userId,
+  role: item.role
+}));
+
+const buildLegacyReviewVotes = (revision = {}) => {
+  const votes = [];
+  const domainAdminReviewerId = getIdString(revision?.domainAdminReviewerId);
+  const domainAdminDecision = String(revision?.domainAdminDecision || '').trim();
+  if (domainAdminReviewerId && domainAdminDecision && domainAdminDecision !== 'pending') {
+    votes.push({
+      userId: domainAdminReviewerId,
+      role: 'domain_admin',
+      decision: domainAdminDecision === 'approved' ? 'approved' : 'rejected',
+      comment: revision?.domainAdminComment || '',
+      reviewedAt: revision?.domainAdminReviewedAt || null
+    });
+  }
+  const domainMasterReviewerId = getIdString(revision?.domainMasterReviewerId);
+  const domainMasterDecision = String(revision?.domainMasterDecision || '').trim();
+  if (domainMasterReviewerId && domainMasterDecision && domainMasterDecision !== 'pending') {
+    votes.push({
+      userId: domainMasterReviewerId,
+      role: 'domain_master',
+      decision: domainMasterDecision === 'approved' ? 'approved' : 'rejected',
+      comment: revision?.domainMasterComment || '',
+      reviewedAt: revision?.domainMasterReviewedAt || null
+    });
+  }
+  return votes;
+};
+
+const ensureReviewParticipantsSnapshot = ({ revision = {}, node = null }) => {
+  const existingParticipants = Array.isArray(revision?.reviewParticipants) ? revision.reviewParticipants : [];
+  if (existingParticipants.length > 0) {
+    return existingParticipants.map((item) => ({
+      userId: getIdString(item?.userId),
+      role: String(item?.role || 'domain_admin').trim() || 'domain_admin'
+    })).filter((item) => !!item.userId);
+  }
+  const participants = buildReviewParticipantsFromNode(node);
+  const seen = new Set(participants.map((item) => item.userId));
+  buildLegacyReviewVotes(revision).forEach((vote) => {
+    if (!vote.userId || seen.has(vote.userId)) return;
+    participants.push({ userId: vote.userId, role: vote.role || 'domain_admin' });
+    seen.add(vote.userId);
+  });
+  return participants;
+};
+
+const ensureReviewVotesSnapshot = (revision = {}) => {
+  const sourceVotes = Array.isArray(revision?.reviewVotes) && revision.reviewVotes.length > 0
+    ? revision.reviewVotes
+    : buildLegacyReviewVotes(revision);
+  const seen = new Set();
+  return sourceVotes.map((item) => ({
+    userId: getIdString(item?.userId),
+    role: String(item?.role || 'domain_admin').trim() || 'domain_admin',
+    decision: String(item?.decision || 'pending').trim() || 'pending',
+    comment: typeof item?.comment === 'string' ? item.comment.trim() : '',
+    reviewedAt: item?.reviewedAt || null
+  })).filter((item) => {
+    if (!item.userId || seen.has(item.userId)) return false;
+    seen.add(item.userId);
+    return true;
+  });
+};
+
+const resolveReviewerRoleForUser = ({ bundle, revision, userId }) => {
+  const normalizedUserId = getIdString(userId);
+  if (!normalizedUserId) return '';
+  if (bundle?.permissions?.isSystemAdmin) return 'system_admin';
+  const participant = ensureReviewParticipantsSnapshot({ revision, node: bundle?.node }).find((item) => item.userId === normalizedUserId);
+  if (participant?.role) return participant.role;
+  if (bundle?.permissions?.isDomainMaster) return 'domain_master';
+  if (bundle?.permissions?.isDomainAdmin) return 'domain_admin';
+  return '';
+};
+
+const buildReviewPresentation = async ({ revision = {}, node = null, currentUserId = '' }) => {
+  const reviewParticipants = ensureReviewParticipantsSnapshot({ revision, node });
+  const reviewVotes = ensureReviewVotesSnapshot(revision);
+  const relatedUserIds = Array.from(new Set(reviewParticipants.map((item) => item.userId).concat(reviewVotes.map((item) => item.userId)).filter(Boolean)));
+  const users = relatedUserIds.length > 0
+    ? await User.find({ _id: { $in: relatedUserIds } }).select('_id username avatar profession').lean()
+    : [];
+  const userMap = new Map(users.map((item) => [getIdString(item._id), item]));
+  const voteMap = new Map(reviewVotes.map((item) => [item.userId, item]));
+  const participants = reviewParticipants.map((item) => {
+    const user = userMap.get(item.userId) || {};
+    const vote = voteMap.get(item.userId) || null;
+    return {
+      userId: item.userId,
+      role: item.role || 'domain_admin',
+      username: user.username || '',
+      avatar: user.avatar || '',
+      profession: user.profession || '',
+      decision: vote?.decision || 'pending',
+      comment: vote?.comment || '',
+      reviewedAt: vote?.reviewedAt || null,
+      isCurrentUser: item.userId === getIdString(currentUserId)
+    };
+  });
+  const summary = participants.reduce((acc, item) => {
+    if (item.decision === 'approved') acc.approvedCount += 1;
+    else if (item.decision === 'rejected') acc.rejectedCount += 1;
+    else acc.pendingCount += 1;
+    return acc;
+  }, { total: participants.length, approvedCount: 0, rejectedCount: 0, pendingCount: 0 });
+  summary.allApproved = summary.total > 0 && summary.approvedCount === summary.total;
+  return { participants, summary };
+};
+
 const ensureNodeAndSense = async (nodeId, senseId) => {
   const safeNodeId = getIdString(nodeId);
   const safeSenseId = String(senseId || '').trim();
@@ -74,7 +369,7 @@ const ensureNodeAndSense = async (nodeId, senseId) => {
   }
   const [node, nodeSense] = await Promise.all([
     Node.findById(safeNodeId)
-      .select('_id name description status domainMaster domainAdmins owner synonymSenses associations')
+      .select('_id name description status domainMaster domainAdmins domainAdminPermissions owner synonymSenses associations')
       .lean(),
     NodeSense.findOne({ nodeId: safeNodeId, senseId: safeSenseId }).lean()
   ]);
@@ -96,8 +391,9 @@ const ensureNodeAndSense = async (nodeId, senseId) => {
     }
   }
   if (!effectiveSense) throw createExposeError('释义不存在', 404, 'sense_not_found');
+  const enrichedNode = await enrichNodeDomainMasterAlliance(node);
   return {
-    node,
+    node: enrichedNode,
     nodeSense: effectiveSense,
     nodeId: safeNodeId,
     senseId: safeSenseId
@@ -216,10 +512,10 @@ const buildRevisionComparePayload = ({ fromRevision = null, toRevision = null })
 
 const buildManagedNodeFilter = async ({ userId, nodeId = '' }) => {
   if (!userId) throw createExposeError('无效用户身份', 401, 'invalid_user');
-  const permissionsNode = nodeId ? await Node.findById(nodeId).select('_id domainMaster domainAdmins').lean() : null;
+  const permissionsNode = nodeId ? await Node.findById(nodeId).select('_id domainMaster domainAdmins domainAdminPermissions').lean() : null;
   const roleInfo = permissionsNode ? await getUserRoleInfo(userId, permissionsNode) : await getUserRoleInfo(userId, null);
   if (nodeId) {
-    ensurePermission(roleInfo.isSystemAdmin || roleInfo.isDomainMaster || roleInfo.isDomainAdmin, '当前用户不能查看该知识域内容治理面板');
+    ensurePermission(roleInfo.isSystemAdmin || roleInfo.isDomainMaster || roleInfo.canReviewSenseArticle, '当前用户不能查看该知识域词条管理');
     return { _id: toObjectIdOrNull(nodeId) };
   }
   if (roleInfo.isSystemAdmin) return {};
@@ -283,6 +579,20 @@ const syncLegacySenseMirror = async ({ nodeId, senseId, nodeSense, editorSource,
   }, { upsert: true });
 };
 
+
+const normalizeScopedChangePayload = (payload = {}) => {
+  if (!payload || typeof payload !== 'object') return null;
+  const mode = String(payload.mode || payload.scopeMode || '').trim();
+  if (!['selection', 'section'].includes(mode)) return null;
+  return {
+    mode,
+    headingTitle: typeof payload.headingTitle === 'string' ? payload.headingTitle.trim() : '',
+    originalText: typeof payload.originalText === 'string' ? payload.originalText : '',
+    currentText: typeof payload.currentText === 'string' ? payload.currentText : '',
+    resolveMessage: typeof payload.resolveMessage === 'string' ? payload.resolveMessage.trim() : ''
+  };
+};
+
 const getNextRevisionNumber = async (articleId) => {
   const latest = await SenseArticleRevision.findOne({ articleId }).sort({ revisionNumber: -1 }).select('revisionNumber').lean();
   return (latest?.revisionNumber || 0) + 1;
@@ -337,11 +647,19 @@ const getArticleBundle = async ({ nodeId, senseId, userId, createIfMissing = tru
   };
 };
 
+const buildRevisionMutationResponse = ({ article, revision, permissions, userId }) => ({
+  article: serializeArticleSummary(article),
+  revision: serializeRevisionMutationResult(revision),
+  permissions: serializePermissions(permissions, userId)
+});
+
 const assertRevisionReadable = ({ revision, permissions, userId }) => {
   const proposerId = getIdString(revision?.proposerId);
   const currentUserId = getIdString(userId);
+  const reviewParticipantIds = ensureReviewParticipantsSnapshot({ revision }).map((item) => item.userId);
   if (revision?.status === 'published') return;
   if (permissions.canReviewDomainAdmin || permissions.canReviewDomainMaster) return;
+  if (reviewParticipantIds.includes(currentUserId)) return;
   ensurePermission(proposerId === currentUserId, '仅发起人或审核者可查看未发布修订');
 };
 
@@ -370,20 +688,28 @@ const getCurrentArticle = async ({ nodeId, senseId, userId }) => {
   ensurePermission(!!bundle.currentRevision, '当前释义尚无已发布百科版本', 404);
   const annotations = await SenseAnnotation.find({ userId: bundle.permissions.userId, articleId: bundle.article._id }).sort({ updatedAt: -1 }).lean();
   const serializedAnnotations = annotations.map((item) => serializeAnnotation(item, relocateAnchor({ anchor: item.anchor, currentRevision: bundle.currentRevision })));
+  const readingMeta = await resolveSenseArticleReadingMeta({
+    revision: bundle.currentRevision,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId
+  });
   return {
     node: bundle.node,
     nodeSense: bundle.nodeSense,
     article: serializeArticleSummary(bundle.article),
     revision: serializeRevisionDetail(bundle.currentRevision),
     permissions: serializePermissions(bundle.permissions, userId),
-    annotations: serializedAnnotations
+    annotations: serializedAnnotations,
+    readingMeta
   };
 };
 
 const listRevisions = async ({ nodeId, senseId, userId, status = '', page = 1, pageSize = 20 }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   const filter = { articleId: bundle.article._id };
-  if (status) filter.status = status;
+  const normalizedStatus = String(status || '').trim();
+  if (normalizedStatus === 'approved') filter.status = { $in: ['published', 'superseded'] };
+  else if (normalizedStatus) filter.status = normalizedStatus;
   const safePageSize = Math.max(1, Math.min(100, Number(pageSize) || 20));
   const safePage = Math.max(1, Number(page) || 1);
   const revisions = await SenseArticleRevision.find(filter)
@@ -399,10 +725,16 @@ const listRevisions = async ({ nodeId, senseId, userId, status = '', page = 1, p
       return false;
     }
   });
+  const decorated = await decorateRevisionRecords({
+    revisions: visible,
+    fallbackSenseTitle: bundle.nodeSense?.title || bundle.senseId || ''
+  });
   return {
+    node: bundle.node,
+    nodeSense: bundle.nodeSense,
     article: serializeArticleSummary(bundle.article),
     currentRevisionId: bundle.article.currentRevisionId || null,
-    revisions: visible.map((item) => serializeRevisionSummary(item)),
+    revisions: decorated.map((item) => serializeRevisionSummary(item)),
     permissions: serializePermissions(bundle.permissions, userId)
   };
 };
@@ -413,17 +745,31 @@ const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId }) => {
   if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
   assertRevisionReadable({ revision, permissions: bundle.permissions, userId });
   const baseRevision = revision.baseRevisionId ? await SenseArticleRevision.findById(revision.baseRevisionId).lean() : null;
+  const [decoratedRevision] = await decorateRevisionRecords({
+    revisions: [revision],
+    fallbackSenseTitle: bundle.nodeSense?.title || bundle.senseId || ''
+  });
+  const reviewPresentation = await buildReviewPresentation({ revision, node: bundle.node, currentUserId: userId });
   return {
+    node: bundle.node,
+    nodeSense: bundle.nodeSense,
     article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(revision),
+    revision: serializeRevisionDetail(decoratedRevision || revision),
     baseRevision: baseRevision ? serializeRevisionDetail(baseRevision) : null,
+    reviewParticipants: reviewPresentation.participants,
+    reviewSummary: reviewPresentation.summary,
     permissions: serializePermissions(bundle.permissions, userId)
   };
+};
+
+const updateSenseMetadata = async ({ nodeId, senseId, userId, payload = {} }) => {
+  throw createExposeError('释义名称修改已并入修订审核流程，请在编辑修订时保存并提交审核', 409, 'sense_metadata_revision_flow_only');
 };
 
 const createDraftRevision = async ({ nodeId, senseId, userId, payload = {} }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   ensurePermission(bundle.permissions.canCreateRevision, '当前用户无法创建百科修订');
+  const proposer = await User.findById(userId).select('_id username').lean();
   const requestedBaseId = getIdString(payload.baseRevisionId) || getIdString(bundle.article.currentRevisionId);
   const baseRevision = requestedBaseId
     ? await SenseArticleRevision.findOne({ _id: requestedBaseId, articleId: bundle.article._id })
@@ -433,6 +779,16 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {} }) =>
     : (baseRevision?.editorSource || bundle.currentRevision?.editorSource || bundle.nodeSense.content || '');
   const revisionNumber = await getNextRevisionNumber(bundle.article._id);
   const materialized = await materializeRevisionPayload({ editorSource, baseRevision });
+  const revisionTitle = resolveRevisionTitleInput({
+    revisionTitle: payload.revisionTitle,
+    fallbackUsername: proposer?.username || ''
+  });
+  const proposedSenseTitle = await resolveProposedSenseTitle({
+    bundle,
+    senseId,
+    proposedSenseTitle: payload.proposedSenseTitle,
+    allowChange: canUserUpdateSenseMetadata(bundle.permissions)
+  });
   const selectedAnchor = payload.sourceMode === 'selection' || payload.selectedRangeAnchor
     ? createAnchorFromSelection({
         revision: baseRevision || bundle.currentRevision,
@@ -465,8 +821,11 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {} }) =>
     plainTextSnapshot: materialized.plainTextSnapshot,
     renderSnapshot: materialized.renderSnapshot,
     diffFromBase: materialized.diffFromBase,
+    scopedChange: normalizeScopedChangePayload(payload.scopedChange),
     proposerId: userId,
     proposerNote: typeof payload.proposerNote === 'string' ? payload.proposerNote.trim() : '',
+    revisionTitle,
+    proposedSenseTitle,
     status: 'draft',
     reviewStage: 'domain_admin'
   });
@@ -491,6 +850,7 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
   const currentUserId = getIdString(userId);
   ensurePermission(getIdString(revision.proposerId) === currentUserId || bundle.permissions.isSystemAdmin, '仅发起人或系统管理员可编辑草稿');
   ensurePermission(DRAFT_EDITABLE_STATUSES.includes(revision.status), '当前修订状态不可编辑');
+  const proposer = await User.findById(revision.proposerId).select('_id username').lean();
   const baseRevision = revision.baseRevisionId ? await SenseArticleRevision.findById(revision.baseRevisionId) : null;
   const editorSource = typeof payload.editorSource === 'string' ? payload.editorSource : revision.editorSource;
   const materialized = await materializeRevisionPayload({ editorSource, baseRevision });
@@ -504,7 +864,27 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
   revision.plainTextSnapshot = materialized.plainTextSnapshot;
   revision.renderSnapshot = materialized.renderSnapshot;
   revision.diffFromBase = materialized.diffFromBase;
+  if (Object.prototype.hasOwnProperty.call(payload || {}, 'scopedChange')) revision.scopedChange = normalizeScopedChangePayload(payload.scopedChange);
   if (typeof payload.proposerNote === 'string') revision.proposerNote = payload.proposerNote.trim();
+  if (Object.prototype.hasOwnProperty.call(payload || {}, 'revisionTitle')) {
+    revision.revisionTitle = resolveRevisionTitleInput({
+      revisionTitle: payload.revisionTitle,
+      fallbackUsername: proposer?.username || ''
+    });
+  } else if (!normalizeTrimmedText(revision.revisionTitle)) {
+    revision.revisionTitle = resolveRevisionTitleInput({
+      revisionTitle: revision.revisionTitle,
+      fallbackUsername: proposer?.username || ''
+    });
+  }
+  if (Object.prototype.hasOwnProperty.call(payload || {}, 'proposedSenseTitle') || !normalizeTrimmedText(revision.proposedSenseTitle)) {
+    revision.proposedSenseTitle = await resolveProposedSenseTitle({
+      bundle,
+      senseId,
+      proposedSenseTitle: Object.prototype.hasOwnProperty.call(payload || {}, 'proposedSenseTitle') ? payload.proposedSenseTitle : revision.proposedSenseTitle,
+      allowChange: canUserUpdateSenseMetadata(bundle.permissions)
+    });
+  }
   if (payload.selectedRangeAnchor) {
     revision.selectedRangeAnchor = createAnchorFromSelection({
       revision: baseRevision || bundle.currentRevision,
@@ -520,11 +900,12 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
   if (typeof payload.targetHeadingId === 'string') revision.targetHeadingId = payload.targetHeadingId.trim();
   await revision.save();
   await SenseArticle.updateOne({ _id: bundle.article._id }, { $set: { latestDraftRevisionId: revision._id, updatedBy: userId } });
-  return {
-    article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(revision),
-    permissions: serializePermissions(bundle.permissions, userId)
-  };
+  return buildRevisionMutationResponse({
+    article: bundle.article,
+    revision,
+    permissions: bundle.permissions,
+    userId
+  });
 };
 
 const attemptConditionalRevisionUpdate = async ({ revision, articleId, expectedStatuses = [], setPatch = {} }) => {
@@ -549,22 +930,54 @@ const submitRevision = async ({ nodeId, senseId, revisionId, userId }) => {
   let revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
   if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
   ensurePermission(getIdString(revision.proposerId) === getIdString(userId) || bundle.permissions.isSystemAdmin, '仅发起人可提交当前修订');
+  const proposer = await User.findById(revision.proposerId).select('_id username').lean();
+  const normalizedRevisionTitle = resolveRevisionTitleInput({
+    revisionTitle: revision.revisionTitle,
+    fallbackUsername: proposer?.username || ''
+  });
+  const normalizedProposedSenseTitle = await resolveProposedSenseTitle({
+    bundle,
+    senseId,
+    proposedSenseTitle: revision.proposedSenseTitle,
+    allowChange: canUserUpdateSenseMetadata(bundle.permissions)
+  });
+  if (normalizedRevisionTitle !== revision.revisionTitle || normalizedProposedSenseTitle !== revision.proposedSenseTitle) {
+    revision.revisionTitle = normalizedRevisionTitle;
+    revision.proposedSenseTitle = normalizedProposedSenseTitle;
+    await revision.save();
+  }
   let operation = resolveSubmitOperation(revision);
   if (operation.kind === 'invalid') throw createExposeError(reasonToMessage(operation.reason), 409, operation.reason);
   if (operation.kind === 'noop') {
-    return {
-      article: serializeArticleSummary(bundle.article),
-      revision: serializeRevisionDetail(revision),
-      permissions: serializePermissions(bundle.permissions, userId)
-    };
+    return buildRevisionMutationResponse({
+      article: bundle.article,
+      revision,
+      permissions: bundle.permissions,
+      userId
+    });
   }
 
+  const reviewParticipants = buildReviewParticipantsFromNode(bundle.node);
   const updated = await attemptConditionalRevisionUpdate({
     revision,
     articleId: bundle.article._id,
     expectedStatuses: [revision.status],
     setPatch: {
       ...operation.patch,
+      reviewParticipants,
+      reviewVotes: [],
+      domainAdminDecision: 'pending',
+      domainAdminReviewerId: null,
+      domainAdminReviewedAt: null,
+      domainAdminComment: '',
+      domainMasterDecision: 'pending',
+      domainMasterReviewerId: null,
+      domainMasterReviewedAt: null,
+      domainMasterComment: '',
+      finalDecision: null,
+      finalDecisionAt: null,
+      publishedBy: null,
+      publishedAt: null,
       updatedAt: new Date()
     }
   });
@@ -572,21 +985,23 @@ const submitRevision = async ({ nodeId, senseId, revisionId, userId }) => {
     revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
     operation = resolveSubmitOperation(revision);
     if (operation.kind === 'noop') {
-      return {
-        article: serializeArticleSummary(bundle.article),
-        revision: serializeRevisionDetail(revision),
-        permissions: serializePermissions(bundle.permissions, userId)
-      };
+      return buildRevisionMutationResponse({
+        article: bundle.article,
+        revision,
+        permissions: bundle.permissions,
+        userId
+      });
     }
     throw createExposeError(reasonToMessage(operation.reason), 409, operation.reason || 'submit_conflict');
   }
 
   await notifyRevisionSubmitted({ node: bundle.node, article: bundle.article, revision: updated, actorId: userId });
-  return {
-    article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(updated),
-    permissions: serializePermissions(bundle.permissions, userId)
-  };
+  return buildRevisionMutationResponse({
+    article: bundle.article,
+    revision: updated,
+    permissions: bundle.permissions,
+    userId
+  });
 };
 
 const supersedeSiblingRevisions = async ({ articleId, baseRevisionId, publishedRevisionId }) => {
@@ -615,109 +1030,113 @@ const supersedeSiblingRevisions = async ({ articleId, baseRevisionId, publishedR
   return candidates.map((item) => ({ ...item, status: 'superseded', supersededByRevisionId: publishedRevisionId }));
 };
 
-const reviewByDomainAdmin = async ({ nodeId, senseId, revisionId, userId, action, comment = '' }) => {
-  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
-  ensurePermission(bundle.permissions.canReviewDomainAdmin, '当前用户不能执行域相审核');
-  let revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
-  if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
-
-  let operation = resolveDomainAdminReviewOperation(revision, action);
-  if (operation.kind === 'invalid') throw createExposeError(reasonToMessage(operation.reason), 409, operation.reason);
-  if (operation.kind === 'noop') {
-    return {
-      article: serializeArticleSummary(bundle.article),
-      revision: serializeRevisionDetail(revision),
-      permissions: serializePermissions(bundle.permissions, userId)
-    };
+const buildLegacyReviewFieldPatch = ({ reviewerRole = '', action = '', userId = '', comment = '', markPublished = false }) => {
+  const now = new Date();
+  const trimmedComment = String(comment || '').trim();
+  const patch = {};
+  const applyToDomainMasterFields = reviewerRole === 'domain_master' || reviewerRole === 'system_admin';
+  if (applyToDomainMasterFields) {
+    patch.domainMasterDecision = action === 'approve' ? 'approved' : 'rejected';
+    patch.domainMasterReviewerId = userId || null;
+    patch.domainMasterReviewedAt = now;
+    patch.domainMasterComment = trimmedComment;
+  } else {
+    patch.domainAdminDecision = action === 'approve' ? 'approved' : 'rejected';
+    patch.domainAdminReviewerId = userId || null;
+    patch.domainAdminReviewedAt = now;
+    patch.domainAdminComment = trimmedComment;
   }
-
-  const updated = await attemptConditionalRevisionUpdate({
-    revision,
-    articleId: bundle.article._id,
-    expectedStatuses: [revision.status],
-    setPatch: {
-      ...operation.patch,
-      domainAdminReviewerId: userId,
-      domainAdminReviewedAt: new Date(),
-      domainAdminComment: String(comment || '').trim(),
-      ...(operation.patch.finalDecision ? { finalDecisionAt: new Date() } : {}),
-      updatedAt: new Date()
-    }
-  });
-  if (!updated) {
-    revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
-    operation = resolveDomainAdminReviewOperation(revision, action);
-    if (operation.kind === 'noop') {
-      return {
-        article: serializeArticleSummary(bundle.article),
-        revision: serializeRevisionDetail(revision),
-        permissions: serializePermissions(bundle.permissions, userId)
-      };
-    }
-    throw createExposeError(reasonToMessage(operation.reason), 409, operation.reason || 'domain_admin_review_conflict');
+  if (markPublished) {
+    patch.domainAdminDecision = 'approved';
+    patch.domainMasterDecision = 'approved';
   }
-
-  await notifyDomainAdminDecision({
-    node: bundle.node,
-    article: bundle.article,
-    revision: updated,
-    action: action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'changes_requested',
-    actorId: userId
-  });
-  return {
-    article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(updated),
-    permissions: serializePermissions(bundle.permissions, userId)
-  };
+  return patch;
 };
 
-const reviewByDomainMaster = async ({ nodeId, senseId, revisionId, userId, action, comment = '' }) => {
+const reviewRevision = async ({ nodeId, senseId, revisionId, userId, action, comment = '', requiredRole = '' }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
-  ensurePermission(bundle.permissions.canReviewDomainMaster, '当前用户不能执行域主终审');
+  const normalizedAction = String(action || '').trim();
+  if (!['approve', 'reject'].includes(normalizedAction)) {
+    throw createExposeError(reasonToMessage('invalid_review_action'), 400, 'invalid_review_action');
+  }
+
   let revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
   if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
 
-  let operation = resolveDomainMasterReviewOperation(revision, action);
-  if (operation.kind === 'invalid') throw createExposeError(reasonToMessage(operation.reason), 409, operation.reason);
-  if (operation.kind === 'noop') {
+  const reviewerRole = resolveReviewerRoleForUser({ bundle, revision, userId });
+  const reviewParticipants = ensureReviewParticipantsSnapshot({ revision, node: bundle.node });
+  const isExplicitParticipant = reviewParticipants.some((item) => item.userId === getIdString(userId));
+  const canReview = !!reviewerRole && (bundle.permissions.isSystemAdmin || isExplicitParticipant);
+  ensurePermission(canReview, '当前用户不能参与该修订的审阅');
+  if (requiredRole === 'domain_master') {
+    ensurePermission(reviewerRole === 'domain_master' || reviewerRole === 'system_admin', '当前用户不能执行域主终审');
+  }
+  if (requiredRole === 'domain_admin') {
+    ensurePermission(reviewerRole === 'domain_admin' || reviewerRole === 'domain_master' || reviewerRole === 'system_admin', '当前用户不能执行百科审阅');
+  }
+
+  if (revision.status === 'published' && normalizedAction === 'approve') {
     return {
       article: serializeArticleSummary(bundle.article),
       revision: serializeRevisionDetail(revision),
       permissions: serializePermissions(bundle.permissions, userId)
     };
   }
+  if ((revision.status === 'rejected' || revision.status === 'rejected_by_domain_admin' || revision.status === 'rejected_by_domain_master') && normalizedAction === 'reject') {
+    return {
+      article: serializeArticleSummary(bundle.article),
+      revision: serializeRevisionDetail(revision),
+      permissions: serializePermissions(bundle.permissions, userId)
+    };
+  }
+  if (!isPendingReviewStatus(revision.status)) {
+    throw createExposeError(reasonToMessage('status_not_reviewable_by_domain_admin'), 409, 'status_not_reviewable_by_domain_admin');
+  }
 
-  if (action !== 'approve') {
+  const baseVotes = ensureReviewVotesSnapshot(revision);
+  const nextVotes = [
+    ...baseVotes.filter((item) => item.userId !== getIdString(userId)),
+    {
+      userId: getIdString(userId),
+      role: reviewerRole,
+      decision: normalizedAction === 'approve' ? 'approved' : 'rejected',
+      comment: String(comment || '').trim(),
+      reviewedAt: new Date()
+    }
+  ];
+
+  if (normalizedAction === 'reject') {
     const updated = await attemptConditionalRevisionUpdate({
       revision,
       articleId: bundle.article._id,
       expectedStatuses: [revision.status],
       setPatch: {
-        ...operation.patch,
-        domainMasterReviewerId: userId,
-        domainMasterReviewedAt: new Date(),
-        domainMasterComment: String(comment || '').trim(),
+        status: 'rejected',
+        reviewStage: 'completed',
+        reviewParticipants,
+        reviewVotes: nextVotes,
+        finalDecision: 'rejected',
         finalDecisionAt: new Date(),
-        updatedAt: new Date()
+        updatedAt: new Date(),
+        ...buildLegacyReviewFieldPatch({ reviewerRole, action: 'reject', userId, comment })
       }
     });
     if (!updated) {
       revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
-      operation = resolveDomainMasterReviewOperation(revision, action);
-      if (operation.kind === 'noop') {
+      if (revision && (revision.status === 'rejected' || revision.status === 'published')) {
         return {
           article: serializeArticleSummary(bundle.article),
           revision: serializeRevisionDetail(revision),
           permissions: serializePermissions(bundle.permissions, userId)
         };
       }
-      throw createExposeError(reasonToMessage(operation.reason), 409, operation.reason || 'domain_master_review_conflict');
+      throw createExposeError('当前修订审核状态已变更，请刷新后重试', 409, 'review_conflict');
     }
     await notifyDomainMasterDecision({
       node: bundle.node,
       article: bundle.article,
       revision: updated,
-      action: action === 'reject' ? 'rejected' : 'changes_requested',
+      action: 'rejected',
       actorId: userId
     });
     return {
@@ -726,6 +1145,46 @@ const reviewByDomainMaster = async ({ nodeId, senseId, revisionId, userId, actio
       permissions: serializePermissions(bundle.permissions, userId)
     };
   }
+
+  const reviewPresentation = await buildReviewPresentation({
+    revision: { ...revision.toObject(), reviewParticipants, reviewVotes: nextVotes },
+    node: bundle.node,
+    currentUserId: userId
+  });
+
+  if (!reviewPresentation.summary.allApproved) {
+    const updated = await attemptConditionalRevisionUpdate({
+      revision,
+      articleId: bundle.article._id,
+      expectedStatuses: [revision.status],
+      setPatch: {
+        status: 'pending_review',
+        reviewStage: 'review',
+        reviewParticipants,
+        reviewVotes: nextVotes,
+        updatedAt: new Date(),
+        ...buildLegacyReviewFieldPatch({ reviewerRole, action: 'approve', userId, comment })
+      }
+    });
+    if (!updated) {
+      revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
+      if (revision && !isPendingReviewStatus(revision.status)) {
+        return {
+          article: serializeArticleSummary(bundle.article),
+          revision: serializeRevisionDetail(revision),
+          permissions: serializePermissions(bundle.permissions, userId)
+        };
+      }
+      throw createExposeError('当前修订审核状态已变更，请刷新后重试', 409, 'review_conflict');
+    }
+    return {
+      article: serializeArticleSummary(bundle.article),
+      revision: serializeRevisionDetail(updated),
+      permissions: serializePermissions(bundle.permissions, userId)
+    };
+  }
+
+  await applyPublishedSenseTitle({ bundle, revision, userId });
 
   const articleUpdate = await SenseArticle.findOneAndUpdate({
     _id: bundle.article._id,
@@ -766,14 +1225,16 @@ const reviewByDomainMaster = async ({ nodeId, senseId, revisionId, userId, actio
     articleId: bundle.article._id,
     expectedStatuses: [revision.status],
     setPatch: {
-      ...operation.patch,
-      domainMasterReviewerId: userId,
-      domainMasterReviewedAt: new Date(),
-      domainMasterComment: String(comment || '').trim(),
+      status: 'published',
+      reviewStage: 'completed',
+      reviewParticipants,
+      reviewVotes: nextVotes,
+      finalDecision: 'published',
       finalDecisionAt: new Date(),
       publishedBy: userId,
       publishedAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      ...buildLegacyReviewFieldPatch({ reviewerRole, action: 'approve', userId, comment, markPublished: true })
     }
   });
 
@@ -785,15 +1246,14 @@ const reviewByDomainMaster = async ({ nodeId, senseId, revisionId, userId, actio
       }
     });
     revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
-    operation = resolveDomainMasterReviewOperation(revision, action);
-    if (operation.kind === 'noop') {
+    if (revision && !isPendingReviewStatus(revision.status)) {
       return {
         article: serializeArticleSummary(bundle.article),
         revision: serializeRevisionDetail(revision),
         permissions: serializePermissions(bundle.permissions, userId)
       };
     }
-    throw createExposeError(reasonToMessage(operation.reason), 409, operation.reason || 'publish_conflict');
+    throw createExposeError('当前修订审核状态已变更，请刷新后重试', 409, 'publish_conflict');
   }
 
   const supersededRevisions = await supersedeSiblingRevisions({
@@ -820,6 +1280,26 @@ const reviewByDomainMaster = async ({ nodeId, senseId, revisionId, userId, actio
     permissions: serializePermissions(bundle.permissions, userId)
   };
 };
+
+const reviewByDomainAdmin = async ({ nodeId, senseId, revisionId, userId, action, comment = '' }) => reviewRevision({
+  nodeId,
+  senseId,
+  revisionId,
+  userId,
+  action,
+  comment,
+  requiredRole: 'domain_admin'
+});
+
+const reviewByDomainMaster = async ({ nodeId, senseId, revisionId, userId, action, comment = '' }) => reviewRevision({
+  nodeId,
+  senseId,
+  revisionId,
+  userId,
+  action,
+  comment,
+  requiredRole: 'domain_master'
+});
 
 const listMyAnnotations = async ({ nodeId, senseId, userId }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
@@ -1023,14 +1503,25 @@ const listBacklinks = async ({ nodeId, senseId, userId }) => {
 
 const getGovernanceDashboard = async ({ userId, nodeId = '' }) => {
   const filter = await buildManagedNodeFilter({ userId, nodeId });
-  const nodes = await Node.find(filter).select('_id name domainMaster domainAdmins').lean();
-  const nodeIds = nodes.map((item) => item._id);
-  const nodeIdSet = new Set(nodeIds.map((item) => String(item)));
+  const nodes = await Node.find(filter).select('_id name domainMaster domainAdmins domainAdminPermissions').lean();
+  const userRoleInfo = await getUserRoleInfo(userId, null);
   const userIdText = getIdString(userId);
-  const domainMasterNodeIds = new Set(nodes.filter((item) => getIdString(item.domainMaster) === userIdText).map((item) => String(item._id)));
+  const reviewableNodes = nodes.filter((item) => (
+    userRoleInfo.isSystemAdmin
+    || getIdString(item.domainMaster) === userIdText
+    || ((Array.isArray(item.domainAdmins) ? item.domainAdmins : []).some((adminId) => getIdString(adminId) === userIdText)
+      && hasDomainAdminPermission({
+        node: item,
+        userId: userIdText,
+        permissionKey: DOMAIN_ADMIN_PERMISSION_KEYS.SENSE_ARTICLE_REVIEW
+      }))
+  ));
+  const nodeIds = reviewableNodes.map((item) => item._id);
+  const nodeIdSet = new Set(nodeIds.map((item) => String(item)));
+  const domainMasterNodeIds = new Set(reviewableNodes.filter((item) => getIdString(item.domainMaster) === userIdText).map((item) => String(item._id)));
   const articleRows = await SenseArticle.find({ nodeId: { $in: nodeIds } }).select('_id nodeId senseId currentRevisionId').lean();
   const articleMap = new Map(articleRows.map((item) => [`${item.nodeId}:${item.senseId}`, item]));
-  const pendingFilter = { nodeId: { $in: nodeIds }, status: { $in: ['pending_domain_admin_review', 'pending_domain_master_review'] } };
+  const pendingFilter = { nodeId: { $in: nodeIds }, status: { $in: ['pending_review', 'pending_domain_admin_review', 'pending_domain_master_review'] } };
   const [pendingRows, requestedRows, publishedRows, allPublishedWithRefs, nodeSenses] = await Promise.all([
     SenseArticleRevision.find(pendingFilter).sort({ createdAt: 1 }).limit(30).lean(),
     SenseArticleRevision.find({ nodeId: { $in: nodeIds }, proposerId: toObjectIdOrNull(userId), status: { $in: ['changes_requested_by_domain_admin', 'changes_requested_by_domain_master'] } }).sort({ updatedAt: -1 }).limit(20).lean(),
@@ -1040,15 +1531,22 @@ const getGovernanceDashboard = async ({ userId, nodeId = '' }) => {
   ]);
 
   const pendingMyReview = pendingRows.filter((revision) => {
+    if (revision.status === 'pending_review') return nodeIdSet.has(String(revision.nodeId));
     if (revision.status === 'pending_domain_admin_review') return nodeIdSet.has(String(revision.nodeId));
-    if (revision.status === 'pending_domain_master_review') return domainMasterNodeIds.has(String(revision.nodeId));
+    if (revision.status === 'pending_domain_master_review') return userRoleInfo.isSystemAdmin || domainMasterNodeIds.has(String(revision.nodeId));
     return false;
-  }).map((item) => serializeRevisionSummary(item));
+  });
+
+  const decoratedPending = await decorateRevisionRecords({ revisions: pendingRows, fallbackSenseTitle: '' });
+  const pendingMap = new Map(decoratedPending.map((item) => [String(item._id), item]));
+  const pendingMyReviewSerialized = pendingMyReview.map((item) => serializeRevisionSummary(pendingMap.get(String(item._id)) || item));
 
   const staleThreshold = Date.now() - (1000 * 60 * 60 * 24 * 7);
-  const stalePending = pendingRows.filter((item) => new Date(item.createdAt || item.updatedAt || 0).getTime() <= staleThreshold).map((item) => serializeRevisionSummary(item));
+  const stalePending = pendingRows
+    .filter((item) => new Date(item.createdAt || item.updatedAt || 0).getTime() <= staleThreshold)
+    .map((item) => serializeRevisionSummary(pendingMap.get(String(item._id)) || item));
 
-  const nodeNameMap = new Map(nodes.map((item) => [String(item._id), item.name || '']));
+  const nodeNameMap = new Map(reviewableNodes.map((item) => [String(item._id), item.name || '']));
   const senseTitleMap = new Map(nodeSenses.map((item) => [`${item.nodeId}:${item.senseId}`, item.title || '']));
 
   const popularRefMap = new Map();
@@ -1084,13 +1582,20 @@ const getGovernanceDashboard = async ({ userId, nodeId = '' }) => {
       legacySummary: item.legacySummary || ''
     }));
 
+  const decoratedRequested = await decorateRevisionRecords({ revisions: requestedRows, fallbackSenseTitle: '' });
+  const decoratedPublished = await decorateRevisionRecords({ revisions: publishedRows, fallbackSenseTitle: '' });
+
   const annotationHealth = await collectAnnotationHealthStats({ userId, nodeIds });
+  const scopedNode = nodeId
+    ? await enrichNodeDomainMasterAlliance(nodes.find((item) => String(item?._id) === String(nodeId)) || null)
+    : null;
   return {
     scope: { nodeId: nodeId || null, totalNodes: nodeIds.length },
-    pendingMyReview,
-    requestedChangesMine: requestedRows.map((item) => serializeRevisionSummary(item)),
+    node: scopedNode,
+    pendingMyReview: pendingMyReviewSerialized,
+    requestedChangesMine: decoratedRequested.map((item) => serializeRevisionSummary(item)),
     stalePending,
-    recentlyPublished: publishedRows.map((item) => serializeRevisionSummary(item)),
+    recentlyPublished: decoratedPublished.map((item) => serializeRevisionSummary(item)),
     highFrequencyReferenced,
     legacyUnmigrated,
     annotationHealth
@@ -1115,11 +1620,13 @@ module.exports = {
   listCurrentReferences,
   listMyAnnotations,
   listRevisions,
+  resolveReferenceTargets,
   reviewByDomainAdmin,
   reviewByDomainMaster,
   searchCurrentArticle,
   searchReferenceTargets,
   submitRevision,
   updateAnnotation,
-  updateDraftRevision
+  updateDraftRevision,
+  updateSenseMetadata
 };

@@ -20,17 +20,17 @@
     background: rgba(30, 41, 59, 0.8);
     border-radius: 12px;
     padding: 1rem 1.5rem;
-    border: 2px solid rgba(168, 85, 247, 0.3);
+    border: 2px solid rgba(103, 232, 249, 0.24);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
 .search-bar-home:focus-within {
-    border-color: rgba(168, 85, 247, 0.6);
-    box-shadow: 0 4px 20px rgba(168, 85, 247, 0.2);
+    border-color: rgba(56, 189, 248, 0.46);
+    box-shadow: 0 4px 20px rgba(103, 232, 249, 0.2);
 }
 
 .search-icon {
-    color: #a855f7;
+    color: var(--topbar-accent);
     margin-right: 1rem;
 }
 
@@ -39,7 +39,7 @@
     background: transparent;
     border: none;
     outline: none;
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.1rem;
 }
 
@@ -48,7 +48,7 @@
 }
 
 .search-clear-btn {
-    background: rgba(168, 85, 247, 0.2);
+    background: rgba(103, 232, 249, 0.2);
     border: none;
     border-radius: 50%;
     width: 32px;
@@ -57,12 +57,12 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: #a855f7;
+    color: var(--topbar-accent);
     transition: all 0.2s ease;
 }
 
 .search-clear-btn:hover {
-    background: rgba(168, 85, 247, 0.4);
+    background: rgba(103, 232, 249, 0.34);
     transform: scale(1.1);
 }
 
@@ -77,7 +77,7 @@
     padding: 1rem;
     max-height: 500px;
     overflow-y: auto;
-    border: 1px solid rgba(168, 85, 247, 0.3);
+    border: 1px solid rgba(103, 232, 249, 0.24);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     z-index: 100;
 }
@@ -97,8 +97,8 @@
 }
 
 .result-item {
-    background: rgba(168, 85, 247, 0.05);
-    border-left: 3px solid #a855f7;
+    background: rgba(103, 232, 249, 0.05);
+    border-left: 3px solid var(--topbar-accent);
     border-radius: 8px;
     padding: 1rem;
     transition: all 0.2s ease;
@@ -106,7 +106,7 @@
 }
 
 .result-item:hover {
-    background: rgba(168, 85, 247, 0.15);
+    background: rgba(103, 232, 249, 0.15);
     transform: translateX(4px);
 }
 
@@ -118,7 +118,7 @@
 }
 
 .result-header h4 {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.1rem;
     margin: 0;
 }
@@ -133,7 +133,7 @@
 }
 
 .result-desc {
-    color: #c4b5fd;
+    color: #c7dff7;
     margin: 0.5rem 0;
     line-height: 1.5;
 }
@@ -150,15 +150,15 @@
     background: rgba(30, 41, 59, 0.8);
     border-radius: 12px;
     padding: 1.5rem;
-    border: 2px solid rgba(168, 85, 247, 0.2);
+    border: 2px solid rgba(103, 232, 249, 0.2);
     transition: all 0.3s ease;
     cursor: pointer;
 }
 
 .node-card:hover {
     transform: translateY(-4px);
-    border-color: rgba(168, 85, 247, 0.5);
-    box-shadow: 0 8px 24px rgba(168, 85, 247, 0.3);
+    border-color: rgba(56, 189, 248, 0.34);
+    box-shadow: 0 8px 24px rgba(103, 232, 249, 0.24);
 }
 
 .node-card-header {
@@ -169,7 +169,7 @@
 }
 
 .node-card-header h3 {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.25rem;
     margin: 0;
     flex: 1;
@@ -197,7 +197,7 @@
 }
 
 .node-card-desc {
-    color: #c4b5fd;
+    color: #c7dff7;
     line-height: 1.6;
     margin-bottom: 1rem;
 }
@@ -207,7 +207,7 @@
     justify-content: space-between;
     align-items: center;
     padding-top: 1rem;
-    border-top: 1px solid rgba(168, 85, 247, 0.2);
+    border-top: 1px solid rgba(103, 232, 249, 0.2);
 }
 
 .node-stat {
@@ -228,14 +228,14 @@
 }
 
 .section-title {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.75rem;
     font-weight: 700;
     margin-bottom: 1.5rem;
     text-align: center;
     text-transform: uppercase;
     letter-spacing: 1px;
-    background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+    background: linear-gradient(135deg, var(--topbar-accent) 0%, #38bdf8 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -276,12 +276,12 @@
 }
 
 .featured-nodes-scroll::-webkit-scrollbar-thumb {
-    background: rgba(168, 85, 247, 0.5);
+    background: rgba(56, 189, 248, 0.34);
     border-radius: 4px;
 }
 
 .featured-nodes-scroll::-webkit-scrollbar-thumb:hover {
-    background: rgba(168, 85, 247, 0.7);
+    background: rgba(14, 165, 233, 0.56);
 }
 
 .featured-node-card {
@@ -346,7 +346,7 @@
     width: 180px;
     background: rgba(30, 41, 59, 0.95);
     border-radius: 12px;
-    border: 2px solid rgba(168, 85, 247, 0.5);
+    border: 2px solid rgba(56, 189, 248, 0.34);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     padding: 1rem;
     max-height: calc(100vh - 160px);
@@ -363,7 +363,7 @@
 .navigation-title {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #a855f7;
+    color: var(--topbar-accent);
     margin: 0 0 0.5rem 0;
     text-align: center;
     text-transform: uppercase;
@@ -372,7 +372,7 @@
 
 .navigation-divider {
     height: 2px;
-    background: linear-gradient(90deg, transparent, rgba(168, 85, 247, 0.5), transparent);
+    background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.34), transparent);
     margin-bottom: 0.75rem;
 }
 
@@ -390,8 +390,8 @@
 }
 
 .nav-item.clickable:hover {
-    background: rgba(168, 85, 247, 0.2);
-    border-color: rgba(168, 85, 247, 0.5);
+    background: rgba(103, 232, 249, 0.2);
+    border-color: rgba(56, 189, 248, 0.34);
     transform: translateX(4px);
 }
 
@@ -413,13 +413,13 @@
 }
 
 .nav-item.active {
-    background: rgba(168, 85, 247, 0.3);
-    border-color: #a855f7;
-    box-shadow: 0 0 15px rgba(168, 85, 247, 0.4);
+    background: rgba(103, 232, 249, 0.24);
+    border-color: var(--topbar-accent);
+    box-shadow: 0 0 15px rgba(103, 232, 249, 0.34);
 }
 
 .nav-label {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 0.9rem;
     font-weight: 500;
     display: block;
@@ -429,7 +429,7 @@
 
 .nav-arrow {
     text-align: center;
-    color: #a855f7;
+    color: var(--topbar-accent);
     font-size: 1.2rem;
     margin: 0.25rem 0;
     font-weight: bold;
@@ -463,12 +463,12 @@
 }
 
 .navigation-sidebar::-webkit-scrollbar-thumb {
-    background: rgba(168, 85, 247, 0.5);
+    background: rgba(56, 189, 248, 0.34);
     border-radius: 3px;
 }
 
 .navigation-sidebar::-webkit-scrollbar-thumb:hover {
-    background: rgba(168, 85, 247, 0.7);
+    background: rgba(14, 165, 233, 0.56);
 }
 
 .node-detail-header {
@@ -483,7 +483,7 @@
 }
 
 .detail-title {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 2rem;
     font-weight: 700;
     margin: 0;
@@ -507,19 +507,19 @@
 }
 
 .info-section-title {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.75rem;
     font-weight: 700;
     margin-bottom: 1rem;
     text-align: center;
-    background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+    background: linear-gradient(135deg, var(--topbar-accent) 0%, #38bdf8 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
 }
 
 .info-section-desc {
-    color: #c4b5fd;
+    color: #c7dff7;
     font-size: 1.05rem;
     line-height: 1.7;
     text-align: center;
@@ -527,12 +527,12 @@
 }
 
 .info-section-subtitle {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.2rem;
     font-weight: 600;
     margin-bottom: 1rem;
     padding-bottom: 0.5rem;
-    border-bottom: 2px solid rgba(168, 85, 247, 0.3);
+    border-bottom: 2px solid rgba(103, 232, 249, 0.24);
 }
 
 .node-info-grid {
@@ -543,10 +543,10 @@
 }
 
 .info-item {
-    background: rgba(168, 85, 247, 0.05);
+    background: rgba(103, 232, 249, 0.05);
     padding: 1rem;
     border-radius: 8px;
-    border-left: 3px solid #a855f7;
+    border-left: 3px solid var(--topbar-accent);
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -568,7 +568,7 @@
     width: 250px;
     background: rgba(30, 41, 59, 0.95);
     border-radius: 12px;
-    border: 2px solid rgba(168, 85, 247, 0.5);
+    border: 2px solid rgba(56, 189, 248, 0.34);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     padding: 1rem;
     max-height: calc(100vh - 160px);
@@ -589,13 +589,13 @@
 }
 
 .location-sidebar-header {
-    border-bottom: 2px solid rgba(168, 85, 247, 0.3);
+    border-bottom: 2px solid rgba(103, 232, 249, 0.24);
     padding-bottom: 0.75rem;
     margin-bottom: 1rem;
 }
 
 .location-sidebar-header h3 {
-    color: #a855f7;
+    color: var(--topbar-accent);
     font-size: 1rem;
     font-weight: 600;
     margin: 0;
@@ -605,7 +605,7 @@
 }
 
 .location-node-title {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.25rem;
     font-weight: 700;
     margin-bottom: 1rem;
@@ -752,7 +752,7 @@
 
 .travel-node-card.clickable:hover {
     background: rgba(30, 41, 59, 0.92);
-    border-color: rgba(168, 85, 247, 0.55);
+    border-color: rgba(56, 189, 248, 0.42);
     transform: translateY(-1px);
 }
 
@@ -843,7 +843,7 @@
     border-radius: 12px;
     padding: 0.5rem;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(168, 85, 247, 0.3);
+    border: 1px solid rgba(103, 232, 249, 0.24);
 }
 
 .search-and-create-container {
@@ -863,7 +863,7 @@
 }
 
 .search-input-wrapper:focus-within {
-    border-color: #a855f7;
+    border-color: var(--topbar-accent);
     background: rgba(15, 23, 42, 0.8);
 }
 
@@ -885,7 +885,7 @@
     margin-top: 0.5rem;
     background: rgba(30, 41, 59, 0.95);
     border-radius: 12px;
-    border: 1px solid rgba(168, 85, 247, 0.3);
+    border: 1px solid rgba(103, 232, 249, 0.24);
     max-height: 400px;
     overflow: hidden;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
@@ -913,12 +913,12 @@
 }
 
 .search-result-card:hover {
-    background: rgba(168, 85, 247, 0.2);
-    border-color: rgba(168, 85, 247, 0.5);
+    background: rgba(103, 232, 249, 0.2);
+    border-color: rgba(56, 189, 248, 0.34);
 }
 
 .search-card-title {
-    color: #e9d5ff;
+    color: #eef8ff;
     font-weight: 600;
     margin-bottom: 0.25rem;
 }
@@ -940,7 +940,7 @@
     border-radius: 8px;
     text-align: center;
     color: #94a3b8;
-    border: 1px solid rgba(168, 85, 247, 0.3);
+    border: 1px solid rgba(103, 232, 249, 0.24);
 }
 
 .home-announcement-dock {
@@ -1183,7 +1183,7 @@
     transform: translateX(24px);
     overflow: hidden;
     border-radius: 12px 0 0 12px;
-    border: 0 solid rgba(168, 85, 247, 0.5);
+    border: 0 solid rgba(56, 189, 248, 0.34);
     border-right: none;
     background: rgba(30, 41, 59, 0.95);
     box-shadow: none;
@@ -1227,7 +1227,7 @@
 }
 
 .home-location-collapse-btn:hover {
-    border-color: rgba(168, 85, 247, 0.65);
+    border-color: rgba(56, 189, 248, 0.44);
     color: #f8fafc;
 }
 
@@ -1247,7 +1247,7 @@
 
 .home-location-dock-toggle {
     pointer-events: auto;
-    border: 2px solid rgba(168, 85, 247, 0.65);
+    border: 2px solid rgba(56, 189, 248, 0.44);
     border-right: none;
     background: rgba(15, 23, 42, 0.94);
     color: #e2e8f0;

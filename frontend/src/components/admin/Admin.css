@@ -26,8 +26,8 @@
 
 .stat-card:hover {
     transform: translateY(-5px);
-    box-shadow: 0 10px 30px rgba(168, 85, 247, 0.3);
-    border-color: #a855f7;
+    box-shadow: 0 10px 30px rgba(103, 232, 249, 0.24);
+    border-color: var(--topbar-accent);
 }
 
 .stat-card h3 {
@@ -2602,15 +2602,15 @@
 
 .alliance-admin-card {
     background: linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(51, 65, 85, 0.9));
-    border: 2px solid rgba(168, 85, 247, 0.3);
+    border: 2px solid rgba(103, 232, 249, 0.24);
     border-radius: 12px;
     padding: 1.5rem;
     transition: all 0.3s ease;
 }
 
 .alliance-admin-card:hover {
-    border-color: rgba(168, 85, 247, 0.5);
-    box-shadow: 0 4px 12px rgba(168, 85, 247, 0.2);
+    border-color: rgba(56, 189, 248, 0.34);
+    box-shadow: 0 4px 12px rgba(103, 232, 249, 0.2);
 }
 
 .alliance-admin-header {
@@ -2619,7 +2619,7 @@
     gap: 1rem;
     margin-bottom: 1.5rem;
     padding-bottom: 1rem;
-    border-bottom: 1px solid rgba(168, 85, 247, 0.2);
+    border-bottom: 1px solid rgba(103, 232, 249, 0.2);
 }
 
 .alliance-flag-medium {
@@ -2632,7 +2632,7 @@
 
 .alliance-admin-info h3 {
     margin: 0 0 0.5rem 0;
-    color: #e9d5ff;
+    color: #eef8ff;
     font-size: 1.3rem;
 }
 

@@ -9,7 +9,7 @@ import {
 } from './senseArticleUi';
 
 test('revision and reference labels stay unified', () => {
-  expect(getRevisionStatusLabel('pending_domain_admin_review')).toBe('待域相审核');
+  expect(getRevisionStatusLabel('pending_domain_admin_review')).toBe('待审核');
   expect(getRevisionStatusLabel('published')).toBe('已发布');
   expect(getReferenceTargetStatusLabel('published', true)).toBe('已发布');
   expect(getReferenceTargetStatusLabel('', false)).toBe('引用目标不存在');

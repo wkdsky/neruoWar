@@ -20,7 +20,6 @@ const makeLocalId = (prefix = 'id') => `${prefix}_${Date.now()}_${Math.random().
 const createSenseDraft = () => ({
   localId: makeLocalId('sense'),
   title: '',
-  content: '',
   relations: []
 });
 
@@ -1059,12 +1058,10 @@ const CreateNodeModal = ({
   const validation = useMemo(() => {
     const normalized = senses.map((sense, index) => {
       const senseTitle = typeof sense?.title === 'string' ? sense.title.trim() : '';
-      const senseContent = typeof sense?.content === 'string' ? sense.content.trim() : '';
       return {
         index,
         localId: sense.localId,
         title: senseTitle,
-        content: senseContent,
         relations: Array.isArray(sense.relations) ? sense.relations : []
       };
     });
@@ -1094,20 +1091,18 @@ const CreateNodeModal = ({
       const titleError = !item.title
         ? '释义题目不能为空'
         : (duplicateTitleMessageByLocalId[item.localId] || '');
-      const contentError = !item.content ? '释义内容不能为空' : '';
-      const relationError = (requiresSenseRelations && item.title && item.content && item.relations.length === 0)
+      const relationError = (requiresSenseRelations && item.title && item.relations.length === 0)
         ? '每个释义至少需要 1 条关联关系'
         : '';
 
-      if (!item.title || !item.content) hasIncompleteSense = true;
-      if (requiresSenseRelations && item.title && item.content && item.relations.length === 0) hasMissingRelation = true;
+      if (!item.title) hasIncompleteSense = true;
+      if (requiresSenseRelations && item.title && item.relations.length === 0) hasMissingRelation = true;
 
       fieldErrorsByLocalId[item.localId] = {
         title: titleError,
-        content: contentError,
         relation: relationError
       };
-      if (!titleError && !contentError && !relationError) readySenses.push(item);
+      if (!titleError && !relationError) readySenses.push(item);
     });
 
     return {
@@ -1163,7 +1158,6 @@ const CreateNodeModal = ({
     const synonymSenses = validation.readySenses.map((sense, index) => ({
       senseId: `sense_${index + 1}`,
       title: sense.title,
-      content: sense.content
     }));
     const senseIdByLocalId = validation.readySenses.reduce((acc, sense, index) => {
       acc[sense.localId] = `sense_${index + 1}`;
@@ -1260,8 +1254,8 @@ const CreateNodeModal = ({
     ? senses.findIndex((sense) => sense.localId === managedSense.localId)
     : -1;
   const managedSenseFieldErrors = managedSense
-    ? (validation.fieldErrorsByLocalId[managedSense.localId] || { title: '', content: '', relation: '' })
-    : { title: '', content: '', relation: '' };
+    ? (validation.fieldErrorsByLocalId[managedSense.localId] || { title: '', relation: '' })
+    : { title: '', relation: '' };
   const sourceDisplay = managedSense?.title?.trim() || `当前释义${managedSenseIndex >= 0 ? managedSenseIndex + 1 : ''}`;
   const targetDisplay = formatNodeSenseDisplay(relationManager.selectedNodeA, relationManager.selectedNodeASenseId);
   const secondTargetDisplay = formatNodeSenseDisplay(relationManager.selectedNodeB, relationManager.selectedNodeBSenseId);
@@ -1482,7 +1476,7 @@ const CreateNodeModal = ({
 
             <div className="sense-list-scroll">
               {senses.map((sense, index) => {
-                const fieldErrors = validation.fieldErrorsByLocalId[sense.localId] || { title: '', content: '', relation: '' };
+                const fieldErrors = validation.fieldErrorsByLocalId[sense.localId] || { title: '', relation: '' };
 
                 return (
                   <div key={sense.localId} className="sense-card">
@@ -1507,15 +1501,6 @@ const CreateNodeModal = ({
                       onChange={(e) => updateSenseField(sense.localId, 'title', e.target.value)}
                     />
                     {fieldErrors.title && <span className="error-text inline-field-error">{fieldErrors.title}</span>}
-
-                    <textarea
-                      className="form-textarea"
-                      rows={3}
-                      placeholder="该释义下的知识内容"
-                      value={sense.content}
-                      onChange={(e) => updateSenseField(sense.localId, 'content', e.target.value)}
-                    />
-                    {fieldErrors.content && <span className="error-text inline-field-error">{fieldErrors.content}</span>}
 
                     <div className="sense-relations-summary">
                       <button
