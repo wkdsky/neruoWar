@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUpRight, Eye, History, MessageSquare, PenSquare, Search, Sparkles } from 'lucide-react';
+import { ArrowUpRight, Eye, History, MessageSquare, PenSquare, Search, Sparkles, Trash2 } from 'lucide-react';
 import { senseArticleApi } from '../../utils/senseArticleApi';
+import {
+  diagLog,
+  durationMs,
+  newFlowId,
+  newRequestId,
+  nowMs,
+  safeJsonByteLength
+} from '../../utils/senseArticleDiagnostics';
 import SenseArticleRenderer from './SenseArticleRenderer';
 import SenseArticlePageHeader from './SenseArticlePageHeader';
 import SenseArticleStateView from './SenseArticleStateView';
@@ -120,20 +128,69 @@ const SenseArticlePage = ({
   const [myEditsLoading, setMyEditsLoading] = useState(false);
   const [myEditsError, setMyEditsError] = useState('');
   const [myEdits, setMyEdits] = useState([]);
+  const [abandoningRevisionId, setAbandoningRevisionId] = useState('');
   const selectionToolbarRef = useRef(null);
+  const loadCurrentSequenceRef = useRef(0);
+  const latestRouteRef = useRef({ nodeId, senseId });
   const pageThemeStyle = useMemo(() => buildSenseArticleThemeStyle(pageData?.node ? { ...articleContext, node: pageData.node } : articleContext), [pageData, articleContext]);
 
+  latestRouteRef.current = { nodeId, senseId };
+
   const loadCurrent = async () => {
+    const requestId = newRequestId('load-current');
+    const flowId = newFlowId('page');
+    const requestSequence = loadCurrentSequenceRef.current + 1;
+    const startedAt = nowMs();
+    loadCurrentSequenceRef.current = requestSequence;
     setLoading(true);
     setError(null);
     try {
       const [data, references] = await Promise.all([
-        senseArticleApi.getCurrent(nodeId, senseId),
-        senseArticleApi.getReferences(nodeId, senseId)
+        senseArticleApi.getCurrent(nodeId, senseId, {
+          flowId,
+          view: 'senseArticlePage',
+          requestId: `${requestId}_current`
+        }),
+        senseArticleApi.getReferences(nodeId, senseId, {
+          flowId,
+          view: 'senseArticlePage',
+          requestId: `${requestId}_references`
+        })
       ]);
+      const revision = data?.revision || {};
+      const isStale = loadCurrentSequenceRef.current !== requestSequence
+        || latestRouteRef.current.nodeId !== nodeId
+        || latestRouteRef.current.senseId !== senseId;
+      diagLog('sense.page.load_current', {
+        requestId,
+        flowId,
+        view: 'senseArticlePage',
+        nodeId,
+        senseId,
+        revisionId: revision?._id || '',
+        durationMs: durationMs(startedAt),
+        responseBytes: safeJsonByteLength(data) + safeJsonByteLength(references || { references: [] }),
+        blockCount: Array.isArray(revision?.ast?.blocks) ? revision.ast.blocks.length : 0,
+        referenceCount: Array.isArray(revision?.referenceIndex) ? revision.referenceIndex.length : 0,
+        headingCount: Array.isArray(revision?.headingIndex) ? revision.headingIndex.length : 0,
+        isStale
+      });
       setPageData(data);
       setReferenceData(references || { references: [] });
     } catch (requestError) {
+      diagLog('sense.page.load_current', {
+        requestId,
+        flowId,
+        view: 'senseArticlePage',
+        nodeId,
+        senseId,
+        durationMs: durationMs(startedAt),
+        responseBytes: 0,
+        isStale: loadCurrentSequenceRef.current !== requestSequence,
+        status: 'error',
+        errorName: requestError?.name || 'Error',
+        errorMessage: requestError?.message || 'load current failed'
+      });
       setError(requestError);
     } finally {
       setLoading(false);
@@ -391,6 +448,22 @@ const SenseArticlePage = ({
     );
   };
 
+  const abandonMyEdit = async (revisionId) => {
+    const normalizedRevisionId = String(revisionId || '').trim();
+    if (!normalizedRevisionId || abandoningRevisionId) return;
+    const confirmed = window.confirm('确定放弃这条未提交审核的修订吗？删除后无法恢复。');
+    if (!confirmed) return;
+    setAbandoningRevisionId(normalizedRevisionId);
+    try {
+      await senseArticleApi.deleteDraft(nodeId, senseId, normalizedRevisionId);
+      setMyEdits((prev) => prev.filter((item) => String(item?._id || '') !== normalizedRevisionId));
+    } catch (requestError) {
+      window.alert(requestError.message || '放弃修订失败');
+    } finally {
+      setAbandoningRevisionId('');
+    }
+  };
+
   const renderMyEditsModal = () => {
     if (!myEditsOpen) return null;
     return (
@@ -414,12 +487,17 @@ const SenseArticlePage = ({
                   {item.proposedSenseTitle && item.proposedSenseTitle !== (pageData?.nodeSense?.title || senseId) ? <div className="sense-annotation-card-body">待生效释义名：{item.proposedSenseTitle}</div> : null}
                   <div className="sense-floating-panel-actions">
                     {String(item?.status || '').trim() === 'draft' ? (
-                      <button type="button" className="btn btn-small btn-primary" onClick={() => {
-                        setMyEditsOpen(false);
-                        onOpenEditor && onOpenEditor({ mode: 'full', revisionId: item._id });
-                      }}>
-                        继续编辑
-                      </button>
+                      <>
+                        <button type="button" className="btn btn-small btn-primary" onClick={() => {
+                          setMyEditsOpen(false);
+                          onOpenEditor && onOpenEditor({ mode: 'full', revisionId: item._id });
+                        }} disabled={abandoningRevisionId === String(item?._id || '')}>
+                          继续编辑
+                        </button>
+                        <button type="button" className="btn btn-small btn-danger" onClick={() => abandonMyEdit(item._id)} disabled={abandoningRevisionId === String(item?._id || '')}>
+                          <Trash2 size={14} /> {abandoningRevisionId === String(item?._id || '') ? '放弃中...' : '放弃修订'}
+                        </button>
+                      </>
                     ) : (
                       <button type="button" className="btn btn-small btn-secondary" onClick={() => {
                         setMyEditsOpen(false);

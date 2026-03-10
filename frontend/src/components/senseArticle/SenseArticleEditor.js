@@ -1,11 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Link2, List, ListOrdered, Quote, Save, Send, Sigma, Sparkles } from 'lucide-react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, GripVertical, Link2, List, ListOrdered, Quote, Save, Send, Sigma, Sparkles, Trash2 } from 'lucide-react';
 import { senseArticleApi } from '../../utils/senseArticleApi';
+import {
+  diagLog,
+  durationMs,
+  newFlowId,
+  nowMs
+} from '../../utils/senseArticleDiagnostics';
 import { parseSenseArticleSource } from '../../utils/senseArticleSyntax';
-import SenseArticleRenderer from './SenseArticleRenderer';
 import SenseArticlePageHeader from './SenseArticlePageHeader';
+import SenseArticlePreviewPanel from './SenseArticlePreviewPanel';
 import SenseArticleStateView from './SenseArticleStateView';
 import SenseArticleStatusBadge from './SenseArticleStatusBadge';
+import useSenseEditorPreviewPane from './useSenseEditorPreviewPane';
 import {
   buildDefaultRevisionTitle,
   buildSenseArticleBreadcrumb,
@@ -38,14 +45,30 @@ const estimateTrackedDiffComplexity = (fromText = '', toText = '') => {
 };
 
 const INSERT_TEMPLATES = {
-  heading: '\n## 新小节\n',
   ref: '[[nodeId:senseId|引用显示文本]]',
   formula: '\n$$\na^2 + b^2 = c^2\n$$\n',
   symbol: ':alpha:',
-  bulletList: '\n- 条目一\n- 条目二\n',
-  orderedList: '\n1. 第一点\n2. 第二点\n',
   blockquote: '\n> 引用块内容\n'
 };
+
+const HEADING_INSERT_OPTIONS = [
+  { key: 'h1', label: '一级标题', template: '\n# 一级标题\n' },
+  { key: 'h2', label: '二级标题', template: '\n## 二级标题\n' },
+  { key: 'h3', label: '三级标题', template: '\n### 三级标题\n' },
+  { key: 'h4', label: '四级标题', template: '\n#### 四级标题\n' }
+];
+
+const BULLET_LIST_INSERT_OPTIONS = [
+  { key: 'dash', label: '圆点列表', template: '\n- 条目一\n- 条目二\n' },
+  { key: 'star', label: '星标列表', template: '\n* 条目一\n* 条目二\n' },
+  { key: 'todo', label: '待办清单', template: '\n- [ ] 待办一\n- [ ] 待办二\n' }
+];
+
+const ORDERED_LIST_INSERT_OPTIONS = [
+  { key: 'number', label: '数字列表', template: '\n1. 第一点\n2. 第二点\n' },
+  { key: 'zero-padded', label: '双位编号', template: '\n01. 第一点\n02. 第二点\n' },
+  { key: 'steps', label: '步骤列表', template: '\n1. 步骤一\n2. 步骤二\n' }
+];
 
 const HELP_EXAMPLES = [
   '# 一级标题\n## 二级标题',
@@ -83,12 +106,14 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [abandoning, setAbandoning] = useState(false);
   const [error, setError] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [showReferencePicker, setShowReferencePicker] = useState(false);
   const [referenceQuery, setReferenceQuery] = useState('');
   const [referenceDisplayText, setReferenceDisplayText] = useState('');
   const [referenceResults, setReferenceResults] = useState([]);
+  const [openInsertMenu, setOpenInsertMenu] = useState('');
   const [previewSource, setPreviewSource] = useState('');
   const [previewState, setPreviewState] = useState({ stale: false, paused: false, reason: '' });
   const [trackedDiffState, setTrackedDiffState] = useState({
@@ -102,6 +127,24 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
   const sourceTextareaRef = useRef(null);
   const scopedTextareaRef = useRef(null);
   const titleInputRef = useRef(null);
+  const insertToolbarRef = useRef(null);
+  const activeFlowIdRef = useRef('');
+  const previewReasonRef = useRef('load');
+  const isCompositionRef = useRef(false);
+  const compositionStartedAtRef = useRef(0);
+  const editorLayoutRef = useRef(null);
+  const {
+    isDesktopResizable,
+    isPreviewBodyMounted,
+    isPreviewCollapsed,
+    layoutClassName,
+    layoutStyle,
+    dividerClassName,
+    previewPaneClassName,
+    previewVisibilityPhase,
+    togglePreviewCollapsed,
+    resizeHandleProps
+  } = useSenseEditorPreviewPane({ layoutRef: editorLayoutRef });
   const pageThemeStyle = useMemo(() => buildSenseArticleThemeStyle(detail?.node ? { ...articleContext, node: detail.node } : articleContext), [detail, articleContext]);
 
   useEffect(() => {
@@ -111,6 +154,10 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
       setError(null);
       try {
         const data = await senseArticleApi.getRevisionDetail(nodeId, senseId, revisionId, {
+          view: 'senseArticleEditor',
+          nodeId,
+          senseId,
+          revisionId,
           signal: controller.signal
         });
         setDetail(data);
@@ -132,6 +179,7 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
           preferFallbackCurrentText: typeof data.revision?.scopedChange?.currentText === 'string'
         });
         setSource(nextSource);
+        previewReasonRef.current = 'load';
         setPreviewSource(nextSource);
         setPreviewState({ stale: false, paused: false, reason: '' });
         setScopedText(initialScopedText || '');
@@ -183,6 +231,9 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
   const revision = detail?.revision || {};
   const baseRevision = detail?.baseRevision || null;
   const fallbackRevisionTitle = useMemo(() => buildDefaultRevisionTitle(revision?.proposerUsername || localStorage.getItem('username') || ''), [revision?.proposerUsername]);
+  const editableStatuses = ['draft', 'changes_requested_by_domain_admin', 'changes_requested_by_domain_master'];
+  const canAbandonRevision = editableStatuses.includes(String(revision?.status || '').trim())
+    && (String(revision?.proposerId || '').trim() === String(detail?.permissions?.currentUserId || '').trim() || !!detail?.permissions?.isSystemAdmin);
   const canUpdateSenseMetadata = revision.sourceMode === 'full' && (!!detail?.permissions?.canReviewSenseArticle || !!detail?.permissions?.isDomainMaster || !!detail?.permissions?.isSystemAdmin);
   const canOpenDashboard = !!detail?.permissions?.canReviewDomainAdmin || !!detail?.permissions?.canReviewDomainMaster || !!detail?.permissions?.isSystemAdmin;
   const scopedScope = useMemo(() => buildScopedRevisionScope({
@@ -192,23 +243,49 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
     selectedRangeAnchor: revision.selectedRangeAnchor || null,
     fallbackOriginalText: revision?.scopedChange?.originalText || ''
   }), [baseRevision?.editorSource, revision.sourceMode, revision.targetHeadingId, revision.selectedRangeAnchor, revision?.scopedChange?.originalText, source]);
-  const scopedState = useMemo(() => buildScopedRevisionState({
-    scope: scopedScope,
-    currentSource: source,
-    fallbackCurrentText: scopedText,
-    preferFallbackCurrentText: scopedScope.isScoped
-  }), [scopedScope, source, scopedText]);
+
+  const scopedStateRef = useRef(null);
+  const scopedState = useMemo(() => {
+    const newState = buildScopedRevisionState({
+      scope: scopedScope,
+      currentSource: source,
+      fallbackCurrentText: scopedText,
+      preferFallbackCurrentText: scopedScope.isScoped
+    });
+    scopedStateRef.current = newState;
+    return newState;
+  }, [scopedScope, source, scopedText]);
 
   const effectiveSource = scopedState.isScoped ? scopedState.composeSource(scopedText) : source;
-  const resizeBodyTextarea = useCallback((element) => {
-    if (!element) return;
-    element.style.height = 'auto';
-    element.style.height = `${element.scrollHeight}px`;
-  }, []);
+  const effectiveSourceLengthRef = useRef(0);
+  effectiveSourceLengthRef.current = String(effectiveSource || '').length;
 
-  useEffect(() => {
-    resizeBodyTextarea(scopedState.isScoped ? scopedTextareaRef.current : sourceTextareaRef.current);
-  }, [resizeBodyTextarea, scopedState.isScoped, scopedText, source]);
+  const syncTextareaHeight = useCallback((element) => {
+    if (!element) return;
+    const startedAt = nowMs();
+    const computedStyle = window.getComputedStyle(element);
+    const minHeight = Number.parseFloat(computedStyle.minHeight) || 0;
+    element.style.height = 'auto';
+    element.style.height = `${Math.max(element.scrollHeight, minHeight)}px`;
+    const tookMs = durationMs(startedAt);
+    if (tookMs >= 8) {
+      diagLog('sense.editor.resize', {
+        flowId: activeFlowIdRef.current || undefined,
+        nodeId,
+        senseId,
+        revisionId,
+        sourceMode: scopedState.isScoped ? revision.sourceMode || 'scoped' : revision.sourceMode || 'full',
+        durationMs: tookMs,
+        isComposition: isCompositionRef.current
+      });
+    }
+  }, [nodeId, revision.sourceMode, revisionId, scopedState.isScoped, senseId]);
+
+  useLayoutEffect(() => {
+    if (isCompositionRef.current) return;
+    const element = scopedState.isScoped ? scopedTextareaRef.current : sourceTextareaRef.current;
+    syncTextareaHeight(element);
+  }, [scopedState.isScoped, scopedText, source, syncTextareaHeight]);
 
   useEffect(() => {
     if (!isTitleEditing || !titleInputRef.current) return;
@@ -216,10 +293,47 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
     titleInputRef.current.select();
   }, [isTitleEditing]);
 
-  const refreshPreview = useCallback((nextSource = effectiveSource, reason = 'manual') => {
-    setPreviewSource(nextSource || '');
+  useEffect(() => {
+    if (!openInsertMenu) return undefined;
+    const handlePointerDown = (event) => {
+      if (insertToolbarRef.current?.contains(event.target)) return;
+      setOpenInsertMenu('');
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setOpenInsertMenu('');
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [openInsertMenu]);
+
+  const effectiveSourceRef = useRef('');
+  effectiveSourceRef.current = effectiveSource;
+
+  const refreshPreview = useCallback((nextSource, reason = 'manual') => {
+    const sourceToUse = nextSource !== undefined ? nextSource : effectiveSourceRef.current;
+    previewReasonRef.current = reason;
+    setPreviewSource(sourceToUse || '');
     setPreviewState({ stale: false, paused: false, reason });
-  }, [effectiveSource]);
+  }, []);
+  const handleManualPreviewRefresh = useCallback(() => {
+    refreshPreview(undefined, 'manual');
+  }, [refreshPreview]);
+  const isPreviewCollapsedLike = isPreviewCollapsed || previewVisibilityPhase === 'collapsing';
+  const previewTopbarStatus = useMemo(() => {
+    if (isPreviewCollapsedLike) return '预览已收起';
+    if (previewVisibilityPhase === 'expanding') return '正在恢复预览…';
+    if (previewVisibilityPhase === 'collapsing') return '正在收起预览…';
+    if (previewState.stale) {
+      return previewState.paused
+        ? '正文较长，已暂停自动刷新；点击“刷新预览”后再重新解析。'
+        : '输入停止 1 秒后会自动刷新预览；也可手动立即刷新。';
+    }
+    return '预览已同步';
+  }, [isPreviewCollapsedLike, previewState.paused, previewState.stale, previewVisibilityPhase]);
 
   useEffect(() => {
     const nextPreviewSource = effectiveSource || '';
@@ -246,10 +360,26 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
   const previewRevision = useMemo(() => {
     const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const parsed = parseSenseArticleSource(previewSource || '');
-    const duration = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt;
+    const tookMs = durationMs(startedAt);
+    diagLog('sense.editor.preview.parse', {
+      flowId: activeFlowIdRef.current || undefined,
+      nodeId,
+      senseId,
+      revisionId,
+      sourceMode: revision.sourceMode || 'full',
+      sourceLength: effectiveSourceLengthRef.current,
+      previewSourceLength: String(previewSource || '').length,
+      durationMs: tookMs,
+      blockCount: Array.isArray(parsed.ast?.blocks) ? parsed.ast.blocks.length : 0,
+      headingCount: Array.isArray(parsed.headingIndex) ? parsed.headingIndex.length : 0,
+      referenceCount: Array.isArray(parsed.referenceIndex) ? parsed.referenceIndex.length : 0,
+      parseErrors: Array.isArray(parsed.parseErrors) ? parsed.parseErrors.length : 0,
+      reason: previewReasonRef.current || 'unknown',
+      isComposition: isCompositionRef.current
+    });
     devLog('[sense-article] preview parse', {
       revisionId,
-      durationMs: Number(duration.toFixed(2)),
+      durationMs: tookMs,
       sourceLength: String(previewSource || '').length,
       blockCount: Array.isArray(parsed.ast?.blocks) ? parsed.ast.blocks.length : 0
     });
@@ -261,7 +391,7 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
       plainTextSnapshot: parsed.plainTextSnapshot,
       parseErrors: parsed.parseErrors
     };
-  }, [previewSource, revisionId]);
+  }, [nodeId, previewSource, revision.sourceMode, revisionId, senseId]);
 
   const isDirty = effectiveSource !== lastSavedState.source
     || revisionTitle !== lastSavedState.revisionTitle
@@ -305,6 +435,10 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
 
   const sectionContext = extractSectionContext(baseRevision || revision, revision.targetHeadingId || '');
   const selectionContext = revision.selectedRangeAnchor?.selectionText || revision.selectedRangeAnchor?.textQuote || '';
+
+  const scopedOriginalTextRef = useRef('');
+  scopedOriginalTextRef.current = scopedState.originalText || '';
+
   useEffect(() => {
     if (!scopedState.isScoped) {
       setTrackedDiffState({ tokens: [], visible: false, loading: false, stale: false, message: '' });
@@ -313,15 +447,17 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
     setTrackedDiffState((prev) => ({
       ...prev,
       stale: true,
-      message: prev.visible ? '局部正文已变化，点击“刷新修订痕迹”以重新生成。' : '编辑过程中已暂停自动计算修订痕迹，点击按钮后再生成。'
+      message: prev.visible ? '局部正文已变化，点击"刷新修订痕迹"以重新生成。' : '编辑过程中已暂停自动计算修订痕迹，点击按钮后再生成。'
     }));
-  }, [scopedState.isScoped, scopedState.originalText, scopedText]);
+  }, [scopedState.isScoped, scopedText]);
 
   const trackedTokens = trackedDiffState.tokens;
 
   const handleRefreshTrackedDiff = useCallback(() => {
     if (!scopedState.isScoped) return;
-    const complexity = estimateTrackedDiffComplexity(scopedState.originalText || '', scopedText || '');
+    const originalText = scopedOriginalTextRef.current;
+    const currentText = scopedText || '';
+    const complexity = estimateTrackedDiffComplexity(originalText, currentText);
     if (complexity > TRACKED_DIFF_TOKEN_PRODUCT_LIMIT) {
       setTrackedDiffState({
         tokens: [],
@@ -336,7 +472,7 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
     setTrackedDiffState((prev) => ({ ...prev, loading: true, message: '正在生成修订痕迹…' }));
     window.setTimeout(() => {
       const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      const tokens = buildTrackedChangeTokens(scopedState.originalText || '', scopedText || '');
+      const tokens = buildTrackedChangeTokens(originalText, currentText);
       const duration = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt;
       devLog('[sense-article] tracked diff', {
         revisionId,
@@ -352,9 +488,26 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
         message: tokens.length > 0 ? '' : '当前范围暂无文字变化。'
       });
     }, 0);
-  }, [revisionId, scopedState.isScoped, scopedState.originalText, scopedText]);
+  }, [revisionId, scopedState.isScoped, scopedText]);
 
-  const insertTemplate = (template) => {
+  const focusEditorWithSelection = useCallback((textarea, selectionStart, selectionEnd = selectionStart) => {
+    if (!textarea) return;
+    const previousScrollX = window.scrollX;
+    const previousScrollY = window.scrollY;
+    if (typeof textarea.focus === 'function') {
+      try {
+        textarea.focus({ preventScroll: true });
+      } catch (_error) {
+        textarea.focus();
+      }
+    }
+    if (typeof textarea.setSelectionRange === 'function') {
+      textarea.setSelectionRange(selectionStart, selectionEnd);
+    }
+    window.scrollTo(previousScrollX, previousScrollY);
+  }, []);
+
+  const insertTemplate = useCallback((template) => {
     const textarea = scopedState.isScoped ? scopedTextareaRef.current : sourceTextareaRef.current;
     const currentValue = scopedState.isScoped ? scopedText : source;
     const updateValue = scopedState.isScoped ? setScopedText : setSource;
@@ -367,11 +520,23 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
     const nextValue = `${currentValue.slice(0, start)}${template}${currentValue.slice(end)}`;
     updateValue(nextValue);
     requestAnimationFrame(() => {
-      textarea.focus();
       const cursor = start + template.length;
-      textarea.setSelectionRange(cursor, cursor);
+      focusEditorWithSelection(textarea, cursor, cursor);
     });
-  };
+  }, [focusEditorWithSelection, scopedState.isScoped, scopedText, source]);
+
+  const handleInsertToolbarMouseDown = useCallback((event) => {
+    event.preventDefault();
+  }, []);
+
+  const handleInsertMenuToggle = useCallback((menuKey) => {
+    setOpenInsertMenu((currentMenu) => (currentMenu === menuKey ? '' : menuKey));
+  }, []);
+
+  const handleInsertMenuOption = useCallback((template) => {
+    insertTemplate(template);
+    setOpenInsertMenu('');
+  }, [insertTemplate]);
 
   const insertReference = (result) => {
     insertTemplate(buildReferenceToken({ nodeId: result.nodeId, senseId: result.senseId, displayText: referenceDisplayText.trim() || result.senseTitle || '' }));
@@ -381,7 +546,8 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
     setReferenceResults([]);
   };
 
-  const buildDraftPayload = () => {
+  const buildDraftPayload = ({ flowId = activeFlowIdRef.current || '', reason = '' } = {}) => {
+    const startedAt = nowMs();
     if (scopedState.isScoped && !scopedState.scopeResolved) {
       throw new Error(scopedState.resolveMessage || '当前局部修订无法稳定定位到正文源码');
     }
@@ -401,20 +567,49 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
         resolveMessage: scopedState.resolveMessage || ''
       };
     }
+    diagLog('sense.editor.payload.build', {
+      flowId: flowId || undefined,
+      nodeId,
+      senseId,
+      revisionId,
+      sourceMode: revision.sourceMode || 'full',
+      sourceLength: String(source || '').length,
+      scopedTextLength: String(scopedText || '').length,
+      nextSourceLength: String(nextSource || '').length,
+      durationMs: durationMs(startedAt),
+      reason: reason || undefined
+    });
     return { payload, nextSource };
   };
 
   const saveDraft = async () => {
+    const flowId = newFlowId('save');
+    activeFlowIdRef.current = flowId;
+    diagLog('sense.editor.save.start', {
+      flowId,
+      view: 'senseArticleEditor',
+      nodeId,
+      senseId,
+      revisionId,
+      sourceMode: revision.sourceMode || 'full',
+      sourceLength: String(source || '').length,
+      scopedTextLength: String(scopedText || '').length,
+      isComposition: isCompositionRef.current
+    });
     setSaving(true);
     try {
-      const { payload, nextSource } = buildDraftPayload();
-      const data = await senseArticleApi.updateDraft(nodeId, senseId, revisionId, payload);
+      const { payload, nextSource } = buildDraftPayload({ flowId, reason: 'save' });
+      const data = await senseArticleApi.updateDraft(nodeId, senseId, revisionId, payload, {
+        flowId,
+        view: 'senseArticleEditor'
+      });
       setDetail((prev) => ({
         ...(prev || {}),
         revision: { ...(prev?.revision || {}), ...(data.revision || {}) },
         article: data.article || prev?.article
       }));
       setSource(nextSource);
+      previewReasonRef.current = 'save';
       setPreviewSource(nextSource);
       setPreviewState({ stale: false, paused: false, reason: 'save' });
       setLastSavedState({ source: nextSource, scopedText, revisionTitle, note, senseTitle: String(senseTitle || '').trim() });
@@ -422,20 +617,41 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
     } catch (requestError) {
       window.alert(requestError.message);
     } finally {
+      activeFlowIdRef.current = '';
       setSaving(false);
     }
   };
 
   const submit = async () => {
+    const flowId = newFlowId('submit');
+    activeFlowIdRef.current = flowId;
+    diagLog('sense.editor.submit.start', {
+      flowId,
+      view: 'senseArticleEditor',
+      nodeId,
+      senseId,
+      revisionId,
+      sourceMode: revision.sourceMode || 'full',
+      sourceLength: String(source || '').length,
+      scopedTextLength: String(scopedText || '').length,
+      isComposition: isCompositionRef.current
+    });
     setSubmitting(true);
     try {
-      const { payload, nextSource } = buildDraftPayload();
-      const draftData = await senseArticleApi.updateDraft(nodeId, senseId, revisionId, payload);
+      const { payload, nextSource } = buildDraftPayload({ flowId, reason: 'submit' });
+      const draftData = await senseArticleApi.updateDraft(nodeId, senseId, revisionId, payload, {
+        flowId,
+        view: 'senseArticleEditor'
+      });
       setSource(nextSource);
+      previewReasonRef.current = 'submit';
       setPreviewSource(nextSource);
       setPreviewState({ stale: false, paused: false, reason: 'submit' });
       setLastSavedState({ source: nextSource, scopedText, revisionTitle, note, senseTitle: String(senseTitle || '').trim() });
-      const data = await senseArticleApi.submitRevision(nodeId, senseId, revisionId);
+      const data = await senseArticleApi.submitRevision(nodeId, senseId, revisionId, {
+        flowId,
+        view: 'senseArticleEditor'
+      });
       setDetail((prev) => ({
         ...(prev || {}),
         revision: { ...(prev?.revision || {}), ...(draftData?.revision || {}), ...(data?.revision || {}) },
@@ -445,7 +661,56 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
     } catch (requestError) {
       window.alert(requestError.message);
     } finally {
+      activeFlowIdRef.current = '';
       setSubmitting(false);
+    }
+  };
+
+  const handleBodyCompositionStart = useCallback((event) => {
+    isCompositionRef.current = true;
+    compositionStartedAtRef.current = nowMs();
+    diagLog('sense.composition', {
+      phase: 'start',
+      flowId: activeFlowIdRef.current || undefined,
+      nodeId,
+      senseId,
+      revisionId,
+      sourceMode: revision.sourceMode || 'full',
+      sourceLength: String(source || event?.target?.value || '').length,
+      scopedTextLength: String(scopedText || '').length
+    });
+  }, [nodeId, revision.sourceMode, revisionId, scopedText, senseId, source]);
+
+  const handleBodyCompositionEnd = useCallback((event) => {
+    const startedAt = compositionStartedAtRef.current || nowMs();
+    isCompositionRef.current = false;
+    compositionStartedAtRef.current = 0;
+    syncTextareaHeight(event?.target);
+    diagLog('sense.composition', {
+      phase: 'end',
+      flowId: activeFlowIdRef.current || undefined,
+      nodeId,
+      senseId,
+      revisionId,
+      sourceMode: revision.sourceMode || 'full',
+      sourceLength: String(source || event?.target?.value || '').length,
+      scopedTextLength: String(scopedText || '').length,
+      durationMs: durationMs(startedAt)
+    });
+  }, [nodeId, revision.sourceMode, revisionId, scopedText, senseId, source, syncTextareaHeight]);
+
+  const abandonRevision = async () => {
+    if (!canAbandonRevision || abandoning || saving || submitting) return;
+    const confirmed = window.confirm('确定放弃当前修订吗？未提交审核的编辑内容将被删除，且无法恢复。');
+    if (!confirmed) return;
+    setAbandoning(true);
+    try {
+      await senseArticleApi.deleteDraft(nodeId, senseId, revisionId);
+      onBack && onBack();
+    } catch (requestError) {
+      window.alert(requestError.message || '放弃修订失败');
+    } finally {
+      setAbandoning(false);
     }
   };
 
@@ -526,26 +791,20 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
                 <Sparkles size={16} /> 词条管理
               </button>
             ) : null}
-            <button type="button" className="btn btn-secondary" onClick={saveDraft} disabled={saving || submitting || (scopedState.isScoped && !scopedState.scopeResolved)}>
+            {canAbandonRevision ? (
+              <button type="button" className="btn btn-danger" onClick={abandonRevision} disabled={abandoning || saving || submitting}>
+                <Trash2 size={16} /> {abandoning ? '放弃中...' : '放弃修订'}
+              </button>
+            ) : null}
+            <button type="button" className="btn btn-secondary" onClick={saveDraft} disabled={saving || submitting || abandoning || (scopedState.isScoped && !scopedState.scopeResolved)}>
               <Save size={16} /> {saving ? '保存中...' : '保存草稿'}
             </button>
-            <button type="button" className="btn btn-primary" onClick={submit} disabled={submitting || saving || (scopedState.isScoped && !scopedState.scopeResolved)}>
+            <button type="button" className="btn btn-primary" onClick={submit} disabled={submitting || saving || abandoning || (scopedState.isScoped && !scopedState.scopeResolved)}>
               <Send size={16} /> {submitting ? '提交中...' : '提交审核'}
             </button>
           </>
         )}
       />
-
-      <div className="sense-editor-toolbar productized">
-        <button type="button" className="btn btn-small btn-secondary" onClick={() => insertTemplate(INSERT_TEMPLATES.heading)}>标题</button>
-        <button type="button" className="btn btn-small btn-secondary" onClick={() => insertTemplate(INSERT_TEMPLATES.bulletList)}><List size={14} /> 列表</button>
-        <button type="button" className="btn btn-small btn-secondary" onClick={() => insertTemplate(INSERT_TEMPLATES.orderedList)}><ListOrdered size={14} /> 有序列表</button>
-        <button type="button" className="btn btn-small btn-secondary" onClick={() => insertTemplate(INSERT_TEMPLATES.blockquote)}><Quote size={14} /> 引用块</button>
-        <button type="button" className="btn btn-small btn-secondary" onClick={() => setShowReferencePicker((prev) => !prev)}><Link2 size={14} /> 插入引用</button>
-        <button type="button" className="btn btn-small btn-secondary" onClick={() => insertTemplate(INSERT_TEMPLATES.formula)}><Sigma size={14} /> 公式</button>
-        <button type="button" className="btn btn-small btn-secondary" onClick={() => insertTemplate(INSERT_TEMPLATES.symbol)}>符号</button>
-        <button type="button" className="btn btn-small btn-secondary" onClick={() => setShowHelp((prev) => !prev)}><BookOpen size={14} /> 语法帮助</button>
-      </div>
 
       {(showReferencePicker || showHelp || revision.sourceMode !== 'full') ? (
         <div className="sense-editor-helper-grid">
@@ -589,15 +848,86 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
         </div>
       ) : null}
 
-      <div className="sense-editor-layout">
-        <section className="sense-editor-pane">
-          <div className="sense-editor-pane-title">{scopedState.isScoped ? scopedState.scopeLabel : '更新释义'}</div>
+      <div
+        ref={editorLayoutRef}
+        className={layoutClassName}
+        style={layoutStyle}
+      >
+        <section className="sense-editor-pane editor-primary">
+          <div className="sense-editor-pane-title">{scopedState.isScoped ? scopedState.scopeLabel : '编辑正文'}</div>
           {canUpdateSenseMetadata ? (
-            <label className="sense-proposer-note">
+            <label className="sense-proposer-note compact">
               <span>释义名称（审核通过后生效）</span>
               <input value={senseTitle} onChange={(event) => setSenseTitle(event.target.value)} className="sense-editor-title-input" placeholder="输入释义名称" />
             </label>
           ) : null}
+          <div ref={insertToolbarRef} className="sense-editor-toolbar productized sticky">
+            <div className={`sense-editor-insert-group ${openInsertMenu === 'heading' ? 'open' : ''}`}>
+              <button type="button" className="btn btn-small btn-secondary" onMouseDown={handleInsertToolbarMouseDown} onClick={() => handleInsertMenuToggle('heading')}>
+                插入标题
+              </button>
+              {openInsertMenu === 'heading' ? (
+                <div className="sense-editor-insert-menu" role="menu">
+                  {HEADING_INSERT_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className="sense-editor-insert-menu-option"
+                      onMouseDown={handleInsertToolbarMouseDown}
+                      onClick={() => handleInsertMenuOption(option.template)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <div className={`sense-editor-insert-group ${openInsertMenu === 'bulletList' ? 'open' : ''}`}>
+              <button type="button" className="btn btn-small btn-secondary" onMouseDown={handleInsertToolbarMouseDown} onClick={() => handleInsertMenuToggle('bulletList')}>
+                <List size={14} /> 插入列表
+              </button>
+              {openInsertMenu === 'bulletList' ? (
+                <div className="sense-editor-insert-menu" role="menu">
+                  {BULLET_LIST_INSERT_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className="sense-editor-insert-menu-option"
+                      onMouseDown={handleInsertToolbarMouseDown}
+                      onClick={() => handleInsertMenuOption(option.template)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <div className={`sense-editor-insert-group ${openInsertMenu === 'orderedList' ? 'open' : ''}`}>
+              <button type="button" className="btn btn-small btn-secondary" onMouseDown={handleInsertToolbarMouseDown} onClick={() => handleInsertMenuToggle('orderedList')}>
+                <ListOrdered size={14} /> 插入有序列表
+              </button>
+              {openInsertMenu === 'orderedList' ? (
+                <div className="sense-editor-insert-menu" role="menu">
+                  {ORDERED_LIST_INSERT_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className="sense-editor-insert-menu-option"
+                      onMouseDown={handleInsertToolbarMouseDown}
+                      onClick={() => handleInsertMenuOption(option.template)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <button type="button" className="btn btn-small btn-secondary" onMouseDown={handleInsertToolbarMouseDown} onClick={() => insertTemplate(INSERT_TEMPLATES.blockquote)}><Quote size={14} /> 插入引用块</button>
+            <button type="button" className="btn btn-small btn-secondary" onMouseDown={handleInsertToolbarMouseDown} onClick={() => setShowReferencePicker((prev) => !prev)}><Link2 size={14} /> 插入引用</button>
+            <button type="button" className="btn btn-small btn-secondary" onMouseDown={handleInsertToolbarMouseDown} onClick={() => insertTemplate(INSERT_TEMPLATES.formula)}><Sigma size={14} /> 插入公式</button>
+            <button type="button" className="btn btn-small btn-secondary" onMouseDown={handleInsertToolbarMouseDown} onClick={() => insertTemplate(INSERT_TEMPLATES.symbol)}>插入符号</button>
+            <button type="button" className="btn btn-small btn-secondary" onMouseDown={handleInsertToolbarMouseDown} onClick={() => setShowHelp((prev) => !prev)}><BookOpen size={14} /> 插入语法帮助</button>
+          </div>
           {scopedState.isScoped ? (
             <>
               <div className="sense-scoped-edit-head">
@@ -613,10 +943,10 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
               {trackedDiffState.message ? <div className="sense-review-note">{trackedDiffState.message}</div> : null}
               {trackedDiffState.visible ? <div className="sense-tracked-change-box">{renderTrackedTokens(trackedTokens)}</div> : null}
               <div className="sense-editor-pane-subtitle">局部正文</div>
-              <textarea ref={scopedTextareaRef} value={scopedText} onChange={(event) => setScopedText(event.target.value)} className="sense-editor-textarea scoped auto-expand" spellCheck="false" rows={1} />
+              <textarea ref={scopedTextareaRef} value={scopedText} onChange={(event) => setScopedText(event.target.value)} onCompositionStart={handleBodyCompositionStart} onCompositionEnd={handleBodyCompositionEnd} className="sense-editor-textarea scoped auto-expand" spellCheck="false" rows={1} />
             </>
           ) : (
-            <textarea ref={sourceTextareaRef} value={source} onChange={(event) => setSource(event.target.value)} className="sense-editor-textarea auto-expand" spellCheck="false" rows={1} />
+            <textarea ref={sourceTextareaRef} value={source} onChange={(event) => setSource(event.target.value)} onCompositionStart={handleBodyCompositionStart} onCompositionEnd={handleBodyCompositionEnd} className="sense-editor-textarea auto-expand" spellCheck="false" rows={1} />
           )}
           <label className="sense-proposer-note">
             <span>提交说明</span>
@@ -630,21 +960,55 @@ const SenseArticleEditor = ({ nodeId, senseId, revisionId, articleContext, onCon
             </div>
           ) : null}
         </section>
-        <section className="sense-editor-pane preview">
-          <div className="sense-editor-pane-title">
-            全文预览
-            <button type="button" className="btn btn-small btn-secondary" onClick={() => refreshPreview()}>
-              刷新预览
-            </button>
-          </div>
-          {previewState.stale ? (
-            <div className="sense-review-note">
-              {previewState.paused
-                ? '正文较长，已暂停自动刷新预览；点击“刷新预览”后再重新解析。'
-                : '输入停止 1 秒后会自动刷新预览；也可手动立即刷新。'}
+        <div className={dividerClassName}>
+          <button
+            type="button"
+            className="sense-editor-resize-handle"
+            disabled={!isDesktopResizable || isPreviewCollapsedLike || previewVisibilityPhase !== 'expanded'}
+            aria-hidden={!isDesktopResizable}
+            aria-label="拖动调整编辑区与预览区宽度"
+            title={!isDesktopResizable ? '当前宽度下不可拖动调整' : (isPreviewCollapsedLike ? '展开预览后才可拖动调整' : '拖动调整宽度')}
+            {...resizeHandleProps}
+          >
+            <span className="sense-editor-resize-handle-lines" aria-hidden="true" />
+            <GripVertical size={14} />
+          </button>
+        </div>
+        <section className={previewPaneClassName}>
+          <div className={`sense-editor-preview-topbar ${isDesktopResizable ? 'sticky' : ''}`}>
+            <div className="sense-editor-preview-topbar-meta">
+              <div className="sense-editor-pane-title">全文预览</div>
+              <div className="sense-editor-preview-status">{previewTopbarStatus}</div>
             </div>
-          ) : null}
-          <SenseArticleRenderer revision={previewRevision} />
+            <div className="sense-editor-preview-actions">
+              <button
+                type="button"
+                className="btn btn-small btn-secondary sense-editor-preview-refresh"
+                onClick={handleManualPreviewRefresh}
+                disabled={isPreviewCollapsedLike || previewVisibilityPhase === 'expanding'}
+              >
+                刷新预览
+              </button>
+              <button
+                type="button"
+                className="btn btn-small btn-secondary sense-editor-preview-toggle"
+                onClick={togglePreviewCollapsed}
+                aria-expanded={!isPreviewCollapsedLike}
+                aria-label={isPreviewCollapsedLike ? '展开全文预览' : '收起全文预览'}
+                title={isPreviewCollapsedLike ? '展开全文预览' : '收起全文预览'}
+              >
+                <span className="sense-editor-preview-toggle-label">{isPreviewCollapsedLike ? '展开' : '收起'}</span>
+                <span className="sense-editor-preview-toggle-icon" aria-hidden="true">
+                  {isPreviewCollapsedLike ? '<' : '>'}
+                </span>
+              </button>
+            </div>
+          </div>
+          <div className={`sense-editor-preview-body${isPreviewBodyMounted ? '' : ' hidden'}`}>
+            {isPreviewBodyMounted ? (
+              <SenseArticlePreviewPanel previewRevision={previewRevision} />
+            ) : null}
+          </div>
         </section>
       </div>
     </div>

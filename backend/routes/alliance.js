@@ -168,6 +168,42 @@ const normalizeVisualStyleInput = (rawStyle = {}, fallbackName = '主视觉') =>
   };
 };
 
+const buildDefaultSenseArticleStyleInput = (rawStyle = {}, fallbackName = '百科主视觉', fallbackFlag = '#7c3aed') => {
+  const baseStyle = normalizeVisualStyleInput(rawStyle, fallbackName);
+  return {
+    name: fallbackName,
+    pageBackgroundStart: normalizeHexColor(baseStyle.secondaryColor, '#0f172a'),
+    pageBackgroundEnd: normalizeHexColor(baseStyle.primaryColor, normalizeHexColor(fallbackFlag, '#38bdf8')),
+    panelBackground: normalizeHexColor(baseStyle.secondaryColor, '#1e293b'),
+    panelBorder: normalizeHexColor(baseStyle.rimColor, '#dbeafe'),
+    contentBackground: '#f8fafc',
+    accentColor: normalizeHexColor(baseStyle.glowColor, '#38bdf8'),
+    titleColor: normalizeHexColor(baseStyle.textColor, '#eef8ff'),
+    bodyTextColor: '#0f172a',
+    mutedTextColor: normalizeHexColor(baseStyle.rimColor, '#cbd5e1'),
+    codeBackground: '#020617'
+  };
+};
+
+const normalizeSenseArticleStyleInput = (rawStyle = {}, fallbackName = '百科主视觉', fallbackVisualStyle = null, fallbackFlag = '#7c3aed') => {
+  const style = rawStyle && typeof rawStyle === 'object' ? rawStyle : {};
+  const normalizedName = typeof style.name === 'string' ? style.name.trim() : '';
+  const fallbackStyle = buildDefaultSenseArticleStyleInput(fallbackVisualStyle || {}, fallbackName, fallbackFlag);
+  return {
+    name: normalizedName || fallbackName,
+    pageBackgroundStart: normalizeHexColor(style.pageBackgroundStart, fallbackStyle.pageBackgroundStart),
+    pageBackgroundEnd: normalizeHexColor(style.pageBackgroundEnd, fallbackStyle.pageBackgroundEnd),
+    panelBackground: normalizeHexColor(style.panelBackground, fallbackStyle.panelBackground),
+    panelBorder: normalizeHexColor(style.panelBorder, fallbackStyle.panelBorder),
+    contentBackground: normalizeHexColor(style.contentBackground, fallbackStyle.contentBackground),
+    accentColor: normalizeHexColor(style.accentColor, fallbackStyle.accentColor),
+    titleColor: normalizeHexColor(style.titleColor, fallbackStyle.titleColor),
+    bodyTextColor: normalizeHexColor(style.bodyTextColor, fallbackStyle.bodyTextColor),
+    mutedTextColor: normalizeHexColor(style.mutedTextColor, fallbackStyle.mutedTextColor),
+    codeBackground: normalizeHexColor(style.codeBackground, fallbackStyle.codeBackground)
+  };
+};
+
 const serializeVisualStyle = (style) => {
   if (!style) return null;
   const styleObj = typeof style.toObject === 'function' ? style.toObject() : style;
@@ -202,12 +238,42 @@ const resolveActiveVisualStyle = (alliance) => {
   return active || styles[0] || null;
 };
 
+const serializeSenseArticleStyle = (style, fallbackVisualStyle = null, fallbackFlag = '#7c3aed') => {
+  if (!style) return null;
+  const styleObj = typeof style.toObject === 'function' ? style.toObject() : style;
+  const normalized = normalizeSenseArticleStyleInput(styleObj, styleObj.name || '百科主视觉', fallbackVisualStyle, fallbackFlag);
+  return {
+    _id: getIdString(styleObj._id),
+    ...normalized
+  };
+};
+
+const resolveActiveSenseArticleStyle = (alliance, activeVisualStyle = null) => {
+  if (!alliance) return null;
+  const styles = Array.isArray(alliance.senseArticleStyles) ? alliance.senseArticleStyles : [];
+  const fallbackVisual = activeVisualStyle || resolveActiveVisualStyle(alliance);
+  if (styles.length === 0) {
+    return normalizeSenseArticleStyleInput({}, '百科主视觉', fallbackVisual, alliance.flag || '#7c3aed');
+  }
+  const activeId = getIdString(alliance.activeSenseArticleStyleId);
+  const active = styles.find((styleItem) => getIdString(styleItem?._id) === activeId);
+  return active || styles[0] || null;
+};
+
 const buildAlliancePayload = (alliance, extras = {}) => {
   let styles = Array.isArray(alliance?.visualStyles) ? alliance.visualStyles.map(serializeVisualStyle).filter(Boolean) : [];
   const active = resolveActiveVisualStyle(alliance);
   const serializedActive = serializeVisualStyle(active);
   if (styles.length === 0 && serializedActive) {
     styles = [serializedActive];
+  }
+  let senseArticleStyles = Array.isArray(alliance?.senseArticleStyles)
+    ? alliance.senseArticleStyles.map((item) => serializeSenseArticleStyle(item, active, alliance?.flag || '#7c3aed')).filter(Boolean)
+    : [];
+  const activeSenseArticleStyle = resolveActiveSenseArticleStyle(alliance, active);
+  const serializedActiveSenseArticleStyle = serializeSenseArticleStyle(activeSenseArticleStyle, active, alliance?.flag || '#7c3aed');
+  if (senseArticleStyles.length === 0 && serializedActiveSenseArticleStyle) {
+    senseArticleStyles = [serializedActiveSenseArticleStyle];
   }
   return {
     _id: alliance._id,
@@ -222,6 +288,9 @@ const buildAlliancePayload = (alliance, extras = {}) => {
     visualStyles: styles,
     activeVisualStyleId: serializedActive?._id || '',
     activeVisualStyle: serializedActive,
+    senseArticleStyles,
+    activeSenseArticleStyleId: serializedActiveSenseArticleStyle?._id || '',
+    activeSenseArticleStyle: serializedActiveSenseArticleStyle,
     knowledgeContributionPercent: typeof alliance.knowledgeContributionPercent === 'number'
       ? alliance.knowledgeContributionPercent
       : 10,
@@ -829,7 +898,10 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
       knowledgeContributionPercent,
       createVisualStyle,
       deleteVisualStyleId,
-      activateVisualStyleId
+      activateVisualStyleId,
+      createSenseArticleStyle,
+      activateSenseArticleStyleId,
+      deleteSenseArticleStyleId
     } = req.body || {};
 
     const leader = await User.findById(req.user.userId).select('_id username');
@@ -930,6 +1002,60 @@ router.put('/leader/:allianceId/manage', authenticateToken, async (req, res) => 
       styleList.splice(deleteIndex, 1);
       if (getIdString(alliance.activeVisualStyleId) === getIdString(removedStyle?._id)) {
         alliance.activeVisualStyleId = styleList[0]?._id || null;
+      }
+      hasChanges = true;
+      hasPersistentChanges = true;
+    }
+
+    if (createSenseArticleStyle && typeof createSenseArticleStyle === 'object') {
+      const fallbackVisualStyle = resolveActiveVisualStyle(alliance);
+      const normalizedStyle = normalizeSenseArticleStyleInput(
+        createSenseArticleStyle,
+        `百科风格${(alliance.senseArticleStyles || []).length + 1}`,
+        fallbackVisualStyle,
+        alliance.flag || '#7c3aed'
+      );
+      const styleNameTaken = (alliance.senseArticleStyles || []).some((item) => (
+        (item?.name || '').trim() === normalizedStyle.name
+      ));
+      if (styleNameTaken) {
+        return res.status(400).json({ error: '已存在同名百科页面样式，请更换名称' });
+      }
+      alliance.senseArticleStyles.push(normalizedStyle);
+      if (!alliance.activeSenseArticleStyleId && alliance.senseArticleStyles[alliance.senseArticleStyles.length - 1]?._id) {
+        alliance.activeSenseArticleStyleId = alliance.senseArticleStyles[alliance.senseArticleStyles.length - 1]._id;
+      }
+      hasChanges = true;
+      hasPersistentChanges = true;
+    }
+
+    if (typeof activateSenseArticleStyleId === 'string' && activateSenseArticleStyleId.trim()) {
+      const targetStyle = (alliance.senseArticleStyles || []).find((item) => (
+        getIdString(item?._id) === activateSenseArticleStyleId.trim()
+      ));
+      if (!targetStyle) {
+        return res.status(400).json({ error: '目标百科页面样式不存在，无法启用' });
+      }
+      alliance.activeSenseArticleStyleId = targetStyle._id;
+      hasChanges = true;
+      hasPersistentChanges = true;
+    }
+
+    if (typeof deleteSenseArticleStyleId === 'string' && deleteSenseArticleStyleId.trim()) {
+      const styleList = alliance.senseArticleStyles || [];
+      const deleteIndex = styleList.findIndex((item) => (
+        getIdString(item?._id) === deleteSenseArticleStyleId.trim()
+      ));
+      if (deleteIndex === -1) {
+        return res.status(400).json({ error: '目标百科页面样式不存在，无法删除' });
+      }
+      if (styleList.length <= 1) {
+        return res.status(400).json({ error: '至少保留一套百科页面样式，不能删除最后一套' });
+      }
+      const removedStyle = styleList[deleteIndex];
+      styleList.splice(deleteIndex, 1);
+      if (getIdString(alliance.activeSenseArticleStyleId) === getIdString(removedStyle?._id)) {
+        alliance.activeSenseArticleStyleId = styleList[0]?._id || null;
       }
       hasChanges = true;
       hasPersistentChanges = true;

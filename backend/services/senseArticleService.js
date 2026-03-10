@@ -45,6 +45,7 @@ const {
 } = require('./senseArticleWorkflow');
 const { DOMAIN_ADMIN_PERMISSION_KEYS, getSenseArticleReviewerEntries, hasDomainAdminPermission } = require('../utils/domainAdminPermissions');
 const { getIdString, isValidObjectId, toObjectIdOrNull } = require('../utils/objectId');
+const { diagLog, durationMs, nowMs } = require('./senseArticleDiagnostics');
 
 const createExposeError = (message, statusCode = 400, code = '') => {
   const error = new Error(message);
@@ -171,7 +172,9 @@ const serializeAllianceThemePayload = (alliance = null) => {
     name: alliance.name || '',
     flag: alliance.flag || '',
     visualStyles: Array.isArray(alliance.visualStyles) ? alliance.visualStyles : [],
-    activeVisualStyleId: alliance.activeVisualStyleId || null
+    activeVisualStyleId: alliance.activeVisualStyleId || null,
+    senseArticleStyles: Array.isArray(alliance.senseArticleStyles) ? alliance.senseArticleStyles : [],
+    activeSenseArticleStyleId: alliance.activeSenseArticleStyleId || null
   };
 };
 
@@ -188,7 +191,7 @@ const enrichNodeDomainMasterAlliance = async (node = null) => {
   const allianceId = getIdString(domainMasterUser.allianceId);
   const alliance = allianceId
     ? await EntropyAlliance.findById(allianceId)
-      .select('_id name flag visualStyles activeVisualStyleId')
+      .select('_id name flag visualStyles activeVisualStyleId senseArticleStyles activeSenseArticleStyleId')
       .lean()
     : null;
 
@@ -543,9 +546,14 @@ const collectAnnotationHealthStats = async ({ userId, nodeIds = [] }) => {
   }, { exact: 0, relocated: 0, uncertain: 0, broken: 0 });
 };
 
-const materializeRevisionPayload = async ({ editorSource, baseRevision = null }) => {
+const materializeRevisionPayload = async ({ editorSource, baseRevision = null, requestMeta = null }) => {
+  const totalStartedAt = nowMs();
+  const parseStartedAt = nowMs();
   const parsed = parseSenseArticleSource(editorSource);
+  const parseMs = durationMs(parseStartedAt);
+  const resolveRefsStartedAt = nowMs();
   const referenceIndex = await resolveReferenceTargets(parsed.referenceIndex);
+  const resolveRefsMs = durationMs(resolveRefsStartedAt);
   const candidateRevision = {
     editorSource: parsed.editorSource,
     ast: parsed.ast,
@@ -554,10 +562,30 @@ const materializeRevisionPayload = async ({ editorSource, baseRevision = null })
     formulaRefs: parsed.formulaRefs,
     symbolRefs: parsed.symbolRefs
   };
+  const buildDiffStartedAt = nowMs();
+  const diffFromBase = buildRevisionComparePayload({ fromRevision: baseRevision, toRevision: candidateRevision });
+  const buildDiffMs = durationMs(buildDiffStartedAt);
+  diagLog('sense.service.materialize_payload', {
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: requestMeta?.nodeId,
+    senseId: requestMeta?.senseId,
+    revisionId: requestMeta?.revisionId,
+    parseMs,
+    resolveRefsMs,
+    buildDiffMs,
+    totalMs: durationMs(totalStartedAt),
+    editorSourceLength: typeof parsed.editorSource === 'string' ? parsed.editorSource.length : 0,
+    blockCount: Array.isArray(parsed.ast?.blocks) ? parsed.ast.blocks.length : 0,
+    headingCount: Array.isArray(parsed.headingIndex) ? parsed.headingIndex.length : 0,
+    referenceCount: Array.isArray(referenceIndex) ? referenceIndex.length : 0,
+    diffSectionCount: Array.isArray(diffFromBase?.sections) ? diffFromBase.sections.length : 0,
+    parseErrors: Array.isArray(parsed.parseErrors) ? parsed.parseErrors.length : 0
+  });
   return {
     ...parsed,
     referenceIndex,
-    diffFromBase: buildRevisionComparePayload({ fromRevision: baseRevision, toRevision: candidateRevision })
+    diffFromBase
   };
 };
 
@@ -683,7 +711,7 @@ const getArticleOverview = async ({ nodeId, senseId, userId }) => {
   };
 };
 
-const getCurrentArticle = async ({ nodeId, senseId, userId }) => {
+const getCurrentArticle = async ({ nodeId, senseId, userId, requestMeta = null }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   ensurePermission(!!bundle.currentRevision, '当前释义尚无已发布百科版本', 404);
   const annotations = await SenseAnnotation.find({ userId: bundle.permissions.userId, articleId: bundle.article._id }).sort({ updatedAt: -1 }).lean();
@@ -697,7 +725,7 @@ const getCurrentArticle = async ({ nodeId, senseId, userId }) => {
     node: bundle.node,
     nodeSense: bundle.nodeSense,
     article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(bundle.currentRevision),
+    revision: serializeRevisionDetail(bundle.currentRevision, { requestMeta, phase: 'get_current_article' }),
     permissions: serializePermissions(bundle.permissions, userId),
     annotations: serializedAnnotations,
     readingMeta
@@ -739,7 +767,7 @@ const listRevisions = async ({ nodeId, senseId, userId, status = '', page = 1, p
   };
 };
 
-const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId }) => {
+const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId, requestMeta = null }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   const revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id }).lean();
   if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
@@ -754,8 +782,8 @@ const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId }) => {
     node: bundle.node,
     nodeSense: bundle.nodeSense,
     article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(decoratedRevision || revision),
-    baseRevision: baseRevision ? serializeRevisionDetail(baseRevision) : null,
+    revision: serializeRevisionDetail(decoratedRevision || revision, { requestMeta, phase: 'get_revision_detail.revision' }),
+    baseRevision: baseRevision ? serializeRevisionDetail(baseRevision, { requestMeta, phase: 'get_revision_detail.base_revision' }) : null,
     reviewParticipants: reviewPresentation.participants,
     reviewSummary: reviewPresentation.summary,
     permissions: serializePermissions(bundle.permissions, userId)
@@ -766,7 +794,7 @@ const updateSenseMetadata = async ({ nodeId, senseId, userId, payload = {} }) =>
   throw createExposeError('释义名称修改已并入修订审核流程，请在编辑修订时保存并提交审核', 409, 'sense_metadata_revision_flow_only');
 };
 
-const createDraftRevision = async ({ nodeId, senseId, userId, payload = {} }) => {
+const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requestMeta = null }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   ensurePermission(bundle.permissions.canCreateRevision, '当前用户无法创建百科修订');
   const proposer = await User.findById(userId).select('_id username').lean();
@@ -778,7 +806,15 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {} }) =>
     ? payload.editorSource
     : (baseRevision?.editorSource || bundle.currentRevision?.editorSource || bundle.nodeSense.content || '');
   const revisionNumber = await getNextRevisionNumber(bundle.article._id);
-  const materialized = await materializeRevisionPayload({ editorSource, baseRevision });
+  const materialized = await materializeRevisionPayload({
+    editorSource,
+    baseRevision,
+    requestMeta: {
+      ...requestMeta,
+      nodeId,
+      senseId
+    }
+  });
   const revisionTitle = resolveRevisionTitleInput({
     revisionTitle: payload.revisionTitle,
     fallbackUsername: proposer?.username || ''
@@ -838,12 +874,12 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {} }) =>
   });
   return {
     article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(draft),
+    revision: serializeRevisionDetail(draft, { requestMeta, phase: 'create_draft_revision' }),
     permissions: serializePermissions(bundle.permissions, userId)
   };
 };
 
-const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payload = {} }) => {
+const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payload = {}, requestMeta = null }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   const revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
   if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
@@ -853,7 +889,16 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
   const proposer = await User.findById(revision.proposerId).select('_id username').lean();
   const baseRevision = revision.baseRevisionId ? await SenseArticleRevision.findById(revision.baseRevisionId) : null;
   const editorSource = typeof payload.editorSource === 'string' ? payload.editorSource : revision.editorSource;
-  const materialized = await materializeRevisionPayload({ editorSource, baseRevision });
+  const materialized = await materializeRevisionPayload({
+    editorSource,
+    baseRevision,
+    requestMeta: {
+      ...requestMeta,
+      nodeId,
+      senseId,
+      revisionId
+    }
+  });
   revision.editorSource = materialized.editorSource;
   revision.ast = materialized.ast;
   revision.headingIndex = materialized.headingIndex;
@@ -906,6 +951,45 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
     permissions: bundle.permissions,
     userId
   });
+};
+
+const deleteDraftRevision = async ({ nodeId, senseId, revisionId, userId }) => {
+  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
+  const revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
+  if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
+
+  const currentUserId = getIdString(userId);
+  ensurePermission(getIdString(revision.proposerId) === currentUserId || bundle.permissions.isSystemAdmin, '仅发起人或系统管理员可放弃草稿');
+  ensurePermission(DRAFT_EDITABLE_STATUSES.includes(revision.status), '仅未提交审核的修订可以放弃');
+
+  await SenseArticleRevision.deleteOne({ _id: revision._id, articleId: bundle.article._id });
+
+  const fallbackDraft = await SenseArticleRevision.findOne({
+    articleId: bundle.article._id,
+    status: { $in: DRAFT_EDITABLE_STATUSES }
+  }).sort({ updatedAt: -1, createdAt: -1, revisionNumber: -1 }).select('_id').lean();
+
+  const latestDraftId = getIdString(bundle.article.latestDraftRevisionId);
+  const removedDraftId = getIdString(revision._id);
+  if (latestDraftId === removedDraftId || !latestDraftId) {
+    await SenseArticle.updateOne({ _id: bundle.article._id }, {
+      $set: {
+        latestDraftRevisionId: fallbackDraft?._id || null,
+        updatedBy: userId,
+        updatedAt: new Date()
+      }
+    });
+  }
+
+  return {
+    ok: true,
+    deletedRevisionId: removedDraftId,
+    article: serializeArticleSummary({
+      ...(bundle.article.toObject?.() || bundle.article),
+      latestDraftRevisionId: fallbackDraft?._id || null
+    }),
+    permissions: serializePermissions(bundle.permissions, userId)
+  };
 };
 
 const attemptConditionalRevisionUpdate = async ({ revision, articleId, expectedStatuses = [], setPatch = {} }) => {
@@ -1066,7 +1150,10 @@ const reviewRevision = async ({ nodeId, senseId, revisionId, userId, action, com
   const reviewerRole = resolveReviewerRoleForUser({ bundle, revision, userId });
   const reviewParticipants = ensureReviewParticipantsSnapshot({ revision, node: bundle.node });
   const isExplicitParticipant = reviewParticipants.some((item) => item.userId === getIdString(userId));
-  const canReview = !!reviewerRole && (bundle.permissions.isSystemAdmin || isExplicitParticipant);
+  const hasCurrentReviewPermission = !!bundle.permissions.isSystemAdmin
+    || !!bundle.permissions.canReviewDomainAdmin
+    || !!bundle.permissions.canReviewDomainMaster;
+  const canReview = !!reviewerRole && (bundle.permissions.isSystemAdmin || (isExplicitParticipant && hasCurrentReviewPermission));
   ensurePermission(canReview, '当前用户不能参与该修订的审阅');
   if (requiredRole === 'domain_master') {
     ensurePermission(reviewerRole === 'domain_master' || reviewerRole === 'system_admin', '当前用户不能执行域主终审');
@@ -1611,6 +1698,7 @@ module.exports = {
   createAnnotation,
   createDraftRevision,
   deleteAnnotation,
+  deleteDraftRevision,
   getArticleBundle,
   getArticleOverview,
   getCurrentArticle,

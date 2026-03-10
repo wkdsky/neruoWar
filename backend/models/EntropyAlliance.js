@@ -1,6 +1,27 @@
 const mongoose = require('mongoose');
 
 const VISUAL_PATTERN_TYPES = ['none', 'dots', 'grid', 'diagonal', 'rings', 'noise'];
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+const normalizeHexColor = (value, fallback) => {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim();
+  return HEX_COLOR_RE.test(normalized) ? normalized.toLowerCase() : fallback;
+};
+
+const buildDefaultSenseArticleStyle = (visualStyle = {}, allianceFlag = '#7c3aed') => ({
+  name: '百科主视觉',
+  pageBackgroundStart: normalizeHexColor(visualStyle.secondaryColor, '#0f172a'),
+  pageBackgroundEnd: normalizeHexColor(visualStyle.primaryColor, normalizeHexColor(allianceFlag, '#38bdf8')),
+  panelBackground: normalizeHexColor(visualStyle.secondaryColor, '#1e293b'),
+  panelBorder: normalizeHexColor(visualStyle.rimColor, '#dbeafe'),
+  contentBackground: '#f8fafc',
+  accentColor: normalizeHexColor(visualStyle.glowColor, '#38bdf8'),
+  titleColor: normalizeHexColor(visualStyle.textColor, '#eef8ff'),
+  bodyTextColor: '#0f172a',
+  mutedTextColor: normalizeHexColor(visualStyle.rimColor, '#cbd5e1'),
+  codeBackground: '#020617'
+});
 
 const AllianceVisualStyleSchema = new mongoose.Schema({
   name: {
@@ -37,6 +58,64 @@ const AllianceVisualStyleSchema = new mongoose.Schema({
     type: String,
     enum: VISUAL_PATTERN_TYPES,
     default: 'diagonal'
+  }
+}, { timestamps: true });
+
+const AllianceSenseArticleStyleSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  pageBackgroundStart: {
+    type: String,
+    required: true,
+    default: '#0f172a'
+  },
+  pageBackgroundEnd: {
+    type: String,
+    required: true,
+    default: '#38bdf8'
+  },
+  panelBackground: {
+    type: String,
+    required: true,
+    default: '#1e293b'
+  },
+  panelBorder: {
+    type: String,
+    required: true,
+    default: '#dbeafe'
+  },
+  contentBackground: {
+    type: String,
+    required: true,
+    default: '#f8fafc'
+  },
+  accentColor: {
+    type: String,
+    required: true,
+    default: '#38bdf8'
+  },
+  titleColor: {
+    type: String,
+    required: true,
+    default: '#eef8ff'
+  },
+  bodyTextColor: {
+    type: String,
+    required: true,
+    default: '#0f172a'
+  },
+  mutedTextColor: {
+    type: String,
+    required: true,
+    default: '#cbd5e1'
+  },
+  codeBackground: {
+    type: String,
+    required: true,
+    default: '#020617'
   }
 }, { timestamps: true });
 
@@ -101,6 +180,14 @@ const EntropyAllianceSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     default: null
   },
+  senseArticleStyles: {
+    type: [AllianceSenseArticleStyleSchema],
+    default: []
+  },
+  activeSenseArticleStyleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null
+  },
   founder: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -141,6 +228,22 @@ EntropyAllianceSchema.pre('validate', function ensureVisualStyle(next) {
   ));
   if (!hasActive) {
     this.activeVisualStyleId = this.visualStyles[0]?._id || null;
+  }
+
+  if (!Array.isArray(this.senseArticleStyles)) {
+    this.senseArticleStyles = [];
+  }
+
+  if (this.senseArticleStyles.length === 0) {
+    this.senseArticleStyles.push(buildDefaultSenseArticleStyle(this.visualStyles[0] || {}, this.flag || '#7c3aed'));
+  }
+
+  const activeSenseId = this.activeSenseArticleStyleId ? this.activeSenseArticleStyleId.toString() : '';
+  const hasActiveSenseStyle = this.senseArticleStyles.some((styleItem) => (
+    styleItem?._id && styleItem._id.toString() === activeSenseId
+  ));
+  if (!hasActiveSenseStyle) {
+    this.activeSenseArticleStyleId = this.senseArticleStyles[0]?._id || null;
   }
 
   next();

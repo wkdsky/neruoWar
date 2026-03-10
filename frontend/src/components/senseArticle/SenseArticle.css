@@ -31,6 +31,13 @@
   --sense-theme-invalid-text: #b91c1c;
   --sense-theme-code-bg: rgba(2, 6, 23, 0.96);
   --sense-theme-selection-bg: linear-gradient(180deg, rgba(15, 23, 42, 0.92) 0%, rgba(8, 15, 28, 0.97) 100%);
+  --sense-editor-preview-width: 36%;
+  --sense-editor-preview-min-width: 30%;
+  --sense-editor-handle-width: 16px;
+  --sense-editor-divider-width: 20px;
+  --sense-editor-preview-collapsed-width: 88px;
+  --sense-editor-sticky-top: 16px;
+  --sense-editor-pane-transition: 180ms ease;
   min-height: 100vh;
   background: var(--sense-theme-page-bg);
   color: var(--sense-theme-text);
@@ -157,6 +164,18 @@
   grid-template-columns: minmax(0, 1fr) 360px;
 }
 
+.sense-editor-layout.resizable {
+  grid-template-columns: minmax(0, 1fr) var(--sense-editor-divider-width) minmax(0, var(--sense-editor-preview-width));
+  align-items: stretch;
+  gap: 10px;
+  position: relative;
+}
+
+.sense-editor-layout.resizable.preview-collapsed {
+  grid-template-columns: minmax(0, 1fr) var(--sense-editor-divider-width) var(--sense-editor-preview-collapsed-width);
+  gap: 8px;
+}
+
 .sense-article-sidebar,
 .sense-article-main {
   min-width: 0;
@@ -248,7 +267,6 @@
 }
 
 .sense-editor-textarea,
-.sense-editor-title-input,
 .sense-proposer-note textarea,
 .sense-review-comment,
 .sense-selection-toolbar textarea {
@@ -269,6 +287,20 @@
   flex-direction: column;
   gap: 8px;
   margin-top: 14px;
+}
+
+.sense-proposer-note.compact {
+  margin-top: 0;
+  margin-bottom: 14px;
+}
+
+.sense-editor-title-input {
+  min-height: 44px;
+  height: 44px;
+  background: rgba(2, 6, 23, 0.42);
+  border: 1px solid var(--sense-theme-border-soft);
+  border-radius: 12px;
+  padding: 0 12px;
 }
 
 .sense-review-stage-card {
@@ -503,6 +535,18 @@
   }
   .sense-article-main {
     padding: 22px;
+  }
+
+  .sense-editor-layout.resizable {
+    grid-template-columns: 1fr;
+  }
+
+  .sense-editor-toolbar.productized {
+    top: 8px;
+  }
+
+  .sense-editor-insert-menu {
+    max-width: min(240px, calc(100vw - 64px));
   }
 }
 
@@ -767,6 +811,58 @@
   flex-wrap: wrap;
   padding: 12px 16px;
   margin-bottom: 16px;
+  position: sticky;
+  top: 12px;
+  z-index: 6;
+  overflow: visible;
+  border: 1px solid var(--sense-theme-border-soft);
+  background: linear-gradient(180deg, rgba(17, 26, 47, 0.94) 0%, rgba(8, 15, 28, 0.98) 100%);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.22);
+}
+
+.sense-editor-insert-group {
+  position: relative;
+  display: inline-flex;
+}
+
+.sense-editor-insert-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 156px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--sense-theme-border);
+  background: linear-gradient(180deg, rgba(17, 26, 47, 0.98) 0%, rgba(8, 15, 28, 0.995) 100%);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.34);
+  z-index: 12;
+}
+
+.sense-editor-insert-menu-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--sense-theme-text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.sense-editor-insert-menu-option:hover,
+.sense-editor-insert-menu-option:focus-visible {
+  outline: none;
+  color: var(--sense-theme-glow);
+  background: rgba(56, 189, 248, 0.12);
+  border-color: var(--sense-theme-border-strong);
 }
 
 .sense-editor-helper-grid {
@@ -774,6 +870,263 @@
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
   margin-bottom: 16px;
+}
+
+.sense-editor-pane.editor-primary,
+.sense-editor-pane.preview {
+  min-width: 0;
+}
+
+.sense-editor-divider {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  min-height: 100%;
+  isolation: isolate;
+}
+
+.sense-editor-divider::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  bottom: 18px;
+  width: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.12) 0%, rgba(219, 234, 254, 0.45) 12%, rgba(56, 189, 248, 0.42) 50%, rgba(219, 234, 254, 0.45) 88%, rgba(219, 234, 254, 0.12) 100%);
+  box-shadow: 0 0 16px rgba(103, 232, 249, 0.16);
+}
+
+.sense-editor-resize-handle,
+.sense-editor-preview-toggle {
+  color: var(--sense-theme-text);
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.sense-editor-resize-handle {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  padding: 72px 0 20px;
+}
+
+.sense-editor-resize-handle::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  right: -6px;
+  top: 0;
+  bottom: 0;
+}
+
+.sense-editor-resize-handle-lines {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--sense-editor-handle-width);
+  height: clamp(88px, 18vh, 164px);
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(219, 234, 254, 0.28) 0%, rgba(56, 189, 248, 0.24) 100%),
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.18) 0,
+      rgba(255, 255, 255, 0.18) 6px,
+      transparent 6px,
+      transparent 12px
+    );
+  box-shadow: inset 0 0 0 1px rgba(219, 234, 254, 0.16), 0 10px 24px rgba(15, 23, 42, 0.24);
+  opacity: 0.9;
+}
+
+.sense-editor-resize-handle svg {
+  position: relative;
+  z-index: 1;
+  color: var(--sense-theme-muted);
+  filter: drop-shadow(0 4px 12px rgba(15, 23, 42, 0.42));
+}
+
+.sense-editor-divider.dragging .sense-editor-resize-handle,
+.sense-editor-resize-handle:hover,
+.sense-editor-preview-toggle:hover {
+  color: var(--sense-theme-glow);
+}
+
+.sense-editor-divider.dragging .sense-editor-resize-handle-lines,
+.sense-editor-resize-handle:hover .sense-editor-resize-handle-lines {
+  background:
+    linear-gradient(180deg, rgba(219, 234, 254, 0.38) 0%, rgba(56, 189, 248, 0.34) 100%),
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.28) 0,
+      rgba(255, 255, 255, 0.28) 6px,
+      transparent 6px,
+      transparent 12px
+    );
+  box-shadow: inset 0 0 0 1px var(--sense-theme-border-strong), 0 14px 32px rgba(56, 189, 248, 0.18);
+}
+
+.sense-editor-divider.dragging .sense-editor-resize-handle svg,
+.sense-editor-resize-handle:hover svg {
+  color: var(--sense-theme-text);
+}
+
+.sense-editor-resize-handle:focus-visible,
+.sense-editor-preview-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px var(--sense-theme-focus-ring), 0 12px 32px var(--sense-theme-shadow-strong);
+}
+
+.sense-editor-resize-handle:disabled {
+  display: none;
+}
+
+.sense-editor-pane.preview {
+  overflow: visible;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  transition: opacity var(--sense-editor-pane-transition), transform var(--sense-editor-pane-transition), border-color var(--sense-editor-pane-transition), box-shadow var(--sense-editor-pane-transition), background-color var(--sense-editor-pane-transition);
+  will-change: opacity, transform;
+}
+
+.sense-editor-preview-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--sense-theme-border-soft);
+  background: linear-gradient(180deg, rgba(17, 26, 47, 0.92) 0%, rgba(8, 15, 28, 0.98) 100%);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.24);
+}
+
+.sense-editor-preview-topbar.sticky {
+  position: sticky;
+  top: var(--sense-editor-sticky-top);
+  z-index: 3;
+}
+
+.sense-editor-preview-topbar-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+
+.sense-editor-preview-topbar .sense-editor-pane-title {
+  margin-bottom: 0;
+}
+
+.sense-editor-preview-status {
+  color: var(--sense-theme-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sense-editor-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sense-editor-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  min-width: 74px;
+  padding: 6px 10px;
+  border: 1px solid var(--sense-theme-border);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(17, 26, 47, 0.96) 0%, rgba(8, 15, 28, 0.98) 100%);
+  box-shadow: 0 12px 30px var(--sense-theme-shadow);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.sense-editor-preview-toggle:hover {
+  border-color: var(--sense-theme-border-strong);
+  background: linear-gradient(180deg, rgba(20, 36, 62, 0.98) 0%, rgba(8, 15, 28, 1) 100%);
+  box-shadow: 0 16px 34px var(--sense-theme-shadow-strong);
+  transform: translateY(-1px);
+}
+
+.sense-editor-preview-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sense-editor-preview-body {
+  min-width: 0;
+  overflow: hidden;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.sense-editor-preview-body.hidden {
+  display: none;
+}
+
+.sense-editor-preview-renderer {
+  contain: layout paint;
+}
+
+.sense-editor-pane.preview.preview-phase-collapsing,
+.sense-editor-pane.preview.preview-phase-collapsed {
+  gap: 0;
+  padding: 10px;
+}
+
+.sense-editor-pane.preview.preview-phase-collapsing .sense-editor-preview-topbar,
+.sense-editor-pane.preview.preview-phase-collapsed .sense-editor-preview-topbar {
+  padding: 8px;
+}
+
+.sense-editor-pane.preview.preview-phase-collapsing .sense-editor-preview-topbar-meta,
+.sense-editor-pane.preview.preview-phase-collapsed .sense-editor-preview-topbar-meta,
+.sense-editor-pane.preview.preview-phase-collapsing .sense-editor-preview-refresh,
+.sense-editor-pane.preview.preview-phase-collapsed .sense-editor-preview-refresh {
+  display: none;
+}
+
+.sense-editor-pane.preview.preview-phase-collapsing .sense-editor-preview-actions,
+.sense-editor-pane.preview.preview-phase-collapsed .sense-editor-preview-actions {
+  width: 100%;
+  justify-content: center;
+}
+
+.sense-editor-pane.preview.preview-phase-collapsing .sense-editor-preview-toggle,
+.sense-editor-pane.preview.preview-phase-collapsed .sense-editor-preview-toggle {
+  width: 100%;
+  min-height: 40px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.sense-editor-pane.preview.preview-phase-expanding {
+  transform: translateX(-4px);
+}
+
+.sense-editor-pane.preview.preview-phase-collapsing {
+  opacity: 0.98;
 }
 
 .sense-search-box.inline {
@@ -795,6 +1148,76 @@
   .sense-editor-helper-grid {
     grid-template-columns: 1fr;
   }
+
+  .sense-editor-layout.resizable,
+  .sense-editor-layout.resizable.preview-collapsed,
+  .sense-editor-layout.resizable.preview-resizing {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .sense-editor-divider {
+    min-height: auto;
+    justify-content: flex-start;
+  }
+
+  .sense-editor-divider::before {
+    display: none;
+  }
+
+  .sense-editor-resize-handle {
+    display: none;
+  }
+
+  .sense-editor-pane.preview {
+    padding: 12px;
+  }
+
+  .sense-editor-preview-topbar.sticky {
+    position: static;
+  }
+
+  .sense-editor-preview-topbar {
+    flex-wrap: wrap;
+  }
+
+  .sense-editor-preview-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .sense-editor-preview-refresh,
+  .sense-editor-preview-toggle {
+    min-height: 40px;
+  }
+
+  .sense-editor-pane.preview.preview-phase-collapsing .sense-editor-preview-topbar-meta,
+  .sense-editor-pane.preview.preview-phase-collapsed .sense-editor-preview-topbar-meta {
+    display: flex;
+  }
+
+  .sense-editor-pane.preview.preview-phase-collapsing .sense-editor-preview-refresh,
+  .sense-editor-pane.preview.preview-phase-collapsed .sense-editor-preview-refresh {
+    display: inline-flex;
+  }
+
+  .sense-editor-pane.preview.preview-phase-collapsing .sense-editor-preview-actions,
+  .sense-editor-pane.preview.preview-phase-collapsed .sense-editor-preview-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .sense-editor-pane.preview.preview-phase-collapsing .sense-editor-preview-toggle,
+  .sense-editor-pane.preview.preview-phase-collapsed .sense-editor-preview-toggle {
+    width: auto;
+    min-height: 40px;
+  }
+}
+
+body.sense-editor-preview-resizing,
+body.sense-editor-preview-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .sense-status-badge {

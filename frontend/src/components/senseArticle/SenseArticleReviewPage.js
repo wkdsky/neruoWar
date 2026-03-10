@@ -109,7 +109,10 @@ const SenseArticleReviewPage = ({ nodeId, senseId, revisionId, articleContext, o
   const reviewSummary = detail?.reviewSummary || { total: 0, approvedCount: 0, rejectedCount: 0, pendingCount: 0 };
   const currentParticipant = reviewParticipants.find((item) => item?.isCurrentUser) || null;
   const isPendingReview = ['pending_review', 'pending_domain_admin_review', 'pending_domain_master_review'].includes(revision?.status);
-  const canAct = isPendingReview && (!!detail?.permissions?.canReviewSenseArticle || !!detail?.permissions?.canReviewDomainMaster || !!currentParticipant);
+  const hasCurrentReviewPermission = !!detail?.permissions?.isSystemAdmin
+    || !!detail?.permissions?.canReviewDomainAdmin
+    || !!detail?.permissions?.canReviewDomainMaster;
+  const canAct = isPendingReview && !!currentParticipant && hasCurrentReviewPermission;
   const canOpenDashboard = !!detail?.permissions?.canReviewDomainAdmin || !!detail?.permissions?.canReviewDomainMaster || !!detail?.permissions?.isSystemAdmin;
   const rangeText = revision?.selectedRangeAnchor?.selectionText || revision?.selectedRangeAnchor?.textQuote || revision?.targetHeadingId || '';
   const scopedState = useMemo(() => buildScopedRevisionState({

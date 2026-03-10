@@ -1,5 +1,6 @@
 // Sense article public DTO serializers. Keep field names stable across pages, notifications and compare/search panels.
 const { getIdString } = require('../utils/objectId');
+const { diagLog, safeJsonByteLength } = require('./senseArticleDiagnostics');
 
 const serializeArticleSummary = (article = {}) => ({
   _id: article?._id || null,
@@ -56,19 +57,38 @@ const serializeRevisionSummary = (revision = {}) => ({
   updatedAt: revision?.updatedAt || null
 });
 
-const serializeRevisionDetail = (revision = {}) => ({
-  ...serializeRevisionSummary(revision),
-  editorSource: revision?.editorSource || '',
-  ast: revision?.ast || null,
-  headingIndex: Array.isArray(revision?.headingIndex) ? revision.headingIndex : [],
-  referenceIndex: Array.isArray(revision?.referenceIndex) ? revision.referenceIndex : [],
-  formulaRefs: Array.isArray(revision?.formulaRefs) ? revision.formulaRefs : [],
-  symbolRefs: Array.isArray(revision?.symbolRefs) ? revision.symbolRefs : [],
-  plainTextSnapshot: revision?.plainTextSnapshot || '',
-  renderSnapshot: revision?.renderSnapshot || null,
-  diffFromBase: revision?.diffFromBase || null,
-  scopedChange: revision?.scopedChange || null
-});
+const serializeRevisionDetail = (revision = {}, meta = {}) => {
+  const detail = {
+    ...serializeRevisionSummary(revision),
+    editorSource: revision?.editorSource || '',
+    ast: revision?.ast || null,
+    headingIndex: Array.isArray(revision?.headingIndex) ? revision.headingIndex : [],
+    referenceIndex: Array.isArray(revision?.referenceIndex) ? revision.referenceIndex : [],
+    formulaRefs: Array.isArray(revision?.formulaRefs) ? revision.formulaRefs : [],
+    symbolRefs: Array.isArray(revision?.symbolRefs) ? revision.symbolRefs : [],
+    plainTextSnapshot: revision?.plainTextSnapshot || '',
+    renderSnapshot: revision?.renderSnapshot || null,
+    diffFromBase: revision?.diffFromBase || null,
+    scopedChange: revision?.scopedChange || null
+  };
+  const requestMeta = meta?.requestMeta || meta || {};
+  diagLog('sense.serializer.revision_detail', {
+    phase: meta?.phase,
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: getIdString(revision?.nodeId),
+    senseId: revision?.senseId || '',
+    revisionId: getIdString(revision?._id),
+    editorSourceLength: typeof revision?.editorSource === 'string' ? revision.editorSource.length : 0,
+    plainTextLength: typeof revision?.plainTextSnapshot === 'string' ? revision.plainTextSnapshot.length : 0,
+    headingCount: Array.isArray(revision?.headingIndex) ? revision.headingIndex.length : 0,
+    referenceCount: Array.isArray(revision?.referenceIndex) ? revision.referenceIndex.length : 0,
+    hasRenderSnapshot: !!revision?.renderSnapshot,
+    hasDiffFromBase: !!revision?.diffFromBase,
+    estimatedBytes: safeJsonByteLength(detail)
+  });
+  return detail;
+};
 
 const serializeRevisionMutationResult = (revision = {}) => ({
   ...serializeRevisionSummary(revision),

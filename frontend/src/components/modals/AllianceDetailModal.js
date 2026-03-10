@@ -2,10 +2,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Users, Zap, X } from 'lucide-react';
 import './AllianceDetailModal.css';
 import AllianceStylePreview from './AllianceStylePreview';
+import AllianceSenseArticleStylePreview from './AllianceSenseArticleStylePreview';
 import {
     ALLIANCE_PATTERN_OPTIONS,
+    DEFAULT_ALLIANCE_SENSE_ARTICLE_STYLE,
     DEFAULT_ALLIANCE_VISUAL_STYLE,
+    getActiveAllianceSenseArticleStyle,
     getActiveAllianceVisualStyle,
+    normalizeAllianceSenseArticleStyle,
     normalizeAllianceVisualStyle
 } from '../../utils/allianceVisualStyle';
 import { API_BASE } from '../../runtimeConfig';
@@ -103,9 +107,15 @@ const AllianceDetailModal = ({
     const [declarationDraft, setDeclarationDraft] = useState('');
     const [knowledgeContributionDraft, setKnowledgeContributionDraft] = useState('10');
     const [styleDraft, setStyleDraft] = useState(DEFAULT_ALLIANCE_VISUAL_STYLE);
+    const [senseArticleStyleDraft, setSenseArticleStyleDraft] = useState(DEFAULT_ALLIANCE_SENSE_ARTICLE_STYLE);
     const [isStyleCreatorOpen, setIsStyleCreatorOpen] = useState(false);
+    const [isSenseArticleStyleCreatorOpen, setIsSenseArticleStyleCreatorOpen] = useState(false);
     const activeVisualStyle = useMemo(
         () => getActiveAllianceVisualStyle(alliance),
+        [alliance]
+    );
+    const activeSenseArticleStyle = useMemo(
+        () => getActiveAllianceSenseArticleStyle(alliance),
         [alliance]
     );
 
@@ -125,6 +135,7 @@ const AllianceDetailModal = ({
             setIsOverviewAnnouncementsLoading(false);
             setIsAllAnnouncementsModalOpen(false);
             setIsStyleCreatorOpen(false);
+            setIsSenseArticleStyleCreatorOpen(false);
             setIsHandoverModalOpen(false);
             setHandoverMode('');
             setHandoverKeyword('');
@@ -158,7 +169,11 @@ const AllianceDetailModal = ({
             ...activeVisualStyle,
             name: `${alliance.name || '熵盟'}风格${(alliance.visualStyles || []).length + 1}`
         }, `风格${(alliance.visualStyles || []).length + 1}`));
-    }, [isOpen, alliance?._id, alliance?.announcement, alliance?.declaration, alliance?.name, alliance?.visualStyles, alliance?.knowledgeContributionPercent, activeVisualStyle]);
+        setSenseArticleStyleDraft(normalizeAllianceSenseArticleStyle({
+            ...activeSenseArticleStyle,
+            name: `${alliance.name || '熵盟'}百科风格${(alliance.senseArticleStyles || []).length + 1}`
+        }, `百科风格${(alliance.senseArticleStyles || []).length + 1}`, activeVisualStyle));
+    }, [isOpen, alliance?._id, alliance?.announcement, alliance?.declaration, alliance?.name, alliance?.visualStyles, alliance?.senseArticleStyles, alliance?.knowledgeContributionPercent, activeVisualStyle, activeSenseArticleStyle]);
 
     const fetchOverviewAnnouncements = useCallback(async () => {
         if (!isOpen || !alliance?._id) {
@@ -510,6 +525,23 @@ const AllianceDetailModal = ({
         return ok;
     };
 
+    const handleCreateSenseArticleStyle = async () => {
+        const normalizedStyle = normalizeAllianceSenseArticleStyle(
+            senseArticleStyleDraft,
+            `百科风格${(alliance?.senseArticleStyles || []).length + 1}` ,
+            activeVisualStyle
+        );
+        if (!normalizedStyle.name) {
+            window.alert('百科页面样式名称不能为空');
+            return false;
+        }
+        const ok = await handleSaveManageContent(
+            { createSenseArticleStyle: normalizedStyle },
+            '新建百科页面样式失败'
+        );
+        return ok;
+    };
+
     const handleActivateVisualStyle = async (styleId) => {
         if (!styleId) return;
         await handleSaveManageContent(
@@ -524,6 +556,23 @@ const AllianceDetailModal = ({
         await handleSaveManageContent(
             { deleteVisualStyleId: styleId },
             '删除视觉样式失败'
+        );
+    };
+
+    const handleActivateSenseArticleStyle = async (styleId) => {
+        if (!styleId) return;
+        await handleSaveManageContent(
+            { activateSenseArticleStyleId: styleId },
+            '启用百科页面样式失败'
+        );
+    };
+
+    const handleDeleteSenseArticleStyle = async (styleId, styleName) => {
+        if (!styleId) return;
+        if (!window.confirm(`确定删除百科页面样式「${styleName || '未命名'}」吗？`)) return;
+        await handleSaveManageContent(
+            { deleteSenseArticleStyleId: styleId },
+            '删除百科页面样式失败'
         );
     };
 
@@ -984,6 +1033,63 @@ const AllianceDetailModal = ({
             </div>
 
             <div className="alliance-section-detail">
+                <h3>释义百科页面样式</h3>
+                <div className="alliance-style-list">
+                    {(alliance.senseArticleStyles || []).map((styleItem) => {
+                        const styleId = (styleItem?._id || '').toString();
+                        const isActive = (alliance.activeSenseArticleStyleId || '').toString() === styleId;
+                        return (
+                            <div key={styleId || styleItem.name} className={`alliance-style-item ${isActive ? 'active' : ''}`}>
+                                <div className="alliance-style-item-header">
+                                    <strong>{styleItem.name || '未命名百科风格'}</strong>
+                                    {isActive && <span className="alliance-style-active-badge">启用中</span>}
+                                </div>
+                                <AllianceSenseArticleStylePreview styleConfig={styleItem} label="百科页" className="compact" />
+                                <div className="alliance-style-item-actions">
+                                    {!isActive && (
+                                        <button
+                                            type="button"
+                                            className="btn btn-small btn-success"
+                                            onClick={() => handleActivateSenseArticleStyle(styleId)}
+                                            disabled={manageActionKey === 'save:manage'}
+                                        >
+                                            启用
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        className="btn btn-small btn-danger"
+                                        onClick={() => handleDeleteSenseArticleStyle(styleId, styleItem.name)}
+                                        disabled={manageActionKey === 'save:manage' || (alliance.senseArticleStyles || []).length <= 1}
+                                    >
+                                        删除
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+                <p className="empty-message">该样式单独作用于释义百科阅读页、历史页、审阅页、编辑页与词条管理页。</p>
+                <div className="alliance-style-create-entry">
+                    <button
+                        type="button"
+                        className="btn btn-small btn-primary"
+                        onClick={() => {
+                            const nextIndex = (alliance?.senseArticleStyles || []).length + 1;
+                            setSenseArticleStyleDraft(normalizeAllianceSenseArticleStyle({
+                                ...activeSenseArticleStyle,
+                                name: `${alliance?.name || '熵盟'}百科风格${nextIndex}`
+                            }, `百科风格${nextIndex}`, activeVisualStyle));
+                            setIsSenseArticleStyleCreatorOpen(true);
+                        }}
+                        disabled={manageActionKey === 'save:manage'}
+                    >
+                        新建百科样式
+                    </button>
+                </div>
+            </div>
+
+            <div className="alliance-section-detail">
                 <h3>盟公告发布</h3>
                 <textarea
                     className="form-textarea"
@@ -1146,6 +1252,177 @@ const AllianceDetailModal = ({
                         </div>
                         <div className="alliance-style-creator-right">
                             <AllianceStylePreview styleConfig={styleDraft} label="示例" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+
+    const renderSenseArticleStyleCreatorModal = () => {
+        if (!isSenseArticleStyleCreatorOpen) return null;
+        return (
+            <div
+                className="alliance-style-creator-backdrop"
+                onClick={(event) => {
+                    event.stopPropagation();
+                    setIsSenseArticleStyleCreatorOpen(false);
+                }}
+            >
+                <div className="alliance-style-creator-modal" onClick={(event) => event.stopPropagation()}>
+                    <div className="alliance-style-creator-header">
+                        <h4>新建释义百科页面样式</h4>
+                        <button
+                            type="button"
+                            className="modal-close"
+                            onClick={() => setIsSenseArticleStyleCreatorOpen(false)}
+                        >
+                            <X size={18} />
+                        </button>
+                    </div>
+                    <div className="alliance-style-creator-content">
+                        <div className="alliance-style-creator-left">
+                            <div className="alliance-style-form-grid">
+                                <label className="mini-field">
+                                    <span>样式名称</span>
+                                    <input
+                                        type="text"
+                                        className="form-input"
+                                        value={senseArticleStyleDraft.name}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, name: event.target.value }))}
+                                        placeholder="输入百科页面样式名称"
+                                    />
+                                </label>
+                                <div className="mini-field">
+                                    <span>适用范围</span>
+                                    <input
+                                        type="text"
+                                        className="form-input"
+                                        value="阅读 / 历史 / 审阅 / 编辑 / 词条管理"
+                                        readOnly
+                                    />
+                                </div>
+                            </div>
+                            <div className="alliance-style-color-row">
+                                <label className="mini-color-field">
+                                    <span>页面顶色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.pageBackgroundStart}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, pageBackgroundStart: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="mini-color-field">
+                                    <span>页面尾色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.pageBackgroundEnd}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, pageBackgroundEnd: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="mini-color-field">
+                                    <span>面板底色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.panelBackground}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, panelBackground: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="mini-color-field">
+                                    <span>面板边框</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.panelBorder}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, panelBorder: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="mini-color-field">
+                                    <span>正文卡片</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.contentBackground}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, contentBackground: event.target.value }))}
+                                    />
+                                </label>
+                            </div>
+                            <div className="alliance-style-color-row">
+                                <label className="mini-color-field">
+                                    <span>强调色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.accentColor}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, accentColor: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="mini-color-field">
+                                    <span>标题色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.titleColor}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, titleColor: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="mini-color-field">
+                                    <span>正文字色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.bodyTextColor}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, bodyTextColor: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="mini-color-field">
+                                    <span>辅助字色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.mutedTextColor}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, mutedTextColor: event.target.value }))}
+                                    />
+                                </label>
+                                <label className="mini-color-field">
+                                    <span>代码块底色</span>
+                                    <input
+                                        type="color"
+                                        className="color-picker"
+                                        value={senseArticleStyleDraft.codeBackground}
+                                        onChange={(event) => setSenseArticleStyleDraft((prev) => ({ ...prev, codeBackground: event.target.value }))}
+                                    />
+                                </label>
+                            </div>
+                            <div className="alliance-manage-actions">
+                                <button
+                                    type="button"
+                                    className="btn btn-small btn-secondary"
+                                    onClick={() => setIsSenseArticleStyleCreatorOpen(false)}
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn btn-small btn-primary"
+                                    onClick={async () => {
+                                        const ok = await handleCreateSenseArticleStyle();
+                                        if (ok) {
+                                            setIsSenseArticleStyleCreatorOpen(false);
+                                        }
+                                    }}
+                                    disabled={manageActionKey === 'save:manage' || !senseArticleStyleDraft.name.trim()}
+                                >
+                                    创建百科样式
+                                </button>
+                            </div>
+                        </div>
+                        <div className="alliance-style-creator-right">
+                            <AllianceSenseArticleStylePreview styleConfig={senseArticleStyleDraft} label="预览" />
                         </div>
                     </div>
                 </div>
@@ -1407,6 +1684,7 @@ const AllianceDetailModal = ({
                 </div>
             )}
             {renderStyleCreatorModal()}
+            {renderSenseArticleStyleCreatorModal()}
         </div>
     );
 };

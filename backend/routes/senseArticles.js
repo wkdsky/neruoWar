@@ -5,6 +5,7 @@ const {
   createAnnotation,
   createDraftRevision,
   deleteAnnotation,
+  deleteDraftRevision,
   getArticleOverview,
   getCurrentArticle,
   getGovernanceDashboard,
@@ -24,6 +25,14 @@ const {
 } = require('../services/senseArticleService');
 
 const router = express.Router();
+
+const buildRequestMeta = (req) => ({
+  flowId: typeof req.headers['x-sense-flow-id'] === 'string' ? req.headers['x-sense-flow-id'].trim() : '',
+  requestId: typeof req.headers['x-sense-request-id'] === 'string' ? req.headers['x-sense-request-id'].trim() : '',
+  nodeId: req.params?.nodeId || '',
+  senseId: req.params?.senseId || '',
+  revisionId: req.params?.revisionId || ''
+});
 
 const sendError = (res, error, fallback = '服务器错误') => {
   if (error?.expose) {
@@ -75,7 +84,8 @@ router.get('/:nodeId/:senseId/current', authenticateToken, async (req, res) => {
     const data = await getCurrentArticle({
       nodeId: req.params.nodeId,
       senseId: req.params.senseId,
-      userId: req.user.userId
+      userId: req.user.userId,
+      requestMeta: buildRequestMeta(req)
     });
     res.json(data);
   } catch (error) {
@@ -106,7 +116,8 @@ router.get('/:nodeId/:senseId/revisions/compare', authenticateToken, async (req,
       senseId: req.params.senseId,
       fromRevisionId: req.query?.from || '',
       toRevisionId: req.query?.to || '',
-      userId: req.user.userId
+      userId: req.user.userId,
+      requestMeta: buildRequestMeta(req)
     });
     res.json(data);
   } catch (error) {
@@ -120,7 +131,8 @@ router.get('/:nodeId/:senseId/revisions/:revisionId', authenticateToken, async (
       nodeId: req.params.nodeId,
       senseId: req.params.senseId,
       revisionId: req.params.revisionId,
-      userId: req.user.userId
+      userId: req.user.userId,
+      requestMeta: buildRequestMeta(req)
     });
     res.json(data);
   } catch (error) {
@@ -134,7 +146,8 @@ router.post('/:nodeId/:senseId/revisions/draft', authenticateToken, async (req, 
       nodeId: req.params.nodeId,
       senseId: req.params.senseId,
       userId: req.user.userId,
-      payload: req.body || {}
+      payload: req.body || {},
+      requestMeta: buildRequestMeta(req)
     });
     res.status(201).json(data);
   } catch (error) {
@@ -149,11 +162,26 @@ router.put('/:nodeId/:senseId/revisions/:revisionId', authenticateToken, async (
       senseId: req.params.senseId,
       revisionId: req.params.revisionId,
       userId: req.user.userId,
-      payload: req.body || {}
+      payload: req.body || {},
+      requestMeta: buildRequestMeta(req)
     });
     res.json(data);
   } catch (error) {
     sendError(res, error, '更新草稿失败');
+  }
+});
+
+router.delete('/:nodeId/:senseId/revisions/:revisionId', authenticateToken, async (req, res) => {
+  try {
+    const data = await deleteDraftRevision({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      revisionId: req.params.revisionId,
+      userId: req.user.userId
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '放弃修订失败');
   }
 });
 
@@ -177,7 +205,8 @@ router.post('/:nodeId/:senseId/revisions/:revisionId/submit', authenticateToken,
       nodeId: req.params.nodeId,
       senseId: req.params.senseId,
       revisionId: req.params.revisionId,
-      userId: req.user.userId
+      userId: req.user.userId,
+      requestMeta: buildRequestMeta(req)
     });
     res.json(data);
   } catch (error) {
@@ -194,7 +223,8 @@ router.post('/:nodeId/:senseId/revisions/from-selection', authenticateToken, asy
       payload: {
         ...(req.body || {}),
         sourceMode: 'selection'
-      }
+      },
+      requestMeta: buildRequestMeta(req)
     });
     res.status(201).json(data);
   } catch (error) {
@@ -211,7 +241,8 @@ router.post('/:nodeId/:senseId/revisions/from-heading', authenticateToken, async
       payload: {
         ...(req.body || {}),
         sourceMode: 'section'
-      }
+      },
+      requestMeta: buildRequestMeta(req)
     });
     res.status(201).json(data);
   } catch (error) {

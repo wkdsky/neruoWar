@@ -1,0 +1,116 @@
+.alliance-sense-preview {
+  display: flex;
+  width: 100%;
+  min-height: 240px;
+  padding: 0.6rem;
+  border-radius: 12px;
+  background: var(--sense-theme-page-bg);
+  color: var(--sense-theme-text);
+}
+
+.alliance-sense-preview-shell {
+  width: 100%;
+  border: 1px solid var(--sense-theme-border);
+  border-radius: 12px;
+  background: var(--sense-theme-surface);
+  box-shadow: 0 18px 36px var(--sense-theme-shadow);
+  overflow: hidden;
+}
+
+.alliance-sense-preview-header {
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--sense-theme-border-soft);
+  background: var(--sense-theme-surface-strong);
+}
+
+.alliance-sense-preview-kicker {
+  color: var(--sense-theme-kicker);
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.35rem;
+}
+
+.alliance-sense-preview-title {
+  color: var(--sense-theme-title);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.alliance-sense-preview-meta {
+  margin-top: 0.45rem;
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  font-size: 0.74rem;
+  color: var(--sense-theme-muted);
+}
+
+.alliance-sense-preview-layout {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 0.9rem;
+  padding: 0.9rem;
+}
+
+.alliance-sense-preview-side {
+  border: 1px solid var(--sense-theme-border-soft);
+  background: var(--sense-theme-interactive-bg);
+  border-radius: 10px;
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.alliance-sense-preview-card-title {
+  color: var(--sense-theme-title);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.alliance-sense-preview-main {
+  border: 1px solid var(--sense-theme-main-border);
+  background: var(--sense-theme-main-bg);
+  color: var(--sense-theme-main-text);
+  border-radius: 12px;
+  padding: 0.95rem 1rem;
+  box-shadow: 0 16px 30px var(--sense-theme-soft-rim);
+}
+
+.alliance-sense-preview-main h4 {
+  margin: 0 0 0.6rem 0;
+  color: var(--sense-theme-main-text);
+}
+
+.alliance-sense-preview-main p {
+  margin: 0 0 0.55rem 0;
+  line-height: 1.55;
+}
+
+.alliance-sense-preview-inline {
+  display: inline-flex;
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  background: var(--sense-theme-inline-bg);
+  color: var(--sense-theme-inline-text);
+}
+
+.alliance-sense-preview-code {
+  margin: 0.55rem 0 0;
+  padding: 0.65rem 0.8rem;
+  border-radius: 10px;
+  background: var(--sense-theme-code-bg);
+  color: #dbeafe;
+  font-size: 0.72rem;
+  overflow: auto;
+}
+
+.alliance-style-item .alliance-sense-preview.compact {
+  min-height: 150px;
+}
+
+@media (max-width: 720px) {
+  .alliance-sense-preview-layout {
+    grid-template-columns: 1fr;
+  }
+}

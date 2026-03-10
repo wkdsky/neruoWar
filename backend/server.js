@@ -81,7 +81,8 @@ app.use(cors({
   origin: createCorsOriginValidator(corsOrigins),
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 app.use('/api', authRoutes);
 app.use('/api/admin', adminRoutes);
@@ -91,6 +92,28 @@ app.use('/api/army', armyRoutes);
 app.use('/api/senses', senseRoutes);
 app.use('/api/sense-articles', senseArticleRoutes);
 app.use('/api/users', usersRoutes);
+
+// 错误处理中间件 - 必须放在所有路由之后
+app.use((err, req, res, next) => {
+  // 处理 413 Payload Too Large 错误
+  if (err.status === 413 || err.type === 'entity.too.large') {
+    console.error('Payload too large error:', {
+      path: req.path,
+      method: req.method,
+      contentLength: req.get('content-length'),
+      errorType: err.type
+    });
+    return res.status(413).json({
+      code: 'PAYLOAD_TOO_LARGE',
+      message: 'Request body too large',
+      limit: '10mb'
+    });
+  }
+
+  // 其他错误继续传递
+  next(err);
+});
+
 // 连接数据库
 connectDB();
 
