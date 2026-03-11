@@ -1,6 +1,7 @@
 import React, { useMemo, useRef } from 'react';
 import { AST_NODE_TYPES } from '../../utils/senseArticleSyntax';
 import { getRelocationStatusLabel } from './senseArticleUi';
+import SenseArticleRichRenderer from './SenseArticleRichRenderer';
 import './SenseArticle.css';
 
 const EMPTY_MAP = new Map();
@@ -254,7 +255,7 @@ const SenseArticleRendererComponent = ({
   );
 };
 
-const SenseArticleRenderer = React.memo(SenseArticleRendererComponent, (prev, next) => (
+const LegacySenseArticleRenderer = React.memo(SenseArticleRendererComponent, (prev, next) => (
   prev.revision === next.revision
   && prev.searchQuery === next.searchQuery
   && prev.annotations === next.annotations
@@ -264,5 +265,12 @@ const SenseArticleRenderer = React.memo(SenseArticleRendererComponent, (prev, ne
   && prev.activeBlockId === next.activeBlockId
   && prev.activeHeadingId === next.activeHeadingId
 ));
+
+const SenseArticleRenderer = (props) => {
+  if (props?.revision?.contentFormat === 'rich_html') {
+    return <SenseArticleRichRenderer {...props} />;
+  }
+  return <LegacySenseArticleRenderer {...props} />;
+};
 
 export default SenseArticleRenderer;

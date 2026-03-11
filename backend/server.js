@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -83,6 +84,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use('/uploads/sense-article-media', express.static(path.join(__dirname, 'uploads', 'sense-article-media')));
 
 app.use('/api', authRoutes);
 app.use('/api/admin', adminRoutes);

@@ -5680,16 +5680,19 @@ const App = () => {
             if (mode === 'selection') {
                 data = await senseArticleApi.createFromSelection(targetNodeId, targetSenseId, {
                     selectedRangeAnchor: anchor,
-                    proposerNote: '从阅读页选段发起修订'
+                    proposerNote: '从阅读页选段发起修订',
+                    contentFormat: 'rich_html'
                 });
             } else if (mode === 'heading') {
                 data = await senseArticleApi.createFromHeading(targetNodeId, targetSenseId, {
                     targetHeadingId: headingId,
-                    proposerNote: headingId ? ('从小节 ' + headingId + ' 发起修订') : '从小节发起修订'
+                    proposerNote: headingId ? ('从小节 ' + headingId + ' 发起修订') : '从小节发起修订',
+                    contentFormat: 'rich_html'
                 });
             } else {
                 data = await senseArticleApi.createDraft(targetNodeId, targetSenseId, {
-                    proposerNote: '整页百科修订草稿'
+                    proposerNote: '整页百科修订草稿',
+                    contentFormat: 'rich_html'
                 });
             }
             navigateSenseArticleSubView('senseArticleEditor', {

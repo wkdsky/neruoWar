@@ -36,6 +36,11 @@ const SenseArticleSchema = new mongoose.Schema({
     default: '',
     trim: true
   },
+  contentFormat: {
+    type: String,
+    enum: ['legacy_markup', 'rich_html'],
+    default: 'legacy_markup'
+  },
   tocVersion: {
     type: Number,
     default: ARTICLE_TOC_VERSION

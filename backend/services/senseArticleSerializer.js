@@ -10,6 +10,7 @@ const serializeArticleSummary = (article = {}) => ({
   currentRevisionId: article?.currentRevisionId || null,
   latestDraftRevisionId: article?.latestDraftRevisionId || null,
   summary: article?.summary || '',
+  contentFormat: article?.contentFormat || 'legacy_markup',
   tocVersion: article?.tocVersion || 0,
   renderVersion: article?.renderVersion || 0,
   searchVersion: article?.searchVersion || 0,
@@ -29,6 +30,7 @@ const serializeRevisionSummary = (revision = {}) => ({
   baseRevisionId: revision?.baseRevisionId || null,
   parentRevisionId: revision?.parentRevisionId || null,
   sourceMode: revision?.sourceMode || 'full',
+  contentFormat: revision?.contentFormat || 'legacy_markup',
   targetHeadingId: revision?.targetHeadingId || '',
   proposerId: revision?.proposerId || null,
   proposerUsername: revision?.proposerUsername || '',
@@ -53,6 +55,7 @@ const serializeRevisionSummary = (revision = {}) => ({
   publishedAt: revision?.publishedAt || null,
   supersededByRevisionId: revision?.supersededByRevisionId || null,
   selectedRangeAnchor: revision?.selectedRangeAnchor || null,
+  revisionVersion: Number(revision?.__v || 0),
   createdAt: revision?.createdAt || null,
   updatedAt: revision?.updatedAt || null
 });
@@ -69,6 +72,8 @@ const serializeRevisionDetail = (revision = {}, meta = {}) => {
     plainTextSnapshot: revision?.plainTextSnapshot || '',
     renderSnapshot: revision?.renderSnapshot || null,
     diffFromBase: revision?.diffFromBase || null,
+    mediaReferences: Array.isArray(revision?.mediaReferences) ? revision.mediaReferences : [],
+    validationSnapshot: revision?.validationSnapshot || null,
     scopedChange: revision?.scopedChange || null
   };
   const requestMeta = meta?.requestMeta || meta || {};
@@ -95,7 +100,9 @@ const serializeRevisionMutationResult = (revision = {}) => ({
   parseErrors: Array.isArray(revision?.parseErrors) ? revision.parseErrors : [],
   headingCount: Array.isArray(revision?.headingIndex) ? revision.headingIndex.length : 0,
   referenceCount: Array.isArray(revision?.referenceIndex) ? revision.referenceIndex.length : 0,
+  mediaReferenceCount: Array.isArray(revision?.mediaReferences) ? revision.mediaReferences.length : 0,
   plainTextLength: typeof revision?.plainTextSnapshot === 'string' ? revision.plainTextSnapshot.length : 0,
+  validationSnapshot: revision?.validationSnapshot || null,
   saved: true
 });
 

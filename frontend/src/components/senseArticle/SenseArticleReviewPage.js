@@ -107,6 +107,8 @@ const SenseArticleReviewPage = ({ nodeId, senseId, revisionId, articleContext, o
   const baseRevision = detail?.baseRevision || {};
   const reviewParticipants = Array.isArray(detail?.reviewParticipants) ? detail.reviewParticipants : [];
   const reviewSummary = detail?.reviewSummary || { total: 0, approvedCount: 0, rejectedCount: 0, pendingCount: 0 };
+  const domainAdminSummary = reviewSummary?.byRole?.domain_admin || { total: 0, approvedCount: 0, pendingCount: 0 };
+  const domainMasterSummary = reviewSummary?.byRole?.domain_master || { total: 0, approvedCount: 0, pendingCount: 0 };
   const currentParticipant = reviewParticipants.find((item) => item?.isCurrentUser) || null;
   const isPendingReview = ['pending_review', 'pending_domain_admin_review', 'pending_domain_master_review'].includes(revision?.status);
   const hasCurrentReviewPermission = !!detail?.permissions?.isSystemAdmin
@@ -131,6 +133,7 @@ const SenseArticleReviewPage = ({ nodeId, senseId, revisionId, articleContext, o
     if (canAct) return '你可以参与这次共同审阅。';
     return '你当前只能查看这次共审结果。';
   }, [canAct, revision?.status]);
+  const validationSnapshot = revision?.validationSnapshot || null;
 
   const { compare: compareData, loading: compareLoading, error: compareError } = useSenseArticleCompare({
     nodeId,
@@ -184,7 +187,8 @@ const SenseArticleReviewPage = ({ nodeId, senseId, revisionId, articleContext, o
           `当前状态：${getRevisionStatusLabel(revision.status)}`,
           `基线版本：${baseRevision?._id ? '当前发布版' : '无'}`,
           `修订范围：${getSourceModeLabel(revision.sourceMode)}`,
-          `投票进度：${reviewSummary.approvedCount || 0}/${reviewSummary.total || 0} 通过`
+          `域相进度：${domainAdminSummary.approvedCount || 0}/${domainAdminSummary.total || 0}`,
+          `域主进度：${domainMasterSummary.approvedCount || 0}/${domainMasterSummary.total || 0}`
         ]}
         onBack={onBack}
         actions={(
@@ -235,6 +239,25 @@ const SenseArticleReviewPage = ({ nodeId, senseId, revisionId, articleContext, o
           ) : null}
           <div className="sense-editor-pane-title">审阅信息</div>
           <div className="sense-review-note">{reviewStageLabel}</div>
+          {validationSnapshot?.hasBlockingIssues || validationSnapshot?.hasWarnings ? (
+            <>
+              <div className="sense-editor-pane-title">发布前检查摘要</div>
+              <div className={`sense-editor-warning ${validationSnapshot.hasBlockingIssues ? 'danger' : 'subtle'}`}>
+                <div className="sense-editor-warning-copy">
+                  <strong>
+                    {validationSnapshot.hasBlockingIssues
+                      ? `存在 ${validationSnapshot.blocking?.length || 0} 个阻塞问题`
+                      : `存在 ${validationSnapshot.warnings?.length || 0} 个提醒`}
+                  </strong>
+                  <span>
+                    {validationSnapshot.hasBlockingIssues
+                      ? '这些问题会阻止该修订继续进入发布流程。'
+                      : '当前没有 blocking error，但仍建议在发布前处理 warning。'}
+                  </span>
+                </div>
+              </div>
+            </>
+          ) : null}
           <div className="sense-editor-pane-title">修订说明</div>
           <div className="sense-review-note">{revision.proposerNote || '无提交说明'}</div>
           {revision?.proposedSenseTitle && revision.proposedSenseTitle !== detail?.nodeSense?.title ? (
@@ -245,6 +268,12 @@ const SenseArticleReviewPage = ({ nodeId, senseId, revisionId, articleContext, o
           ) : null}
           <div className="sense-editor-pane-title">范围来源</div>
           <div className="sense-review-note">{rangeText || '整页修订'}</div>
+          {revision?.sourceMode !== 'full' ? (
+            <>
+              <div className="sense-editor-pane-title">局部修订提示</div>
+              <div className="sense-review-note">该修订由局部范围发起。compare 面板已优先展示对应小节和块级变化，编辑页会自动定位并高亮相关块。</div>
+            </>
+          ) : null}
           <div className="sense-editor-pane-title">审核意见</div>
           <textarea value={comment} onChange={(event) => setComment(event.target.value)} className="sense-review-comment" placeholder="填写审核意见（可选）" disabled={!canAct || !!acting} />
           {canAct ? (

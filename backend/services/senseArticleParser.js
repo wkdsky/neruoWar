@@ -228,6 +228,7 @@ const getInlineText = (value = '', inlineContext = {}) => {
 
 const buildBlockPlainText = (block = {}) => {
   if (!block) return '';
+  if (typeof block.plainText === 'string' && block.plainText.trim()) return block.plainText;
   if (block.type === AST_NODE_TYPES.HEADING || block.type === AST_NODE_TYPES.PARAGRAPH) {
     return extractPlainText(block.children || []);
   }
@@ -239,6 +240,9 @@ const buildBlockPlainText = (block = {}) => {
   }
   if (block.type === AST_NODE_TYPES.FORMULA_BLOCK || block.type === AST_NODE_TYPES.CODE_BLOCK) {
     return block.value || '';
+  }
+  if (Array.isArray(block.rows)) {
+    return block.rows.map((row) => (Array.isArray(row.cells) ? row.cells.join(' ') : '')).filter(Boolean).join('\n');
   }
   return '';
 };

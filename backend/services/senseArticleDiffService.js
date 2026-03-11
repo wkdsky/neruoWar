@@ -1,4 +1,5 @@
 const { getIdString } = require('../utils/objectId');
+const { buildBlockDiff } = require('./senseArticleRichCompareService');
 
 const normalizeLines = (text = '') => String(text || '').split(/\r?\n/);
 
@@ -211,6 +212,7 @@ const buildSectionChange = ({ fromSection = null, toSection = null }) => {
   const lineDiff = buildLineDiff(fromSection?.source || '', toSection?.source || '');
   const referenceChanges = diffReferences({ fromReferences: fromSection?.references || [], toReferences: toSection?.references || [] });
   const formulaChanges = diffFormulas({ fromFormulas: fromSection?.formulas || [], toFormulas: toSection?.formulas || [] });
+  const blockDiff = buildBlockDiff({ fromSection, toSection });
   const changeTypes = [];
 
   if (!fromSection && toSection) {
@@ -219,9 +221,16 @@ const buildSectionChange = ({ fromSection = null, toSection = null }) => {
     changeTypes.push('heading_removed', 'section_removed');
   } else {
     if ((fromSection?.headingTitle || '') !== (toSection?.headingTitle || '')) changeTypes.push('heading_renamed');
-    if (lineDiff.stats.changed > 0) changeTypes.push('section_modified');
+    if (lineDiff.stats.changed > 0 || blockDiff.summary.modified > 0 || blockDiff.summary.added > 0 || blockDiff.summary.removed > 0) {
+      changeTypes.push('section_modified');
+    }
     if (referenceChanges.totalChanged > 0) changeTypes.push('references_changed');
     if (formulaChanges.changed) changeTypes.push('formulas_changed');
+    if (blockDiff.summary.tableChanged > 0) changeTypes.push('tables_changed');
+    if (blockDiff.summary.mediaChanged > 0) changeTypes.push('media_changed');
+    const fromLevel = Number(fromSection?.level || 0);
+    const toLevel = Number(toSection?.level || 0);
+    if (fromLevel && toLevel && fromLevel !== toLevel) changeTypes.push('heading_level_changed');
   }
 
   return {
@@ -248,11 +257,14 @@ const buildSectionChange = ({ fromSection = null, toSection = null }) => {
     hasChanges: changeTypes.length > 0,
     changeTypes,
     lineDiff,
+    blockDiff,
     referenceChanges,
     formulaChanges,
     preview: {
       fromSnippet: String(fromSection?.plainText || '').slice(0, 160),
-      toSnippet: String(toSection?.plainText || '').slice(0, 160)
+      toSnippet: String(toSection?.plainText || '').slice(0, 160),
+      fromBlocks: blockDiff.changes.filter((item) => item.status !== 'added').slice(0, 6),
+      toBlocks: blockDiff.changes.filter((item) => item.status !== 'removed').slice(0, 6)
     }
   };
 };
@@ -315,10 +327,16 @@ const buildStructuredDiff = ({ fromRevision = null, toRevision = null }) => {
     if (section.changeTypes.includes('heading_added')) acc.headingAdded += 1;
     if (section.changeTypes.includes('heading_removed')) acc.headingRemoved += 1;
     if (section.changeTypes.includes('heading_renamed')) acc.headingRenamed += 1;
+    if (section.changeTypes.includes('heading_level_changed')) acc.headingLevelChanged += 1;
     acc.referenceAdded += section.referenceChanges.added.length;
     acc.referenceRemoved += section.referenceChanges.removed.length;
     acc.referenceModified += section.referenceChanges.modified.length;
     if (section.formulaChanges.changed) acc.formulaChangedSections += 1;
+    acc.blockAdded += section.blockDiff?.summary?.added || 0;
+    acc.blockRemoved += section.blockDiff?.summary?.removed || 0;
+    acc.blockModified += section.blockDiff?.summary?.modified || 0;
+    acc.tableChanged += section.blockDiff?.summary?.tableChanged || 0;
+    acc.mediaChanged += section.blockDiff?.summary?.mediaChanged || 0;
     return acc;
   }, {
     sectionAdded: 0,
@@ -327,10 +345,16 @@ const buildStructuredDiff = ({ fromRevision = null, toRevision = null }) => {
     headingAdded: 0,
     headingRemoved: 0,
     headingRenamed: 0,
+    headingLevelChanged: 0,
     referenceAdded: 0,
     referenceRemoved: 0,
     referenceModified: 0,
-    formulaChangedSections: 0
+    formulaChangedSections: 0,
+    blockAdded: 0,
+    blockRemoved: 0,
+    blockModified: 0,
+    tableChanged: 0,
+    mediaChanged: 0
   });
 
   const lineDiff = buildLineDiff(fromRevision?.editorSource || '', toRevision?.editorSource || '');

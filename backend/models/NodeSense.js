@@ -21,6 +21,11 @@ const NodeSenseSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  contentFormat: {
+    type: String,
+    enum: ['legacy_markup', 'rich_html'],
+    default: 'legacy_markup'
+  },
   legacySummary: {
     type: String,
     default: '',

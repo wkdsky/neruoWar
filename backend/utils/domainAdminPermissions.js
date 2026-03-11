@@ -53,11 +53,16 @@ const getNodeDomainAdminPermissionMap = (node = null, allowedAdminIds = null) =>
 
 const buildDomainAdminPermissionState = ({ node = null, userId = '', gateDefenseViewerAdminIds = [] } = {}) => {
   const normalizedUserId = getIdString(userId);
+  const allowedAdminIdSet = getAllowedAdminIdSet(node);
+  const isAllowedDomainAdmin = normalizedUserId && allowedAdminIdSet.has(normalizedUserId);
   const permissionMap = getNodeDomainAdminPermissionMap(node);
   const hasExplicitEntry = Object.prototype.hasOwnProperty.call(permissionMap, normalizedUserId);
-  const grantedPermissionKeySet = new Set(hasExplicitEntry
-    ? permissionMap[normalizedUserId]
-    : [DOMAIN_ADMIN_PERMISSION_KEYS.SENSE_ARTICLE_REVIEW]
+  const grantedPermissionKeySet = new Set(
+    !isAllowedDomainAdmin
+      ? []
+      : (hasExplicitEntry
+        ? permissionMap[normalizedUserId]
+        : [DOMAIN_ADMIN_PERMISSION_KEYS.SENSE_ARTICLE_REVIEW])
   );
   if ((Array.isArray(gateDefenseViewerAdminIds) ? gateDefenseViewerAdminIds : []).some((item) => getIdString(item) === normalizedUserId)) {
     grantedPermissionKeySet.add(DOMAIN_ADMIN_PERMISSION_KEYS.GATE_DEFENSE_VIEW);

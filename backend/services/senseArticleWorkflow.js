@@ -25,8 +25,8 @@ const resolveSubmitOperation = (revision = {}) => {
   }
   if (DRAFT_EDITABLE_STATUSES.includes(status)) {
     return apply({
-      status: 'pending_review',
-      reviewStage: 'review'
+      status: 'pending_domain_admin_review',
+      reviewStage: 'domain_admin'
     }, 'submitted_for_domain_admin_review');
   }
   if (status === 'published') return invalid('already_published');

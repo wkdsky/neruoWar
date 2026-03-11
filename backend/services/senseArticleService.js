@@ -21,7 +21,18 @@ const {
   notifyRevisionSubmitted,
   notifySupersededRevisions
 } = require('./senseArticleNotificationService');
-const { parseSenseArticleSource } = require('./senseArticleParser');
+const {
+  CONTENT_FORMATS,
+  convertLegacyMarkupToRichHtml,
+  detectContentFormat,
+  materializeRevisionContent
+} = require('./senseArticleRichContentService');
+const {
+  extractMediaReferencesFromRevision,
+  hydrateMediaReferenceAssets,
+  listMediaAssetsForEditor,
+  refreshArticleMediaReferenceState
+} = require('./senseArticleMediaReferenceService');
 const { ensurePermission, getUserRoleInfo } = require('./senseArticlePermissionService');
 const {
   serializeAnnotation,
@@ -45,13 +56,16 @@ const {
 } = require('./senseArticleWorkflow');
 const { DOMAIN_ADMIN_PERMISSION_KEYS, getSenseArticleReviewerEntries, hasDomainAdminPermission } = require('../utils/domainAdminPermissions');
 const { getIdString, isValidObjectId, toObjectIdOrNull } = require('../utils/objectId');
-const { diagLog, durationMs, nowMs } = require('./senseArticleDiagnostics');
+const { diagLog, diagWarn, durationMs, nowMs } = require('./senseArticleDiagnostics');
+const { createMediaAssetRecord } = require('./senseArticleMediaService');
+const { validateRevisionContent } = require('./senseArticleValidationService');
 
-const createExposeError = (message, statusCode = 400, code = '') => {
+const createExposeError = (message, statusCode = 400, code = '', details = null) => {
   const error = new Error(message);
   error.expose = true;
   error.statusCode = statusCode;
   error.code = code;
+  error.details = details;
   return error;
 };
 
@@ -361,6 +375,19 @@ const buildReviewPresentation = async ({ revision = {}, node = null, currentUser
     return acc;
   }, { total: participants.length, approvedCount: 0, rejectedCount: 0, pendingCount: 0 });
   summary.allApproved = summary.total > 0 && summary.approvedCount === summary.total;
+  const byRole = ['domain_admin', 'domain_master', 'system_admin'].reduce((acc, role) => {
+    const scopedParticipants = participants.filter((item) => item.role === role);
+    const roleSummary = scopedParticipants.reduce((roleAcc, item) => {
+      if (item.decision === 'approved') roleAcc.approvedCount += 1;
+      else if (item.decision === 'rejected') roleAcc.rejectedCount += 1;
+      else roleAcc.pendingCount += 1;
+      return roleAcc;
+    }, { total: scopedParticipants.length, approvedCount: 0, rejectedCount: 0, pendingCount: 0 });
+    roleSummary.allApproved = roleSummary.total > 0 && roleSummary.approvedCount === roleSummary.total;
+    acc[role] = roleSummary;
+    return acc;
+  }, {});
+  summary.byRole = byRole;
   return { participants, summary };
 };
 
@@ -546,15 +573,16 @@ const collectAnnotationHealthStats = async ({ userId, nodeIds = [] }) => {
   }, { exact: 0, relocated: 0, uncertain: 0, broken: 0 });
 };
 
-const materializeRevisionPayload = async ({ editorSource, baseRevision = null, requestMeta = null }) => {
+const materializeRevisionPayload = async ({ editorSource, contentFormat = CONTENT_FORMATS.LEGACY_MARKUP, baseRevision = null, requestMeta = null }) => {
   const totalStartedAt = nowMs();
   const parseStartedAt = nowMs();
-  const parsed = parseSenseArticleSource(editorSource);
+  const parsed = materializeRevisionContent({ editorSource, contentFormat });
   const parseMs = durationMs(parseStartedAt);
   const resolveRefsStartedAt = nowMs();
   const referenceIndex = await resolveReferenceTargets(parsed.referenceIndex);
   const resolveRefsMs = durationMs(resolveRefsStartedAt);
   const candidateRevision = {
+    contentFormat: parsed.contentFormat || contentFormat,
     editorSource: parsed.editorSource,
     ast: parsed.ast,
     headingIndex: parsed.headingIndex,
@@ -575,6 +603,7 @@ const materializeRevisionPayload = async ({ editorSource, baseRevision = null, r
     resolveRefsMs,
     buildDiffMs,
     totalMs: durationMs(totalStartedAt),
+    contentFormat: parsed.contentFormat || contentFormat,
     editorSourceLength: typeof parsed.editorSource === 'string' ? parsed.editorSource.length : 0,
     blockCount: Array.isArray(parsed.ast?.blocks) ? parsed.ast.blocks.length : 0,
     headingCount: Array.isArray(parsed.headingIndex) ? parsed.headingIndex.length : 0,
@@ -589,6 +618,41 @@ const materializeRevisionPayload = async ({ editorSource, baseRevision = null, r
   };
 };
 
+const buildRevisionMediaAndValidation = async ({ revisionLike = null, nodeId = '', senseId = '' } = {}) => {
+  const rawMediaReferences = extractMediaReferencesFromRevision({ revision: revisionLike, nodeId, senseId });
+  const mediaReferences = await hydrateMediaReferenceAssets({
+    nodeId: getIdString(nodeId || revisionLike?.nodeId),
+    senseId: String(senseId || revisionLike?.senseId || '').trim(),
+    references: rawMediaReferences
+  });
+  const validationSnapshot = validateRevisionContent({
+    revision: {
+      ...(revisionLike || {}),
+      mediaReferences
+    },
+    mediaReferences
+  });
+  return {
+    mediaReferences,
+    validationSnapshot
+  };
+};
+
+const assertRevisionValidationBeforeWorkflow = ({ validationSnapshot = null, phase = 'submit' } = {}) => {
+  if (!validationSnapshot?.hasBlockingIssues) return;
+  const label = phase === 'publish' ? '发布' : '提交';
+  diagWarn('sense.validation.blocked_workflow', {
+    phase,
+    blockingCount: Array.isArray(validationSnapshot?.blocking) ? validationSnapshot.blocking.length : 0
+  });
+  throw createExposeError(
+    `${label}前校验失败，请先修复正文中的阻塞问题`,
+    409,
+    'revision_validation_failed',
+    { validation: validationSnapshot }
+  );
+};
+
 const syncLegacySenseMirror = async ({ nodeId, senseId, nodeSense, editorSource, plainTextSnapshot, actorUserId }) => {
   const filter = { nodeId: toObjectIdOrNull(nodeId), senseId: String(senseId || '').trim() };
   const legacySummary = buildSummary(plainTextSnapshot);
@@ -596,6 +660,7 @@ const syncLegacySenseMirror = async ({ nodeId, senseId, nodeSense, editorSource,
     $set: {
       title: nodeSense?.title || '未命名释义',
       content: editorSource,
+      contentFormat: detectContentFormat({ editorSource }),
       legacySummary,
       updatedBy: actorUserId || null
     },
@@ -636,7 +701,14 @@ const getArticleBundle = async ({ nodeId, senseId, userId, createIfMissing = tru
   let article = await SenseArticle.findOne({ nodeId: base.nodeId, senseId: base.senseId });
 
   if (!article && createIfMissing) {
-    const materialized = await materializeRevisionPayload({ editorSource: base.nodeSense.content || '' });
+    const initialContentFormat = detectContentFormat({
+      contentFormat: base.nodeSense.contentFormat,
+      editorSource: base.nodeSense.content || ''
+    });
+    const materialized = await materializeRevisionPayload({
+      editorSource: base.nodeSense.content || '',
+      contentFormat: initialContentFormat
+    });
     const articleId = new mongoose.Types.ObjectId();
     const seed = buildLegacyArticleSeed({
       nodeId: base.nodeId,
@@ -648,6 +720,9 @@ const getArticleBundle = async ({ nodeId, senseId, userId, createIfMissing = tru
       updatedAt: base.nodeSense.updatedAt || base.nodeSense.createdAt || new Date(),
       referenceIndex: materialized.referenceIndex
     });
+    seed.article.summary = buildSummary(materialized.plainTextSnapshot);
+    seed.revision.contentFormat = initialContentFormat;
+    seed.revision.editorSource = materialized.editorSource;
     seed.revision.parseErrors = materialized.parseErrors;
     seed.revision.ast = materialized.ast;
     seed.revision.headingIndex = materialized.headingIndex;
@@ -655,9 +730,21 @@ const getArticleBundle = async ({ nodeId, senseId, userId, createIfMissing = tru
     seed.revision.symbolRefs = materialized.symbolRefs;
     seed.revision.plainTextSnapshot = materialized.plainTextSnapshot;
     seed.revision.renderSnapshot = materialized.renderSnapshot;
+    const derived = await buildRevisionMediaAndValidation({
+      revisionLike: {
+        nodeId: base.nodeId,
+        senseId: base.senseId,
+        ...materialized
+      },
+      nodeId: base.nodeId,
+      senseId: base.senseId
+    });
+    seed.revision.mediaReferences = derived.mediaReferences;
+    seed.revision.validationSnapshot = derived.validationSnapshot;
     const revision = await SenseArticleRevision.create(seed.revision);
     article = await SenseArticle.create({
       ...seed.article,
+      contentFormat: initialContentFormat,
       currentRevisionId: revision._id,
       latestDraftRevisionId: null
     });
@@ -769,8 +856,20 @@ const listRevisions = async ({ nodeId, senseId, userId, status = '', page = 1, p
 
 const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId, requestMeta = null }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
-  const revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id }).lean();
+  let revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id }).lean();
   if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
+  if (!Array.isArray(revision.mediaReferences) || !revision.validationSnapshot) {
+    const derived = await buildRevisionMediaAndValidation({
+      revisionLike: revision,
+      nodeId: bundle.nodeId,
+      senseId: bundle.senseId
+    });
+    revision = {
+      ...revision,
+      mediaReferences: derived.mediaReferences,
+      validationSnapshot: derived.validationSnapshot
+    };
+  }
   assertRevisionReadable({ revision, permissions: bundle.permissions, userId });
   const baseRevision = revision.baseRevisionId ? await SenseArticleRevision.findById(revision.baseRevisionId).lean() : null;
   const [decoratedRevision] = await decorateRevisionRecords({
@@ -778,6 +877,12 @@ const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId, requestM
     fallbackSenseTitle: bundle.nodeSense?.title || bundle.senseId || ''
   });
   const reviewPresentation = await buildReviewPresentation({ revision, node: bundle.node, currentUserId: userId });
+  const mediaLibrary = await listMediaAssetsForEditor({
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    articleId: bundle.article._id,
+    revisionId: revision._id
+  });
   return {
     node: bundle.node,
     nodeSense: bundle.nodeSense,
@@ -786,6 +891,11 @@ const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId, requestM
     baseRevision: baseRevision ? serializeRevisionDetail(baseRevision, { requestMeta, phase: 'get_revision_detail.base_revision' }) : null,
     reviewParticipants: reviewPresentation.participants,
     reviewSummary: reviewPresentation.summary,
+    mediaLibrary: {
+      referencedAssets: mediaLibrary.referencedAssets.map((item) => serializeMediaAsset(item)),
+      recentAssets: mediaLibrary.recentAssets.map((item) => serializeMediaAsset(item)),
+      orphanCandidates: mediaLibrary.orphanCandidates.map((item) => serializeMediaAsset(item))
+    },
     permissions: serializePermissions(bundle.permissions, userId)
   };
 };
@@ -802,18 +912,38 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
   const baseRevision = requestedBaseId
     ? await SenseArticleRevision.findOne({ _id: requestedBaseId, articleId: bundle.article._id })
     : bundle.currentRevision;
-  const editorSource = typeof payload.editorSource === 'string' && payload.editorSource.trim()
+  const requestedContentFormat = detectContentFormat({
+    contentFormat: payload.contentFormat || CONTENT_FORMATS.RICH_HTML,
+    editorSource: payload.editorSource
+  });
+  let editorSource = typeof payload.editorSource === 'string' && payload.editorSource.trim()
     ? payload.editorSource
     : (baseRevision?.editorSource || bundle.currentRevision?.editorSource || bundle.nodeSense.content || '');
+  if (requestedContentFormat === CONTENT_FORMATS.RICH_HTML && detectContentFormat({
+    contentFormat: baseRevision?.contentFormat || bundle.currentRevision?.contentFormat || bundle.nodeSense?.contentFormat,
+    editorSource
+  }) === CONTENT_FORMATS.LEGACY_MARKUP) {
+    editorSource = convertLegacyMarkupToRichHtml(editorSource);
+  }
   const revisionNumber = await getNextRevisionNumber(bundle.article._id);
   const materialized = await materializeRevisionPayload({
     editorSource,
+    contentFormat: requestedContentFormat,
     baseRevision,
     requestMeta: {
       ...requestMeta,
       nodeId,
       senseId
     }
+  });
+  const derived = await buildRevisionMediaAndValidation({
+    revisionLike: {
+      nodeId: bundle.nodeId,
+      senseId: bundle.senseId,
+      ...materialized
+    },
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId
   });
   const revisionTitle = resolveRevisionTitleInput({
     revisionTitle: payload.revisionTitle,
@@ -845,6 +975,7 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
     baseRevisionId: baseRevision?._id || null,
     parentRevisionId: getIdString(payload.parentRevisionId) || baseRevision?._id || null,
     sourceMode: payload.sourceMode || 'full',
+    contentFormat: materialized.contentFormat,
     selectedRangeAnchor: selectedAnchor,
     targetHeadingId: typeof payload.targetHeadingId === 'string' ? payload.targetHeadingId.trim() : '',
     editorSource: materialized.editorSource,
@@ -857,6 +988,8 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
     plainTextSnapshot: materialized.plainTextSnapshot,
     renderSnapshot: materialized.renderSnapshot,
     diffFromBase: materialized.diffFromBase,
+    mediaReferences: derived.mediaReferences,
+    validationSnapshot: derived.validationSnapshot,
     scopedChange: normalizeScopedChangePayload(payload.scopedChange),
     proposerId: userId,
     proposerNote: typeof payload.proposerNote === 'string' ? payload.proposerNote.trim() : '',
@@ -868,9 +1001,15 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
   await SenseArticle.updateOne({ _id: bundle.article._id }, {
     $set: {
       latestDraftRevisionId: draft._id,
+      contentFormat: draft.contentFormat || requestedContentFormat,
       updatedBy: userId,
       updatedAt: new Date()
     }
+  });
+  await refreshArticleMediaReferenceState({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId
   });
   return {
     article: serializeArticleSummary(bundle.article),
@@ -883,14 +1022,33 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   const revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
   if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
+  if (Object.prototype.hasOwnProperty.call(payload || {}, 'expectedRevisionVersion')) {
+    const expectedRevisionVersion = Number(payload.expectedRevisionVersion);
+    if (Number.isFinite(expectedRevisionVersion) && expectedRevisionVersion !== Number(revision.__v || 0)) {
+      throw createExposeError(
+        '当前草稿已被其他保存更新，请刷新后确认差异再继续编辑',
+        409,
+        'revision_edit_conflict',
+        {
+          serverRevisionVersion: Number(revision.__v || 0),
+          serverUpdatedAt: revision.updatedAt || null
+        }
+      );
+    }
+  }
   const currentUserId = getIdString(userId);
   ensurePermission(getIdString(revision.proposerId) === currentUserId || bundle.permissions.isSystemAdmin, '仅发起人或系统管理员可编辑草稿');
   ensurePermission(DRAFT_EDITABLE_STATUSES.includes(revision.status), '当前修订状态不可编辑');
   const proposer = await User.findById(revision.proposerId).select('_id username').lean();
   const baseRevision = revision.baseRevisionId ? await SenseArticleRevision.findById(revision.baseRevisionId) : null;
+  const nextContentFormat = detectContentFormat({
+    contentFormat: payload.contentFormat || revision.contentFormat || bundle.article?.contentFormat || CONTENT_FORMATS.LEGACY_MARKUP,
+    editorSource: typeof payload.editorSource === 'string' ? payload.editorSource : revision.editorSource
+  });
   const editorSource = typeof payload.editorSource === 'string' ? payload.editorSource : revision.editorSource;
   const materialized = await materializeRevisionPayload({
     editorSource,
+    contentFormat: nextContentFormat,
     baseRevision,
     requestMeta: {
       ...requestMeta,
@@ -899,6 +1057,17 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
       revisionId
     }
   });
+  const derived = await buildRevisionMediaAndValidation({
+    revisionLike: {
+      _id: revision._id,
+      nodeId: bundle.nodeId,
+      senseId: bundle.senseId,
+      ...materialized
+    },
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId
+  });
+  revision.contentFormat = materialized.contentFormat;
   revision.editorSource = materialized.editorSource;
   revision.ast = materialized.ast;
   revision.headingIndex = materialized.headingIndex;
@@ -909,6 +1078,8 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
   revision.plainTextSnapshot = materialized.plainTextSnapshot;
   revision.renderSnapshot = materialized.renderSnapshot;
   revision.diffFromBase = materialized.diffFromBase;
+  revision.mediaReferences = derived.mediaReferences;
+  revision.validationSnapshot = derived.validationSnapshot;
   if (Object.prototype.hasOwnProperty.call(payload || {}, 'scopedChange')) revision.scopedChange = normalizeScopedChangePayload(payload.scopedChange);
   if (typeof payload.proposerNote === 'string') revision.proposerNote = payload.proposerNote.trim();
   if (Object.prototype.hasOwnProperty.call(payload || {}, 'revisionTitle')) {
@@ -944,7 +1115,18 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
   }
   if (typeof payload.targetHeadingId === 'string') revision.targetHeadingId = payload.targetHeadingId.trim();
   await revision.save();
-  await SenseArticle.updateOne({ _id: bundle.article._id }, { $set: { latestDraftRevisionId: revision._id, updatedBy: userId } });
+  await SenseArticle.updateOne({ _id: bundle.article._id }, {
+    $set: {
+      latestDraftRevisionId: revision._id,
+      contentFormat: revision.contentFormat || nextContentFormat,
+      updatedBy: userId
+    }
+  });
+  await refreshArticleMediaReferenceState({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId
+  });
   return buildRevisionMutationResponse({
     article: bundle.article,
     revision,
@@ -1030,6 +1212,10 @@ const submitRevision = async ({ nodeId, senseId, revisionId, userId }) => {
     revision.proposedSenseTitle = normalizedProposedSenseTitle;
     await revision.save();
   }
+  assertRevisionValidationBeforeWorkflow({
+    validationSnapshot: revision.validationSnapshot || validateRevisionContent({ revision, mediaReferences: revision.mediaReferences }),
+    phase: 'submit'
+  });
   let operation = resolveSubmitOperation(revision);
   if (operation.kind === 'invalid') throw createExposeError(reasonToMessage(operation.reason), 409, operation.reason);
   if (operation.kind === 'noop') {
@@ -1192,6 +1378,14 @@ const reviewRevision = async ({ nodeId, senseId, revisionId, userId, action, com
     }
   ];
 
+  const projectedPresentation = await buildReviewPresentation({
+    revision: { ...revision.toObject(), reviewParticipants, reviewVotes: nextVotes },
+    node: bundle.node,
+    currentUserId: userId
+  });
+  const adminStageSummary = projectedPresentation.summary?.byRole?.domain_admin || { total: 0, approvedCount: 0, pendingCount: 0, allApproved: false };
+  const masterStageSummary = projectedPresentation.summary?.byRole?.domain_master || { total: 0, approvedCount: 0, pendingCount: 0, allApproved: false };
+
   if (normalizedAction === 'reject') {
     const updated = await attemptConditionalRevisionUpdate({
       revision,
@@ -1233,24 +1427,84 @@ const reviewRevision = async ({ nodeId, senseId, revisionId, userId, action, com
     };
   }
 
-  const reviewPresentation = await buildReviewPresentation({
-    revision: { ...revision.toObject(), reviewParticipants, reviewVotes: nextVotes },
-    node: bundle.node,
-    currentUserId: userId
-  });
+  if (reviewerRole === 'domain_admin' || (reviewerRole === 'system_admin' && revision.status !== 'pending_domain_master_review')) {
+    if (!adminStageSummary.allApproved) {
+      const updated = await attemptConditionalRevisionUpdate({
+        revision,
+        articleId: bundle.article._id,
+        expectedStatuses: [revision.status],
+        setPatch: {
+          status: 'pending_domain_admin_review',
+          reviewStage: 'domain_admin',
+          reviewParticipants,
+          reviewVotes: nextVotes,
+          updatedAt: new Date(),
+          ...buildLegacyReviewFieldPatch({ reviewerRole: 'domain_admin', action: 'approve', userId, comment })
+        }
+      });
+      if (!updated) {
+        revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
+        if (revision && !isPendingReviewStatus(revision.status)) {
+          return {
+            article: serializeArticleSummary(bundle.article),
+            revision: serializeRevisionDetail(revision),
+            permissions: serializePermissions(bundle.permissions, userId)
+          };
+        }
+        throw createExposeError('当前修订审核状态已变更，请刷新后重试', 409, 'review_conflict');
+      }
+      return {
+        article: serializeArticleSummary(bundle.article),
+        revision: serializeRevisionDetail(updated),
+        permissions: serializePermissions(bundle.permissions, userId)
+      };
+    }
 
-  if (!reviewPresentation.summary.allApproved) {
+    if (masterStageSummary.total > 0) {
+      const updated = await attemptConditionalRevisionUpdate({
+        revision,
+        articleId: bundle.article._id,
+        expectedStatuses: [revision.status],
+        setPatch: {
+          status: 'pending_domain_master_review',
+          reviewStage: 'domain_master',
+          reviewParticipants,
+          reviewVotes: nextVotes,
+          updatedAt: new Date(),
+          ...buildLegacyReviewFieldPatch({ reviewerRole: 'domain_admin', action: 'approve', userId, comment })
+        }
+      });
+      if (!updated) {
+        revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
+        if (revision && !isPendingReviewStatus(revision.status)) {
+          return {
+            article: serializeArticleSummary(bundle.article),
+            revision: serializeRevisionDetail(revision),
+            permissions: serializePermissions(bundle.permissions, userId)
+          };
+        }
+        throw createExposeError('当前修订审核状态已变更，请刷新后重试', 409, 'review_conflict');
+      }
+      return {
+        article: serializeArticleSummary(bundle.article),
+        revision: serializeRevisionDetail(updated),
+        permissions: serializePermissions(bundle.permissions, userId)
+      };
+    }
+  }
+
+  if (!masterStageSummary.allApproved && masterStageSummary.total > 0) {
     const updated = await attemptConditionalRevisionUpdate({
       revision,
       articleId: bundle.article._id,
       expectedStatuses: [revision.status],
       setPatch: {
-        status: 'pending_review',
-        reviewStage: 'review',
+        status: 'pending_domain_master_review',
+        reviewStage: 'domain_master',
         reviewParticipants,
         reviewVotes: nextVotes,
         updatedAt: new Date(),
-        ...buildLegacyReviewFieldPatch({ reviewerRole, action: 'approve', userId, comment })
+        ...buildLegacyReviewFieldPatch({ reviewerRole: reviewerRole === 'system_admin' ? 'domain_master' : reviewerRole, action: 'approve', userId, comment })
       }
     });
     if (!updated) {
@@ -1271,6 +1525,10 @@ const reviewRevision = async ({ nodeId, senseId, revisionId, userId, action, com
     };
   }
 
+  assertRevisionValidationBeforeWorkflow({
+    validationSnapshot: revision.validationSnapshot || validateRevisionContent({ revision, mediaReferences: revision.mediaReferences }),
+    phase: 'publish'
+  });
   await applyPublishedSenseTitle({ bundle, revision, userId });
 
   const articleUpdate = await SenseArticle.findOneAndUpdate({
@@ -1279,6 +1537,7 @@ const reviewRevision = async ({ nodeId, senseId, revisionId, userId, action, com
   }, {
     $set: {
       currentRevisionId: revision._id,
+      contentFormat: revision.contentFormat || detectContentFormat({ editorSource: revision.editorSource }),
       summary: buildSummary(revision.plainTextSnapshot),
       publishedAt: new Date(),
       updatedBy: userId,
@@ -1356,6 +1615,11 @@ const reviewRevision = async ({ nodeId, senseId, revisionId, userId, action, com
     editorSource: updatedRevision.editorSource,
     plainTextSnapshot: updatedRevision.plainTextSnapshot,
     actorUserId: userId
+  });
+  await refreshArticleMediaReferenceState({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId
   });
   await notifyDomainMasterDecision({ node: bundle.node, article: bundle.article, revision: updatedRevision, action: 'approved', actorId: userId });
   await notifySupersededRevisions({ node: bundle.node, article: bundle.article, publishedRevision: updatedRevision, supersededRevisions, actorId: userId });
@@ -1519,6 +1783,86 @@ const searchReferenceTargets = async ({ query }) => {
       summary: item.summary || '',
       displayLabel: `${nodeMap.get(String(item.nodeId)) || '知识域'} / ${item.senseTitle || senseMap.get(`${item.nodeId}:${item.senseId}`) || item.senseId}`
     }))
+  };
+};
+
+const serializeMediaAsset = (asset = {}) => ({
+  _id: asset?._id || null,
+  nodeId: asset?.nodeId || null,
+  senseId: asset?.senseId || '',
+  articleId: asset?.articleId || null,
+  revisionId: asset?.revisionId || null,
+  kind: asset?.kind || 'image',
+  originalName: asset?.originalName || '',
+  fileName: asset?.fileName || '',
+  url: asset?.url || '',
+  mimeType: asset?.mimeType || '',
+  size: Number(asset?.size || 0),
+  fileSize: Number(asset?.fileSize || asset?.size || 0),
+  width: Number.isFinite(Number(asset?.width)) ? Number(asset.width) : null,
+  height: Number.isFinite(Number(asset?.height)) ? Number(asset.height) : null,
+  duration: Number.isFinite(Number(asset?.duration)) ? Number(asset.duration) : null,
+  alt: asset?.alt || '',
+  caption: asset?.caption || '',
+  title: asset?.title || '',
+  description: asset?.description || '',
+  posterUrl: asset?.posterUrl || '',
+  status: asset?.status || 'uploaded',
+  referencedRevisionIds: Array.isArray(asset?.referencedRevisionIds) ? asset.referencedRevisionIds : [],
+  publishedRevisionIds: Array.isArray(asset?.publishedRevisionIds) ? asset.publishedRevisionIds : [],
+  createdAt: asset?.createdAt || null
+});
+
+const uploadMediaAsset = async ({ nodeId, senseId, revisionId = '', userId, file, payload = {} }) => {
+  ensurePermission(!!file, '请先选择媒体文件', 400, 'media_file_required');
+  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
+  ensurePermission(bundle.permissions.canCreateRevision, '当前用户无法上传百科正文媒体');
+  const revision = revisionId
+    ? await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id }).select('_id').lean()
+    : null;
+  const explicitKind = String(payload.kind || '').trim();
+  const mimeType = String(file?.mimetype || '').toLowerCase();
+  const inferredKind = explicitKind
+    || (mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('audio/') ? 'audio' : mimeType.startsWith('video/') ? 'video' : '');
+  ensurePermission(['image', 'audio', 'video'].includes(inferredKind), '不支持的媒体类型', 400, 'media_kind_invalid');
+  const asset = await createMediaAssetRecord({
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    articleId: bundle.article?._id || null,
+    revisionId: revision?._id || null,
+    kind: inferredKind,
+    file,
+    userId,
+    alt: typeof payload.alt === 'string' ? payload.alt.trim() : '',
+    caption: typeof payload.caption === 'string' ? payload.caption.trim() : '',
+    title: typeof payload.title === 'string' ? payload.title.trim() : '',
+    description: typeof payload.description === 'string' ? payload.description.trim() : '',
+    posterUrl: typeof payload.posterUrl === 'string' ? payload.posterUrl.trim() : '',
+    width: payload.width,
+    height: payload.height,
+    duration: payload.duration
+  });
+  return {
+    ok: true,
+    asset: serializeMediaAsset(asset)
+  };
+};
+
+const listMediaAssets = async ({ nodeId, senseId, revisionId = '', userId }) => {
+  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
+  ensurePermission(bundle.permissions.canRead, '当前用户无法查看媒体资源', 403, 'media_read_forbidden');
+  const mediaLibrary = await listMediaAssetsForEditor({
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    articleId: bundle.article._id,
+    revisionId
+  });
+  return {
+    article: serializeArticleSummary(bundle.article),
+    revisionId: revisionId || null,
+    referencedAssets: mediaLibrary.referencedAssets.map((item) => serializeMediaAsset(item)),
+    recentAssets: mediaLibrary.recentAssets.map((item) => serializeMediaAsset(item)),
+    orphanCandidates: mediaLibrary.orphanCandidates.map((item) => serializeMediaAsset(item))
   };
 };
 
@@ -1706,6 +2050,7 @@ module.exports = {
   getRevisionDetail,
   listBacklinks,
   listCurrentReferences,
+  listMediaAssets,
   listMyAnnotations,
   listRevisions,
   resolveReferenceTargets,
@@ -1714,6 +2059,7 @@ module.exports = {
   searchCurrentArticle,
   searchReferenceTargets,
   submitRevision,
+  uploadMediaAsset,
   updateAnnotation,
   updateDraftRevision,
   updateSenseMetadata

@@ -16,6 +16,11 @@ export const AST_NODE_TYPES = {
   CODE_BLOCK: 'code_block'
 };
 
+export const SENSE_ARTICLE_CONTENT_FORMATS = {
+  LEGACY_MARKUP: 'legacy_markup',
+  RICH_HTML: 'rich_html'
+};
+
 export const SYMBOL_SHORTCUTS = {
   alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', lambda: 'λ', mu: 'μ', pi: 'π', sigma: 'σ', omega: 'ω',
   forall: '∀', exists: '∃', in: '∈', notin: '∉', sub: '⊂', subeq: '⊆', sup: '⊃', union: '∪', inter: '∩',
@@ -156,9 +161,11 @@ export const parseInline = (text = '', context = {}) => {
 
 const buildBlockPlainText = (block) => {
   if (!block) return '';
+  if (typeof block.plainText === 'string' && block.plainText.trim()) return block.plainText;
   if (block.type === AST_NODE_TYPES.HEADING || block.type === AST_NODE_TYPES.PARAGRAPH) return extractPlainText(block.children || []);
   if (block.type === AST_NODE_TYPES.LIST) return (block.items || []).map((item) => extractPlainText(item.children || [])).join('\n');
   if (block.type === AST_NODE_TYPES.BLOCKQUOTE) return (block.lines || []).map((item) => extractPlainText(item.children || [])).join('\n');
+  if (Array.isArray(block.rows)) return block.rows.map((row) => (Array.isArray(row.cells) ? row.cells.join(' ') : '')).filter(Boolean).join('\n');
   return String(block.value || '');
 };
 

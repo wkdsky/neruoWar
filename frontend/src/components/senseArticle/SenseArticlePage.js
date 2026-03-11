@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpRight, Eye, History, MessageSquare, PenSquare, Search, Sparkles, Trash2 } from 'lucide-react';
 import { senseArticleApi } from '../../utils/senseArticleApi';
 import {
@@ -12,6 +12,7 @@ import {
 import SenseArticleRenderer from './SenseArticleRenderer';
 import SenseArticlePageHeader from './SenseArticlePageHeader';
 import SenseArticleStateView from './SenseArticleStateView';
+import SenseArticleOutlineTree from './SenseArticleOutlineTree';
 import {
   buildSenseArticleBreadcrumb,
   getReferenceTargetStatusLabel,
@@ -136,7 +137,7 @@ const SenseArticlePage = ({
 
   latestRouteRef.current = { nodeId, senseId };
 
-  const loadCurrent = async () => {
+  const loadCurrent = useCallback(async () => {
     const requestId = newRequestId('load-current');
     const flowId = newFlowId('page');
     const requestSequence = loadCurrentSequenceRef.current + 1;
@@ -195,11 +196,11 @@ const SenseArticlePage = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, [nodeId, senseId]);
 
   useEffect(() => {
     loadCurrent();
-  }, [nodeId, senseId]);
+  }, [loadCurrent]);
 
   useEffect(() => {
     if (!pageData) return;
@@ -325,7 +326,7 @@ const SenseArticlePage = ({
   }, [activeSearchIndex, searchData]);
 
   const headingIndex = pageData?.revision?.headingIndex || [];
-  const annotations = pageData?.annotations || [];
+  const annotations = useMemo(() => (Array.isArray(pageData?.annotations) ? pageData.annotations : []), [pageData?.annotations]);
   const annotationsByStatus = useMemo(() => {
     const groups = { exact: [], relocated: [], uncertain: [], broken: [] };
     annotations.forEach((item) => {
@@ -613,13 +614,14 @@ const SenseArticlePage = ({
         <aside className="sense-article-sidebar">
           <div className="sense-side-card">
             <div className="sense-side-card-title">目录</div>
-            <div className="sense-toc-list">
-              {headingIndex.length === 0 ? <SenseArticleStateView compact kind="empty" title="暂无目录" description="当前发布版没有可索引的小节标题。" /> : headingIndex.map((heading) => (
-                <div key={heading.headingId} className={`sense-toc-item level-${heading.level || 1} ${activeHeadingId === heading.headingId ? 'active' : ''}`}>
-                  <button type="button" onClick={() => jumpToHeading(heading.headingId)}>{heading.title}</button>
-                  <button type="button" className="sense-mini-action" onClick={() => onOpenEditor && onOpenEditor({ mode: 'heading', headingId: heading.headingId })}>编辑本节</button>
-                </div>
-              ))}
+            <div className="sense-reading-outline-shell">
+              <SenseArticleOutlineTree
+                items={headingIndex}
+                activeHeadingId={activeHeadingId}
+                onJump={(heading) => jumpToHeading(heading.headingId)}
+                emptyTitle="暂无目录"
+                emptyDescription="当前发布版没有可索引的小节标题。"
+              />
             </div>
           </div>
           <div className="sense-side-card">

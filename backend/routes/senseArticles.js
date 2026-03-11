@@ -1,4 +1,6 @@
 const express = require('express');
+const path = require('path');
+const multer = require('multer');
 const { authenticateToken } = require('../middleware/auth');
 const {
   compareRevisions,
@@ -12,6 +14,7 @@ const {
   getRevisionDetail,
   listBacklinks,
   listCurrentReferences,
+  listMediaAssets,
   listMyAnnotations,
   listRevisions,
   reviewByDomainAdmin,
@@ -19,12 +22,43 @@ const {
   searchCurrentArticle,
   searchReferenceTargets,
   submitRevision,
+  uploadMediaAsset,
   updateAnnotation,
   updateDraftRevision,
   updateSenseMetadata
 } = require('../services/senseArticleService');
+const { ensureMediaStorageDir } = require('../services/senseArticleMediaService');
 
 const router = express.Router();
+ensureMediaStorageDir();
+
+const MEDIA_LIMIT_BYTES = 15 * 1024 * 1024;
+const allowedMimeTypes = new Set([
+  'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml',
+  'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/mp4', 'audio/x-m4a', 'audio/flac', 'audio/aac',
+  'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'
+]);
+
+const mediaUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => callback(null, ensureMediaStorageDir()),
+    filename: (_req, file, callback) => {
+      const ext = path.extname(file.originalname || '').slice(0, 12).toLowerCase();
+      const base = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      callback(null, `${base}${ext}`);
+    }
+  }),
+  limits: {
+    fileSize: MEDIA_LIMIT_BYTES
+  },
+  fileFilter: (_req, file, callback) => {
+    if (!allowedMimeTypes.has(String(file.mimetype || '').toLowerCase())) {
+      callback(new Error('unsupported_media_type'));
+      return;
+    }
+    callback(null, true);
+  }
+});
 
 const buildRequestMeta = (req) => ({
   flowId: typeof req.headers['x-sense-flow-id'] === 'string' ? req.headers['x-sense-flow-id'].trim() : '',
@@ -35,6 +69,12 @@ const buildRequestMeta = (req) => ({
 });
 
 const sendError = (res, error, fallback = '服务器错误') => {
+  if (error?.message === 'unsupported_media_type') {
+    return res.status(400).json({ error: '文件类型不受支持，仅允许图片、音频、视频白名单格式', code: 'unsupported_media_type' });
+  }
+  if (error?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: '媒体文件超过大小限制', code: 'media_file_too_large' });
+  }
   if (error?.expose) {
     return res.status(error.statusCode || 400).json({
       error: error.message || fallback,
@@ -137,6 +177,36 @@ router.get('/:nodeId/:senseId/revisions/:revisionId', authenticateToken, async (
     res.json(data);
   } catch (error) {
     sendError(res, error, '获取修订详情失败');
+  }
+});
+
+router.post('/:nodeId/:senseId/media', authenticateToken, mediaUpload.single('file'), async (req, res) => {
+  try {
+    const data = await uploadMediaAsset({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      revisionId: typeof req.body?.revisionId === 'string' ? req.body.revisionId.trim() : '',
+      userId: req.user.userId,
+      file: req.file,
+      payload: req.body || {}
+    });
+    res.status(201).json(data);
+  } catch (error) {
+    sendError(res, error, '上传百科媒体失败');
+  }
+});
+
+router.get('/:nodeId/:senseId/media', authenticateToken, async (req, res) => {
+  try {
+    const data = await listMediaAssets({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      revisionId: typeof req.query?.revisionId === 'string' ? req.query.revisionId.trim() : '',
+      userId: req.user.userId
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '获取百科媒体资源失败');
   }
 });
 

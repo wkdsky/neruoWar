@@ -23,6 +23,13 @@ const authHeaders = () => {
   };
 };
 
+const authOnlyHeaders = () => {
+  const token = localStorage.getItem('token');
+  return {
+    Authorization: `Bearer ${token}`
+  };
+};
+
 const createTimeoutError = (timeoutMs) => {
   const error = new Error(`请求超时（>${Math.round(timeoutMs / 1000)} 秒），请稍后重试`);
   error.name = 'TimeoutError';
@@ -187,6 +194,34 @@ const requestJson = async (path, options = {}, requestOptions = {}) => {
   }
 };
 
+const requestMultipart = async (path, formData, requestOptions = {}) => {
+  const timeoutMs = Number(requestOptions.timeoutMs || DEFAULT_TIMEOUT_MS);
+  const timeoutController = new AbortController();
+  const timeoutId = window.setTimeout(() => {
+    timeoutController.abort(createTimeoutError(timeoutMs));
+  }, timeoutMs);
+
+  const signal = combineSignals(requestOptions.signal, timeoutController.signal);
+
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      body: formData,
+      signal,
+      headers: {
+        ...authOnlyHeaders(),
+        ...(requestOptions.flowId ? { 'x-sense-flow-id': requestOptions.flowId } : {}),
+        ...(requestOptions.requestId ? { 'x-sense-request-id': requestOptions.requestId } : {})
+      }
+    });
+    const parsed = await parseMaybeJsonResponse(response);
+    if (!response.ok) throw buildApiError(response, parsed, '请求失败');
+    return parsed.data;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
+
 export const senseArticleApi = {
   getOverview: (nodeId, senseId, requestOptions = {}) => requestJson(`/sense-articles/${nodeId}/${senseId}`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'getOverview', nodeId, senseId }),
   getCurrent: (nodeId, senseId, requestOptions = {}) => requestJson(`/sense-articles/${nodeId}/${senseId}/current`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'getCurrent', nodeId, senseId }),
@@ -238,5 +273,20 @@ export const senseArticleApi = {
   getReferences: (nodeId, senseId, requestOptions = {}) => requestJson(`/sense-articles/${nodeId}/${senseId}/references`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'getReferences', nodeId, senseId }),
   getBacklinks: (nodeId, senseId, requestOptions = {}) => requestJson(`/sense-articles/${nodeId}/${senseId}/backlinks`, {}, requestOptions),
   getDashboard: (nodeId = '', requestOptions = {}) => requestJson(`/sense-articles/dashboard${nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : ''}`, {}, requestOptions),
-  searchReferenceTargets: (query, requestOptions = {}) => requestJson(`/sense-articles/reference-targets/search?q=${encodeURIComponent(query || '')}`, {}, requestOptions)
+  searchReferenceTargets: (query, requestOptions = {}) => requestJson(`/sense-articles/reference-targets/search?q=${encodeURIComponent(query || '')}`, {}, requestOptions),
+  uploadMedia: (nodeId, senseId, payload = {}, requestOptions = {}) => {
+    const formData = new FormData();
+    if (payload.file) formData.append('file', payload.file);
+    Object.entries(payload || {}).forEach(([key, value]) => {
+      if (key === 'file' || value === undefined || value === null || value === '') return;
+      formData.append(key, value);
+    });
+    return requestMultipart(`/sense-articles/${nodeId}/${senseId}/media`, formData, requestOptions);
+  },
+  listMediaAssets: (nodeId, senseId, params = {}, requestOptions = {}) => {
+    const query = new URLSearchParams();
+    if (params.revisionId) query.set('revisionId', params.revisionId);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return requestJson(`/sense-articles/${nodeId}/${senseId}/media${suffix}`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'listMediaAssets', nodeId, senseId, revisionId: params.revisionId || '' });
+  }
 };

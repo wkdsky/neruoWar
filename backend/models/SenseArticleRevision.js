@@ -154,6 +154,11 @@ const SenseArticleRevisionSchema = new mongoose.Schema({
     default: '',
     trim: true
   },
+  contentFormat: {
+    type: String,
+    enum: ['legacy_markup', 'rich_html'],
+    default: 'legacy_markup'
+  },
   ast: {
     type: mongoose.Schema.Types.Mixed,
     default: null
@@ -188,6 +193,14 @@ const SenseArticleRevisionSchema = new mongoose.Schema({
     default: null
   },
   diffFromBase: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+  mediaReferences: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: []
+  },
+  validationSnapshot: {
     type: mongoose.Schema.Types.Mixed,
     default: null
   },
