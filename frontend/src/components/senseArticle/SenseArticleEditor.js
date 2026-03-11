@@ -149,19 +149,6 @@ const SenseArticleEditor = ({
     });
   }, [articleContext, detail, nodeId, onContextPatch, revisionId, senseId]);
 
-  const previewRevision = useMemo(() => {
-    if (readOnlyLegacyFallback) return revision;
-    return {
-      ...(revision || {}),
-      contentFormat: 'rich_html',
-      editorSource: normalizedEditorHtml,
-      renderSnapshot: {
-        ...(revision?.renderSnapshot || {}),
-        html: normalizedEditorHtml
-      }
-    };
-  }, [normalizedEditorHtml, readOnlyLegacyFallback, revision]);
-
   const scopedFocus = useMemo(() => {
     const selectionText = revision?.selectedRangeAnchor?.selectionText || revision?.selectedRangeAnchor?.textQuote || '';
     const headingId = revision?.targetHeadingId || revision?.selectedRangeAnchor?.headingId || '';
@@ -476,9 +463,9 @@ const SenseArticleEditor = ({
       </div>
 
       {readOnlyLegacyFallback ? (
-        <section className="sense-editor-pane preview">
-          <div className="sense-editor-pane-title">旧版内容只读预览</div>
-          <div className="sense-editor-preview-renderer">
+        <section className="sense-editor-pane legacy-readonly">
+          <div className="sense-editor-pane-title">旧版内容只读正文</div>
+          <div className="sense-editor-legacy-renderer">
             <SenseArticleRenderer revision={revision} />
           </div>
         </section>
@@ -486,12 +473,12 @@ const SenseArticleEditor = ({
         <RichSenseArticleEditorShell
           value={editorHtml}
           onChange={setEditorHtml}
-          previewRevision={previewRevision}
           onSearchReferences={(query) => senseArticleApi.searchReferenceTargets(query)}
           onUploadMedia={uploadMedia}
           scopedFocus={scopedFocus}
           mediaLibrary={mediaLibrary}
           onPasteNotice={(message) => showToast(message, 'subtle')}
+          onEditorNotice={(message, tone = 'subtle') => showToast(message, tone)}
           onSaveDraft={saveDraft}
           saveDisabled={saving || !canEdit || readOnlyLegacyFallback}
           savePending={saving}

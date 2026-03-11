@@ -242,7 +242,11 @@ const buildBlockPlainText = (block = {}) => {
     return block.value || '';
   }
   if (Array.isArray(block.rows)) {
-    return block.rows.map((row) => (Array.isArray(row.cells) ? row.cells.join(' ') : '')).filter(Boolean).join('\n');
+    return block.rows.map((row) => (
+      Array.isArray(row.cells)
+        ? row.cells.map((cell) => (typeof cell === 'string' ? cell : cell?.text || '')).join(' ')
+        : ''
+    )).filter(Boolean).join('\n');
   }
   return '';
 };

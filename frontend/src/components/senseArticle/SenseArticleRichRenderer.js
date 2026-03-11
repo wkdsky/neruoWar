@@ -85,6 +85,19 @@ const renderDomNode = ({ node, searchQuery, referenceMap, onReferenceClick, onRe
   }));
   const className = node.getAttribute('class') || undefined;
   const style = styleStringToObject(node.getAttribute('style') || '');
+  const tableCellProps = {
+    colSpan: node.getAttribute('colspan') ? Number(node.getAttribute('colspan')) : undefined,
+    rowSpan: node.getAttribute('rowspan') ? Number(node.getAttribute('rowspan')) : undefined,
+    'data-align': node.getAttribute('data-align') || undefined,
+    'data-vertical-align': node.getAttribute('data-vertical-align') || undefined,
+    'data-background-color': node.getAttribute('data-background-color') || undefined,
+    'data-text-color': node.getAttribute('data-text-color') || undefined,
+    'data-border-edges': node.getAttribute('data-border-edges') || undefined,
+    'data-border-width': node.getAttribute('data-border-width') || undefined,
+    'data-border-color': node.getAttribute('data-border-color') || undefined,
+    'data-diagonal': node.getAttribute('data-diagonal') || undefined,
+    'data-colwidth': node.getAttribute('data-colwidth') || undefined
+  };
 
   if (tagName === 'a' && node.getAttribute('data-reference-kind') === 'internal-sense') {
     const referenceId = node.getAttribute('data-reference-id') || '';
@@ -146,6 +159,32 @@ const renderDomNode = ({ node, searchQuery, referenceMap, onReferenceClick, onRe
         {children}
       </colgroup>
     );
+  }
+  if (tagName === 'table') {
+    return (
+      <div key={`${keyPrefix}-wrap`} className="sense-rich-table-wrap">
+        <table
+          key={keyPrefix}
+          className={className}
+          style={Object.keys(style).length ? style : undefined}
+          data-table-style={node.getAttribute('data-table-style') || undefined}
+          data-table-width-mode={node.getAttribute('data-table-width-mode') || undefined}
+          data-table-width-value={node.getAttribute('data-table-width-value') || undefined}
+          data-table-border-preset={node.getAttribute('data-table-border-preset') || undefined}
+          data-column-widths={node.getAttribute('data-column-widths') || undefined}
+        >
+          {children}
+        </table>
+      </div>
+    );
+  }
+  if (tagName === 'td' || tagName === 'th') {
+    return React.createElement(tagName, {
+      key: keyPrefix,
+      className,
+      style: Object.keys(style).length ? style : undefined,
+      ...tableCellProps
+    }, children);
   }
   if (tagName === 'input') {
     return <input key={keyPrefix} type="checkbox" checked={node.hasAttribute('checked')} disabled />;

@@ -3,6 +3,22 @@ const { parse } = require('node-html-parser');
 const { AST_NODE_TYPES } = require('../constants/senseArticle');
 const { shortHash } = require('../utils/hash');
 const { parseSenseArticleSource, extractPlainText } = require('./senseArticleParser');
+const {
+  buildTableCompareDigest,
+  extractTableMetaFromElement,
+  normalizeBorderEdges,
+  normalizeColor,
+  normalizeEnum,
+  normalizeTableWidthValue,
+  parseColumnWidths,
+  serializeColumnWidths,
+  TABLE_BORDER_PRESETS,
+  TABLE_BORDER_WIDTH_OPTIONS,
+  TABLE_DIAGONAL_MODES,
+  TABLE_STYLE_OPTIONS,
+  TABLE_VERTICAL_ALIGN_OPTIONS,
+  TABLE_WIDTH_MODES
+} = require('./senseArticleTableMetaService');
 
 const CONTENT_FORMATS = Object.freeze({
   LEGACY_MARKUP: 'legacy_markup',
@@ -56,11 +72,17 @@ const filterAllowedStyle = (styleText = '') => {
       if (property === 'color' && isAllowedColor(value)) result.color = value;
       if (property === 'background-color' && isAllowedColor(value)) result['background-color'] = value;
       if (property === 'text-align' && /^(left|center|right|justify)$/i.test(value)) result['text-align'] = value.toLowerCase();
+      if (property === 'vertical-align' && /^(top|middle|bottom)$/i.test(value)) result['vertical-align'] = value.toLowerCase();
       if (property === 'font-size' && /^(12|14|16|18|24|32)px$/i.test(value)) result['font-size'] = value.toLowerCase();
       if (property === 'list-style-type' && /^(disc|circle|square|decimal|decimal-leading-zero|lower-alpha|lower-roman)$/i.test(value)) {
         result['list-style-type'] = value.toLowerCase();
       }
-      if (property === 'width' && /^(25|50|75|100)%$/i.test(value)) result.width = value.toLowerCase();
+      if (property === 'width' && (/^(25|50|60|72|75|88|100)%$/i.test(value) || /^([4-9]\d|1[01]\d|1200)px$/i.test(value))) {
+        result.width = value.toLowerCase();
+      }
+      if (/^border-(top|right|bottom|left)$/.test(property) && /^(none|[123]px\s+solid\s+(#[0-9a-f]{3,8}|rgb(a)?\([\d\s.,%]+\)|hsl(a)?\([\d\s.,%]+\)))$/i.test(value)) {
+        result[property] = value;
+      }
     });
   return Object.entries(result).map(([property, value]) => `${property}: ${value}`).join('; ');
 };
@@ -165,9 +187,9 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
     source: ['src', 'type'],
     span: ['class', 'style', 'data-formula-placeholder', 'data-font-size', 'data-highlight'],
     strong: ['class'],
-    table: ['class', 'data-table-style'],
-    td: ['class', 'style', 'colspan', 'rowspan', 'data-align'],
-    th: ['class', 'style', 'colspan', 'rowspan', 'data-align'],
+    table: ['class', 'style', 'data-table-style', 'data-table-width-mode', 'data-table-width-value', 'data-table-border-preset', 'data-column-widths'],
+    td: ['class', 'style', 'colspan', 'rowspan', 'data-align', 'data-vertical-align', 'data-background-color', 'data-text-color', 'data-border-edges', 'data-border-width', 'data-border-color', 'data-diagonal', 'data-colwidth'],
+    th: ['class', 'style', 'colspan', 'rowspan', 'data-align', 'data-vertical-align', 'data-background-color', 'data-text-color', 'data-border-edges', 'data-border-width', 'data-border-color', 'data-diagonal', 'data-colwidth'],
     tr: ['class'],
     ul: ['class', 'style', 'data-list-style-type'],
     video: ['src', 'poster', 'controls', 'class', 'width']
@@ -187,9 +209,9 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
     ol: ['list-style-decimal', 'list-style-leading-zero', 'list-style-lower-alpha', 'list-style-lower-roman'],
     p: ['align-left', 'align-center', 'align-right', 'align-justify'],
     span: ['sense-inline-code', 'sense-formula-placeholder', 'has-highlight'],
-    table: ['sense-rich-table', 'table-style-default', 'table-style-compact', 'table-style-zebra'],
-    td: ['align-left', 'align-center', 'align-right', 'align-justify'],
-    th: ['align-left', 'align-center', 'align-right', 'align-justify'],
+    table: ['sense-rich-table', 'table-style-default', 'table-style-compact', 'table-style-zebra', 'table-style-three-line', 'table-border-all', 'table-border-none', 'table-border-outer', 'table-border-inner-horizontal', 'table-border-inner-vertical', 'table-border-three-line'],
+    td: ['align-left', 'align-center', 'align-right', 'align-justify', 'table-cell-valign-middle', 'table-cell-valign-bottom', 'table-cell-diagonal-tl-br', 'table-cell-diagonal-tr-bl'],
+    th: ['align-left', 'align-center', 'align-right', 'align-justify', 'table-cell-valign-middle', 'table-cell-valign-bottom', 'table-cell-diagonal-tl-br', 'table-cell-diagonal-tr-bl'],
     ul: ['list-style-disc', 'list-style-circle', 'list-style-square'],
     video: ['size-50', 'size-75', 'size-100']
   },
@@ -228,13 +250,49 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
     ul: (_tagName, attribs) => ({ tagName: 'ul', attribs: { ...attribs, class: normalizeClassNames(attribs.class, ['list-style-disc', 'list-style-circle', 'list-style-square']), style: filterAllowedStyle(attribs.style) } }),
     ol: (_tagName, attribs) => ({ tagName: 'ol', attribs: { ...attribs, class: normalizeClassNames(attribs.class, ['list-style-decimal', 'list-style-leading-zero', 'list-style-lower-alpha', 'list-style-lower-roman']), style: filterAllowedStyle(attribs.style) } }),
     li: (_tagName, attribs) => ({ tagName: 'li', attribs: { ...attribs, class: normalizeClassNames(attribs.class, ['task-item']), style: filterAllowedStyle(attribs.style) } }),
-    td: (_tagName, attribs) => ({ tagName: 'td', attribs: { ...attribs, class: normalizeClassNames(attribs.class, ['align-left', 'align-center', 'align-right', 'align-justify']), style: filterAllowedStyle(attribs.style) } }),
-    th: (_tagName, attribs) => ({ tagName: 'th', attribs: { ...attribs, class: normalizeClassNames(attribs.class, ['align-left', 'align-center', 'align-right', 'align-justify']), style: filterAllowedStyle(attribs.style) } }),
+    td: (_tagName, attribs) => ({
+      tagName: 'td',
+      attribs: {
+        ...attribs,
+        class: normalizeClassNames(attribs.class, ['align-left', 'align-center', 'align-right', 'align-justify', 'table-cell-valign-middle', 'table-cell-valign-bottom', 'table-cell-diagonal-tl-br', 'table-cell-diagonal-tr-bl']),
+        style: filterAllowedStyle(attribs.style),
+        'data-vertical-align': normalizeEnum(attribs['data-vertical-align'], TABLE_VERTICAL_ALIGN_OPTIONS, '') || undefined,
+        'data-background-color': normalizeColor(attribs['data-background-color']) || undefined,
+        'data-text-color': normalizeColor(attribs['data-text-color']) || undefined,
+        'data-border-edges': normalizeBorderEdges(attribs['data-border-edges']) || undefined,
+        'data-border-width': normalizeEnum(attribs['data-border-width'], TABLE_BORDER_WIDTH_OPTIONS, '') || undefined,
+        'data-border-color': normalizeColor(attribs['data-border-color']) || undefined,
+        'data-diagonal': normalizeEnum(attribs['data-diagonal'], TABLE_DIAGONAL_MODES, '') || undefined,
+        'data-colwidth': serializeColumnWidths(parseColumnWidths(attribs['data-colwidth'])) || undefined
+      }
+    }),
+    th: (_tagName, attribs) => ({
+      tagName: 'th',
+      attribs: {
+        ...attribs,
+        class: normalizeClassNames(attribs.class, ['align-left', 'align-center', 'align-right', 'align-justify', 'table-cell-valign-middle', 'table-cell-valign-bottom', 'table-cell-diagonal-tl-br', 'table-cell-diagonal-tr-bl']),
+        style: filterAllowedStyle(attribs.style),
+        'data-vertical-align': normalizeEnum(attribs['data-vertical-align'], TABLE_VERTICAL_ALIGN_OPTIONS, '') || undefined,
+        'data-background-color': normalizeColor(attribs['data-background-color']) || undefined,
+        'data-text-color': normalizeColor(attribs['data-text-color']) || undefined,
+        'data-border-edges': normalizeBorderEdges(attribs['data-border-edges']) || undefined,
+        'data-border-width': normalizeEnum(attribs['data-border-width'], TABLE_BORDER_WIDTH_OPTIONS, '') || undefined,
+        'data-border-color': normalizeColor(attribs['data-border-color']) || undefined,
+        'data-diagonal': normalizeEnum(attribs['data-diagonal'], TABLE_DIAGONAL_MODES, '') || undefined,
+        'data-colwidth': serializeColumnWidths(parseColumnWidths(attribs['data-colwidth'])) || undefined
+      }
+    }),
     table: (_tagName, attribs) => ({
       tagName: 'table',
       attribs: {
         ...attribs,
-        class: normalizeClassNames(attribs.class, ['sense-rich-table', 'table-style-default', 'table-style-compact', 'table-style-zebra'])
+        class: normalizeClassNames(attribs.class, ['sense-rich-table', 'table-style-default', 'table-style-compact', 'table-style-zebra', 'table-style-three-line', 'table-border-all', 'table-border-none', 'table-border-outer', 'table-border-inner-horizontal', 'table-border-inner-vertical', 'table-border-three-line']),
+        style: filterAllowedStyle(attribs.style),
+        'data-table-style': normalizeEnum(attribs['data-table-style'], TABLE_STYLE_OPTIONS, 'default'),
+        'data-table-width-mode': normalizeEnum(attribs['data-table-width-mode'], TABLE_WIDTH_MODES, 'auto'),
+        'data-table-width-value': normalizeTableWidthValue(attribs['data-table-width-value'] || '100'),
+        'data-table-border-preset': normalizeEnum(attribs['data-table-border-preset'], TABLE_BORDER_PRESETS, 'all'),
+        'data-column-widths': serializeColumnWidths(parseColumnWidths(attribs['data-column-widths'])) || undefined
       }
     }),
     figure: (_tagName, attribs) => ({
@@ -435,15 +493,25 @@ const materializeRichHtmlContent = (html = '') => {
       }
 
       if (tagName === 'table') {
+        const tableMeta = extractTableMetaFromElement(node);
         blocks.push({
           id: blockId,
           type: 'table',
           headingId: currentHeadingId,
           plainText,
-          tableStyle: node.getAttribute('data-table-style') || '',
-          rows: node.querySelectorAll('tr').map((row, rowIndex) => ({
+          tableStyle: tableMeta.tableStyle,
+          tableWidthMode: tableMeta.tableWidthMode,
+          tableWidthValue: tableMeta.tableWidthValue,
+          tableBorderPreset: tableMeta.tableBorderPreset,
+          columnWidths: tableMeta.columnWidths,
+          headerSummary: tableMeta.headerSummary,
+          mergeSummary: tableMeta.mergeSummary,
+          cellFormatSummary: tableMeta.cellFormatSummary,
+          diagonalCellCount: tableMeta.diagonalCellCount,
+          tableMetaDigest: buildTableCompareDigest(tableMeta),
+          rows: tableMeta.rows.map((row, rowIndex) => ({
             id: `${blockId}_row_${rowIndex + 1}`,
-            cells: row.querySelectorAll('th,td').map((cell) => cell.text.trim())
+            cells: row.cells
           })),
           html: blockHtml
         });

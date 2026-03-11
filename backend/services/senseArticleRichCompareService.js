@@ -1,6 +1,7 @@
 const { shortHash } = require('../utils/hash');
 
 const normalizeText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+const getTableCellText = (cell = '') => (typeof cell === 'string' ? cell : String(cell?.text || '').trim());
 
 const computeSimilarity = (left = '', right = '') => {
   const a = normalizeText(left);
@@ -50,7 +51,7 @@ const buildBlockLabel = (block = {}) => {
 const buildBlockCompareText = (block = {}) => {
   if (block.type === 'table') {
     return (Array.isArray(block.rows) ? block.rows : [])
-      .map((row) => (Array.isArray(row.cells) ? row.cells.join(' | ') : ''))
+      .map((row) => (Array.isArray(row.cells) ? row.cells.map((cell) => getTableCellText(cell)).join(' | ') : ''))
       .filter(Boolean)
       .join('\n');
   }
@@ -73,8 +74,15 @@ const buildBlockPreview = (block = {}) => {
   if (block.type === 'table') {
     const rows = Array.isArray(block.rows) ? block.rows : [];
     const rowCount = rows.length;
-    const colCount = Math.max(0, ...rows.map((row) => (Array.isArray(row.cells) ? row.cells.length : 0)));
-    return `${rowCount} 行 × ${colCount} 列`;
+    const colCount = Math.max(0, ...rows.map((row) => (
+      Array.isArray(row.cells)
+        ? row.cells.reduce((sum, cell) => sum + Math.max(1, Number(cell?.colspan || 1)), 0)
+        : 0
+    )));
+    const widthLabel = block.tableWidthMode === 'auto'
+      ? '自适应'
+      : `${block.tableWidthValue || '100'}%`;
+    return `${rowCount} 行 × ${colCount} 列 · ${block.tableStyle || 'default'} · ${widthLabel}`;
   }
   if (block.type === 'image' || block.type === 'audio' || block.type === 'video') {
     return normalizeText(block.plainText || buildBlockLabel(block));
@@ -82,7 +90,11 @@ const buildBlockPreview = (block = {}) => {
   return normalizeText(buildBlockCompareText(block)).slice(0, 180);
 };
 
-const countTableColumns = (block = {}) => Math.max(0, ...(Array.isArray(block.rows) ? block.rows : []).map((row) => (Array.isArray(row.cells) ? row.cells.length : 0)));
+const countTableColumns = (block = {}) => Math.max(0, ...(Array.isArray(block.rows) ? block.rows : []).map((row) => (
+  Array.isArray(row.cells)
+    ? row.cells.reduce((sum, cell) => sum + Math.max(1, Number(cell?.colspan || 1)), 0)
+    : 0
+)));
 
 const extractComparableBlocks = (section = {}) => (Array.isArray(section.blocks) ? section.blocks : []).map((block, index) => ({
   key: block.id || `${section.sectionKey || 'section'}:${index}:${shortHash(buildBlockCompareText(block), 8)}`,
@@ -96,6 +108,15 @@ const extractComparableBlocks = (section = {}) => (Array.isArray(section.blocks)
   order: index,
   meta: {
     tableStyle: block.tableStyle || '',
+    tableWidthMode: block.tableWidthMode || 'auto',
+    tableWidthValue: block.tableWidthValue || '100',
+    tableBorderPreset: block.tableBorderPreset || 'all',
+    columnWidths: Array.isArray(block.columnWidths) ? block.columnWidths.join(',') : '',
+    diagonalCellCount: Number(block.diagonalCellCount || 0),
+    mergedCellCount: Number(block?.mergeSummary?.mergedCellCount || 0),
+    mergedAreaPreview: String(block?.mergeSummary?.areaPreview || ''),
+    cellFormatSummary: JSON.stringify(block.cellFormatSummary || {}),
+    headerSummary: JSON.stringify(block.headerSummary || {}),
     mediaType: block.type === 'image' || block.type === 'audio' || block.type === 'video' ? block.type : '',
     rowCount: Array.isArray(block.rows) ? block.rows.length : 0,
     colCount: countTableColumns(block),

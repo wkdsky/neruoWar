@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import DialogFrame from './DialogFrame';
+import { TABLE_STYLE_OPTIONS } from '../table/tableSchema';
+import { DEFAULT_TABLE_WIDTH_MODE, TABLE_WIDTH_MODES } from '../table/tableWidthUtils';
 
 const QUICK_SIZES = [
   { rows: 2, cols: 2 },
@@ -15,6 +17,7 @@ const InsertTableDialog = ({ open, onClose, onSubmit }) => {
   const [withHeaderRow, setWithHeaderRow] = useState(true);
   const [withHeaderColumn, setWithHeaderColumn] = useState(false);
   const [tableStyle, setTableStyle] = useState('default');
+  const [tableWidthMode, setTableWidthMode] = useState(DEFAULT_TABLE_WIDTH_MODE);
 
   useEffect(() => {
     if (!open) return;
@@ -25,12 +28,14 @@ const InsertTableDialog = ({ open, onClose, onSubmit }) => {
       setWithHeaderRow(Boolean(stored.withHeaderRow ?? true));
       setWithHeaderColumn(Boolean(stored.withHeaderColumn));
       setTableStyle(stored.tableStyle || 'default');
+      setTableWidthMode(stored.tableWidthMode || DEFAULT_TABLE_WIDTH_MODE);
     } catch (_error) {
       setRows(3);
       setCols(3);
       setWithHeaderRow(true);
       setWithHeaderColumn(false);
       setTableStyle('default');
+      setTableWidthMode(DEFAULT_TABLE_WIDTH_MODE);
     }
   }, [open]);
 
@@ -46,7 +51,8 @@ const InsertTableDialog = ({ open, onClose, onSubmit }) => {
             cols: Math.max(2, Math.min(8, Number(cols) || 3)),
             withHeaderRow,
             withHeaderColumn,
-            tableStyle
+            tableStyle,
+            tableWidthMode
           };
           window.localStorage.setItem(LAST_TABLE_CONFIG_KEY, JSON.stringify(payload));
           onSubmit(payload);
@@ -55,7 +61,7 @@ const InsertTableDialog = ({ open, onClose, onSubmit }) => {
         插入表格
       </button>
     </>
-  ), [cols, onClose, onSubmit, rows, tableStyle, withHeaderColumn, withHeaderRow]);
+  ), [cols, onClose, onSubmit, rows, tableStyle, tableWidthMode, withHeaderColumn, withHeaderRow]);
 
   return (
     <DialogFrame open={open} title="插入表格" description="设置表格尺寸、表头和样式；最近一次配置会缓存在本地。" onClose={onClose} footer={footer}>
@@ -81,9 +87,21 @@ const InsertTableDialog = ({ open, onClose, onSubmit }) => {
         <label>
           <span>表格样式</span>
           <select value={tableStyle} onChange={(event) => setTableStyle(event.target.value)}>
-            <option value="default">默认</option>
-            <option value="compact">紧凑</option>
-            <option value="zebra">斑马纹</option>
+            {TABLE_STYLE_OPTIONS.map((item) => (
+              <option key={item} value={item}>
+                {item === 'default' ? '常规' : item === 'compact' ? '紧凑' : item === 'zebra' ? '斑马纹' : '三线表'}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>初始宽度</span>
+          <select value={tableWidthMode} onChange={(event) => setTableWidthMode(event.target.value)}>
+            {TABLE_WIDTH_MODES.filter((item) => item !== 'custom').map((item) => (
+              <option key={item} value={item}>
+                {item === 'auto' ? '自适应' : item === 'narrow' ? '窄' : item === 'medium' ? '中' : item === 'wide' ? '宽' : '全宽'}
+              </option>
+            ))}
           </select>
         </label>
         <label className="sense-rich-checkbox-row">

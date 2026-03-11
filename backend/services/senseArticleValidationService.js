@@ -1,4 +1,10 @@
 const { getIdString } = require('../utils/objectId');
+const {
+  TABLE_BORDER_PRESETS,
+  TABLE_DIAGONAL_MODES,
+  TABLE_STYLE_OPTIONS,
+  TABLE_WIDTH_MODES
+} = require('./senseArticleTableMetaService');
 
 const isMeaningfulBlock = (block = {}) => {
   const type = String(block?.type || '').trim();
@@ -98,7 +104,9 @@ const validateRevisionContent = ({ revision = null, mediaReferences = null } = {
 
   const emptyTables = blocks.filter((block) => String(block?.type || '').trim() === 'table').filter((block) => {
     const rows = Array.isArray(block?.rows) ? block.rows : [];
-    return rows.length === 0 || rows.every((row) => (Array.isArray(row?.cells) ? row.cells : []).every((cell) => !String(cell || '').trim()));
+    return rows.length === 0 || rows.every((row) => (
+      Array.isArray(row?.cells) ? row.cells : []
+    ).every((cell) => !String(typeof cell === 'string' ? cell : cell?.text || '').trim()));
   });
   if (emptyTables.length > 0) {
     pushIssue(warnings, {
@@ -109,6 +117,53 @@ const validateRevisionContent = ({ revision = null, mediaReferences = null } = {
       }
     });
   }
+
+  const invalidTableBlocks = blocks.filter((block) => String(block?.type || '').trim() === 'table').flatMap((block) => {
+    const issues = [];
+    if (block.tableStyle && !TABLE_STYLE_OPTIONS.has(String(block.tableStyle))) {
+      issues.push({ code: 'invalid_table_style', level: 'warning', message: `表格 ${block.id || ''} 含非法样式枚举。` });
+    }
+    if (block.tableBorderPreset && !TABLE_BORDER_PRESETS.has(String(block.tableBorderPreset))) {
+      issues.push({ code: 'invalid_table_border_preset', level: 'warning', message: `表格 ${block.id || ''} 含非法边框预设。` });
+    }
+    if (block.tableWidthMode && !TABLE_WIDTH_MODES.has(String(block.tableWidthMode))) {
+      issues.push({ code: 'invalid_table_width_mode', level: 'warning', message: `表格 ${block.id || ''} 含非法宽度模式。` });
+    }
+    const widthValue = Number(block.tableWidthValue || 100);
+    if (block.tableWidthMode && block.tableWidthMode !== 'auto' && (!Number.isFinite(widthValue) || widthValue < 40 || widthValue > 100)) {
+      issues.push({ code: 'invalid_table_width_value', level: 'warning', message: `表格 ${block.id || ''} 的宽度值超出允许范围。` });
+    }
+    if (Array.isArray(block.columnWidths) && block.columnWidths.some((item) => !Number.isFinite(Number(item)) || Number(item) < 40 || Number(item) > 1200)) {
+      issues.push({ code: 'invalid_table_column_widths', level: 'warning', message: `表格 ${block.id || ''} 含非法列宽。` });
+    }
+    (Array.isArray(block.rows) ? block.rows : []).forEach((row) => {
+      (Array.isArray(row?.cells) ? row.cells : []).forEach((cell) => {
+        if (!cell || typeof cell === 'string') return;
+        const rowSpan = Number(cell.rowspan ?? 1);
+        const colSpan = Number(cell.colspan ?? 1);
+        if (!Number.isFinite(rowSpan) || rowSpan < 1 || !Number.isFinite(colSpan) || colSpan < 1) {
+          issues.push({ code: 'invalid_table_merge_span', level: 'blocking', message: `表格 ${block.id || ''} 存在非法的 rowspan/colspan。` });
+        }
+        if (cell.diagonalMode && !TABLE_DIAGONAL_MODES.has(String(cell.diagonalMode))) {
+          issues.push({ code: 'invalid_table_diagonal_mode', level: 'warning', message: `表格 ${block.id || ''} 含非法斜线模式。` });
+        }
+        if (cell.diagonalMode && cell.diagonalMode !== 'none' && !cell.isHeader) {
+          issues.push({ code: 'diagonal_on_non_header_cell', level: 'warning', message: `表格 ${block.id || ''} 存在非表头斜线单元格，建议确认是否符合预期。` });
+        }
+      });
+    });
+    if ((block.mergeSummary?.mergedCellCount || 0) > 0 && (block.mergeSummary?.maxRowspan || 1) > (Array.isArray(block.rows) ? block.rows.length : 0)) {
+      issues.push({ code: 'invalid_table_merge_structure', level: 'blocking', message: `表格 ${block.id || ''} 的合并结构超过表格行数。` });
+    }
+    if ((Array.isArray(block.rows) ? block.rows.length : 0) > 0 && Math.max(0, ...(block.rows || []).map((row) => (row.cells || []).length)) === 0) {
+      issues.push({ code: 'empty_table_shell', level: 'warning', message: `表格 ${block.id || ''} 只有壳结构，建议补充内容或删除。` });
+    }
+    return issues;
+  });
+
+  invalidTableBlocks.forEach((issue) => {
+    pushIssue(issue.level === 'blocking' ? blocking : warnings, issue);
+  });
 
   return {
     checkedAt: new Date().toISOString(),

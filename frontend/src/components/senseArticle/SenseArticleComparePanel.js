@@ -28,6 +28,19 @@ const blockKindLabelMap = {
   divider: '分割线'
 };
 
+const formatTableMeta = (meta = {}) => {
+  if (!meta || typeof meta !== 'object') return '—';
+  const widthLabel = meta.tableWidthMode === 'auto' ? '自适应' : `${meta.tableWidthValue || '100'}%`;
+  return [
+    `样式 ${meta.tableStyle || 'default'}`,
+    `宽度 ${widthLabel}`,
+    `边框 ${meta.tableBorderPreset || 'all'}`,
+    meta.columnWidths ? `列宽 ${meta.columnWidths}` : '',
+    Number(meta.mergedCellCount || 0) > 0 ? `合并 ${meta.mergedCellCount}${meta.mergedAreaPreview ? ` (${meta.mergedAreaPreview})` : ''}` : '',
+    Number(meta.diagonalCellCount || 0) > 0 ? `斜线 ${meta.diagonalCellCount}` : ''
+  ].filter(Boolean).join(' · ') || '—';
+};
+
 const renderLineDiff = (lineDiff = {}) => {
   const changes = Array.isArray(lineDiff?.changes) ? lineDiff.changes : [];
   if (changes.length === 0) {
@@ -70,6 +83,11 @@ const renderBlockDiff = (blockDiff = {}) => {
           </div>
           {item.details?.levelChanged ? (
             <div className="sense-compare-meta-text">标题级别：H{item.details.fromLevel || 0} → H{item.details.toLevel || 0}</div>
+          ) : null}
+          {item.blockKind === 'table' ? (
+            <div className="sense-compare-meta-text">
+              表格元数据：{formatTableMeta(item.details?.fromMeta)} → {formatTableMeta(item.details?.toMeta)}
+            </div>
           ) : null}
         </div>
       ))}

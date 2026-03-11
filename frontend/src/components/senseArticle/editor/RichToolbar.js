@@ -19,7 +19,6 @@ import {
   Minus,
   Outdent,
   Redo2,
-  Table2,
   Type,
   Undo2,
   Video
@@ -33,6 +32,7 @@ import InsertMediaDialog from './dialogs/InsertMediaDialog';
 import ImportMarkdownDialog from './dialogs/ImportMarkdownDialog';
 import TextColorPopover from './dialogs/TextColorPopover';
 import { FONT_SIZE_PRESETS, normalizeFontSize } from './extensions/FontSize';
+import { buildTableWidthPayload } from './table/tableWidthUtils';
 
 const buttonLabel = (label, icon) => (<>{icon}<span>{label}</span></>);
 
@@ -194,10 +194,15 @@ const RichToolbar = ({
     closeFloatingUi();
   };
 
-  const handleTableSubmit = ({ rows, cols, withHeaderRow, withHeaderColumn, tableStyle }) => {
+  const handleTableSubmit = ({ rows, cols, withHeaderRow, withHeaderColumn, tableStyle, tableWidthMode }) => {
+    const tableWidthPayload = buildTableWidthPayload({ tableWidthMode });
     let chain = chainWithPreservedSelection().insertTable({ rows, cols, withHeaderRow });
     if (withHeaderColumn) chain = chain.toggleHeaderColumn();
-    chain.setTableStyle(tableStyle).run();
+    chain
+      .setTableStyle(tableStyle)
+      .setTableWidth(tableWidthPayload.tableWidthMode, tableWidthPayload.tableWidthValue)
+      .setTableBorderPreset(tableStyle === 'three-line' ? 'three-line' : 'all')
+      .run();
     closeFloatingUi();
   };
 
@@ -357,7 +362,7 @@ const RichToolbar = ({
 
         <ToolbarGroup title="插入">
           <ToolbarButton title="插入分割线" onClick={() => editor.chain().focus().setHorizontalRule().createParagraphNear().run()}>{buttonLabel('分割线', <Minus size={16} />)}</ToolbarButton>
-          <ToolbarButton title="插入表格" onClick={() => openSingleFloatingUi(() => setTableDialogOpen(true))}>{buttonLabel('表格', <Table2 size={16} />)}</ToolbarButton>
+          <ToolbarButton title="插入表格" onClick={() => openSingleFloatingUi(() => setTableDialogOpen(true))}>表格</ToolbarButton>
           <ToolbarButton title="插入外部链接" onClick={() => openSingleFloatingUi(() => setLinkDialogMode('external'))}>{buttonLabel('链接', <Link2 size={16} />)}</ToolbarButton>
           <ToolbarButton title="插入内部引用" onClick={() => openSingleFloatingUi(() => setLinkDialogMode('internal'))}>{buttonLabel('内部引用', <ListChecks size={16} />)}</ToolbarButton>
           <ToolbarButton title="插入图片" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('image'))}>{buttonLabel('图片', <ImageIcon size={16} />)}</ToolbarButton>
@@ -365,37 +370,6 @@ const RichToolbar = ({
           <ToolbarButton title="插入视频" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('video'))}>{buttonLabel('视频', <Video size={16} />)}</ToolbarButton>
           <ToolbarButton title="导入 Markdown" onClick={() => openSingleFloatingUi(() => setMarkdownDialogOpen(true))}>导入 MD</ToolbarButton>
         </ToolbarGroup>
-
-        {editor.isActive('table') ? (
-          <ToolbarGroup title="表格设置">
-            <ToolbarButton title="在前方插入列" onClick={() => editor.chain().focus().addColumnBefore().run()}>前插列</ToolbarButton>
-            <ToolbarButton title="在后方插入列" onClick={() => editor.chain().focus().addColumnAfter().run()}>后插列</ToolbarButton>
-            <ToolbarButton title="删除当前列" onClick={() => editor.chain().focus().deleteColumn().run()}>删列</ToolbarButton>
-            <ToolbarButton title="在上方插入行" onClick={() => editor.chain().focus().addRowBefore().run()}>前插行</ToolbarButton>
-            <ToolbarButton title="在下方插入行" onClick={() => editor.chain().focus().addRowAfter().run()}>后插行</ToolbarButton>
-            <ToolbarButton title="删除当前行" onClick={() => editor.chain().focus().deleteRow().run()}>删行</ToolbarButton>
-            <ToolbarButton title="切换首行表头" onClick={() => editor.chain().focus().toggleHeaderRow().run()}>表头开关</ToolbarButton>
-            <ToolbarButton title="切换首列表头" onClick={() => editor.chain().focus().toggleHeaderColumn().run()}>首列表头</ToolbarButton>
-            <div className="sense-rich-toolbar-select compact">
-              <select
-                aria-label="表格样式"
-                value={editor.getAttributes('table')?.tableStyle || 'default'}
-                onMouseDownCapture={preserveSelection}
-                onChange={(event) => {
-                  chainWithPreservedSelection().setTableStyle(event.target.value).run();
-                }}
-              >
-                <option value="default">默认</option>
-                <option value="compact">紧凑</option>
-                <option value="zebra">斑马纹</option>
-              </select>
-            </div>
-            <ToolbarButton title="单元格左对齐" onClick={() => editor.chain().focus().updateAttributes('tableCell', { textAlign: 'left' }).updateAttributes('tableHeader', { textAlign: 'left' }).run()}><AlignLeft size={16} /></ToolbarButton>
-            <ToolbarButton title="单元格居中" onClick={() => editor.chain().focus().updateAttributes('tableCell', { textAlign: 'center' }).updateAttributes('tableHeader', { textAlign: 'center' }).run()}><AlignCenter size={16} /></ToolbarButton>
-            <ToolbarButton title="单元格右对齐" onClick={() => editor.chain().focus().updateAttributes('tableCell', { textAlign: 'right' }).updateAttributes('tableHeader', { textAlign: 'right' }).run()}><AlignRight size={16} /></ToolbarButton>
-            <ToolbarButton title="删除表格" onClick={() => editor.chain().focus().deleteTable().run()}>删除表格</ToolbarButton>
-          </ToolbarGroup>
-        ) : null}
 
         <ToolbarGroup title="清除" compact>
           <ToolbarButton title="清除当前格式" onClick={() => {

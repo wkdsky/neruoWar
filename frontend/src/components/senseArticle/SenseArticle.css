@@ -173,6 +173,17 @@
   position: relative;
 }
 
+.sense-editor-layout-wysiwyg {
+  display: grid;
+  grid-template-columns: minmax(200px, var(--sense-editor-outline-width)) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+}
+
+.sense-editor-layout-wysiwyg.toc-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sense-editor-layout.resizable.toc-collapsed {
   grid-template-columns: minmax(0, 1fr) var(--sense-editor-divider-width) minmax(0, var(--sense-editor-preview-width));
 }
@@ -182,8 +193,7 @@
   gap: 0;
 }
 
-.sense-editor-layout.resizable.preview-collapsed .sense-editor-divider,
-.sense-editor-layout.resizable.preview-collapsed .sense-editor-pane.preview {
+.sense-editor-layout.resizable.preview-collapsed .sense-editor-divider {
   display: none;
 }
 
@@ -929,7 +939,7 @@
 }
 
 .sense-editor-pane.editor-primary,
-.sense-editor-pane.preview {
+.sense-editor-pane.legacy-readonly {
   min-width: 0;
 }
 
@@ -954,8 +964,7 @@
   box-shadow: 0 0 16px rgba(103, 232, 249, 0.16);
 }
 
-.sense-editor-resize-handle,
-.sense-editor-preview-toggle {
+.sense-editor-resize-handle {
   color: var(--sense-theme-text);
   transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
@@ -1013,8 +1022,7 @@
 }
 
 .sense-editor-divider.dragging .sense-editor-resize-handle,
-.sense-editor-resize-handle:hover,
-.sense-editor-preview-toggle:hover {
+.sense-editor-resize-handle:hover {
   color: var(--sense-theme-glow);
 }
 
@@ -1037,8 +1045,7 @@
   color: var(--sense-theme-text);
 }
 
-.sense-editor-resize-handle:focus-visible,
-.sense-editor-preview-toggle:focus-visible {
+.sense-editor-resize-handle:focus-visible {
   outline: none;
   box-shadow: 0 0 0 4px var(--sense-theme-focus-ring), 0 12px 32px var(--sense-theme-shadow-strong);
 }
@@ -1047,7 +1054,7 @@
   display: none;
 }
 
-.sense-editor-pane.preview {
+.sense-editor-pane.legacy-readonly {
   overflow: visible;
   min-width: 0;
   display: flex;
@@ -1079,7 +1086,7 @@
   gap: 8px;
 }
 
-.sense-editor-preview-status {
+.sense-editor-outline-status {
   color: var(--sense-theme-muted);
   font-size: 12px;
   line-height: 1.5;
@@ -1098,26 +1105,12 @@
   display: none;
 }
 
-.sense-editor-preview-renderer {
+.sense-editor-legacy-renderer {
   contain: layout paint;
   min-height: 100%;
   padding: 26px 28px 80px;
   background: rgba(248, 250, 252, 0.98);
   color: #0f172a;
-}
-
-.sense-editor-pane.preview.preview-phase-collapsing,
-.sense-editor-pane.preview.preview-phase-collapsed {
-  gap: 0;
-  padding: 0;
-}
-
-.sense-editor-pane.preview.preview-phase-expanding {
-  transform: translateX(-4px);
-}
-
-.sense-editor-pane.preview.preview-phase-collapsing {
-  opacity: 0.98;
 }
 
 .sense-search-box.inline {
@@ -1142,6 +1135,7 @@
   }
 
   .sense-editor-layout.resizable,
+  .sense-editor-layout-wysiwyg,
   .sense-editor-layout.resizable.toc-collapsed,
   .sense-editor-layout.resizable.preview-collapsed,
   .sense-editor-layout.resizable.preview-resizing {
@@ -1162,7 +1156,7 @@
     display: none;
   }
 
-  .sense-editor-pane.preview {
+  .sense-editor-pane.legacy-readonly {
     padding: 0;
   }
 
@@ -1170,7 +1164,7 @@
     order: -1;
   }
 
-  .sense-editor-preview-renderer {
+  .sense-editor-legacy-renderer {
     padding: 18px 16px 56px;
   }
 }
@@ -1794,7 +1788,7 @@ body.sense-editor-preview-resizing * {
   box-shadow: 0 10px 24px rgba(2, 132, 199, 0.18);
 }
 
-.sense-rich-editor-utility-button.preview-toggle {
+.sense-rich-editor-utility-button.outline-toggle {
   background: rgba(15, 23, 42, 0.78);
 }
 
@@ -1831,6 +1825,27 @@ body.sense-editor-preview-resizing * {
   background: transparent;
   box-shadow: none;
   overflow: visible;
+}
+
+.sense-table-context-band {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(14, 165, 233, 0.24);
+  background: linear-gradient(180deg, rgba(8, 47, 73, 0.44) 0%, rgba(12, 20, 37, 0.94) 100%);
+  box-shadow: inset 0 1px 0 rgba(125, 211, 252, 0.08);
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(125, 211, 252, 0.32) transparent;
+}
+
+.sense-table-context-band-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: max-content;
+  flex-wrap: nowrap;
 }
 
 .sense-rich-toolbar-group {
@@ -1887,6 +1902,15 @@ body.sense-editor-preview-resizing * {
   color: rgba(226, 232, 240, 0.96);
   cursor: pointer;
   white-space: nowrap;
+}
+
+.sense-table-context-band .sense-rich-toolbar-button,
+.sense-table-context-band .sense-rich-toolbar-select,
+.sense-table-band-trigger {
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 9px;
+  font-size: 12px;
 }
 
 .sense-rich-toolbar-button.active {
@@ -1962,7 +1986,16 @@ body.sense-editor-preview-resizing * {
 }
 
 .sense-rich-toolbar-select.compact {
-  min-width: 84px;
+  min-width: 76px;
+}
+
+.sense-rich-toolbar-select.danger {
+  border-color: rgba(248, 113, 113, 0.24);
+}
+
+.sense-rich-toolbar-select.danger:hover,
+.sense-rich-toolbar-select.danger:focus-within {
+  border-color: rgba(248, 113, 113, 0.38);
 }
 
 .sense-rich-toolbar-select select {
@@ -1978,6 +2011,241 @@ body.sense-editor-preview-resizing * {
 .sense-rich-toolbar-fontsize select option {
   background: #0f172a;
   color: #e2e8f0;
+}
+
+.sense-table-context-width-pills,
+.sense-rich-table-option-row,
+.sense-rich-color-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.sense-table-context-width-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.82);
+  color: rgba(226, 232, 240, 0.96);
+}
+
+.sense-table-context-width-slider input {
+  width: 140px;
+}
+
+.sense-rich-table-chip {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.74);
+  color: rgba(226, 232, 240, 0.92);
+  cursor: pointer;
+}
+
+.sense-rich-table-chip.active {
+  border-color: rgba(56, 189, 248, 0.48);
+  background: rgba(14, 116, 144, 0.36);
+  color: #e0f2fe;
+}
+
+.sense-table-band-popover-anchor {
+  position: relative;
+}
+
+.sense-table-menu-anchor {
+  position: relative;
+}
+
+.sense-table-band-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.82);
+  color: rgba(226, 232, 240, 0.96);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sense-table-band-trigger.danger {
+  border-color: rgba(248, 113, 113, 0.24);
+}
+
+.sense-table-band-trigger:hover,
+.sense-table-band-trigger:focus-visible {
+  border-color: rgba(56, 189, 248, 0.36);
+  background: rgba(30, 41, 59, 0.96);
+}
+
+.sense-table-band-trigger.danger:hover,
+.sense-table-band-trigger.danger:focus-visible {
+  border-color: rgba(248, 113, 113, 0.38);
+}
+
+.sense-table-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 66;
+  min-width: 168px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(2, 6, 23, 0.98);
+  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.42);
+}
+
+.sense-table-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  width: 100%;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #e2e8f0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sense-table-menu-item:hover,
+.sense-table-menu-item:focus-visible,
+.sense-table-menu-item.checked {
+  border-color: rgba(56, 189, 248, 0.28);
+  background: rgba(14, 116, 144, 0.18);
+}
+
+.sense-table-menu-item.destructive {
+  color: #fecaca;
+}
+
+.sense-table-menu-item.destructive:hover,
+.sense-table-menu-item.destructive:focus-visible {
+  border-color: rgba(248, 113, 113, 0.24);
+  background: rgba(127, 29, 29, 0.28);
+}
+
+.sense-table-menu-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: #7dd3fc;
+  flex: 0 0 14px;
+}
+
+.sense-table-menu-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sense-rich-table-popover,
+.sense-rich-table-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 65;
+  min-width: 228px;
+  max-width: min(320px, calc(100vw - 24px));
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--sense-theme-border-strong);
+  background: rgba(2, 6, 23, 0.98);
+  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.42);
+  max-height: min(62vh, 520px);
+  overflow: auto;
+}
+
+.sense-rich-table-popover-section {
+  display: grid;
+  gap: 6px;
+}
+
+.sense-rich-table-popover-section strong {
+  color: #e2e8f0;
+  font-size: 12px;
+}
+
+.sense-rich-table-popover-section input[type="color"] {
+  width: 100%;
+  height: 36px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.86);
+  border-radius: 10px;
+}
+
+.sense-rich-table-option-column {
+  display: grid;
+  gap: 6px;
+}
+
+.sense-rich-table-text-button {
+  justify-self: start;
+  border: none;
+  background: transparent;
+  color: #7dd3fc;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.sense-rich-table-popover-note {
+  color: rgba(191, 219, 254, 0.88);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sense-rich-table-dropdown-format {
+  width: min(300px, calc(100vw - 24px));
+}
+
+.sense-rich-table-dropdown-border {
+  width: min(320px, calc(100vw - 24px));
+}
+
+.sense-rich-table-dropdown-portal {
+  position: fixed;
+  z-index: 96;
+}
+
+.sense-rich-table-dropdown-portal > .sense-rich-table-popover,
+.sense-rich-table-dropdown-portal > .sense-rich-table-dropdown {
+  position: static;
+  top: auto;
+  left: auto;
+}
+
+.sense-rich-editor-pane {
+  position: relative;
+}
+
+.sense-table-width-handle {
+  position: absolute;
+  z-index: 15;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.42);
+  background: rgba(14, 116, 144, 0.88);
+  color: #f0f9ff;
+  box-shadow: 0 12px 28px rgba(14, 116, 144, 0.3);
+  cursor: ew-resize;
 }
 
 .sense-rich-toolbar-color {
@@ -2178,11 +2446,28 @@ body.sense-editor-preview-resizing * {
 }
 
 .sense-rich-editor-surface .sense-rich-table,
+.sense-rich-editor-surface .tableWrapper table,
 .sense-rich-renderer .sense-rich-table {
-  width: 100%;
+  width: auto;
   border-collapse: collapse;
   margin: 1.25em 0;
   table-layout: fixed;
+  background: rgba(255, 255, 255, 0.96);
+  color: #0f172a;
+  max-width: none;
+}
+
+.sense-rich-editor-surface .sense-rich-table[data-table-width-mode="auto"],
+.sense-rich-editor-surface .tableWrapper table[data-table-width-mode="auto"],
+.sense-rich-renderer .sense-rich-table[data-table-width-mode="auto"] {
+  width: max-content;
+  table-layout: auto;
+}
+
+.sense-rich-editor-surface .sense-rich-table[data-table-width-mode="full"],
+.sense-rich-editor-surface .tableWrapper table[data-table-width-mode="full"],
+.sense-rich-renderer .sense-rich-table[data-table-width-mode="full"] {
+  width: 100%;
 }
 
 .sense-rich-editor-surface .tableWrapper,
@@ -2191,27 +2476,225 @@ body.sense-editor-preview-resizing * {
 .sense-rich-renderer .sense-rich-table-wrap {
   overflow-x: auto;
   max-width: 100%;
+  position: relative;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.48) transparent;
 }
 
 .sense-rich-editor-surface .sense-rich-table th,
 .sense-rich-editor-surface .sense-rich-table td,
+.sense-rich-editor-surface .tableWrapper th,
+.sense-rich-editor-surface .tableWrapper td,
 .sense-rich-renderer .sense-rich-table th,
 .sense-rich-renderer .sense-rich-table td {
   border: 1px solid rgba(148, 163, 184, 0.36);
   padding: 10px 12px;
   vertical-align: top;
+  position: relative;
+  overflow: hidden;
+  word-break: break-word;
+  line-height: 1.55;
+  transition: box-shadow 140ms ease, background-color 140ms ease, border-color 140ms ease;
 }
 
 .sense-rich-editor-surface .table-style-compact th,
 .sense-rich-editor-surface .table-style-compact td,
+.sense-rich-editor-surface .tableWrapper .table-style-compact th,
+.sense-rich-editor-surface .tableWrapper .table-style-compact td,
 .sense-rich-renderer .table-style-compact th,
 .sense-rich-renderer .table-style-compact td {
   padding: 6px 8px;
 }
 
 .sense-rich-editor-surface .table-style-zebra tbody tr:nth-child(odd),
+.sense-rich-editor-surface .tableWrapper .table-style-zebra tbody tr:nth-child(odd),
 .sense-rich-renderer .table-style-zebra tbody tr:nth-child(odd) {
   background: rgba(226, 232, 240, 0.52);
+}
+
+.sense-rich-editor-surface .table-style-three-line,
+.sense-rich-editor-surface .tableWrapper .table-style-three-line,
+.sense-rich-renderer .table-style-three-line,
+.sense-rich-editor-surface .table-border-three-line,
+.sense-rich-editor-surface .tableWrapper .table-border-three-line,
+.sense-rich-renderer .table-border-three-line {
+  border-top: 2px solid rgba(51, 65, 85, 0.92);
+  border-bottom: 2px solid rgba(51, 65, 85, 0.92);
+}
+
+.sense-rich-editor-surface .table-style-three-line th,
+.sense-rich-editor-surface .table-style-three-line td,
+.sense-rich-editor-surface .tableWrapper .table-style-three-line th,
+.sense-rich-editor-surface .tableWrapper .table-style-three-line td,
+.sense-rich-renderer .table-style-three-line th,
+.sense-rich-renderer .table-style-three-line td,
+.sense-rich-editor-surface .table-border-three-line th,
+.sense-rich-editor-surface .table-border-three-line td,
+.sense-rich-editor-surface .tableWrapper .table-border-three-line th,
+.sense-rich-editor-surface .tableWrapper .table-border-three-line td,
+.sense-rich-renderer .table-border-three-line th,
+.sense-rich-renderer .table-border-three-line td {
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  border-bottom: 1px solid rgba(100, 116, 139, 0.55);
+}
+
+.sense-rich-editor-surface .table-style-three-line thead th,
+.sense-rich-editor-surface .tableWrapper .table-style-three-line thead th,
+.sense-rich-renderer .table-style-three-line thead th,
+.sense-rich-editor-surface .table-border-three-line thead th,
+.sense-rich-editor-surface .tableWrapper .table-border-three-line thead th,
+.sense-rich-renderer .table-border-three-line thead th {
+  border-bottom: 2px solid rgba(51, 65, 85, 0.92);
+}
+
+.sense-rich-editor-surface .table-border-none th,
+.sense-rich-editor-surface .table-border-none td,
+.sense-rich-editor-surface .tableWrapper .table-border-none th,
+.sense-rich-editor-surface .tableWrapper .table-border-none td,
+.sense-rich-renderer .table-border-none th,
+.sense-rich-renderer .table-border-none td {
+  border: none;
+}
+
+.sense-rich-editor-surface .table-border-inner-horizontal th,
+.sense-rich-editor-surface .table-border-inner-horizontal td,
+.sense-rich-editor-surface .tableWrapper .table-border-inner-horizontal th,
+.sense-rich-editor-surface .tableWrapper .table-border-inner-horizontal td,
+.sense-rich-renderer .table-border-inner-horizontal th,
+.sense-rich-renderer .table-border-inner-horizontal td {
+  border: none;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.42);
+}
+
+.sense-rich-editor-surface .table-border-inner-horizontal tr:last-child > *,
+.sense-rich-editor-surface .tableWrapper .table-border-inner-horizontal tr:last-child > *,
+.sense-rich-renderer .table-border-inner-horizontal tr:last-child > * {
+  border-bottom: none;
+}
+
+.sense-rich-editor-surface .table-border-inner-vertical th,
+.sense-rich-editor-surface .table-border-inner-vertical td,
+.sense-rich-editor-surface .tableWrapper .table-border-inner-vertical th,
+.sense-rich-editor-surface .tableWrapper .table-border-inner-vertical td,
+.sense-rich-renderer .table-border-inner-vertical th,
+.sense-rich-renderer .table-border-inner-vertical td {
+  border: none;
+  border-right: 1px solid rgba(148, 163, 184, 0.42);
+}
+
+.sense-rich-editor-surface .table-border-inner-vertical tr > *:last-child,
+.sense-rich-editor-surface .tableWrapper .table-border-inner-vertical tr > *:last-child,
+.sense-rich-renderer .table-border-inner-vertical tr > *:last-child {
+  border-right: none;
+}
+
+.sense-rich-editor-surface .table-border-outer th,
+.sense-rich-editor-surface .table-border-outer td,
+.sense-rich-editor-surface .tableWrapper .table-border-outer th,
+.sense-rich-editor-surface .tableWrapper .table-border-outer td,
+.sense-rich-renderer .table-border-outer th,
+.sense-rich-renderer .table-border-outer td {
+  border: none;
+}
+
+.sense-rich-editor-surface .table-border-outer tr:first-child > * ,
+.sense-rich-editor-surface .tableWrapper .table-border-outer tr:first-child > * ,
+.sense-rich-renderer .table-border-outer tr:first-child > * {
+  border-top: 1px solid rgba(148, 163, 184, 0.48);
+}
+
+.sense-rich-editor-surface .table-border-outer tr:last-child > * ,
+.sense-rich-editor-surface .tableWrapper .table-border-outer tr:last-child > * ,
+.sense-rich-renderer .table-border-outer tr:last-child > * {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.48);
+}
+
+.sense-rich-editor-surface .table-border-outer tr > *:first-child,
+.sense-rich-editor-surface .tableWrapper .table-border-outer tr > *:first-child,
+.sense-rich-renderer .table-border-outer tr > *:first-child {
+  border-left: 1px solid rgba(148, 163, 184, 0.48);
+}
+
+.sense-rich-editor-surface .table-border-outer tr > *:last-child,
+.sense-rich-editor-surface .tableWrapper .table-border-outer tr > *:last-child,
+.sense-rich-renderer .table-border-outer tr > *:last-child {
+  border-right: 1px solid rgba(148, 163, 184, 0.48);
+}
+
+.sense-rich-editor-surface .table-cell-valign-middle,
+.sense-rich-renderer .table-cell-valign-middle {
+  vertical-align: middle;
+}
+
+.sense-rich-editor-surface .table-cell-valign-bottom,
+.sense-rich-renderer .table-cell-valign-bottom {
+  vertical-align: bottom;
+}
+
+.sense-rich-editor-surface .table-cell-diagonal-tl-br,
+.sense-rich-editor-surface .table-cell-diagonal-tr-bl,
+.sense-rich-renderer .table-cell-diagonal-tl-br,
+.sense-rich-renderer .table-cell-diagonal-tr-bl {
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+.sense-rich-editor-surface .table-cell-diagonal-tl-br,
+.sense-rich-renderer .table-cell-diagonal-tl-br {
+  background-image: linear-gradient(to bottom right, transparent calc(50% - 1px), rgba(71, 85, 105, 0.72) 50%, transparent calc(50% + 1px));
+}
+
+.sense-rich-editor-surface .table-cell-diagonal-tr-bl,
+.sense-rich-renderer .table-cell-diagonal-tr-bl {
+  background-image: linear-gradient(to bottom left, transparent calc(50% - 1px), rgba(71, 85, 105, 0.72) 50%, transparent calc(50% + 1px));
+}
+
+.sense-rich-editor-surface .selectedCell,
+.sense-rich-editor-surface td.selectedCell,
+.sense-rich-editor-surface th.selectedCell {
+  background: rgba(56, 189, 248, 0.18);
+  box-shadow: inset 0 0 0 2px rgba(14, 165, 233, 0.32);
+}
+
+.sense-rich-editor-surface .sense-table-active-cell {
+  background: rgba(186, 230, 253, 0.22);
+  box-shadow: inset 0 0 0 2px rgba(14, 165, 233, 0.54), 0 0 0 1px rgba(125, 211, 252, 0.24);
+}
+
+.sense-rich-editor-surface .selectedCell.sense-table-active-cell {
+  box-shadow: inset 0 0 0 2px rgba(2, 132, 199, 0.82), 0 0 0 1px rgba(125, 211, 252, 0.36);
+}
+
+.sense-rich-editor-surface td[rowspan]:not([rowspan="1"]),
+.sense-rich-editor-surface th[rowspan]:not([rowspan="1"]),
+.sense-rich-editor-surface td[colspan]:not([colspan="1"]),
+.sense-rich-editor-surface th[colspan]:not([colspan="1"]),
+.sense-rich-renderer td[rowspan]:not([rowspan="1"]),
+.sense-rich-renderer th[rowspan]:not([rowspan="1"]),
+.sense-rich-renderer td[colspan]:not([colspan="1"]),
+.sense-rich-renderer th[colspan]:not([colspan="1"]) {
+  box-shadow: inset 0 0 0 1px rgba(14, 165, 233, 0.22);
+}
+
+.sense-rich-editor-surface .sense-table-selected-merged-cell,
+.sense-rich-editor-surface .sense-table-active-merged-cell {
+  box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0.52);
+}
+
+.sense-rich-editor-surface .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: rgba(14, 165, 233, 0.58);
+}
+
+.sense-rich-editor-surface.resize-cursor {
+  cursor: col-resize;
 }
 
 .sense-rich-editor-surface .task-item,
@@ -2244,6 +2727,29 @@ body.sense-editor-preview-resizing * {
 .sense-rich-editor-surface .align-justify,
 .sense-rich-renderer .align-justify {
   text-align: justify;
+}
+
+@media (max-width: 980px) {
+  .sense-table-context-band {
+    padding: 7px 8px;
+  }
+
+  .sense-table-context-band-row {
+    gap: 5px;
+  }
+
+  .sense-rich-table-popover,
+  .sense-rich-table-dropdown {
+    max-width: none;
+    min-width: 0;
+    width: auto;
+  }
+
+  .sense-rich-table-dropdown-portal {
+    left: 12px !important;
+    right: 12px !important;
+    top: 72px !important;
+  }
 }
 
 .sense-rich-renderer .sense-article-block[id],
