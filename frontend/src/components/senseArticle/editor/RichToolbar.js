@@ -33,6 +33,13 @@ import ImportMarkdownDialog from './dialogs/ImportMarkdownDialog';
 import TextColorPopover from './dialogs/TextColorPopover';
 import { FONT_SIZE_PRESETS, normalizeFontSize } from './extensions/FontSize';
 import { buildTableWidthPayload } from './table/tableWidthUtils';
+import { applyAttrsToSelectedTableCells, getTableSelectionState, isCellSelection } from './table/tableSelectionState';
+import {
+  describeActiveElement,
+  describeEditorSelection,
+  describeScrollPosition,
+  senseEditorDebugLog
+} from './editorDebug';
 
 const buttonLabel = (label, icon) => (<>{icon}<span>{label}</span></>);
 
@@ -41,7 +48,8 @@ const RichToolbar = ({
   onSearchReferences,
   onUploadMedia,
   mediaLibrary = null,
-  onImportMarkdown = null
+  onImportMarkdown = null,
+  dialogPortalTarget = null
 }) => {
   const [linkDialogMode, setLinkDialogMode] = useState('');
   const [mediaDialogKind, setMediaDialogKind] = useState('');
@@ -50,7 +58,9 @@ const RichToolbar = ({
   const [colorOpen, setColorOpen] = useState(false);
   const [fontSizeInput, setFontSizeInput] = useState('16');
   const colorPopoverRef = useRef(null);
-  const preservedSelectionRef = useRef(null);
+  const mediaToolbarGroupRef = useRef(null);
+  const preservedSelectionBookmarkRef = useRef(null);
+  const preservedCellSelectionRef = useRef(null);
   const preservedTextRef = useRef('');
 
   const selectedImage = editor?.isActive('figureImage') ? editor.getAttributes('figureImage') : null;
@@ -73,7 +83,8 @@ const RichToolbar = ({
 
       return {
         paragraphType,
-        activeFontSize: normalizeFontSize(currentEditor.getAttributes('textStyle')?.fontSize || '16px') || '16px'
+        activeFontSize: normalizeFontSize(currentEditor.getAttributes('textStyle')?.fontSize || '16px') || '16px',
+        tableSelectionState: getTableSelectionState(currentEditor)
       };
     }
   });
@@ -81,6 +92,7 @@ const RichToolbar = ({
   const paragraphType = editorUiState?.paragraphType || 'paragraph';
 
   const activeFontSize = editorUiState?.activeFontSize || '16px';
+  const tableSelectionState = editorUiState?.tableSelectionState || {};
 
   useEffect(() => {
     setFontSizeInput(String(activeFontSize).replace(/px$/, ''));
@@ -105,6 +117,17 @@ const RichToolbar = ({
     };
   }, [colorOpen]);
 
+  useEffect(() => {
+    if (!editor) return;
+    senseEditorDebugLog('toolbar', 'Media dialog state changed', {
+      mediaDialogKind: mediaDialogKind || '',
+      activeElement: describeActiveElement(),
+      scroll: describeScrollPosition(),
+      selection: describeEditorSelection(editor),
+      editorFocused: editor.isFocused
+    });
+  }, [editor, mediaDialogKind]);
+
   if (!editor) return null;
 
   const closeFloatingUi = () => {
@@ -116,20 +139,162 @@ const RichToolbar = ({
   };
 
   const preserveSelection = () => {
-    const { from, to } = editor.state.selection;
-    preservedSelectionRef.current = { from, to };
+    const selection = editor.state.selection;
+    const { from, to } = selection;
+    preservedSelectionBookmarkRef.current = selection?.getBookmark?.() || null;
+    preservedCellSelectionRef.current = isCellSelection(selection)
+      ? {
+        anchor: selection.$anchorCell.pos,
+        head: selection.$headCell.pos
+      }
+      : null;
     preservedTextRef.current = editor.state.doc.textBetween(from, to, ' ');
   };
 
+  const clearBrowserSelection = () => {
+    if (typeof window === 'undefined' || !window.getSelection) return;
+    const selection = window.getSelection();
+    if (!selection) return;
+    try {
+      selection.removeAllRanges();
+    } catch (_error) {
+      // Ignore DOM selection cleanup failures.
+    }
+  };
+
+  const restoreSelectionFromBookmark = () => {
+    const preservedCellSelection = preservedCellSelectionRef.current;
+    if (preservedCellSelection && editor?.state?.tr && editor?.view?.dispatch) {
+      try {
+        const nextSelection = editor.state.selection?.constructor?.create?.(
+          editor.state.doc,
+          preservedCellSelection.anchor,
+          preservedCellSelection.head
+        );
+        if (!nextSelection) throw new Error('CellSelection factory unavailable');
+        if (!editor.state.selection?.eq?.(nextSelection)) {
+          editor.view.dispatch(editor.state.tr.setSelection(nextSelection));
+        }
+        return true;
+      } catch (_error) {
+        // Fall through to bookmark restoration.
+      }
+    }
+    const bookmark = preservedSelectionBookmarkRef.current;
+    if (!bookmark || !editor?.state?.tr || !editor?.view?.dispatch) return false;
+    try {
+      const selection = bookmark.resolve(editor.state.doc);
+      if (!editor.state.selection?.eq?.(selection)) {
+        editor.view.dispatch(editor.state.tr.setSelection(selection));
+      }
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  };
+
   const chainWithPreservedSelection = () => {
-    const chain = editor.chain().focus();
-    const selection = preservedSelectionRef.current;
-    if (!selection) return chain;
-    return chain.setTextSelection(selection);
+    restoreSelectionFromBookmark();
+    return editor.chain().focus();
   };
 
   const restoreSelection = () => {
-    chainWithPreservedSelection().run();
+    const restored = restoreSelectionFromBookmark();
+    if (restored && !preservedCellSelectionRef.current && typeof editor?.view?.focus === 'function') {
+      editor.view.focus();
+      return;
+    }
+    if (!preservedCellSelectionRef.current) {
+      editor.chain().focus().run();
+    }
+  };
+
+  const focusEditor = (reason = '') => {
+    if (preservedCellSelectionRef.current) {
+      senseEditorDebugLog('toolbar', 'Skipped editor focus to preserve multi-cell selection', {
+        reason,
+        activeElement: describeActiveElement(),
+        scroll: describeScrollPosition(),
+        selection: describeEditorSelection(editor)
+      });
+      return;
+    }
+    if (typeof editor?.view?.focus === 'function') editor.view.focus();
+    else editor.chain().focus().run();
+    senseEditorDebugLog('toolbar', 'Focused editor', {
+      reason,
+      activeElement: describeActiveElement(),
+      scroll: describeScrollPosition(),
+      selection: describeEditorSelection(editor)
+    });
+  };
+
+  const refreshPreservedSelectionVisibility = () => {
+    const nextBookmark = editor?.state?.selection?.getBookmark?.();
+    if (nextBookmark) preservedSelectionBookmarkRef.current = nextBookmark;
+    if (isCellSelection(editor?.state?.selection)) {
+      preservedCellSelectionRef.current = {
+        anchor: editor.state.selection.$anchorCell.pos,
+        head: editor.state.selection.$headCell.pos
+      };
+    }
+    const restore = () => {
+      restoreSelection();
+      const updatedBookmark = editor?.state?.selection?.getBookmark?.();
+      if (updatedBookmark) preservedSelectionBookmarkRef.current = updatedBookmark;
+      if (isCellSelection(editor?.state?.selection)) {
+        preservedCellSelectionRef.current = {
+          anchor: editor.state.selection.$anchorCell.pos,
+          head: editor.state.selection.$headCell.pos
+        };
+      }
+    };
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(restore);
+      return;
+    }
+    restore();
+  };
+
+  const runWithPreservedSelection = (command) => {
+    restoreSelectionFromBookmark();
+    const didRun = typeof command === 'function' ? command(editor.chain().focus()) : false;
+    if (didRun !== false) refreshPreservedSelectionVisibility();
+    return didRun;
+  };
+
+  const applyAlignment = (value) => {
+    restoreSelectionFromBookmark();
+    const latestTableSelectionState = getTableSelectionState(editor);
+    if (latestTableSelectionState?.isTableActive) {
+      if (latestTableSelectionState.isEntireTableSelected) {
+        if (value === 'justify') {
+          runWithPreservedSelection((chain) => chain.setTableAlign('left').setTableWidth('full', '100').run());
+          return;
+        }
+        runWithPreservedSelection((chain) => chain.setTableAlign(value).run());
+        return;
+      }
+      const didApply = applyAttrsToSelectedTableCells(editor, { textAlign: value });
+      if (didApply) {
+        refreshPreservedSelectionVisibility();
+      }
+      return;
+    }
+    runWithPreservedSelection((chain) => chain.setTextAlign(value).run());
+  };
+
+  const isAlignmentActive = (value) => {
+    if (tableSelectionState?.isTableActive) {
+      if (tableSelectionState.isEntireTableSelected) {
+        if (value === 'justify') {
+          return String(tableSelectionState?.currentTableAttrs?.tableWidthMode || 'auto') === 'full';
+        }
+        return String(tableSelectionState?.currentTableAttrs?.tableAlign || 'left') === value;
+      }
+      return String(tableSelectionState?.currentCellAttrs?.textAlign || 'left') === value;
+    }
+    return editor.isActive({ textAlign: value });
   };
 
   const insertOrUpdateMarkedText = (markName, attrs, text) => {
@@ -146,23 +311,22 @@ const RichToolbar = ({
   };
 
   const handleParagraphChange = (value) => {
-    const chain = chainWithPreservedSelection();
-    if (value === 'paragraph') {
-      chain.clearNodes().setParagraph().run();
-      return;
-    }
-    if (value === 'h1') chain.toggleHeading({ level: 1 }).run();
-    if (value === 'h2') chain.toggleHeading({ level: 2 }).run();
-    if (value === 'h3') chain.toggleHeading({ level: 3 }).run();
-    if (value === 'h4') chain.toggleHeading({ level: 4 }).run();
-    if (value === 'blockquote') chain.toggleBlockquote().run();
-    if (value === 'codeBlock') chain.toggleCodeBlock().run();
+    runWithPreservedSelection((chain) => {
+      if (value === 'paragraph') return chain.clearNodes().setParagraph().run();
+      if (value === 'h1') return chain.toggleHeading({ level: 1 }).run();
+      if (value === 'h2') return chain.toggleHeading({ level: 2 }).run();
+      if (value === 'h3') return chain.toggleHeading({ level: 3 }).run();
+      if (value === 'h4') return chain.toggleHeading({ level: 4 }).run();
+      if (value === 'blockquote') return chain.toggleBlockquote().run();
+      if (value === 'codeBlock') return chain.toggleCodeBlock().run();
+      return false;
+    });
   };
 
   const applyFontSize = (rawValue) => {
     const normalizedValue = normalizeFontSize(rawValue);
     if (!normalizedValue) return;
-    chainWithPreservedSelection().setFontSize(normalizedValue).run();
+    runWithPreservedSelection((chain) => chain.setFontSize(normalizedValue).run());
   };
 
   const handleLinkSubmit = (payload) => {
@@ -207,25 +371,99 @@ const RichToolbar = ({
   };
 
   const handleMediaSubmit = (payload) => {
+    senseEditorDebugLog('toolbar', 'Submitting media payload', {
+      kind: payload.kind,
+      activeElementBefore: describeActiveElement(),
+      scrollBefore: describeScrollPosition(),
+      selectionBefore: describeEditorSelection(editor),
+      editorFocused: editor.isFocused
+    });
+    let didRun = false;
     if (payload.kind === 'image') {
-      if (editor.isActive('figureImage')) chainWithPreservedSelection().updateFigureImage(payload).run();
-      else chainWithPreservedSelection().insertFigureImage(payload).run();
+      if (editor.isActive('figureImage')) didRun = chainWithPreservedSelection().updateFigureImage(payload).run();
+      else didRun = chainWithPreservedSelection().insertFigureImage(payload).run();
     }
     if (payload.kind === 'audio') {
-      if (editor.isActive('audioNode')) chainWithPreservedSelection().updateAudioNode(payload).run();
-      else chainWithPreservedSelection().insertAudioNode(payload).run();
+      if (editor.isActive('audioNode')) didRun = chainWithPreservedSelection().updateAudioNode(payload).run();
+      else didRun = chainWithPreservedSelection().insertAudioNode(payload).run();
     }
     if (payload.kind === 'video') {
-      if (editor.isActive('videoNode')) chainWithPreservedSelection().updateVideoNode(payload).run();
-      else chainWithPreservedSelection().insertVideoNode(payload).run();
+      if (editor.isActive('videoNode')) didRun = chainWithPreservedSelection().updateVideoNode(payload).run();
+      else didRun = chainWithPreservedSelection().insertVideoNode(payload).run();
     }
+    senseEditorDebugLog('toolbar', 'Media command executed', {
+      kind: payload.kind,
+      didRun,
+      activeElementAfterRun: describeActiveElement(),
+      scrollAfterRun: describeScrollPosition(),
+      selectionAfterRun: describeEditorSelection(editor)
+    });
     closeFloatingUi();
+    window.requestAnimationFrame(() => {
+      focusEditor('media-submit');
+      senseEditorDebugLog('toolbar', 'Media dialog closed after submit', {
+        activeElementAfter: describeActiveElement(),
+        scrollAfter: describeScrollPosition(),
+        selectionAfter: describeEditorSelection(editor),
+        editorFocused: editor.isFocused
+      });
+    });
   };
 
-  const openSingleFloatingUi = (openCallback) => {
+  const openSingleFloatingUi = (openCallback, reason = 'generic') => {
     preserveSelection();
+    senseEditorDebugLog('toolbar', 'Opening floating UI', {
+      reason,
+      activeElementBefore: describeActiveElement(),
+      scrollBefore: describeScrollPosition(),
+      selectionBefore: describeEditorSelection(editor),
+      editorFocused: editor.isFocused
+    });
+    if (typeof editor?.commands?.blur === 'function') {
+      editor.commands.blur();
+    }
+    if (editor?.view?.dom?.blur) {
+      try {
+        editor.view.dom.blur();
+      } catch (_error) {
+        // Ignore DOM blur failures.
+      }
+    }
+    clearBrowserSelection();
     closeFloatingUi();
     openCallback();
+  };
+
+  const closeMediaDialog = (reason = 'cancel') => {
+    setMediaDialogKind('');
+    window.requestAnimationFrame(() => {
+      restoreSelection();
+      senseEditorDebugLog('toolbar', 'Media dialog closed', {
+        reason,
+        activeElementAfter: describeActiveElement(),
+        scrollAfter: describeScrollPosition(),
+        selectionAfter: describeEditorSelection(editor),
+        editorFocused: editor.isFocused
+      });
+    });
+  };
+
+  const applyIndentChange = (direction = 'increase') => {
+    restoreSelectionFromBookmark();
+    if (editor.isActive('listItem')) {
+      const didRun = runWithPreservedSelection((chain) => (
+        direction === 'increase'
+          ? chain.sinkListItem('listItem').run()
+          : chain.liftListItem('listItem').run()
+      ));
+      if (!didRun) focusEditor(`list-${direction}-noop`);
+      return;
+    }
+    if (direction === 'increase') {
+      runWithPreservedSelection((chain) => chain.increaseIndent().run());
+      return;
+    }
+    runWithPreservedSelection((chain) => chain.decreaseIndent().run());
   };
 
   return (
@@ -258,11 +496,11 @@ const RichToolbar = ({
         </ToolbarGroup>
 
         <ToolbarGroup title="文字样式">
-          <ToolbarButton active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} title="粗体 (Ctrl/Cmd+B)" ariaLabel="切换粗体">{buttonLabel('粗体', <Type size={16} />)}</ToolbarButton>
-          <ToolbarButton active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()} title="斜体 (Ctrl/Cmd+I)" ariaLabel="切换斜体">{buttonLabel('斜体', <Type size={16} />)}</ToolbarButton>
-          <ToolbarButton active={editor.isActive('underline')} onClick={() => editor.chain().focus().toggleUnderline().run()} title="下划线" ariaLabel="切换下划线">{buttonLabel('下划线', <Type size={16} />)}</ToolbarButton>
-          <ToolbarButton active={editor.isActive('strike')} onClick={() => editor.chain().focus().toggleStrike().run()} title="删除线" ariaLabel="切换删除线">{buttonLabel('删除线', <Type size={16} />)}</ToolbarButton>
-          <ToolbarButton active={editor.isActive('code')} onClick={() => editor.chain().focus().toggleCode().run()} title="行内代码" ariaLabel="切换行内代码">{buttonLabel('行内代码', <FileCode2 size={16} />)}</ToolbarButton>
+          <ToolbarButton active={editor.isActive('bold')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleBold().run())} title="粗体 (Ctrl/Cmd+B)" ariaLabel="切换粗体">{buttonLabel('粗体', <Type size={16} />)}</ToolbarButton>
+          <ToolbarButton active={editor.isActive('italic')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleItalic().run())} title="斜体 (Ctrl/Cmd+I)" ariaLabel="切换斜体">{buttonLabel('斜体', <Type size={16} />)}</ToolbarButton>
+          <ToolbarButton active={editor.isActive('underline')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleUnderline().run())} title="下划线" ariaLabel="切换下划线">{buttonLabel('下划线', <Type size={16} />)}</ToolbarButton>
+          <ToolbarButton active={editor.isActive('strike')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleStrike().run())} title="删除线" ariaLabel="切换删除线">{buttonLabel('删除线', <Type size={16} />)}</ToolbarButton>
+          <ToolbarButton active={editor.isActive('code')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleCode().run())} title="行内代码" ariaLabel="切换行内代码">{buttonLabel('行内代码', <FileCode2 size={16} />)}</ToolbarButton>
           <div className="sense-rich-toolbar-fontsize" aria-label="字号控制">
             <input
               type="text"
@@ -316,37 +554,41 @@ const RichToolbar = ({
                 open={colorOpen}
                 textColor={editor.getAttributes('textStyle')?.color || '#0f172a'}
                 highlightColor={editor.getAttributes('highlight')?.color || '#facc15'}
-                onTextColorChange={(value) => editor.chain().focus().setColor(value).run()}
-                onHighlightColorChange={(value) => editor.chain().focus().toggleHighlight({ color: value }).run()}
-                onClearTextColor={() => editor.chain().focus().unsetColor().run()}
-                onClearHighlight={() => editor.chain().focus().unsetHighlight().run()}
+                onTextColorChange={(value) => runWithPreservedSelection((chain) => chain.setColor(value).run())}
+                onHighlightColorChange={(value) => runWithPreservedSelection((chain) => chain.toggleHighlight({ color: value }).run())}
+                onClearTextColor={() => runWithPreservedSelection((chain) => chain.unsetColor().run())}
+                onClearHighlight={() => runWithPreservedSelection((chain) => chain.unsetHighlight().run())}
               />
             </div>
           </div>
         </ToolbarGroup>
 
         <ToolbarGroup title="对齐 / 缩进">
-          <ToolbarButton title="左对齐" active={editor.isActive({ textAlign: 'left' })} onClick={() => editor.chain().focus().setTextAlign('left').run()} ariaLabel="左对齐"><AlignLeft size={16} /></ToolbarButton>
-          <ToolbarButton title="居中对齐" active={editor.isActive({ textAlign: 'center' })} onClick={() => editor.chain().focus().setTextAlign('center').run()} ariaLabel="居中对齐"><AlignCenter size={16} /></ToolbarButton>
-          <ToolbarButton title="右对齐" active={editor.isActive({ textAlign: 'right' })} onClick={() => editor.chain().focus().setTextAlign('right').run()} ariaLabel="右对齐"><AlignRight size={16} /></ToolbarButton>
-          <ToolbarButton title="两端对齐" active={editor.isActive({ textAlign: 'justify' })} onClick={() => editor.chain().focus().setTextAlign('justify').run()} ariaLabel="两端对齐"><AlignJustify size={16} /></ToolbarButton>
-          <ToolbarButton title="增加缩进" onClick={() => editor.chain().focus().increaseIndent().run()} ariaLabel="增加缩进"><Indent size={16} /></ToolbarButton>
-          <ToolbarButton title="减少缩进" onClick={() => editor.chain().focus().decreaseIndent().run()} ariaLabel="减少缩进"><Outdent size={16} /></ToolbarButton>
+          <ToolbarButton title="左对齐" active={isAlignmentActive('left')} onMouseDownCapture={preserveSelection} onClick={() => applyAlignment('left')} ariaLabel="左对齐"><AlignLeft size={16} /></ToolbarButton>
+          <ToolbarButton title="居中对齐" active={isAlignmentActive('center')} onMouseDownCapture={preserveSelection} onClick={() => applyAlignment('center')} ariaLabel="居中对齐"><AlignCenter size={16} /></ToolbarButton>
+          <ToolbarButton title="右对齐" active={isAlignmentActive('right')} onMouseDownCapture={preserveSelection} onClick={() => applyAlignment('right')} ariaLabel="右对齐"><AlignRight size={16} /></ToolbarButton>
+          <ToolbarButton title="两端对齐" active={isAlignmentActive('justify')} onMouseDownCapture={preserveSelection} onClick={() => applyAlignment('justify')} ariaLabel="两端对齐"><AlignJustify size={16} /></ToolbarButton>
+          <ToolbarButton title="增加缩进" onMouseDownCapture={preserveSelection} onClick={() => applyIndentChange('increase')} ariaLabel="增加缩进"><Indent size={16} /></ToolbarButton>
+          <ToolbarButton title="减少缩进" onMouseDownCapture={preserveSelection} onClick={() => applyIndentChange('decrease')} ariaLabel="减少缩进"><Outdent size={16} /></ToolbarButton>
         </ToolbarGroup>
 
         <ToolbarGroup title="列表">
-          <ToolbarButton title="无序列表" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().setBulletListStyle('disc').run()}>{buttonLabel('无序', <List size={16} />)}</ToolbarButton>
-          <ToolbarButton title="有序列表" active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().setOrderedListStyle('decimal').run()}>{buttonLabel('有序', <ListOrdered size={16} />)}</ToolbarButton>
-          <ToolbarButton title="任务列表" active={editor.isActive('taskList')} onClick={() => editor.chain().focus().toggleTaskList().run()}>{buttonLabel('任务', <CheckSquare size={16} />)}</ToolbarButton>
+          <ToolbarButton title="无序列表" active={editor.isActive('bulletList')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.setBulletListStyle('disc').run())}>{buttonLabel('无序', <List size={16} />)}</ToolbarButton>
+          <ToolbarButton title="有序列表" active={editor.isActive('orderedList')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.setOrderedListStyle('decimal').run())}>{buttonLabel('有序', <ListOrdered size={16} />)}</ToolbarButton>
+          <ToolbarButton title="任务列表" active={editor.isActive('taskList')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleTaskList().run())}>{buttonLabel('任务', <CheckSquare size={16} />)}</ToolbarButton>
           <div className="sense-rich-toolbar-select compact">
+            <ListOrdered size={16} className="sense-rich-select-leading-icon" />
             <select
               aria-label="列表样式"
               value={editor.getAttributes('bulletList')?.listStyleType || editor.getAttributes('orderedList')?.listStyleType || 'disc'}
               onMouseDownCapture={preserveSelection}
               onChange={(event) => {
                 const value = event.target.value;
-                if (['disc', 'circle', 'square'].includes(value)) chainWithPreservedSelection().setBulletListStyle(value).run();
-                else chainWithPreservedSelection().setOrderedListStyle(value).run();
+                if (['disc', 'circle', 'square'].includes(value)) {
+                  runWithPreservedSelection((chain) => chain.setBulletListStyle(value).run());
+                  return;
+                }
+                runWithPreservedSelection((chain) => chain.setOrderedListStyle(value).run());
               }}
             >
               <option value="disc">disc</option>
@@ -357,27 +599,32 @@ const RichToolbar = ({
               <option value="lower-alpha">lower-alpha</option>
               <option value="lower-roman">lower-roman</option>
             </select>
+            <ChevronDown size={14} />
           </div>
         </ToolbarGroup>
 
-        <ToolbarGroup title="插入">
-          <ToolbarButton title="插入分割线" onClick={() => editor.chain().focus().setHorizontalRule().createParagraphNear().run()}>{buttonLabel('分割线', <Minus size={16} />)}</ToolbarButton>
-          <ToolbarButton title="插入表格" onClick={() => openSingleFloatingUi(() => setTableDialogOpen(true))}>表格</ToolbarButton>
-          <ToolbarButton title="插入外部链接" onClick={() => openSingleFloatingUi(() => setLinkDialogMode('external'))}>{buttonLabel('链接', <Link2 size={16} />)}</ToolbarButton>
-          <ToolbarButton title="插入内部引用" onClick={() => openSingleFloatingUi(() => setLinkDialogMode('internal'))}>{buttonLabel('内部引用', <ListChecks size={16} />)}</ToolbarButton>
-          <ToolbarButton title="插入图片" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('image'))}>{buttonLabel('图片', <ImageIcon size={16} />)}</ToolbarButton>
-          <ToolbarButton title="插入音频" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('audio'))}>{buttonLabel('音频', <Mic size={16} />)}</ToolbarButton>
-          <ToolbarButton title="插入视频" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('video'))}>{buttonLabel('视频', <Video size={16} />)}</ToolbarButton>
-          <ToolbarButton title="导入 Markdown" onClick={() => openSingleFloatingUi(() => setMarkdownDialogOpen(true))}>导入 MD</ToolbarButton>
-        </ToolbarGroup>
+        <div ref={mediaToolbarGroupRef} className="sense-rich-toolbar-insert-cluster">
+          <ToolbarGroup title="插入">
+            <ToolbarButton title="插入分割线" onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.setHorizontalRule().createParagraphNear().run())}>{buttonLabel('分割线', <Minus size={16} />)}</ToolbarButton>
+            <ToolbarButton title="插入表格" onClick={() => openSingleFloatingUi(() => setTableDialogOpen(true), 'table-dialog')}>表格</ToolbarButton>
+            <ToolbarButton title="插入外部链接" onClick={() => openSingleFloatingUi(() => setLinkDialogMode('external'), 'external-link-dialog')}>{buttonLabel('链接', <Link2 size={16} />)}</ToolbarButton>
+            <ToolbarButton title="插入内部引用" onClick={() => openSingleFloatingUi(() => setLinkDialogMode('internal'), 'internal-link-dialog')}>{buttonLabel('内部引用', <ListChecks size={16} />)}</ToolbarButton>
+            <ToolbarButton title="插入图片" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('image'), 'media-image')}>{buttonLabel('图片', <ImageIcon size={16} />)}</ToolbarButton>
+            <ToolbarButton title="插入音频" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('audio'), 'media-audio')}>{buttonLabel('音频', <Mic size={16} />)}</ToolbarButton>
+            <ToolbarButton title="插入视频" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('video'), 'media-video')}>{buttonLabel('视频', <Video size={16} />)}</ToolbarButton>
+            <ToolbarButton title="导入 Markdown" onClick={() => openSingleFloatingUi(() => setMarkdownDialogOpen(true), 'markdown-dialog')}>导入 MD</ToolbarButton>
+          </ToolbarGroup>
+        </div>
 
         <ToolbarGroup title="清除" compact>
-          <ToolbarButton title="清除当前格式" onClick={() => {
-            const chain = editor.chain().focus().unsetAllMarks();
-            if (editor.isActive('heading') || editor.isActive('blockquote') || editor.isActive('codeBlock')) {
-              chain.setParagraph();
-            }
-            chain.run();
+          <ToolbarButton title="清除当前格式" onMouseDownCapture={preserveSelection} onClick={() => {
+            runWithPreservedSelection((chain) => {
+              const nextChain = chain.unsetAllMarks();
+              if (editor.isActive('heading') || editor.isActive('blockquote') || editor.isActive('codeBlock')) {
+                nextChain.setParagraph();
+              }
+              return nextChain.run();
+            });
           }}>{buttonLabel('清除格式', <Eraser size={16} />)}</ToolbarButton>
         </ToolbarGroup>
       </div>
@@ -404,13 +651,14 @@ const RichToolbar = ({
         open={!!mediaDialogKind}
         kind={mediaDialogKind || 'image'}
         initialValue={mediaDialogKind === 'image' ? (selectedImage || {}) : mediaDialogKind === 'audio' ? (selectedAudio || {}) : (selectedVideo || {})}
-        onClose={() => {
-          restoreSelection();
-          setMediaDialogKind('');
-        }}
+        onClose={() => closeMediaDialog('cancel')}
         onUpload={onUploadMedia}
         onSubmit={handleMediaSubmit}
         mediaLibrary={mediaLibrary}
+        restoreFocusOnClose={false}
+        presentation="dialog"
+        anchorRef={mediaToolbarGroupRef}
+        portalTarget={dialogPortalTarget}
       />
       <ImportMarkdownDialog
         open={markdownDialogOpen}

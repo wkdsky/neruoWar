@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlignCenter, ChevronDown, StretchHorizontal, X } from 'lucide-react';
 import DialogFrame from './DialogFrame';
+import { describeActiveElement, describeScrollPosition, senseEditorDebugLog } from '../editorDebug';
 
 const MEDIA_FIELD_BY_KIND = {
   image: {
@@ -25,6 +27,66 @@ const VALIDATION_PATTERNS = {
   video: /\.(mp4|webm|ogg|mov)(\?.*)?$/i
 };
 
+const AUDIO_MIME_BY_EXTENSION = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  flac: 'audio/flac'
+};
+
+const VIDEO_MIME_BY_EXTENSION = {
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  ogg: 'video/ogg',
+  mov: 'video/quicktime'
+};
+
+const resolveExtensionFromValue = (value = '') => {
+  const normalized = String(value || '').trim().split('?')[0].toLowerCase();
+  const match = normalized.match(/\.([a-z0-9]+)$/i);
+  return match ? match[1] : '';
+};
+
+const inferMediaMimeType = ({ kind = 'image', fileType = '', fileName = '', sourceUrl = '' } = {}) => {
+  const normalizedFileType = String(fileType || '').trim().toLowerCase();
+  if (normalizedFileType) return normalizedFileType;
+  const extension = resolveExtensionFromValue(fileName || sourceUrl);
+  if (!extension) return '';
+  if (kind === 'audio') return AUDIO_MIME_BY_EXTENSION[extension] || '';
+  if (kind === 'video') return VIDEO_MIME_BY_EXTENSION[extension] || '';
+  return '';
+};
+
+const canBrowserPlayMedia = ({ kind = 'audio', mimeType = '' } = {}) => {
+  if ((kind !== 'audio' && kind !== 'video') || typeof document === 'undefined') return true;
+  const normalizedMimeType = String(mimeType || '').trim().toLowerCase();
+  if (!normalizedMimeType) return true;
+  const element = document.createElement(kind);
+  if (!element || typeof element.canPlayType !== 'function') return true;
+  return element.canPlayType(normalizedMimeType).replace(/^no$/i, '') !== '';
+};
+
+const getUnsupportedMediaMessage = (kind = 'audio') => {
+  if (kind === 'audio') {
+    return '当前浏览器不支持该音频格式。建议使用 MP3、WAV 或 OGG；M4A 取决于具体编码。';
+  }
+  if (kind === 'video') {
+    return '当前浏览器不支持该视频格式。建议使用 MP4 或 WebM。';
+  }
+  return '当前浏览器不支持该媒体格式。';
+};
+
+const focusWithoutScroll = (target) => {
+  if (!target?.focus) return;
+  try {
+    target.focus({ preventScroll: true });
+  } catch (_error) {
+    target.focus();
+  }
+};
+
 const InsertMediaDialog = ({
   open,
   kind = 'image',
@@ -32,7 +94,13 @@ const InsertMediaDialog = ({
   onClose,
   onUpload,
   onSubmit,
-  mediaLibrary = null
+  mediaLibrary = null,
+  restoreFocusOnClose = true,
+  restoreFocusTarget = null,
+  onAfterCloseFocus = null,
+  presentation = 'dialog',
+  anchorRef = null,
+  portalTarget = null
 }) => {
   const [insertMode, setInsertMode] = useState('upload');
   const [file, setFile] = useState(null);
@@ -46,21 +114,75 @@ const InsertMediaDialog = ({
   const [align, setAlign] = useState('center');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const inlinePanelRef = useRef(null);
+  const closeButtonRef = useRef(null);
+  const titleIdRef = useRef(`sense-rich-media-title-${Math.random().toString(36).slice(2)}`);
+  const descriptionIdRef = useRef(`sense-rich-media-description-${Math.random().toString(36).slice(2)}`);
+  const initialSrc = initialValue?.src || '';
+  const initialAlt = initialValue?.alt || '';
+  const initialCaption = initialValue?.caption || '';
+  const initialTitle = initialValue?.title || '';
+  const initialDescription = initialValue?.description || '';
+  const initialPoster = initialValue?.poster || '';
+  const initialWidth = initialValue?.width || (kind === 'image' ? '75%' : '100%');
+  const initialAlign = initialValue?.align || 'center';
 
   useEffect(() => {
     if (!open) return;
     setInsertMode('upload');
     setFile(null);
-    setUrl(initialValue.src || '');
-    setAlt(initialValue.alt || '');
-    setCaption(initialValue.caption || '');
-    setTitle(initialValue.title || '');
-    setDescription(initialValue.description || '');
-    setPoster(initialValue.poster || '');
-    setWidth(initialValue.width || (kind === 'image' ? '75%' : '100%'));
-    setAlign(initialValue.align || 'center');
+    setUrl(initialSrc);
+    setAlt(initialAlt);
+    setCaption(initialCaption);
+    setTitle(initialTitle);
+    setDescription(initialDescription);
+    setPoster(initialPoster);
+    setWidth(initialWidth);
+    setAlign(initialAlign);
     setError('');
-  }, [initialValue, kind, open]);
+  }, [initialAlign, initialAlt, initialCaption, initialDescription, initialPoster, initialSrc, initialTitle, initialWidth, kind, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    senseEditorDebugLog('media-dialog', 'Media dialog rendered/opened', {
+      kind,
+      presentation,
+      activeElement: describeActiveElement(),
+      scroll: describeScrollPosition(),
+      insertMode,
+      hasInitialSrc: !!initialSrc
+    });
+  }, [initialSrc, insertMode, kind, open, presentation]);
+
+  useEffect(() => {
+    if (!open || presentation !== 'inline' || typeof document === 'undefined') return undefined;
+    const handlePointerDown = (event) => {
+      const panelElement = inlinePanelRef.current;
+      const anchorElement = anchorRef?.current || null;
+      if (panelElement?.contains(event.target)) return;
+      if (anchorElement?.contains?.(event.target)) return;
+      senseEditorDebugLog('media-dialog', 'Inline media panel closing from outside pointerdown', {
+        kind,
+        activeElement: describeActiveElement(),
+        scroll: describeScrollPosition()
+      });
+      onClose?.();
+    };
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose?.();
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    window.requestAnimationFrame(() => {
+      focusWithoutScroll(closeButtonRef.current || inlinePanelRef.current);
+    });
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [anchorRef, kind, onClose, open, presentation]);
 
   const kindMeta = MEDIA_FIELD_BY_KIND[kind] || MEDIA_FIELD_BY_KIND.image;
 
@@ -121,9 +243,26 @@ const InsertMediaDialog = ({
   const handleSubmit = useCallback(async () => {
     setError('');
     setPending(true);
+    senseEditorDebugLog('media-dialog', 'Submitting media dialog form', {
+      kind,
+      insertMode,
+      activeElement: describeActiveElement(),
+      scroll: describeScrollPosition(),
+      hasFile: !!file,
+      hasUrl: !!url.trim()
+    });
     try {
       let sourceUrl = url.trim();
       if (insertMode === 'upload' && file) {
+        const selectedMimeType = inferMediaMimeType({
+          kind,
+          fileType: file.type,
+          fileName: file.name
+        });
+        if (!canBrowserPlayMedia({ kind, mimeType: selectedMimeType })) {
+          setError(getUnsupportedMediaMessage(kind));
+          return;
+        }
         try {
           const metadata = await readLocalMediaMetadata(file);
           const response = await onUpload({
@@ -150,6 +289,14 @@ const InsertMediaDialog = ({
         const validationError = validateUrl(sourceUrl);
         if (validationError) {
           setError(validationError);
+          return;
+        }
+        const urlMimeType = inferMediaMimeType({
+          kind,
+          sourceUrl
+        });
+        if (!canBrowserPlayMedia({ kind, mimeType: urlMimeType })) {
+          setError(getUnsupportedMediaMessage(kind));
           return;
         }
       }
@@ -193,8 +340,8 @@ const InsertMediaDialog = ({
     </>
   ), [file, handleSubmit, insertMode, onClose, pending, url]);
 
-  return (
-    <DialogFrame open={open} title={kindMeta.title} description="媒体必须通过上传或 URL 引用插入；上传成功后会记录媒体元数据与 revision 引用关系。" onClose={onClose} footer={footer} wide>
+  const content = (
+    <>
       <div className="sense-rich-link-tabs">
         <button type="button" className={insertMode === 'upload' ? 'active' : ''} onClick={() => setInsertMode('upload')}>上传文件</button>
         <button type="button" className={insertMode === 'url' ? 'active' : ''} onClick={() => setInsertMode('url')}>粘贴 URL</button>
@@ -255,17 +402,25 @@ const InsertMediaDialog = ({
             </label>
             <label>
               <span>宽度</span>
-              <select value={width} onChange={(event) => setWidth(event.target.value)}>
-                {kindMeta.widthOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-              </select>
+              <div className="sense-rich-dialog-select">
+                <StretchHorizontal size={16} className="sense-rich-dialog-select-icon" />
+                <select value={width} onChange={(event) => setWidth(event.target.value)}>
+                  {kindMeta.widthOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+                <ChevronDown size={16} className="sense-rich-dialog-select-caret" />
+              </div>
             </label>
             <label>
               <span>对齐</span>
-              <select value={align} onChange={(event) => setAlign(event.target.value)}>
-                <option value="left">左</option>
-                <option value="center">中</option>
-                <option value="right">右</option>
-              </select>
+              <div className="sense-rich-dialog-select">
+                <AlignCenter size={16} className="sense-rich-dialog-select-icon" />
+                <select value={align} onChange={(event) => setAlign(event.target.value)}>
+                  <option value="left">左</option>
+                  <option value="center">中</option>
+                  <option value="right">右</option>
+                </select>
+                <ChevronDown size={16} className="sense-rich-dialog-select-caret" />
+              </div>
             </label>
           </>
         ) : null}
@@ -293,13 +448,64 @@ const InsertMediaDialog = ({
             </label>
             <label>
               <span>宽度</span>
-              <select value={width} onChange={(event) => setWidth(event.target.value)}>
-                {kindMeta.widthOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-              </select>
+              <div className="sense-rich-dialog-select">
+                <StretchHorizontal size={16} className="sense-rich-dialog-select-icon" />
+                <select value={width} onChange={(event) => setWidth(event.target.value)}>
+                  {kindMeta.widthOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+                <ChevronDown size={16} className="sense-rich-dialog-select-caret" />
+              </div>
             </label>
           </>
         ) : null}
       </div>
+    </>
+  );
+
+  if (presentation === 'inline') {
+    if (!open) return null;
+    return (
+      <div
+        ref={inlinePanelRef}
+        className="sense-rich-inline-panel"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby={titleIdRef.current}
+        aria-describedby={descriptionIdRef.current}
+        tabIndex={-1}
+      >
+        <div className="sense-rich-dialog-header">
+          <div className="sense-rich-dialog-header-copy">
+            <strong id={titleIdRef.current}>{kindMeta.title}</strong>
+            <span id={descriptionIdRef.current} className="sense-rich-dialog-description">
+              媒体必须通过上传或 URL 引用插入；上传成功后会记录媒体元数据与 revision 引用关系。
+            </span>
+          </div>
+          <button ref={closeButtonRef} type="button" className="sense-rich-dialog-close" onClick={onClose} aria-label="关闭">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="sense-rich-dialog-body">{content}</div>
+        <div className="sense-rich-dialog-footer">{footer}</div>
+      </div>
+    );
+  }
+
+  return (
+    <DialogFrame
+      open={open}
+      title={kindMeta.title}
+      description="媒体必须通过上传或 URL 引用插入；上传成功后会记录媒体元数据与 revision 引用关系。"
+      onClose={onClose}
+      footer={footer}
+      wide
+      restoreFocusOnClose={restoreFocusOnClose}
+      restoreFocusTarget={restoreFocusTarget}
+      onAfterCloseFocus={onAfterCloseFocus}
+      autoFocusTarget="dialog"
+      portalTarget={portalTarget}
+    >
+      {content}
     </DialogFrame>
   );
 };

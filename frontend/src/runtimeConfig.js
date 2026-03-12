@@ -24,9 +24,20 @@ const resolveBackendOrigin = () => {
 export const DEFAULT_BACKEND_ORIGIN = LEGACY_BACKEND_ORIGIN;
 export const BACKEND_ORIGIN = resolveBackendOrigin();
 export const API_BASE = `${BACKEND_ORIGIN}/api`;
+const MEDIA_ASSET_PREFIX = '/uploads/';
 
 export const mapBackendUrl = (url = '') => {
   if (typeof url !== 'string') return url;
   if (!url.startsWith(DEFAULT_BACKEND_ORIGIN)) return url;
   return `${BACKEND_ORIGIN}${url.slice(DEFAULT_BACKEND_ORIGIN.length)}`;
+};
+
+export const resolveBackendAssetUrl = (url = '') => {
+  if (typeof url !== 'string') return url;
+  const normalized = url.trim();
+  if (!normalized) return normalized;
+  if (normalized.startsWith(MEDIA_ASSET_PREFIX)) {
+    return `${BACKEND_ORIGIN}${normalized}`;
+  }
+  return mapBackendUrl(normalized);
 };

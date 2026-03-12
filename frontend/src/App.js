@@ -41,6 +41,7 @@ import {
 import { senseArticleApi } from './utils/senseArticleApi';
 import { API_BASE, BACKEND_ORIGIN } from './runtimeConfig';
 import BattleDataService from './game/battle/data/BattleDataService';
+import { isSenseEditorDebugEnabled } from './components/senseArticle/editor/editorDebug';
 
 // 导入头像
 import defaultMale1 from './assets/avatars/default_male_1.svg';
@@ -515,6 +516,7 @@ const App = () => {
         const storedLocation = localStorage.getItem('userLocation');
         const storedProfession = localStorage.getItem('profession');
         const storedAvatar = localStorage.getItem('userAvatar');
+        const storedUserRole = localStorage.getItem('userRole');
 
         if (token && storedUsername) {
             const resolvedUserId = storedUserId || decodeUserIdFromToken(token);
@@ -524,6 +526,7 @@ const App = () => {
             setProfession(storedProfession || '');
             setUserLocation(storedLocation || '');
             setUserAvatar(storedAvatar || 'default_male_1');
+            setIsAdmin(storedUserRole === 'admin');
             if (resolvedUserId) {
                 localStorage.setItem('userId', resolvedUserId);
             }
@@ -545,8 +548,10 @@ const App = () => {
                 }, 200);
             }
 
-            // 检查管理员状态
-            checkAdminStatus();
+            // 仅在已知管理员会话下校验管理员状态，避免普通用户刷新时触发 403 探测请求
+            if (storedUserRole === 'admin') {
+                checkAdminStatus();
+            }
         }
     }, []); // 只在组件挂载时执行一次
 
@@ -763,6 +768,17 @@ const App = () => {
         isStopping: !!normalizedTravel.isStopping
       };
     }, []);
+
+    useEffect(() => {
+        if (!isSenseEditorDebugEnabled()) return;
+        console.debug('[sense-editor:app] View/context changed', {
+            view,
+            nodeId: senseArticleContext?.nodeId || '',
+            senseId: senseArticleContext?.senseId || '',
+            revisionId: senseArticleContext?.revisionId || '',
+            selectedRevisionId: senseArticleContext?.selectedRevisionId || ''
+        });
+    }, [senseArticleContext, view]);
 
     // 初始化WebGL场景
     useEffect(() => {
@@ -997,12 +1013,14 @@ const App = () => {
     localStorage.setItem('userLocation', data.location || '');
     localStorage.setItem('profession', data.profession || '求知');
     localStorage.setItem('userAvatar', data.avatar || 'default_male_1');
+    localStorage.setItem('userRole', data.role || '');
     setAuthenticated(true);
     setUserId(normalizeObjectId(data.userId));
     setUsername(data.username);
     setProfession(data.profession || '求知');
     setUserLocation(data.location || '');
     setUserAvatar(data.avatar || 'default_male_1');
+    setIsAdmin(data.role === 'admin');
     const needsLocationSelection = data.role !== 'admin' && (!data.location || data.location === '');
     if (needsLocationSelection) {
       // 先打开降临弹窗，避免出现首页闪一下再弹窗
@@ -1014,7 +1032,9 @@ const App = () => {
     // 重新初始化socket连接（连接事件中会处理认证）
     initializeSocket(data.token);
 
-    await checkAdminStatus();
+    if (data.role === 'admin') {
+      await checkAdminStatus();
+    }
     if (data.role !== 'admin') {
       fetchTravelStatus(true);
     } else {
@@ -2370,6 +2390,7 @@ const App = () => {
         localStorage.removeItem('userLocation');
         localStorage.removeItem('profession');
         localStorage.removeItem('userAvatar');
+        localStorage.removeItem('userRole');
         localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
         hasRestoredPageRef.current = false;
         isRestoringPageRef.current = false;
@@ -2550,7 +2571,12 @@ const App = () => {
 
     const checkAdminStatus = async () => {
         const token = localStorage.getItem('token');
+        const storedUserRole = localStorage.getItem('userRole');
         if (!token) return;
+        if (storedUserRole && storedUserRole !== 'admin') {
+            setIsAdmin(false);
+            return;
+        }
     
         try {
             const response = await fetch(`${API_BASE}/admin/users`, {

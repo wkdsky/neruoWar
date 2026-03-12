@@ -13,6 +13,7 @@ const {
   materializeNodeSensesToEmbedded,
   backfillNodeSenseCollectionFromEmbedded
 } = require('./services/nodeSenseStore');
+const { pruneExpiredTemporaryMediaAssets } = require('./services/senseArticleMediaService');
 
 const WORKER_CONCURRENCY = Math.max(1, Math.min(32, parseInt(process.env.WORKER_CONCURRENCY, 10) || 1));
 const WORKER_LOCK_MS = Math.max(1000, parseInt(process.env.WORKER_LOCK_MS, 10) || 90 * 1000);
@@ -105,6 +106,10 @@ const handlers = {
     if (!ENABLE_MAINTENANCE_CLEANUP) return;
     const result = await runMaintenanceCleanup({ now: new Date() });
     console.log('[worker] maintenance cleanup:', JSON.stringify(result.deleted));
+  },
+  sense_article_temp_media_cleanup_tick: async () => {
+    const result = await pruneExpiredTemporaryMediaAssets({ now: new Date() });
+    console.log('[worker] temp media cleanup:', JSON.stringify(result));
   }
 };
 

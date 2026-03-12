@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { describeActiveElement, describeScrollPosition, senseEditorDebugLog } from '../editorDebug';
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -11,21 +12,81 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])'
 ].join(',');
 
-const DialogFrame = ({ open, title, description = '', onClose, children, footer = null, wide = false }) => {
+const resolveFocusTarget = (restoreFocusTarget, fallbackTarget) => {
+  if (typeof restoreFocusTarget === 'function') {
+    try {
+      return restoreFocusTarget() || fallbackTarget;
+    } catch (_error) {
+      return fallbackTarget;
+    }
+  }
+  if (restoreFocusTarget?.current) return restoreFocusTarget.current;
+  return restoreFocusTarget || fallbackTarget;
+};
+
+const focusWithoutScroll = (target) => {
+  if (!target?.focus) return;
+  try {
+    target.focus({ preventScroll: true });
+  } catch (_error) {
+    target.focus();
+  }
+};
+
+const DialogFrame = ({
+  open,
+  title,
+  description = '',
+  onClose,
+  children,
+  footer = null,
+  wide = false,
+  restoreFocusOnClose = true,
+  restoreFocusTarget = null,
+  onAfterCloseFocus = null,
+  autoFocusTarget = 'closeButton',
+  portalTarget = null
+}) => {
   const closeButtonRef = useRef(null);
   const dialogRef = useRef(null);
   const previousFocusedElementRef = useRef(null);
   const titleIdRef = useRef(`sense-rich-dialog-title-${Math.random().toString(36).slice(2)}`);
   const descriptionIdRef = useRef(`sense-rich-dialog-description-${Math.random().toString(36).slice(2)}`);
+  const latestOnCloseRef = useRef(onClose);
+  const latestRestoreFocusOnCloseRef = useRef(restoreFocusOnClose);
+  const latestRestoreFocusTargetRef = useRef(restoreFocusTarget);
+  const latestAfterCloseFocusRef = useRef(onAfterCloseFocus);
+  const latestTitleRef = useRef(title);
+
+  useEffect(() => {
+    latestOnCloseRef.current = onClose;
+    latestRestoreFocusOnCloseRef.current = restoreFocusOnClose;
+    latestRestoreFocusTargetRef.current = restoreFocusTarget;
+    latestAfterCloseFocusRef.current = onAfterCloseFocus;
+    latestTitleRef.current = title;
+  }, [onAfterCloseFocus, onClose, restoreFocusOnClose, restoreFocusTarget, title]);
 
   useEffect(() => {
     if (!open) return undefined;
     previousFocusedElementRef.current = document.activeElement;
-    closeButtonRef.current?.focus?.();
+    const initialFocusTarget = autoFocusTarget === 'dialog'
+      ? dialogRef.current
+      : autoFocusTarget === 'none'
+        ? null
+        : closeButtonRef.current;
+    if (initialFocusTarget) {
+      focusWithoutScroll(initialFocusTarget);
+    }
+    senseEditorDebugLog('dialog-frame', 'Dialog opened', {
+      title: latestTitleRef.current,
+      autoFocusTarget,
+      previousActiveElement: describeActiveElement(),
+      scroll: describeScrollPosition()
+    });
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onClose && onClose();
+        latestOnCloseRef.current && latestOnCloseRef.current();
         return;
       }
       if (event.key === 'Tab' && dialogRef.current) {
@@ -35,23 +96,43 @@ const DialogFrame = ({ open, title, description = '', onClose, children, footer 
         const lastElement = focusableElements[focusableElements.length - 1];
         if (event.shiftKey && document.activeElement === firstElement) {
           event.preventDefault();
-          lastElement.focus();
+          focusWithoutScroll(lastElement);
         } else if (!event.shiftKey && document.activeElement === lastElement) {
           event.preventDefault();
-          firstElement.focus();
+          focusWithoutScroll(firstElement);
         }
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
-      previousFocusedElementRef.current?.focus?.();
+      const shouldRestoreFocus = latestRestoreFocusOnCloseRef.current;
+      senseEditorDebugLog('dialog-frame', 'Dialog cleanup start', {
+        title: latestTitleRef.current,
+        restoreFocusOnClose: shouldRestoreFocus,
+        activeElementBeforeCleanup: describeActiveElement(),
+        scrollBeforeCleanup: describeScrollPosition()
+      });
+      if (shouldRestoreFocus) {
+        const nextFocusTarget = resolveFocusTarget(latestRestoreFocusTargetRef.current, previousFocusedElementRef.current);
+        focusWithoutScroll(nextFocusTarget);
+        senseEditorDebugLog('dialog-frame', 'Dialog restored focus on close', {
+          title: latestTitleRef.current,
+          nextFocusTargetTag: nextFocusTarget?.tagName || '',
+          activeElementAfterRestore: describeActiveElement(),
+          scrollAfterRestore: describeScrollPosition()
+        });
+      }
+      if (typeof latestAfterCloseFocusRef.current === 'function') {
+        latestAfterCloseFocusRef.current();
+      }
     };
-  }, [open, onClose]);
+  }, [autoFocusTarget, open]);
 
   if (!open || typeof document === 'undefined') return null;
 
-  return createPortal(
+  const resolvedPortalTarget = portalTarget?.current || portalTarget || document.body;
+  const dialogNode = (
     <div className="sense-rich-dialog-backdrop" onMouseDown={onClose}>
       <div
         ref={dialogRef}
@@ -61,6 +142,7 @@ const DialogFrame = ({ open, title, description = '', onClose, children, footer 
         aria-modal="true"
         aria-labelledby={titleIdRef.current}
         aria-describedby={description ? descriptionIdRef.current : undefined}
+        tabIndex={-1}
       >
         <div className="sense-rich-dialog-header">
           <div className="sense-rich-dialog-header-copy">
@@ -74,9 +156,11 @@ const DialogFrame = ({ open, title, description = '', onClose, children, footer 
         <div className="sense-rich-dialog-body">{children}</div>
         {footer ? <div className="sense-rich-dialog-footer">{footer}</div> : null}
       </div>
-    </div>,
-    document.body
+    </div>
   );
+
+  if (!resolvedPortalTarget) return dialogNode;
+  return createPortal(dialogNode, resolvedPortalTarget);
 };
 
 export default DialogFrame;

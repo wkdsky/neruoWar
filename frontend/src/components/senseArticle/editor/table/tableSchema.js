@@ -2,6 +2,8 @@ import { buildTableWidthPayload, DEFAULT_TABLE_WIDTH_MODE, DEFAULT_TABLE_WIDTH_V
 
 export const TABLE_STYLE_OPTIONS = Object.freeze(['default', 'compact', 'zebra', 'three-line']);
 export const TABLE_BORDER_PRESETS = Object.freeze(['all', 'none', 'outer', 'inner-horizontal', 'inner-vertical', 'three-line']);
+export const TABLE_BORDER_PRESET_OPTIONS = Object.freeze(['all', 'none', 'outer', 'three-line']);
+export const TABLE_ALIGN_OPTIONS = Object.freeze(['left', 'center', 'right']);
 export const TABLE_VERTICAL_ALIGN_OPTIONS = Object.freeze(['top', 'middle', 'bottom']);
 export const TABLE_DIAGONAL_MODES = Object.freeze(['none', 'tl-br', 'tr-bl']);
 export const TABLE_BORDER_EDGE_OPTIONS = Object.freeze(['top', 'right', 'bottom', 'left']);
@@ -28,6 +30,7 @@ export const TABLE_BORDER_CLASS_MAP = Object.freeze({
 export const DEFAULT_TABLE_ATTRIBUTES = Object.freeze({
   tableStyle: 'default',
   tableBorderPreset: 'all',
+  tableAlign: 'left',
   tableWidthMode: DEFAULT_TABLE_WIDTH_MODE,
   tableWidthValue: String(DEFAULT_TABLE_WIDTH_VALUE),
   columnWidths: ''
@@ -74,6 +77,10 @@ export const normalizeTableBorderPreset = (value = '') => (
   TABLE_BORDER_PRESETS.includes(String(value || '').trim()) ? String(value || '').trim() : DEFAULT_TABLE_ATTRIBUTES.tableBorderPreset
 );
 
+export const normalizeTableAlign = (value = '') => (
+  TABLE_ALIGN_OPTIONS.includes(String(value || '').trim()) ? String(value || '').trim() : DEFAULT_TABLE_ATTRIBUTES.tableAlign
+);
+
 export const normalizeVerticalAlign = (value = '') => (
   TABLE_VERTICAL_ALIGN_OPTIONS.includes(String(value || '').trim()) ? String(value || '').trim() : DEFAULT_CELL_ATTRIBUTES.verticalAlign
 );
@@ -106,6 +113,21 @@ export const normalizeBorderEdges = (value = '') => {
     .join(',');
 };
 
+export const normalizeExplicitBorderEdges = (value = '') => {
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) return '';
+  if (normalizedValue === 'all') return 'all';
+  if (normalizedValue === 'none') return 'none';
+  const entries = normalizedValue
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => TABLE_BORDER_EDGE_OPTIONS.includes(item));
+  if (entries.length === 0) return '';
+  return Array.from(new Set(entries))
+    .sort((left, right) => TABLE_BORDER_EDGE_OPTIONS.indexOf(left) - TABLE_BORDER_EDGE_OPTIONS.indexOf(right))
+    .join(',');
+};
+
 export const isBorderEdgeEnabled = (borderEdges = '', edge = '') => {
   const normalizedEdge = String(edge || '').trim();
   if (!TABLE_BORDER_EDGE_OPTIONS.includes(normalizedEdge)) return false;
@@ -122,6 +144,7 @@ export const buildTableAttributesPayload = (attributes = {}) => {
   return {
     tableStyle,
     tableBorderPreset,
+    tableAlign: normalizeTableAlign(attributes.tableAlign),
     tableWidthMode: widthPayload.tableWidthMode,
     tableWidthValue: widthPayload.tableWidthValue,
     columnWidths: serializeColumnWidths(attributes.columnWidths)
@@ -144,6 +167,13 @@ export const resolveTableWidthStyle = (attributes = {}) => {
   return `width: ${widthValue}%`;
 };
 
+export const resolveTableAlignStyle = (attributes = {}) => {
+  const tableAlign = normalizeTableAlign(attributes.tableAlign);
+  if (tableAlign === 'center') return 'margin-left: auto; margin-right: auto';
+  if (tableAlign === 'right') return 'margin-left: auto; margin-right: 0';
+  return 'margin-left: 0; margin-right: auto';
+};
+
 export const buildCellClassName = (attributes = {}) => {
   const classes = [];
   const diagonalMode = normalizeDiagonalMode(attributes.diagonalMode);
@@ -154,7 +184,7 @@ export const buildCellClassName = (attributes = {}) => {
 };
 
 export const buildCellDataAttributes = (attributes = {}) => {
-  const borderEdges = normalizeBorderEdges(attributes.borderEdges);
+  const borderEdges = normalizeExplicitBorderEdges(attributes.borderEdges);
   const borderWidth = normalizeBorderWidth(attributes.borderWidth);
   const backgroundColor = normalizeColor(attributes.backgroundColor);
   const textColor = normalizeColor(attributes.textColor);
@@ -179,7 +209,7 @@ export const buildCellInlineStyle = (attributes = {}) => {
   const verticalAlign = normalizeVerticalAlign(attributes.verticalAlign);
   const backgroundColor = normalizeColor(attributes.backgroundColor);
   const textColor = normalizeColor(attributes.textColor);
-  const borderEdges = normalizeBorderEdges(attributes.borderEdges);
+  const borderEdges = normalizeExplicitBorderEdges(attributes.borderEdges);
   const borderWidth = normalizeBorderWidth(attributes.borderWidth);
   const borderColor = normalizeColor(attributes.borderColor);
   const widthValue = serializeColumnWidths(attributes.colwidth).split(',')[0] || '';
@@ -190,7 +220,7 @@ export const buildCellInlineStyle = (attributes = {}) => {
   if (widthValue) style.push(`width: ${widthValue}px`);
   if (borderEdges) {
     const effectiveBorderWidth = borderWidth || '1';
-    const effectiveBorderColor = borderColor || '#94a3b8';
+    const effectiveBorderColor = borderColor || '#334155';
     TABLE_BORDER_EDGE_OPTIONS.forEach((edge) => {
       const property = `border-${edge}`;
       if (borderEdges === 'none') {

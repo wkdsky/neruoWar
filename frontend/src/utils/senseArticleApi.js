@@ -117,10 +117,12 @@ const requestJson = async (path, options = {}, requestOptions = {}) => {
 
   try {
     const response = await fetch(`${API_BASE}${path}`, {
+      ...(requestOptions.fetchOptions || {}),
       ...options,
       signal,
       headers: {
         ...(options.headers || {}),
+        ...((requestOptions.fetchOptions && requestOptions.fetchOptions.headers) || {}),
         ...(requestOptions.flowId ? { 'x-sense-flow-id': requestOptions.flowId } : {}),
         ...(requestId ? { 'x-sense-request-id': requestId } : {}),
         ...authHeaders()
@@ -205,10 +207,12 @@ const requestMultipart = async (path, formData, requestOptions = {}) => {
 
   try {
     const response = await fetch(`${API_BASE}${path}`, {
+      ...(requestOptions.fetchOptions || {}),
       method: 'POST',
       body: formData,
       signal,
       headers: {
+        ...((requestOptions.fetchOptions && requestOptions.fetchOptions.headers) || {}),
         ...authOnlyHeaders(),
         ...(requestOptions.flowId ? { 'x-sense-flow-id': requestOptions.flowId } : {}),
         ...(requestOptions.requestId ? { 'x-sense-request-id': requestOptions.requestId } : {})
@@ -288,5 +292,15 @@ export const senseArticleApi = {
     if (params.revisionId) query.set('revisionId', params.revisionId);
     const suffix = query.toString() ? `?${query.toString()}` : '';
     return requestJson(`/sense-articles/${nodeId}/${senseId}/media${suffix}`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'listMediaAssets', nodeId, senseId, revisionId: params.revisionId || '' });
-  }
+  },
+  touchMediaSession: (nodeId, senseId, payload = {}, requestOptions = {}) => requestJson(
+    `/sense-articles/${nodeId}/${senseId}/media/session/touch`,
+    { method: 'POST', body: JSON.stringify(payload || {}) },
+    { ...requestOptions, apiName: requestOptions.apiName || 'touchMediaSession', nodeId, senseId, revisionId: payload?.revisionId || '' }
+  ),
+  releaseMediaSession: (nodeId, senseId, payload = {}, requestOptions = {}) => requestJson(
+    `/sense-articles/${nodeId}/${senseId}/media/session/release`,
+    { method: 'POST', body: JSON.stringify(payload || {}) },
+    { ...requestOptions, apiName: requestOptions.apiName || 'releaseMediaSession', nodeId, senseId, revisionId: payload?.revisionId || '' }
+  )
 };

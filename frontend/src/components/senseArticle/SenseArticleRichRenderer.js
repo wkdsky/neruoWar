@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { getRelocationStatusLabel } from './senseArticleUi';
 import { buildFallbackRichBlocks } from './editor/extractRichHtmlOutline';
+import { resolveBackendAssetUrl } from '../../runtimeConfig';
 
 const EMPTY_ARRAY = [];
 
@@ -132,7 +133,7 @@ const renderDomNode = ({ node, searchQuery, referenceMap, onReferenceClick, onRe
     return (
       <img
         key={keyPrefix}
-        src={node.getAttribute('src') || ''}
+        src={resolveBackendAssetUrl(node.getAttribute('src') || '')}
         alt={node.getAttribute('alt') || ''}
         className={className}
         style={style}
@@ -142,13 +143,22 @@ const renderDomNode = ({ node, searchQuery, referenceMap, onReferenceClick, onRe
     );
   }
   if (tagName === 'audio') {
-    return <audio key={keyPrefix} src={node.getAttribute('src') || ''} controls className={className} />;
+    return <audio key={keyPrefix} src={resolveBackendAssetUrl(node.getAttribute('src') || '')} controls className={className} />;
   }
   if (tagName === 'video') {
-    return <video key={keyPrefix} src={node.getAttribute('src') || ''} poster={node.getAttribute('poster') || undefined} controls className={className} width={node.getAttribute('width') || undefined} />;
+    return (
+      <video
+        key={keyPrefix}
+        src={resolveBackendAssetUrl(node.getAttribute('src') || '')}
+        poster={resolveBackendAssetUrl(node.getAttribute('poster') || '') || undefined}
+        controls
+        className={className}
+        width={node.getAttribute('width') || undefined}
+      />
+    );
   }
   if (tagName === 'source') {
-    return <source key={keyPrefix} src={node.getAttribute('src') || ''} type={node.getAttribute('type') || undefined} />;
+    return <source key={keyPrefix} src={resolveBackendAssetUrl(node.getAttribute('src') || '')} type={node.getAttribute('type') || undefined} />;
   }
   if (tagName === 'col') {
     return <col key={keyPrefix} className={className} style={Object.keys(style).length ? style : undefined} span={node.getAttribute('span') || undefined} />;
@@ -168,6 +178,7 @@ const renderDomNode = ({ node, searchQuery, referenceMap, onReferenceClick, onRe
           className={className}
           style={Object.keys(style).length ? style : undefined}
           data-table-style={node.getAttribute('data-table-style') || undefined}
+          data-table-align={node.getAttribute('data-table-align') || undefined}
           data-table-width-mode={node.getAttribute('data-table-width-mode') || undefined}
           data-table-width-value={node.getAttribute('data-table-width-value') || undefined}
           data-table-border-preset={node.getAttribute('data-table-border-preset') || undefined}

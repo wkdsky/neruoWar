@@ -1,11 +1,17 @@
 import { findParentNodeClosestToPos } from '@tiptap/core';
 import { CellSelection, TableMap, selectedRect } from '@tiptap/pm/tables';
-import { normalizeBorderEdges } from './tableSchema';
+import {
+  normalizeExplicitBorderEdges,
+  normalizeTableBorderPreset,
+  TABLE_BORDER_EDGE_OPTIONS
+} from './tableSchema';
+import { isSenseEditorDebugEnabled, senseEditorDebugLog } from '../editorDebug';
 
 const TABLE_CELL_TYPES = new Set(['tableCell', 'tableHeader']);
 const EMPTY_SELECTION_STATE = Object.freeze({
   isTableActive: false,
   isMultiCellSelection: false,
+  isEntireTableSelected: false,
   canMerge: false,
   canSplit: false,
   currentTableAttrs: {},
@@ -118,10 +124,93 @@ export const getSelectedTableCellEntries = (editor) => {
   });
 };
 
+export const isCellSelection = (selection = null) => selection instanceof CellSelection;
+
 const areComparableValuesEqual = (left, right) => JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+
+const pickDebugCellAttrs = (attrs = {}) => ({
+  textAlign: attrs.textAlign,
+  verticalAlign: attrs.verticalAlign,
+  backgroundColor: attrs.backgroundColor,
+  textColor: attrs.textColor,
+  borderEdges: attrs.borderEdges,
+  borderWidth: attrs.borderWidth,
+  borderColor: attrs.borderColor,
+  diagonalMode: attrs.diagonalMode
+});
+
+const EDGE_OPPOSITE_MAP = Object.freeze({
+  top: 'bottom',
+  right: 'left',
+  bottom: 'top',
+  left: 'right'
+});
+
+const buildEdgeSetFromExplicitValue = (value = '') => {
+  const normalizedValue = normalizeExplicitBorderEdges(value);
+  if (normalizedValue === 'all') return new Set(TABLE_BORDER_EDGE_OPTIONS);
+  if (!normalizedValue || normalizedValue === 'none') return new Set();
+  return new Set(normalizedValue.split(',').filter(Boolean));
+};
+
+export const resolveEffectiveTableCellEdges = ({
+  cellAttrs = {},
+  cellRect = null,
+  tableBorderPreset = 'all',
+  tableWidth = 0,
+  tableHeight = 0
+} = {}) => {
+  const explicitEdges = normalizeExplicitBorderEdges(cellAttrs.borderEdges || '');
+  if (explicitEdges) return buildEdgeSetFromExplicitValue(explicitEdges);
+
+  const normalizedPreset = normalizeTableBorderPreset(tableBorderPreset);
+  const isFirstRow = Number(cellRect?.top) === 0;
+  const isLastRow = Number(cellRect?.bottom) === Number(tableHeight);
+  const isFirstColumn = Number(cellRect?.left) === 0;
+  const isLastColumn = Number(cellRect?.right) === Number(tableWidth);
+
+  if (normalizedPreset === 'none') return new Set();
+  if (normalizedPreset === 'outer') {
+    const edgeSet = new Set();
+    if (isFirstRow) edgeSet.add('top');
+    if (isLastRow) edgeSet.add('bottom');
+    if (isFirstColumn) edgeSet.add('left');
+    if (isLastColumn) edgeSet.add('right');
+    return edgeSet;
+  }
+  if (normalizedPreset === 'three-line') {
+    const edgeSet = new Set();
+    if (isFirstRow) {
+      edgeSet.add('top');
+      edgeSet.add('bottom');
+    }
+    if (isLastRow) edgeSet.add('bottom');
+    return edgeSet;
+  }
+
+  return new Set(TABLE_BORDER_EDGE_OPTIONS);
+};
+
+export const isTableCellEdgeVisible = ({
+  cellAttrs = {},
+  cellRect = null,
+  tableBorderPreset = 'all',
+  tableWidth = 0,
+  tableHeight = 0,
+  edge = ''
+} = {}) => (
+  resolveEffectiveTableCellEdges({
+    cellAttrs,
+    cellRect,
+    tableBorderPreset,
+    tableWidth,
+    tableHeight
+  }).has(String(edge || '').trim())
+);
 
 export const applyAttrsToSelectedTableCells = (editor, attrsOrResolver) => {
   if (!editor?.state?.selection || !editor?.view?.dispatch) return false;
+  const originalSelection = editor.state.selection;
   const entries = getSelectedTableCellEntries(editor);
   if (entries.length === 0) return false;
   let tr = editor.state.tr;
@@ -142,13 +231,273 @@ export const applyAttrsToSelectedTableCells = (editor, attrsOrResolver) => {
     const nextAttrs = { ...cellNode.attrs, ...patch };
     const patchChanged = Object.keys(patch).some((key) => !areComparableValuesEqual(cellNode.attrs?.[key], nextAttrs[key]));
     if (!patchChanged) return;
-    tr = tr.setNodeMarkup(entry.pos, undefined, nextAttrs);
+    senseEditorDebugLog('table-selection', 'Patching table cell attrs', {
+      pos: entry.pos,
+      patch,
+      prevAttrs: pickDebugCellAttrs(cellNode.attrs || {}),
+      nextAttrs: pickDebugCellAttrs(nextAttrs)
+    });
+    tr = tr.setNodeMarkup(entry.pos, null, nextAttrs);
     changed = true;
   });
 
-  if (changed) editor.view.dispatch(tr);
-  if (typeof editor.view.focus === 'function') editor.view.focus();
+  if (changed) {
+    if (originalSelection instanceof CellSelection) {
+      try {
+        tr = tr.setSelection(CellSelection.create(
+          tr.doc,
+          tr.mapping.map(originalSelection.$anchorCell.pos),
+          tr.mapping.map(originalSelection.$headCell.pos)
+        ));
+      } catch (_error) {
+        // Ignore selection restoration errors and fall back to the mapped transaction selection.
+      }
+    }
+    const changedDoc = !!tr.docChanged;
+    editor.view.dispatch(tr);
+    if (isSenseEditorDebugEnabled()) {
+      const appliedHtml = String(editor.getHTML?.() || '');
+      const patchKeys = entries.flatMap((entry, index) => {
+        const cellNode = editor.state.doc.nodeAt(entry.pos);
+        const patch = typeof attrsOrResolver === 'function'
+          ? attrsOrResolver({
+            attrs: cellNode?.attrs || {},
+            entry,
+            index,
+            entries
+          })
+          : attrsOrResolver;
+        return patch && typeof patch === 'object' ? Object.keys(patch) : [];
+      });
+      senseEditorDebugLog('table-selection', 'Applied table cell attrs', {
+        changed,
+        docChanged: changedDoc,
+        selectedCellCount: entries.length,
+        firstCellAttrsAfter: pickDebugCellAttrs(editor.state.doc.nodeAt(entries[0].pos)?.attrs || {}),
+        htmlContains: Array.from(new Set(patchKeys)).reduce((result, key) => {
+          const dataKey = key === 'textAlign'
+            ? 'data-align'
+            : key === 'verticalAlign'
+              ? 'data-vertical-align'
+              : key === 'backgroundColor'
+                ? 'data-background-color'
+                : key === 'textColor'
+                  ? 'data-text-color'
+                  : key === 'borderEdges'
+                    ? 'data-border-edges'
+                    : key === 'borderWidth'
+                      ? 'data-border-width'
+                      : key === 'borderColor'
+                        ? 'data-border-color'
+                        : key === 'diagonalMode'
+                          ? 'data-diagonal'
+                          : '';
+          if (dataKey) result[dataKey] = appliedHtml.includes(dataKey);
+          return result;
+        }, {}),
+        selectionFrom: editor.state.selection?.from,
+        selectionTo: editor.state.selection?.to
+      });
+    }
+  }
   return changed || entries.length > 0;
+};
+
+const getNeighborCoordinatesForEdge = (rect = null, edge = '') => {
+  const coordinates = [];
+  if (!rect) return coordinates;
+  if (edge === 'top') {
+    const row = Number(rect.top) - 1;
+    if (row < 0) return coordinates;
+    for (let col = Number(rect.left); col < Number(rect.right); col += 1) {
+      coordinates.push({ row, col });
+    }
+    return coordinates;
+  }
+  if (edge === 'bottom') {
+    const row = Number(rect.bottom);
+    for (let col = Number(rect.left); col < Number(rect.right); col += 1) {
+      coordinates.push({ row, col });
+    }
+    return coordinates;
+  }
+  if (edge === 'left') {
+    const col = Number(rect.left) - 1;
+    if (col < 0) return coordinates;
+    for (let row = Number(rect.top); row < Number(rect.bottom); row += 1) {
+      coordinates.push({ row, col });
+    }
+    return coordinates;
+  }
+  if (edge === 'right') {
+    const col = Number(rect.right);
+    for (let row = Number(rect.top); row < Number(rect.bottom); row += 1) {
+      coordinates.push({ row, col });
+    }
+  }
+  return coordinates;
+};
+
+const resolveTableCellRectByAbsolutePos = ({ tableMap, tableStart, absolutePos }) => {
+  if (!tableMap || !Number.isFinite(tableStart) || !Number.isFinite(absolutePos)) return null;
+  try {
+    return tableMap.findCell(absolutePos - tableStart);
+  } catch (_error) {
+    return null;
+  }
+};
+
+const collectSharedEdgeNeighborCells = ({ entry = null, edge = '', tableMap, tableStart = 0 }) => {
+  const coordinates = getNeighborCoordinatesForEdge(entry?.rect, edge);
+  const neighbors = [];
+  const seen = new Set();
+  coordinates.forEach(({ row, col }) => {
+    if (row < 0 || col < 0 || row >= tableMap.height || col >= tableMap.width) return;
+    const relativePos = tableMap.map[(row * tableMap.width) + col];
+    if (!Number.isFinite(relativePos)) return;
+    const absolutePos = tableStart + relativePos;
+    if (!Number.isFinite(absolutePos) || absolutePos === entry?.pos || seen.has(absolutePos)) return;
+    seen.add(absolutePos);
+    neighbors.push({
+      pos: absolutePos,
+      rect: resolveTableCellRectByAbsolutePos({ tableMap, tableStart, absolutePos })
+    });
+  });
+  return neighbors;
+};
+
+export const applySyncedTableBorderEdge = ({
+  editor,
+  selectionState = null,
+  edge = '',
+  borderWidth = '',
+  borderColor = ''
+} = {}) => {
+  if (!editor?.state?.selection || !editor?.view?.dispatch) return false;
+  const originalSelection = editor.state.selection;
+  if (!TABLE_BORDER_EDGE_OPTIONS.includes(String(edge || '').trim())) return false;
+
+  const entries = getSelectedTableCellEntries(editor);
+  if (entries.length === 0) return false;
+
+  const selection = editor.state.selection;
+  const tableContext = resolveTableContext(selection);
+  const tableNode = tableContext?.table?.node;
+  const tableStart = getTableStart(tableContext, selection);
+  if (!tableNode || !Number.isFinite(tableStart)) return false;
+
+  const tableMap = TableMap.get(tableNode);
+  const tableBorderPreset = tableNode.attrs?.tableBorderPreset;
+  const shouldEnable = !selectionState?.selectionEdgeState?.[edge];
+  const patchStateMap = new Map();
+
+  const getOrCreatePatchState = (absolutePos, cellRect = null) => {
+    if (!Number.isFinite(absolutePos)) return null;
+    if (patchStateMap.has(absolutePos)) return patchStateMap.get(absolutePos);
+    const cellNode = editor.state.doc.nodeAt(absolutePos);
+    if (!cellNode) return null;
+    const nextState = {
+      pos: absolutePos,
+      rect: cellRect || resolveTableCellRectByAbsolutePos({ tableMap, tableStart, absolutePos }),
+      attrs: cellNode.attrs || {},
+      edgeSet: resolveEffectiveTableCellEdges({
+        cellAttrs: cellNode.attrs || {},
+        cellRect: cellRect || resolveTableCellRectByAbsolutePos({ tableMap, tableStart, absolutePos }),
+        tableBorderPreset,
+        tableWidth: tableMap.width,
+        tableHeight: tableMap.height
+      })
+    };
+    patchStateMap.set(absolutePos, nextState);
+    return nextState;
+  };
+
+  entries.forEach((entry) => {
+    const activeCellState = getOrCreatePatchState(entry.pos, entry.rect);
+    if (activeCellState) {
+      if (shouldEnable) activeCellState.edgeSet.add(edge);
+      else activeCellState.edgeSet.delete(edge);
+    }
+
+    const oppositeEdge = EDGE_OPPOSITE_MAP[edge];
+    collectSharedEdgeNeighborCells({
+      entry,
+      edge,
+      tableMap,
+      tableStart
+    }).forEach((neighbor) => {
+      const neighborState = getOrCreatePatchState(neighbor.pos, neighbor.rect);
+      if (!neighborState) return;
+      if (shouldEnable) neighborState.edgeSet.add(oppositeEdge);
+      else neighborState.edgeSet.delete(oppositeEdge);
+    });
+  });
+
+  let tr = editor.state.tr;
+  let changed = false;
+
+  patchStateMap.forEach((item) => {
+    const orderedEdges = TABLE_BORDER_EDGE_OPTIONS.filter((candidate) => item.edgeSet.has(candidate));
+    const nextBorderEdges = orderedEdges.length === 0
+      ? 'none'
+      : orderedEdges.length === TABLE_BORDER_EDGE_OPTIONS.length
+        ? 'all'
+        : orderedEdges.join(',');
+    const nextAttrs = {
+      ...item.attrs,
+      borderEdges: nextBorderEdges,
+      borderWidth: item.attrs.borderWidth || borderWidth || '1',
+      borderColor: item.attrs.borderColor || borderColor || '#334155'
+    };
+    const patchChanged = ['borderEdges', 'borderWidth', 'borderColor']
+      .some((key) => !areComparableValuesEqual(item.attrs?.[key], nextAttrs[key]));
+    if (!patchChanged) return;
+    tr = tr.setNodeMarkup(item.pos, null, nextAttrs);
+    changed = true;
+  });
+
+  if (changed) {
+    if (originalSelection instanceof CellSelection) {
+      try {
+        tr = tr.setSelection(CellSelection.create(
+          tr.doc,
+          tr.mapping.map(originalSelection.$anchorCell.pos),
+          tr.mapping.map(originalSelection.$headCell.pos)
+        ));
+      } catch (_error) {
+        // Ignore selection restoration errors and fall back to the mapped transaction selection.
+      }
+    }
+    editor.view.dispatch(tr);
+  }
+  return changed || entries.length > 0;
+};
+
+export const selectEntireTable = (editor) => {
+  const state = editor?.state;
+  const dispatch = editor?.view?.dispatch;
+  if (!state?.selection || typeof dispatch !== 'function') return false;
+  const tableContext = resolveTableContext(state.selection);
+  if (!tableContext?.table?.node) return false;
+  const tableStart = getTableStart(tableContext, state.selection);
+  if (!Number.isFinite(tableStart)) return false;
+  const tableMap = TableMap.get(tableContext.table.node);
+  const cellPositions = tableMap.cellsInRect({
+    left: 0,
+    top: 0,
+    right: tableMap.width,
+    bottom: tableMap.height
+  });
+  if (!cellPositions.length) return false;
+  try {
+    const anchor = tableStart + cellPositions[0];
+    const head = tableStart + cellPositions[cellPositions.length - 1];
+    const selection = CellSelection.create(state.doc, anchor, head);
+    dispatch(state.tr.setSelection(selection));
+    return true;
+  } catch (_error) {
+    return false;
+  }
 };
 
 const resolveRelativeCellRect = ({ tableContext, selection, cellPosition = 0 }) => {
@@ -228,8 +577,17 @@ export const getTableSelectionState = (editor) => {
   const selectionTouchesMergedRows = selectionTouchesMergedCells({ selection, kind: 'row', tableContext });
   const selectionTouchesMergedColumns = selectionTouchesMergedCells({ selection, kind: 'column', tableContext });
   const selectedRange = safeSelectedRect(editor.state);
+  const tableMap = TableMap.get(tableContext.table.node);
+  const isEntireTableSelected = !!selectedRange
+    && selectedRange.left === 0
+    && selectedRange.top === 0
+    && selectedRange.right === tableMap.width
+    && selectedRange.bottom === tableMap.height
+    && entries.length > 0
+    && selection instanceof CellSelection;
   const selectedMergedCellCount = entries.filter((entry) => entry.isMerged).length;
   const currentCellAttrs = activeCell?.attrs || editor.getAttributes('tableCell') || editor.getAttributes('tableHeader') || {};
+  const currentTableAttrs = tableContext.table.node?.attrs || {};
   const tableStructure = resolveTableStructure(tableContext.table.node);
   const mergeAvailabilityReason = canMerge
     ? ''
@@ -243,13 +601,14 @@ export const getTableSelectionState = (editor) => {
     : activeCell?.isMerged
       ? '请先只聚焦一个合并单元格，再执行拆分。'
       : '当前单元格不是已合并单元格，无法拆分。';
-  const currentBorderEdges = normalizeBorderEdges(currentCellAttrs.borderEdges || 'all');
+  const currentBorderEdges = normalizeExplicitBorderEdges(currentCellAttrs.borderEdges || '');
   return {
     isTableActive: true,
     isMultiCellSelection,
+    isEntireTableSelected,
     canMerge,
     canSplit,
-    currentTableAttrs: editor.getAttributes('table') || {},
+    currentTableAttrs,
     tableStructure,
     currentCellAttrs,
     selectionTouchesMergedRows,
@@ -269,12 +628,44 @@ export const getTableSelectionState = (editor) => {
     deleteColumnReason: selectionTouchesMergedColumns ? '当前列与合并单元格相交，请先拆分相关单元格。' : '',
     activeCellIsMerged: !!activeCell?.isMerged,
     activeCellRect: activeCell?.rect || null,
+    tableDimensions: {
+      width: tableMap.width,
+      height: tableMap.height
+    },
     selectionEdgeState: {
       currentBorderEdges,
-      top: entries.length > 0 && entries.every((entry) => normalizeBorderEdges(entry.attrs?.borderEdges || 'all') === 'all' || normalizeBorderEdges(entry.attrs?.borderEdges || 'all').split(',').includes('top')),
-      right: entries.length > 0 && entries.every((entry) => normalizeBorderEdges(entry.attrs?.borderEdges || 'all') === 'all' || normalizeBorderEdges(entry.attrs?.borderEdges || 'all').split(',').includes('right')),
-      bottom: entries.length > 0 && entries.every((entry) => normalizeBorderEdges(entry.attrs?.borderEdges || 'all') === 'all' || normalizeBorderEdges(entry.attrs?.borderEdges || 'all').split(',').includes('bottom')),
-      left: entries.length > 0 && entries.every((entry) => normalizeBorderEdges(entry.attrs?.borderEdges || 'all') === 'all' || normalizeBorderEdges(entry.attrs?.borderEdges || 'all').split(',').includes('left'))
+      top: entries.length > 0 && entries.every((entry) => isTableCellEdgeVisible({
+        cellAttrs: entry.attrs,
+        cellRect: entry.rect,
+        tableBorderPreset: currentTableAttrs.tableBorderPreset,
+        tableWidth: tableMap.width,
+        tableHeight: tableMap.height,
+        edge: 'top'
+      })),
+      right: entries.length > 0 && entries.every((entry) => isTableCellEdgeVisible({
+        cellAttrs: entry.attrs,
+        cellRect: entry.rect,
+        tableBorderPreset: currentTableAttrs.tableBorderPreset,
+        tableWidth: tableMap.width,
+        tableHeight: tableMap.height,
+        edge: 'right'
+      })),
+      bottom: entries.length > 0 && entries.every((entry) => isTableCellEdgeVisible({
+        cellAttrs: entry.attrs,
+        cellRect: entry.rect,
+        tableBorderPreset: currentTableAttrs.tableBorderPreset,
+        tableWidth: tableMap.width,
+        tableHeight: tableMap.height,
+        edge: 'bottom'
+      })),
+      left: entries.length > 0 && entries.every((entry) => isTableCellEdgeVisible({
+        cellAttrs: entry.attrs,
+        cellRect: entry.rect,
+        tableBorderPreset: currentTableAttrs.tableBorderPreset,
+        tableWidth: tableMap.width,
+        tableHeight: tableMap.height,
+        edge: 'left'
+      }))
     }
   };
 };

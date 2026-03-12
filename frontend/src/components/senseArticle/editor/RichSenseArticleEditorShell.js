@@ -12,6 +12,7 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Placeholder from '@tiptap/extension-placeholder';
 import { RichBulletList, RichOrderedList } from './extensions/ListStyle';
+import ListKeymapExtension from './extensions/ListKeymapExtension';
 import FontSize from './extensions/FontSize';
 import Indent from './extensions/Indent';
 import FigureImage from './extensions/FigureImage';
@@ -21,12 +22,18 @@ import InternalSenseReference from './extensions/InternalSenseReference';
 import TableStyleExtension, { RichTableCell, RichTableHeader, RichTableRow } from './extensions/TableStyleExtension';
 import TableContextBand from './TableContextBand';
 import RichToolbar from './RichToolbar';
-import { normalizeRichHtmlContent } from './richContentState';
+import { areRichHtmlContentsEquivalent, normalizeRichHtmlContent } from './richContentState';
 import { normalizePastedHtml } from './paste/normalizePastedContent';
 import { looksLikeMarkdown, markdownToRichHtml } from './paste/markdownToRichContent';
 import { extractRichHtmlOutline } from './extractRichHtmlOutline';
 import SenseArticleOutlineTree from '../SenseArticleOutlineTree';
-import { formatTableWidthLabel, resolveTableWidthValue } from './table/tableWidthUtils';
+import { getTableSelectionState, selectEntireTable } from './table/tableSelectionState';
+import {
+  describeActiveElement,
+  describeEditorSelection,
+  describeScrollPosition,
+  senseEditorDebugLog
+} from './editorDebug';
 
 const getActiveTableElements = (editorInstance) => {
   if (!editorInstance?.view?.domAtPos) return { tableElement: null, wrapperElement: null };
@@ -78,16 +85,39 @@ const RichSenseArticleEditorShell = ({
   savePending = false
 }) => {
   const toolbarRef = useRef(null);
+  const shellRef = useRef(null);
   const editorHostRef = useRef(null);
   const editorPaneRef = useRef(null);
   const editorRef = useRef(null);
   const [toolbarHeight, setToolbarHeight] = useState(0);
   const [isOutlineCollapsed, setIsOutlineCollapsed] = useState(false);
-  const [tableOverlayState, setTableOverlayState] = useState({ visible: false, top: 0, left: 0, label: '' });
+  const [tableOverlayState, setTableOverlayState] = useState({
+    visible: false,
+    selectTop: 0,
+    selectLeft: 0,
+    isEntireTableSelected: false
+  });
   const toolbarHeightRef = useRef(0);
-  const dragStateRef = useRef(null);
-  const dragFrameRef = useRef(0);
+  const lastEmittedHtmlRef = useRef(normalizeRichHtmlContent(value || '<p></p>') || '<p></p>');
+  const lastAppliedValueRef = useRef(lastEmittedHtmlRef.current);
+  const isApplyingExternalValueRef = useRef(false);
+  const lastScopedFocusTargetRef = useRef('');
   const outlineItems = useMemo(() => extractRichHtmlOutline(value || ''), [value]);
+  const scopedFocusTargetKey = useMemo(() => JSON.stringify({
+    enabled: !!scopedFocus?.enabled,
+    headingText: scopedFocus?.headingText || '',
+    selectionText: scopedFocus?.selectionText || '',
+    originalText: scopedFocus?.originalText || '',
+    previewHeadingId: scopedFocus?.previewHeadingId || '',
+    previewBlockId: scopedFocus?.previewBlockId || ''
+  }), [
+    scopedFocus?.enabled,
+    scopedFocus?.headingText,
+    scopedFocus?.selectionText,
+    scopedFocus?.originalText,
+    scopedFocus?.previewHeadingId,
+    scopedFocus?.previewBlockId
+  ]);
 
   useEffect(() => {
     if (!toolbarRef.current || typeof ResizeObserver === 'undefined') return undefined;
@@ -106,12 +136,15 @@ const RichSenseArticleEditorShell = ({
       StarterKit.configure({
         bulletList: false,
         orderedList: false,
+        link: false,
+        underline: false,
         heading: {
           levels: [1, 2, 3, 4]
         }
       }),
       RichBulletList,
       RichOrderedList,
+      ListKeymapExtension,
       Link.configure({
         openOnClick: false,
         autolink: true
@@ -172,48 +205,129 @@ const RichSenseArticleEditorShell = ({
             return true;
           }
           return false;
+        },
+        dragstart: (_view, event) => {
+          const target = event.target;
+          const mediaFigure = target?.closest?.('figure[data-node-type="image"], figure[data-node-type="audio"], figure[data-node-type="video"]');
+          if (mediaFigure) return false;
+          event.preventDefault();
+          senseEditorDebugLog('shell', 'Prevented editor dragstart', {
+            targetTag: target?.tagName || ''
+          });
+          return true;
+        },
+        drop: (_view, event) => {
+          if ((event.dataTransfer?.files?.length || 0) > 0) {
+            event.preventDefault();
+            onPasteNotice && onPasteNotice('暂不支持通过拖放插入本地媒体文件，请使用工具栏中的媒体上传入口。');
+            return true;
+          }
+          const mediaFigure = event.target?.closest?.('figure[data-node-type="image"], figure[data-node-type="audio"], figure[data-node-type="video"]');
+          if (mediaFigure) return false;
+          event.preventDefault();
+          senseEditorDebugLog('shell', 'Prevented editor drop', {
+            targetTag: event.target?.tagName || ''
+          });
+          return true;
         }
       }
     },
     onCreate: ({ editor: currentEditor }) => {
       editorRef.current = currentEditor;
+      const normalizedInitialHtml = normalizeRichHtmlContent(currentEditor.getHTML() || value || '<p></p>') || '<p></p>';
+      lastEmittedHtmlRef.current = normalizedInitialHtml;
+      lastAppliedValueRef.current = normalizedInitialHtml;
+      senseEditorDebugLog('shell', 'Editor created', {
+        htmlLength: normalizedInitialHtml.length,
+        activeElement: describeActiveElement(),
+        scroll: describeScrollPosition(),
+        selection: describeEditorSelection(currentEditor)
+      });
     },
     onDestroy: () => {
+      senseEditorDebugLog('shell', 'Editor destroyed', {
+        activeElement: describeActiveElement(),
+        scroll: describeScrollPosition()
+      });
       editorRef.current = null;
     },
     onUpdate: ({ editor: currentEditor }) => {
-      onChange(normalizeRichHtmlContent(currentEditor.getHTML()));
+      const normalizedHtml = normalizeRichHtmlContent(currentEditor.getHTML()) || '<p></p>';
+      lastEmittedHtmlRef.current = normalizedHtml;
+      lastAppliedValueRef.current = normalizedHtml;
+      senseEditorDebugLog('shell', 'onUpdate emitted editor HTML', {
+        isApplyingExternalValue: isApplyingExternalValueRef.current,
+        htmlLength: normalizedHtml.length,
+        activeElement: describeActiveElement(),
+        scroll: describeScrollPosition(),
+        selection: describeEditorSelection(currentEditor)
+      });
+      onChange(normalizedHtml);
     }
   });
 
   const updateTableOverlay = useCallback(() => {
     syncTableSelectionUi({ editorInstance: editor, editorHost: editorHostRef.current });
     if (!editor || !editorPaneRef.current || !editorHostRef.current || !editor.isActive('table')) {
-      setTableOverlayState((prev) => (prev.visible ? { visible: false, top: 0, left: 0, label: '' } : prev));
+      setTableOverlayState((prev) => (prev.visible ? { visible: false, selectTop: 0, selectLeft: 0, isEntireTableSelected: false } : prev));
       return;
     }
     const { tableElement, wrapperElement } = getActiveTableElements(editor);
     if (!tableElement || !wrapperElement) {
-      setTableOverlayState((prev) => (prev.visible ? { visible: false, top: 0, left: 0, label: '' } : prev));
+      setTableOverlayState((prev) => (prev.visible ? { visible: false, selectTop: 0, selectLeft: 0, isEntireTableSelected: false } : prev));
       return;
     }
     const paneRect = editorPaneRef.current.getBoundingClientRect();
     const targetRect = wrapperElement.getBoundingClientRect();
-    const label = formatTableWidthLabel(editor.getAttributes('table') || {});
+    const selectionState = getTableSelectionState(editor);
     setTableOverlayState({
       visible: true,
-      top: targetRect.top - paneRect.top + 8,
-      left: targetRect.right - paneRect.left - 18,
-      label
+      selectTop: targetRect.top - paneRect.top + 8,
+      selectLeft: targetRect.left - paneRect.left + 8,
+      isEntireTableSelected: !!selectionState?.isEntireTableSelected
     });
   }, [editor]);
 
   useEffect(() => {
     if (!editor) return;
-    const currentHtml = editor.getHTML();
-    const normalizedValue = value || '<p></p>';
-    if (normalizedValue === currentHtml) return;
-    editor.commands.setContent(normalizedValue, false);
+    const normalizedValue = normalizeRichHtmlContent(value || '<p></p>') || '<p></p>';
+    const currentHtml = normalizeRichHtmlContent(editor.getHTML() || '<p></p>') || '<p></p>';
+    const matchesCurrent = areRichHtmlContentsEquivalent(currentHtml, normalizedValue);
+    const matchesLastEmitted = areRichHtmlContentsEquivalent(lastEmittedHtmlRef.current || '<p></p>', normalizedValue);
+    const matchesLastApplied = areRichHtmlContentsEquivalent(lastAppliedValueRef.current || '<p></p>', normalizedValue);
+
+    if (matchesCurrent || matchesLastEmitted || matchesLastApplied) {
+      lastAppliedValueRef.current = normalizedValue;
+      senseEditorDebugLog('shell', 'Skipped external setContent', {
+        matchesCurrent,
+        matchesLastEmitted,
+        matchesLastApplied,
+        activeElement: describeActiveElement(),
+        scroll: describeScrollPosition()
+      });
+      return;
+    }
+
+    senseEditorDebugLog('shell', 'Applying external value via setContent', {
+      normalizedValueLength: normalizedValue.length,
+      currentHtmlLength: currentHtml.length,
+      activeElement: describeActiveElement(),
+      scroll: describeScrollPosition(),
+      selectionBefore: describeEditorSelection(editor)
+    });
+    isApplyingExternalValueRef.current = true;
+    try {
+      editor.commands.setContent(normalizedValue, false);
+      lastAppliedValueRef.current = normalizedValue;
+      lastEmittedHtmlRef.current = normalizedValue;
+      senseEditorDebugLog('shell', 'Applied external value via setContent', {
+        activeElement: describeActiveElement(),
+        scroll: describeScrollPosition(),
+        selectionAfter: describeEditorSelection(editor)
+      });
+    } finally {
+      isApplyingExternalValueRef.current = false;
+    }
   }, [editor, value]);
 
   useEffect(() => {
@@ -238,7 +352,10 @@ const RichSenseArticleEditorShell = ({
     Array.from(container.querySelectorAll('.sense-scoped-editor-target')).forEach((element) => {
       element.classList.remove('sense-scoped-editor-target');
     });
-    if (!scopedFocus?.enabled) return;
+    if (!scopedFocus?.enabled) {
+      lastScopedFocusTargetRef.current = '';
+      return;
+    }
     const query = String(scopedFocus.headingText || scopedFocus.selectionText || scopedFocus.originalText || '').trim();
     const candidates = Array.from(container.querySelectorAll('h1, h2, h3, h4, p, li, blockquote, pre, table, figure'));
     const matched = candidates.find((element) => {
@@ -253,10 +370,19 @@ const RichSenseArticleEditorShell = ({
     });
     if (!matched) return;
     matched.classList.add('sense-scoped-editor-target');
+    if (lastScopedFocusTargetRef.current === scopedFocusTargetKey) return;
+    lastScopedFocusTargetRef.current = scopedFocusTargetKey;
     if (typeof matched.scrollIntoView === 'function') {
-      matched.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      senseEditorDebugLog('shell', 'Scoped focus scrolling target into view', {
+        targetTag: matched.tagName || '',
+        targetText: String(matched.textContent || '').slice(0, 80),
+        scrollBefore: describeScrollPosition()
+      });
+      window.requestAnimationFrame(() => {
+        matched.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      });
     }
-  }, [scopedFocus, value]);
+  }, [scopedFocus, scopedFocusTargetKey]);
 
   const handleOutlineJump = useCallback((heading) => {
     if (!editorHostRef.current || !heading?.title) return;
@@ -278,69 +404,17 @@ const RichSenseArticleEditorShell = ({
     if (typeof onEditorNotice === 'function') onEditorNotice(message, tone);
   }, [onEditorNotice]);
 
-  const stopTableWidthDrag = useCallback(() => {
-    if (dragFrameRef.current) {
-      window.cancelAnimationFrame(dragFrameRef.current);
-      dragFrameRef.current = 0;
-    }
-    dragStateRef.current = null;
-  }, []);
-
-  useEffect(() => () => stopTableWidthDrag(), [stopTableWidthDrag]);
-
-  const handleTableWidthDragStart = useCallback((event) => {
-    if (!editor || !editorPaneRef.current || !editor.isActive('table') || event.button !== 0) return;
-    event.preventDefault();
-    const paneRect = editorPaneRef.current.getBoundingClientRect();
-    const { wrapperElement } = getActiveTableElements(editor);
-    const wrapperRect = wrapperElement?.getBoundingClientRect?.() || null;
-    const tableAttrs = editor.getAttributes('table') || {};
-    const resolvedValue = resolveTableWidthValue(tableAttrs)
-      || Math.round(((wrapperRect?.width || 0) / Math.max(paneRect.width, 1)) * 100)
-      || 100;
-    dragStateRef.current = {
-      pointerId: event.pointerId,
-      startClientX: event.clientX,
-      startValue: resolvedValue,
-      paneWidth: paneRect.width
-    };
-    if (typeof event.currentTarget?.setPointerCapture === 'function') {
-      try {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      } catch (_error) {
-        // Ignore capture failures.
-      }
-    }
-  }, [editor]);
-
-  const handleTableWidthDragMove = useCallback((event) => {
-    const dragState = dragStateRef.current;
-    if (!editor || !dragState || dragState.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    const nextValue = Math.min(100, Math.max(40, Math.round(dragState.startValue + ((event.clientX - dragState.startClientX) / Math.max(dragState.paneWidth, 1)) * 100)));
-    if (dragFrameRef.current) return;
-    dragFrameRef.current = window.requestAnimationFrame(() => {
-      dragFrameRef.current = 0;
-      editor.chain().focus().setTableWidth('custom', nextValue).run();
+  const handleSelectEntireTable = useCallback(() => {
+    if (!editor) return;
+    const didSelect = selectEntireTable(editor);
+    if (!didSelect) return;
+    window.requestAnimationFrame(() => {
       updateTableOverlay();
     });
   }, [editor, updateTableOverlay]);
 
-  const handleTableWidthDragEnd = useCallback((event) => {
-    const dragState = dragStateRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId) return;
-    if (typeof event.currentTarget?.hasPointerCapture === 'function' && event.currentTarget.hasPointerCapture(event.pointerId)) {
-      try {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      } catch (_error) {
-        // Ignore release failures.
-      }
-    }
-    stopTableWidthDrag();
-  }, [stopTableWidthDrag]);
-
   return (
-    <div className="sense-rich-editor-shell" style={{ '--sense-editor-toolbar-height': `${toolbarHeight}px` }}>
+    <div ref={shellRef} className="sense-rich-editor-shell" style={{ '--sense-editor-toolbar-height': `${toolbarHeight}px` }}>
       <div ref={toolbarRef} className="sense-rich-toolbar-shell">
         <div className="sense-rich-editor-commandbar">
           <div className="sense-rich-editor-commandbar-actions">
@@ -368,6 +442,7 @@ const RichSenseArticleEditorShell = ({
           onSearchReferences={onSearchReferences}
           onUploadMedia={onUploadMedia}
           mediaLibrary={mediaLibrary}
+          dialogPortalTarget={shellRef}
         />
         <TableContextBand editor={editor} onNotice={showEditorNotice} />
       </div>
@@ -400,16 +475,16 @@ const RichSenseArticleEditorShell = ({
           {tableOverlayState.visible ? (
             <button
               type="button"
-              className="sense-table-width-handle"
-              style={{ top: `${tableOverlayState.top}px`, left: `${tableOverlayState.left}px` }}
-              onPointerDown={handleTableWidthDragStart}
-              onPointerMove={handleTableWidthDragMove}
-              onPointerUp={handleTableWidthDragEnd}
-              onPointerCancel={handleTableWidthDragEnd}
-              title="拖拽调整表格整体宽度"
-              aria-label={`拖拽调整表格整体宽度，当前 ${tableOverlayState.label}`}
+              className={`sense-table-select-handle${tableOverlayState.isEntireTableSelected ? ' active' : ''}`}
+              style={{ top: `${tableOverlayState.selectTop}px`, left: `${tableOverlayState.selectLeft}px` }}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                handleSelectEntireTable();
+              }}
+              title="全选表格"
+              aria-label="全选表格"
             >
-              <span>{tableOverlayState.label}</span>
+              <span aria-hidden="true">⊞</span>
             </button>
           ) : null}
           <div ref={editorHostRef}>

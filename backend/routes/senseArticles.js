@@ -17,11 +17,13 @@ const {
   listMediaAssets,
   listMyAnnotations,
   listRevisions,
+  releaseMediaSession,
   reviewByDomainAdmin,
   reviewByDomainMaster,
   searchCurrentArticle,
   searchReferenceTargets,
   submitRevision,
+  touchMediaSession,
   uploadMediaAsset,
   updateAnnotation,
   updateDraftRevision,
@@ -207,6 +209,36 @@ router.get('/:nodeId/:senseId/media', authenticateToken, async (req, res) => {
     res.json(data);
   } catch (error) {
     sendError(res, error, '获取百科媒体资源失败');
+  }
+});
+
+router.post('/:nodeId/:senseId/media/session/touch', authenticateToken, async (req, res) => {
+  try {
+    const data = await touchMediaSession({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      revisionId: typeof req.body?.revisionId === 'string' ? req.body.revisionId.trim() : '',
+      userId: req.user.userId,
+      tempMediaSessionId: typeof req.body?.tempMediaSessionId === 'string' ? req.body.tempMediaSessionId.trim() : ''
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '续租媒体临时缓存失败');
+  }
+});
+
+router.post('/:nodeId/:senseId/media/session/release', authenticateToken, async (req, res) => {
+  try {
+    const data = await releaseMediaSession({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      revisionId: typeof req.body?.revisionId === 'string' ? req.body.revisionId.trim() : '',
+      userId: req.user.userId,
+      tempMediaSessionId: typeof req.body?.tempMediaSessionId === 'string' ? req.body.tempMediaSessionId.trim() : ''
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '释放媒体临时缓存失败');
   }
 });
 

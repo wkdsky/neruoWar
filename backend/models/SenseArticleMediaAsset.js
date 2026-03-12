@@ -128,6 +128,19 @@ const SenseArticleMediaAssetSchema = new mongoose.Schema({
     type: [mongoose.Schema.Types.ObjectId],
     ref: 'SenseArticleRevision',
     default: []
+  },
+  isTemporary: {
+    type: Boolean,
+    default: false
+  },
+  tempSessionId: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  tempExpiresAt: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true
@@ -138,5 +151,7 @@ SenseArticleMediaAssetSchema.index({ articleId: 1, createdAt: -1 });
 SenseArticleMediaAssetSchema.index({ revisionId: 1, createdAt: -1 });
 SenseArticleMediaAssetSchema.index({ articleId: 1, status: 1, createdAt: -1 });
 SenseArticleMediaAssetSchema.index({ nodeId: 1, senseId: 1, url: 1 });
+SenseArticleMediaAssetSchema.index({ isTemporary: 1, tempExpiresAt: 1 });
+SenseArticleMediaAssetSchema.index({ articleId: 1, tempSessionId: 1, isTemporary: 1 });
 
 module.exports = mongoose.model('SenseArticleMediaAsset', SenseArticleMediaAssetSchema);

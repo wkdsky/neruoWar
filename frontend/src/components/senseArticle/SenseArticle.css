@@ -1890,6 +1890,10 @@ body.sense-editor-preview-resizing * {
   border-right: none;
 }
 
+.sense-rich-toolbar-insert-cluster {
+  display: contents;
+}
+
 .sense-rich-toolbar-button {
   display: inline-flex;
   align-items: center;
@@ -1902,6 +1906,8 @@ body.sense-editor-preview-resizing * {
   color: rgba(226, 232, 240, 0.96);
   cursor: pointer;
   white-space: nowrap;
+  font-weight: 600;
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, color 0.18s ease;
 }
 
 .sense-table-context-band .sense-rich-toolbar-button,
@@ -1928,6 +1934,8 @@ body.sense-editor-preview-resizing * {
 .sense-rich-toolbar-button:focus-visible {
   border-color: rgba(56, 189, 248, 0.36);
   background: rgba(30, 41, 59, 0.96);
+  box-shadow: 0 10px 22px rgba(2, 6, 23, 0.22);
+  transform: translateY(-1px);
 }
 
 .sense-rich-toolbar-select {
@@ -1937,10 +1945,13 @@ body.sense-editor-preview-resizing * {
   height: 34px;
   padding: 0 10px;
   border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background:
+    linear-gradient(180deg, rgba(30, 41, 59, 0.92) 0%, rgba(15, 23, 42, 0.92) 100%);
   color: rgba(226, 232, 240, 0.96);
   color-scheme: dark;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 18px rgba(2, 6, 23, 0.14);
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .sense-rich-toolbar-fontsize {
@@ -1950,10 +1961,34 @@ body.sense-editor-preview-resizing * {
   min-height: 34px;
   padding: 0 10px;
   border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background:
+    linear-gradient(180deg, rgba(30, 41, 59, 0.92) 0%, rgba(15, 23, 42, 0.92) 100%);
   color: rgba(226, 232, 240, 0.96);
   color-scheme: dark;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 18px rgba(2, 6, 23, 0.14);
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.sense-rich-toolbar-select:hover,
+.sense-rich-toolbar-select:focus-within,
+.sense-rich-toolbar-fontsize:hover,
+.sense-rich-toolbar-fontsize:focus-within {
+  border-color: rgba(103, 232, 249, 0.42);
+  background: linear-gradient(180deg, rgba(51, 65, 85, 0.94) 0%, rgba(15, 23, 42, 0.94) 100%);
+  box-shadow: inset 0 1px 0 rgba(224, 242, 254, 0.06), 0 12px 24px rgba(2, 6, 23, 0.24);
+  transform: translateY(-1px);
+}
+
+.sense-rich-select-leading-icon {
+  color: rgba(125, 211, 252, 0.9);
+  flex: 0 0 auto;
+}
+
+.sense-rich-toolbar-select > svg:last-child,
+.sense-rich-toolbar-fontsize > svg:last-child {
+  color: rgba(191, 219, 254, 0.76);
+  flex: 0 0 auto;
 }
 
 .sense-rich-toolbar-fontsize input,
@@ -2005,6 +2040,8 @@ body.sense-editor-preview-resizing * {
   outline: none;
   min-width: 0;
   appearance: none;
+  font: inherit;
+  font-weight: 600;
 }
 
 .sense-rich-toolbar-select select option,
@@ -2020,6 +2057,10 @@ body.sense-editor-preview-resizing * {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.sense-rich-table-option-row-tight {
+  gap: 6px;
 }
 
 .sense-table-context-width-slider {
@@ -2039,19 +2080,52 @@ body.sense-editor-preview-resizing * {
 }
 
 .sense-rich-table-chip {
-  min-height: 30px;
-  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 11px;
   border-radius: 999px;
   border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(15, 23, 42, 0.74);
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.88) 0%, rgba(15, 23, 42, 0.82) 100%);
   color: rgba(226, 232, 240, 0.92);
   cursor: pointer;
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, color 0.18s ease;
 }
 
 .sense-rich-table-chip.active {
   border-color: rgba(56, 189, 248, 0.48);
-  background: rgba(14, 116, 144, 0.36);
+  background: linear-gradient(180deg, rgba(14, 116, 144, 0.5) 0%, rgba(8, 47, 73, 0.9) 100%);
   color: #e0f2fe;
+  box-shadow: 0 10px 22px rgba(8, 47, 73, 0.28);
+}
+
+.sense-rich-table-chip-edge,
+.sense-rich-table-chip-edge.active {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.88) 0%, rgba(15, 23, 42, 0.82) 100%);
+  color: rgba(226, 232, 240, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.sense-rich-table-chip:hover,
+.sense-rich-table-chip:focus-visible {
+  outline: none;
+  border-color: rgba(103, 232, 249, 0.44);
+  background: linear-gradient(180deg, rgba(51, 65, 85, 0.94) 0%, rgba(15, 23, 42, 0.88) 100%);
+  transform: translateY(-1px);
+}
+
+.sense-rich-table-button-icon {
+  flex: 0 0 auto;
+  color: rgba(125, 211, 252, 0.96);
+}
+
+.sense-rich-table-button-icon.mirrored {
+  transform: scaleX(-1);
 }
 
 .sense-table-band-popover-anchor {
@@ -2192,6 +2266,9 @@ body.sense-editor-preview-resizing * {
 }
 
 .sense-rich-table-text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   justify-self: start;
   border: none;
   background: transparent;
@@ -2212,7 +2289,7 @@ body.sense-editor-preview-resizing * {
 }
 
 .sense-rich-table-dropdown-border {
-  width: min(320px, calc(100vw - 24px));
+  width: min(420px, calc(100vw - 24px));
 }
 
 .sense-rich-table-dropdown-portal {
@@ -2231,21 +2308,33 @@ body.sense-editor-preview-resizing * {
   position: relative;
 }
 
-.sense-table-width-handle {
+.sense-table-select-handle {
   position: absolute;
   z-index: 15;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 52px;
-  min-height: 28px;
-  padding: 0 8px;
-  border-radius: 999px;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
   border: 1px solid rgba(56, 189, 248, 0.42);
-  background: rgba(14, 116, 144, 0.88);
-  color: #f0f9ff;
-  box-shadow: 0 12px 28px rgba(14, 116, 144, 0.3);
-  cursor: ew-resize;
+  background: rgba(15, 23, 42, 0.92);
+  color: #e0f2fe;
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.28);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.sense-table-select-handle:hover,
+.sense-table-select-handle:focus-visible,
+.sense-table-select-handle.active {
+  outline: none;
+  border-color: rgba(125, 211, 252, 0.7);
+  background: linear-gradient(180deg, rgba(14, 116, 144, 0.9) 0%, rgba(8, 47, 73, 0.96) 100%);
+  box-shadow: 0 14px 28px rgba(8, 47, 73, 0.28);
+  transform: translateY(-1px);
 }
 
 .sense-rich-toolbar-color {
@@ -2470,6 +2559,27 @@ body.sense-editor-preview-resizing * {
   width: 100%;
 }
 
+.sense-rich-editor-surface .sense-rich-table[data-table-align="left"],
+.sense-rich-editor-surface .tableWrapper table[data-table-align="left"],
+.sense-rich-renderer .sense-rich-table[data-table-align="left"] {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+.sense-rich-editor-surface .sense-rich-table[data-table-align="center"],
+.sense-rich-editor-surface .tableWrapper table[data-table-align="center"],
+.sense-rich-renderer .sense-rich-table[data-table-align="center"] {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.sense-rich-editor-surface .sense-rich-table[data-table-align="right"],
+.sense-rich-editor-surface .tableWrapper table[data-table-align="right"],
+.sense-rich-renderer .sense-rich-table[data-table-align="right"] {
+  margin-left: auto;
+  margin-right: 0;
+}
+
 .sense-rich-editor-surface .tableWrapper,
 .sense-rich-renderer .tableWrapper,
 .sense-rich-editor-surface .sense-rich-table-wrap,
@@ -2488,14 +2598,34 @@ body.sense-editor-preview-resizing * {
 .sense-rich-editor-surface .tableWrapper td,
 .sense-rich-renderer .sense-rich-table th,
 .sense-rich-renderer .sense-rich-table td {
-  border: 1px solid rgba(148, 163, 184, 0.36);
+  border: 1px solid rgba(51, 65, 85, 0.82);
   padding: 10px 12px;
   vertical-align: top;
+  box-sizing: border-box;
   position: relative;
   overflow: hidden;
   word-break: break-word;
   line-height: 1.55;
   transition: box-shadow 140ms ease, background-color 140ms ease, border-color 140ms ease;
+}
+
+.sense-rich-editor-surface .sense-rich-table th > *,
+.sense-rich-editor-surface .sense-rich-table td > *,
+.sense-rich-editor-surface .tableWrapper th > *,
+.sense-rich-editor-surface .tableWrapper td > *,
+.sense-rich-renderer .sense-rich-table th > *,
+.sense-rich-renderer .sense-rich-table td > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.sense-rich-editor-surface .sense-rich-table th > * + *,
+.sense-rich-editor-surface .sense-rich-table td > * + *,
+.sense-rich-editor-surface .tableWrapper th > * + *,
+.sense-rich-editor-surface .tableWrapper td > * + *,
+.sense-rich-renderer .sense-rich-table th > * + *,
+.sense-rich-renderer .sense-rich-table td > * + * {
+  margin-top: 0.75em;
 }
 
 .sense-rich-editor-surface .table-style-compact th,
@@ -2527,101 +2657,128 @@ body.sense-editor-preview-resizing * {
 .sense-rich-editor-surface .table-style-three-line td,
 .sense-rich-editor-surface .tableWrapper .table-style-three-line th,
 .sense-rich-editor-surface .tableWrapper .table-style-three-line td,
-.sense-rich-renderer .table-style-three-line th,
-.sense-rich-renderer .table-style-three-line td,
 .sense-rich-editor-surface .table-border-three-line th,
-.sense-rich-editor-surface .table-border-three-line td,
-.sense-rich-editor-surface .tableWrapper .table-border-three-line th,
-.sense-rich-editor-surface .tableWrapper .table-border-three-line td,
-.sense-rich-renderer .table-border-three-line th,
-.sense-rich-renderer .table-border-three-line td {
+.sense-rich-editor-surface .table-border-three-line td {
+  border: 1px dashed rgba(148, 163, 184, 0.14);
   border-left: none;
   border-right: none;
-  border-top: none;
-  border-bottom: 1px solid rgba(100, 116, 139, 0.55);
 }
 
-.sense-rich-editor-surface .table-style-three-line thead th,
-.sense-rich-editor-surface .tableWrapper .table-style-three-line thead th,
-.sense-rich-renderer .table-style-three-line thead th,
-.sense-rich-editor-surface .table-border-three-line thead th,
-.sense-rich-editor-surface .tableWrapper .table-border-three-line thead th,
-.sense-rich-renderer .table-border-three-line thead th {
+.sense-rich-editor-surface .table-style-three-line tr:first-child > *,
+.sense-rich-editor-surface .tableWrapper .table-style-three-line tr:first-child > *,
+.sense-rich-editor-surface .table-border-three-line tr:first-child > * {
+  border-top: 2px solid rgba(51, 65, 85, 0.92);
+  border-bottom: 2px solid rgba(51, 65, 85, 0.92);
+}
+
+.sense-rich-editor-surface .table-style-three-line tr:last-child > *,
+.sense-rich-editor-surface .tableWrapper .table-style-three-line tr:last-child > *,
+.sense-rich-editor-surface .table-border-three-line tr:last-child > * {
+  border-bottom: 2px solid rgba(51, 65, 85, 0.92);
+}
+
+.sense-rich-renderer .table-style-three-line th,
+.sense-rich-renderer .table-style-three-line td,
+.sense-rich-renderer .table-border-three-line th,
+.sense-rich-renderer .table-border-three-line td {
+  border: none;
+  border-left: none;
+  border-right: none;
+}
+
+.sense-rich-renderer .table-style-three-line tr:first-child > *,
+.sense-rich-renderer .table-border-three-line tr:first-child > * {
+  border-top: 2px solid rgba(51, 65, 85, 0.92);
+  border-bottom: 2px solid rgba(51, 65, 85, 0.92);
+}
+
+.sense-rich-renderer .table-style-three-line tr:last-child > *,
+.sense-rich-renderer .table-border-three-line tr:last-child > * {
   border-bottom: 2px solid rgba(51, 65, 85, 0.92);
 }
 
 .sense-rich-editor-surface .table-border-none th,
-.sense-rich-editor-surface .table-border-none td,
-.sense-rich-editor-surface .tableWrapper .table-border-none th,
-.sense-rich-editor-surface .tableWrapper .table-border-none td,
+.sense-rich-editor-surface .table-border-none td {
+  border: 1px dashed transparent;
+}
+
+.sense-rich-editor-surface .table-border-none:hover th,
+.sense-rich-editor-surface .table-border-none:hover td {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
 .sense-rich-renderer .table-border-none th,
 .sense-rich-renderer .table-border-none td {
   border: none;
 }
 
-.sense-rich-editor-surface .table-border-inner-horizontal th,
-.sense-rich-editor-surface .table-border-inner-horizontal td,
-.sense-rich-editor-surface .tableWrapper .table-border-inner-horizontal th,
-.sense-rich-editor-surface .tableWrapper .table-border-inner-horizontal td,
-.sense-rich-renderer .table-border-inner-horizontal th,
-.sense-rich-renderer .table-border-inner-horizontal td {
-  border: none;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.42);
-}
-
-.sense-rich-editor-surface .table-border-inner-horizontal tr:last-child > *,
-.sense-rich-editor-surface .tableWrapper .table-border-inner-horizontal tr:last-child > *,
-.sense-rich-renderer .table-border-inner-horizontal tr:last-child > * {
-  border-bottom: none;
-}
-
-.sense-rich-editor-surface .table-border-inner-vertical th,
-.sense-rich-editor-surface .table-border-inner-vertical td,
-.sense-rich-editor-surface .tableWrapper .table-border-inner-vertical th,
-.sense-rich-editor-surface .tableWrapper .table-border-inner-vertical td,
-.sense-rich-renderer .table-border-inner-vertical th,
-.sense-rich-renderer .table-border-inner-vertical td {
-  border: none;
-  border-right: 1px solid rgba(148, 163, 184, 0.42);
-}
-
-.sense-rich-editor-surface .table-border-inner-vertical tr > *:last-child,
-.sense-rich-editor-surface .tableWrapper .table-border-inner-vertical tr > *:last-child,
-.sense-rich-renderer .table-border-inner-vertical tr > *:last-child {
-  border-right: none;
-}
-
 .sense-rich-editor-surface .table-border-outer th,
-.sense-rich-editor-surface .table-border-outer td,
-.sense-rich-editor-surface .tableWrapper .table-border-outer th,
-.sense-rich-editor-surface .tableWrapper .table-border-outer td,
+.sense-rich-editor-surface .table-border-outer td {
+  border: 1px dashed rgba(148, 163, 184, 0.16);
+}
+
+.sense-rich-editor-surface .table-border-outer tr:first-child > * {
+  border-top: 1px solid rgba(51, 65, 85, 0.82);
+}
+
+.sense-rich-editor-surface .table-border-outer tr:last-child > * {
+  border-bottom: 1px solid rgba(51, 65, 85, 0.82);
+}
+
+.sense-rich-editor-surface .table-border-outer tr > *:first-child {
+  border-left: 1px solid rgba(51, 65, 85, 0.82);
+}
+
+.sense-rich-editor-surface .table-border-outer tr > *:last-child {
+  border-right: 1px solid rgba(51, 65, 85, 0.82);
+}
+
 .sense-rich-renderer .table-border-outer th,
 .sense-rich-renderer .table-border-outer td {
   border: none;
 }
 
-.sense-rich-editor-surface .table-border-outer tr:first-child > * ,
-.sense-rich-editor-surface .tableWrapper .table-border-outer tr:first-child > * ,
 .sense-rich-renderer .table-border-outer tr:first-child > * {
-  border-top: 1px solid rgba(148, 163, 184, 0.48);
+  border-top: 1px solid rgba(51, 65, 85, 0.82);
 }
 
-.sense-rich-editor-surface .table-border-outer tr:last-child > * ,
-.sense-rich-editor-surface .tableWrapper .table-border-outer tr:last-child > * ,
 .sense-rich-renderer .table-border-outer tr:last-child > * {
-  border-bottom: 1px solid rgba(148, 163, 184, 0.48);
+  border-bottom: 1px solid rgba(51, 65, 85, 0.82);
 }
 
-.sense-rich-editor-surface .table-border-outer tr > *:first-child,
-.sense-rich-editor-surface .tableWrapper .table-border-outer tr > *:first-child,
 .sense-rich-renderer .table-border-outer tr > *:first-child {
-  border-left: 1px solid rgba(148, 163, 184, 0.48);
+  border-left: 1px solid rgba(51, 65, 85, 0.82);
 }
 
-.sense-rich-editor-surface .table-border-outer tr > *:last-child,
-.sense-rich-editor-surface .tableWrapper .table-border-outer tr > *:last-child,
 .sense-rich-renderer .table-border-outer tr > *:last-child {
-  border-right: 1px solid rgba(148, 163, 184, 0.48);
+  border-right: 1px solid rgba(51, 65, 85, 0.82);
+}
+
+.sense-rich-editor-surface .sense-rich-table th[data-vertical-align="top"],
+.sense-rich-editor-surface .sense-rich-table td[data-vertical-align="top"],
+.sense-rich-editor-surface .tableWrapper th[data-vertical-align="top"],
+.sense-rich-editor-surface .tableWrapper td[data-vertical-align="top"],
+.sense-rich-renderer .sense-rich-table th[data-vertical-align="top"],
+.sense-rich-renderer .sense-rich-table td[data-vertical-align="top"] {
+  vertical-align: top;
+}
+
+.sense-rich-editor-surface .sense-rich-table th[data-vertical-align="middle"],
+.sense-rich-editor-surface .sense-rich-table td[data-vertical-align="middle"],
+.sense-rich-editor-surface .tableWrapper th[data-vertical-align="middle"],
+.sense-rich-editor-surface .tableWrapper td[data-vertical-align="middle"],
+.sense-rich-renderer .sense-rich-table th[data-vertical-align="middle"],
+.sense-rich-renderer .sense-rich-table td[data-vertical-align="middle"] {
+  vertical-align: middle;
+}
+
+.sense-rich-editor-surface .sense-rich-table th[data-vertical-align="bottom"],
+.sense-rich-editor-surface .sense-rich-table td[data-vertical-align="bottom"],
+.sense-rich-editor-surface .tableWrapper th[data-vertical-align="bottom"],
+.sense-rich-editor-surface .tableWrapper td[data-vertical-align="bottom"],
+.sense-rich-renderer .sense-rich-table th[data-vertical-align="bottom"],
+.sense-rich-renderer .sense-rich-table td[data-vertical-align="bottom"] {
+  vertical-align: bottom;
 }
 
 .sense-rich-editor-surface .table-cell-valign-middle,
@@ -2655,12 +2812,10 @@ body.sense-editor-preview-resizing * {
 .sense-rich-editor-surface .selectedCell,
 .sense-rich-editor-surface td.selectedCell,
 .sense-rich-editor-surface th.selectedCell {
-  background: rgba(56, 189, 248, 0.18);
-  box-shadow: inset 0 0 0 2px rgba(14, 165, 233, 0.32);
+  box-shadow: inset 0 0 0 2px rgba(14, 165, 233, 0.38);
 }
 
 .sense-rich-editor-surface .sense-table-active-cell {
-  background: rgba(186, 230, 253, 0.22);
   box-shadow: inset 0 0 0 2px rgba(14, 165, 233, 0.54), 0 0 0 1px rgba(125, 211, 252, 0.24);
 }
 
@@ -2772,6 +2927,22 @@ body.sense-editor-preview-resizing * {
   padding: 24px;
 }
 
+.sense-rich-inline-panel {
+  width: min(760px, 100%);
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+  border: 1px solid var(--sense-theme-border-strong);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(6, 12, 24, 0.98) 100%);
+  box-shadow: 0 26px 58px rgba(2, 6, 23, 0.4);
+}
+
+.sense-rich-inline-panel .sense-rich-dialog-body {
+  max-height: min(58vh, 620px);
+}
+
 .sense-rich-dialog {
   width: min(560px, calc(100vw - 32px));
   max-height: min(82vh, 820px);
@@ -2865,10 +3036,71 @@ body.sense-editor-preview-resizing * {
 .sense-rich-reference-item {
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 12px;
-  background: rgba(15, 23, 42, 0.72);
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.88) 0%, rgba(15, 23, 42, 0.84) 100%);
   color: inherit;
   min-height: 42px;
   padding: 0 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.sense-rich-form-grid input:focus,
+.sense-rich-form-grid select:focus,
+.sense-rich-reference-item:hover,
+.sense-rich-reference-item:focus-visible {
+  outline: none;
+  border-color: rgba(103, 232, 249, 0.4);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.12), 0 10px 22px rgba(2, 6, 23, 0.18);
+}
+
+.sense-rich-form-grid select {
+  appearance: none;
+  font: inherit;
+  font-weight: 600;
+}
+
+.sense-rich-dialog-select {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.88) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background-color 0.18s ease;
+}
+
+.sense-rich-dialog-select:hover,
+.sense-rich-dialog-select:focus-within {
+  border-color: rgba(103, 232, 249, 0.42);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.12), 0 12px 26px rgba(2, 6, 23, 0.2);
+  transform: translateY(-1px);
+}
+
+.sense-rich-dialog-select-icon {
+  flex: 0 0 auto;
+  color: rgba(125, 211, 252, 0.92);
+}
+
+.sense-rich-dialog-select-caret {
+  flex: 0 0 auto;
+  color: rgba(191, 219, 254, 0.74);
+}
+
+.sense-rich-dialog-select select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  outline: none;
+  appearance: none;
+  font: inherit;
+  font-weight: 600;
 }
 
 .sense-rich-checkbox-row {

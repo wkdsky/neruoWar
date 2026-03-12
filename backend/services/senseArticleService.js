@@ -57,7 +57,16 @@ const {
 const { DOMAIN_ADMIN_PERMISSION_KEYS, getSenseArticleReviewerEntries, hasDomainAdminPermission } = require('../utils/domainAdminPermissions');
 const { getIdString, isValidObjectId, toObjectIdOrNull } = require('../utils/objectId');
 const { diagLog, diagWarn, durationMs, nowMs } = require('./senseArticleDiagnostics');
-const { createMediaAssetRecord } = require('./senseArticleMediaService');
+const schedulerService = require('./schedulerService');
+const {
+  buildCleanupBucketRunAt,
+  createMediaAssetRecord,
+  promoteMediaAssets,
+  pruneExpiredTemporaryMediaAssets,
+  pruneUnreferencedMediaAssets,
+  releaseTemporaryMediaSession,
+  touchTemporaryMediaSession
+} = require('./senseArticleMediaService');
 const { validateRevisionContent } = require('./senseArticleValidationService');
 
 const createExposeError = (message, statusCode = 400, code = '', details = null) => {
@@ -762,9 +771,66 @@ const getArticleBundle = async ({ nodeId, senseId, userId, createIfMissing = tru
   };
 };
 
-const buildRevisionMutationResponse = ({ article, revision, permissions, userId }) => ({
+const serializeEditorMediaLibrary = (mediaLibrary = {}) => ({
+  referencedAssets: Array.isArray(mediaLibrary?.referencedAssets) ? mediaLibrary.referencedAssets.map((item) => serializeMediaAsset(item)) : [],
+  recentAssets: Array.isArray(mediaLibrary?.recentAssets) ? mediaLibrary.recentAssets.map((item) => serializeMediaAsset(item)) : [],
+  orphanCandidates: Array.isArray(mediaLibrary?.orphanCandidates) ? mediaLibrary.orphanCandidates.map((item) => serializeMediaAsset(item)) : []
+});
+
+const extractReferenceUrls = (mediaReferences = []) => (
+  Array.from(new Set((Array.isArray(mediaReferences) ? mediaReferences : [])
+    .map((item) => String(item?.url || '').trim())
+    .filter(Boolean)))
+);
+
+const enqueueTemporaryMediaCleanup = async ({ runAt = new Date() } = {}) => {
+  const cleanupAt = buildCleanupBucketRunAt(runAt);
+  const bucket = cleanupAt.toISOString().slice(0, 16);
+  await schedulerService.enqueue({
+    type: 'sense_article_temp_media_cleanup_tick',
+    runAt: cleanupAt,
+    payload: {},
+    dedupeKey: `sense_article_temp_media_cleanup:${bucket}`
+  });
+};
+
+const pruneArticleMedia = async ({ articleId = null, nodeId = '', senseId = '', now = new Date() } = {}) => {
+  await pruneExpiredTemporaryMediaAssets({
+    articleId,
+    nodeId: toObjectIdOrNull(nodeId),
+    senseId,
+    now
+  });
+  return pruneUnreferencedMediaAssets({
+    articleId,
+    nodeId: toObjectIdOrNull(nodeId),
+    senseId
+  });
+};
+
+const syncAndPruneArticleMedia = async ({ articleId = null, nodeId = '', senseId = '' } = {}) => {
+  await refreshArticleMediaReferenceState({ articleId, nodeId, senseId });
+  return pruneArticleMedia({
+    articleId,
+    nodeId,
+    senseId
+  });
+};
+
+const loadEditorMediaLibrary = async ({ articleId = null, nodeId = '', senseId = '', revisionId = '' } = {}) => {
+  const mediaLibrary = await listMediaAssetsForEditor({
+    nodeId,
+    senseId,
+    articleId,
+    revisionId
+  });
+  return serializeEditorMediaLibrary(mediaLibrary);
+};
+
+const buildRevisionMutationResponse = ({ article, revision, permissions, userId, mediaLibrary = null }) => ({
   article: serializeArticleSummary(article),
   revision: serializeRevisionMutationResult(revision),
+  ...(mediaLibrary ? { mediaLibrary: serializeEditorMediaLibrary(mediaLibrary) } : {}),
   permissions: serializePermissions(permissions, userId)
 });
 
@@ -877,7 +943,12 @@ const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId, requestM
     fallbackSenseTitle: bundle.nodeSense?.title || bundle.senseId || ''
   });
   const reviewPresentation = await buildReviewPresentation({ revision, node: bundle.node, currentUserId: userId });
-  const mediaLibrary = await listMediaAssetsForEditor({
+  await syncAndPruneArticleMedia({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId
+  });
+  const mediaLibrary = await loadEditorMediaLibrary({
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
     articleId: bundle.article._id,
@@ -891,11 +962,7 @@ const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId, requestM
     baseRevision: baseRevision ? serializeRevisionDetail(baseRevision, { requestMeta, phase: 'get_revision_detail.base_revision' }) : null,
     reviewParticipants: reviewPresentation.participants,
     reviewSummary: reviewPresentation.summary,
-    mediaLibrary: {
-      referencedAssets: mediaLibrary.referencedAssets.map((item) => serializeMediaAsset(item)),
-      recentAssets: mediaLibrary.recentAssets.map((item) => serializeMediaAsset(item)),
-      orphanCandidates: mediaLibrary.orphanCandidates.map((item) => serializeMediaAsset(item))
-    },
+    mediaLibrary,
     permissions: serializePermissions(bundle.permissions, userId)
   };
 };
@@ -1006,14 +1073,36 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
       updatedAt: new Date()
     }
   });
-  await refreshArticleMediaReferenceState({
+  const tempMediaSessionId = typeof payload.tempMediaSessionId === 'string' ? payload.tempMediaSessionId.trim() : '';
+  if (tempMediaSessionId) {
+    await promoteMediaAssets({
+      articleId: bundle.article._id,
+      nodeId: bundle.nodeId,
+      senseId: bundle.senseId,
+      urls: extractReferenceUrls(derived.mediaReferences)
+    });
+    await releaseTemporaryMediaSession({
+      articleId: bundle.article._id,
+      nodeId: bundle.nodeId,
+      senseId: bundle.senseId,
+      tempSessionId: tempMediaSessionId
+    });
+  }
+  await syncAndPruneArticleMedia({
     articleId: bundle.article._id,
     nodeId: bundle.nodeId,
     senseId: bundle.senseId
   });
+  const mediaLibrary = await loadEditorMediaLibrary({
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    articleId: bundle.article._id,
+    revisionId: draft._id
+  });
   return {
     article: serializeArticleSummary(bundle.article),
     revision: serializeRevisionDetail(draft, { requestMeta, phase: 'create_draft_revision' }),
+    mediaLibrary,
     permissions: serializePermissions(bundle.permissions, userId)
   };
 };
@@ -1122,16 +1211,38 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
       updatedBy: userId
     }
   });
-  await refreshArticleMediaReferenceState({
+  const tempMediaSessionId = typeof payload.tempMediaSessionId === 'string' ? payload.tempMediaSessionId.trim() : '';
+  if (tempMediaSessionId) {
+    await promoteMediaAssets({
+      articleId: bundle.article._id,
+      nodeId: bundle.nodeId,
+      senseId: bundle.senseId,
+      urls: extractReferenceUrls(derived.mediaReferences)
+    });
+    await releaseTemporaryMediaSession({
+      articleId: bundle.article._id,
+      nodeId: bundle.nodeId,
+      senseId: bundle.senseId,
+      tempSessionId: tempMediaSessionId
+    });
+  }
+  await syncAndPruneArticleMedia({
     articleId: bundle.article._id,
     nodeId: bundle.nodeId,
     senseId: bundle.senseId
+  });
+  const mediaLibrary = await loadEditorMediaLibrary({
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    articleId: bundle.article._id,
+    revisionId: revision._id
   });
   return buildRevisionMutationResponse({
     article: bundle.article,
     revision,
     permissions: bundle.permissions,
-    userId
+    userId,
+    mediaLibrary
   });
 };
 
@@ -1162,6 +1273,11 @@ const deleteDraftRevision = async ({ nodeId, senseId, revisionId, userId }) => {
       }
     });
   }
+  await syncAndPruneArticleMedia({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId
+  });
 
   return {
     ok: true,
@@ -1808,6 +1924,9 @@ const serializeMediaAsset = (asset = {}) => ({
   description: asset?.description || '',
   posterUrl: asset?.posterUrl || '',
   status: asset?.status || 'uploaded',
+  isTemporary: !!asset?.isTemporary,
+  tempSessionId: asset?.tempSessionId || '',
+  tempExpiresAt: asset?.tempExpiresAt || null,
   referencedRevisionIds: Array.isArray(asset?.referencedRevisionIds) ? asset.referencedRevisionIds : [],
   publishedRevisionIds: Array.isArray(asset?.publishedRevisionIds) ? asset.publishedRevisionIds : [],
   createdAt: asset?.createdAt || null
@@ -1825,6 +1944,7 @@ const uploadMediaAsset = async ({ nodeId, senseId, revisionId = '', userId, file
   const inferredKind = explicitKind
     || (mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('audio/') ? 'audio' : mimeType.startsWith('video/') ? 'video' : '');
   ensurePermission(['image', 'audio', 'video'].includes(inferredKind), '不支持的媒体类型', 400, 'media_kind_invalid');
+  const tempMediaSessionId = typeof payload.tempMediaSessionId === 'string' ? payload.tempMediaSessionId.trim() : '';
   const asset = await createMediaAssetRecord({
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
@@ -1840,18 +1960,85 @@ const uploadMediaAsset = async ({ nodeId, senseId, revisionId = '', userId, file
     posterUrl: typeof payload.posterUrl === 'string' ? payload.posterUrl.trim() : '',
     width: payload.width,
     height: payload.height,
-    duration: payload.duration
+    duration: payload.duration,
+    tempSessionId: tempMediaSessionId
   });
+  if (asset?.tempExpiresAt) {
+    await enqueueTemporaryMediaCleanup({ runAt: asset.tempExpiresAt });
+  }
   return {
     ok: true,
     asset: serializeMediaAsset(asset)
   };
 };
 
+const touchMediaSession = async ({ nodeId, senseId, revisionId = '', userId, tempMediaSessionId = '' }) => {
+  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: false });
+  if (!bundle.article) {
+    return {
+      ok: true,
+      revisionId: revisionId || null,
+      touchedAssetCount: 0,
+      tempExpiresAt: null
+    };
+  }
+  ensurePermission(bundle.permissions.canCreateRevision, '当前用户无法续租媒体临时缓存');
+  const revision = revisionId
+    ? await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id }).select('_id').lean()
+    : null;
+  const result = await touchTemporaryMediaSession({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    tempSessionId: tempMediaSessionId
+  });
+  if (result?.tempExpiresAt) {
+    await enqueueTemporaryMediaCleanup({ runAt: result.tempExpiresAt });
+  }
+  return {
+    ok: true,
+    revisionId: revision?._id || revisionId || null,
+    touchedAssetCount: Number(result?.matchedCount || 0),
+    tempExpiresAt: result?.tempExpiresAt || null
+  };
+};
+
+const releaseMediaSession = async ({ nodeId, senseId, revisionId = '', userId, tempMediaSessionId = '' }) => {
+  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: false });
+  if (!bundle.article) {
+    return {
+      ok: true,
+      revisionId: revisionId || null,
+      deletedAssetCount: 0,
+      deletedFileCount: 0
+    };
+  }
+  ensurePermission(bundle.permissions.canCreateRevision, '当前用户无法释放媒体临时缓存');
+  const revision = revisionId
+    ? await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id }).select('_id').lean()
+    : null;
+  const deleted = await releaseTemporaryMediaSession({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    tempSessionId: tempMediaSessionId
+  });
+  return {
+    ok: true,
+    revisionId: revision?._id || revisionId || null,
+    ...deleted
+  };
+};
+
 const listMediaAssets = async ({ nodeId, senseId, revisionId = '', userId }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   ensurePermission(bundle.permissions.canRead, '当前用户无法查看媒体资源', 403, 'media_read_forbidden');
-  const mediaLibrary = await listMediaAssetsForEditor({
+  await syncAndPruneArticleMedia({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId
+  });
+  const mediaLibrary = await loadEditorMediaLibrary({
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
     articleId: bundle.article._id,
@@ -1860,9 +2047,7 @@ const listMediaAssets = async ({ nodeId, senseId, revisionId = '', userId }) => 
   return {
     article: serializeArticleSummary(bundle.article),
     revisionId: revisionId || null,
-    referencedAssets: mediaLibrary.referencedAssets.map((item) => serializeMediaAsset(item)),
-    recentAssets: mediaLibrary.recentAssets.map((item) => serializeMediaAsset(item)),
-    orphanCandidates: mediaLibrary.orphanCandidates.map((item) => serializeMediaAsset(item))
+    ...mediaLibrary
   };
 };
 
@@ -2056,9 +2241,11 @@ module.exports = {
   resolveReferenceTargets,
   reviewByDomainAdmin,
   reviewByDomainMaster,
+  releaseMediaSession,
   searchCurrentArticle,
   searchReferenceTargets,
   submitRevision,
+  touchMediaSession,
   uploadMediaAsset,
   updateAnnotation,
   updateDraftRevision,

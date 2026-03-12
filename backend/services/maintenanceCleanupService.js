@@ -2,6 +2,7 @@ const ScheduledTask = require('../models/ScheduledTask');
 const AllianceBroadcastEvent = require('../models/AllianceBroadcastEvent');
 const DistributionResult = require('../models/DistributionResult');
 const SiegeParticipant = require('../models/SiegeParticipant');
+const { pruneExpiredTemporaryMediaAssets } = require('./senseArticleMediaService');
 
 const TASK_RETENTION_DAYS = Math.max(1, parseInt(process.env.TASK_RETENTION_DAYS, 10) || 7);
 const BROADCAST_RETENTION_DAYS = Math.max(1, parseInt(process.env.BROADCAST_RETENTION_DAYS, 10) || 30);
@@ -20,7 +21,7 @@ const runMaintenanceCleanup = async ({ now = new Date() } = {}) => {
   const distributionCutoff = computeCutoff(safeNow, DISTRIBUTION_RESULT_RETENTION_DAYS);
   const siegeCutoff = computeCutoff(safeNow, SIEGE_PARTICIPANT_RETENTION_DAYS);
 
-  const [taskResult, eventResult, distributionResult, siegeResult] = await Promise.all([
+  const [taskResult, eventResult, distributionResult, siegeResult, tempMediaResult] = await Promise.all([
     ScheduledTask.deleteMany({
       status: { $in: ['done', 'failed'] },
       updatedAt: { $lt: taskCutoff }
@@ -34,7 +35,8 @@ const runMaintenanceCleanup = async ({ now = new Date() } = {}) => {
     SiegeParticipant.deleteMany({
       status: { $nin: ['moving', 'sieging'] },
       updatedAt: { $lt: siegeCutoff }
-    })
+    }),
+    pruneExpiredTemporaryMediaAssets({ now: safeNow })
   ]);
 
   return {
@@ -55,7 +57,9 @@ const runMaintenanceCleanup = async ({ now = new Date() } = {}) => {
       scheduledTasks: taskResult?.deletedCount || 0,
       allianceBroadcastEvents: eventResult?.deletedCount || 0,
       distributionResults: distributionResult?.deletedCount || 0,
-      siegeParticipants: siegeResult?.deletedCount || 0
+      siegeParticipants: siegeResult?.deletedCount || 0,
+      temporarySenseArticleMediaAssets: tempMediaResult?.deletedAssetCount || 0,
+      temporarySenseArticleMediaFiles: tempMediaResult?.deletedFileCount || 0
     }
   };
 };

@@ -45,6 +45,21 @@ const normalizeBorderEdges = (value = '') => {
     .join(',');
 };
 
+const normalizeExplicitBorderEdges = (value = '') => {
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) return '';
+  if (normalizedValue === 'all') return 'all';
+  if (normalizedValue === 'none') return 'none';
+  const edges = normalizedValue
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => TABLE_BORDER_EDGE_OPTIONS.includes(item));
+  if (edges.length === 0) return '';
+  return Array.from(new Set(edges))
+    .sort((left, right) => TABLE_BORDER_EDGE_OPTIONS.indexOf(left) - TABLE_BORDER_EDGE_OPTIONS.indexOf(right))
+    .join(',');
+};
+
 const parseColumnWidths = (value = '') => String(value || '')
   .split(',')
   .map((item) => Number.parseInt(String(item || '').trim(), 10))
@@ -80,7 +95,7 @@ const extractTableCellMeta = (cell = null) => {
     verticalAlign: normalizeEnum(cell?.getAttribute?.('data-vertical-align') || '', TABLE_VERTICAL_ALIGN_OPTIONS, 'top'),
     backgroundColor: normalizeColor(cell?.getAttribute?.('data-background-color') || ''),
     textColor: normalizeColor(cell?.getAttribute?.('data-text-color') || ''),
-    borderEdges: normalizeBorderEdges(cell?.getAttribute?.('data-border-edges') || ''),
+    borderEdges: normalizeExplicitBorderEdges(cell?.getAttribute?.('data-border-edges') || ''),
     borderWidth,
     borderColor: normalizeColor(cell?.getAttribute?.('data-border-color') || ''),
     diagonalMode,
@@ -239,6 +254,7 @@ module.exports = {
   extractTableCellMeta,
   extractTableMetaFromElement,
   normalizeBorderEdges,
+  normalizeExplicitBorderEdges,
   normalizeColor,
   normalizeEnum,
   normalizeTableWidthValue,
