@@ -2,6 +2,7 @@ import React, { useMemo, useRef } from 'react';
 import { AST_NODE_TYPES } from '../../utils/senseArticleSyntax';
 import { getRelocationStatusLabel } from './senseArticleUi';
 import SenseArticleRichRenderer from './SenseArticleRichRenderer';
+import FormulaPreviewView from './editor/FormulaPreviewView';
 import './SenseArticle.css';
 
 const EMPTY_MAP = new Map();
@@ -42,7 +43,9 @@ const InlineNodesBase = ({ nodes = EMPTY_ARRAY, searchQuery = '', referenceMap =
       if (node.type === AST_NODE_TYPES.EMPHASIS) return <em key={`em-${index}`}><InlineNodes nodes={node.children || EMPTY_ARRAY} searchQuery={searchQuery} referenceMap={referenceMap} onReferenceClick={onReferenceClick} onReferenceHover={onReferenceHover} /></em>;
       if (node.type === AST_NODE_TYPES.STRONG) return <strong key={`strong-${index}`}><InlineNodes nodes={node.children || EMPTY_ARRAY} searchQuery={searchQuery} referenceMap={referenceMap} onReferenceClick={onReferenceClick} onReferenceHover={onReferenceHover} /></strong>;
       if (node.type === AST_NODE_TYPES.CODE_INLINE) return <code key={`code-${index}`}>{node.value || ''}</code>;
-      if (node.type === AST_NODE_TYPES.FORMULA_INLINE) return <span key={`formula-${index}`} className="sense-inline-formula">{node.value || ''}</span>;
+      if (node.type === AST_NODE_TYPES.FORMULA_INLINE) {
+        return <FormulaPreviewView key={`formula-${index}`} source={node.value || ''} displayMode="inline" className="sense-inline-formula" />;
+      }
       if (node.type === AST_NODE_TYPES.SYMBOL) return <span key={`symbol-${index}`}>{node.value || ''}</span>;
       if (node.type === AST_NODE_TYPES.SENSE_REFERENCE) {
         const meta = referenceMap.get(node.referenceId) || node;
@@ -170,7 +173,7 @@ const BlockViewBase = ({ block, searchQuery, referenceMap, onReferenceClick, onR
   }
 
   if (block.type === AST_NODE_TYPES.FORMULA_BLOCK) {
-    return <pre {...commonProps} className={`${commonProps.className} sense-formula-block`}>{block.value || ''}</pre>;
+    return <FormulaPreviewView as="div" {...commonProps} source={block.value || ''} displayMode="block" className={`${commonProps.className} sense-formula-block`} />;
   }
 
   if (block.type === AST_NODE_TYPES.CODE_BLOCK) {

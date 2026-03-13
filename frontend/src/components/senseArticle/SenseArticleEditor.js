@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Send, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowUp, HelpCircle, Send, Sparkles, Trash2 } from 'lucide-react';
 import { senseArticleApi } from '../../utils/senseArticleApi';
 import { API_BASE } from '../../runtimeConfig';
 import SenseArticlePageHeader from './SenseArticlePageHeader';
@@ -7,10 +7,18 @@ import SenseArticleRenderer from './SenseArticleRenderer';
 import SenseArticleStateView from './SenseArticleStateView';
 import SenseArticleStatusBadge from './SenseArticleStatusBadge';
 import SenseArticleEditorStatusBand from './SenseArticleEditorStatusBand';
+import SenseArticleDisplayModeToggle from './SenseArticleDisplayModeToggle';
 import RichSenseArticleEditorShell from './editor/RichSenseArticleEditorShell';
 import { legacyMarkupToRichHtmlWithDiagnostics } from './editor/legacyMarkupToRichHtml';
 import { normalizeRichHtmlContent } from './editor/richContentState';
+import {
+  composeScopedRichEditorDocument,
+  extractPlainTextFromRichHtml,
+  extractScopedRichEditorDocument
+} from './editor/richScopedContent';
 import useSenseArticleAutosave, { formatAutosaveTime } from './hooks/useSenseArticleAutosave';
+import useSenseArticleAsyncSideData from './hooks/useSenseArticleAsyncSideData';
+import useSenseArticleDisplayMode from './hooks/useSenseArticleDisplayMode';
 import useUnsavedChangesGuard from './hooks/useUnsavedChangesGuard';
 import SenseArticleEditorHelpDialog from './editor/dialogs/SenseArticleEditorHelpDialog';
 import {
@@ -23,28 +31,19 @@ import {
 } from './senseArticleUi';
 import { buildSenseArticleAllianceContext, buildSenseArticleThemeStyle } from './senseArticleTheme';
 import { describeActiveElement, describeScrollPosition, senseEditorDebugLog } from './editor/editorDebug';
-import { resolveBackendAssetUrl } from '../../runtimeConfig';
 import './SenseArticle.css';
 
 const EMPTY_REVISION = Object.freeze({});
 const EDITABLE_DRAFT_STATUSES = new Set(['draft', 'changes_requested_by_domain_admin', 'changes_requested_by_domain_master']);
 
-const extractMediaEntriesFromHtml = (html = '') => {
-  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return [];
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(`<body>${html || ''}</body>`, 'text/html');
-  const rows = Array.from(doc.body.querySelectorAll('img, audio, video'))
-    .map((element) => {
-      const tagName = String(element.tagName || '').toLowerCase();
-      const src = resolveBackendAssetUrl(element.getAttribute('src') || '');
-      if (!src) return null;
-      return {
-        kind: tagName === 'img' ? 'image' : tagName === 'audio' ? 'audio' : 'video',
-        src
-      };
-    })
+const buildValidationFailureMessage = (validation = null, fallback = '提交失败') => {
+  const blocking = Array.isArray(validation?.blocking) ? validation.blocking : [];
+  const messages = blocking
+    .map((item) => String(item?.message || '').trim())
     .filter(Boolean);
-  return rows.filter((item, index, array) => array.findIndex((target) => target.kind === item.kind && target.src === item.src) === index);
+  if (messages.length === 0) return fallback;
+  const summary = messages.slice(0, 3).join('；');
+  return messages.length > 3 ? `${summary}；另有 ${messages.length - 3} 项问题` : summary;
 };
 
 const extractMediaSourceUrlsFromHtml = (html = '') => {
@@ -69,6 +68,7 @@ const SenseArticleEditor = ({
 }) => {
   const [detail, setDetail] = useState(null);
   const [editorHtml, setEditorHtml] = useState('<p></p>');
+  const [fullEditorHtml, setFullEditorHtml] = useState('<p></p>');
   const [revisionTitle, setRevisionTitle] = useState('');
   const [note, setNote] = useState('');
   const [senseTitle, setSenseTitle] = useState('');
@@ -80,12 +80,9 @@ const SenseArticleEditor = ({
   const [conversionWarning, setConversionWarning] = useState('');
   const [readOnlyLegacyFallback, setReadOnlyLegacyFallback] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [mediaLibrary, setMediaLibrary] = useState({ referencedAssets: [], recentAssets: [], orphanCandidates: [] });
   const [toast, setToast] = useState(null);
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [resolvedRevisionId, setResolvedRevisionId] = useState(String(revisionId || '').trim());
-  const validationSectionRef = useRef(null);
-  const mediaSectionRef = useRef(null);
   const toastTimerRef = useRef(0);
   const tempMediaSessionIdRef = useRef(`temp-media-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
   const draftLaunchModeRef = useRef(String(articleContext?.draftLaunchMode || '').trim());
@@ -94,6 +91,7 @@ const SenseArticleEditor = ({
   const latestRevisionIdRef = useRef(String(revisionId || '').trim());
   const hasDiscardedDraftRef = useRef(false);
   const effectiveRevisionId = String(resolvedRevisionId || revisionId || '').trim();
+  const { displayMode, toggleDisplayMode } = useSenseArticleDisplayMode();
 
   const pageThemeStyle = useMemo(
     () => buildSenseArticleThemeStyle(detail?.node ? { ...articleContext, node: detail.node } : articleContext),
@@ -103,33 +101,34 @@ const SenseArticleEditor = ({
   const canOpenDashboard = !!detail?.permissions?.canReviewDomainAdmin || !!detail?.permissions?.canReviewDomainMaster || !!detail?.permissions?.isSystemAdmin;
   const canEdit = ['draft', 'changes_requested_by_domain_admin', 'changes_requested_by_domain_master'].includes(String(revision?.status || '').trim());
   const normalizedEditorHtml = useMemo(() => normalizeRichHtmlContent(editorHtml), [editorHtml]);
-  const currentEditorMedia = useMemo(() => {
-    const currentEntries = extractMediaEntriesFromHtml(normalizedEditorHtml);
-    const savedAssets = Array.isArray(mediaLibrary?.referencedAssets) ? mediaLibrary.referencedAssets : [];
-    const knownAssets = [
-      ...savedAssets,
-      ...(Array.isArray(mediaLibrary?.recentAssets) ? mediaLibrary.recentAssets : []),
-      ...(Array.isArray(revision?.mediaReferences) ? revision.mediaReferences : [])
-    ];
-    const assetMap = new Map();
-    knownAssets.forEach((asset) => {
-      const resolvedUrl = resolveBackendAssetUrl(asset?.url || asset?.src || '');
-      if (!resolvedUrl || assetMap.has(resolvedUrl)) return;
-      assetMap.set(resolvedUrl, asset);
-    });
-    const savedUrlSet = new Set(savedAssets.map((asset) => resolveBackendAssetUrl(asset?.url || '')));
-    return currentEntries.map((entry) => {
-      const matchedAsset = assetMap.get(entry.src);
-      return {
-        key: `${entry.kind}:${entry.src}`,
-        kind: entry.kind,
-        src: entry.src,
-        label: matchedAsset?.originalName || matchedAsset?.title || matchedAsset?.url || entry.src,
-        isSaved: savedUrlSet.has(entry.src)
-      };
-    });
-  }, [mediaLibrary, normalizedEditorHtml, revision]);
-
+  const scopedEditorDocument = useMemo(() => extractScopedRichEditorDocument({
+    fullHtml: fullEditorHtml,
+    sourceMode: revision?.sourceMode || 'full',
+    targetHeadingId: revision?.targetHeadingId || '',
+    selectedRangeAnchor: revision?.selectedRangeAnchor || null,
+    headingTitle: revision?.scopedChange?.headingTitle || ''
+  }), [fullEditorHtml, revision?.scopedChange?.headingTitle, revision?.selectedRangeAnchor, revision?.sourceMode, revision?.targetHeadingId]);
+  const composedEditorHtml = useMemo(() => composeScopedRichEditorDocument({
+    fullHtml: fullEditorHtml,
+    sourceMode: revision?.sourceMode || 'full',
+    targetHeadingId: revision?.targetHeadingId || '',
+    selectedRangeAnchor: revision?.selectedRangeAnchor || null,
+    headingTitle: revision?.scopedChange?.headingTitle || '',
+    editableHtml: normalizedEditorHtml
+  }), [fullEditorHtml, normalizedEditorHtml, revision?.scopedChange?.headingTitle, revision?.selectedRangeAnchor, revision?.sourceMode, revision?.targetHeadingId]);
+  const {
+    mediaLibrary,
+    mediaState,
+    reloadMediaLibrary,
+    setMediaLibrary,
+    setValidationSnapshot
+  } = useSenseArticleAsyncSideData({
+    nodeId,
+    senseId,
+    revisionId: effectiveRevisionId,
+    enabled: !!effectiveRevisionId && !readOnlyLegacyFallback,
+    initialValidationSnapshot: String(revision?._id || '').trim() === effectiveRevisionId ? (revision?.validationSnapshot || null) : null
+  });
   useEffect(() => {
     setResolvedRevisionId(String(revisionId || '').trim());
   }, [revisionId]);
@@ -188,20 +187,6 @@ const SenseArticleEditor = ({
     return () => window.removeEventListener('scroll', updateVisibility);
   }, []);
 
-  const loadMediaLibrary = useCallback(async () => {
-    if (!effectiveRevisionId) return;
-    try {
-      const data = await senseArticleApi.listMediaAssets(nodeId, senseId, { revisionId: effectiveRevisionId }, { view: 'senseArticleEditor' });
-      setMediaLibrary({
-        referencedAssets: Array.isArray(data?.referencedAssets) ? data.referencedAssets : [],
-        recentAssets: Array.isArray(data?.recentAssets) ? data.recentAssets : [],
-        orphanCandidates: Array.isArray(data?.orphanCandidates) ? data.orphanCandidates : []
-      });
-    } catch (_error) {
-      setMediaLibrary({ referencedAssets: [], recentAssets: [], orphanCandidates: [] });
-    }
-  }, [effectiveRevisionId, nodeId, senseId]);
-
   useEffect(() => {
     const incomingRevisionId = String(revisionId || '').trim();
     if (incomingRevisionId) return undefined;
@@ -211,28 +196,15 @@ const SenseArticleEditor = ({
       setLoading(true);
       setError(null);
       try {
-        const overview = await senseArticleApi.getOverview(nodeId, senseId, { view: 'senseArticleEditor' });
+        const mine = await senseArticleApi.getMyEdits(nodeId, senseId, { limit: 50 }, { view: 'senseArticleEditor' });
         if (cancelled) return;
-        const latestDraftRevisionId = String(overview?.article?.latestDraftRevisionId || '').trim();
-        if (latestDraftRevisionId) {
-          try {
-            const detail = await senseArticleApi.getRevisionDetail(nodeId, senseId, latestDraftRevisionId, { view: 'senseArticleEditor' });
-            if (cancelled) return;
-            const nextRevision = detail?.revision || null;
-            const currentUserId = String(detail?.permissions?.currentUserId || localStorage.getItem('userId') || '').trim();
-            const isMineOrAdmin = !!detail?.permissions?.isSystemAdmin || String(nextRevision?.proposerId || '').trim() === currentUserId;
-            const isReusableFullDraft = String(nextRevision?.sourceMode || 'full').trim() === 'full'
-              && EDITABLE_DRAFT_STATUSES.has(String(nextRevision?.status || '').trim());
-            if (nextRevision?._id && isMineOrAdmin && isReusableFullDraft) {
-              draftLaunchModeRef.current = 'reused';
-              hasPersistedDraftSaveRef.current = true;
-              hasDiscardedDraftRef.current = false;
-              setResolvedRevisionId(latestDraftRevisionId);
-              return;
-            }
-          } catch (_detailError) {
-            // Fallback to creating a new draft when the current latest draft is not reusable by this user.
-          }
+        const reusableFullDraftId = String(mine?.activeFullDraft?._id || '').trim();
+        if (reusableFullDraftId) {
+          draftLaunchModeRef.current = 'reused';
+          hasPersistedDraftSaveRef.current = true;
+          hasDiscardedDraftRef.current = false;
+          setResolvedRevisionId(reusableFullDraftId);
+          return;
         }
         const data = await senseArticleApi.createDraft(nodeId, senseId, {
           proposerNote: '整页百科修订草稿',
@@ -269,11 +241,11 @@ const SenseArticleEditor = ({
       try {
         const data = await senseArticleApi.getRevisionDetail(nodeId, senseId, effectiveRevisionId, {
           signal: controller.signal,
-          view: 'senseArticleEditor'
+          view: 'senseArticleEditor',
+          mode: 'bootstrap'
         });
         if (controller.signal.aborted) return;
         setDetail(data);
-        setMediaLibrary(data?.mediaLibrary || { referencedAssets: [], recentAssets: [], orphanCandidates: [] });
         const nextRevision = data?.revision || {};
         const nextRevisionTitle = nextRevision.revisionTitle
           || buildDefaultRevisionTitle(nextRevision.proposerUsername || localStorage.getItem('username') || '');
@@ -284,17 +256,36 @@ const SenseArticleEditor = ({
         setConversionWarning('');
 
         if (nextRevision.contentFormat === 'rich_html') {
-          setEditorHtml(nextRevision.editorSource || '<p></p>');
+          const fullHtml = nextRevision.editorSource || '<p></p>';
+          const scopedDocument = extractScopedRichEditorDocument({
+            fullHtml,
+            sourceMode: nextRevision.sourceMode || 'full',
+            targetHeadingId: nextRevision.targetHeadingId || '',
+            selectedRangeAnchor: nextRevision.selectedRangeAnchor || null,
+            headingTitle: nextRevision.scopedChange?.headingTitle || ''
+          });
+          setFullEditorHtml(fullHtml);
+          setEditorHtml(scopedDocument.editableHtml || '<p></p>');
           return;
         }
 
         try {
           const converted = legacyMarkupToRichHtmlWithDiagnostics(nextRevision.editorSource || '');
-          setEditorHtml(converted.html || '<p></p>');
+          const fullHtml = converted.html || '<p></p>';
+          const scopedDocument = extractScopedRichEditorDocument({
+            fullHtml,
+            sourceMode: nextRevision.sourceMode || 'full',
+            targetHeadingId: nextRevision.targetHeadingId || '',
+            selectedRangeAnchor: nextRevision.selectedRangeAnchor || null,
+            headingTitle: nextRevision.scopedChange?.headingTitle || ''
+          });
+          setFullEditorHtml(fullHtml);
+          setEditorHtml(scopedDocument.editableHtml || '<p></p>');
           const parseErrors = converted.parseErrors.length || (Array.isArray(nextRevision.parseErrors) ? nextRevision.parseErrors.length : 0);
           setConversionWarning(`当前修订是旧版 legacy_markup，已保守转换为 rich_html${parseErrors > 0 ? `（原内容含 ${parseErrors} 个解析异常）` : ''}；保存后将按新格式提交。`);
         } catch (conversionError) {
           setReadOnlyLegacyFallback(true);
+          setFullEditorHtml('<p></p>');
           setEditorHtml('<p></p>');
           setConversionWarning(`旧版内容未能自动转换到富文本，本次仅提供只读预览。${conversionError?.message ? `失败原因：${conversionError.message}` : ''}`);
         }
@@ -349,16 +340,8 @@ const SenseArticleEditor = ({
     };
   }, [revision]);
 
-  const modeLabel = useMemo(() => {
-    if (readOnlyLegacyFallback) return '旧版内容只读 fallback';
-    if (!detail?.article?.currentRevisionId) return '新建首个百科版本';
-    if (canEdit) return '编辑草稿';
-    if (String(revision?.status || '').startsWith('pending_')) return '审阅流转中';
-    return '查看修订';
-  }, [canEdit, detail?.article?.currentRevisionId, readOnlyLegacyFallback, revision?.status]);
-
   const snapshot = useMemo(() => ({
-    editorSource: normalizedEditorHtml,
+    editorSource: composedEditorHtml,
     contentFormat: 'rich_html',
     proposerNote: note,
     revisionTitle: revisionTitle.trim(),
@@ -366,12 +349,24 @@ const SenseArticleEditor = ({
     sourceMode: revision.sourceMode || 'full',
     targetHeadingId: revision.targetHeadingId || '',
     selectedRangeAnchor: revision.selectedRangeAnchor || null,
-    scopedChange: revision.scopedChange || null
-  }), [normalizedEditorHtml, note, revision, revisionTitle, senseTitle]);
+    scopedChange: ['section', 'selection'].includes(String(revision?.sourceMode || '').trim())
+      ? {
+          mode: revision.sourceMode || 'full',
+          headingTitle: scopedEditorDocument.headingTitle || revision?.scopedChange?.headingTitle || '',
+          originalText: revision?.scopedChange?.originalText || scopedEditorDocument.originalText || '',
+          currentText: extractPlainTextFromRichHtml(normalizedEditorHtml),
+          resolveMessage: scopedEditorDocument.resolveMessage || ''
+        }
+      : (revision.scopedChange || null)
+  }), [composedEditorHtml, note, normalizedEditorHtml, revision, revisionTitle, scopedEditorDocument.headingTitle, scopedEditorDocument.originalText, scopedEditorDocument.resolveMessage, senseTitle]);
 
   const applySavedRevision = useCallback((data, fallbackSnapshot = snapshot) => {
     if (!data?.revision) return;
     hasPersistedDraftSaveRef.current = true;
+    setFullEditorHtml(fallbackSnapshot.editorSource || '<p></p>');
+    if (data?.revision?.validationSnapshot) {
+      setValidationSnapshot(data.revision.validationSnapshot);
+    }
     setDetail((prev) => ({
       ...(prev || {}),
       revision: {
@@ -384,12 +379,8 @@ const SenseArticleEditor = ({
         proposedSenseTitle: fallbackSnapshot.proposedSenseTitle
       }
     }));
-    if (data?.mediaLibrary) {
-      setMediaLibrary(data.mediaLibrary);
-    } else {
-      loadMediaLibrary();
-    }
-  }, [loadMediaLibrary, snapshot]);
+    reloadMediaLibrary();
+  }, [reloadMediaLibrary, setValidationSnapshot, snapshot]);
 
   const autosave = useSenseArticleAutosave({
     nodeId,
@@ -436,10 +427,6 @@ const SenseArticleEditor = ({
     enabled: autosave.isDirty || autosave.status === 'saving'
   });
 
-  const jumpToSection = useCallback((ref) => {
-    ref?.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-  }, []);
-
   const handleBack = useCallback(() => {
     if (!confirmNavigation()) return;
     onBack && onBack({
@@ -484,6 +471,7 @@ const SenseArticleEditor = ({
     } catch (requestError) {
       const validation = requestError?.payload?.details?.validation || requestError?.payload?.validation || null;
       if (validation) {
+        setValidationSnapshot(validation);
         setDetail((prev) => ({
           ...(prev || {}),
           revision: {
@@ -492,7 +480,7 @@ const SenseArticleEditor = ({
           }
         }));
       }
-      showToast(requestError.message || '提交失败', 'danger');
+      showToast(buildValidationFailureMessage(validation, requestError.message || '提交失败'), 'danger');
     } finally {
       setSubmitting(false);
     }
@@ -597,7 +585,7 @@ const SenseArticleEditor = ({
       }).catch(() => {});
     }, 1000);
     return () => window.clearTimeout(timeoutId);
-  }, [canEdit, effectiveRevisionId, mediaLibrary?.recentAssets, nodeId, normalizedEditorHtml, readOnlyLegacyFallback, senseId]);
+  }, [canEdit, effectiveRevisionId, mediaLibrary?.recentAssets, nodeId, normalizedEditorHtml, readOnlyLegacyFallback, senseId, setMediaLibrary]);
 
   useEffect(() => {
     if (!canEdit || readOnlyLegacyFallback) return undefined;
@@ -631,7 +619,6 @@ const SenseArticleEditor = ({
     };
   }, [canEdit, effectiveRevisionId, nodeId, readOnlyLegacyFallback, senseId]);
 
-  const validationSnapshot = revision?.validationSnapshot || null;
   const statusNotices = useMemo(() => {
     const notices = [];
     if (conversionWarning) {
@@ -642,12 +629,20 @@ const SenseArticleEditor = ({
         message: conversionWarning
       });
     }
+    if (!readOnlyLegacyFallback && ['section', 'selection'].includes(String(revision?.sourceMode || '').trim()) && scopedEditorDocument.resolveMessage) {
+      notices.push({
+        id: 'scoped-range-warning',
+        tone: 'warning',
+        title: '局部范围已降级为保守编辑',
+        message: scopedEditorDocument.resolveMessage
+      });
+    }
     return notices;
-  }, [conversionWarning, readOnlyLegacyFallback]);
+  }, [conversionWarning, readOnlyLegacyFallback, revision?.sourceMode, scopedEditorDocument.resolveMessage]);
 
   if (loading) {
     const isResolvingDraft = !effectiveRevisionId;
-    return <div className="sense-article-page" style={pageThemeStyle}><SenseArticleStateView kind="loading" title={isResolvingDraft ? '正在准备编辑草稿' : '正在加载编辑页'} description={isResolvingDraft ? '正在检查可复用草稿；如无可复用草稿，将自动创建新的整页草稿。' : '正在读取修订内容与当前权限。'} /></div>;
+    return <div className={`sense-article-page sense-display-mode-${displayMode}`} style={pageThemeStyle}><SenseArticleStateView kind="loading" title={isResolvingDraft ? '正在准备编辑草稿' : '正在加载编辑页'} description={isResolvingDraft ? '正在检查可复用草稿；如无可复用草稿，将自动创建新的整页草稿。' : '正在读取修订内容、局部范围与当前权限。'} /></div>;
   }
   if (error) {
     const state = resolveSenseArticleStateFromError(error, {
@@ -655,14 +650,14 @@ const SenseArticleEditor = ({
       forbiddenTitle: '暂无编辑权限',
       errorTitle: '编辑页加载失败'
     });
-    return <div className="sense-article-page" style={pageThemeStyle}><SenseArticleStateView {...state} action={<button type="button" className="btn btn-secondary" onClick={handleBack}>返回</button>} /></div>;
+    return <div className={`sense-article-page sense-display-mode-${displayMode}`} style={pageThemeStyle}><SenseArticleStateView {...state} action={<button type="button" className="btn btn-secondary" onClick={handleBack}>返回</button>} /></div>;
   }
   if (!detail?.revision) {
-    return <div className="sense-article-page" style={pageThemeStyle}><SenseArticleStateView kind="empty" title="未找到修订" description="该修订可能已不存在。" action={<button type="button" className="btn btn-secondary" onClick={handleBack}>返回</button>} /></div>;
+    return <div className={`sense-article-page sense-display-mode-${displayMode}`} style={pageThemeStyle}><SenseArticleStateView kind="empty" title="未找到修订" description="该修订可能已不存在。" action={<button type="button" className="btn btn-secondary" onClick={handleBack}>返回</button>} /></div>;
   }
 
   return (
-    <div className="sense-article-page editor-mode rich-editor-mode" style={pageThemeStyle}>
+    <div className={`sense-article-page editor-mode rich-editor-mode sense-display-mode-${displayMode}`} style={pageThemeStyle}>
       <SenseArticlePageHeader
         pageType="senseArticleEditor"
         articleContext={articleContext}
@@ -688,6 +683,9 @@ const SenseArticleEditor = ({
                 <Sparkles size={16} /> 词条管理
               </button>
             ) : null}
+            <button type="button" className="btn btn-secondary" onClick={() => setHelpOpen(true)}>
+              <HelpCircle size={16} /> 帮助
+            </button>
             <button type="button" className="btn btn-primary" onClick={submitRevision} disabled={submitting || !canEdit || readOnlyLegacyFallback}>
               <Send size={16} /> {submitting ? '提交中…' : '提交审核'}
             </button>
@@ -700,14 +698,7 @@ const SenseArticleEditor = ({
 
       <div className="sense-editor-metadata-card">
         <SenseArticleEditorStatusBand
-          modeLabel={modeLabel}
           scopedLabel={revision.sourceMode !== 'full' ? `${getSourceModeLabel(revision.sourceMode)}发起的局部修订` : ''}
-          validationSnapshot={validationSnapshot}
-          mediaLibrary={mediaLibrary}
-          onJumpToValidation={() => jumpToSection(validationSectionRef)}
-          onJumpToMedia={() => jumpToSection(mediaSectionRef)}
-          onJumpToOutline={() => document.querySelector('.sense-editor-outline-card')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })}
-          onOpenHelp={() => setHelpOpen(true)}
           notices={statusNotices}
         />
 
@@ -725,35 +716,6 @@ const SenseArticleEditor = ({
             <textarea value={note} onChange={(event) => setNote(event.target.value)} className="sense-review-comment" disabled={!canEdit} />
           </label>
         </div>
-
-        {!readOnlyLegacyFallback ? (
-          <div ref={mediaSectionRef} className="sense-editor-media-summary">
-            <div className="sense-editor-pane-title">当前正文媒体</div>
-            <div className="sense-editor-media-chip-row">
-              {currentEditorMedia.length > 0 ? (
-                currentEditorMedia.map((asset) => (
-                  <span key={asset.key} className={`sense-pill media-${asset.kind}`}>
-                    {asset.label}
-                    {!asset.isSaved ? ' · 未保存' : ''}
-                  </span>
-                ))
-              ) : <SenseArticleStateView compact kind="empty" title="无媒体引用" description="当前正文尚未插入图片、音频或视频。" />}
-            </div>
-            {currentEditorMedia.some((item) => !item.isSaved) ? (
-              <div className="sense-review-note">已插入但尚未保存的媒体会标记为“未保存”；只有保存后仍在正文中的媒体才会继续保留在服务器上。</div>
-            ) : null}
-            {(mediaLibrary.orphanCandidates || []).length > 0 ? (
-              <div className="sense-review-note">系统检测到 {(mediaLibrary.orphanCandidates || []).length} 个待清理旧媒体；它们会在后续草稿保存或重新进入编辑页时自动删除。</div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {validationSnapshot?.hasBlockingIssues || validationSnapshot?.hasWarnings ? (
-          <div ref={validationSectionRef} className="sense-validation-list" role="status" aria-live="polite">
-            {(validationSnapshot.blocking || []).map((item) => <div key={`blocking-${item.code}`} className="sense-parse-error-item">{item.message}</div>)}
-            {(validationSnapshot.warnings || []).map((item) => <div key={`warning-${item.code}`} className="sense-review-note">{item.message}</div>)}
-          </div>
-        ) : <div ref={validationSectionRef}><SenseArticleStateView compact kind="empty" title="发布前检查无阻塞问题" description="当前修订没有 blocking error；如后续继续编辑，校验结果会随内容重新计算。" /></div>}
       </div>
 
       {readOnlyLegacyFallback ? (
@@ -771,6 +733,9 @@ const SenseArticleEditor = ({
           onUploadMedia={uploadMedia}
           scopedFocus={scopedFocus}
           mediaLibrary={mediaLibrary}
+          mediaLibraryState={mediaState.status}
+          mediaLibraryError={mediaState.error}
+          onRetryMediaLibrary={reloadMediaLibrary}
           onPasteNotice={(message) => showToast(message, 'subtle')}
           onEditorNotice={(message, tone = 'subtle') => showToast(message, tone)}
           onSaveDraft={saveDraft}
@@ -796,6 +761,7 @@ const SenseArticleEditor = ({
           <ArrowUp size={18} />
         </button>
       ) : null}
+      <SenseArticleDisplayModeToggle displayMode={displayMode} onToggle={toggleDisplayMode} />
       <SenseArticleEditorHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );

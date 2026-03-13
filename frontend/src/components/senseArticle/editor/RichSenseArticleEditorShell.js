@@ -18,6 +18,8 @@ import Indent from './extensions/Indent';
 import FigureImage from './extensions/FigureImage';
 import AudioNode from './extensions/AudioNode';
 import VideoNode from './extensions/VideoNode';
+import FormulaInline from './extensions/FormulaInline';
+import FormulaBlock from './extensions/FormulaBlock';
 import InternalSenseReference from './extensions/InternalSenseReference';
 import MediaAttachmentReference from './extensions/MediaAttachmentReference';
 import { MediaAttachmentSyncExtension } from './extensions/mediaAttachmentSupport';
@@ -25,6 +27,7 @@ import TableStyleExtension, { RichTableCell, RichTableHeader, RichTableRow } fro
 import TableContextBand from './TableContextBand';
 import RichToolbar from './RichToolbar';
 import AttachmentTitleDialog from './dialogs/AttachmentTitleDialog';
+import FormulaEditorDialog from './dialogs/FormulaEditorDialog';
 import { areRichHtmlContentsEquivalent, normalizeRichHtmlContent } from './richContentState';
 import { normalizePastedHtml } from './paste/normalizePastedContent';
 import { looksLikeMarkdown, markdownToRichHtml } from './paste/markdownToRichContent';
@@ -82,6 +85,9 @@ const RichSenseArticleEditorShell = ({
   onUploadMedia,
   scopedFocus = null,
   mediaLibrary = null,
+  mediaLibraryState = 'idle',
+  mediaLibraryError = null,
+  onRetryMediaLibrary = null,
   onPasteNotice = null,
   onEditorNotice = null,
   onSaveDraft = null,
@@ -106,6 +112,12 @@ const RichSenseArticleEditorShell = ({
     pos: null,
     title: '',
     nodeName: ''
+  });
+  const [formulaDialogState, setFormulaDialogState] = useState({
+    open: false,
+    pos: null,
+    latex: '',
+    displayMode: 'inline'
   });
   const toolbarHeightRef = useRef(0);
   const lastEmittedHtmlRef = useRef(normalizeRichHtmlContent(value || '<p></p>') || '<p></p>');
@@ -149,7 +161,7 @@ const RichSenseArticleEditorShell = ({
         link: false,
         underline: false,
         heading: {
-          levels: [1, 2, 3, 4]
+          levels: [1, 2, 3]
         }
       }),
       RichBulletList,
@@ -184,6 +196,8 @@ const RichSenseArticleEditorShell = ({
       FigureImage,
       AudioNode,
       VideoNode,
+      FormulaInline,
+      FormulaBlock,
       InternalSenseReference,
       MediaAttachmentReference,
       MediaAttachmentSyncExtension
@@ -372,8 +386,32 @@ const RichSenseArticleEditorShell = ({
     return () => window.removeEventListener('sense-media-attachment-edit-title', handleAttachmentTitleEdit);
   }, []);
 
+  useEffect(() => {
+    const handleFormulaEdit = (event) => {
+      const detail = event?.detail || {};
+      setFormulaDialogState({
+        open: true,
+        pos: Number.isFinite(Number(detail.pos)) ? Number(detail.pos) : null,
+        latex: String(detail.latex || '').trim(),
+        displayMode: String(detail.displayMode || 'inline').trim() === 'block' ? 'block' : 'inline'
+      });
+    };
+    window.addEventListener('sense-formula-edit', handleFormulaEdit);
+    return () => window.removeEventListener('sense-formula-edit', handleFormulaEdit);
+  }, []);
+
   const closeAttachmentTitleDialog = useCallback(() => {
     setAttachmentTitleDialogState((prev) => ({
+      ...prev,
+      open: false
+    }));
+    window.requestAnimationFrame(() => {
+      if (typeof editor?.view?.focus === 'function') editor.view.focus();
+    });
+  }, [editor]);
+
+  const closeFormulaDialog = useCallback(() => {
+    setFormulaDialogState((prev) => ({
       ...prev,
       open: false
     }));
@@ -401,6 +439,39 @@ const RichSenseArticleEditorShell = ({
     closeAttachmentTitleDialog();
   }, [attachmentTitleDialogState.pos, closeAttachmentTitleDialog, editor]);
 
+  const handleFormulaDialogSubmit = useCallback(({ latex, displayMode }) => {
+    if (!editor?.state?.doc || !editor?.view?.dispatch) {
+      closeFormulaDialog();
+      return;
+    }
+    const position = Number(formulaDialogState.pos);
+    const node = Number.isFinite(position) ? editor.state.doc.nodeAt(position) : null;
+    const normalizedLatex = String(latex || '').trim();
+    const normalizedDisplayMode = String(displayMode || '').trim() === 'block' ? 'block' : 'inline';
+    if (!node || !normalizedLatex) {
+      closeFormulaDialog();
+      return;
+    }
+    if (node.type.name === (normalizedDisplayMode === 'block' ? 'formulaBlock' : 'formulaInline')) {
+      const transaction = editor.state.tr.setNodeMarkup(position, undefined, {
+        ...node.attrs,
+        formulaSource: normalizedLatex,
+        displayMode: normalizedDisplayMode
+      });
+      editor.view.dispatch(transaction);
+      closeFormulaDialog();
+      return;
+    }
+    editor.chain().focus().setNodeSelection(position).deleteSelection().insertContent({
+      type: normalizedDisplayMode === 'block' ? 'formulaBlock' : 'formulaInline',
+      attrs: {
+        formulaSource: normalizedLatex,
+        displayMode: normalizedDisplayMode
+      }
+    }).run();
+    closeFormulaDialog();
+  }, [closeFormulaDialog, editor, formulaDialogState.pos]);
+
   useEffect(() => {
     if (!editorHostRef.current) return;
     const container = editorHostRef.current;
@@ -412,7 +483,7 @@ const RichSenseArticleEditorShell = ({
       return;
     }
     const query = String(scopedFocus.headingText || scopedFocus.selectionText || scopedFocus.originalText || '').trim();
-    const candidates = Array.from(container.querySelectorAll('h1, h2, h3, h4, p, li, blockquote, pre, table, figure'));
+    const candidates = Array.from(container.querySelectorAll('h1, h2, h3, p, li, blockquote, pre, table, figure'));
     const matched = candidates.find((element) => {
       const text = String(element.textContent || '').replace(/\s+/g, ' ').trim();
       if (!text && element.tagName.toLowerCase() === 'figure') {
@@ -497,6 +568,9 @@ const RichSenseArticleEditorShell = ({
           onSearchReferences={onSearchReferences}
           onUploadMedia={onUploadMedia}
           mediaLibrary={mediaLibrary}
+          mediaLibraryState={mediaLibraryState}
+          mediaLibraryError={mediaLibraryError}
+          onRetryMediaLibrary={onRetryMediaLibrary}
           dialogPortalTarget={shellRef}
         />
         <TableContextBand editor={editor} onNotice={showEditorNotice} />
@@ -514,7 +588,7 @@ const RichSenseArticleEditorShell = ({
                 items={outlineItems}
                 onJump={handleOutlineJump}
                 emptyTitle="暂无目录项"
-                emptyDescription="当前内容还没有标题结构，可先插入 H1-H4。"
+                emptyDescription=""
               />
             </div>
           </section>
@@ -553,6 +627,17 @@ const RichSenseArticleEditorShell = ({
         mediaLabel={resolveMediaAttachmentTypeLabel(attachmentTitleDialogState.nodeName)}
         onClose={closeAttachmentTitleDialog}
         onSubmit={handleAttachmentTitleSubmit}
+        portalTarget={shellRef}
+      />
+      <FormulaEditorDialog
+        open={formulaDialogState.open}
+        initialValue={formulaDialogState.latex}
+        initialDisplayMode={formulaDialogState.displayMode}
+        submitLabel="确认修改"
+        onClose={closeFormulaDialog}
+        onSubmit={handleFormulaDialogSubmit}
+        restoreFocusOnClose={false}
+        autoFocusTarget="none"
         portalTarget={shellRef}
       />
     </div>

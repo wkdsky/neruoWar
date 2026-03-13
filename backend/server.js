@@ -26,6 +26,7 @@ const usersRoutes = require('./routes/users');
 const app = express();
 const server = http.createServer(app);
 const DEFAULT_FRONTEND_ORIGIN = 'http://localhost:3000';
+const LOCALHOST_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
 const parseOriginList = (...inputs) => {
   const merged = inputs
@@ -38,6 +39,45 @@ const parseOriginList = (...inputs) => {
   return unique.length > 0 ? unique : [DEFAULT_FRONTEND_ORIGIN];
 };
 
+const parseOrigin = (origin = '') => {
+  try {
+    const parsed = new URL(origin);
+    return {
+      origin: parsed.origin,
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
+    };
+  } catch (_error) {
+    return null;
+  }
+};
+
+const isLocalhostHost = (hostname = '') => LOCALHOST_HOSTS.has(String(hostname || '').trim().toLowerCase());
+
+const formatOrigin = ({ protocol = 'http:', hostname = 'localhost', port = '' } = {}) => {
+  const safeHostname = String(hostname || '').includes(':') ? `[${hostname}]` : hostname;
+  return `${protocol}//${safeHostname}${port ? `:${port}` : ''}`;
+};
+
+const expandOriginAliases = (allowList = []) => {
+  const expanded = new Set();
+  allowList.forEach((origin) => {
+    if (typeof origin !== 'string' || !origin) return;
+    expanded.add(origin);
+    const parsed = parseOrigin(origin);
+    if (!parsed || !isLocalhostHost(parsed.hostname)) return;
+    LOCALHOST_HOSTS.forEach((aliasHostname) => {
+      expanded.add(formatOrigin({
+        protocol: parsed.protocol,
+        hostname: aliasHostname,
+        port: parsed.port
+      }));
+    });
+  });
+  return Array.from(expanded);
+};
+
 const isOriginAllowed = (origin, allowList = []) => {
   if (!origin) return true;
   if (allowList.includes('*')) return true;
@@ -45,7 +85,21 @@ const isOriginAllowed = (origin, allowList = []) => {
 };
 
 const createCorsOriginValidator = (allowList = []) => (origin, callback) => {
-  if (isOriginAllowed(origin, allowList)) {
+  const expandedAllowList = expandOriginAliases(allowList);
+  if (isOriginAllowed(origin, expandedAllowList)) {
+    callback(null, true);
+    return;
+  }
+
+  const requestOrigin = parseOrigin(origin);
+  const allowByLocalhostTemplate = requestOrigin && expandedAllowList.some((allowedOrigin) => {
+    const allowed = parseOrigin(allowedOrigin);
+    if (!allowed) return false;
+    if (!isLocalhostHost(allowed.hostname)) return false;
+    return allowed.protocol === requestOrigin.protocol && allowed.port === requestOrigin.port;
+  });
+
+  if (allowByLocalhostTemplate) {
     callback(null, true);
     return;
   }

@@ -9,7 +9,7 @@ export const extractRichHtmlOutline = (html = '') => {
   if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return [];
   const parser = new DOMParser();
   const doc = parser.parseFromString(`<body>${html || ''}</body>`, 'text/html');
-  const headings = Array.from(doc.body.querySelectorAll('h1, h2, h3, h4'));
+  const headings = Array.from(doc.body.querySelectorAll('h1, h2, h3'));
   return headings
     .map((heading, index) => {
       const title = normalizeHeadingText(heading.textContent || '');
@@ -42,7 +42,7 @@ export const buildFallbackRichBlocks = (html = '') => {
         };
       }
       const tagName = String(node.tagName || '').toLowerCase();
-      const isHeading = /^h[1-4]$/.test(tagName);
+      const isHeading = /^h[1-3]$/.test(tagName);
       if (isHeading) {
         const headingTitle = normalizeHeadingText(node.textContent || '');
         currentHeadingId = normalizeHeadingId(node.getAttribute('id') || headingIdsByTitle.get(headingTitle) || '', index);

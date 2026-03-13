@@ -95,11 +95,12 @@ const SenseArticleOutlineTree = ({
   onJump,
   renderActions = null,
   emptyTitle = '暂无目录项',
-  emptyDescription = '当前内容还没有标题结构，可先插入 H1-H4。'
+  emptyDescription = ''
 }) => {
   const outlineTree = useMemo(() => buildOutlineTree(items), [items]);
   const [expandedIds, setExpandedIds] = useState([]);
   const hasInitializedStateRef = useRef(false);
+  const treeRef = useRef(null);
   const expandedIdSet = useMemo(() => new Set(expandedIds), [expandedIds]);
 
   useEffect(() => {
@@ -113,6 +114,28 @@ const SenseArticleOutlineTree = ({
       return nextExpandableIds.filter((id) => previousIdSet.has(id));
     });
   }, [outlineTree]);
+
+  useEffect(() => {
+    if (!activeHeadingId) return;
+    const activeLink = treeRef.current?.querySelector('.sense-outline-tree-node.active .sense-outline-tree-link');
+    if (!activeLink) return;
+    const scroller = treeRef.current?.closest('.sense-editor-outline-shell, .sense-reading-outline-card');
+    if (!scroller) {
+      activeLink.scrollIntoView({
+        block: 'center',
+        inline: 'nearest',
+        behavior: 'smooth'
+      });
+      return;
+    }
+    const scrollerRect = scroller.getBoundingClientRect();
+    const linkRect = activeLink.getBoundingClientRect();
+    const nextTop = scroller.scrollTop + (linkRect.top - scrollerRect.top) - (scroller.clientHeight / 2) + (linkRect.height / 2);
+    scroller.scrollTo({
+      top: Math.max(0, nextTop),
+      behavior: 'smooth'
+    });
+  }, [activeHeadingId]);
 
   const handleToggle = (headingId) => {
     if (!headingId) return;
@@ -130,7 +153,7 @@ const SenseArticleOutlineTree = ({
   }
 
   return (
-    <div className="sense-outline-tree" role="tree">
+    <div ref={treeRef} className="sense-outline-tree" role="tree">
       {outlineTree.map((node) => (
         <OutlineTreeNode
           key={`${node.headingId}-${node.flatIndex}`}

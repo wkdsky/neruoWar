@@ -4,11 +4,11 @@ import {
   AlignJustify,
   AlignLeft,
   AlignRight,
+  Calculator,
   Check,
   CheckSquare,
   ChevronDown,
   Eraser,
-  FileCode2,
   FileText,
   Heading,
   Image as ImageIcon,
@@ -33,8 +33,7 @@ import InsertLinkDialog from './dialogs/InsertLinkDialog';
 import InsertTableDialog from './dialogs/InsertTableDialog';
 import InsertMediaDialog from './dialogs/InsertMediaDialog';
 import ImportMarkdownDialog from './dialogs/ImportMarkdownDialog';
-import TextColorPopover from './dialogs/TextColorPopover';
-import { FONT_SIZE_PRESETS, normalizeFontSize } from './extensions/FontSize';
+import FormulaEditorDialog from './dialogs/FormulaEditorDialog';
 import { buildAttachmentCaptionText, resolveAttachmentReferenceText } from './extensions/mediaAttachmentFormat';
 import { buildTableWidthPayload } from './table/tableWidthUtils';
 import { applyAttrsToSelectedTableCells, getTableSelectionState, isCellSelection } from './table/tableSelectionState';
@@ -116,6 +115,9 @@ const RichToolbar = ({
   onSearchReferences,
   onUploadMedia,
   mediaLibrary = null,
+  mediaLibraryState = 'idle',
+  mediaLibraryError = null,
+  onRetryMediaLibrary = null,
   onImportMarkdown = null,
   dialogPortalTarget = null
 }) => {
@@ -124,14 +126,13 @@ const RichToolbar = ({
   const [toolbarMenu, setToolbarMenu] = useState('');
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [markdownDialogOpen, setMarkdownDialogOpen] = useState(false);
-  const [colorOpen, setColorOpen] = useState(false);
-  const [fontSizeInput, setFontSizeInput] = useState('16');
-  const colorPopoverRef = useRef(null);
+  const [formulaDialogOpen, setFormulaDialogOpen] = useState(false);
   const mediaToolbarGroupRef = useRef(null);
   const mediaMenuAnchorRef = useRef(null);
   const referenceMenuAnchorRef = useRef(null);
   const bulletListMenuAnchorRef = useRef(null);
   const orderedListMenuAnchorRef = useRef(null);
+  const formatBlockMenuAnchorRef = useRef(null);
   const preservedSelectionBookmarkRef = useRef(null);
   const preservedCellSelectionRef = useRef(null);
   const preservedTextRef = useRef('');
@@ -139,59 +140,42 @@ const RichToolbar = ({
   const selectedImage = editor?.isActive('figureImage') ? editor.getAttributes('figureImage') : null;
   const selectedAudio = editor?.isActive('audioNode') ? editor.getAttributes('audioNode') : null;
   const selectedVideo = editor?.isActive('videoNode') ? editor.getAttributes('videoNode') : null;
+  const selectedFormula = editor?.isActive('formulaInline')
+    ? { ...editor.getAttributes('formulaInline'), nodeType: 'formulaInline' }
+    : editor?.isActive('formulaBlock')
+      ? { ...editor.getAttributes('formulaBlock'), nodeType: 'formulaBlock' }
+      : null;
 
   const editorUiState = useEditorState({
     editor,
     selector: ({ editor: currentEditor }) => {
       if (!currentEditor) {
-        return { paragraphType: 'paragraph', activeFontSize: '16px' };
+        return { paragraphType: 'paragraph', formatBlockType: '' };
       }
       let paragraphType = 'paragraph';
       if (currentEditor.isActive('heading', { level: 1 })) paragraphType = 'h1';
       else if (currentEditor.isActive('heading', { level: 2 })) paragraphType = 'h2';
       else if (currentEditor.isActive('heading', { level: 3 })) paragraphType = 'h3';
-      else if (currentEditor.isActive('heading', { level: 4 })) paragraphType = 'h4';
-      else if (currentEditor.isActive('blockquote')) paragraphType = 'blockquote';
-      else if (currentEditor.isActive('codeBlock')) paragraphType = 'codeBlock';
+      const formatBlockType = currentEditor.isActive('blockquote')
+        ? 'blockquote'
+        : currentEditor.isActive('codeBlock')
+          ? 'codeBlock'
+          : '';
 
       return {
         paragraphType,
-        activeFontSize: normalizeFontSize(currentEditor.getAttributes('textStyle')?.fontSize || '16px') || '16px',
+        formatBlockType,
         tableSelectionState: getTableSelectionState(currentEditor)
       };
     }
   });
 
   const paragraphType = editorUiState?.paragraphType || 'paragraph';
-
-  const activeFontSize = editorUiState?.activeFontSize || '16px';
+  const formatBlockType = editorUiState?.formatBlockType || '';
   const tableSelectionState = editorUiState?.tableSelectionState || {};
   const mediaAttachments = collectSavedMediaAttachments(editor, mediaLibrary);
   const activeBulletListStyle = editor.getAttributes('bulletList')?.listStyleType || 'disc';
   const activeOrderedListStyle = editor.getAttributes('orderedList')?.listStyleType || 'decimal';
-
-  useEffect(() => {
-    setFontSizeInput(String(activeFontSize).replace(/px$/, ''));
-  }, [activeFontSize]);
-
-  useEffect(() => {
-    const handlePointerDown = (event) => {
-      if (!colorOpen) return;
-      if (colorPopoverRef.current?.contains(event.target)) return;
-      setColorOpen(false);
-    };
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setColorOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [colorOpen]);
 
   useEffect(() => {
     if (!toolbarMenu) return undefined;
@@ -200,10 +184,12 @@ const RichToolbar = ({
       const referenceMenuOpen = toolbarMenu === 'reference';
       const bulletListMenuOpen = toolbarMenu === 'bullet-list';
       const orderedListMenuOpen = toolbarMenu === 'ordered-list';
+      const formatBlockMenuOpen = toolbarMenu === 'format-block';
       if (mediaMenuOpen && mediaMenuAnchorRef.current?.contains(event.target)) return;
       if (referenceMenuOpen && referenceMenuAnchorRef.current?.contains(event.target)) return;
       if (bulletListMenuOpen && bulletListMenuAnchorRef.current?.contains(event.target)) return;
       if (orderedListMenuOpen && orderedListMenuAnchorRef.current?.contains(event.target)) return;
+      if (formatBlockMenuOpen && formatBlockMenuAnchorRef.current?.contains(event.target)) return;
       setToolbarMenu('');
     };
     const handleKeyDown = (event) => {
@@ -231,12 +217,12 @@ const RichToolbar = ({
   if (!editor) return null;
 
   const closeFloatingUi = () => {
-    setColorOpen(false);
     setReferenceDialogMode('');
     setMediaDialogKind('');
     setToolbarMenu('');
     setTableDialogOpen(false);
     setMarkdownDialogOpen(false);
+    setFormulaDialogOpen(false);
   };
 
   const preserveSelection = () => {
@@ -452,17 +438,18 @@ const RichToolbar = ({
       if (value === 'h1') return chain.toggleHeading({ level: 1 }).run();
       if (value === 'h2') return chain.toggleHeading({ level: 2 }).run();
       if (value === 'h3') return chain.toggleHeading({ level: 3 }).run();
-      if (value === 'h4') return chain.toggleHeading({ level: 4 }).run();
-      if (value === 'blockquote') return chain.toggleBlockquote().run();
-      if (value === 'codeBlock') return chain.toggleCodeBlock().run();
       return false;
     });
   };
 
-  const applyFontSize = (rawValue) => {
-    const normalizedValue = normalizeFontSize(rawValue);
-    if (!normalizedValue) return;
-    runWithPreservedSelection((chain) => chain.setFontSize(normalizedValue).run());
+  const handleFormatBlockChange = (value) => {
+    if (!value) return;
+    runWithPreservedSelection((chain) => {
+      if (value === 'blockquote') return chain.toggleBlockquote().run();
+      if (value === 'codeBlock') return chain.toggleCodeBlock().run();
+      return false;
+    });
+    setToolbarMenu('');
   };
 
   const handleLinkSubmit = (payload) => {
@@ -563,6 +550,34 @@ const RichToolbar = ({
     });
   };
 
+  const handleFormulaSubmit = ({ latex, displayMode }) => {
+    restoreSelectionFromBookmark();
+    const normalizedSource = String(latex || '').trim();
+    const normalizedDisplayMode = String(displayMode || '').trim() === 'block' ? 'block' : 'inline';
+    if (!normalizedSource) return;
+    if (editor.isActive('formulaInline') && normalizedDisplayMode === 'inline') {
+      chainWithPreservedSelection().updateFormulaInline(normalizedSource).run();
+    } else if (editor.isActive('formulaBlock') && normalizedDisplayMode === 'block') {
+      chainWithPreservedSelection().updateFormulaBlock(normalizedSource).run();
+    } else if (editor.isActive('formulaInline') || editor.isActive('formulaBlock')) {
+      chainWithPreservedSelection().deleteSelection().insertContent({
+        type: normalizedDisplayMode === 'block' ? 'formulaBlock' : 'formulaInline',
+        attrs: {
+          formulaSource: normalizedSource,
+          displayMode: normalizedDisplayMode
+        }
+      }).run();
+    } else if (normalizedDisplayMode === 'block') {
+      chainWithPreservedSelection().insertFormulaBlock(normalizedSource).run();
+    } else {
+      chainWithPreservedSelection().insertFormulaInline(normalizedSource).run();
+    }
+    closeFloatingUi();
+    window.requestAnimationFrame(() => {
+      focusEditor('formula-submit');
+    });
+  };
+
   const openSingleFloatingUi = (openCallback, reason = 'generic') => {
     preserveSelection();
     senseEditorDebugLog('toolbar', 'Opening floating UI', {
@@ -635,7 +650,6 @@ const RichToolbar = ({
 
   const toggleToolbarMenu = (menuName) => {
     preserveSelection();
-    setColorOpen(false);
     setReferenceDialogMode('');
     setMediaDialogKind('');
     setTableDialogOpen(false);
@@ -674,11 +688,41 @@ const RichToolbar = ({
               <option value="h1">标题 1</option>
               <option value="h2">标题 2</option>
               <option value="h3">标题 3</option>
-              <option value="h4">标题 4</option>
-              <option value="blockquote">引用块</option>
-              <option value="codeBlock">代码块</option>
             </select>
             <ChevronDown size={14} />
+          </div>
+        </ToolbarGroup>
+
+        <ToolbarGroup title="格式块">
+          <div ref={formatBlockMenuAnchorRef} className="sense-table-menu-anchor">
+            <ToolbarButton
+              title="格式块"
+              active={formatBlockType === 'blockquote' || formatBlockType === 'codeBlock' || toolbarMenu === 'format-block'}
+              onMouseDownCapture={preserveSelection}
+              onClick={() => toggleToolbarMenu('format-block')}
+            >
+              {menuButtonLabel('格式块', <FileText size={16} />)}
+            </ToolbarButton>
+            {toolbarMenu === 'format-block' ? (
+              <div className="sense-table-menu-panel" role="menu" aria-label="格式块菜单">
+                <button
+                  type="button"
+                  className={`sense-table-menu-item${formatBlockType === 'blockquote' ? ' checked' : ''}`}
+                  onClick={() => handleFormatBlockChange('blockquote')}
+                >
+                  <span className="sense-table-menu-check">{formatBlockType === 'blockquote' ? <Check size={14} /> : null}</span>
+                  <span>引用块</span>
+                </button>
+                <button
+                  type="button"
+                  className={`sense-table-menu-item${formatBlockType === 'codeBlock' ? ' checked' : ''}`}
+                  onClick={() => handleFormatBlockChange('codeBlock')}
+                >
+                  <span className="sense-table-menu-check">{formatBlockType === 'codeBlock' ? <Check size={14} /> : null}</span>
+                  <span>代码块</span>
+                </button>
+              </div>
+            ) : null}
           </div>
         </ToolbarGroup>
 
@@ -687,68 +731,7 @@ const RichToolbar = ({
           <ToolbarButton active={editor.isActive('italic')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleItalic().run())} title="斜体 (Ctrl/Cmd+I)" ariaLabel="切换斜体">{buttonLabel('斜体', <Type size={16} />)}</ToolbarButton>
           <ToolbarButton active={editor.isActive('underline')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleUnderline().run())} title="下划线" ariaLabel="切换下划线">{buttonLabel('下划线', <Type size={16} />)}</ToolbarButton>
           <ToolbarButton active={editor.isActive('strike')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleStrike().run())} title="删除线" ariaLabel="切换删除线">{buttonLabel('删除线', <Type size={16} />)}</ToolbarButton>
-          <ToolbarButton active={editor.isActive('code')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleCode().run())} title="行内代码" ariaLabel="切换行内代码">{buttonLabel('行内代码', <FileCode2 size={16} />)}</ToolbarButton>
-          <div className="sense-rich-toolbar-fontsize" aria-label="字号控制">
-            <input
-              type="text"
-              inputMode="decimal"
-              aria-label="输入字号像素值"
-              value={fontSizeInput}
-              onMouseDownCapture={preserveSelection}
-              onChange={(event) => setFontSizeInput(event.target.value.replace(/[^\d.]/g, ''))}
-              onBlur={() => {
-                const normalizedValue = normalizeFontSize(fontSizeInput);
-                if (!normalizedValue) {
-                  setFontSizeInput(activeFontSize.replace(/px$/, ''));
-                  return;
-                }
-                applyFontSize(normalizedValue);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  applyFontSize(fontSizeInput);
-                }
-              }}
-            />
-            <span className="sense-rich-toolbar-fontsize-unit">px</span>
-            <select
-              aria-label="字号预设"
-              value={activeFontSize}
-              onMouseDownCapture={preserveSelection}
-              onChange={(event) => {
-                setFontSizeInput(event.target.value.replace(/px$/, ''));
-                applyFontSize(event.target.value);
-              }}
-            >
-              {FONT_SIZE_PRESETS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-            </select>
-          </div>
-        </ToolbarGroup>
-
-        <ToolbarGroup title="颜色">
-          <div className="sense-rich-toolbar-color">
-            <ToolbarButton title="文字颜色与高亮" active={colorOpen} onClick={() => {
-              preserveSelection();
-              setReferenceDialogMode('');
-              setMediaDialogKind('');
-              setTableDialogOpen(false);
-              setMarkdownDialogOpen(false);
-              setToolbarMenu('');
-              setColorOpen((prev) => !prev);
-            }} ariaLabel="打开文字颜色与高亮设置">颜色</ToolbarButton>
-            <div ref={colorPopoverRef}>
-              <TextColorPopover
-                open={colorOpen}
-                textColor={editor.getAttributes('textStyle')?.color || '#0f172a'}
-                highlightColor={editor.getAttributes('highlight')?.color || '#facc15'}
-                onTextColorChange={(value) => runWithPreservedSelection((chain) => chain.setColor(value).run())}
-                onHighlightColorChange={(value) => runWithPreservedSelection((chain) => chain.toggleHighlight({ color: value }).run())}
-                onClearTextColor={() => runWithPreservedSelection((chain) => chain.unsetColor().run())}
-                onClearHighlight={() => runWithPreservedSelection((chain) => chain.unsetHighlight().run())}
-              />
-            </div>
-          </div>
+          <ToolbarButton active={editor.isActive('formulaInline') || editor.isActive('formulaBlock') || formulaDialogOpen} onMouseDownCapture={preserveSelection} onClick={() => openSingleFloatingUi(() => setFormulaDialogOpen(true), 'formula-dialog')} title="公式 / 特殊字符" ariaLabel="插入公式或特殊字符">{buttonLabel('公式/特殊字符', <Calculator size={16} />)}</ToolbarButton>
         </ToolbarGroup>
 
         <ToolbarGroup title="对齐 / 缩进">
@@ -902,6 +885,9 @@ const RichToolbar = ({
         onSubmit={handleLinkSubmit}
         onSearchReferences={onSearchReferences}
         mediaLibrary={mediaLibrary}
+        mediaLibraryState={mediaLibraryState}
+        mediaLibraryError={mediaLibraryError}
+        onRetryMediaLibrary={onRetryMediaLibrary}
         mediaAttachments={mediaAttachments}
         restoreFocusOnClose={false}
         autoFocusTarget="dialog"
@@ -935,6 +921,20 @@ const RichToolbar = ({
           closeFloatingUi();
           if (typeof onImportMarkdown === 'function') onImportMarkdown();
         }}
+      />
+      <FormulaEditorDialog
+        open={formulaDialogOpen}
+        initialValue={selectedFormula?.formulaSource || ''}
+        initialDisplayMode={selectedFormula?.displayMode || (selectedFormula?.nodeType === 'formulaBlock' ? 'block' : 'inline')}
+        submitLabel={selectedFormula ? '确认修改' : '插入公式'}
+        onClose={() => {
+          restoreSelection();
+          setFormulaDialogOpen(false);
+        }}
+        onSubmit={handleFormulaSubmit}
+        restoreFocusOnClose={false}
+        autoFocusTarget="none"
+        portalTarget={dialogPortalTarget}
       />
     </>
   );

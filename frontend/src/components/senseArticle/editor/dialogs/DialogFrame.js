@@ -45,7 +45,9 @@ const DialogFrame = ({
   restoreFocusTarget = null,
   onAfterCloseFocus = null,
   autoFocusTarget = 'closeButton',
-  portalTarget = null
+  portalTarget = null,
+  dialogClassName = '',
+  bodyClassName = ''
 }) => {
   const closeButtonRef = useRef(null);
   const dialogRef = useRef(null);
@@ -136,7 +138,7 @@ const DialogFrame = ({
     <div className="sense-rich-dialog-backdrop" onMouseDown={onClose}>
       <div
         ref={dialogRef}
-        className={`sense-rich-dialog${wide ? ' wide' : ''}`}
+        className={`sense-rich-dialog${wide ? ' wide' : ''}${dialogClassName ? ` ${dialogClassName}` : ''}`}
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -153,7 +155,7 @@ const DialogFrame = ({
             <X size={16} />
           </button>
         </div>
-        <div className="sense-rich-dialog-body">{children}</div>
+        <div className={`sense-rich-dialog-body${bodyClassName ? ` ${bodyClassName}` : ''}`}>{children}</div>
         {footer ? <div className="sense-rich-dialog-footer">{footer}</div> : null}
       </div>
     </div>

@@ -314,6 +314,7 @@ const SenseArticleRevisionSchema = new mongoose.Schema({
 SenseArticleRevisionSchema.index({ articleId: 1, revisionNumber: -1 }, { unique: true });
 SenseArticleRevisionSchema.index({ nodeId: 1, senseId: 1, status: 1, createdAt: -1 });
 SenseArticleRevisionSchema.index({ proposerId: 1, createdAt: -1 });
+SenseArticleRevisionSchema.index({ articleId: 1, proposerId: 1, status: 1, updatedAt: -1 });
 SenseArticleRevisionSchema.index({ baseRevisionId: 1, status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('SenseArticleRevision', SenseArticleRevisionSchema);

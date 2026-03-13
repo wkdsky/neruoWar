@@ -41,6 +41,7 @@ const {
   serializeBacklinkEntry,
   serializePermissions,
   serializeReferencePreview,
+  serializeRevisionBootstrap,
   serializeRevisionDetail,
   serializeRevisionMutationResult,
   serializeRevisionSummary,
@@ -79,6 +80,13 @@ const createExposeError = (message, statusCode = 400, code = '', details = null)
   error.details = details;
   return error;
 };
+
+const MY_EDITS_VISIBLE_STATUSES = new Set([
+  ...DRAFT_EDITABLE_STATUSES,
+  'pending_review',
+  'pending_domain_admin_review',
+  'pending_domain_master_review'
+]);
 
 const normalizeTrimmedText = (value = '') => (typeof value === 'string' ? value.trim() : '');
 
@@ -120,6 +128,25 @@ const decorateRevisionRecords = async ({ revisions = [], fallbackSenseTitle = ''
       proposedSenseTitle: normalizeTrimmedText(revision.proposedSenseTitle) || normalizedFallbackSenseTitle
     };
   });
+};
+
+const loadMyVisibleRevisionSummaries = async ({ articleId = null, proposerId = '', fallbackSenseTitle = '', limit = 50 } = {}) => {
+  const normalizedProposerId = toObjectIdOrNull(proposerId);
+  if (!articleId || !normalizedProposerId) return [];
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
+  const rows = await SenseArticleRevision.find({
+    articleId,
+    proposerId: normalizedProposerId,
+    status: { $in: Array.from(MY_EDITS_VISIBLE_STATUSES) }
+  })
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .limit(safeLimit)
+    .lean();
+  const decorated = await decorateRevisionRecords({
+    revisions: rows,
+    fallbackSenseTitle
+  });
+  return decorated.map((item) => serializeRevisionSummary(item));
 };
 
 const resolveProposedSenseTitle = async ({ bundle, senseId, proposedSenseTitle = '', allowChange = false } = {}) => {
@@ -262,6 +289,7 @@ const reasonToMessage = (reason = '') => ({
   revision_superseded: '当前修订已被 superseded，不能继续提交',
   revision_withdrawn: '当前修订已撤回，不能继续提交',
   revision_rejected: '当前修订已被驳回，不能继续提交',
+  unchanged_revision: '当前修订与基线版本相比没有任何实际变化，不能提交审核',
   status_not_submittable: '当前修订状态不可提交',
   published_cannot_be_reviewed: '已发布修订不能再次审核',
   superseded_cannot_be_reviewed: '已 superseded 修订不能再次审核',
@@ -551,6 +579,24 @@ const buildRevisionComparePayload = ({ fromRevision = null, toRevision = null })
   serializeStructuredDiff(buildStructuredDiff({ fromRevision, toRevision }))
 );
 
+const compareHasAnyChanges = (compare = null) => {
+  if (!compare || typeof compare !== 'object') return false;
+  const summary = compare.summary && typeof compare.summary === 'object' ? compare.summary : {};
+  if (Object.values(summary).some((value) => Number(value || 0) > 0)) return true;
+  if (Array.isArray(compare.changes) && compare.changes.length > 0) return true;
+  const stats = compare.stats && typeof compare.stats === 'object' ? compare.stats : {};
+  return Object.values(stats).some((value) => Number(value || 0) > 0);
+};
+
+const revisionHasMeaningfulSubmissionChanges = ({ revision = null, currentSenseTitle = '' } = {}) => {
+  if (!revision) return false;
+  if (compareHasAnyChanges(revision.diffFromBase)) return true;
+  const normalizedCurrentTitle = normalizeTrimmedText(currentSenseTitle);
+  const normalizedProposedTitle = normalizeTrimmedText(revision.proposedSenseTitle);
+  if (normalizedProposedTitle && normalizedCurrentTitle && normalizedProposedTitle !== normalizedCurrentTitle) return true;
+  return false;
+};
+
 const buildManagedNodeFilter = async ({ userId, nodeId = '' }) => {
   if (!userId) throw createExposeError('无效用户身份', 401, 'invalid_user');
   const permissionsNode = nodeId ? await Node.findById(nodeId).select('_id domainMaster domainAdmins domainAdminPermissions').lean() : null;
@@ -652,12 +698,18 @@ const buildRevisionMediaAndValidation = async ({ revisionLike = null, nodeId = '
 const assertRevisionValidationBeforeWorkflow = ({ validationSnapshot = null, phase = 'submit' } = {}) => {
   if (!validationSnapshot?.hasBlockingIssues) return;
   const label = phase === 'publish' ? '发布' : '提交';
+  const blockingMessages = (Array.isArray(validationSnapshot?.blocking) ? validationSnapshot.blocking : [])
+    .map((item) => String(item?.message || '').trim())
+    .filter(Boolean);
+  const detailMessage = blockingMessages.slice(0, 3).join('；');
   diagWarn('sense.validation.blocked_workflow', {
     phase,
     blockingCount: Array.isArray(validationSnapshot?.blocking) ? validationSnapshot.blocking.length : 0
   });
   throw createExposeError(
-    `${label}前校验失败，请先修复正文中的阻塞问题`,
+    detailMessage
+      ? `${label}前校验失败：${detailMessage}${blockingMessages.length > 3 ? `；另有 ${blockingMessages.length - 3} 项问题` : ''}`
+      : `${label}前校验失败，请先修复正文中的阻塞问题`,
     409,
     'revision_validation_failed',
     { validation: validationSnapshot }
@@ -835,11 +887,22 @@ const syncAndPruneArticleMedia = async ({ articleId = null, nodeId = '', senseId
 };
 
 const loadEditorMediaLibrary = async ({ articleId = null, nodeId = '', senseId = '', revisionId = '' } = {}) => {
+  const startedAt = nowMs();
   const mediaLibrary = await listMediaAssetsForEditor({
     nodeId,
     senseId,
     articleId,
     revisionId
+  });
+  diagLog('sense.media.library.load', {
+    nodeId: getIdString(nodeId),
+    senseId,
+    articleId: getIdString(articleId),
+    revisionId: getIdString(revisionId),
+    durationMs: durationMs(startedAt),
+    referencedCount: Array.isArray(mediaLibrary?.referencedAssets) ? mediaLibrary.referencedAssets.length : 0,
+    recentCount: Array.isArray(mediaLibrary?.recentAssets) ? mediaLibrary.recentAssets.length : 0,
+    orphanCount: Array.isArray(mediaLibrary?.orphanCandidates) ? mediaLibrary.orphanCandidates.length : 0
   });
   return serializeEditorMediaLibrary(mediaLibrary);
 };
@@ -850,6 +913,100 @@ const buildRevisionMutationResponse = ({ article, revision, permissions, userId,
   ...(mediaLibrary ? { mediaLibrary: serializeEditorMediaLibrary(mediaLibrary) } : {}),
   permissions: serializePermissions(permissions, userId)
 });
+
+const buildRevisionBootstrapResponse = ({ article, revision, permissions, userId, node = null, nodeSense = null, requestMeta = null }) => ({
+  ...(node ? { node } : {}),
+  ...(nodeSense ? { nodeSense } : {}),
+  article: serializeArticleSummary(article),
+  revision: serializeRevisionBootstrap(revision, { requestMeta, phase: 'revision_bootstrap' }),
+  permissions: serializePermissions(permissions, userId)
+});
+
+const scheduleArticleMediaMaintenance = ({ articleId = null, nodeId = '', senseId = '', trigger = 'unspecified' } = {}) => {
+  const normalizedArticleId = getIdString(articleId);
+  const normalizedNodeId = getIdString(nodeId);
+  const normalizedSenseId = String(senseId || '').trim();
+  setTimeout(async () => {
+    const startedAt = nowMs();
+    diagLog('sense.media.maintenance.start', {
+      trigger,
+      articleId: normalizedArticleId,
+      nodeId: normalizedNodeId,
+      senseId: normalizedSenseId
+    });
+    try {
+      await syncAndPruneArticleMedia({
+        articleId: normalizedArticleId,
+        nodeId: normalizedNodeId,
+        senseId: normalizedSenseId
+      });
+      diagLog('sense.media.maintenance.finish', {
+        trigger,
+        articleId: normalizedArticleId,
+        nodeId: normalizedNodeId,
+        senseId: normalizedSenseId,
+        durationMs: durationMs(startedAt)
+      });
+    } catch (error) {
+      diagWarn('sense.media.maintenance.fail', {
+        trigger,
+        articleId: normalizedArticleId,
+        nodeId: normalizedNodeId,
+        senseId: normalizedSenseId,
+        durationMs: durationMs(startedAt),
+        errorName: error?.name || 'Error',
+        errorMessage: error?.message || 'media maintenance failed'
+      });
+    }
+  }, 0);
+};
+
+const ensureRevisionDerivedState = async ({
+  revision = null,
+  nodeId = '',
+  senseId = '',
+  persist = true,
+  requestMeta = null
+} = {}) => {
+  if (!revision) return null;
+  const needsMediaReferences = !Array.isArray(revision.mediaReferences) || revision.mediaReferences.length === 0;
+  const needsValidationSnapshot = !revision.validationSnapshot;
+  if (!needsMediaReferences && !needsValidationSnapshot) return revision;
+  const startedAt = nowMs();
+  const derived = await buildRevisionMediaAndValidation({
+    revisionLike: revision,
+    nodeId,
+    senseId
+  });
+  const nextRevision = revision?.toObject
+    ? revision
+    : {
+        ...(revision || {}),
+        mediaReferences: derived.mediaReferences,
+        validationSnapshot: derived.validationSnapshot
+      };
+  if (revision) {
+    revision.mediaReferences = derived.mediaReferences;
+    revision.validationSnapshot = derived.validationSnapshot;
+  }
+  if (persist && revision?.save) {
+    await revision.save();
+  }
+  diagLog('sense.revision.derived_state', {
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: getIdString(nodeId || revision?.nodeId),
+    senseId: String(senseId || revision?.senseId || '').trim(),
+    revisionId: getIdString(revision?._id),
+    persisted: !!(persist && revision?.save),
+    durationMs: durationMs(startedAt),
+    mediaReferenceCount: Array.isArray(derived.mediaReferences) ? derived.mediaReferences.length : 0,
+    blockingCount: Array.isArray(derived.validationSnapshot?.blocking) ? derived.validationSnapshot.blocking.length : 0,
+    warningCount: Array.isArray(derived.validationSnapshot?.warnings) ? derived.validationSnapshot.warnings.length : 0
+  });
+  if (!revision?.toObject) return nextRevision;
+  return revision;
+};
 
 const assertRevisionReadable = ({ revision, permissions, userId }) => {
   const proposerId = getIdString(revision?.proposerId);
@@ -867,7 +1024,6 @@ const getArticleOverview = async ({ nodeId, senseId, userId }) => {
     userId: bundle.permissions.userId,
     articleId: bundle.article._id
   }).sort({ updatedAt: -1 }).limit(50).lean();
-
   return {
     node: bundle.node,
     nodeSense: bundle.nodeSense,
@@ -882,6 +1038,59 @@ const getArticleOverview = async ({ nodeId, senseId, userId }) => {
 };
 
 const getCurrentArticle = async ({ nodeId, senseId, userId, requestMeta = null }) => {
+  const startedAt = nowMs();
+  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
+  ensurePermission(!!bundle.currentRevision, '当前释义尚无已发布百科版本', 404);
+  const response = {
+    node: bundle.node,
+    nodeSense: bundle.nodeSense,
+    article: serializeArticleSummary(bundle.article),
+    revision: serializeRevisionDetail(bundle.currentRevision, { requestMeta, phase: 'get_current_article' }),
+    permissions: serializePermissions(bundle.permissions, userId)
+  };
+  diagLog('sense.current_article.bootstrap', {
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    revisionId: getIdString(bundle.currentRevision?._id),
+    durationMs: durationMs(startedAt)
+  });
+  return response;
+};
+
+const listMyEdits = async ({ nodeId, senseId, userId, requestMeta = null, limit = 50 }) => {
+  const startedAt = nowMs();
+  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
+  const revisions = await loadMyVisibleRevisionSummaries({
+    articleId: bundle.article._id,
+    proposerId: userId,
+    fallbackSenseTitle: bundle.nodeSense?.title || bundle.senseId || '',
+    limit
+  });
+  const activeFullDraft = revisions.find((item) => item?.sourceMode === 'full' && DRAFT_EDITABLE_STATUSES.includes(String(item?.status || '').trim())) || null;
+  const response = {
+    node: bundle.node,
+    nodeSense: bundle.nodeSense,
+    article: serializeArticleSummary(bundle.article),
+    revisions,
+    activeFullDraft,
+    permissions: serializePermissions(bundle.permissions, userId)
+  };
+  diagLog('sense.revision.list_my_edits', {
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    durationMs: durationMs(startedAt),
+    count: revisions.length,
+    hasActiveFullDraft: !!activeFullDraft
+  });
+  return response;
+};
+
+const getCurrentArticleSideData = async ({ nodeId, senseId, userId, requestMeta = null }) => {
+  const startedAt = nowMs();
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   ensurePermission(!!bundle.currentRevision, '当前释义尚无已发布百科版本', 404);
   const annotations = await SenseAnnotation.find({ userId: bundle.permissions.userId, articleId: bundle.article._id }).sort({ updatedAt: -1 }).lean();
@@ -891,15 +1100,23 @@ const getCurrentArticle = async ({ nodeId, senseId, userId, requestMeta = null }
     nodeId: bundle.nodeId,
     senseId: bundle.senseId
   });
-  return {
-    node: bundle.node,
-    nodeSense: bundle.nodeSense,
+  const response = {
     article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(bundle.currentRevision, { requestMeta, phase: 'get_current_article' }),
-    permissions: serializePermissions(bundle.permissions, userId),
+    revisionId: bundle.currentRevision?._id || null,
     annotations: serializedAnnotations,
     readingMeta
   };
+  diagLog('sense.current_article.side_data', {
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    revisionId: getIdString(bundle.currentRevision?._id),
+    durationMs: durationMs(startedAt),
+    annotationCount: serializedAnnotations.length,
+    hasReadingMeta: !!readingMeta
+  });
+  return response;
 };
 
 const listRevisions = async ({ nodeId, senseId, userId, status = '', page = 1, pageSize = 20 }) => {
@@ -937,51 +1154,78 @@ const listRevisions = async ({ nodeId, senseId, userId, status = '', page = 1, p
   };
 };
 
-const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId, requestMeta = null }) => {
+const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId, requestMeta = null, detailLevel = 'full' }) => {
+  const startedAt = nowMs();
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   let revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id }).lean();
   if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
-  if (!Array.isArray(revision.mediaReferences) || !revision.validationSnapshot) {
-    const derived = await buildRevisionMediaAndValidation({
-      revisionLike: revision,
-      nodeId: bundle.nodeId,
-      senseId: bundle.senseId
-    });
-    revision = {
-      ...revision,
-      mediaReferences: derived.mediaReferences,
-      validationSnapshot: derived.validationSnapshot
-    };
-  }
   assertRevisionReadable({ revision, permissions: bundle.permissions, userId });
-  const baseRevision = revision.baseRevisionId ? await SenseArticleRevision.findById(revision.baseRevisionId).lean() : null;
   const [decoratedRevision] = await decorateRevisionRecords({
     revisions: [revision],
     fallbackSenseTitle: bundle.nodeSense?.title || bundle.senseId || ''
   });
-  const reviewPresentation = await buildReviewPresentation({ revision, node: bundle.node, currentUserId: userId });
-  await syncAndPruneArticleMedia({
-    articleId: bundle.article._id,
-    nodeId: bundle.nodeId,
-    senseId: bundle.senseId
-  });
-  const mediaLibrary = await loadEditorMediaLibrary({
+  const bootstrapRevision = decoratedRevision
+    ? {
+        ...decoratedRevision,
+        mediaReferences: Array.isArray(revision?.mediaReferences) ? revision.mediaReferences : [],
+        validationSnapshot: revision?.validationSnapshot || null
+      }
+    : revision;
+  if (detailLevel === 'bootstrap') {
+    const response = buildRevisionBootstrapResponse({
+      node: bundle.node,
+      nodeSense: bundle.nodeSense,
+      article: bundle.article,
+      revision: bootstrapRevision,
+      permissions: bundle.permissions,
+      userId,
+      requestMeta
+    });
+    diagLog('sense.revision.detail.bootstrap', {
+      flowId: requestMeta?.flowId,
+      requestId: requestMeta?.requestId,
+      nodeId: bundle.nodeId,
+      senseId: bundle.senseId,
+      revisionId: getIdString(revision?._id),
+      durationMs: durationMs(startedAt)
+    });
+    return response;
+  }
+  revision = await ensureRevisionDerivedState({
+    revision,
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
-    articleId: bundle.article._id,
-    revisionId: revision._id
+    persist: false,
+    requestMeta
   });
-  return {
+  const fullRevision = decoratedRevision
+    ? {
+        ...decoratedRevision,
+        mediaReferences: Array.isArray(revision?.mediaReferences) ? revision.mediaReferences : [],
+        validationSnapshot: revision?.validationSnapshot || null
+      }
+    : revision;
+  const baseRevision = revision.baseRevisionId ? await SenseArticleRevision.findById(revision.baseRevisionId).lean() : null;
+  const reviewPresentation = await buildReviewPresentation({ revision, node: bundle.node, currentUserId: userId });
+  const response = {
     node: bundle.node,
     nodeSense: bundle.nodeSense,
     article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(decoratedRevision || revision, { requestMeta, phase: 'get_revision_detail.revision' }),
+    revision: serializeRevisionDetail(fullRevision, { requestMeta, phase: 'get_revision_detail.revision' }),
     baseRevision: baseRevision ? serializeRevisionDetail(baseRevision, { requestMeta, phase: 'get_revision_detail.base_revision' }) : null,
     reviewParticipants: reviewPresentation.participants,
     reviewSummary: reviewPresentation.summary,
-    mediaLibrary,
     permissions: serializePermissions(bundle.permissions, userId)
   };
+  diagLog('sense.revision.detail.full', {
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    revisionId: getIdString(revision?._id),
+    durationMs: durationMs(startedAt)
+  });
+  return response;
 };
 
 const updateSenseMetadata = async ({ nodeId, senseId, userId, payload = {} }) => {
@@ -989,6 +1233,7 @@ const updateSenseMetadata = async ({ nodeId, senseId, userId, payload = {} }) =>
 };
 
 const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requestMeta = null }) => {
+  const startedAt = nowMs();
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   ensurePermission(bundle.permissions.canCreateRevision, '当前用户无法创建百科修订');
   const proposer = await User.findById(userId).select('_id username').lean();
@@ -1019,15 +1264,6 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
       nodeId,
       senseId
     }
-  });
-  const derived = await buildRevisionMediaAndValidation({
-    revisionLike: {
-      nodeId: bundle.nodeId,
-      senseId: bundle.senseId,
-      ...materialized
-    },
-    nodeId: bundle.nodeId,
-    senseId: bundle.senseId
   });
   const revisionTitle = resolveRevisionTitleInput({
     revisionTitle: payload.revisionTitle,
@@ -1072,8 +1308,8 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
     plainTextSnapshot: materialized.plainTextSnapshot,
     renderSnapshot: materialized.renderSnapshot,
     diffFromBase: materialized.diffFromBase,
-    mediaReferences: derived.mediaReferences,
-    validationSnapshot: derived.validationSnapshot,
+    mediaReferences: [],
+    validationSnapshot: null,
     scopedChange: normalizeScopedChangePayload(payload.scopedChange),
     proposerId: userId,
     proposerNote: typeof payload.proposerNote === 'string' ? payload.proposerNote.trim() : '',
@@ -1097,7 +1333,6 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
       nodeId: bundle.nodeId,
       senseId: bundle.senseId,
       urls: Array.from(new Set([
-        ...extractReferenceUrls(derived.mediaReferences),
         ...extractMediaUrlsFromEditorSource(materialized.editorSource)
       ]))
     });
@@ -1108,26 +1343,51 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
       tempSessionId: tempMediaSessionId
     });
   }
-  await syncAndPruneArticleMedia({
-    articleId: bundle.article._id,
-    nodeId: bundle.nodeId,
-    senseId: bundle.senseId
-  });
-  const mediaLibrary = await loadEditorMediaLibrary({
+  ensureRevisionDerivedState({
+    revision: draft,
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
-    articleId: bundle.article._id,
-    revisionId: draft._id
+    persist: true,
+    requestMeta
+  }).catch((error) => {
+    diagWarn('sense.revision.create_draft.derived_state_fail', {
+      flowId: requestMeta?.flowId,
+      requestId: requestMeta?.requestId,
+      nodeId: bundle.nodeId,
+      senseId: bundle.senseId,
+      revisionId: getIdString(draft?._id),
+      errorName: error?.name || 'Error',
+      errorMessage: error?.message || 'create draft derived state failed'
+    });
   });
-  return {
-    article: serializeArticleSummary(bundle.article),
-    revision: serializeRevisionDetail(draft, { requestMeta, phase: 'create_draft_revision' }),
-    mediaLibrary,
-    permissions: serializePermissions(bundle.permissions, userId)
-  };
+  scheduleArticleMediaMaintenance({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    trigger: 'create_draft_revision'
+  });
+  const response = buildRevisionBootstrapResponse({
+    node: bundle.node,
+    nodeSense: bundle.nodeSense,
+    article: bundle.article,
+    revision: draft,
+    permissions: bundle.permissions,
+    userId,
+    requestMeta
+  });
+  diagLog('sense.revision.create_draft.bootstrap', {
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    revisionId: getIdString(draft?._id),
+    durationMs: durationMs(startedAt)
+  });
+  return response;
 };
 
 const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payload = {}, requestMeta = null }) => {
+  const startedAt = nowMs();
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   const revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
   if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
@@ -1249,24 +1509,27 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
       tempSessionId: tempMediaSessionId
     });
   }
-  await syncAndPruneArticleMedia({
+  scheduleArticleMediaMaintenance({
     articleId: bundle.article._id,
-    nodeId: bundle.nodeId,
-    senseId: bundle.senseId
-  });
-  const mediaLibrary = await loadEditorMediaLibrary({
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
-    articleId: bundle.article._id,
-    revisionId: revision._id
+    trigger: 'update_draft_revision'
   });
-  return buildRevisionMutationResponse({
+  const response = buildRevisionMutationResponse({
     article: bundle.article,
     revision,
     permissions: bundle.permissions,
-    userId,
-    mediaLibrary
+    userId
   });
+  diagLog('sense.revision.update_draft', {
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    revisionId: getIdString(revision?._id),
+    durationMs: durationMs(startedAt)
+  });
+  return response;
 };
 
 const deleteDraftRevision = async ({ nodeId, senseId, revisionId, userId }) => {
@@ -1350,6 +1613,28 @@ const submitRevision = async ({ nodeId, senseId, revisionId, userId }) => {
     revision.revisionTitle = normalizedRevisionTitle;
     revision.proposedSenseTitle = normalizedProposedSenseTitle;
     await revision.save();
+  }
+  revision = await ensureRevisionDerivedState({
+    revision,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    persist: true
+  });
+  if (!revisionHasMeaningfulSubmissionChanges({
+    revision,
+    currentSenseTitle: bundle?.nodeSense?.title || senseId
+  })) {
+    throw createExposeError(
+      reasonToMessage('unchanged_revision'),
+      409,
+      'unchanged_revision',
+      {
+        compare: revision?.diffFromBase || null,
+        sourceMode: revision?.sourceMode || 'full',
+        targetHeadingId: revision?.targetHeadingId || '',
+        selectedRangeAnchor: revision?.selectedRangeAnchor || null
+      }
+    );
   }
   assertRevisionValidationBeforeWorkflow({
     validationSnapshot: revision.validationSnapshot || validateRevisionContent({ revision, mediaReferences: revision.mediaReferences }),
@@ -2084,24 +2369,74 @@ const syncMediaSession = async ({ nodeId, senseId, revisionId = '', userId, temp
 };
 
 const listMediaAssets = async ({ nodeId, senseId, revisionId = '', userId }) => {
+  const startedAt = nowMs();
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   ensurePermission(bundle.permissions.canRead, '当前用户无法查看媒体资源', 403, 'media_read_forbidden');
-  await syncAndPruneArticleMedia({
-    articleId: bundle.article._id,
-    nodeId: bundle.nodeId,
-    senseId: bundle.senseId
-  });
+  if (revisionId) {
+    const revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
+    if (revision) {
+      await ensureRevisionDerivedState({
+        revision,
+        nodeId: bundle.nodeId,
+        senseId: bundle.senseId,
+        persist: true
+      });
+    }
+  }
   const mediaLibrary = await loadEditorMediaLibrary({
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
     articleId: bundle.article._id,
     revisionId
   });
-  return {
+  const response = {
     article: serializeArticleSummary(bundle.article),
     revisionId: revisionId || null,
     ...mediaLibrary
   };
+  diagLog('sense.media.library.response', {
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    revisionId: getIdString(revisionId),
+    durationMs: durationMs(startedAt),
+    referencedCount: Array.isArray(mediaLibrary?.referencedAssets) ? mediaLibrary.referencedAssets.length : 0,
+    recentCount: Array.isArray(mediaLibrary?.recentAssets) ? mediaLibrary.recentAssets.length : 0,
+    orphanCount: Array.isArray(mediaLibrary?.orphanCandidates) ? mediaLibrary.orphanCandidates.length : 0
+  });
+  return response;
+};
+
+const getRevisionValidation = async ({ nodeId, senseId, revisionId, userId, requestMeta = null }) => {
+  const startedAt = nowMs();
+  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
+  let revision = await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id });
+  if (!revision) throw createExposeError('修订不存在', 404, 'revision_not_found');
+  assertRevisionReadable({ revision, permissions: bundle.permissions, userId });
+  revision = await ensureRevisionDerivedState({
+    revision,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    persist: true,
+    requestMeta
+  });
+  const response = {
+    article: serializeArticleSummary(bundle.article),
+    revisionId: revision._id,
+    validationSnapshot: revision.validationSnapshot || null,
+    mediaReferenceCount: Array.isArray(revision.mediaReferences) ? revision.mediaReferences.length : 0
+  };
+  diagLog('sense.revision.validation.response', {
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    revisionId: getIdString(revision?._id),
+    durationMs: durationMs(startedAt),
+    mediaReferenceCount: response.mediaReferenceCount,
+    blockingCount: Array.isArray(response.validationSnapshot?.blocking) ? response.validationSnapshot.blocking.length : 0,
+    warningCount: Array.isArray(response.validationSnapshot?.warnings) ? response.validationSnapshot.warnings.length : 0
+  });
+  return response;
 };
 
 const buildBacklinkEntries = ({ revisions = [], targetNodeId = '', targetSenseId = '', nodeMap = new Map(), senseMap = new Map() }) => (
@@ -2284,11 +2619,14 @@ module.exports = {
   getArticleBundle,
   getArticleOverview,
   getCurrentArticle,
+  getCurrentArticleSideData,
   getGovernanceDashboard,
   getRevisionDetail,
+  getRevisionValidation,
   listBacklinks,
   listCurrentReferences,
   listMediaAssets,
+  listMyEdits,
   listMyAnnotations,
   listRevisions,
   resolveReferenceTargets,

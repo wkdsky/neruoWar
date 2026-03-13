@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { getRelocationStatusLabel } from './senseArticleUi';
 import { buildFallbackRichBlocks } from './editor/extractRichHtmlOutline';
+import FormulaPreviewView from './editor/FormulaPreviewView';
 import { resolveBackendAssetUrl } from '../../runtimeConfig';
 
 const EMPTY_ARRAY = [];
@@ -86,6 +87,7 @@ const renderDomNode = ({ node, searchQuery, referenceMap, onReferenceClick, onRe
   }));
   const className = node.getAttribute('class') || undefined;
   const style = styleStringToObject(node.getAttribute('style') || '');
+  const formulaSource = String(node.getAttribute('data-formula-source') || node.textContent || '').trim();
   const tableCellProps = {
     colSpan: node.getAttribute('colspan') ? Number(node.getAttribute('colspan')) : undefined,
     rowSpan: node.getAttribute('rowspan') ? Number(node.getAttribute('rowspan')) : undefined,
@@ -119,6 +121,20 @@ const renderDomNode = ({ node, searchQuery, referenceMap, onReferenceClick, onRe
       >
         {children}
       </button>
+    );
+  }
+
+  if ((tagName === 'span' || tagName === 'div') && node.getAttribute('data-formula-placeholder') === 'true') {
+    const displayMode = String(node.getAttribute('data-formula-display') || (tagName === 'div' ? 'block' : 'inline')).trim() === 'block' ? 'block' : 'inline';
+    return (
+      <FormulaPreviewView
+        key={keyPrefix}
+        source={formulaSource}
+        displayMode={displayMode}
+        as={displayMode === 'block' ? 'div' : 'span'}
+        className={[className, displayMode === 'block' ? 'sense-formula-block' : 'sense-inline-formula'].filter(Boolean).join(' ')}
+        title={formulaSource}
+      />
     );
   }
 

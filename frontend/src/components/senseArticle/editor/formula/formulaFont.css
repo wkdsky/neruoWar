@@ -1,0 +1,41 @@
+.sense-formula-preview .katex,
+.sense-formula-placeholder .katex,
+.sense-inline-formula .katex,
+.sense-formula-block .katex {
+  font-family: 'KaTeX_Main', 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'Times New Roman', serif;
+}
+
+.sense-formula-preview .katex .mord,
+.sense-formula-preview .katex .mrel,
+.sense-formula-preview .katex .mbin,
+.sense-formula-preview .katex .mop,
+.sense-formula-preview .katex .mopen,
+.sense-formula-preview .katex .mclose,
+.sense-formula-preview .katex .minner,
+.sense-formula-preview .katex .mathnormal,
+.sense-formula-placeholder .katex .mord,
+.sense-formula-placeholder .katex .mrel,
+.sense-formula-placeholder .katex .mbin,
+.sense-formula-placeholder .katex .mop,
+.sense-formula-placeholder .katex .mopen,
+.sense-formula-placeholder .katex .mclose,
+.sense-formula-placeholder .katex .minner,
+.sense-formula-placeholder .katex .mathnormal,
+.sense-inline-formula .katex .mord,
+.sense-inline-formula .katex .mrel,
+.sense-inline-formula .katex .mbin,
+.sense-inline-formula .katex .mop,
+.sense-inline-formula .katex .mopen,
+.sense-inline-formula .katex .mclose,
+.sense-inline-formula .katex .minner,
+.sense-inline-formula .katex .mathnormal,
+.sense-formula-block .katex .mord,
+.sense-formula-block .katex .mrel,
+.sense-formula-block .katex .mbin,
+.sense-formula-block .katex .mop,
+.sense-formula-block .katex .mopen,
+.sense-formula-block .katex .mclose,
+.sense-formula-block .katex .minner,
+.sense-formula-block .katex .mathnormal {
+  font-family: 'KaTeX_Math', 'KaTeX_Main', 'Cambria Math', 'Latin Modern Math', serif !important;
+}

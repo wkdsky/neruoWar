@@ -193,7 +193,7 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
     audio: ['src', 'controls', 'class', 'data-title', 'data-description', 'width'],
     blockquote: ['class', 'style', 'data-indent'],
     code: ['class'],
-    div: ['class', 'data-node-type', 'data-align'],
+    div: ['class', 'data-node-type', 'data-align', 'data-formula-placeholder', 'data-formula-source', 'data-formula-display'],
     figure: ['id', 'class', 'style', 'data-node-type', 'data-align', 'data-width', 'data-asset-id', 'data-attachment-id', 'data-attachment-index', 'data-attachment-title', 'data-media-width'],
     figcaption: ['class'],
     h1: ['id', 'class', 'style', 'data-indent'],
@@ -207,7 +207,7 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
     p: ['class', 'style', 'data-indent'],
     pre: ['class'],
     source: ['src', 'type'],
-    span: ['class', 'style', 'data-formula-placeholder', 'data-font-size', 'data-highlight'],
+    span: ['class', 'style', 'data-formula-placeholder', 'data-formula-source', 'data-formula-display', 'data-font-size', 'data-highlight'],
     strong: ['class'],
     table: ['class', 'style', 'data-table-style', 'data-table-width-mode', 'data-table-width-value', 'data-table-border-preset', 'data-column-widths'],
     td: ['class', 'style', 'colspan', 'rowspan', 'data-align', 'data-vertical-align', 'data-background-color', 'data-text-color', 'data-border-edges', 'data-border-width', 'data-border-color', 'data-diagonal', 'data-colwidth'],
@@ -220,6 +220,7 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
     a: ['sense-rich-link', 'sense-internal-reference', 'sense-media-reference-link'],
     blockquote: ['sense-rich-blockquote'],
     code: ['language-text'],
+    div: ['sense-formula-placeholder', 'sense-formula-block'],
     figure: ['sense-rich-figure', 'align-left', 'align-center', 'align-right', 'size-25', 'size-50', 'size-75', 'size-100'],
     figcaption: ['sense-rich-caption'],
     h1: ['align-left', 'align-center', 'align-right', 'align-justify'],
@@ -249,11 +250,26 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
       tagName: 'source',
       attribs: isSafeUrl(attribs.src, { mediaOnly: true }) ? { src: attribs.src, type: attribs.type || '' } : {}
     }),
+    div: (_tagName, attribs) => ({
+      tagName: 'div',
+      attribs: {
+        ...attribs,
+        class: attribs['data-formula-placeholder'] === 'true'
+          ? normalizeClassNames(attribs.class, ['sense-formula-placeholder', 'sense-formula-block'])
+          : undefined,
+        'data-formula-placeholder': attribs['data-formula-placeholder'] === 'true' ? 'true' : undefined,
+        'data-formula-source': attribs['data-formula-placeholder'] === 'true' ? (String(attribs['data-formula-source'] || '').trim() || undefined) : undefined,
+        'data-formula-display': attribs['data-formula-placeholder'] === 'true' && String(attribs['data-formula-display'] || '').trim() === 'block' ? 'block' : undefined
+      }
+    }),
     span: (_tagName, attribs) => ({
       tagName: 'span',
       attribs: {
         ...attribs,
         class: normalizeClassNames(attribs.class, ['sense-inline-code', 'sense-formula-placeholder', 'has-highlight', 'sense-rich-attachment-label', 'sense-rich-attachment-title']),
+        'data-formula-placeholder': attribs['data-formula-placeholder'] === 'true' ? 'true' : undefined,
+        'data-formula-source': String(attribs['data-formula-source'] || '').trim() || undefined,
+        'data-formula-display': String(attribs['data-formula-display'] || '').trim() === 'block' ? 'block' : 'inline',
         style: filterAllowedStyle(attribs.style)
       }
     }),
@@ -387,7 +403,7 @@ const collectReferenceEntries = ({ element = null, blockId = '', headingId = '' 
 const collectFormulaRefs = ({ element = null, blockId = '', headingId = '' }) => {
   if (!element?.querySelectorAll) return [];
   return element.querySelectorAll('[data-formula-placeholder]').map((node, index) => ({
-    formula: node.text.trim(),
+    formula: String(node.getAttribute('data-formula-source') || node.text || '').trim(),
     headingId,
     blockId,
     line: index + 1
@@ -406,6 +422,15 @@ const buildMediaBlockType = (element) => {
   if (element.querySelector('audio')) return 'audio';
   if (element.querySelector('video')) return 'video';
   return 'media';
+};
+
+const FORMULA_MARKUP_PATTERN = /data-formula-placeholder\s*=\s*["']true["']/i;
+
+const isMeaningfulRichBlock = (block = {}) => {
+  if (!block) return false;
+  if (['image', 'audio', 'video', 'table', 'horizontal_rule'].includes(block.type)) return true;
+  if (FORMULA_MARKUP_PATTERN.test(String(block.html || ''))) return true;
+  return String(block.plainText || '').trim().length > 0;
 };
 
 const shouldKeepNode = (node) => {
@@ -581,14 +606,11 @@ const materializeRichHtmlContent = (html = '') => {
     });
 
   const finalizedHeadingIndex = finalizeHeadingRanges(headingIndex, blocks.length);
-  const hasMeaningfulBlocks = blocks.some((block) => {
-    if (!block) return false;
-    if (['image', 'audio', 'video', 'table', 'horizontal_rule'].includes(block.type)) return true;
-    return String(block.plainText || '').trim().length > 0;
-  });
+  const hasFormulaContent = formulaRefs.some((item) => String(item?.formula || '').trim().length > 0);
+  const hasMeaningfulBlocks = hasFormulaContent || blocks.some((block) => isMeaningfulRichBlock(block));
   const normalizedBlocks = hasMeaningfulBlocks
     ? blocks
-    : blocks.filter((block) => ['image', 'audio', 'video', 'table', 'horizontal_rule'].includes(block?.type) || String(block?.plainText || '').trim());
+    : blocks.filter((block) => isMeaningfulRichBlock(block));
   const plainTextSnapshot = normalizedBlocks.map((block) => String(block.plainText || '')).filter(Boolean).join('\n\n').trim();
   const normalizedHtml = hasMeaningfulBlocks ? sanitizedHtml : '';
 
@@ -622,7 +644,10 @@ const renderInlineNodeToRichHtml = (node = {}) => {
   if (node.type === AST_NODE_TYPES.STRONG) return `<strong>${(node.children || []).map(renderInlineNodeToRichHtml).join('')}</strong>`;
   if (node.type === AST_NODE_TYPES.EMPHASIS) return `<em>${(node.children || []).map(renderInlineNodeToRichHtml).join('')}</em>`;
   if (node.type === AST_NODE_TYPES.CODE_INLINE) return `<code>${escapeHtml(node.value || '')}</code>`;
-  if (node.type === AST_NODE_TYPES.FORMULA_INLINE) return `<span class="sense-formula-placeholder" data-formula-placeholder="true">${escapeHtml(node.value || '')}</span>`;
+  if (node.type === AST_NODE_TYPES.FORMULA_INLINE) {
+    const value = escapeHtml(node.value || '');
+    return `<span class="sense-formula-placeholder" data-formula-placeholder="true" data-formula-source="${value}" data-formula-display="inline">${value}</span>`;
+  }
   if (node.type === AST_NODE_TYPES.SYMBOL) return escapeHtml(node.value || '');
   if (node.type === AST_NODE_TYPES.SENSE_REFERENCE) {
     const href = `#sense-ref-${escapeHtml(node.targetNodeId || '')}-${escapeHtml(node.targetSenseId || '')}`;
@@ -652,7 +677,8 @@ const renderLegacyBlockToRichHtml = (block = {}) => {
     return `<pre><code>${escapeHtml(block.value || '')}</code></pre>`;
   }
   if (block.type === AST_NODE_TYPES.FORMULA_BLOCK) {
-    return `<pre><code>${escapeHtml(block.value || '')}</code></pre>`;
+    const value = escapeHtml(block.value || '');
+    return `<div class="sense-formula-placeholder sense-formula-block" data-formula-placeholder="true" data-formula-source="${value}" data-formula-display="block">${value}</div>`;
   }
   return '';
 };

@@ -1,0 +1,5 @@
+/*
+ * STIX Two was requested as a preferred math font, but no local licensed
+ * asset package exists in this repository. Formula rendering now relies on
+ * KaTeX's bundled local font files under /vendor/formula/fonts/.
+ */

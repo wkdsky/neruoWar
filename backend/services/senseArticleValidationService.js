@@ -6,9 +6,18 @@ const {
   TABLE_WIDTH_MODES
 } = require('./senseArticleTableMetaService');
 
+const FORMULA_MARKUP_PATTERN = /data-formula-placeholder\s*=\s*["']true["']/i;
+
+const hasSemanticInlineContent = (block = {}) => {
+  const html = String(block?.html || '').trim();
+  if (!html) return false;
+  return FORMULA_MARKUP_PATTERN.test(html);
+};
+
 const isMeaningfulBlock = (block = {}) => {
   const type = String(block?.type || '').trim();
   if (['image', 'audio', 'video', 'table', 'horizontal_rule'].includes(type)) return true;
+  if (hasSemanticInlineContent(block)) return true;
   return String(block?.plainText || '').trim().length > 0;
 };
 
@@ -27,9 +36,11 @@ const validateRevisionContent = ({ revision = null, mediaReferences = null } = {
   const blocks = Array.isArray(revision?.ast?.blocks) ? revision.ast.blocks : [];
   const headingIndex = Array.isArray(revision?.headingIndex) ? revision.headingIndex : [];
   const referenceIndex = Array.isArray(revision?.referenceIndex) ? revision.referenceIndex : [];
+  const formulaRefs = Array.isArray(revision?.formulaRefs) ? revision.formulaRefs : [];
   const effectiveMediaReferences = Array.isArray(mediaReferences) ? mediaReferences : (Array.isArray(revision?.mediaReferences) ? revision.mediaReferences : []);
+  const hasFormulaContent = formulaRefs.some((item) => String(item?.formula || '').trim().length > 0);
 
-  if (!blocks.some(isMeaningfulBlock)) {
+  if (!hasFormulaContent && !blocks.some(isMeaningfulBlock)) {
     pushIssue(blocking, {
       code: 'empty_body',
       level: 'blocking',

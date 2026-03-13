@@ -46,7 +46,7 @@ export const markdownToRichHtml = (text = '') => {
       continue;
     }
 
-    const headingMatch = line.match(/^(#{1,4})\s+(.*)$/);
+    const headingMatch = line.match(/^(#{1,3})\s+(.*)$/);
     if (headingMatch) {
       chunks.push(`<h${headingMatch[1].length}>${inlineMarkdownToHtml(headingMatch[2].trim())}</h${headingMatch[1].length}>`);
       index += 1;

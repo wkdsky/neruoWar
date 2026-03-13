@@ -10,11 +10,14 @@ const {
   deleteDraftRevision,
   getArticleOverview,
   getCurrentArticle,
+  getCurrentArticleSideData,
   getGovernanceDashboard,
   getRevisionDetail,
+  getRevisionValidation,
   listBacklinks,
   listCurrentReferences,
   listMediaAssets,
+  listMyEdits,
   listMyAnnotations,
   listRevisions,
   releaseMediaSession,
@@ -136,6 +139,20 @@ router.get('/:nodeId/:senseId/current', authenticateToken, async (req, res) => {
   }
 });
 
+router.get('/:nodeId/:senseId/current/side-data', authenticateToken, async (req, res) => {
+  try {
+    const data = await getCurrentArticleSideData({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      userId: req.user.userId,
+      requestMeta: buildRequestMeta(req)
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '获取当前发布版辅助数据失败');
+  }
+});
+
 router.get('/:nodeId/:senseId/revisions', authenticateToken, async (req, res) => {
   try {
     const data = await listRevisions({
@@ -168,9 +185,40 @@ router.get('/:nodeId/:senseId/revisions/compare', authenticateToken, async (req,
   }
 });
 
+router.get('/:nodeId/:senseId/revisions/mine', authenticateToken, async (req, res) => {
+  try {
+    const data = await listMyEdits({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      userId: req.user.userId,
+      requestMeta: buildRequestMeta(req),
+      limit: Number(req.query?.limit || 50)
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '获取我的编辑失败');
+  }
+});
+
 router.get('/:nodeId/:senseId/revisions/:revisionId', authenticateToken, async (req, res) => {
   try {
     const data = await getRevisionDetail({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      revisionId: req.params.revisionId,
+      userId: req.user.userId,
+      requestMeta: buildRequestMeta(req),
+      detailLevel: typeof req.query?.mode === 'string' && req.query.mode.trim() === 'bootstrap' ? 'bootstrap' : 'full'
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '获取修订详情失败');
+  }
+});
+
+router.get('/:nodeId/:senseId/revisions/:revisionId/validation', authenticateToken, async (req, res) => {
+  try {
+    const data = await getRevisionValidation({
       nodeId: req.params.nodeId,
       senseId: req.params.senseId,
       revisionId: req.params.revisionId,
@@ -179,7 +227,7 @@ router.get('/:nodeId/:senseId/revisions/:revisionId', authenticateToken, async (
     });
     res.json(data);
   } catch (error) {
-    sendError(res, error, '获取修订详情失败');
+    sendError(res, error, '获取修订校验摘要失败');
   }
 });
 

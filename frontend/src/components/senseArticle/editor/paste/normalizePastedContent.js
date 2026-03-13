@@ -1,7 +1,7 @@
 import { looksLikeMarkdown, markdownToRichHtml } from './markdownToRichContent';
 
 const SAFE_INLINE_TAGS = new Set(['strong', 'b', 'em', 'i', 'u', 's', 'code', 'a', 'br']);
-const SAFE_BLOCK_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'blockquote', 'pre', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr']);
+const SAFE_BLOCK_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'blockquote', 'pre', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr']);
 
 const escapeHtml = (value = '') => String(value || '')
   .replace(/&/g, '&amp;')

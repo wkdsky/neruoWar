@@ -229,6 +229,13 @@ const requestMultipart = async (path, formData, requestOptions = {}) => {
 export const senseArticleApi = {
   getOverview: (nodeId, senseId, requestOptions = {}) => requestJson(`/sense-articles/${nodeId}/${senseId}`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'getOverview', nodeId, senseId }),
   getCurrent: (nodeId, senseId, requestOptions = {}) => requestJson(`/sense-articles/${nodeId}/${senseId}/current`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'getCurrent', nodeId, senseId }),
+  getCurrentSideData: (nodeId, senseId, requestOptions = {}) => requestJson(`/sense-articles/${nodeId}/${senseId}/current/side-data`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'getCurrentSideData', nodeId, senseId }),
+  getMyEdits: (nodeId, senseId, params = {}, requestOptions = {}) => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', params.limit);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return requestJson(`/sense-articles/${nodeId}/${senseId}/revisions/mine${suffix}`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'getMyEdits', nodeId, senseId });
+  },
   getRevisions: (nodeId, senseId, params = {}, requestOptions = {}) => {
     const query = new URLSearchParams();
     if (params.status) query.set('status', params.status);
@@ -237,10 +244,20 @@ export const senseArticleApi = {
     const suffix = query.toString() ? `?${query.toString()}` : '';
     return requestJson(`/sense-articles/${nodeId}/${senseId}/revisions${suffix}`, {}, { ...requestOptions, apiName: requestOptions.apiName || 'getRevisions', nodeId, senseId });
   },
-  getRevisionDetail: (nodeId, senseId, revisionId, requestOptions = {}) => requestJson(
-    `/sense-articles/${nodeId}/${senseId}/revisions/${revisionId}`,
+  getRevisionDetail: (nodeId, senseId, revisionId, requestOptions = {}) => {
+    const query = new URLSearchParams();
+    if (requestOptions.mode) query.set('mode', requestOptions.mode);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return requestJson(
+      `/sense-articles/${nodeId}/${senseId}/revisions/${revisionId}${suffix}`,
+      {},
+      { ...requestOptions, apiName: requestOptions.apiName || 'getRevisionDetail', nodeId, senseId, revisionId, timeoutMs: requestOptions.timeoutMs || REQUEST_TIMEOUTS.revisionDetail }
+    );
+  },
+  getRevisionValidation: (nodeId, senseId, revisionId, requestOptions = {}) => requestJson(
+    `/sense-articles/${nodeId}/${senseId}/revisions/${revisionId}/validation`,
     {},
-    { ...requestOptions, apiName: requestOptions.apiName || 'getRevisionDetail', nodeId, senseId, revisionId, timeoutMs: requestOptions.timeoutMs || REQUEST_TIMEOUTS.revisionDetail }
+    { ...requestOptions, apiName: requestOptions.apiName || 'getRevisionValidation', nodeId, senseId, revisionId, timeoutMs: requestOptions.timeoutMs || REQUEST_TIMEOUTS.revisionDetail }
   ),
   updateMetadata: (nodeId, senseId, payload, requestOptions = {}) => requestJson(
     `/sense-articles/${nodeId}/${senseId}/metadata`,

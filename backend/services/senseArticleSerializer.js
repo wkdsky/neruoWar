@@ -95,6 +95,31 @@ const serializeRevisionDetail = (revision = {}, meta = {}) => {
   return detail;
 };
 
+const serializeRevisionBootstrap = (revision = {}, meta = {}) => {
+  const detail = {
+    ...serializeRevisionSummary(revision),
+    editorSource: revision?.editorSource || '',
+    parseErrors: Array.isArray(revision?.parseErrors) ? revision.parseErrors : [],
+    validationSnapshot: revision?.validationSnapshot || null,
+    selectedRangeAnchor: revision?.selectedRangeAnchor || null,
+    scopedChange: revision?.scopedChange || null
+  };
+  const requestMeta = meta?.requestMeta || meta || {};
+  diagLog('sense.serializer.revision_bootstrap', {
+    phase: meta?.phase,
+    flowId: requestMeta?.flowId,
+    requestId: requestMeta?.requestId,
+    nodeId: getIdString(revision?.nodeId),
+    senseId: revision?.senseId || '',
+    revisionId: getIdString(revision?._id),
+    editorSourceLength: typeof revision?.editorSource === 'string' ? revision.editorSource.length : 0,
+    parseErrors: Array.isArray(revision?.parseErrors) ? revision.parseErrors.length : 0,
+    hasValidationSnapshot: !!revision?.validationSnapshot,
+    estimatedBytes: safeJsonByteLength(detail)
+  });
+  return detail;
+};
+
 const serializeRevisionMutationResult = (revision = {}) => ({
   ...serializeRevisionSummary(revision),
   parseErrors: Array.isArray(revision?.parseErrors) ? revision.parseErrors : [],
@@ -202,6 +227,7 @@ module.exports = {
   serializeBacklinkEntry,
   serializePermissions,
   serializeReferencePreview,
+  serializeRevisionBootstrap,
   serializeRevisionMutationResult,
   serializeRevisionDetail,
   serializeRevisionSummary,

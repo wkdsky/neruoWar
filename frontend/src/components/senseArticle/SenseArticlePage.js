@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUpRight, Eye, History, MessageSquare, PenSquare, RefreshCw, Search, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowUp, ArrowUpRight, ChevronDown, ChevronUp, Eye, History, MessageSquare, PenSquare, RefreshCw, Search, Sparkles, Trash2 } from 'lucide-react';
 import { senseArticleApi } from '../../utils/senseArticleApi';
 import {
   diagLog,
@@ -13,9 +13,9 @@ import SenseArticleRenderer from './SenseArticleRenderer';
 import SenseArticlePageHeader from './SenseArticlePageHeader';
 import SenseArticleStateView from './SenseArticleStateView';
 import SenseArticleOutlineTree from './SenseArticleOutlineTree';
+import SenseArticleDisplayModeToggle from './SenseArticleDisplayModeToggle';
 import {
   buildSenseArticleBreadcrumb,
-  findEditableSenseArticleRevision,
   getReferenceTargetStatusLabel,
   getRelocationStatusLabel,
   getRevisionDisplayTitle,
@@ -32,9 +32,22 @@ import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
 import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
 import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
 import { buildSenseArticleAllianceContext, buildSenseArticleThemeStyle } from './senseArticleTheme';
+import useSenseArticleDisplayMode from './hooks/useSenseArticleDisplayMode';
 
 const ANNOTATION_COLORS = ['#fde68a', '#fca5a5', '#86efac', '#93c5fd', '#d8b4fe'];
-const MY_EDITS_PENDING_STATUSES = new Set(['pending_review', 'pending_domain_admin_review', 'pending_domain_master_review']);
+
+const getMyEditBadgeLabel = (revision = {}, activeFullDraftId = '') => {
+  const revisionId = String(revision?._id || '').trim();
+  if (revisionId && revisionId === String(activeFullDraftId || '').trim()) return '更新释义';
+  return getSourceModeLabel(revision?.sourceMode || 'full');
+};
+
+const getMyEditResumeLabel = (revision = {}) => {
+  const sourceMode = String(revision?.sourceMode || 'full').trim();
+  if (sourceMode === 'section') return '继续小节修订';
+  if (sourceMode === 'selection') return '继续选段修订';
+  return '继续编辑';
+};
 
 const articleAvatarMap = {
   default_male_1: defaultMale1,
@@ -125,85 +138,57 @@ const SenseArticlePage = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchData, setSearchData] = useState({ total: 0, matches: [], groups: [] });
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
+  const [isReadingSearchOpen, setIsReadingSearchOpen] = useState(false);
+  const [isReadingSearchResultsExpanded, setIsReadingSearchResultsExpanded] = useState(false);
   const [activeHeadingId, setActiveHeadingId] = useState('');
   const [selectionAnchor, setSelectionAnchor] = useState(null);
   const [annotationDraft, setAnnotationDraft] = useState({ note: '', color: ANNOTATION_COLORS[0] });
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const [referencePreview, setReferencePreview] = useState(null);
+  const [readingSideData, setReadingSideData] = useState({ annotations: [], readingMeta: null });
+  const [readingSideDataLoading, setReadingSideDataLoading] = useState(false);
+  const [readingSideDataError, setReadingSideDataError] = useState('');
   const [myEditsOpen, setMyEditsOpen] = useState(false);
   const [myEditsLoading, setMyEditsLoading] = useState(false);
   const [myEditsError, setMyEditsError] = useState('');
   const [myEdits, setMyEdits] = useState([]);
   const [myEditsLoaded, setMyEditsLoaded] = useState(false);
-  const [primaryDraft, setPrimaryDraft] = useState(null);
+  const [activeFullDraft, setActiveFullDraft] = useState(null);
   const [abandoningRevisionId, setAbandoningRevisionId] = useState('');
+  const hasSearchQuery = !!searchQuery.trim();
+  const hasSearchResults = hasSearchQuery && searchData.total > 0;
   const selectionToolbarRef = useRef(null);
+  const readingSearchRef = useRef(null);
+  const readingSearchInputRef = useRef(null);
   const loadCurrentSequenceRef = useRef(0);
+  const readingSideDataRequestSequenceRef = useRef(0);
   const myEditsRequestSequenceRef = useRef(0);
   const myEditsRequestRef = useRef(null);
-  const primaryDraftRequestSequenceRef = useRef(0);
   const latestRouteRef = useRef({ nodeId, senseId });
   const pageThemeStyle = useMemo(() => buildSenseArticleThemeStyle(pageData?.node ? { ...articleContext, node: pageData.node } : articleContext), [pageData, articleContext]);
+  const { displayMode, toggleDisplayMode } = useSenseArticleDisplayMode();
 
   latestRouteRef.current = { nodeId, senseId };
-
-  const loadPrimaryDraft = useCallback(async (latestDraftRevisionId = '') => {
-    const normalizedRevisionId = String(latestDraftRevisionId || '').trim();
-    const requestSequence = primaryDraftRequestSequenceRef.current + 1;
-    primaryDraftRequestSequenceRef.current = requestSequence;
-    if (!normalizedRevisionId) {
-      setPrimaryDraft(null);
-      return null;
-    }
-    try {
-      const detail = await senseArticleApi.getRevisionDetail(nodeId, senseId, normalizedRevisionId, { view: 'senseArticlePage' });
-      if (primaryDraftRequestSequenceRef.current !== requestSequence) return null;
-      const revision = detail?.revision || null;
-      const currentUserId = String(detail?.permissions?.currentUserId || localStorage.getItem('userId') || '').trim();
-      const isVisibleToCurrentUser = !!detail?.permissions?.isSystemAdmin
-        || String(revision?.proposerId || '').trim() === currentUserId;
-      const isReusableFullDraft = String(revision?.sourceMode || 'full').trim() === 'full'
-        && (isEditableSenseArticleStatus(revision?.status) || MY_EDITS_PENDING_STATUSES.has(String(revision?.status || '').trim()));
-      const nextPrimaryDraft = isVisibleToCurrentUser && isReusableFullDraft ? revision : null;
-      setPrimaryDraft(nextPrimaryDraft);
-      return nextPrimaryDraft;
-    } catch (_error) {
-      if (primaryDraftRequestSequenceRef.current === requestSequence) {
-        setPrimaryDraft(null);
-      }
-      return null;
-    }
-  }, [nodeId, senseId]);
 
   const loadMyEdits = useCallback(async () => {
     const requestSequence = myEditsRequestSequenceRef.current + 1;
     myEditsRequestSequenceRef.current = requestSequence;
     setMyEditsLoading(true);
     setMyEditsError('');
-    const request = senseArticleApi.getRevisions(nodeId, senseId, { pageSize: 100 })
+    const request = senseArticleApi.getMyEdits(nodeId, senseId, { limit: 50 }, { view: 'senseArticlePage' })
       .then((data) => {
         if (myEditsRequestSequenceRef.current !== requestSequence) return [];
         const revisions = Array.isArray(data?.revisions) ? data.revisions.slice() : [];
-        const currentUserId = String(data?.permissions?.currentUserId || localStorage.getItem('userId') || '').trim();
-        const drafts = revisions
-          .filter((item) => {
-            const status = String(item?.status || '').trim();
-            const isMine = String(item?.proposerId || '').trim() === currentUserId;
-            return isMine && (isEditableSenseArticleStatus(status) || MY_EDITS_PENDING_STATUSES.has(status));
-          })
-          .filter((item, index, array) => array.findIndex((target) => String(target?._id || '') === String(item?._id || '')) === index)
-          .sort((left, right) => (
-            new Date(right?.updatedAt || right?.createdAt || 0).getTime()
-            - new Date(left?.updatedAt || left?.createdAt || 0).getTime()
-          ));
-        setMyEdits(drafts);
+        setMyEdits(revisions);
+        setActiveFullDraft(data?.activeFullDraft || null);
         setMyEditsLoaded(true);
-        return drafts;
+        return revisions;
       })
       .catch((requestError) => {
         if (myEditsRequestSequenceRef.current !== requestSequence) return [];
         setMyEditsError(requestError.message || '加载失败');
         setMyEdits([]);
+        setActiveFullDraft(null);
         setMyEditsLoaded(true);
         return [];
       })
@@ -252,7 +237,6 @@ const SenseArticlePage = ({
         isStale
       });
       setPageData(data);
-      loadPrimaryDraft(data?.article?.latestDraftRevisionId || '');
     } catch (requestError) {
       diagLog('sense.page.load_current', {
         requestId,
@@ -271,7 +255,60 @@ const SenseArticlePage = ({
     } finally {
       setLoading(false);
     }
-  }, [loadPrimaryDraft, nodeId, senseId]);
+  }, [nodeId, senseId]);
+
+  const loadCurrentSideData = useCallback(async () => {
+    const requestId = newRequestId('load-current-side');
+    const flowId = newFlowId('page');
+    const requestSequence = readingSideDataRequestSequenceRef.current + 1;
+    const startedAt = nowMs();
+    readingSideDataRequestSequenceRef.current = requestSequence;
+    setReadingSideDataLoading(true);
+    setReadingSideDataError('');
+    try {
+      const data = await senseArticleApi.getCurrentSideData(nodeId, senseId, {
+        flowId,
+        view: 'senseArticlePage',
+        requestId
+      });
+      if (readingSideDataRequestSequenceRef.current !== requestSequence) return;
+      setReadingSideData({
+        annotations: Array.isArray(data?.annotations) ? data.annotations : [],
+        readingMeta: data?.readingMeta || null
+      });
+      diagLog('sense.page.load_current_side_data', {
+        requestId,
+        flowId,
+        view: 'senseArticlePage',
+        nodeId,
+        senseId,
+        durationMs: durationMs(startedAt),
+        responseBytes: safeJsonByteLength(data),
+        annotationCount: Array.isArray(data?.annotations) ? data.annotations.length : 0,
+        hasReadingMeta: !!data?.readingMeta
+      });
+    } catch (requestError) {
+      if (readingSideDataRequestSequenceRef.current !== requestSequence) return;
+      setReadingSideData({ annotations: [], readingMeta: null });
+      setReadingSideDataError(requestError.message || '加载失败');
+      diagLog('sense.page.load_current_side_data', {
+        requestId,
+        flowId,
+        view: 'senseArticlePage',
+        nodeId,
+        senseId,
+        durationMs: durationMs(startedAt),
+        responseBytes: 0,
+        status: 'error',
+        errorName: requestError?.name || 'Error',
+        errorMessage: requestError?.message || 'load current side data failed'
+      });
+    } finally {
+      if (readingSideDataRequestSequenceRef.current === requestSequence) {
+        setReadingSideDataLoading(false);
+      }
+    }
+  }, [nodeId, senseId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -312,6 +349,46 @@ const SenseArticlePage = ({
   }, [loadCurrent]);
 
   useEffect(() => {
+    loadCurrentSideData();
+  }, [loadCurrentSideData]);
+
+  useEffect(() => {
+    if (!isReadingSearchOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (readingSearchRef.current?.contains(event.target)) return;
+      setIsReadingSearchOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setIsReadingSearchOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isReadingSearchOpen]);
+
+  useEffect(() => {
+    if (!isReadingSearchOpen) return;
+    window.requestAnimationFrame(() => {
+      readingSearchInputRef.current?.focus();
+    });
+  }, [isReadingSearchOpen]);
+
+  useEffect(() => {
+    if (isReadingSearchOpen) return;
+    setIsReadingSearchResultsExpanded(false);
+  }, [isReadingSearchOpen]);
+
+  useEffect(() => {
+    if (hasSearchResults) return;
+    setIsReadingSearchResultsExpanded(false);
+  }, [hasSearchResults]);
+
+  useEffect(() => {
     if (!pageData) return;
     const node = pageData.node || {};
     const nodeSense = pageData.nodeSense || {};
@@ -344,52 +421,41 @@ const SenseArticlePage = ({
   }, [loadMyEdits, myEditsLoaded, myEditsOpen]);
 
   useEffect(() => {
+    if (!pageData?.permissions?.canCreateRevision) return;
+    if (myEditsLoaded || myEditsRequestRef.current) return;
+    loadMyEdits();
+  }, [loadMyEdits, myEditsLoaded, pageData?.permissions?.canCreateRevision]);
+
+  useEffect(() => {
     if (!articleContext?.myEditsRefreshKey) return;
     loadCurrent();
     loadMyEdits();
-  }, [articleContext?.myEditsRefreshKey, loadCurrent, loadMyEdits]);
+    loadCurrentSideData();
+  }, [articleContext?.myEditsRefreshKey, loadCurrent, loadCurrentSideData, loadMyEdits]);
 
   useEffect(() => {
-    setMyEdits([]);
-    setMyEditsError('');
-    setMyEditsLoaded(false);
-    setMyEditsLoading(false);
-    setPrimaryDraft(null);
-    myEditsRequestSequenceRef.current += 1;
-    myEditsRequestRef.current = null;
-    primaryDraftRequestSequenceRef.current += 1;
+      setMyEdits([]);
+      setMyEditsError('');
+      setMyEditsLoaded(false);
+      setMyEditsLoading(false);
+      setActiveFullDraft(null);
+      setReadingSideData({ annotations: [], readingMeta: null });
+      setReadingSideDataLoading(false);
+      setReadingSideDataError('');
+      readingSideDataRequestSequenceRef.current += 1;
+      myEditsRequestSequenceRef.current += 1;
+      myEditsRequestRef.current = null;
   }, [nodeId, senseId]);
 
-  const mergedMyEdits = useMemo(() => {
-    const rows = [primaryDraft, ...myEdits]
-      .filter(Boolean)
-      .filter((item, index, array) => array.findIndex((target) => String(target?._id || '') === String(item?._id || '')) === index)
-      .sort((left, right) => (
-        new Date(right?.updatedAt || right?.createdAt || 0).getTime()
-        - new Date(left?.updatedAt || left?.createdAt || 0).getTime()
-      ));
-    return rows;
-  }, [myEdits, primaryDraft]);
-
-  const activeFullDraft = useMemo(() => findEditableSenseArticleRevision({
-    revisions: mergedMyEdits,
-    currentUserId: String(pageData?.permissions?.currentUserId || localStorage.getItem('userId') || '').trim(),
-    isSystemAdmin: !!pageData?.permissions?.isSystemAdmin
-  }), [mergedMyEdits, pageData?.permissions?.currentUserId, pageData?.permissions?.isSystemAdmin]);
-
   const handleRefreshMyEdits = useCallback(async () => {
-    await Promise.all([
-      loadCurrent(),
-      loadMyEdits(),
-      loadPrimaryDraft(pageData?.article?.latestDraftRevisionId || '')
-    ]);
-  }, [loadCurrent, loadMyEdits, loadPrimaryDraft, pageData?.article?.latestDraftRevisionId]);
+    await loadMyEdits();
+  }, [loadMyEdits]);
 
   const handleOpenFullEditor = useCallback(() => {
     if (!onOpenEditor) return;
-    const targetRevisionId = String(activeFullDraft?._id || '').trim() || String(primaryDraft?._id || '').trim();
+    const targetRevisionId = String(activeFullDraft?._id || '').trim();
     onOpenEditor({ mode: 'full', revisionId: targetRevisionId });
-  }, [activeFullDraft, onOpenEditor, primaryDraft]);
+  }, [activeFullDraft, onOpenEditor]);
 
   useEffect(() => {
     if (!searchQuery.trim()) {
@@ -452,7 +518,7 @@ const SenseArticlePage = ({
   }, [activeSearchIndex, searchData]);
 
   const headingIndex = pageData?.revision?.headingIndex || [];
-  const annotations = useMemo(() => (Array.isArray(pageData?.annotations) ? pageData.annotations : []), [pageData?.annotations]);
+  const annotations = useMemo(() => (Array.isArray(readingSideData?.annotations) ? readingSideData.annotations : []), [readingSideData?.annotations]);
   const annotationsByStatus = useMemo(() => {
     const groups = { exact: [], relocated: [], uncertain: [], broken: [] };
     annotations.forEach((item) => {
@@ -477,7 +543,7 @@ const SenseArticlePage = ({
       });
       setSelectionAnchor(null);
       setAnnotationDraft({ note: '', color: ANNOTATION_COLORS[0] });
-      await loadCurrent();
+      await loadCurrentSideData();
     } catch (requestError) {
       window.alert(requestError.message);
     } finally {
@@ -619,29 +685,23 @@ const SenseArticlePage = ({
           {!myEditsLoading && myEditsError ? <SenseArticleStateView compact kind="error" title="我的编辑加载失败" description={myEditsError} /> : null}
           {!myEditsLoading && !myEditsError ? (
             <div className="sense-floating-panel-body">
-              {mergedMyEdits.length === 0 ? <SenseArticleStateView compact kind="empty" title="暂无我的编辑" description="这里会显示你自己的草稿，以及你已提交但仍待审核的修订。" /> : mergedMyEdits.map((item) => (
+              {myEdits.length === 0 ? <SenseArticleStateView compact kind="empty" title="暂无我的编辑" description="这里会显示你自己的草稿，以及你已提交但仍待审核的修订。" /> : myEdits.map((item) => (
                 <div key={item._id} className="sense-annotation-card sense-my-edit-card">
                   <div className="sense-annotation-card-head">
                     <strong>{getRevisionDisplayTitle(item)}</strong>
-                    {String(item?._id || '') === String(activeFullDraft?._id || '') ? (
-                      <span className="sense-my-edit-badge">更新释义</span>
-                    ) : null}
+                    <span className="sense-my-edit-badge">{getMyEditBadgeLabel(item, activeFullDraft?._id || '')}</span>
                   </div>
                   <div className="sense-annotation-card-meta">{item.updatedAt ? new Date(item.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '--'} · {getRevisionStatusLabel(item.status || 'draft')}</div>
-                  {String(item?.sourceMode || 'full').trim() === 'full' ? (
-                    <div className="sense-review-note">修订范围：{getSourceModeLabel(item?.sourceMode || 'full')}</div>
-                  ) : (
-                    <div className="sense-review-note">修订范围：{getSourceModeLabel(item?.sourceMode || 'full')}</div>
-                  )}
+                  <div className="sense-review-note">修订范围：{getSourceModeLabel(item?.sourceMode || 'full')}</div>
                   {item.proposedSenseTitle && item.proposedSenseTitle !== (pageData?.nodeSense?.title || senseId) ? <div className="sense-annotation-card-body">待生效释义名：{item.proposedSenseTitle}</div> : null}
                   <div className="sense-floating-panel-actions">
                     {isEditableSenseArticleStatus(item?.status) ? (
                       <>
                         <button type="button" className="btn btn-small btn-primary" onClick={() => {
                           setMyEditsOpen(false);
-                          onOpenEditor && onOpenEditor({ mode: 'full', revisionId: item._id });
+                          onOpenEditor && onOpenEditor({ revisionId: item._id });
                         }} disabled={abandoningRevisionId === String(item?._id || '')}>
-                          继续编辑
+                          {getMyEditResumeLabel(item)}
                         </button>
                         <button
                           type="button"
@@ -672,7 +732,7 @@ const SenseArticlePage = ({
     );
   };
 
-  if (loading) return <div className="sense-article-page" style={pageThemeStyle}><SenseArticleStateView kind="loading" title="正在加载阅读页" description="正在读取当前释义百科页的发布版、正文引用与私有标注。" /></div>;
+  if (loading) return <div className="sense-article-page" style={pageThemeStyle}><SenseArticleStateView kind="loading" title="正在加载阅读页" description="正在优先读取当前释义百科页的发布版正文。" /></div>;
   if (error) {
     const state = resolveSenseArticleStateFromError(error, {
       emptyTitle: '当前释义尚无已发布百科页',
@@ -711,13 +771,13 @@ const SenseArticlePage = ({
   const nodeSense = pageData?.nodeSense || {};
   const revision = pageData?.revision || null;
   const permissions = pageData?.permissions || {};
-  const readingMeta = pageData?.readingMeta || {};
+  const readingMeta = readingSideData?.readingMeta || {};
   const revisionAuthor = readingMeta?.revisionAuthor || null;
   const canUpdateSenseArticle = !!permissions.isDomainMaster || !!permissions.canReviewSenseArticle;
   const title = `${node.name || '未命名知识域'}-${nodeSense.title || senseId}`;
   const readingMetaItems = [
-    revision?.updatedAt ? `修订时间 ${new Date(revision.updatedAt).toLocaleString('zh-CN', { hour12: false })}` : '修订时间 --',
-    revisionAuthor ? (
+    revision?.updatedAt ? `最近更新 ${new Date(revision.updatedAt).toLocaleString('zh-CN', { hour12: false })}` : '更新时间 --',
+    readingSideDataLoading ? '更新人信息加载中…' : revisionAuthor ? (
       <span className="sense-reading-meta-person">
         <img
           src={resolveArticleAvatarSrc(revisionAuthor.avatar)}
@@ -727,11 +787,74 @@ const SenseArticlePage = ({
         <span>{`修订人 ${revisionAuthor.username || '--'}`}</span>
       </span>
     ) : '修订人 --',
-    `收藏人数 ${Number(readingMeta?.favoriteCount || 0)}`
+    readingSideDataLoading ? '阅读统计加载中…' : `收藏人数 ${Number(readingMeta?.favoriteCount || 0)}`
   ];
 
+  const renderReadingSearchPanel = () => (
+    <div
+      ref={readingSearchRef}
+      className={`sense-reading-search-shell ${isReadingSearchOpen ? 'open' : ''} ${isReadingSearchResultsExpanded ? 'results-expanded' : ''}`}
+    >
+      <button
+        type="button"
+        className="sense-reading-search-trigger"
+        onClick={() => setIsReadingSearchOpen((prev) => !prev)}
+        aria-expanded={isReadingSearchOpen}
+        aria-label="切换页内搜索"
+      >
+        <span className="sense-reading-search-trigger-main">
+          <span className="sense-reading-search-label"><Search size={16} /> 页内搜索</span>
+        </span>
+        <span className="sense-reading-search-trigger-side">
+          {hasSearchQuery ? <span className="sense-reading-search-hit-count">命中 {searchData.total}</span> : null}
+          {isReadingSearchOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </span>
+      </button>
+      <div className={`sense-reading-search-panel ${isReadingSearchOpen ? 'open' : ''}`} aria-hidden={!isReadingSearchOpen}>
+          <div className="sense-search-box sense-reading-search-box">
+            <Search size={16} />
+            <input ref={readingSearchInputRef} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索正文 / 标题 / 公式" />
+          </div>
+          {hasSearchQuery ? (
+            <div className="sense-search-meta-row">
+              <span>命中 {searchData.total}</span>
+              <span>{searchData.total > 0 ? `${activeSearchIndex + 1}/${searchData.total}` : '0/0'}</span>
+            </div>
+          ) : (
+            <div className="sense-reading-search-hint">输入关键词后显示命中结果</div>
+          )}
+          <div className={`sense-search-results sense-reading-search-results ${isReadingSearchResultsExpanded ? 'expanded' : ''}`}>
+            {(searchData.groups || []).map((group) => (
+              <div key={group.headingId || 'root'} className="sense-search-group">
+                <div className="sense-search-group-title">{group.headingTitle || (group.headingId === 'root' ? '前言' : group.headingId)} · {group.count}</div>
+                {(group.matches || []).map((item) => {
+                  const matchIndex = searchData.matches.findIndex((candidate) => candidate.blockId === item.blockId && candidate.position === item.position);
+                  return (
+                    <button key={`${item.blockId}-${item.position}`} type="button" className={`sense-search-result-item ${activeSearchMatch && activeSearchMatch.blockId === item.blockId && activeSearchMatch.position === item.position ? 'active' : ''} ${isReadingSearchResultsExpanded ? 'expanded' : ''}`} onClick={() => jumpToMatch(item, matchIndex)}>
+                      {item.snippet}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          {hasSearchResults ? (
+            <button
+              type="button"
+              className="sense-reading-search-size-toggle"
+              onClick={() => setIsReadingSearchResultsExpanded((prev) => !prev)}
+              aria-label={isReadingSearchResultsExpanded ? '收起搜索结果' : '展开搜索结果'}
+              title={isReadingSearchResultsExpanded ? '收起搜索结果' : '展开搜索结果'}
+            >
+              {isReadingSearchResultsExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+            </button>
+          ) : null}
+        </div>
+    </div>
+  );
+
   return (
-    <div className="sense-article-page" style={pageThemeStyle}>
+    <div className={`sense-article-page sense-display-mode-${displayMode}`} style={pageThemeStyle}>
       {renderMyEditsModal()}
       <SenseArticlePageHeader
         pageType="senseArticle"
@@ -771,7 +894,7 @@ const SenseArticlePage = ({
 
       <div className="sense-article-layout">
         <aside className="sense-article-sidebar">
-          <div className="sense-side-card">
+          <div className="sense-side-card sense-reading-outline-card sense-reading-surface-card">
             <div className="sense-side-card-title">目录</div>
             <div className="sense-reading-outline-shell">
               <SenseArticleOutlineTree
@@ -783,37 +906,10 @@ const SenseArticlePage = ({
               />
             </div>
           </div>
-          <div className="sense-side-card">
-            <div className="sense-side-card-title">页内搜索</div>
-            <div className="sense-search-box">
-              <Search size={16} />
-              <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索正文 / 标题 / 公式" />
-            </div>
-            <div className="sense-search-meta-row">
-              <span>命中 {searchData.total}</span>
-              <span>{searchData.total > 0 ? `${activeSearchIndex + 1}/${searchData.total}` : '0/0'}</span>
-              <button type="button" className="sense-mini-action" onClick={() => navigateSearch(-1)} disabled={!searchData.total}>上一个</button>
-              <button type="button" className="sense-mini-action" onClick={() => navigateSearch(1)} disabled={!searchData.total}>下一个</button>
-            </div>
-            <div className="sense-search-results">
-              {(searchData.groups || []).map((group) => (
-                <div key={group.headingId || 'root'} className="sense-search-group">
-                  <div className="sense-search-group-title">{group.headingTitle || (group.headingId === 'root' ? '前言' : group.headingId)} · {group.count}</div>
-                  {(group.matches || []).map((item) => {
-                    const matchIndex = searchData.matches.findIndex((candidate) => candidate.blockId === item.blockId && candidate.position === item.position);
-                    return (
-                      <button key={`${item.blockId}-${item.position}`} type="button" className={`sense-search-result-item ${activeSearchMatch && activeSearchMatch.blockId === item.blockId && activeSearchMatch.position === item.position ? 'active' : ''}`} onClick={() => jumpToMatch(item, matchIndex)}>
-                        {item.snippet}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          </div>
         </aside>
 
-        <main className="sense-article-main">
+        <main className="sense-article-main sense-reading-main-shell">
+          {renderReadingSearchPanel()}
           {renderSelectionToolbar()}
           {renderReferencePreview()}
           <SenseArticleRenderer
@@ -832,7 +928,10 @@ const SenseArticlePage = ({
           <div className="sense-side-card">
             <div className="sense-side-card-title">我的私有标注</div>
             <div className="sense-annotation-list">
-              {annotations.length === 0 ? <SenseArticleStateView compact kind="empty" title="暂无私有标注" description="你可以在阅读页选中文本后创建仅自己可见的高亮与备注。" /> : annotations.map((annotation) => {
+              {readingSideDataLoading ? <SenseArticleStateView compact kind="loading" title="正在读取私有标注" description="批注列表与锚点重定位正在后台补齐。" /> : null}
+              {!readingSideDataLoading && readingSideDataError ? <SenseArticleStateView compact kind="error" title="私有标注加载失败" description={readingSideDataError} action={<button type="button" className="btn btn-secondary btn-small" onClick={loadCurrentSideData}>重试</button>} /> : null}
+              {!readingSideDataLoading && !readingSideDataError && annotations.length === 0 ? <SenseArticleStateView compact kind="empty" title="暂无私有标注" description="你可以在阅读页选中文本后创建仅自己可见的高亮与备注。" /> : null}
+              {!readingSideDataLoading && !readingSideDataError ? annotations.map((annotation) => {
                 const relocationStatus = annotation?.relocation?.status || 'exact';
                 return (
                   <div key={annotation._id} className={`sense-annotation-card relocation-${relocationStatus}`}>
@@ -844,15 +943,21 @@ const SenseArticlePage = ({
                     {(annotation.anchor?.selectionText || annotation.anchor?.headingId) ? <div className="sense-annotation-card-body">{annotation.anchor?.selectionText || annotation.anchor?.headingId}</div> : null}
                   </div>
                 );
-              })}
+              }) : null}
             </div>
           </div>
           <div className="sense-side-card">
             <div className="sense-side-card-title">标注状态</div>
-            <div className="sense-status-row"><MessageSquare size={16} /> 精确 {annotationsByStatus.exact.length}</div>
-            <div className="sense-status-row"><MessageSquare size={16} /> 重定位 {annotationsByStatus.relocated.length}</div>
-            <div className="sense-status-row"><MessageSquare size={16} /> 待确认 {annotationsByStatus.uncertain.length}</div>
-            <div className="sense-status-row"><MessageSquare size={16} /> 失效 {annotationsByStatus.broken.length}</div>
+            {readingSideDataLoading ? <SenseArticleStateView compact kind="loading" title="正在统计标注状态" description="状态汇总会在批注数据加载后显示。" /> : null}
+            {!readingSideDataLoading && readingSideDataError ? <SenseArticleStateView compact kind="error" title="标注状态加载失败" description={readingSideDataError} action={<button type="button" className="btn btn-secondary btn-small" onClick={loadCurrentSideData}>重试</button>} /> : null}
+            {!readingSideDataLoading && !readingSideDataError ? (
+              <>
+                <div className="sense-status-row"><MessageSquare size={16} /> 精确 {annotationsByStatus.exact.length}</div>
+                <div className="sense-status-row"><MessageSquare size={16} /> 重定位 {annotationsByStatus.relocated.length}</div>
+                <div className="sense-status-row"><MessageSquare size={16} /> 待确认 {annotationsByStatus.uncertain.length}</div>
+                <div className="sense-status-row"><MessageSquare size={16} /> 失效 {annotationsByStatus.broken.length}</div>
+              </>
+            ) : null}
           </div>
           <div className="sense-side-card">
             <div className="sense-side-card-title"><Eye size={16} /> 当前页引用</div>
@@ -869,6 +974,16 @@ const SenseArticlePage = ({
           </div>
         </aside>
       </div>
+      <SenseArticleDisplayModeToggle displayMode={displayMode} onToggle={toggleDisplayMode} />
+      <button
+        type="button"
+        className="sense-page-back-to-top"
+        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+        aria-label="回到顶部"
+        title="回到顶部"
+      >
+        <ArrowUp size={18} />
+      </button>
     </div>
   );
 };

@@ -13,7 +13,10 @@ const renderInlineNode = (node = {}) => {
   if (node.type === AST_NODE_TYPES.STRONG) return `<strong>${(node.children || []).map(renderInlineNode).join('')}</strong>`;
   if (node.type === AST_NODE_TYPES.EMPHASIS) return `<em>${(node.children || []).map(renderInlineNode).join('')}</em>`;
   if (node.type === AST_NODE_TYPES.CODE_INLINE) return `<code>${escapeHtml(node.value || '')}</code>`;
-  if (node.type === AST_NODE_TYPES.FORMULA_INLINE) return `<span class="sense-formula-placeholder" data-formula-placeholder="true">${escapeHtml(node.value || '')}</span>`;
+  if (node.type === AST_NODE_TYPES.FORMULA_INLINE) {
+    const value = escapeHtml(node.value || '');
+    return `<span class="sense-formula-placeholder" data-formula-placeholder="true" data-formula-source="${value}" data-formula-display="inline">${value}</span>`;
+  }
   if (node.type === AST_NODE_TYPES.SYMBOL) return escapeHtml(node.value || '');
   if (node.type === AST_NODE_TYPES.SENSE_REFERENCE) {
     return `<a class="sense-internal-reference" href="#sense-ref-${escapeHtml(node.targetNodeId || '')}-${escapeHtml(node.targetSenseId || '')}" data-reference-kind="internal-sense" data-node-id="${escapeHtml(node.targetNodeId || '')}" data-sense-id="${escapeHtml(node.targetSenseId || '')}" data-display-text="${escapeHtml(node.displayText || '')}">${escapeHtml(node.displayText || `${node.targetNodeId}:${node.targetSenseId}`)}</a>`;
@@ -37,8 +40,12 @@ const renderBlock = (block = {}) => {
   if (block.type === AST_NODE_TYPES.BLOCKQUOTE) {
     return `<blockquote>${(block.lines || []).map((line) => `<p>${(line.children || []).map(renderInlineNode).join('')}</p>`).join('')}</blockquote>`;
   }
-  if (block.type === AST_NODE_TYPES.CODE_BLOCK || block.type === AST_NODE_TYPES.FORMULA_BLOCK) {
+  if (block.type === AST_NODE_TYPES.CODE_BLOCK) {
     return `<pre><code>${escapeHtml(block.value || '')}</code></pre>`;
+  }
+  if (block.type === AST_NODE_TYPES.FORMULA_BLOCK) {
+    const value = escapeHtml(block.value || '');
+    return `<div class="sense-formula-placeholder sense-formula-block" data-formula-placeholder="true" data-formula-source="${value}" data-formula-display="block">${value}</div>`;
   }
   return '';
 };

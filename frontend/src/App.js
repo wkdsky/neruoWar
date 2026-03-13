@@ -25,9 +25,7 @@ import SenseArticleHistoryPage from './components/senseArticle/SenseArticleHisto
 import SenseArticleDashboardPage from './components/senseArticle/SenseArticleDashboardPage';
 import SenseArticleErrorBoundary from './components/senseArticle/SenseArticleErrorBoundary';
 import {
-    findEditableSenseArticleRevision,
     getSenseArticleEntryActionLabel,
-    isEditableSenseArticleStatus,
     SENSE_ARTICLE_ENTRY_LABEL,
     SENSE_ARTICLE_ENTRY_SHORT_LABEL
 } from './components/senseArticle/senseArticleUi';
@@ -5630,38 +5628,13 @@ const App = () => {
     };
 
     const resolveEditableSenseArticleRevision = useCallback(async (nodeId, senseId) => {
-        const currentUserId = normalizeObjectId(userId) || normalizeObjectId(localStorage.getItem('userId'));
-        try {
-            const overview = await senseArticleApi.getOverview(nodeId, senseId);
-            const latestDraftRevisionId = normalizeObjectId(overview?.article?.latestDraftRevisionId);
-            if (latestDraftRevisionId) {
-                const detail = await senseArticleApi.getRevisionDetail(nodeId, senseId, latestDraftRevisionId, { view: 'senseArticlePage' });
-                const revision = detail?.revision || null;
-                const isMine = String(revision?.proposerId || '').trim() === currentUserId;
-                const isReusableFullDraft = String(revision?.sourceMode || 'full').trim() === 'full'
-                    && isEditableSenseArticleStatus(revision?.status || '');
-                if (revision?._id && (isMine || !!isAdmin || !!detail?.permissions?.isSystemAdmin) && isReusableFullDraft) {
-                    return {
-                        articleId: overview?.article?._id || detail?.article?._id || '',
-                        currentRevisionId: overview?.article?.currentRevisionId || detail?.article?.currentRevisionId || '',
-                        revision
-                    };
-                }
-            }
-        } catch (_error) {
-            // Fall back to revision list lookup when the primary draft pointer is unavailable.
-        }
-        const data = await senseArticleApi.getRevisions(nodeId, senseId, { pageSize: 50 });
+        const data = await senseArticleApi.getMyEdits(nodeId, senseId, { limit: 50 }, { view: 'senseArticlePage' });
         return {
             articleId: data?.article?._id || '',
-            currentRevisionId: data?.currentRevisionId || '',
-            revision: findEditableSenseArticleRevision({
-                revisions: data?.revisions || [],
-                currentUserId,
-                isSystemAdmin: !!isAdmin || !!data?.permissions?.isSystemAdmin
-            })
+            currentRevisionId: data?.article?.currentRevisionId || '',
+            revision: data?.activeFullDraft || null
         };
-    }, [isAdmin, userId]);
+    }, []);
 
     const handleSenseArticleBack = async (payload = null) => {
         if (payload?.action === 'openArticle') {

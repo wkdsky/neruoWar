@@ -70,6 +70,9 @@ const InsertLinkDialog = ({
   onSubmit,
   onSearchReferences,
   mediaLibrary = null,
+  mediaLibraryState = 'idle',
+  mediaLibraryError = null,
+  onRetryMediaLibrary = null,
   mediaAttachments = null,
   restoreFocusOnClose = true,
   restoreFocusTarget = null,
@@ -234,9 +237,22 @@ const InsertLinkDialog = ({
             ))}
           </div>
           <div className="sense-rich-reference-list">
-            {visibleMediaAssets.length === 0 ? (
+            {mediaLibraryState === 'loading' ? (
+              <div className="sense-rich-reference-empty">正在读取已保存的多媒体附件…</div>
+            ) : null}
+            {mediaLibraryState === 'error' ? (
+              <div className="sense-rich-reference-empty">
+                读取已保存的多媒体附件失败。
+                {typeof onRetryMediaLibrary === 'function' ? (
+                  <button type="button" className="sense-mini-action" onClick={onRetryMediaLibrary}>重试</button>
+                ) : null}
+                {mediaLibraryError?.message ? <span>{mediaLibraryError.message}</span> : null}
+              </div>
+            ) : null}
+            {mediaLibraryState !== 'loading' && mediaLibraryState !== 'error' && visibleMediaAssets.length === 0 ? (
               <div className="sense-rich-reference-empty">当前没有可引用的已保存{MEDIA_TABS.find((item) => item.key === mediaTab)?.label || '媒体'}。</div>
-            ) : visibleMediaAssets.map((asset) => (
+            ) : null}
+            {mediaLibraryState !== 'loading' && mediaLibraryState !== 'error' ? visibleMediaAssets.map((asset) => (
               <button
                 key={asset.key}
                 type="button"
@@ -254,7 +270,7 @@ const InsertLinkDialog = ({
                 <strong>{asset.displayLabel || resolveAttachmentReferenceText(asset.attachmentIndex)}</strong>
                 <span>{asset.statusLabel}</span>
               </button>
-            ))}
+            )) : null}
           </div>
         </div>
       ) : null}
