@@ -47,11 +47,19 @@ export const isEditableSenseArticleStatus = (status = '') => EDITABLE_SENSE_ARTI
 
 export const findEditableSenseArticleRevision = ({ revisions = [], currentUserId = '', isSystemAdmin = false } = {}) => {
   const normalizedUserId = String(currentUserId || '').trim();
-  return (Array.isArray(revisions) ? revisions : []).find((revision) => {
+  const matched = (Array.isArray(revisions) ? revisions : []).filter((revision) => {
     if (!isEditableSenseArticleStatus(revision?.status)) return false;
     if (isSystemAdmin) return true;
     return String(revision?.proposerId || '').trim() === normalizedUserId;
-  }) || null;
+  });
+  const sorted = matched.sort((left, right) => {
+    const leftIsFull = String(left?.sourceMode || 'full').trim() === 'full';
+    const rightIsFull = String(right?.sourceMode || 'full').trim() === 'full';
+    if (leftIsFull !== rightIsFull) return rightIsFull ? 1 : -1;
+    return new Date(right?.updatedAt || right?.createdAt || 0).getTime()
+      - new Date(left?.updatedAt || left?.createdAt || 0).getTime();
+  });
+  return sorted[0] || null;
 };
 
 export const getSenseArticleEntryActionLabel = ({ hasPublishedRevision = false, loading = false } = {}) => {

@@ -302,5 +302,10 @@ export const senseArticleApi = {
     `/sense-articles/${nodeId}/${senseId}/media/session/release`,
     { method: 'POST', body: JSON.stringify(payload || {}) },
     { ...requestOptions, apiName: requestOptions.apiName || 'releaseMediaSession', nodeId, senseId, revisionId: payload?.revisionId || '' }
+  ),
+  syncMediaSession: (nodeId, senseId, payload = {}, requestOptions = {}) => requestJson(
+    `/sense-articles/${nodeId}/${senseId}/media/session/sync`,
+    { method: 'POST', body: JSON.stringify(payload || {}) },
+    { ...requestOptions, apiName: requestOptions.apiName || 'syncMediaSession', nodeId, senseId, revisionId: payload?.revisionId || '' }
   )
 };

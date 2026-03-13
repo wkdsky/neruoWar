@@ -97,8 +97,18 @@ const normalizeClassNames = (classText = '', allowed = []) => {
     .join(' ');
 };
 
+const normalizeAttachmentId = (value = '') => {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return normalized || '';
+};
+
 const sanitizeAnchor = (attribs = {}) => {
   const isInternal = attribs['data-reference-kind'] === 'internal-sense';
+  const isMediaAttachmentReference = attribs['data-reference-kind'] === 'media-attachment';
   const href = String(attribs.href || '').trim();
   const next = { ...attribs };
   delete next.onclick;
@@ -115,6 +125,18 @@ const sanitizeAnchor = (attribs = {}) => {
     }
     next.href = isSafeUrl(href, { allowHash: true }) ? href : `#sense-ref-${nodeId}-${senseId}`;
     next.rel = 'nofollow noopener noreferrer';
+    return next;
+  }
+  if (isMediaAttachmentReference) {
+    next.href = isSafeUrl(href, { allowHash: true }) ? href : '#';
+    delete next.target;
+    next.rel = 'noopener noreferrer';
+    next['data-asset-id'] = String(attribs['data-asset-id'] || '').trim() || undefined;
+    next['data-attachment-id'] = normalizeAttachmentId(attribs['data-attachment-id']) || undefined;
+    next['data-attachment-index'] = Number.isFinite(Number(attribs['data-attachment-index'])) && Number(attribs['data-attachment-index']) > 0
+      ? String(Math.round(Number(attribs['data-attachment-index'])))
+      : undefined;
+    next['data-display-text'] = String(attribs['data-display-text'] || '').trim() || undefined;
     return next;
   }
   if (!isSafeUrl(href)) {
@@ -138,8 +160,7 @@ const sanitizeMediaAttribs = (attribs = {}, { kind = 'image' } = {}) => {
   const poster = String(next.poster || '').trim();
   if (src && !isSafeUrl(src, { mediaOnly: true })) delete next.src;
   if (kind === 'video' && poster && !isSafeUrl(poster, { mediaOnly: true })) delete next.poster;
-  if (kind === 'image' && next.width && !/^(25|50|75|100)%$/.test(String(next.width))) delete next.width;
-  if (kind === 'video' && next.width && !/^(50|75|100)%$/.test(String(next.width))) delete next.width;
+  if (next.width && !/^(25|50|75|100)%$/.test(String(next.width)) && !/^([4-9]\d|[1-9]\d{2}|1[01]\d{2}|1200)px$/i.test(String(next.width))) delete next.width;
   if (kind === 'audio') {
     next.controls = 'controls';
     delete next.autoplay;
@@ -168,12 +189,12 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
     'thead', 'th', 'tr', 'u', 'ul', 'video'
   ],
   allowedAttributes: {
-    a: ['href', 'target', 'rel', 'class', 'style', 'data-reference-kind', 'data-node-id', 'data-sense-id', 'data-display-text', 'data-reference-id'],
-    audio: ['src', 'controls', 'class', 'data-title', 'data-description'],
+    a: ['href', 'target', 'rel', 'class', 'style', 'data-reference-kind', 'data-node-id', 'data-sense-id', 'data-display-text', 'data-reference-id', 'data-asset-id', 'data-attachment-id', 'data-attachment-index'],
+    audio: ['src', 'controls', 'class', 'data-title', 'data-description', 'width'],
     blockquote: ['class', 'style', 'data-indent'],
     code: ['class'],
     div: ['class', 'data-node-type', 'data-align'],
-    figure: ['class', 'data-node-type', 'data-align', 'data-width'],
+    figure: ['id', 'class', 'style', 'data-node-type', 'data-align', 'data-width', 'data-asset-id', 'data-attachment-id', 'data-attachment-index', 'data-attachment-title', 'data-media-width'],
     figcaption: ['class'],
     h1: ['id', 'class', 'style', 'data-indent'],
     h2: ['id', 'class', 'style', 'data-indent'],
@@ -196,7 +217,7 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
     video: ['src', 'poster', 'controls', 'class', 'width']
   },
   allowedClasses: {
-    a: ['sense-rich-link', 'sense-internal-reference'],
+    a: ['sense-rich-link', 'sense-internal-reference', 'sense-media-reference-link'],
     blockquote: ['sense-rich-blockquote'],
     code: ['language-text'],
     figure: ['sense-rich-figure', 'align-left', 'align-center', 'align-right', 'size-25', 'size-50', 'size-75', 'size-100'],
@@ -209,7 +230,7 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
     li: ['task-item'],
     ol: ['list-style-decimal', 'list-style-leading-zero', 'list-style-lower-alpha', 'list-style-lower-roman'],
     p: ['align-left', 'align-center', 'align-right', 'align-justify'],
-    span: ['sense-inline-code', 'sense-formula-placeholder', 'has-highlight'],
+    span: ['sense-inline-code', 'sense-formula-placeholder', 'has-highlight', 'sense-rich-attachment-label', 'sense-rich-attachment-title'],
     table: ['sense-rich-table', 'table-style-default', 'table-style-compact', 'table-style-zebra', 'table-style-three-line', 'table-border-all', 'table-border-none', 'table-border-outer', 'table-border-inner-horizontal', 'table-border-inner-vertical', 'table-border-three-line'],
     td: ['align-left', 'align-center', 'align-right', 'align-justify', 'table-cell-valign-middle', 'table-cell-valign-bottom', 'table-cell-diagonal-tl-br', 'table-cell-diagonal-tr-bl'],
     th: ['align-left', 'align-center', 'align-right', 'align-justify', 'table-cell-valign-middle', 'table-cell-valign-bottom', 'table-cell-diagonal-tl-br', 'table-cell-diagonal-tr-bl'],
@@ -232,7 +253,7 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
       tagName: 'span',
       attribs: {
         ...attribs,
-        class: normalizeClassNames(attribs.class, ['sense-inline-code', 'sense-formula-placeholder', 'has-highlight']),
+        class: normalizeClassNames(attribs.class, ['sense-inline-code', 'sense-formula-placeholder', 'has-highlight', 'sense-rich-attachment-label', 'sense-rich-attachment-title']),
         style: filterAllowedStyle(attribs.style)
       }
     }),
@@ -300,7 +321,16 @@ const sanitizeRichHtml = (html = '') => sanitizeHtml(String(html || ''), {
       tagName: 'figure',
       attribs: {
         ...attribs,
-        class: normalizeClassNames(attribs.class, ['sense-rich-figure', 'align-left', 'align-center', 'align-right', 'size-25', 'size-50', 'size-75', 'size-100'])
+        id: normalizeAttachmentId(attribs.id) || undefined,
+        class: normalizeClassNames(attribs.class, ['sense-rich-figure', 'align-left', 'align-center', 'align-right', 'size-25', 'size-50', 'size-75', 'size-100']),
+        style: filterAllowedStyle(attribs.style),
+        'data-node-type': ['image', 'audio', 'video'].includes(String(attribs['data-node-type'] || '').trim()) ? String(attribs['data-node-type']).trim() : undefined,
+        'data-align': ['left', 'center', 'right'].includes(String(attribs['data-align'] || '').trim()) ? String(attribs['data-align']).trim() : 'center',
+        'data-asset-id': String(attribs['data-asset-id'] || '').trim() || undefined,
+        'data-attachment-id': normalizeAttachmentId(attribs['data-attachment-id']) || undefined,
+        'data-attachment-index': Number.isFinite(Number(attribs['data-attachment-index'])) && Number(attribs['data-attachment-index']) > 0 ? String(Math.round(Number(attribs['data-attachment-index']))) : undefined,
+        'data-attachment-title': String(attribs['data-attachment-title'] || '').trim() || undefined,
+        'data-media-width': Number.isFinite(Number(attribs['data-media-width'])) && Number(attribs['data-media-width']) >= 160 ? String(Math.round(Number(attribs['data-media-width']))) : undefined
       }
     })
   }

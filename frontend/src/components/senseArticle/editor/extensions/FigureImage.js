@@ -1,4 +1,11 @@
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Node } from '@tiptap/core';
+import { resolveBackendAssetUrl } from '../../../../runtimeConfig';
+import {
+  buildAttachmentCaptionChildren,
+  buildMediaAttachmentAttributes,
+  buildMediaAttachmentFigureAttrs,
+  createMediaAttachmentNodeView
+} from './mediaAttachmentSupport';
 
 const FigureImage = Node.create({
   name: 'figureImage',
@@ -8,13 +15,15 @@ const FigureImage = Node.create({
   selectable: true,
 
   addAttributes() {
-    return {
-      src: { default: '' },
-      alt: { default: '' },
-      caption: { default: '' },
-      width: { default: '75%' },
-      align: { default: 'center' }
-    };
+    return buildMediaAttachmentAttributes({
+      legacyCaptionAttr: 'data-caption',
+      extraAttrs: {
+        alt: {
+          default: '',
+          parseHTML: (element) => String(element?.querySelector?.('img')?.getAttribute?.('alt') || '').trim()
+        }
+      }
+    });
   },
 
   parseHTML() {
@@ -24,20 +33,42 @@ const FigureImage = Node.create({
   },
 
   renderHTML({ HTMLAttributes }) {
-    const className = `sense-rich-figure align-${HTMLAttributes.align || 'center'} size-${String(HTMLAttributes.width || '75%').replace('%', '')}`;
-    return ['figure', mergeAttributes(HTMLAttributes, {
-      'data-node-type': 'image',
-      'data-align': HTMLAttributes.align || 'center',
-      'data-width': HTMLAttributes.width || '75%',
-      class: className
-    }),
-    ['img', {
-      src: HTMLAttributes.src || '',
-      alt: HTMLAttributes.alt || '',
-      width: HTMLAttributes.width || '75%',
-      'data-align': HTMLAttributes.align || 'center'
-    }],
-    ['figcaption', { class: 'sense-rich-caption' }, HTMLAttributes.caption || '']];
+    const figureAttrs = buildMediaAttachmentFigureAttrs({ nodeName: this.name, attrs: HTMLAttributes });
+    return ['figure', figureAttrs,
+      ['img', {
+        src: HTMLAttributes.src || '',
+        alt: HTMLAttributes.alt || ''
+      }],
+      ['figcaption', { class: 'sense-rich-caption' }, ...buildAttachmentCaptionChildren({
+        attachmentIndex: HTMLAttributes.attachmentIndex,
+        nodeName: this.name,
+        attachmentTitle: HTMLAttributes.attachmentTitle
+      })]
+    ];
+  },
+
+  addNodeView() {
+    return ({ node, view, getPos }) => createMediaAttachmentNodeView({
+      node,
+      view,
+      getPos,
+      createMediaElement: () => {
+        const image = document.createElement('img');
+        image.draggable = false;
+        return image;
+      },
+      syncMediaElement: (image, currentNode) => {
+        const src = resolveBackendAssetUrl(currentNode?.attrs?.src || '');
+        const alt = String(currentNode?.attrs?.alt || '').trim();
+        if (image.getAttribute('src') !== src) {
+          if (src) image.setAttribute('src', src);
+          else image.removeAttribute('src');
+        }
+        image.setAttribute('alt', alt);
+        image.style.width = '100%';
+      },
+      acceptsDirectPlayback: false
+    });
   },
 
   addCommands() {

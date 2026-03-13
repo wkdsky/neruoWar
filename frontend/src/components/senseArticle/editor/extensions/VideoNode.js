@@ -1,5 +1,11 @@
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Node } from '@tiptap/core';
 import { resolveBackendAssetUrl } from '../../../../runtimeConfig';
+import {
+  buildAttachmentCaptionChildren,
+  buildMediaAttachmentAttributes,
+  buildMediaAttachmentFigureAttrs,
+  createMediaAttachmentNodeView
+} from './mediaAttachmentSupport';
 
 const VideoNode = Node.create({
   name: 'videoNode',
@@ -9,12 +15,15 @@ const VideoNode = Node.create({
   selectable: true,
 
   addAttributes() {
-    return {
-      src: { default: '' },
-      poster: { default: '' },
-      caption: { default: '' },
-      width: { default: '100%' }
-    };
+    return buildMediaAttachmentAttributes({
+      legacyCaptionAttr: 'data-caption',
+      extraAttrs: {
+        poster: {
+          default: '',
+          parseHTML: (element) => String(element?.querySelector?.('video')?.getAttribute?.('poster') || '').trim()
+        }
+      }
+    });
   },
 
   parseHTML() {
@@ -24,67 +33,44 @@ const VideoNode = Node.create({
   },
 
   renderHTML({ HTMLAttributes }) {
-    const widthClass = `size-${String(HTMLAttributes.width || '100%').replace('%', '')}`;
-    return ['figure', mergeAttributes(HTMLAttributes, {
-      'data-node-type': 'video',
-      class: `sense-rich-figure align-center ${widthClass}`
-    }),
-    ['video', {
-      src: HTMLAttributes.src || '',
-      poster: HTMLAttributes.poster || '',
-      controls: 'controls',
-      width: HTMLAttributes.width || '100%'
-    }],
-    ['figcaption', { class: 'sense-rich-caption' }, HTMLAttributes.caption || '']];
+    const figureAttrs = buildMediaAttachmentFigureAttrs({ nodeName: this.name, attrs: HTMLAttributes });
+    return ['figure', figureAttrs,
+      ['video', {
+        src: HTMLAttributes.src || '',
+        poster: HTMLAttributes.poster || '',
+        controls: 'controls'
+      }],
+      ['figcaption', { class: 'sense-rich-caption' }, ...buildAttachmentCaptionChildren({
+        attachmentIndex: HTMLAttributes.attachmentIndex,
+        nodeName: this.name,
+        attachmentTitle: HTMLAttributes.attachmentTitle
+      })]
+    ];
   },
 
   addNodeView() {
-    return ({ node }) => {
-      const dom = document.createElement('figure');
-      const video = document.createElement('video');
-      const caption = document.createElement('figcaption');
-
-      dom.setAttribute('data-node-type', 'video');
-      dom.contentEditable = 'false';
-
-      video.controls = true;
-      caption.className = 'sense-rich-caption';
-
-      const syncFromNode = (currentNode) => {
+    return ({ node, view, getPos }) => createMediaAttachmentNodeView({
+      node,
+      view,
+      getPos,
+      createMediaElement: () => {
+        const video = document.createElement('video');
+        video.controls = true;
+        return video;
+      },
+      syncMediaElement: (video, currentNode) => {
         const src = resolveBackendAssetUrl(currentNode?.attrs?.src || '');
         const poster = resolveBackendAssetUrl(currentNode?.attrs?.poster || '');
-        const width = currentNode?.attrs?.width || '100%';
-        const widthClass = `size-${String(width).replace('%', '')}`;
-
-        dom.className = `sense-rich-figure align-center ${widthClass}`;
-        if (src) video.setAttribute('src', src);
-        else video.removeAttribute('src');
+        if (video.getAttribute('src') !== src) {
+          if (src) video.setAttribute('src', src);
+          else video.removeAttribute('src');
+        }
         if (poster) video.setAttribute('poster', poster);
         else video.removeAttribute('poster');
-        video.setAttribute('width', width);
-        caption.textContent = currentNode?.attrs?.caption || '';
-      };
-
-      syncFromNode(node);
-      dom.append(video, caption);
-
-      return {
-        dom,
-        update: (updatedNode) => {
-          if (updatedNode.type.name !== this.name) return false;
-          syncFromNode(updatedNode);
-          return true;
-        },
-        selectNode: () => {
-          dom.classList.add('ProseMirror-selectednode');
-        },
-        deselectNode: () => {
-          dom.classList.remove('ProseMirror-selectednode');
-        },
-        stopEvent: (event) => video.contains(event.target),
-        ignoreMutation: () => true
-      };
-    };
+        video.style.width = '100%';
+      },
+      acceptsDirectPlayback: true
+    });
   },
 
   addCommands() {

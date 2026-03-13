@@ -1,22 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlignCenter, ChevronDown, StretchHorizontal, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import DialogFrame from './DialogFrame';
 import { describeActiveElement, describeScrollPosition, senseEditorDebugLog } from '../editorDebug';
 
 const MEDIA_FIELD_BY_KIND = {
   image: {
     title: '插入图片',
-    widthOptions: ['25%', '50%', '75%', '100%'],
     accept: 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml'
   },
   audio: {
     title: '插入音频',
-    widthOptions: [],
     accept: 'audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/mp4,audio/x-m4a,audio/flac,audio/aac'
   },
   video: {
     title: '插入视频',
-    widthOptions: ['50%', '75%', '100%'],
     accept: 'video/mp4,video/webm,video/ogg,video/quicktime'
   }
 };
@@ -94,7 +91,6 @@ const InsertMediaDialog = ({
   onClose,
   onUpload,
   onSubmit,
-  mediaLibrary = null,
   restoreFocusOnClose = true,
   restoreFocusTarget = null,
   onAfterCloseFocus = null,
@@ -106,41 +102,36 @@ const InsertMediaDialog = ({
   const [file, setFile] = useState(null);
   const [url, setUrl] = useState('');
   const [alt, setAlt] = useState('');
-  const [caption, setCaption] = useState('');
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
+  const [attachmentTitle, setAttachmentTitle] = useState('');
   const [poster, setPoster] = useState('');
-  const [width, setWidth] = useState(kind === 'image' ? '75%' : '100%');
-  const [align, setAlign] = useState('center');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const inlinePanelRef = useRef(null);
   const closeButtonRef = useRef(null);
   const titleIdRef = useRef(`sense-rich-media-title-${Math.random().toString(36).slice(2)}`);
   const descriptionIdRef = useRef(`sense-rich-media-description-${Math.random().toString(36).slice(2)}`);
+  const lastOpenKindRef = useRef('');
   const initialSrc = initialValue?.src || '';
   const initialAlt = initialValue?.alt || '';
-  const initialCaption = initialValue?.caption || '';
-  const initialTitle = initialValue?.title || '';
-  const initialDescription = initialValue?.description || '';
+  const initialAttachmentTitle = initialValue?.attachmentTitle || initialValue?.title || initialValue?.caption || '';
   const initialPoster = initialValue?.poster || '';
-  const initialWidth = initialValue?.width || (kind === 'image' ? '75%' : '100%');
-  const initialAlign = initialValue?.align || 'center';
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      lastOpenKindRef.current = '';
+      return;
+    }
+    const openKindKey = `${kind}:open`;
+    if (lastOpenKindRef.current === openKindKey) return;
+    lastOpenKindRef.current = openKindKey;
     setInsertMode('upload');
     setFile(null);
     setUrl(initialSrc);
     setAlt(initialAlt);
-    setCaption(initialCaption);
-    setTitle(initialTitle);
-    setDescription(initialDescription);
+    setAttachmentTitle(initialAttachmentTitle);
     setPoster(initialPoster);
-    setWidth(initialWidth);
-    setAlign(initialAlign);
     setError('');
-  }, [initialAlign, initialAlt, initialCaption, initialDescription, initialPoster, initialSrc, initialTitle, initialWidth, kind, open]);
+  }, [initialAlt, initialAttachmentTitle, initialPoster, initialSrc, kind, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -269,9 +260,7 @@ const InsertMediaDialog = ({
             kind,
             file,
             alt,
-            caption,
-            title,
-            description,
+            title: attachmentTitle,
             posterUrl: poster,
             ...metadata
           });
@@ -280,6 +269,15 @@ const InsertMediaDialog = ({
             setError('上传成功但未返回可用地址，请重试。');
             return;
           }
+          onSubmit({
+            kind,
+            src: sourceUrl,
+            alt,
+            poster,
+            attachmentTitle: attachmentTitle || response?.asset?.originalName || '',
+            assetId: response?.asset?._id || ''
+          });
+          return;
         } catch (uploadError) {
           setError(uploadError?.message || '上传失败，请重试。');
           return;
@@ -308,23 +306,13 @@ const InsertMediaDialog = ({
         kind,
         src: sourceUrl,
         alt,
-        caption,
-        title,
-        description,
         poster,
-        width,
-        align
+        attachmentTitle
       });
     } finally {
       setPending(false);
     }
-  }, [align, alt, caption, description, file, insertMode, kind, onSubmit, onUpload, poster, readLocalMediaMetadata, title, url, validateUrl, width]);
-
-  const libraryAssets = useMemo(() => {
-    const referenced = Array.isArray(mediaLibrary?.referencedAssets) ? mediaLibrary.referencedAssets : [];
-    const recent = Array.isArray(mediaLibrary?.recentAssets) ? mediaLibrary.recentAssets : [];
-    return [...referenced, ...recent].filter((item, index, array) => item?.kind === kind && array.findIndex((target) => target?._id === item?._id) === index);
-  }, [kind, mediaLibrary]);
+  }, [alt, attachmentTitle, file, insertMode, kind, onSubmit, onUpload, poster, readLocalMediaMetadata, url, validateUrl]);
 
   const footer = useMemo(() => (
     <>
@@ -345,7 +333,6 @@ const InsertMediaDialog = ({
       <div className="sense-rich-link-tabs">
         <button type="button" className={insertMode === 'upload' ? 'active' : ''} onClick={() => setInsertMode('upload')}>上传文件</button>
         <button type="button" className={insertMode === 'url' ? 'active' : ''} onClick={() => setInsertMode('url')}>粘贴 URL</button>
-        <button type="button" className={insertMode === 'library' ? 'active' : ''} onClick={() => setInsertMode('library')}>已上传资源</button>
       </div>
       <div className="sense-rich-form-grid">
         {insertMode === 'upload' ? (
@@ -364,31 +351,7 @@ const InsertMediaDialog = ({
               setError('');
             }} placeholder="https://..." />
           </label>
-        ) : (
-          <div className="sense-rich-reference-list">
-            {libraryAssets.length === 0 ? (
-              <div className="sense-rich-reference-empty">暂无可复用的已上传资源。</div>
-            ) : libraryAssets.map((asset) => (
-              <button
-                key={asset._id}
-                type="button"
-                className="sense-rich-reference-item"
-                onClick={() => {
-                  setUrl(asset.url || '');
-                  setAlt(asset.alt || '');
-                  setCaption(asset.caption || '');
-                  setTitle(asset.title || '');
-                  setDescription(asset.description || '');
-                  setPoster(asset.posterUrl || '');
-                  setInsertMode('url');
-                }}
-              >
-                <strong>{asset.originalName || asset.title || asset.url}</strong>
-                <span>{asset.status || 'uploaded'} · {asset.mimeType || asset.kind}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        ) : null}
         {error ? <div className="sense-rich-inline-error">{error}</div> : null}
         {kind === 'image' ? (
           <>
@@ -397,64 +360,28 @@ const InsertMediaDialog = ({
               <input value={alt} onChange={(event) => setAlt(event.target.value)} placeholder="图片说明" />
             </label>
             <label>
-              <span>caption</span>
-              <input value={caption} onChange={(event) => setCaption(event.target.value)} placeholder="可选说明" />
-            </label>
-            <label>
-              <span>宽度</span>
-              <div className="sense-rich-dialog-select">
-                <StretchHorizontal size={16} className="sense-rich-dialog-select-icon" />
-                <select value={width} onChange={(event) => setWidth(event.target.value)}>
-                  {kindMeta.widthOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-                </select>
-                <ChevronDown size={16} className="sense-rich-dialog-select-caret" />
-              </div>
-            </label>
-            <label>
-              <span>对齐</span>
-              <div className="sense-rich-dialog-select">
-                <AlignCenter size={16} className="sense-rich-dialog-select-icon" />
-                <select value={align} onChange={(event) => setAlign(event.target.value)}>
-                  <option value="left">左</option>
-                  <option value="center">中</option>
-                  <option value="right">右</option>
-                </select>
-                <ChevronDown size={16} className="sense-rich-dialog-select-caret" />
-              </div>
+              <span>附件标题</span>
+              <input value={attachmentTitle} onChange={(event) => setAttachmentTitle(event.target.value)} placeholder="用户可见的附件标题" />
             </label>
           </>
         ) : null}
         {kind === 'audio' ? (
           <>
             <label>
-              <span>标题</span>
-              <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="音频标题" />
-            </label>
-            <label>
-              <span>说明</span>
-              <input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="可选说明" />
+              <span>附件标题</span>
+              <input value={attachmentTitle} onChange={(event) => setAttachmentTitle(event.target.value)} placeholder="用户可见的附件标题" />
             </label>
           </>
         ) : null}
         {kind === 'video' ? (
           <>
             <label>
-              <span>说明</span>
-              <input value={caption} onChange={(event) => setCaption(event.target.value)} placeholder="视频说明" />
+              <span>附件标题</span>
+              <input value={attachmentTitle} onChange={(event) => setAttachmentTitle(event.target.value)} placeholder="用户可见的附件标题" />
             </label>
             <label>
               <span>Poster URL</span>
               <input value={poster} onChange={(event) => setPoster(event.target.value)} placeholder="可选封面" />
-            </label>
-            <label>
-              <span>宽度</span>
-              <div className="sense-rich-dialog-select">
-                <StretchHorizontal size={16} className="sense-rich-dialog-select-icon" />
-                <select value={width} onChange={(event) => setWidth(event.target.value)}>
-                  {kindMeta.widthOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-                </select>
-                <ChevronDown size={16} className="sense-rich-dialog-select-caret" />
-              </div>
             </label>
           </>
         ) : null}
@@ -478,7 +405,7 @@ const InsertMediaDialog = ({
           <div className="sense-rich-dialog-header-copy">
             <strong id={titleIdRef.current}>{kindMeta.title}</strong>
             <span id={descriptionIdRef.current} className="sense-rich-dialog-description">
-              媒体必须通过上传或 URL 引用插入；上传成功后会记录媒体元数据与 revision 引用关系。
+              插入后会自动生成“附件n”标题，默认居中独占一行；尺寸请直接拖动附件右下角，位置请使用工具栏对齐按钮调整。已保存媒体复用请改走“引用 > 引用内部多媒体”。
             </span>
           </div>
           <button ref={closeButtonRef} type="button" className="sense-rich-dialog-close" onClick={onClose} aria-label="关闭">
@@ -495,7 +422,7 @@ const InsertMediaDialog = ({
     <DialogFrame
       open={open}
       title={kindMeta.title}
-      description="媒体必须通过上传或 URL 引用插入；上传成功后会记录媒体元数据与 revision 引用关系。"
+      description="插入后会自动生成“附件n”标题，默认居中独占一行；尺寸请直接拖动附件右下角，位置请使用工具栏对齐按钮调整。已保存媒体复用请改走“引用 > 引用内部多媒体”。"
       onClose={onClose}
       footer={footer}
       wide

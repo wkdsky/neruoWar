@@ -1,15 +1,11 @@
 import React from 'react';
-import { AlertTriangle, FolderTree, HelpCircle, History, RotateCcw, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { formatAutosaveTime } from './hooks/useSenseArticleAutosave';
+import { AlertTriangle, FolderTree, HelpCircle, History, ShieldAlert, ShieldCheck } from 'lucide-react';
 
 const SenseArticleEditorStatusBand = ({
   modeLabel = '',
-  recoverableDraft = null,
   scopedLabel = '',
   validationSnapshot = null,
   mediaLibrary = null,
-  onRestoreLocalDraft,
-  onDiscardRecovery,
   onJumpToValidation,
   onJumpToMedia,
   onJumpToOutline,
@@ -49,22 +45,6 @@ const SenseArticleEditorStatusBand = ({
               <History size={14} /> 查看媒体摘要
             </button>
           </div>
-        </article>
-
-        <article className={`sense-editor-status-card ${recoverableDraft ? 'warning' : 'subtle'}`}>
-          <span className="sense-editor-status-kicker">本地恢复</span>
-          <strong>{recoverableDraft ? '检测到未同步草稿' : '无可恢复本地缓存'}</strong>
-          <span className="sense-editor-status-meta">{recoverableDraft?.savedAt ? `缓存时间：${formatAutosaveTime(recoverableDraft.savedAt)}` : '最近一次编辑内容已同步或未产生本地恢复点。'}</span>
-          {recoverableDraft ? (
-            <div className="sense-inline-link-row">
-              <button type="button" className="sense-inline-link-button" onClick={onRestoreLocalDraft}>
-                <RotateCcw size={14} /> 恢复内容
-              </button>
-              <button type="button" className="sense-inline-link-button" onClick={onDiscardRecovery}>
-                丢弃缓存
-              </button>
-            </div>
-          ) : null}
         </article>
 
         {scopedLabel ? (

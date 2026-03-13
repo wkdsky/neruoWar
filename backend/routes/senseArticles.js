@@ -22,6 +22,7 @@ const {
   reviewByDomainMaster,
   searchCurrentArticle,
   searchReferenceTargets,
+  syncMediaSession,
   submitRevision,
   touchMediaSession,
   uploadMediaAsset,
@@ -239,6 +240,22 @@ router.post('/:nodeId/:senseId/media/session/release', authenticateToken, async 
     res.json(data);
   } catch (error) {
     sendError(res, error, '释放媒体临时缓存失败');
+  }
+});
+
+router.post('/:nodeId/:senseId/media/session/sync', authenticateToken, async (req, res) => {
+  try {
+    const data = await syncMediaSession({
+      nodeId: req.params.nodeId,
+      senseId: req.params.senseId,
+      revisionId: typeof req.body?.revisionId === 'string' ? req.body.revisionId.trim() : '',
+      userId: req.user.userId,
+      tempMediaSessionId: typeof req.body?.tempMediaSessionId === 'string' ? req.body.tempMediaSessionId.trim() : '',
+      activeUrls: Array.isArray(req.body?.activeUrls) ? req.body.activeUrls : []
+    });
+    res.json(data);
+  } catch (error) {
+    sendError(res, error, '同步媒体临时缓存失败');
   }
 });
 

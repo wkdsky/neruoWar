@@ -863,11 +863,85 @@
 
 .sense-my-edit-card {
   text-align: left;
+  position: relative;
+}
+
+.sense-my-edit-card .sense-annotation-card-head {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.sense-my-edit-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: #ecfeff;
+  background: linear-gradient(180deg, rgba(14, 116, 144, 0.94) 0%, rgba(8, 47, 73, 0.98) 100%);
+  border: 1px solid rgba(103, 232, 249, 0.34);
+  box-shadow: 0 8px 18px rgba(8, 47, 73, 0.2);
+  flex-shrink: 0;
+}
+
+.sense-icon-action-button {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.96) 100%);
+  color: rgba(226, 232, 240, 0.94);
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.18);
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.sense-icon-action-button:hover,
+.sense-icon-action-button:focus-visible {
+  outline: none;
+  transform: translateY(-1px);
+  border-color: rgba(125, 211, 252, 0.46);
+  color: #f8fafc;
+  background: linear-gradient(180deg, rgba(51, 65, 85, 0.94) 0%, rgba(15, 23, 42, 0.98) 100%);
+  box-shadow: 0 14px 28px rgba(2, 6, 23, 0.24);
+}
+
+.sense-icon-action-button.danger {
+  border-color: rgba(248, 113, 113, 0.26);
+  color: #fecaca;
+  background: linear-gradient(180deg, rgba(127, 29, 29, 0.88) 0%, rgba(69, 10, 10, 0.96) 100%);
+  box-shadow: 0 10px 24px rgba(69, 10, 10, 0.18);
+}
+
+.sense-icon-action-button.danger:hover,
+.sense-icon-action-button.danger:focus-visible {
+  border-color: rgba(252, 165, 165, 0.5);
+  color: #fff1f2;
+  background: linear-gradient(180deg, rgba(153, 27, 27, 0.94) 0%, rgba(127, 29, 29, 0.98) 100%);
+  box-shadow: 0 14px 28px rgba(127, 29, 29, 0.26);
+}
+
+.sense-icon-action-button:disabled {
+  cursor: default;
+  opacity: 0.7;
+  transform: none;
+  box-shadow: 0 8px 18px rgba(2, 6, 23, 0.14);
+}
+
+.sense-icon-action-button.spinning svg {
+  animation: sense-spin 0.9s linear infinite;
 }
 
 .sense-floating-panel-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
   margin-top: 10px;
 }
 
@@ -1069,10 +1143,18 @@
   min-width: 0;
   padding: 0;
   overflow: hidden;
+  position: sticky;
+  top: calc(var(--sense-editor-sticky-offset) + var(--sense-editor-toolbar-height, 0px) + 12px);
+  align-self: start;
+  max-height: calc(100vh - var(--sense-editor-sticky-offset) - var(--sense-editor-toolbar-height, 0px) - 12px);
+  display: flex;
+  flex-direction: column;
 }
 
 .sense-editor-outline-shell {
-  height: 100%;
+  height: auto;
+  min-height: 0;
+  max-height: 100%;
   padding: 14px 12px;
   display: flex;
   flex-direction: column;
@@ -1162,6 +1244,9 @@
 
   .sense-editor-outline-pane {
     order: -1;
+    position: static;
+    top: auto;
+    max-height: none;
   }
 
   .sense-editor-legacy-renderer {
@@ -1524,7 +1609,7 @@ body.sense-editor-preview-resizing * {
 }
 
 .rich-editor-mode {
-  --sense-editor-sticky-offset: 16px;
+  --sense-editor-sticky-offset: 0px;
 }
 
 .sense-editor-metadata-card {
@@ -1653,6 +1738,34 @@ body.sense-editor-preview-resizing * {
 .sense-editor-toast.subtle {
   border-color: rgba(148, 163, 184, 0.24);
   color: #e2e8f0;
+}
+
+.sense-editor-back-to-top {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 90;
+  width: 46px;
+  height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(125, 211, 252, 0.38);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(8, 47, 73, 0.94) 0%, rgba(12, 21, 39, 0.98) 100%);
+  color: #e0f2fe;
+  box-shadow: 0 18px 36px rgba(2, 6, 23, 0.32);
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.sense-editor-back-to-top:hover,
+.sense-editor-back-to-top:focus-visible {
+  outline: none;
+  transform: translateY(-2px);
+  border-color: rgba(103, 232, 249, 0.72);
+  background: linear-gradient(180deg, rgba(14, 116, 144, 0.94) 0%, rgba(8, 47, 73, 0.98) 100%);
+  box-shadow: 0 22px 42px rgba(8, 47, 73, 0.34);
 }
 
 .sense-editor-metadata-grid {
@@ -2487,6 +2600,14 @@ body.sense-editor-preview-resizing * {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: min(100%, 480px);
+  max-width: 100%;
+  position: relative;
+}
+
+.sense-rich-editor-surface .sense-rich-figure[data-node-type="audio"],
+.sense-rich-renderer .sense-rich-figure[data-node-type="audio"] {
+  width: min(100%, 560px);
 }
 
 .sense-rich-editor-surface .sense-rich-figure.align-left,
@@ -2505,7 +2626,9 @@ body.sense-editor-preview-resizing * {
 .sense-rich-editor-surface .sense-rich-figure video,
 .sense-rich-renderer .sense-rich-figure img,
 .sense-rich-renderer .sense-rich-figure video {
+  width: 100%;
   max-width: 100%;
+  display: block;
   border-radius: 12px;
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.14);
 }
@@ -2515,11 +2638,66 @@ body.sense-editor-preview-resizing * {
   color: rgba(51, 65, 85, 0.9);
   font-size: 13px;
   text-align: center;
+  line-height: 1.5;
+}
+
+.sense-rich-editor-surface .sense-rich-attachment-label,
+.sense-rich-renderer .sense-rich-attachment-label {
+  font-weight: 600;
+}
+
+.sense-rich-editor-surface .sense-rich-attachment-title,
+.sense-rich-renderer .sense-rich-attachment-title {
+  color: rgba(71, 85, 105, 0.96);
 }
 
 .sense-rich-editor-surface .sense-rich-figure audio,
 .sense-rich-renderer .sense-rich-figure audio {
-  width: min(100%, 560px);
+  width: 100%;
+}
+
+.sense-rich-editor-surface .sense-rich-media-delete-button {
+  position: absolute;
+  top: -12px;
+  right: -12px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 244, 244, 0.96), rgba(254, 202, 202, 0.94) 32%, rgba(239, 68, 68, 0.96) 70%, rgba(185, 28, 28, 0.98) 100%);
+  color: #fff;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
+  box-shadow:
+    0 10px 24px rgba(127, 29, 29, 0.32),
+    0 2px 6px rgba(15, 23, 42, 0.16);
+  z-index: 6;
+  pointer-events: auto;
+}
+
+.sense-rich-editor-surface .sense-rich-figure:hover .sense-rich-media-delete-button,
+.sense-rich-editor-surface .sense-rich-figure.ProseMirror-selectednode .sense-rich-media-delete-button {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.sense-rich-editor-surface .sense-rich-media-delete-button:hover {
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 250, 250, 0.98), rgba(254, 226, 226, 0.96) 30%, rgba(248, 113, 113, 0.98) 68%, rgba(153, 27, 27, 1) 100%);
+  box-shadow:
+    0 14px 28px rgba(127, 29, 29, 0.38),
+    0 4px 8px rgba(15, 23, 42, 0.18);
 }
 
 .sense-rich-editor-surface .sense-rich-figure img.is-broken,
@@ -2532,6 +2710,53 @@ body.sense-editor-preview-resizing * {
     linear-gradient(45deg, rgba(148, 163, 184, 0.24) 25%, transparent 25%) 0 0/24px 24px,
     rgba(15, 23, 42, 0.06);
   border: 1px dashed rgba(148, 163, 184, 0.6);
+}
+
+.sense-rich-editor-surface .sense-rich-figure.ProseMirror-selectednode {
+  outline: 2px solid rgba(14, 116, 144, 0.45);
+  outline-offset: 4px;
+}
+
+.sense-rich-editor-surface .sense-rich-attachment-title {
+  cursor: text;
+}
+
+.sense-rich-editor-surface .sense-rich-media-resize-handle {
+  position: absolute;
+  right: -10px;
+  bottom: 28px;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0f766e, #155e75);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
+  cursor: nwse-resize;
+}
+
+.sense-rich-editor-surface .sense-rich-media-resize-handle::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  background:
+    linear-gradient(135deg, transparent 0 34%, rgba(255, 255, 255, 0.96) 34% 44%, transparent 44% 58%, rgba(255, 255, 255, 0.96) 58% 68%, transparent 68%);
+}
+
+.sense-rich-renderer .sense-rich-media-resize-handle {
+  display: none;
+}
+
+.sense-rich-renderer .sense-rich-media-delete-button {
+  display: none;
+}
+
+.sense-rich-editor-surface .sense-media-reference-link,
+.sense-rich-renderer .sense-media-reference-link {
+  color: #0f766e;
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 0.18em;
 }
 
 .sense-rich-editor-surface .sense-rich-table,
@@ -3337,7 +3562,7 @@ body.sense-editor-preview-resizing * {
 
 @media (max-width: 1080px) {
   .sense-rich-toolbar-shell {
-    top: 8px;
+    top: var(--sense-editor-sticky-offset);
   }
 
   .sense-rich-editor-commandbar-actions {

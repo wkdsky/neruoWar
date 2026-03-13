@@ -1,5 +1,11 @@
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Node } from '@tiptap/core';
 import { resolveBackendAssetUrl } from '../../../../runtimeConfig';
+import {
+  buildAttachmentCaptionChildren,
+  buildMediaAttachmentAttributes,
+  buildMediaAttachmentFigureAttrs,
+  createMediaAttachmentNodeView
+} from './mediaAttachmentSupport';
 
 const AudioNode = Node.create({
   name: 'audioNode',
@@ -9,11 +15,9 @@ const AudioNode = Node.create({
   selectable: true,
 
   addAttributes() {
-    return {
-      src: { default: '' },
-      title: { default: '' },
-      description: { default: '' }
-    };
+    return buildMediaAttachmentAttributes({
+      legacyTitleAttr: 'data-title'
+    });
   },
 
   parseHTML() {
@@ -23,68 +27,41 @@ const AudioNode = Node.create({
   },
 
   renderHTML({ HTMLAttributes }) {
-    return ['figure', mergeAttributes(HTMLAttributes, {
-      'data-node-type': 'audio',
-      class: 'sense-rich-figure align-center size-100'
-    }),
-    ['audio', {
-      src: HTMLAttributes.src || '',
-      controls: 'controls',
-      'data-title': HTMLAttributes.title || '',
-      'data-description': HTMLAttributes.description || ''
-    }],
-    ['figcaption', { class: 'sense-rich-caption' }, HTMLAttributes.title || HTMLAttributes.description || '']];
+    const figureAttrs = buildMediaAttachmentFigureAttrs({ nodeName: this.name, attrs: HTMLAttributes });
+    return ['figure', figureAttrs,
+      ['audio', {
+        src: HTMLAttributes.src || '',
+        controls: 'controls'
+      }],
+      ['figcaption', { class: 'sense-rich-caption' }, ...buildAttachmentCaptionChildren({
+        attachmentIndex: HTMLAttributes.attachmentIndex,
+        nodeName: this.name,
+        attachmentTitle: HTMLAttributes.attachmentTitle
+      })]
+    ];
   },
 
   addNodeView() {
-    return ({ node }) => {
-      const dom = document.createElement('figure');
-      const audio = document.createElement('audio');
-      const caption = document.createElement('figcaption');
-
-      dom.setAttribute('data-node-type', 'audio');
-      dom.className = 'sense-rich-figure align-center size-100';
-      dom.contentEditable = 'false';
-
-      audio.controls = true;
-      audio.setAttribute('data-title', '');
-      audio.setAttribute('data-description', '');
-
-      caption.className = 'sense-rich-caption';
-
-      const syncFromNode = (currentNode) => {
+    return ({ node, view, getPos }) => createMediaAttachmentNodeView({
+      node,
+      view,
+      getPos,
+      createMediaElement: () => {
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        return audio;
+      },
+      syncMediaElement: (audio, currentNode) => {
         const src = resolveBackendAssetUrl(currentNode?.attrs?.src || '');
-        const title = currentNode?.attrs?.title || '';
-        const description = currentNode?.attrs?.description || '';
         if (audio.getAttribute('src') !== src) {
           if (src) audio.setAttribute('src', src);
           else audio.removeAttribute('src');
         }
-        audio.setAttribute('data-title', title);
-        audio.setAttribute('data-description', description);
-        caption.textContent = title || description || '';
-      };
-
-      syncFromNode(node);
-      dom.append(audio, caption);
-
-      return {
-        dom,
-        update: (updatedNode) => {
-          if (updatedNode.type.name !== this.name) return false;
-          syncFromNode(updatedNode);
-          return true;
-        },
-        selectNode: () => {
-          dom.classList.add('ProseMirror-selectednode');
-        },
-        deselectNode: () => {
-          dom.classList.remove('ProseMirror-selectednode');
-        },
-        stopEvent: (event) => audio.contains(event.target),
-        ignoreMutation: () => true
-      };
-    };
+        audio.style.width = '100%';
+      },
+      acceptsDirectPlayback: true,
+      isResizable: false
+    });
   },
 
   addCommands() {

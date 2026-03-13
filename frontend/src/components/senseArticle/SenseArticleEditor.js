@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Send, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowUp, Send, Sparkles, Trash2 } from 'lucide-react';
 import { senseArticleApi } from '../../utils/senseArticleApi';
 import { API_BASE } from '../../runtimeConfig';
 import SenseArticlePageHeader from './SenseArticlePageHeader';
@@ -27,6 +27,7 @@ import { resolveBackendAssetUrl } from '../../runtimeConfig';
 import './SenseArticle.css';
 
 const EMPTY_REVISION = Object.freeze({});
+const EDITABLE_DRAFT_STATUSES = new Set(['draft', 'changes_requested_by_domain_admin', 'changes_requested_by_domain_master']);
 
 const extractMediaEntriesFromHtml = (html = '') => {
   if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return [];
@@ -44,6 +45,16 @@ const extractMediaEntriesFromHtml = (html = '') => {
     })
     .filter(Boolean);
   return rows.filter((item, index, array) => array.findIndex((target) => target.kind === item.kind && target.src === item.src) === index);
+};
+
+const extractMediaSourceUrlsFromHtml = (html = '') => {
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return [];
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<body>${html || ''}</body>`, 'text/html');
+  const urls = Array.from(doc.body.querySelectorAll('img, audio, video'))
+    .map((element) => String(element.getAttribute('src') || '').trim())
+    .filter(Boolean);
+  return urls.filter((item, index, array) => array.indexOf(item) === index);
 };
 
 const SenseArticleEditor = ({
@@ -71,10 +82,18 @@ const SenseArticleEditor = ({
   const [helpOpen, setHelpOpen] = useState(false);
   const [mediaLibrary, setMediaLibrary] = useState({ referencedAssets: [], recentAssets: [], orphanCandidates: [] });
   const [toast, setToast] = useState(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const [resolvedRevisionId, setResolvedRevisionId] = useState(String(revisionId || '').trim());
   const validationSectionRef = useRef(null);
   const mediaSectionRef = useRef(null);
   const toastTimerRef = useRef(0);
   const tempMediaSessionIdRef = useRef(`temp-media-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+  const draftLaunchModeRef = useRef(String(articleContext?.draftLaunchMode || '').trim());
+  const hasPersistedDraftSaveRef = useRef(String(articleContext?.draftLaunchMode || '').trim() !== 'created');
+  const latestRevisionStatusRef = useRef('');
+  const latestRevisionIdRef = useRef(String(revisionId || '').trim());
+  const hasDiscardedDraftRef = useRef(false);
+  const effectiveRevisionId = String(resolvedRevisionId || revisionId || '').trim();
 
   const pageThemeStyle = useMemo(
     () => buildSenseArticleThemeStyle(detail?.node ? { ...articleContext, node: detail.node } : articleContext),
@@ -112,10 +131,27 @@ const SenseArticleEditor = ({
   }, [mediaLibrary, normalizedEditorHtml, revision]);
 
   useEffect(() => {
+    setResolvedRevisionId(String(revisionId || '').trim());
+  }, [revisionId]);
+
+  useEffect(() => {
+    const externalLaunchMode = String(articleContext?.draftLaunchMode || '').trim();
+    if (externalLaunchMode === 'pending_full' && !revisionId) return;
+    draftLaunchModeRef.current = externalLaunchMode;
+    hasPersistedDraftSaveRef.current = draftLaunchModeRef.current !== 'created';
+    hasDiscardedDraftRef.current = false;
+  }, [articleContext?.draftLaunchMode, effectiveRevisionId, revisionId]);
+
+  useEffect(() => {
+    latestRevisionStatusRef.current = String(revision?.status || '').trim();
+    latestRevisionIdRef.current = effectiveRevisionId;
+  }, [effectiveRevisionId, revision?.status]);
+
+  useEffect(() => {
     senseEditorDebugLog('editor-page', 'SenseArticleEditor mounted', {
       nodeId,
       senseId,
-      revisionId,
+      revisionId: effectiveRevisionId,
       activeElement: describeActiveElement(),
       scroll: describeScrollPosition()
     });
@@ -123,29 +159,39 @@ const SenseArticleEditor = ({
       senseEditorDebugLog('editor-page', 'SenseArticleEditor unmounted', {
         nodeId,
         senseId,
-        revisionId,
+        revisionId: effectiveRevisionId,
         activeElement: describeActiveElement(),
         scroll: describeScrollPosition()
       });
     };
-  }, [nodeId, revisionId, senseId]);
+  }, [effectiveRevisionId, nodeId, senseId]);
 
   useEffect(() => {
     senseEditorDebugLog('editor-page', 'SenseArticleEditor key props changed', {
       nodeId,
       senseId,
-      revisionId,
+      revisionId: effectiveRevisionId,
       canEdit,
       readOnlyLegacyFallback,
       editorHtmlLength: normalizedEditorHtml.length,
       mediaAssetCount: Number((mediaLibrary?.referencedAssets || []).length) + Number((mediaLibrary?.recentAssets || []).length)
     });
-  }, [canEdit, mediaLibrary, nodeId, normalizedEditorHtml.length, readOnlyLegacyFallback, revisionId, senseId]);
+  }, [canEdit, effectiveRevisionId, mediaLibrary, nodeId, normalizedEditorHtml.length, readOnlyLegacyFallback, senseId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const updateVisibility = () => {
+      setShowBackToTop(window.scrollY > 320);
+    };
+    updateVisibility();
+    window.addEventListener('scroll', updateVisibility, { passive: true });
+    return () => window.removeEventListener('scroll', updateVisibility);
+  }, []);
 
   const loadMediaLibrary = useCallback(async () => {
-    if (!revisionId) return;
+    if (!effectiveRevisionId) return;
     try {
-      const data = await senseArticleApi.listMediaAssets(nodeId, senseId, { revisionId }, { view: 'senseArticleEditor' });
+      const data = await senseArticleApi.listMediaAssets(nodeId, senseId, { revisionId: effectiveRevisionId }, { view: 'senseArticleEditor' });
       setMediaLibrary({
         referencedAssets: Array.isArray(data?.referencedAssets) ? data.referencedAssets : [],
         recentAssets: Array.isArray(data?.recentAssets) ? data.recentAssets : [],
@@ -154,16 +200,74 @@ const SenseArticleEditor = ({
     } catch (_error) {
       setMediaLibrary({ referencedAssets: [], recentAssets: [], orphanCandidates: [] });
     }
+  }, [effectiveRevisionId, nodeId, senseId]);
+
+  useEffect(() => {
+    const incomingRevisionId = String(revisionId || '').trim();
+    if (incomingRevisionId) return undefined;
+    let cancelled = false;
+
+    const resolveFullDraft = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const overview = await senseArticleApi.getOverview(nodeId, senseId, { view: 'senseArticleEditor' });
+        if (cancelled) return;
+        const latestDraftRevisionId = String(overview?.article?.latestDraftRevisionId || '').trim();
+        if (latestDraftRevisionId) {
+          try {
+            const detail = await senseArticleApi.getRevisionDetail(nodeId, senseId, latestDraftRevisionId, { view: 'senseArticleEditor' });
+            if (cancelled) return;
+            const nextRevision = detail?.revision || null;
+            const currentUserId = String(detail?.permissions?.currentUserId || localStorage.getItem('userId') || '').trim();
+            const isMineOrAdmin = !!detail?.permissions?.isSystemAdmin || String(nextRevision?.proposerId || '').trim() === currentUserId;
+            const isReusableFullDraft = String(nextRevision?.sourceMode || 'full').trim() === 'full'
+              && EDITABLE_DRAFT_STATUSES.has(String(nextRevision?.status || '').trim());
+            if (nextRevision?._id && isMineOrAdmin && isReusableFullDraft) {
+              draftLaunchModeRef.current = 'reused';
+              hasPersistedDraftSaveRef.current = true;
+              hasDiscardedDraftRef.current = false;
+              setResolvedRevisionId(latestDraftRevisionId);
+              return;
+            }
+          } catch (_detailError) {
+            // Fallback to creating a new draft when the current latest draft is not reusable by this user.
+          }
+        }
+        const data = await senseArticleApi.createDraft(nodeId, senseId, {
+          proposerNote: '整页百科修订草稿',
+          contentFormat: 'rich_html'
+        }, {
+          view: 'senseArticleEditor'
+        });
+        if (cancelled) return;
+        draftLaunchModeRef.current = 'created';
+        hasPersistedDraftSaveRef.current = false;
+        hasDiscardedDraftRef.current = false;
+        setResolvedRevisionId(String(data?.revision?._id || '').trim());
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(requestError);
+          setLoading(false);
+        }
+      }
+    };
+
+    resolveFullDraft();
+    return () => {
+      cancelled = true;
+    };
   }, [nodeId, revisionId, senseId]);
 
   useEffect(() => {
+    if (!effectiveRevisionId) return undefined;
     const controller = new AbortController();
 
     const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        const data = await senseArticleApi.getRevisionDetail(nodeId, senseId, revisionId, {
+        const data = await senseArticleApi.getRevisionDetail(nodeId, senseId, effectiveRevisionId, {
           signal: controller.signal,
           view: 'senseArticleEditor'
         });
@@ -203,7 +307,7 @@ const SenseArticleEditor = ({
 
     load();
     return () => controller.abort();
-  }, [nodeId, revisionId, senseId]);
+  }, [effectiveRevisionId, nodeId, senseId]);
 
   useEffect(() => {
     if (!detail) return;
@@ -213,8 +317,8 @@ const SenseArticleEditor = ({
       senseId,
       articleId: detail.article?._id || articleContext?.articleId || '',
       currentRevisionId: detail.article?.currentRevisionId || articleContext?.currentRevisionId || '',
-      selectedRevisionId: nextRevision._id || revisionId,
-      revisionId: nextRevision._id || revisionId,
+      selectedRevisionId: nextRevision._id || effectiveRevisionId,
+      revisionId: nextRevision._id || effectiveRevisionId,
       revisionStatus: nextRevision.status || '',
       nodeName: detail.node?.name || articleContext?.nodeName || '',
       senseTitle: detail.nodeSense?.title || articleContext?.senseTitle || senseId,
@@ -226,7 +330,7 @@ const SenseArticleEditor = ({
         revisionTitle: getRevisionDisplayTitle(nextRevision)
       })
     });
-  }, [articleContext, detail, nodeId, onContextPatch, revisionId, senseId]);
+  }, [articleContext, detail, effectiveRevisionId, nodeId, onContextPatch, senseId]);
 
   const scopedFocus = useMemo(() => {
     const selectionText = revision?.selectedRangeAnchor?.selectionText || revision?.selectedRangeAnchor?.textQuote || '';
@@ -267,6 +371,7 @@ const SenseArticleEditor = ({
 
   const applySavedRevision = useCallback((data, fallbackSnapshot = snapshot) => {
     if (!data?.revision) return;
+    hasPersistedDraftSaveRef.current = true;
     setDetail((prev) => ({
       ...(prev || {}),
       revision: {
@@ -289,12 +394,12 @@ const SenseArticleEditor = ({
   const autosave = useSenseArticleAutosave({
     nodeId,
     senseId,
-    revisionId,
+    revisionId: effectiveRevisionId,
     snapshot,
     revisionVersion: Number(revision?.revisionVersion || 0),
     initialLastSavedAt: revision?.updatedAt || null,
     enabled: !loading && canEdit && !readOnlyLegacyFallback,
-    onSave: async ({ snapshot: nextSnapshot, expectedRevisionVersion }) => senseArticleApi.updateDraft(nodeId, senseId, revisionId, {
+    onSave: async ({ snapshot: nextSnapshot, expectedRevisionVersion }) => senseArticleApi.updateDraft(nodeId, senseId, effectiveRevisionId, {
       ...nextSnapshot,
       expectedRevisionVersion,
       tempMediaSessionId: tempMediaSessionIdRef.current
@@ -331,24 +436,24 @@ const SenseArticleEditor = ({
     enabled: autosave.isDirty || autosave.status === 'saving'
   });
 
-  const handleRestoreLocalDraft = useCallback(() => {
-    const localDraft = autosave.restoreLocalDraft();
-    if (!localDraft) return;
-    setEditorHtml(localDraft.editorSource || '<p></p>');
-    setRevisionTitle(localDraft.revisionTitle || revisionTitle);
-    setNote(localDraft.proposerNote || '');
-    setSenseTitle(localDraft.proposedSenseTitle || senseTitle);
-    showToast(`已恢复本地缓存内容（${formatAutosaveTime(autosave.recoverableDraft?.savedAt)} 保存）。`, 'success');
-  }, [autosave, revisionTitle, senseTitle, showToast]);
-
   const jumpToSection = useCallback((ref) => {
     ref?.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   }, []);
 
   const handleBack = useCallback(() => {
     if (!confirmNavigation()) return;
-    onBack && onBack();
-  }, [confirmNavigation, onBack]);
+    onBack && onBack({
+      action: 'returnFromEditor',
+      revisionId: effectiveRevisionId,
+      hasPersistedDraftSave: hasPersistedDraftSaveRef.current,
+      wasDiscarded: hasDiscardedDraftRef.current
+    });
+  }, [confirmNavigation, effectiveRevisionId, onBack]);
+
+  const handleBackToTop = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
 
   const saveDraft = async () => {
     if (!detail || readOnlyLegacyFallback) return;
@@ -372,11 +477,10 @@ const SenseArticleEditor = ({
       return;
     }
     try {
-      const data = await senseArticleApi.submitRevision(nodeId, senseId, revisionId, {
+      const data = await senseArticleApi.submitRevision(nodeId, senseId, effectiveRevisionId, {
         view: 'senseArticleEditor'
       });
-      autosave.clearLocalBackup();
-      onSubmitted && onSubmitted(data?.revision || { _id: revisionId, status: 'pending_review' });
+      onSubmitted && onSubmitted(data?.revision || { _id: effectiveRevisionId, status: 'pending_review' });
     } catch (requestError) {
       const validation = requestError?.payload?.details?.validation || requestError?.payload?.validation || null;
       if (validation) {
@@ -399,10 +503,11 @@ const SenseArticleEditor = ({
     if (!window.confirm('确定放弃当前修订草稿？')) return;
     setAbandoning(true);
     try {
-      await senseArticleApi.deleteDraft(nodeId, senseId, revisionId);
-      autosave.clearLocalBackup();
+      hasDiscardedDraftRef.current = true;
+      await senseArticleApi.deleteDraft(nodeId, senseId, effectiveRevisionId);
       onBack && onBack();
     } catch (requestError) {
+      hasDiscardedDraftRef.current = false;
       showToast(requestError.message || '放弃失败', 'danger');
     } finally {
       setAbandoning(false);
@@ -412,7 +517,7 @@ const SenseArticleEditor = ({
   const uploadMedia = async (payload) => {
     const response = await senseArticleApi.uploadMedia(nodeId, senseId, {
       ...payload,
-      revisionId,
+      revisionId: effectiveRevisionId,
       tempMediaSessionId: tempMediaSessionIdRef.current
     });
     setMediaLibrary((prev) => ({
@@ -426,7 +531,7 @@ const SenseArticleEditor = ({
     if (!canEdit || readOnlyLegacyFallback) return undefined;
     const intervalId = window.setInterval(() => {
       senseArticleApi.touchMediaSession(nodeId, senseId, {
-        revisionId,
+        revisionId: effectiveRevisionId,
         tempMediaSessionId: tempMediaSessionIdRef.current
       }, {
         view: 'senseArticleEditor',
@@ -436,7 +541,63 @@ const SenseArticleEditor = ({
       }).catch(() => {});
     }, 2 * 60 * 1000);
     return () => window.clearInterval(intervalId);
-  }, [canEdit, nodeId, readOnlyLegacyFallback, revisionId, senseId]);
+  }, [canEdit, effectiveRevisionId, nodeId, readOnlyLegacyFallback, senseId]);
+
+  useEffect(() => () => {
+    const launchMode = draftLaunchModeRef.current;
+    const saved = hasPersistedDraftSaveRef.current;
+    const discarded = hasDiscardedDraftRef.current;
+    const currentRevisionStatus = latestRevisionStatusRef.current;
+    const currentRevisionId = latestRevisionIdRef.current;
+    if (launchMode !== 'created' || saved || discarded || !currentRevisionId || !EDITABLE_DRAFT_STATUSES.has(currentRevisionStatus)) {
+      return;
+    }
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    hasDiscardedDraftRef.current = true;
+    window.fetch(`${API_BASE}/sense-articles/${encodeURIComponent(nodeId)}/${encodeURIComponent(senseId)}/revisions/${encodeURIComponent(currentRevisionId)}`, {
+      method: 'DELETE',
+      keepalive: true,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    }).catch(() => {
+      hasDiscardedDraftRef.current = false;
+    });
+  }, [nodeId, senseId]);
+
+  useEffect(() => {
+    if (!canEdit || readOnlyLegacyFallback) return undefined;
+    const temporaryRecentAssets = Array.isArray(mediaLibrary?.recentAssets)
+      ? mediaLibrary.recentAssets.filter((item) => item?.isTemporary)
+      : [];
+    if (temporaryRecentAssets.length === 0) return undefined;
+    const activeUrls = extractMediaSourceUrlsFromHtml(normalizedEditorHtml);
+    const timeoutId = window.setTimeout(() => {
+      senseArticleApi.syncMediaSession(nodeId, senseId, {
+        revisionId: effectiveRevisionId,
+        tempMediaSessionId: tempMediaSessionIdRef.current,
+        activeUrls
+      }, {
+        view: 'senseArticleEditor'
+      }).then((data) => {
+        const deletedIdSet = new Set((Array.isArray(data?.deletedAssetIds) ? data.deletedAssetIds : []).map((item) => String(item)));
+        const deletedUrlSet = new Set((Array.isArray(data?.deletedUrls) ? data.deletedUrls : []).map((item) => String(item)));
+        if (deletedIdSet.size === 0 && deletedUrlSet.size === 0) return;
+        setMediaLibrary((prev) => ({
+          ...prev,
+          recentAssets: Array.isArray(prev?.recentAssets)
+            ? prev.recentAssets.filter((item) => !deletedIdSet.has(String(item?._id || '')) && !deletedUrlSet.has(String(item?.url || '')))
+            : [],
+          orphanCandidates: Array.isArray(prev?.orphanCandidates)
+            ? prev.orphanCandidates.filter((item) => !deletedIdSet.has(String(item?._id || '')) && !deletedUrlSet.has(String(item?.url || '')))
+            : []
+        }));
+      }).catch(() => {});
+    }, 1000);
+    return () => window.clearTimeout(timeoutId);
+  }, [canEdit, effectiveRevisionId, mediaLibrary?.recentAssets, nodeId, normalizedEditorHtml, readOnlyLegacyFallback, senseId]);
 
   useEffect(() => {
     if (!canEdit || readOnlyLegacyFallback) return undefined;
@@ -451,7 +612,7 @@ const SenseArticleEditor = ({
           Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
-          revisionId,
+          revisionId: effectiveRevisionId,
           tempMediaSessionId: tempMediaSessionIdRef.current
         })
       }).catch(() => {});
@@ -468,7 +629,7 @@ const SenseArticleEditor = ({
       window.removeEventListener('beforeunload', handlePageHide);
       releaseSession(false);
     };
-  }, [canEdit, nodeId, readOnlyLegacyFallback, revisionId, senseId]);
+  }, [canEdit, effectiveRevisionId, nodeId, readOnlyLegacyFallback, senseId]);
 
   const validationSnapshot = revision?.validationSnapshot || null;
   const statusNotices = useMemo(() => {
@@ -485,7 +646,8 @@ const SenseArticleEditor = ({
   }, [conversionWarning, readOnlyLegacyFallback]);
 
   if (loading) {
-    return <div className="sense-article-page" style={pageThemeStyle}><SenseArticleStateView kind="loading" title="正在加载编辑页" description="正在读取修订内容与当前权限。" /></div>;
+    const isResolvingDraft = !effectiveRevisionId;
+    return <div className="sense-article-page" style={pageThemeStyle}><SenseArticleStateView kind="loading" title={isResolvingDraft ? '正在准备编辑草稿' : '正在加载编辑页'} description={isResolvingDraft ? '正在检查可复用草稿；如无可复用草稿，将自动创建新的整页草稿。' : '正在读取修订内容与当前权限。'} /></div>;
   }
   if (error) {
     const state = resolveSenseArticleStateFromError(error, {
@@ -539,12 +701,9 @@ const SenseArticleEditor = ({
       <div className="sense-editor-metadata-card">
         <SenseArticleEditorStatusBand
           modeLabel={modeLabel}
-          recoverableDraft={autosave.recoverableDraft}
           scopedLabel={revision.sourceMode !== 'full' ? `${getSourceModeLabel(revision.sourceMode)}发起的局部修订` : ''}
           validationSnapshot={validationSnapshot}
           mediaLibrary={mediaLibrary}
-          onRestoreLocalDraft={handleRestoreLocalDraft}
-          onDiscardRecovery={autosave.discardRecovery}
           onJumpToValidation={() => jumpToSection(validationSectionRef)}
           onJumpToMedia={() => jumpToSection(mediaSectionRef)}
           onJumpToOutline={() => document.querySelector('.sense-editor-outline-card')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })}
@@ -625,6 +784,17 @@ const SenseArticleEditor = ({
             {toast.message}
           </div>
         </div>
+      ) : null}
+      {showBackToTop ? (
+        <button
+          type="button"
+          className="sense-editor-back-to-top"
+          onClick={handleBackToTop}
+          aria-label="回到顶部"
+          title="回到顶部"
+        >
+          <ArrowUp size={18} />
+        </button>
       ) : null}
       <SenseArticleEditorHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>

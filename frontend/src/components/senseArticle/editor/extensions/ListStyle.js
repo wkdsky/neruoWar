@@ -32,7 +32,12 @@ const RichBulletList = BulletList.extend({
   addCommands() {
     return {
       ...this.parent?.(),
-      setBulletListStyle: (listStyleType = 'disc') => ({ chain }) => chain().toggleBulletList().updateAttributes('bulletList', { listStyleType }).run()
+      setBulletListStyle: (listStyleType = 'disc') => ({ chain, editor }) => {
+        if (editor.isActive('bulletList')) {
+          return chain().updateAttributes('bulletList', { listStyleType }).run();
+        }
+        return chain().toggleBulletList().updateAttributes('bulletList', { listStyleType }).run();
+      }
     };
   }
 });
@@ -55,7 +60,12 @@ const RichOrderedList = OrderedList.extend({
   addCommands() {
     return {
       ...this.parent?.(),
-      setOrderedListStyle: (listStyleType = 'decimal') => ({ chain }) => chain().toggleOrderedList().updateAttributes('orderedList', { listStyleType }).run()
+      setOrderedListStyle: (listStyleType = 'decimal') => ({ chain, editor }) => {
+        if (editor.isActive('orderedList')) {
+          return chain().updateAttributes('orderedList', { listStyleType }).run();
+        }
+        return chain().toggleOrderedList().updateAttributes('orderedList', { listStyleType }).run();
+      }
     };
   }
 });

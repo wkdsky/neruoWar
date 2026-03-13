@@ -22,21 +22,35 @@ const uniqueBy = (rows = [], buildKey = (item) => item) => {
 
 const normalizeUrl = (value = '') => String(value || '').trim();
 
+const extractAttachmentTitleFromCaption = (value = '') => {
+  const source = String(value || '').trim();
+  if (!source) return '';
+  const match = source.match(/^附件\d+（[^）]+）\s*(.*)$/);
+  return match ? String(match[1] || '').trim() : source;
+};
+
 const extractMediaAttributesFromFigure = (figureHtml = '', fallback = {}) => {
   if (!figureHtml) return null;
   try {
     const root = parse(figureHtml);
     const targetTag = ['img', 'audio', 'video'].find((tagName) => !!root.querySelector(tagName));
     if (!targetTag) return null;
+    const figure = root.querySelector('figure') || root;
     const mediaElement = root.querySelector(targetTag);
     const caption = root.querySelector('figcaption')?.text?.trim?.() || fallback.caption || '';
-    const width = Number.parseInt(String(mediaElement.getAttribute('width') || fallback.width || '').replace(/[^\d]/g, ''), 10) || null;
+    const width = Number.parseInt(String(
+      figure.getAttribute('data-media-width')
+      || figure.getAttribute('style')
+      || mediaElement.getAttribute('width')
+      || fallback.width
+      || ''
+    ).replace(/[^\d]/g, ''), 10) || null;
     return {
       kind: MEDIA_TAG_TO_KIND[targetTag] || fallback.kind || '',
       url: normalizeUrl(mediaElement.getAttribute('src') || fallback.url || ''),
       alt: normalizeUrl(mediaElement.getAttribute('alt') || fallback.alt || ''),
       caption,
-      title: normalizeUrl(mediaElement.getAttribute('data-title') || fallback.title || ''),
+      title: normalizeUrl(figure.getAttribute('data-attachment-title') || mediaElement.getAttribute('data-title') || fallback.title || extractAttachmentTitleFromCaption(caption)),
       description: normalizeUrl(mediaElement.getAttribute('data-description') || fallback.description || ''),
       posterUrl: normalizeUrl(mediaElement.getAttribute('poster') || fallback.posterUrl || ''),
       width

@@ -4,10 +4,12 @@ import {
   AlignJustify,
   AlignLeft,
   AlignRight,
+  Check,
   CheckSquare,
   ChevronDown,
   Eraser,
   FileCode2,
+  FileText,
   Heading,
   Image as ImageIcon,
   Indent,
@@ -24,6 +26,7 @@ import {
   Video
 } from 'lucide-react';
 import { useEditorState } from '@tiptap/react';
+import { resolveBackendAssetUrl } from '../../../runtimeConfig';
 import ToolbarButton from './ToolbarButton';
 import ToolbarGroup from './ToolbarGroup';
 import InsertLinkDialog from './dialogs/InsertLinkDialog';
@@ -32,6 +35,7 @@ import InsertMediaDialog from './dialogs/InsertMediaDialog';
 import ImportMarkdownDialog from './dialogs/ImportMarkdownDialog';
 import TextColorPopover from './dialogs/TextColorPopover';
 import { FONT_SIZE_PRESETS, normalizeFontSize } from './extensions/FontSize';
+import { buildAttachmentCaptionText, resolveAttachmentReferenceText } from './extensions/mediaAttachmentFormat';
 import { buildTableWidthPayload } from './table/tableWidthUtils';
 import { applyAttrsToSelectedTableCells, getTableSelectionState, isCellSelection } from './table/tableSelectionState';
 import {
@@ -42,6 +46,70 @@ import {
 } from './editorDebug';
 
 const buttonLabel = (label, icon) => (<>{icon}<span>{label}</span></>);
+const menuButtonLabel = (label, icon) => (<>{icon}<span>{label}</span><ChevronDown size={14} /></>);
+
+const MEDIA_KIND_BY_NODE_NAME = {
+  figureImage: 'image',
+  audioNode: 'audio',
+  videoNode: 'video'
+};
+
+const BULLET_LIST_STYLE_OPTIONS = [
+  { value: 'disc', label: '实心圆点' },
+  { value: 'circle', label: '空心圆点' },
+  { value: 'square', label: '方形圆点' }
+];
+
+const ORDERED_LIST_STYLE_OPTIONS = [
+  { value: 'decimal', label: '1. 2. 3.' },
+  { value: 'decimal-leading-zero', label: '01. 02. 03.' },
+  { value: 'lower-alpha', label: 'a. b. c.' },
+  { value: 'lower-roman', label: 'i. ii. iii.' }
+];
+
+const collectSavedMediaAttachments = (editor, mediaLibrary = null) => {
+  if (!editor?.state?.doc?.descendants) return [];
+  const savedAssets = Array.isArray(mediaLibrary?.referencedAssets) ? mediaLibrary.referencedAssets : [];
+  const assetById = new Map();
+  const assetByUrl = new Map();
+  savedAssets.forEach((asset) => {
+    const assetId = String(asset?._id || '').trim();
+    const resolvedUrl = resolveBackendAssetUrl(asset?.url || asset?.src || '');
+    if (assetId && !assetById.has(assetId)) assetById.set(assetId, asset);
+    if (resolvedUrl && !assetByUrl.has(resolvedUrl)) assetByUrl.set(resolvedUrl, asset);
+  });
+
+  const rows = [];
+  editor.state.doc.descendants((node) => {
+    const nodeName = String(node?.type?.name || '').trim();
+    const kind = MEDIA_KIND_BY_NODE_NAME[nodeName];
+    if (!kind) return;
+    const resolvedSrc = resolveBackendAssetUrl(node?.attrs?.src || '');
+    const assetId = String(node?.attrs?.assetId || '').trim();
+    const savedAsset = (assetId && assetById.get(assetId)) || (resolvedSrc && assetByUrl.get(resolvedSrc)) || null;
+    if (!savedAsset) return;
+    const attachmentIndex = Number(node?.attrs?.attachmentIndex || 0);
+    const attachmentId = String(node?.attrs?.attachmentId || '').trim();
+    const attachmentTitle = String(node?.attrs?.attachmentTitle || savedAsset?.title || savedAsset?.originalName || '').trim();
+    rows.push({
+      key: attachmentId || `${kind}:${savedAsset?._id || resolvedSrc}:${rows.length + 1}`,
+      kind,
+      assetId: assetId || String(savedAsset?._id || ''),
+      attachmentId,
+      attachmentIndex: attachmentIndex || rows.length + 1,
+      attachmentTitle,
+      displayLabel: buildAttachmentCaptionText({
+        attachmentIndex: attachmentIndex || rows.length + 1,
+        nodeName,
+        attachmentTitle
+      }),
+      statusLabel: `${savedAsset?.mimeType || kind} · 已保存于正文`,
+      isSaved: true
+    });
+  });
+
+  return rows.sort((left, right) => Number(left.attachmentIndex || 0) - Number(right.attachmentIndex || 0));
+};
 
 const RichToolbar = ({
   editor,
@@ -51,14 +119,19 @@ const RichToolbar = ({
   onImportMarkdown = null,
   dialogPortalTarget = null
 }) => {
-  const [linkDialogMode, setLinkDialogMode] = useState('');
+  const [referenceDialogMode, setReferenceDialogMode] = useState('');
   const [mediaDialogKind, setMediaDialogKind] = useState('');
+  const [toolbarMenu, setToolbarMenu] = useState('');
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [markdownDialogOpen, setMarkdownDialogOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
   const [fontSizeInput, setFontSizeInput] = useState('16');
   const colorPopoverRef = useRef(null);
   const mediaToolbarGroupRef = useRef(null);
+  const mediaMenuAnchorRef = useRef(null);
+  const referenceMenuAnchorRef = useRef(null);
+  const bulletListMenuAnchorRef = useRef(null);
+  const orderedListMenuAnchorRef = useRef(null);
   const preservedSelectionBookmarkRef = useRef(null);
   const preservedCellSelectionRef = useRef(null);
   const preservedTextRef = useRef('');
@@ -93,6 +166,9 @@ const RichToolbar = ({
 
   const activeFontSize = editorUiState?.activeFontSize || '16px';
   const tableSelectionState = editorUiState?.tableSelectionState || {};
+  const mediaAttachments = collectSavedMediaAttachments(editor, mediaLibrary);
+  const activeBulletListStyle = editor.getAttributes('bulletList')?.listStyleType || 'disc';
+  const activeOrderedListStyle = editor.getAttributes('orderedList')?.listStyleType || 'decimal';
 
   useEffect(() => {
     setFontSizeInput(String(activeFontSize).replace(/px$/, ''));
@@ -118,6 +194,30 @@ const RichToolbar = ({
   }, [colorOpen]);
 
   useEffect(() => {
+    if (!toolbarMenu) return undefined;
+    const handlePointerDown = (event) => {
+      const mediaMenuOpen = toolbarMenu === 'media';
+      const referenceMenuOpen = toolbarMenu === 'reference';
+      const bulletListMenuOpen = toolbarMenu === 'bullet-list';
+      const orderedListMenuOpen = toolbarMenu === 'ordered-list';
+      if (mediaMenuOpen && mediaMenuAnchorRef.current?.contains(event.target)) return;
+      if (referenceMenuOpen && referenceMenuAnchorRef.current?.contains(event.target)) return;
+      if (bulletListMenuOpen && bulletListMenuAnchorRef.current?.contains(event.target)) return;
+      if (orderedListMenuOpen && orderedListMenuAnchorRef.current?.contains(event.target)) return;
+      setToolbarMenu('');
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setToolbarMenu('');
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [toolbarMenu]);
+
+  useEffect(() => {
     if (!editor) return;
     senseEditorDebugLog('toolbar', 'Media dialog state changed', {
       mediaDialogKind: mediaDialogKind || '',
@@ -132,8 +232,9 @@ const RichToolbar = ({
 
   const closeFloatingUi = () => {
     setColorOpen(false);
-    setLinkDialogMode('');
+    setReferenceDialogMode('');
     setMediaDialogKind('');
+    setToolbarMenu('');
     setTableDialogOpen(false);
     setMarkdownDialogOpen(false);
   };
@@ -265,6 +366,19 @@ const RichToolbar = ({
 
   const applyAlignment = (value) => {
     restoreSelectionFromBookmark();
+    const normalizedValue = value === 'justify' ? 'center' : value;
+    if (editor.isActive('figureImage')) {
+      chainWithPreservedSelection().updateFigureImage({ align: normalizedValue }).run();
+      return;
+    }
+    if (editor.isActive('audioNode')) {
+      chainWithPreservedSelection().updateAudioNode({ align: normalizedValue }).run();
+      return;
+    }
+    if (editor.isActive('videoNode')) {
+      chainWithPreservedSelection().updateVideoNode({ align: normalizedValue }).run();
+      return;
+    }
     const latestTableSelectionState = getTableSelectionState(editor);
     if (latestTableSelectionState?.isTableActive) {
       if (latestTableSelectionState.isEntireTableSelected) {
@@ -285,6 +399,14 @@ const RichToolbar = ({
   };
 
   const isAlignmentActive = (value) => {
+    if (editor.isActive('figureImage') || editor.isActive('audioNode') || editor.isActive('videoNode')) {
+      const activeAttrs = editor.isActive('figureImage')
+        ? editor.getAttributes('figureImage')
+        : editor.isActive('audioNode')
+          ? editor.getAttributes('audioNode')
+          : editor.getAttributes('videoNode');
+      return String(activeAttrs?.align || 'center') === (value === 'justify' ? 'center' : value);
+    }
     if (tableSelectionState?.isTableActive) {
       if (tableSelectionState.isEntireTableSelected) {
         if (value === 'justify') {
@@ -310,6 +432,20 @@ const RichToolbar = ({
     editor.chain().focus().setMark(markName, attrs).run();
   };
 
+  const applyStandardLink = ({ href, target = '_blank', rel = null, className = '', text = '' }) => {
+    const attrs = {
+      href,
+      target,
+      rel,
+      class: className || null
+    };
+    if (editor.state.selection.empty) {
+      insertOrUpdateMarkedText('link', attrs, text || href);
+      return;
+    }
+    chainWithPreservedSelection().extendMarkRange('link').setLink(attrs).run();
+  };
+
   const handleParagraphChange = (value) => {
     runWithPreservedSelection((chain) => {
       if (value === 'paragraph') return chain.clearNodes().setParagraph().run();
@@ -331,16 +467,33 @@ const RichToolbar = ({
 
   const handleLinkSubmit = (payload) => {
     if (payload.type === 'external') {
-      const attrs = {
+      applyStandardLink({
         href: payload.href,
         target: payload.target,
-        rel: payload.target === '_blank' ? 'noopener noreferrer nofollow' : null
+        rel: payload.target === '_blank' ? 'noopener noreferrer nofollow' : null,
+        text: payload.displayText || payload.href
+      });
+    } else if (payload.type === 'literature') {
+      applyStandardLink({
+        href: payload.href,
+        target: payload.target,
+        rel: payload.target === '_blank' ? 'noopener noreferrer nofollow' : null,
+        className: 'sense-literature-reference',
+        text: payload.displayText || payload.title || payload.href
+      });
+    } else if (payload.type === 'media') {
+      const attrs = {
+        assetId: payload.assetId || '',
+        attachmentId: payload.attachmentId || '',
+        attachmentIndex: payload.attachmentIndex ?? null,
+        displayText: resolveAttachmentReferenceText(payload.attachmentIndex),
+        href: payload.attachmentId ? `#${payload.attachmentId}` : '#'
       };
-      if (editor.state.selection.empty) {
-        insertOrUpdateMarkedText('link', attrs, payload.href);
-      } else {
-        chainWithPreservedSelection().extendMarkRange('link').setLink(attrs).run();
-      }
+      chainWithPreservedSelection().insertContent({
+        type: 'text',
+        text: resolveAttachmentReferenceText(payload.attachmentIndex),
+        marks: [{ type: 'mediaAttachmentReference', attrs }]
+      }).run();
     } else {
       const attrs = {
         nodeId: payload.nodeId,
@@ -448,6 +601,20 @@ const RichToolbar = ({
     });
   };
 
+  const closeReferenceDialog = (reason = 'cancel') => {
+    setReferenceDialogMode('');
+    window.requestAnimationFrame(() => {
+      restoreSelection();
+      senseEditorDebugLog('toolbar', 'Reference dialog closed', {
+        reason,
+        activeElementAfter: describeActiveElement(),
+        scrollAfter: describeScrollPosition(),
+        selectionAfter: describeEditorSelection(editor),
+        editorFocused: editor.isFocused
+      });
+    });
+  };
+
   const applyIndentChange = (direction = 'increase') => {
     restoreSelectionFromBookmark();
     if (editor.isActive('listItem')) {
@@ -464,6 +631,26 @@ const RichToolbar = ({
       return;
     }
     runWithPreservedSelection((chain) => chain.decreaseIndent().run());
+  };
+
+  const toggleToolbarMenu = (menuName) => {
+    preserveSelection();
+    setColorOpen(false);
+    setReferenceDialogMode('');
+    setMediaDialogKind('');
+    setTableDialogOpen(false);
+    setMarkdownDialogOpen(false);
+    setToolbarMenu((prev) => (prev === menuName ? '' : menuName));
+  };
+
+  const applyBulletListStyle = (styleValue) => {
+    runWithPreservedSelection((chain) => chain.setBulletListStyle(styleValue).run());
+    setToolbarMenu('');
+  };
+
+  const applyOrderedListStyle = (styleValue) => {
+    runWithPreservedSelection((chain) => chain.setOrderedListStyle(styleValue).run());
+    setToolbarMenu('');
   };
 
   return (
@@ -543,10 +730,11 @@ const RichToolbar = ({
           <div className="sense-rich-toolbar-color">
             <ToolbarButton title="文字颜色与高亮" active={colorOpen} onClick={() => {
               preserveSelection();
-              setLinkDialogMode('');
+              setReferenceDialogMode('');
               setMediaDialogKind('');
               setTableDialogOpen(false);
               setMarkdownDialogOpen(false);
+              setToolbarMenu('');
               setColorOpen((prev) => !prev);
             }} ariaLabel="打开文字颜色与高亮设置">颜色</ToolbarButton>
             <div ref={colorPopoverRef}>
@@ -573,45 +761,119 @@ const RichToolbar = ({
         </ToolbarGroup>
 
         <ToolbarGroup title="列表">
-          <ToolbarButton title="无序列表" active={editor.isActive('bulletList')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.setBulletListStyle('disc').run())}>{buttonLabel('无序', <List size={16} />)}</ToolbarButton>
-          <ToolbarButton title="有序列表" active={editor.isActive('orderedList')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.setOrderedListStyle('decimal').run())}>{buttonLabel('有序', <ListOrdered size={16} />)}</ToolbarButton>
-          <ToolbarButton title="任务列表" active={editor.isActive('taskList')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleTaskList().run())}>{buttonLabel('任务', <CheckSquare size={16} />)}</ToolbarButton>
-          <div className="sense-rich-toolbar-select compact">
-            <ListOrdered size={16} className="sense-rich-select-leading-icon" />
-            <select
-              aria-label="列表样式"
-              value={editor.getAttributes('bulletList')?.listStyleType || editor.getAttributes('orderedList')?.listStyleType || 'disc'}
+          <div ref={bulletListMenuAnchorRef} className="sense-table-menu-anchor">
+            <ToolbarButton
+              title="无序列表"
+              active={editor.isActive('bulletList') || toolbarMenu === 'bullet-list'}
               onMouseDownCapture={preserveSelection}
-              onChange={(event) => {
-                const value = event.target.value;
-                if (['disc', 'circle', 'square'].includes(value)) {
-                  runWithPreservedSelection((chain) => chain.setBulletListStyle(value).run());
-                  return;
-                }
-                runWithPreservedSelection((chain) => chain.setOrderedListStyle(value).run());
-              }}
+              onClick={() => toggleToolbarMenu('bullet-list')}
             >
-              <option value="disc">disc</option>
-              <option value="circle">circle</option>
-              <option value="square">square</option>
-              <option value="decimal">decimal</option>
-              <option value="decimal-leading-zero">leading-zero</option>
-              <option value="lower-alpha">lower-alpha</option>
-              <option value="lower-roman">lower-roman</option>
-            </select>
-            <ChevronDown size={14} />
+              {menuButtonLabel('无序', <List size={16} />)}
+            </ToolbarButton>
+            {toolbarMenu === 'bullet-list' ? (
+              <div className="sense-table-menu-panel" role="menu" aria-label="无序列表样式菜单">
+                {BULLET_LIST_STYLE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`sense-table-menu-item${editor.isActive('bulletList') && activeBulletListStyle === option.value ? ' checked' : ''}`}
+                    onClick={() => applyBulletListStyle(option.value)}
+                  >
+                    <span className="sense-table-menu-check">{editor.isActive('bulletList') && activeBulletListStyle === option.value ? <Check size={14} /> : null}</span>
+                    <span>{option.label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
+          <div ref={orderedListMenuAnchorRef} className="sense-table-menu-anchor">
+            <ToolbarButton
+              title="有序列表"
+              active={editor.isActive('orderedList') || toolbarMenu === 'ordered-list'}
+              onMouseDownCapture={preserveSelection}
+              onClick={() => toggleToolbarMenu('ordered-list')}
+            >
+              {menuButtonLabel('有序', <ListOrdered size={16} />)}
+            </ToolbarButton>
+            {toolbarMenu === 'ordered-list' ? (
+              <div className="sense-table-menu-panel" role="menu" aria-label="有序列表样式菜单">
+                {ORDERED_LIST_STYLE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`sense-table-menu-item${editor.isActive('orderedList') && activeOrderedListStyle === option.value ? ' checked' : ''}`}
+                    onClick={() => applyOrderedListStyle(option.value)}
+                  >
+                    <span className="sense-table-menu-check">{editor.isActive('orderedList') && activeOrderedListStyle === option.value ? <Check size={14} /> : null}</span>
+                    <span>{option.label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <ToolbarButton title="任务列表" active={editor.isActive('taskList')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleTaskList().run())}>{buttonLabel('任务', <CheckSquare size={16} />)}</ToolbarButton>
         </ToolbarGroup>
 
         <div ref={mediaToolbarGroupRef} className="sense-rich-toolbar-insert-cluster">
           <ToolbarGroup title="插入">
             <ToolbarButton title="插入分割线" onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.setHorizontalRule().createParagraphNear().run())}>{buttonLabel('分割线', <Minus size={16} />)}</ToolbarButton>
             <ToolbarButton title="插入表格" onClick={() => openSingleFloatingUi(() => setTableDialogOpen(true), 'table-dialog')}>表格</ToolbarButton>
-            <ToolbarButton title="插入外部链接" onClick={() => openSingleFloatingUi(() => setLinkDialogMode('external'), 'external-link-dialog')}>{buttonLabel('链接', <Link2 size={16} />)}</ToolbarButton>
-            <ToolbarButton title="插入内部引用" onClick={() => openSingleFloatingUi(() => setLinkDialogMode('internal'), 'internal-link-dialog')}>{buttonLabel('内部引用', <ListChecks size={16} />)}</ToolbarButton>
-            <ToolbarButton title="插入图片" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('image'), 'media-image')}>{buttonLabel('图片', <ImageIcon size={16} />)}</ToolbarButton>
-            <ToolbarButton title="插入音频" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('audio'), 'media-audio')}>{buttonLabel('音频', <Mic size={16} />)}</ToolbarButton>
-            <ToolbarButton title="插入视频" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('video'), 'media-video')}>{buttonLabel('视频', <Video size={16} />)}</ToolbarButton>
+            <div ref={mediaMenuAnchorRef} className="sense-table-menu-anchor">
+              <ToolbarButton
+                title="插入多媒体"
+                active={toolbarMenu === 'media'}
+                onMouseDownCapture={preserveSelection}
+                onClick={() => setToolbarMenu((prev) => (prev === 'media' ? '' : 'media'))}
+              >
+                {menuButtonLabel('插入多媒体', <ImageIcon size={16} />)}
+              </ToolbarButton>
+              {toolbarMenu === 'media' ? (
+                <div className="sense-table-menu-panel" role="menu" aria-label="插入多媒体菜单">
+                  <button type="button" className="sense-table-menu-item" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('image'), 'media-image-dialog')}>
+                    <span className="sense-table-menu-icon"><ImageIcon size={14} /></span>
+                    <span>图片</span>
+                  </button>
+                  <button type="button" className="sense-table-menu-item" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('audio'), 'media-audio-dialog')}>
+                    <span className="sense-table-menu-icon"><Mic size={14} /></span>
+                    <span>音频</span>
+                  </button>
+                  <button type="button" className="sense-table-menu-item" onClick={() => openSingleFloatingUi(() => setMediaDialogKind('video'), 'media-video-dialog')}>
+                    <span className="sense-table-menu-icon"><Video size={14} /></span>
+                    <span>视频</span>
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <div ref={referenceMenuAnchorRef} className="sense-table-menu-anchor">
+              <ToolbarButton
+                title="引用"
+                active={toolbarMenu === 'reference'}
+                onMouseDownCapture={preserveSelection}
+                onClick={() => setToolbarMenu((prev) => (prev === 'reference' ? '' : 'reference'))}
+              >
+                {menuButtonLabel('引用', <Link2 size={16} />)}
+              </ToolbarButton>
+              {toolbarMenu === 'reference' ? (
+                <div className="sense-table-menu-panel" role="menu" aria-label="引用菜单">
+                  <button type="button" className="sense-table-menu-item" onClick={() => openSingleFloatingUi(() => setReferenceDialogMode('media'), 'reference-media-dialog')}>
+                    <span className="sense-table-menu-icon"><ImageIcon size={14} /></span>
+                    <span>引用内部多媒体</span>
+                  </button>
+                  <button type="button" className="sense-table-menu-item" onClick={() => openSingleFloatingUi(() => setReferenceDialogMode('external'), 'reference-external-dialog')}>
+                    <span className="sense-table-menu-icon"><Link2 size={14} /></span>
+                    <span>引用外部链接</span>
+                  </button>
+                  <button type="button" className="sense-table-menu-item" onClick={() => openSingleFloatingUi(() => setReferenceDialogMode('literature'), 'reference-literature-dialog')}>
+                    <span className="sense-table-menu-icon"><FileText size={14} /></span>
+                    <span>引用文献</span>
+                  </button>
+                  <button type="button" className="sense-table-menu-item" onClick={() => openSingleFloatingUi(() => setReferenceDialogMode('internal'), 'reference-internal-dialog')}>
+                    <span className="sense-table-menu-icon"><ListChecks size={14} /></span>
+                    <span>引用其他释义</span>
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <ToolbarButton title="导入 Markdown" onClick={() => openSingleFloatingUi(() => setMarkdownDialogOpen(true), 'markdown-dialog')}>导入 MD</ToolbarButton>
           </ToolbarGroup>
         </div>
@@ -630,18 +892,20 @@ const RichToolbar = ({
       </div>
 
       <InsertLinkDialog
-        open={!!linkDialogMode}
-        mode={linkDialogMode || 'external'}
+        open={!!referenceDialogMode}
+        mode={referenceDialogMode || 'external'}
         initialValue={{
-          ...editor.getAttributes(linkDialogMode === 'internal' ? 'internalSenseReference' : 'link'),
+          ...editor.getAttributes(referenceDialogMode === 'internal' ? 'internalSenseReference' : 'link'),
           displayText: editor.state.selection.empty ? (editor.getAttributes('internalSenseReference')?.displayText || preservedTextRef.current || '') : editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, ' ')
         }}
-        onClose={() => {
-          restoreSelection();
-          setLinkDialogMode('');
-        }}
+        onClose={() => closeReferenceDialog('cancel')}
         onSubmit={handleLinkSubmit}
         onSearchReferences={onSearchReferences}
+        mediaLibrary={mediaLibrary}
+        mediaAttachments={mediaAttachments}
+        restoreFocusOnClose={false}
+        autoFocusTarget="dialog"
+        portalTarget={dialogPortalTarget}
       />
       <InsertTableDialog open={tableDialogOpen} onClose={() => {
         restoreSelection();
@@ -654,7 +918,6 @@ const RichToolbar = ({
         onClose={() => closeMediaDialog('cancel')}
         onUpload={onUploadMedia}
         onSubmit={handleMediaSubmit}
-        mediaLibrary={mediaLibrary}
         restoreFocusOnClose={false}
         presentation="dialog"
         anchorRef={mediaToolbarGroupRef}

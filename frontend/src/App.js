@@ -27,6 +27,7 @@ import SenseArticleErrorBoundary from './components/senseArticle/SenseArticleErr
 import {
     findEditableSenseArticleRevision,
     getSenseArticleEntryActionLabel,
+    isEditableSenseArticleStatus,
     SENSE_ARTICLE_ENTRY_LABEL,
     SENSE_ARTICLE_ENTRY_SHORT_LABEL
 } from './components/senseArticle/senseArticleUi';
@@ -5629,13 +5630,34 @@ const App = () => {
     };
 
     const resolveEditableSenseArticleRevision = useCallback(async (nodeId, senseId) => {
-        const data = await senseArticleApi.getRevisions(nodeId, senseId, { status: 'draft', pageSize: 20 });
+        const currentUserId = normalizeObjectId(userId) || normalizeObjectId(localStorage.getItem('userId'));
+        try {
+            const overview = await senseArticleApi.getOverview(nodeId, senseId);
+            const latestDraftRevisionId = normalizeObjectId(overview?.article?.latestDraftRevisionId);
+            if (latestDraftRevisionId) {
+                const detail = await senseArticleApi.getRevisionDetail(nodeId, senseId, latestDraftRevisionId, { view: 'senseArticlePage' });
+                const revision = detail?.revision || null;
+                const isMine = String(revision?.proposerId || '').trim() === currentUserId;
+                const isReusableFullDraft = String(revision?.sourceMode || 'full').trim() === 'full'
+                    && isEditableSenseArticleStatus(revision?.status || '');
+                if (revision?._id && (isMine || !!isAdmin || !!detail?.permissions?.isSystemAdmin) && isReusableFullDraft) {
+                    return {
+                        articleId: overview?.article?._id || detail?.article?._id || '',
+                        currentRevisionId: overview?.article?.currentRevisionId || detail?.article?.currentRevisionId || '',
+                        revision
+                    };
+                }
+            }
+        } catch (_error) {
+            // Fall back to revision list lookup when the primary draft pointer is unavailable.
+        }
+        const data = await senseArticleApi.getRevisions(nodeId, senseId, { pageSize: 50 });
         return {
             articleId: data?.article?._id || '',
             currentRevisionId: data?.currentRevisionId || '',
             revision: findEditableSenseArticleRevision({
                 revisions: data?.revisions || [],
-                currentUserId: normalizeObjectId(userId) || normalizeObjectId(localStorage.getItem('userId')),
+                currentUserId,
                 isSystemAdmin: !!isAdmin || !!data?.permissions?.isSystemAdmin
             })
         };
@@ -5652,7 +5674,16 @@ const App = () => {
         }
         const backTarget = resolveSenseArticleBackTarget({ context: senseArticleContext });
         if (backTarget.kind === 'article' && backTarget.context) {
-            setSenseArticleContext(backTarget.context);
+            if (payload?.action === 'returnFromEditor' && (payload?.hasPersistedDraftSave || payload?.wasDiscarded)) {
+                setSenseArticleContext(createSenseArticleContext({
+                    ...backTarget.context,
+                    myEditsRefreshKey: Date.now(),
+                    draftReturnRevisionId: payload?.wasDiscarded ? '' : normalizeObjectId(payload?.revisionId),
+                    draftReturnState: payload?.wasDiscarded ? 'discarded' : 'saved'
+                }, backTarget.context));
+            } else {
+                setSenseArticleContext(backTarget.context);
+            }
             setView(backTarget.view || 'senseArticle');
             return;
         }
@@ -5677,6 +5708,7 @@ const App = () => {
         if (!targetNodeId || !targetSenseId) return;
         try {
             let data = null;
+            const shouldPreferExisting = !!preferExisting || mode === 'full';
             const requestedRevisionId = normalizeObjectId(revisionId);
             if (requestedRevisionId) {
                 navigateSenseArticleSubView('senseArticleEditor', {
@@ -5685,11 +5717,24 @@ const App = () => {
                     articleId: senseArticleContext?.articleId || '',
                     currentRevisionId: senseArticleContext?.currentRevisionId || '',
                     selectedRevisionId: requestedRevisionId,
-                    revisionId: requestedRevisionId
+                    revisionId: requestedRevisionId,
+                    draftLaunchMode: 'explicit'
                 });
                 return;
             }
-            if (preferExisting) {
+            if (mode === 'full') {
+                navigateSenseArticleSubView('senseArticleEditor', {
+                    nodeId: targetNodeId,
+                    senseId: targetSenseId,
+                    articleId: senseArticleContext?.articleId || '',
+                    currentRevisionId: senseArticleContext?.currentRevisionId || '',
+                    selectedRevisionId: '',
+                    revisionId: '',
+                    draftLaunchMode: 'pending_full'
+                });
+                return;
+            }
+            if (shouldPreferExisting) {
                 const existing = await resolveEditableSenseArticleRevision(targetNodeId, targetSenseId);
                 if (existing?.revision?._id) {
                     navigateSenseArticleSubView('senseArticleEditor', {
@@ -5698,7 +5743,8 @@ const App = () => {
                         articleId: existing.articleId || senseArticleContext?.articleId || '',
                         currentRevisionId: existing.currentRevisionId || senseArticleContext?.currentRevisionId || '',
                         selectedRevisionId: existing.revision._id,
-                        revisionId: existing.revision._id
+                        revisionId: existing.revision._id,
+                        draftLaunchMode: 'reused'
                     });
                     return;
                 }
@@ -5727,7 +5773,8 @@ const App = () => {
                 articleId: data?.article?._id || senseArticleContext?.articleId || '',
                 currentRevisionId: data?.article?.currentRevisionId || senseArticleContext?.currentRevisionId || '',
                 selectedRevisionId: data?.revision?._id || '',
-                revisionId: data?.revision?._id || ''
+                revisionId: data?.revision?._id || '',
+                draftLaunchMode: mode === 'full' ? 'created' : 'explicit'
             });
         } catch (error) {
             window.alert(error.message);
@@ -6605,7 +6652,7 @@ const App = () => {
                         />
                     </SenseArticleErrorBoundary>
                 )}
-                {view === "senseArticleEditor" && senseArticleContext?.nodeId && senseArticleContext?.senseId && senseArticleContext?.revisionId && (
+                {view === "senseArticleEditor" && senseArticleContext?.nodeId && senseArticleContext?.senseId && (
                     <SenseArticleErrorBoundary
                         resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
                         onBack={handleSenseArticleBack}

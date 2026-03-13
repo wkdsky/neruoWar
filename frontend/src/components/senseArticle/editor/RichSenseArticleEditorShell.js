@@ -19,9 +19,12 @@ import FigureImage from './extensions/FigureImage';
 import AudioNode from './extensions/AudioNode';
 import VideoNode from './extensions/VideoNode';
 import InternalSenseReference from './extensions/InternalSenseReference';
+import MediaAttachmentReference from './extensions/MediaAttachmentReference';
+import { MediaAttachmentSyncExtension } from './extensions/mediaAttachmentSupport';
 import TableStyleExtension, { RichTableCell, RichTableHeader, RichTableRow } from './extensions/TableStyleExtension';
 import TableContextBand from './TableContextBand';
 import RichToolbar from './RichToolbar';
+import AttachmentTitleDialog from './dialogs/AttachmentTitleDialog';
 import { areRichHtmlContentsEquivalent, normalizeRichHtmlContent } from './richContentState';
 import { normalizePastedHtml } from './paste/normalizePastedContent';
 import { looksLikeMarkdown, markdownToRichHtml } from './paste/markdownToRichContent';
@@ -34,6 +37,7 @@ import {
   describeScrollPosition,
   senseEditorDebugLog
 } from './editorDebug';
+import { resolveMediaAttachmentTypeLabel } from './extensions/mediaAttachmentFormat';
 
 const getActiveTableElements = (editorInstance) => {
   if (!editorInstance?.view?.domAtPos) return { tableElement: null, wrapperElement: null };
@@ -96,6 +100,12 @@ const RichSenseArticleEditorShell = ({
     selectTop: 0,
     selectLeft: 0,
     isEntireTableSelected: false
+  });
+  const [attachmentTitleDialogState, setAttachmentTitleDialogState] = useState({
+    open: false,
+    pos: null,
+    title: '',
+    nodeName: ''
   });
   const toolbarHeightRef = useRef(0);
   const lastEmittedHtmlRef = useRef(normalizeRichHtmlContent(value || '<p></p>') || '<p></p>');
@@ -174,7 +184,9 @@ const RichSenseArticleEditorShell = ({
       FigureImage,
       AudioNode,
       VideoNode,
-      InternalSenseReference
+      InternalSenseReference,
+      MediaAttachmentReference,
+      MediaAttachmentSyncExtension
     ],
     content: value || '<p></p>',
     editorProps: {
@@ -347,6 +359,49 @@ const RichSenseArticleEditorShell = ({
   }, [editor, updateTableOverlay]);
 
   useEffect(() => {
+    const handleAttachmentTitleEdit = (event) => {
+      const detail = event?.detail || {};
+      setAttachmentTitleDialogState({
+        open: true,
+        pos: Number.isFinite(Number(detail.pos)) ? Number(detail.pos) : null,
+        title: String(detail.title || '').trim(),
+        nodeName: String(detail.nodeName || '').trim()
+      });
+    };
+    window.addEventListener('sense-media-attachment-edit-title', handleAttachmentTitleEdit);
+    return () => window.removeEventListener('sense-media-attachment-edit-title', handleAttachmentTitleEdit);
+  }, []);
+
+  const closeAttachmentTitleDialog = useCallback(() => {
+    setAttachmentTitleDialogState((prev) => ({
+      ...prev,
+      open: false
+    }));
+    window.requestAnimationFrame(() => {
+      if (typeof editor?.view?.focus === 'function') editor.view.focus();
+    });
+  }, [editor]);
+
+  const handleAttachmentTitleSubmit = useCallback((nextTitle) => {
+    if (!editor?.state?.doc || !editor?.view?.dispatch) {
+      closeAttachmentTitleDialog();
+      return;
+    }
+    const position = Number(attachmentTitleDialogState.pos);
+    const node = Number.isFinite(position) ? editor.state.doc.nodeAt(position) : null;
+    if (!node) {
+      closeAttachmentTitleDialog();
+      return;
+    }
+    const transaction = editor.state.tr.setNodeMarkup(position, undefined, {
+      ...node.attrs,
+      attachmentTitle: String(nextTitle || '').trim()
+    });
+    editor.view.dispatch(transaction);
+    closeAttachmentTitleDialog();
+  }, [attachmentTitleDialogState.pos, closeAttachmentTitleDialog, editor]);
+
+  useEffect(() => {
     if (!editorHostRef.current) return;
     const container = editorHostRef.current;
     Array.from(container.querySelectorAll('.sense-scoped-editor-target')).forEach((element) => {
@@ -492,6 +547,14 @@ const RichSenseArticleEditorShell = ({
           </div>
         </section>
       </div>
+      <AttachmentTitleDialog
+        open={attachmentTitleDialogState.open}
+        initialTitle={attachmentTitleDialogState.title}
+        mediaLabel={resolveMediaAttachmentTypeLabel(attachmentTitleDialogState.nodeName)}
+        onClose={closeAttachmentTitleDialog}
+        onSubmit={handleAttachmentTitleSubmit}
+        portalTarget={shellRef}
+      />
     </div>
   );
 };

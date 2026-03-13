@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { parse } = require('node-html-parser');
 const Node = require('../models/Node');
 const User = require('../models/User');
 const EntropyAlliance = require('../models/EntropyAlliance');
@@ -65,6 +66,7 @@ const {
   pruneExpiredTemporaryMediaAssets,
   pruneUnreferencedMediaAssets,
   releaseTemporaryMediaSession,
+  syncTemporaryMediaSessionAssets,
   touchTemporaryMediaSession
 } = require('./senseArticleMediaService');
 const { validateRevisionContent } = require('./senseArticleValidationService');
@@ -783,6 +785,21 @@ const extractReferenceUrls = (mediaReferences = []) => (
     .filter(Boolean)))
 );
 
+const extractMediaUrlsFromEditorSource = (editorSource = '') => {
+  const source = String(editorSource || '').trim();
+  if (!source) return [];
+  try {
+    const root = parse(`<div class="sense-rich-root">${source}</div>`);
+    const container = root.querySelector('.sense-rich-root');
+    const urls = (container?.querySelectorAll?.('img, audio, video') || [])
+      .map((element) => String(element.getAttribute('src') || '').trim())
+      .filter(Boolean);
+    return Array.from(new Set(urls));
+  } catch (_error) {
+    return [];
+  }
+};
+
 const enqueueTemporaryMediaCleanup = async ({ runAt = new Date() } = {}) => {
   const cleanupAt = buildCleanupBucketRunAt(runAt);
   const bucket = cleanupAt.toISOString().slice(0, 16);
@@ -1079,7 +1096,10 @@ const createDraftRevision = async ({ nodeId, senseId, userId, payload = {}, requ
       articleId: bundle.article._id,
       nodeId: bundle.nodeId,
       senseId: bundle.senseId,
-      urls: extractReferenceUrls(derived.mediaReferences)
+      urls: Array.from(new Set([
+        ...extractReferenceUrls(derived.mediaReferences),
+        ...extractMediaUrlsFromEditorSource(materialized.editorSource)
+      ]))
     });
     await releaseTemporaryMediaSession({
       articleId: bundle.article._id,
@@ -1217,7 +1237,10 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
       articleId: bundle.article._id,
       nodeId: bundle.nodeId,
       senseId: bundle.senseId,
-      urls: extractReferenceUrls(derived.mediaReferences)
+      urls: Array.from(new Set([
+        ...extractReferenceUrls(derived.mediaReferences),
+        ...extractMediaUrlsFromEditorSource(materialized.editorSource)
+      ]))
     });
     await releaseTemporaryMediaSession({
       articleId: bundle.article._id,
@@ -2030,6 +2053,36 @@ const releaseMediaSession = async ({ nodeId, senseId, revisionId = '', userId, t
   };
 };
 
+const syncMediaSession = async ({ nodeId, senseId, revisionId = '', userId, tempMediaSessionId = '', activeUrls = [] }) => {
+  const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: false });
+  if (!bundle.article) {
+    return {
+      ok: true,
+      revisionId: revisionId || null,
+      deletedAssetCount: 0,
+      deletedFileCount: 0,
+      deletedAssetIds: [],
+      deletedUrls: []
+    };
+  }
+  ensurePermission(bundle.permissions.canCreateRevision, '当前用户无法同步媒体临时缓存');
+  const revision = revisionId
+    ? await SenseArticleRevision.findOne({ _id: revisionId, articleId: bundle.article._id }).select('_id').lean()
+    : null;
+  const deleted = await syncTemporaryMediaSessionAssets({
+    articleId: bundle.article._id,
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    tempSessionId: tempMediaSessionId,
+    activeUrls
+  });
+  return {
+    ok: true,
+    revisionId: revision?._id || revisionId || null,
+    ...deleted
+  };
+};
+
 const listMediaAssets = async ({ nodeId, senseId, revisionId = '', userId }) => {
   const bundle = await getArticleBundle({ nodeId, senseId, userId, createIfMissing: true });
   ensurePermission(bundle.permissions.canRead, '当前用户无法查看媒体资源', 403, 'media_read_forbidden');
@@ -2244,6 +2297,7 @@ module.exports = {
   releaseMediaSession,
   searchCurrentArticle,
   searchReferenceTargets,
+  syncMediaSession,
   submitRevision,
   touchMediaSession,
   uploadMediaAsset,

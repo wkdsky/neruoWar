@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUpRight, Eye, History, MessageSquare, PenSquare, Search, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowUpRight, Eye, History, MessageSquare, PenSquare, RefreshCw, Search, Sparkles, Trash2 } from 'lucide-react';
 import { senseArticleApi } from '../../utils/senseArticleApi';
 import {
   diagLog,
@@ -15,10 +15,13 @@ import SenseArticleStateView from './SenseArticleStateView';
 import SenseArticleOutlineTree from './SenseArticleOutlineTree';
 import {
   buildSenseArticleBreadcrumb,
+  findEditableSenseArticleRevision,
   getReferenceTargetStatusLabel,
   getRelocationStatusLabel,
   getRevisionDisplayTitle,
   getRevisionStatusLabel,
+  getSourceModeLabel,
+  isEditableSenseArticleStatus,
   resolveSenseArticleStateFromError
 } from './senseArticleUi';
 import './SenseArticle.css';
@@ -31,6 +34,7 @@ import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
 import { buildSenseArticleAllianceContext, buildSenseArticleThemeStyle } from './senseArticleTheme';
 
 const ANNOTATION_COLORS = ['#fde68a', '#fca5a5', '#86efac', '#93c5fd', '#d8b4fe'];
+const MY_EDITS_PENDING_STATUSES = new Set(['pending_review', 'pending_domain_admin_review', 'pending_domain_master_review']);
 
 const articleAvatarMap = {
   default_male_1: defaultMale1,
@@ -115,6 +119,7 @@ const SenseArticlePage = ({
 }) => {
   const [pageData, setPageData] = useState(null);
   const [referenceData, setReferenceData] = useState({ references: [] });
+  const [referencesLoading, setReferencesLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -129,13 +134,90 @@ const SenseArticlePage = ({
   const [myEditsLoading, setMyEditsLoading] = useState(false);
   const [myEditsError, setMyEditsError] = useState('');
   const [myEdits, setMyEdits] = useState([]);
+  const [myEditsLoaded, setMyEditsLoaded] = useState(false);
+  const [primaryDraft, setPrimaryDraft] = useState(null);
   const [abandoningRevisionId, setAbandoningRevisionId] = useState('');
   const selectionToolbarRef = useRef(null);
   const loadCurrentSequenceRef = useRef(0);
+  const myEditsRequestSequenceRef = useRef(0);
+  const myEditsRequestRef = useRef(null);
+  const primaryDraftRequestSequenceRef = useRef(0);
   const latestRouteRef = useRef({ nodeId, senseId });
   const pageThemeStyle = useMemo(() => buildSenseArticleThemeStyle(pageData?.node ? { ...articleContext, node: pageData.node } : articleContext), [pageData, articleContext]);
 
   latestRouteRef.current = { nodeId, senseId };
+
+  const loadPrimaryDraft = useCallback(async (latestDraftRevisionId = '') => {
+    const normalizedRevisionId = String(latestDraftRevisionId || '').trim();
+    const requestSequence = primaryDraftRequestSequenceRef.current + 1;
+    primaryDraftRequestSequenceRef.current = requestSequence;
+    if (!normalizedRevisionId) {
+      setPrimaryDraft(null);
+      return null;
+    }
+    try {
+      const detail = await senseArticleApi.getRevisionDetail(nodeId, senseId, normalizedRevisionId, { view: 'senseArticlePage' });
+      if (primaryDraftRequestSequenceRef.current !== requestSequence) return null;
+      const revision = detail?.revision || null;
+      const currentUserId = String(detail?.permissions?.currentUserId || localStorage.getItem('userId') || '').trim();
+      const isVisibleToCurrentUser = !!detail?.permissions?.isSystemAdmin
+        || String(revision?.proposerId || '').trim() === currentUserId;
+      const isReusableFullDraft = String(revision?.sourceMode || 'full').trim() === 'full'
+        && (isEditableSenseArticleStatus(revision?.status) || MY_EDITS_PENDING_STATUSES.has(String(revision?.status || '').trim()));
+      const nextPrimaryDraft = isVisibleToCurrentUser && isReusableFullDraft ? revision : null;
+      setPrimaryDraft(nextPrimaryDraft);
+      return nextPrimaryDraft;
+    } catch (_error) {
+      if (primaryDraftRequestSequenceRef.current === requestSequence) {
+        setPrimaryDraft(null);
+      }
+      return null;
+    }
+  }, [nodeId, senseId]);
+
+  const loadMyEdits = useCallback(async () => {
+    const requestSequence = myEditsRequestSequenceRef.current + 1;
+    myEditsRequestSequenceRef.current = requestSequence;
+    setMyEditsLoading(true);
+    setMyEditsError('');
+    const request = senseArticleApi.getRevisions(nodeId, senseId, { pageSize: 100 })
+      .then((data) => {
+        if (myEditsRequestSequenceRef.current !== requestSequence) return [];
+        const revisions = Array.isArray(data?.revisions) ? data.revisions.slice() : [];
+        const currentUserId = String(data?.permissions?.currentUserId || localStorage.getItem('userId') || '').trim();
+        const drafts = revisions
+          .filter((item) => {
+            const status = String(item?.status || '').trim();
+            const isMine = String(item?.proposerId || '').trim() === currentUserId;
+            return isMine && (isEditableSenseArticleStatus(status) || MY_EDITS_PENDING_STATUSES.has(status));
+          })
+          .filter((item, index, array) => array.findIndex((target) => String(target?._id || '') === String(item?._id || '')) === index)
+          .sort((left, right) => (
+            new Date(right?.updatedAt || right?.createdAt || 0).getTime()
+            - new Date(left?.updatedAt || left?.createdAt || 0).getTime()
+          ));
+        setMyEdits(drafts);
+        setMyEditsLoaded(true);
+        return drafts;
+      })
+      .catch((requestError) => {
+        if (myEditsRequestSequenceRef.current !== requestSequence) return [];
+        setMyEditsError(requestError.message || '加载失败');
+        setMyEdits([]);
+        setMyEditsLoaded(true);
+        return [];
+      })
+      .finally(() => {
+        if (myEditsRequestSequenceRef.current === requestSequence) {
+          setMyEditsLoading(false);
+        }
+        if (myEditsRequestRef.current === request) {
+          myEditsRequestRef.current = null;
+        }
+      });
+    myEditsRequestRef.current = request;
+    return request;
+  }, [nodeId, senseId]);
 
   const loadCurrent = useCallback(async () => {
     const requestId = newRequestId('load-current');
@@ -146,18 +228,11 @@ const SenseArticlePage = ({
     setLoading(true);
     setError(null);
     try {
-      const [data, references] = await Promise.all([
-        senseArticleApi.getCurrent(nodeId, senseId, {
-          flowId,
-          view: 'senseArticlePage',
-          requestId: `${requestId}_current`
-        }),
-        senseArticleApi.getReferences(nodeId, senseId, {
-          flowId,
-          view: 'senseArticlePage',
-          requestId: `${requestId}_references`
-        })
-      ]);
+      const data = await senseArticleApi.getCurrent(nodeId, senseId, {
+        flowId,
+        view: 'senseArticlePage',
+        requestId: `${requestId}_current`
+      });
       const revision = data?.revision || {};
       const isStale = loadCurrentSequenceRef.current !== requestSequence
         || latestRouteRef.current.nodeId !== nodeId
@@ -170,14 +245,14 @@ const SenseArticlePage = ({
         senseId,
         revisionId: revision?._id || '',
         durationMs: durationMs(startedAt),
-        responseBytes: safeJsonByteLength(data) + safeJsonByteLength(references || { references: [] }),
+        responseBytes: safeJsonByteLength(data),
         blockCount: Array.isArray(revision?.ast?.blocks) ? revision.ast.blocks.length : 0,
         referenceCount: Array.isArray(revision?.referenceIndex) ? revision.referenceIndex.length : 0,
         headingCount: Array.isArray(revision?.headingIndex) ? revision.headingIndex.length : 0,
         isStale
       });
       setPageData(data);
-      setReferenceData(references || { references: [] });
+      loadPrimaryDraft(data?.article?.latestDraftRevisionId || '');
     } catch (requestError) {
       diagLog('sense.page.load_current', {
         requestId,
@@ -196,6 +271,40 @@ const SenseArticlePage = ({
     } finally {
       setLoading(false);
     }
+  }, [loadPrimaryDraft, nodeId, senseId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setReferencesLoading(true);
+    const requestId = newRequestId('load-references');
+    const flowId = newFlowId('page');
+    const startedAt = nowMs();
+    senseArticleApi.getReferences(nodeId, senseId, {
+      flowId,
+      view: 'senseArticlePage',
+      requestId
+    }).then((references) => {
+      if (cancelled) return;
+      setReferenceData(references || { references: [] });
+      diagLog('sense.page.load_references', {
+        requestId,
+        flowId,
+        view: 'senseArticlePage',
+        nodeId,
+        senseId,
+        durationMs: durationMs(startedAt),
+        responseBytes: safeJsonByteLength(references || { references: [] }),
+        referenceCount: Array.isArray(references?.references) ? references.references.length : 0
+      });
+    }).catch(() => {
+      if (cancelled) return;
+      setReferenceData({ references: [] });
+    }).finally(() => {
+      if (!cancelled) setReferencesLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [nodeId, senseId]);
 
   useEffect(() => {
@@ -229,41 +338,58 @@ const SenseArticlePage = ({
   }, [pageData, nodeId, senseId, articleContext, onContextPatch]);
 
   useEffect(() => {
-    if (!myEditsOpen) return undefined;
-    let cancelled = false;
+    if (myEditsOpen && !myEditsLoaded && !myEditsRequestRef.current) {
+      loadMyEdits();
+    }
+  }, [loadMyEdits, myEditsLoaded, myEditsOpen]);
 
-    const loadMyDrafts = async () => {
-      setMyEditsLoading(true);
-      setMyEditsError('');
-      try {
-        const data = await senseArticleApi.getRevisions(nodeId, senseId, { pageSize: 50 });
-        if (cancelled) return;
-        const currentUserId = String(data?.permissions?.currentUserId || localStorage.getItem('userId') || '').trim();
-        const drafts = (data?.revisions || [])
-          .filter((item) => {
-            const status = String(item?.status || '').trim();
-            return String(item?.proposerId || '').trim() === currentUserId
-              && ['draft', 'pending_review', 'pending_domain_admin_review', 'pending_domain_master_review'].includes(status);
-          })
-          .sort((left, right) => (
-            new Date(right?.updatedAt || right?.createdAt || 0).getTime()
-            - new Date(left?.updatedAt || left?.createdAt || 0).getTime()
-          ));
-        setMyEdits(drafts);
-      } catch (requestError) {
-        if (cancelled) return;
-        setMyEditsError(requestError.message || '加载失败');
-        setMyEdits([]);
-      } finally {
-        if (!cancelled) setMyEditsLoading(false);
-      }
-    };
+  useEffect(() => {
+    if (!articleContext?.myEditsRefreshKey) return;
+    loadCurrent();
+    loadMyEdits();
+  }, [articleContext?.myEditsRefreshKey, loadCurrent, loadMyEdits]);
 
-    loadMyDrafts();
-    return () => {
-      cancelled = true;
-    };
-  }, [myEditsOpen, nodeId, senseId]);
+  useEffect(() => {
+    setMyEdits([]);
+    setMyEditsError('');
+    setMyEditsLoaded(false);
+    setMyEditsLoading(false);
+    setPrimaryDraft(null);
+    myEditsRequestSequenceRef.current += 1;
+    myEditsRequestRef.current = null;
+    primaryDraftRequestSequenceRef.current += 1;
+  }, [nodeId, senseId]);
+
+  const mergedMyEdits = useMemo(() => {
+    const rows = [primaryDraft, ...myEdits]
+      .filter(Boolean)
+      .filter((item, index, array) => array.findIndex((target) => String(target?._id || '') === String(item?._id || '')) === index)
+      .sort((left, right) => (
+        new Date(right?.updatedAt || right?.createdAt || 0).getTime()
+        - new Date(left?.updatedAt || left?.createdAt || 0).getTime()
+      ));
+    return rows;
+  }, [myEdits, primaryDraft]);
+
+  const activeFullDraft = useMemo(() => findEditableSenseArticleRevision({
+    revisions: mergedMyEdits,
+    currentUserId: String(pageData?.permissions?.currentUserId || localStorage.getItem('userId') || '').trim(),
+    isSystemAdmin: !!pageData?.permissions?.isSystemAdmin
+  }), [mergedMyEdits, pageData?.permissions?.currentUserId, pageData?.permissions?.isSystemAdmin]);
+
+  const handleRefreshMyEdits = useCallback(async () => {
+    await Promise.all([
+      loadCurrent(),
+      loadMyEdits(),
+      loadPrimaryDraft(pageData?.article?.latestDraftRevisionId || '')
+    ]);
+  }, [loadCurrent, loadMyEdits, loadPrimaryDraft, pageData?.article?.latestDraftRevisionId]);
+
+  const handleOpenFullEditor = useCallback(() => {
+    if (!onOpenEditor) return;
+    const targetRevisionId = String(activeFullDraft?._id || '').trim() || String(primaryDraft?._id || '').trim();
+    onOpenEditor({ mode: 'full', revisionId: targetRevisionId });
+  }, [activeFullDraft, onOpenEditor, primaryDraft]);
 
   useEffect(() => {
     if (!searchQuery.trim()) {
@@ -475,19 +601,41 @@ const SenseArticlePage = ({
               <div className="sense-side-card-title"><Sparkles size={16} /> 我的编辑</div>
               <div className="sense-floating-panel-subtitle">这里显示你当前的草稿，以及你已提交但仍在待审核中的修订。</div>
             </div>
-            <button type="button" className="btn btn-small btn-secondary" onClick={() => setMyEditsOpen(false)}>关闭</button>
+            <div className="sense-floating-panel-actions">
+              <button
+                type="button"
+                className={`sense-icon-action-button${myEditsLoading ? ' spinning' : ''}`}
+                onClick={handleRefreshMyEdits}
+                disabled={myEditsLoading}
+                aria-label={myEditsLoading ? '刷新中' : '刷新我的编辑'}
+                title={myEditsLoading ? '刷新中' : '刷新'}
+              >
+                <RefreshCw size={16} />
+              </button>
+              <button type="button" className="btn btn-small btn-secondary" onClick={() => setMyEditsOpen(false)}>关闭</button>
+            </div>
           </div>
           {myEditsLoading ? <SenseArticleStateView compact kind="loading" title="正在读取我的编辑" description="正在加载你自己的草稿和待审核修订。" /> : null}
           {!myEditsLoading && myEditsError ? <SenseArticleStateView compact kind="error" title="我的编辑加载失败" description={myEditsError} /> : null}
           {!myEditsLoading && !myEditsError ? (
             <div className="sense-floating-panel-body">
-              {myEdits.length === 0 ? <SenseArticleStateView compact kind="empty" title="暂无我的编辑" description="这里会显示你自己的草稿，以及你已提交但仍待审核的修订。" /> : myEdits.map((item) => (
+              {mergedMyEdits.length === 0 ? <SenseArticleStateView compact kind="empty" title="暂无我的编辑" description="这里会显示你自己的草稿，以及你已提交但仍待审核的修订。" /> : mergedMyEdits.map((item) => (
                 <div key={item._id} className="sense-annotation-card sense-my-edit-card">
-                  <div className="sense-annotation-card-head"><strong>{getRevisionDisplayTitle(item)}</strong></div>
+                  <div className="sense-annotation-card-head">
+                    <strong>{getRevisionDisplayTitle(item)}</strong>
+                    {String(item?._id || '') === String(activeFullDraft?._id || '') ? (
+                      <span className="sense-my-edit-badge">更新释义</span>
+                    ) : null}
+                  </div>
                   <div className="sense-annotation-card-meta">{item.updatedAt ? new Date(item.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '--'} · {getRevisionStatusLabel(item.status || 'draft')}</div>
+                  {String(item?.sourceMode || 'full').trim() === 'full' ? (
+                    <div className="sense-review-note">修订范围：{getSourceModeLabel(item?.sourceMode || 'full')}</div>
+                  ) : (
+                    <div className="sense-review-note">修订范围：{getSourceModeLabel(item?.sourceMode || 'full')}</div>
+                  )}
                   {item.proposedSenseTitle && item.proposedSenseTitle !== (pageData?.nodeSense?.title || senseId) ? <div className="sense-annotation-card-body">待生效释义名：{item.proposedSenseTitle}</div> : null}
                   <div className="sense-floating-panel-actions">
-                    {String(item?.status || '').trim() === 'draft' ? (
+                    {isEditableSenseArticleStatus(item?.status) ? (
                       <>
                         <button type="button" className="btn btn-small btn-primary" onClick={() => {
                           setMyEditsOpen(false);
@@ -495,8 +643,15 @@ const SenseArticlePage = ({
                         }} disabled={abandoningRevisionId === String(item?._id || '')}>
                           继续编辑
                         </button>
-                        <button type="button" className="btn btn-small btn-danger" onClick={() => abandonMyEdit(item._id)} disabled={abandoningRevisionId === String(item?._id || '')}>
-                          <Trash2 size={14} /> {abandoningRevisionId === String(item?._id || '') ? '放弃中...' : '放弃修订'}
+                        <button
+                          type="button"
+                          className={`sense-icon-action-button danger${abandoningRevisionId === String(item?._id || '') ? ' spinning' : ''}`}
+                          onClick={() => abandonMyEdit(item._id)}
+                          disabled={abandoningRevisionId === String(item?._id || '')}
+                          aria-label={abandoningRevisionId === String(item?._id || '') ? '放弃中' : '放弃修订'}
+                          title={abandoningRevisionId === String(item?._id || '') ? '放弃中' : '放弃修订'}
+                        >
+                          <Trash2 size={15} />
                         </button>
                       </>
                     ) : (
@@ -532,7 +687,7 @@ const SenseArticlePage = ({
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => onOpenEditor({ mode: 'full' })}
+              onClick={handleOpenFullEditor}
             >
               <PenSquare size={16} /> 创建首个百科版本
             </button>
@@ -591,7 +746,11 @@ const SenseArticlePage = ({
         actions={(
           <>
             {canUpdateSenseArticle ? (
-              <button type="button" className="btn btn-primary" onClick={() => onOpenEditor && onOpenEditor({ mode: 'full' })}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleOpenFullEditor}
+              >
                 <PenSquare size={16} /> 更新释义
               </button>
             ) : null}
@@ -698,12 +857,14 @@ const SenseArticlePage = ({
           <div className="sense-side-card">
             <div className="sense-side-card-title"><Eye size={16} /> 当前页引用</div>
             <div className="sense-annotation-list">
-              {(referenceData.references || []).length === 0 ? <SenseArticleStateView compact kind="empty" title="本页暂无正文引用" description="当前发布版未引用其他释义百科页。" /> : referenceData.references.slice(0, 8).map((item) => (
+              {referencesLoading ? <SenseArticleStateView compact kind="loading" title="正在读取引用" description="正在加载当前发布版的正文引用。" /> : null}
+              {!referencesLoading && (referenceData.references || []).length === 0 ? <SenseArticleStateView compact kind="empty" title="本页暂无正文引用" description="当前发布版未引用其他释义百科页。" /> : null}
+              {!referencesLoading ? referenceData.references.slice(0, 8).map((item) => (
                 <button key={item.referenceId} type="button" className="sense-annotation-card sense-backlink-card" onClick={() => handleReferenceClick(item)}>
                   <div className="sense-annotation-card-head"><strong>{item.targetNodeName || '知识域'} / {item.targetTitle || item.targetSenseId}</strong></div>
                   <div className="sense-annotation-card-meta">{item.targetSummary || '暂无摘要'} <ArrowUpRight size={12} /></div>
                 </button>
-              ))}
+              )) : null}
             </div>
           </div>
         </aside>

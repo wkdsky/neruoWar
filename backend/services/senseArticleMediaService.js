@@ -141,6 +141,34 @@ const releaseTemporaryMediaSession = async ({ articleId = null, nodeId = null, s
   return deleteMediaAssets(sessionAssets);
 };
 
+const syncTemporaryMediaSessionAssets = async ({ articleId = null, nodeId = null, senseId = '', tempSessionId = '', activeUrls = [] } = {}) => {
+  const normalizedSessionId = normalizeTempSessionId(tempSessionId);
+  if (!normalizedSessionId) {
+    return {
+      deletedAssetCount: 0,
+      deletedFileCount: 0,
+      deletedAssetIds: [],
+      deletedUrls: []
+    };
+  }
+  const filter = normalizeFilter({ articleId, nodeId, senseId });
+  const normalizedUrls = new Set((Array.isArray(activeUrls) ? activeUrls : []).map((item) => String(item || '').trim()).filter(Boolean));
+  const staleAssets = await SenseArticleMediaAsset.find({
+    ...filter,
+    isTemporary: true,
+    tempSessionId: normalizedSessionId,
+    url: { $nin: Array.from(normalizedUrls) }
+  }).lean();
+  const deletedAssetIds = staleAssets.map((item) => item?._id).filter(Boolean);
+  const deletedUrls = staleAssets.map((item) => String(item?.url || '').trim()).filter(Boolean);
+  const deleted = await deleteMediaAssets(staleAssets);
+  return {
+    ...deleted,
+    deletedAssetIds,
+    deletedUrls
+  };
+};
+
 const createMediaAssetRecord = async ({
   nodeId,
   senseId,
@@ -204,5 +232,6 @@ module.exports = {
   pruneExpiredTemporaryMediaAssets,
   pruneUnreferencedMediaAssets,
   releaseTemporaryMediaSession,
+  syncTemporaryMediaSessionAssets,
   touchTemporaryMediaSession
 };
