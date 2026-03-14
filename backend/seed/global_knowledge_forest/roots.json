@@ -1,0 +1,72 @@
+[
+  {
+    "key": "people",
+    "name": "人物",
+    "aspectKey": "people"
+  },
+  {
+    "key": "geography",
+    "name": "地理与地点",
+    "aspectKey": "place"
+  },
+  {
+    "key": "history",
+    "name": "历史与事件",
+    "aspectKey": "event"
+  },
+  {
+    "key": "society",
+    "name": "社会、政治、法律与政府",
+    "aspectKey": "institution"
+  },
+  {
+    "key": "economy",
+    "name": "经济与管理",
+    "aspectKey": "economy"
+  },
+  {
+    "key": "military",
+    "name": "军事与安全",
+    "aspectKey": "security"
+  },
+  {
+    "key": "philosophy",
+    "name": "哲学、宗教与思想",
+    "aspectKey": "idea"
+  },
+  {
+    "key": "language",
+    "name": "语言与文学",
+    "aspectKey": "language"
+  },
+  {
+    "key": "art_media",
+    "name": "艺术与媒体",
+    "aspectKey": "art"
+  },
+  {
+    "key": "education_psychology",
+    "name": "教育与心理",
+    "aspectKey": "education"
+  },
+  {
+    "key": "math_logic",
+    "name": "数学与逻辑",
+    "aspectKey": "math"
+  },
+  {
+    "key": "science",
+    "name": "自然与生命科学",
+    "aspectKey": "science"
+  },
+  {
+    "key": "engineering",
+    "name": "工程、技术与计算",
+    "aspectKey": "tech"
+  },
+  {
+    "key": "health_life",
+    "name": "医学、健康、农业、生态、环境、生活、体育与休闲",
+    "aspectKey": "health"
+  }
+]

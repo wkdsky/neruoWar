@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { Home, Shield, Bell, Layers, Star, MapPin, ChevronLeft, ChevronRight, Users } from 'lucide-react';
 import io from 'socket.io-client';
 import './App.css';
 import Login from './components/auth/Login';
@@ -8,524 +7,63 @@ import AlliancePanel from './components/game/AlliancePanel';
 import ProfilePanel from './components/game/ProfilePanel';
 import ArmyPanel from './components/game/ArmyPanel';
 import TrainingGroundPanel from './components/game/TrainingGroundPanel';
-import NodeDetail from './components/game/NodeDetail';
-import HomeView from './components/game/Home';
+import KnowledgeViewRouter from './components/game/KnowledgeViewRouter';
 import KnowledgeDomainScene from './components/game/KnowledgeDomainScene';
 import SceneManager from './SceneManager';
 import LocationSelectionModal from './LocationSelectionModal';
-import AssociationModal from './components/modals/AssociationModal';
-import NodeInfoModal from './components/modals/NodeInfoModal';
-import CreateNodeModal from './components/modals/CreateNodeModal';
-import { BattleSceneModal } from './game/battle';
-import BattlefieldPreviewModal from './components/game/BattlefieldPreviewModal';
-import SenseArticlePage from './components/senseArticle/SenseArticlePage';
-import SenseArticleEditor from './components/senseArticle/SenseArticleEditor';
-import SenseArticleReviewPage from './components/senseArticle/SenseArticleReviewPage';
-import SenseArticleHistoryPage from './components/senseArticle/SenseArticleHistoryPage';
-import SenseArticleDashboardPage from './components/senseArticle/SenseArticleDashboardPage';
-import SenseArticleErrorBoundary from './components/senseArticle/SenseArticleErrorBoundary';
+import SenseArticleViewRouter from './components/senseArticle/SenseArticleViewRouter';
+import useSenseArticleNavigation from './components/senseArticle/hooks/useSenseArticleNavigation';
+import AppOverlays from './components/layout/AppOverlays';
+import useDomainConflictState from './hooks/useDomainConflictState';
+import useDistributionPanelState from './hooks/useDistributionPanelState';
 import {
-    getSenseArticleEntryActionLabel,
-    SENSE_ARTICLE_ENTRY_LABEL,
-    SENSE_ARTICLE_ENTRY_SHORT_LABEL
-} from './components/senseArticle/senseArticleUi';
+    AppShellChrome,
+    SenseSelectorPanel
+} from './components/layout/AppShellPanels';
 import {
-    buildSenseArticleNavigationState,
     buildSenseArticleSubViewContext,
     createSenseArticleContext,
-    areSenseArticleContextsEqual,
-    resolveSenseArticleBackTarget,
-    resolveSenseArticleNotificationNavigation
+    areSenseArticleContextsEqual
 } from './components/senseArticle/senseArticleNavigation';
 import { senseArticleApi } from './utils/senseArticleApi';
 import { API_BASE, SOCKET_ENDPOINT } from './runtimeConfig';
-import BattleDataService from './game/battle/data/BattleDataService';
 import { isSenseEditorDebugEnabled } from './components/senseArticle/editor/editorDebug';
+import {
+    CITY_GATE_LABEL_MAP,
+    LOCAL_DEVELOPMENT_HOSTS,
+    LOCALHOST_STORAGE_RESET_KEY,
+    LOCALHOST_STORAGE_RESET_VERSION,
+    PAGE_STATE_STORAGE_KEY,
+    SENSE_EDITOR_PREVIEW_RESIZE_CLASS,
+    buildNavigationTrailItem,
+    clearStoredAuthState,
+    clearStoredLocalhostRuntimeState,
+    createDefaultHeaderUserStats,
+    createEmptyIntelHeistStatus,
+    createEmptyNodeDistributionStatus,
+    createEmptySiegeStatus,
+    createHomeNavigationPath,
+    decodeUserIdFromToken,
+    formatDateTimeText,
+    getElapsedMinutesText,
+    getIntelSnapshotAgeMinutesText,
+    getNavigationRelationFromSceneNode,
+    isDevEnvironment,
+    isKnowledgeDetailView,
+    isMapDebugEnabled,
+    isSenseArticleSubView,
+    isTitleBattleView,
+    isValidObjectId,
+    normalizeNavigationRelation,
+    normalizeObjectId,
+    normalizeSiegeUnitEntries,
+    readSavedPageState
+} from './app/appShared';
+import useNotificationCenter from './hooks/useNotificationCenter';
+import useAppShellState from './hooks/useAppShellState';
 
-// 导入头像
-import defaultMale1 from './assets/avatars/default_male_1.svg';
-import defaultMale2 from './assets/avatars/default_male_2.svg';
-import defaultMale3 from './assets/avatars/default_male_3.svg';
-import defaultFemale1 from './assets/avatars/default_female_1.svg';
-import defaultFemale2 from './assets/avatars/default_female_2.svg';
-import defaultFemale3 from './assets/avatars/default_female_3.svg';
-
-// 头像映射
-const avatarMap = {
-    default_male_1: defaultMale1,
-    default_male_2: defaultMale2,
-    default_male_3: defaultMale3,
-    default_female_1: defaultFemale1,
-    default_female_2: defaultFemale2,
-    default_female_3: defaultFemale3,
-    male1: defaultMale1,
-    male2: defaultMale2,
-    male3: defaultMale3,
-    female1: defaultFemale1,
-    female2: defaultFemale2,
-    female3: defaultFemale3
-};
-
-const resolveAvatarSrc = (avatarKey = '') => {
-    const key = typeof avatarKey === 'string' ? avatarKey.trim() : '';
-    if (!key) return avatarMap.default_male_1;
-    if (avatarMap[key]) return avatarMap[key];
-    if (/^https?:\/\//i.test(key) || key.startsWith('/') || key.startsWith('data:image/')) {
-        return key;
-    }
-    return avatarMap.default_male_1;
-};
-
-const PAGE_STATE_STORAGE_KEY = 'app:lastPageState';
-const isDevEnvironment = process.env.NODE_ENV !== 'production';
-const SENSE_EDITOR_PREVIEW_RESIZE_CLASS = 'sense-editor-preview-resizing';
-const LOCALHOST_STORAGE_RESET_KEY = 'app:localhostStorageResetVersion';
-const LOCALHOST_STORAGE_RESET_VERSION = '2026-03-14-localhost-reset-v1';
-const LOCAL_DEVELOPMENT_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
-const SENSE_ARTICLE_SUB_VIEWS = Object.freeze([
-    'senseArticle',
-    'senseArticleEditor',
-    'senseArticleReview',
-    'senseArticleHistory',
-    'senseArticleDashboard'
-]);
-const isSenseArticleSubView = (value = '') => SENSE_ARTICLE_SUB_VIEWS.includes(String(value || ''));
-const createDefaultHeaderUserStats = () => ({
-    loading: false,
-    level: 0,
-    experience: 0,
-    knowledgeBalance: 0,
-    armyCount: 0
-});
-
-const KNOWN_PERSISTED_VIEWS = new Set([
-    'home',
-    'nodeDetail',
-    'titleDetail',
-    'knowledgeDomain',
-    'alliance',
-    'admin',
-    'profile',
-    'army',
-    'equipment',
-    'trainingGround'
-]);
-
-const clearStoredAuthState = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('userId');
-    localStorage.removeItem('username');
-    localStorage.removeItem('userLocation');
-    localStorage.removeItem('profession');
-    localStorage.removeItem('userAvatar');
-    localStorage.removeItem('userRole');
-    localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
-};
-
-const clearStoredLocalhostRuntimeState = () => {
-    clearStoredAuthState();
-    localStorage.removeItem('senseArticleContext');
-    localStorage.removeItem('sense-article-editor.preview-pane.v1');
-    localStorage.removeItem('sense-article-editor.preview-pane.v2');
-};
-
-const readSavedPageState = () => {
-    try {
-        const raw = localStorage.getItem(PAGE_STATE_STORAGE_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object') return null;
-        const view = typeof parsed.view === 'string' ? parsed.view : '';
-        if (!view || isSenseArticleSubView(view) || !KNOWN_PERSISTED_VIEWS.has(view)) {
-            localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
-            return null;
-        }
-        const nodeId = typeof parsed.nodeId === 'string' && /^[0-9a-fA-F]{24}$/.test(parsed.nodeId)
-            ? parsed.nodeId
-            : '';
-        return { view, nodeId };
-    } catch (error) {
-        localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
-        return null;
-    }
-};
-
-const normalizeObjectId = (value) => {
-    if (!value) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'object' && value._id) return normalizeObjectId(value._id);
-    if (typeof value.toString === 'function') return value.toString();
-    return '';
-};
-const decodeUserIdFromToken = (token = '') => {
-    if (!token || typeof token !== 'string') return '';
-    const parts = token.split('.');
-    if (parts.length < 2) return '';
-    try {
-        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-        const normalized = `${base64}${'='.repeat((4 - (base64.length % 4)) % 4)}`;
-        const payload = JSON.parse(atob(normalized));
-        return normalizeObjectId(payload?.userId);
-    } catch (error) {
-        return '';
-    }
-};
-const isValidObjectId = (value) => /^[0-9a-fA-F]{24}$/.test(normalizeObjectId(value));
-const createHomeNavigationPath = () => ([
-    { type: 'home', label: '首页' }
-]);
-const normalizeNavigationRelation = (relation) => (
-    relation === 'parent' || relation === 'child' ? relation : 'jump'
-);
-const isMapDebugEnabled = () => {
-    if (typeof window === 'undefined') return false;
-    const value = new URLSearchParams(window.location.search).get('mapDebug');
-    if (typeof value !== 'string') return false;
-    const normalized = value.trim().toLowerCase();
-    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
-};
-const buildNavigationTrailItem = (node, relation = 'jump', options = {}) => {
-    const nodeId = normalizeObjectId(node?._id);
-    if (!nodeId) return null;
-    const nodeTitle = typeof node?.name === 'string' ? node.name.trim() : '';
-    const senseTitle = typeof node?.activeSenseTitle === 'string' ? node.activeSenseTitle.trim() : '';
-    const displayLabel = senseTitle ? `${nodeTitle}-${senseTitle}` : nodeTitle;
-    const mode = options?.mode === 'title' ? 'title' : 'sense';
-    return {
-        type: 'node',
-        label: (mode === 'title' ? nodeTitle : displayLabel) || '未命名知识域',
-        nodeId,
-        senseId: mode === 'sense' && typeof node?.activeSenseId === 'string' ? node.activeSenseId : '',
-        relation: normalizeNavigationRelation(relation),
-        mode
-    };
-};
-const getNavigationRelationFromSceneNode = (sceneNode) => {
-    if (sceneNode?.type === 'parent') return 'parent';
-    if (sceneNode?.type === 'child') return 'child';
-    return 'jump';
-};
-const getNodePrimarySense = (node) => {
-    const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
-    if (typeof node?.activeSenseId === 'string' && node.activeSenseId.trim()) {
-        const matched = senses.find((item) => item?.senseId === node.activeSenseId.trim());
-        if (matched) return matched;
-    }
-    return senses[0] || null;
-};
-const getNodeSenseArticleTarget = (node, requestedSenseId = '') => {
-    const nodeId = normalizeObjectId(node?._id || node?.nodeId);
-    if (!nodeId) return null;
-    const normalizedSenseId = typeof requestedSenseId === 'string' ? requestedSenseId.trim() : '';
-    if (normalizedSenseId) {
-        return {
-            nodeId,
-            senseId: normalizedSenseId
-        };
-    }
-    const primarySense = getNodePrimarySense(node);
-    const fallbackSenseId = typeof node?.activeSenseId === 'string' && node.activeSenseId.trim()
-        ? node.activeSenseId.trim()
-        : (typeof primarySense?.senseId === 'string' ? primarySense.senseId.trim() : '');
-    if (!fallbackSenseId) return null;
-    return {
-        nodeId,
-        senseId: fallbackSenseId
-    };
-};
-const isSenseArticleNotification = (notification) => typeof notification?.type === 'string' && notification.type.startsWith('sense_article_');
-
-const getNodeDisplayName = (node) => {
-    if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
-    const name = typeof node?.name === 'string' ? node.name.trim() : '';
-    const senseTitle = typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()
-        ? node.activeSenseTitle.trim()
-        : (typeof getNodePrimarySense(node)?.title === 'string' ? getNodePrimarySense(node).title.trim() : '');
-    return senseTitle ? `${name}-${senseTitle}` : (name || '未命名知识域');
-};
-const hexToRgba = (hex, alpha = 1) => {
-    const safeHex = typeof hex === 'string' ? hex.trim() : '';
-    if (!/^#[0-9a-fA-F]{6}$/.test(safeHex)) return `rgba(30, 41, 59, ${alpha})`;
-    const r = Number.parseInt(safeHex.slice(1, 3), 16);
-    const g = Number.parseInt(safeHex.slice(3, 5), 16);
-    const b = Number.parseInt(safeHex.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-};
-
-const ANNOUNCEMENT_NOTIFICATION_TYPES = ['domain_distribution_announcement', 'alliance_announcement'];
-const isAnnouncementNotification = (notification) => (
-    ANNOUNCEMENT_NOTIFICATION_TYPES.includes(notification?.type)
-);
-const RIGHT_DOCK_COLLAPSE_MS = 220;
-const isKnowledgeDetailView = (value) => value === 'nodeDetail' || value === 'titleDetail';
-const isTitleBattleView = (value) => value === 'titleDetail';
-const createEmptyNodeDistributionStatus = () => ({
-    nodeId: '',
-    active: false,
-    phase: 'none',
-    requiresManualEntry: false,
-    joined: false,
-    canJoin: false,
-    canExit: false,
-    joinTip: ''
-});
-const createDefaultDistributionPanelState = () => ({
-    loading: false,
-    joining: false,
-    exiting: false,
-    error: '',
-    feedback: '',
-    data: null
-});
-const createEmptyIntelHeistStatus = () => ({
-    loading: false,
-    nodeId: '',
-    canSteal: false,
-    reason: '',
-    latestSnapshot: null
-});
-const CITY_GATE_LABEL_MAP = {
-    cheng: '承门',
-    qi: '启门'
-};
-const normalizeSiegeUnitEntries = (entries = []) => (
-    (Array.isArray(entries) ? entries : [])
-        .map((entry) => ({
-            unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
-            unitName: typeof entry?.unitName === 'string' ? entry.unitName : '',
-            count: Math.max(0, Math.floor(Number(entry?.count) || 0))
-        }))
-        .filter((entry) => entry.unitTypeId && entry.count > 0)
-);
-const normalizeSiegeGateState = (gateState = {}, gateKey = '') => {
-    const attackers = (Array.isArray(gateState?.attackers) ? gateState.attackers : [])
-        .map((attacker) => ({
-            userId: normalizeObjectId(attacker?.userId),
-            username: typeof attacker?.username === 'string' ? attacker.username : '',
-            status: typeof attacker?.status === 'string' ? attacker.status : 'sieging',
-            statusLabel: typeof attacker?.statusLabel === 'string' ? attacker.statusLabel : '',
-            isInitiator: !!attacker?.isInitiator,
-            isReinforcement: !!attacker?.isReinforcement,
-            fromNodeName: typeof attacker?.fromNodeName === 'string' ? attacker.fromNodeName : '',
-            autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(attacker?.autoRetreatPercent) || 40))),
-            totalCount: Math.max(0, Math.floor(Number(attacker?.totalCount) || 0)),
-            remainingSeconds: Math.max(0, Math.floor(Number(attacker?.remainingSeconds) || 0)),
-            units: normalizeSiegeUnitEntries(attacker?.units)
-        }))
-        .filter((attacker) => !!attacker.userId);
-    return {
-        gateKey: gateState?.gateKey || gateKey || '',
-        gateLabel: gateState?.gateLabel || CITY_GATE_LABEL_MAP[gateKey] || gateKey,
-        enabled: !!gateState?.enabled,
-        active: !!gateState?.active,
-        attackerAllianceId: normalizeObjectId(gateState?.attackerAllianceId),
-        initiatorUserId: normalizeObjectId(gateState?.initiatorUserId),
-        initiatorUsername: typeof gateState?.initiatorUsername === 'string' ? gateState.initiatorUsername : '',
-        supportNotifiedAt: gateState?.supportNotifiedAt || null,
-        totalCount: Math.max(0, Math.floor(Number(gateState?.totalCount) || 0)),
-        aggregateUnits: normalizeSiegeUnitEntries(gateState?.aggregateUnits),
-        attackers
-    };
-};
-const createEmptySiegeStatus = () => ({
-    loading: false,
-    viewerRole: 'common',
-    nodeId: '',
-    nodeName: '',
-    hasActiveSiege: false,
-    activeGateKeys: [],
-    preferredGate: '',
-    compareGate: '',
-    canStartSiege: false,
-    startDisabledReason: '',
-    canRequestSupport: false,
-    canSupportSameBattlefield: false,
-    supportDisabledReason: '',
-    supportGate: '',
-    canRetreat: false,
-    retreatDisabledReason: '',
-    ownRoster: { totalCount: 0, units: [] },
-    compare: {
-        gateKey: '',
-        gateLabel: '',
-        attacker: { totalCount: 0, units: [], supporters: [] },
-        defender: { source: 'unknown', totalCount: null, gates: [] }
-    },
-    intelUsed: false,
-    intelCapturedAt: null,
-    intelDeploymentUpdatedAt: null,
-    gateStates: {
-        cheng: normalizeSiegeGateState({}, 'cheng'),
-        qi: normalizeSiegeGateState({}, 'qi')
-    }
-});
-const mergeSiegeStatusPreservingIntelView = (previousStatus = {}, nextStatus = {}, targetNodeId = '') => {
-    const prevNodeId = normalizeObjectId(previousStatus?.nodeId);
-    const nextNodeId = normalizeObjectId(nextStatus?.nodeId || targetNodeId);
-    if (!prevNodeId || !nextNodeId || prevNodeId !== nextNodeId) return nextStatus;
-    const previousDefender = previousStatus?.compare?.defender;
-    if (previousDefender?.source !== 'intel') return nextStatus;
-    return {
-        ...nextStatus,
-        compare: {
-            ...(nextStatus?.compare || {}),
-            defender: previousDefender
-        },
-        intelUsed: previousStatus?.intelUsed ?? nextStatus?.intelUsed ?? false,
-        intelCapturedAt: previousStatus?.intelCapturedAt || nextStatus?.intelCapturedAt || null,
-        intelDeploymentUpdatedAt: previousStatus?.intelDeploymentUpdatedAt || nextStatus?.intelDeploymentUpdatedAt || null
-    };
-};
-const normalizeSiegeStatus = (raw = {}, fallbackNodeId = '') => {
-    const source = raw && typeof raw === 'object' ? raw : {};
-    const gateStatesSource = source?.gateStates && typeof source.gateStates === 'object' ? source.gateStates : {};
-    const compareSource = source?.compare && typeof source.compare === 'object' ? source.compare : {};
-    const defenderSource = compareSource?.defender && typeof compareSource.defender === 'object' ? compareSource.defender : {};
-    const attackerSource = compareSource?.attacker && typeof compareSource.attacker === 'object' ? compareSource.attacker : {};
-    const viewerRole = source?.viewerRole === 'domainMaster' || source?.viewerRole === 'domainAdmin'
-        ? source.viewerRole
-        : 'common';
-    return {
-        loading: false,
-        viewerRole,
-        nodeId: normalizeObjectId(source.nodeId) || fallbackNodeId || '',
-        nodeName: typeof source.nodeName === 'string' ? source.nodeName : '',
-        hasActiveSiege: !!source.hasActiveSiege,
-        activeGateKeys: Array.isArray(source.activeGateKeys) ? source.activeGateKeys.filter((key) => key === 'cheng' || key === 'qi') : [],
-        preferredGate: typeof source.preferredGate === 'string' ? source.preferredGate : '',
-        compareGate: typeof source.compareGate === 'string' ? source.compareGate : '',
-        canStartSiege: !!source.canStartSiege,
-        startDisabledReason: typeof source.startDisabledReason === 'string' ? source.startDisabledReason : '',
-        canRequestSupport: !!source.canRequestSupport,
-        canSupportSameBattlefield: !!source.canSupportSameBattlefield,
-        supportDisabledReason: typeof source.supportDisabledReason === 'string' ? source.supportDisabledReason : '',
-        supportGate: typeof source.supportGate === 'string' ? source.supportGate : '',
-        canRetreat: !!source.canRetreat,
-        retreatDisabledReason: typeof source.retreatDisabledReason === 'string' ? source.retreatDisabledReason : '',
-        ownRoster: {
-            totalCount: Math.max(0, Math.floor(Number(source?.ownRoster?.totalCount) || 0)),
-            units: normalizeSiegeUnitEntries(source?.ownRoster?.units)
-        },
-        compare: {
-            gateKey: typeof compareSource.gateKey === 'string' ? compareSource.gateKey : '',
-            gateLabel: typeof compareSource.gateLabel === 'string' ? compareSource.gateLabel : '',
-            attacker: {
-                totalCount: Math.max(0, Math.floor(Number(attackerSource.totalCount) || 0)),
-                units: normalizeSiegeUnitEntries(attackerSource.units),
-                supporters: Array.isArray(attackerSource.supporters)
-                    ? attackerSource.supporters.map((item) => ({
-                        userId: normalizeObjectId(item?.userId),
-                        username: typeof item?.username === 'string' ? item.username : '',
-                        totalCount: Math.max(0, Math.floor(Number(item?.totalCount) || 0)),
-                        status: typeof item?.status === 'string' ? item.status : '',
-                        statusLabel: typeof item?.statusLabel === 'string' ? item.statusLabel : ''
-                    }))
-                    : []
-            },
-            defender: {
-                source: defenderSource?.source === 'intel' ? 'intel' : 'unknown',
-                totalCount: Number.isFinite(Number(defenderSource?.totalCount))
-                    ? Math.max(0, Math.floor(Number(defenderSource.totalCount)))
-                    : null,
-                gates: Array.isArray(defenderSource?.gates)
-                    ? defenderSource.gates.map((gate) => ({
-                        gateKey: typeof gate?.gateKey === 'string' ? gate.gateKey : '',
-                        gateLabel: typeof gate?.gateLabel === 'string' ? gate.gateLabel : '',
-                        highlight: !!gate?.highlight,
-                        unknown: !!gate?.unknown,
-                        enabled: !!gate?.enabled,
-                        totalCount: Number.isFinite(Number(gate?.totalCount))
-                            ? Math.max(0, Math.floor(Number(gate?.totalCount)))
-                            : null,
-                        entries: normalizeSiegeUnitEntries(gate?.entries)
-                    }))
-                    : []
-            }
-        },
-        intelUsed: !!source.intelUsed,
-        intelCapturedAt: source.intelCapturedAt || null,
-        intelDeploymentUpdatedAt: source.intelDeploymentUpdatedAt || null,
-        gateStates: {
-            cheng: normalizeSiegeGateState(gateStatesSource.cheng, 'cheng'),
-            qi: normalizeSiegeGateState(gateStatesSource.qi, 'qi')
-        }
-    };
-};
-
-const getIntelSnapshotAgeMinutesText = (snapshot) => {
-    const capturedAtMs = new Date(snapshot?.capturedAt || 0).getTime();
-    if (!Number.isFinite(capturedAtMs) || capturedAtMs <= 0) return '';
-    const diffMs = Math.max(0, Date.now() - capturedAtMs);
-    const minutes = Math.floor(diffMs / 60000);
-    if (minutes <= 60) {
-        return `${minutes}分钟`;
-    }
-    const hours = diffMs / 3600000;
-    if (hours > 24) {
-        return '>1天前';
-    }
-    return `${hours.toFixed(1)}小时前`;
-};
-
-const formatDateTimeText = (value) => {
-    const ms = new Date(value || 0).getTime();
-    if (!Number.isFinite(ms) || ms <= 0) return '未知';
-    return new Date(ms).toLocaleString('zh-CN', { hour12: false });
-};
-
-const getElapsedMinutesText = (value) => {
-    const ms = new Date(value || 0).getTime();
-    if (!Number.isFinite(ms) || ms <= 0) return '';
-    const diffMs = Math.max(0, Date.now() - ms);
-    const minutes = Math.floor(diffMs / 60000);
-    if (minutes <= 60) {
-        return `${minutes}分钟`;
-    }
-    const hours = diffMs / 3600000;
-    if (hours > 24) {
-        return '>1天前';
-    }
-    return `${hours.toFixed(1)}小时前`;
-};
-
-const normalizeIntelSnapshotGateEntries = (entries = []) => (
-    (Array.isArray(entries) ? entries : [])
-        .map((entry) => ({
-            unitTypeId: typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
-            unitName: typeof entry?.unitName === 'string' ? entry.unitName : '',
-            count: Math.max(0, Math.floor(Number(entry?.count) || 0))
-        }))
-        .filter((entry) => entry.unitTypeId && entry.count > 0)
-);
-
-const normalizeIntelSnapshot = (snapshot = {}) => {
-    const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
-    return {
-        nodeId: typeof source.nodeId === 'string' ? source.nodeId : '',
-        nodeName: typeof source.nodeName === 'string' ? source.nodeName : '',
-        sourceBuildingId: typeof source.sourceBuildingId === 'string' ? source.sourceBuildingId : '',
-        deploymentUpdatedAt: source.deploymentUpdatedAt || null,
-        capturedAt: source.capturedAt || null,
-        gateDefense: {
-            cheng: normalizeIntelSnapshotGateEntries(source?.gateDefense?.cheng),
-            qi: normalizeIntelSnapshotGateEntries(source?.gateDefense?.qi)
-        }
-    };
-};
-const formatCountdownText = (seconds) => {
-    const total = Math.max(0, Math.floor(Number(seconds) || 0));
-    const day = Math.floor(total / 86400);
-    const hour = Math.floor((total % 86400) / 3600);
-    const minute = Math.floor((total % 3600) / 60);
-    const second = total % 60;
-    const hh = String(hour).padStart(2, '0');
-    const mm = String(minute).padStart(2, '0');
-    const ss = String(second).padStart(2, '0');
-    if (day > 0) {
-        return `${day}天 ${hh}:${mm}:${ss}`;
-    }
-    return `${hh}:${mm}:${ss}`;
-};
+const PRIMARY_NAVIGATION_TIMEOUT_MS = 10000;
+const PRIMARY_NAVIGATION_RETRY_DELAYS_MS = [250, 700];
 
 const App = () => {
     const [socket, setSocket] = useState(null);
@@ -541,7 +79,6 @@ const App = () => {
     const socketRef = useRef(null);
     const isRestoringPageRef = useRef(false);
     const hasRestoredPageRef = useRef(false);
-    const isLocationDockExpandedRef = useRef(false);
     const travelStatusRef = useRef({ isTraveling: false, isStopping: false });
     const [isAdmin, setIsAdmin] = useState(false);
     const [adminEntryTab, setAdminEntryTab] = useState('users');
@@ -677,33 +214,7 @@ const App = () => {
     const [currentLocationNodeDetail, setCurrentLocationNodeDetail] = useState(null);
     const [isRefreshingLocationDetail, setIsRefreshingLocationDetail] = useState(false);
     const [travelStatus, setTravelStatus] = useState({ isTraveling: false });
-    const [nodeDistributionStatus, setNodeDistributionStatus] = useState(createEmptyNodeDistributionStatus);
-    const [showDistributionPanel, setShowDistributionPanel] = useState(false);
-    const [distributionPanelState, setDistributionPanelState] = useState(createDefaultDistributionPanelState);
     const [isStoppingTravel, setIsStoppingTravel] = useState(false);
-    const [notifications, setNotifications] = useState([]);
-    const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
-    const [showNotificationsPanel, setShowNotificationsPanel] = useState(false);
-    const [isNotificationsLoading, setIsNotificationsLoading] = useState(false);
-    const [isClearingNotifications, setIsClearingNotifications] = useState(false);
-    const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
-    const [isMarkingAnnouncementsRead, setIsMarkingAnnouncementsRead] = useState(false);
-    const [isLocationDockExpanded, setIsLocationDockExpanded] = useState(false);
-    const [isAnnouncementDockExpanded, setIsAnnouncementDockExpanded] = useState(false);
-    const [announcementDockTab, setAnnouncementDockTab] = useState('system');
-    const [notificationActionId, setNotificationActionId] = useState('');
-    const [adminPendingNodes, setAdminPendingNodes] = useState([]);
-    const [showRelatedDomainsPanel, setShowRelatedDomainsPanel] = useState(false);
-    const [showMilitaryMenu, setShowMilitaryMenu] = useState(false);
-    const [relatedDomainsData, setRelatedDomainsData] = useState({
-        loading: false,
-        error: '',
-        domainMasterDomains: [],
-        domainAdminDomains: [],
-        favoriteDomains: [],
-        recentDomains: []
-    });
-    const [favoriteActionDomainId, setFavoriteActionDomainId] = useState('');
 
     // 首页相关状态
     const [rootNodes, setRootNodes] = useState([]);
@@ -742,47 +253,7 @@ const App = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [view]);
     const [isApplyingDomainMaster, setIsApplyingDomainMaster] = useState(false);
-    const [intelHeistStatus, setIntelHeistStatus] = useState(createEmptyIntelHeistStatus);
-    const [intelHeistDialog, setIntelHeistDialog] = useState({
-        open: false,
-        loading: false,
-        node: null,
-        snapshot: null,
-        error: ''
-    });
-    const [siegeStatus, setSiegeStatus] = useState(createEmptySiegeStatus);
-    const [siegeDialog, setSiegeDialog] = useState({
-        open: false,
-        loading: false,
-        submitting: false,
-        supportSubmitting: false,
-        node: null,
-        error: '',
-        message: ''
-    });
-    const [siegeSupportDraft, setSiegeSupportDraft] = useState({
-        gateKey: '',
-        autoRetreatPercent: 40,
-        units: {}
-    });
     const [siegeSupportStatuses, setSiegeSupportStatuses] = useState([]);
-    const [pveBattleState, setPveBattleState] = useState({
-        open: false,
-        loading: false,
-        error: '',
-        nodeId: '',
-        gateKey: '',
-        data: null
-    });
-    const [siegeBattlefieldPreviewState, setSiegeBattlefieldPreviewState] = useState({
-        open: false,
-        loading: false,
-        error: '',
-        nodeId: '',
-        gateKey: '',
-        gateLabel: '',
-        layoutBundle: null
-    });
 
 
     // 导航路径相关状态
@@ -809,7 +280,168 @@ const App = () => {
     const militaryMenuWrapperRef = useRef(null);
     const senseSelectorAnchorRef = useRef({ x: 0, y: 0, visible: false });
     const knowledgeDomainReturnContextRef = useRef(null);
+    const senseArticleEntryStatusMapRef = useRef({});
+    const primaryNavigationRequestRef = useRef({
+        seq: 0,
+        controller: null,
+        requestKey: '',
+        source: ''
+    });
     const [knowledgeHeaderOffset, setKnowledgeHeaderOffset] = useState(92);
+
+    const delay = useCallback((ms) => new Promise((resolve) => {
+        window.setTimeout(resolve, Math.max(0, Number(ms) || 0));
+    }), []);
+
+    const createPrimaryNavigationTimeoutError = useCallback((timeoutMs) => {
+        const error = new Error(`请求超时（>${Math.round(timeoutMs / 1000)} 秒）`);
+        error.name = 'TimeoutError';
+        error.status = 408;
+        return error;
+    }, []);
+
+    const mergeAbortSignals = useCallback((primarySignal, secondarySignal) => {
+        if (!secondarySignal) return primarySignal;
+        if (!primarySignal) return secondarySignal;
+        if (primarySignal.aborted) return primarySignal;
+        if (secondarySignal.aborted) return secondarySignal;
+
+        const controller = new AbortController();
+        const forwardAbort = (signal) => () => {
+            if (!controller.signal.aborted) {
+                controller.abort(signal.reason);
+            }
+        };
+        primarySignal.addEventListener('abort', forwardAbort(primarySignal), { once: true });
+        secondarySignal.addEventListener('abort', forwardAbort(secondarySignal), { once: true });
+        return controller.signal;
+    }, []);
+
+    const isAbortError = useCallback((error) => (
+        error?.name === 'AbortError'
+        || error?.code === 'ERR_CANCELED'
+    ), []);
+
+    const isRetriablePrimaryNavigationError = useCallback((error) => {
+        if (!error) return false;
+        if (isAbortError(error)) return false;
+        if (error?.name === 'TimeoutError') return true;
+        const status = Number(error?.status || 0);
+        if ([408, 425, 429, 502, 503, 504].includes(status)) {
+            return true;
+        }
+        const message = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
+        return (
+            message.includes('failed to fetch')
+            || message.includes('networkerror')
+            || message.includes('load failed')
+            || message.includes('network request failed')
+        );
+    }, [isAbortError]);
+
+    const beginPrimaryNavigationRequest = useCallback((requestKey = '', source = '') => {
+        const previous = primaryNavigationRequestRef.current;
+        if (previous?.controller && !previous.controller.signal.aborted) {
+            previous.controller.abort(new DOMException('Superseded by a newer primary navigation request', 'AbortError'));
+        }
+
+        const controller = new AbortController();
+        const request = {
+            seq: (previous?.seq || 0) + 1,
+            controller,
+            requestKey,
+            source
+        };
+        primaryNavigationRequestRef.current = request;
+        return request;
+    }, []);
+
+    const isPrimaryNavigationRequestCurrent = useCallback((request) => {
+        if (!request) return false;
+        const current = primaryNavigationRequestRef.current;
+        return current?.seq === request.seq && current?.controller === request.controller;
+    }, []);
+
+    const finishPrimaryNavigationRequest = useCallback((request) => {
+        if (!isPrimaryNavigationRequestCurrent(request)) return;
+        primaryNavigationRequestRef.current = {
+            ...primaryNavigationRequestRef.current,
+            controller: null
+        };
+    }, [isPrimaryNavigationRequestCurrent]);
+
+    const fetchPrimaryNavigationResponse = useCallback(async (url, request, options = {}) => {
+        const timeoutMs = Math.max(1000, Number(options?.timeoutMs) || PRIMARY_NAVIGATION_TIMEOUT_MS);
+        const retryDelays = Array.isArray(options?.retryDelaysMs) && options.retryDelaysMs.length > 0
+            ? options.retryDelaysMs
+            : PRIMARY_NAVIGATION_RETRY_DELAYS_MS;
+
+        for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+            if (!isPrimaryNavigationRequestCurrent(request)) {
+                return null;
+            }
+
+            const timeoutController = new AbortController();
+            const timeoutId = window.setTimeout(() => {
+                timeoutController.abort(createPrimaryNavigationTimeoutError(timeoutMs));
+            }, timeoutMs);
+
+            try {
+                const signal = mergeAbortSignals(request?.controller?.signal, timeoutController.signal);
+                const response = await fetch(url, { signal });
+
+                if (!isPrimaryNavigationRequestCurrent(request)) {
+                    return null;
+                }
+
+                if ([408, 425, 429, 502, 503, 504].includes(Number(response.status || 0)) && attempt < retryDelays.length) {
+                    console.warn('[primary-navigation] retrying response', {
+                        url,
+                        status: response.status,
+                        attempt: attempt + 1,
+                        requestKey: request?.requestKey || '',
+                        source: request?.source || ''
+                    });
+                    await delay(retryDelays[attempt]);
+                    continue;
+                }
+
+                return response;
+            } catch (error) {
+                if (!isPrimaryNavigationRequestCurrent(request)) {
+                    return null;
+                }
+
+                let resolvedError = error;
+                if (error?.name === 'AbortError' && timeoutController.signal.aborted && timeoutController.signal.reason instanceof Error) {
+                    resolvedError = timeoutController.signal.reason;
+                }
+
+                if (!isRetriablePrimaryNavigationError(resolvedError) || attempt >= retryDelays.length) {
+                    throw resolvedError;
+                }
+
+                console.warn('[primary-navigation] retrying after transient error', {
+                    url,
+                    error: resolvedError?.message || 'request failed',
+                    attempt: attempt + 1,
+                    requestKey: request?.requestKey || '',
+                    source: request?.source || ''
+                });
+                await delay(retryDelays[attempt]);
+            } finally {
+                window.clearTimeout(timeoutId);
+            }
+        }
+
+        return null;
+    }, [
+        createPrimaryNavigationTimeoutError,
+        delay,
+        isPrimaryNavigationRequestCurrent,
+        isRetriablePrimaryNavigationError,
+        mergeAbortSignals
+    ]);
 
     useLayoutEffect(() => {
         const headerEl = headerRef.current;
@@ -879,56 +511,9 @@ const App = () => {
         });
     }, [senseArticleContext, view]);
 
-    const resetAppNavigationStateToHome = useCallback((options = {}) => {
-        const clearHomeCollections = options?.clearHomeCollections === true;
-
-        hasRestoredPageRef.current = true;
-        isRestoringPageRef.current = false;
-        localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
-        localStorage.removeItem('senseArticleContext');
-        localStorage.removeItem('sense-article-editor.preview-pane.v1');
-        localStorage.removeItem('sense-article-editor.preview-pane.v2');
-        knowledgeDomainReturnContextRef.current = null;
-
-        setView('home');
-        setNavigationPath(createHomeNavigationPath());
-        setShowKnowledgeDomain(false);
-        setKnowledgeDomainNode(null);
-        setKnowledgeDomainMode('normal');
-        setDomainTransitionProgress(0);
-        setIsTransitioningToDomain(false);
-        setClickedNodeForTransition(null);
-        setCurrentNodeDetail(null);
-        setCurrentTitleDetail(null);
-        setTitleGraphData(null);
-        setTitleRelationInfo(null);
-        setSenseArticleContext(null);
-        setShowNodeInfoModal(false);
-        setNodeInfoModalTarget(null);
-        setShowAssociationModal(false);
-        setViewingAssociationNode(null);
-        setShowCreateNodeModal(false);
-        setSenseSelectorSourceNode(null);
-        setSenseSelectorSourceSceneNodeId('');
-        setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
-        setIsSenseSelectorVisible(false);
-        setSenseSelectorOverviewNode(null);
-        setSenseSelectorOverviewLoading(false);
-        setSenseSelectorOverviewError('');
-        setHomeSearchQuery('');
-        setHomeSearchResults([]);
-        setShowSearchResults(false);
-        setShowNotificationsPanel(false);
-        setShowRelatedDomainsPanel(false);
-        setShowMilitaryMenu(false);
-        setShowDistributionPanel(false);
-        setIsLocationDockExpanded(false);
-        setIsAnnouncementDockExpanded(false);
-        if (clearHomeCollections) {
-            setRootNodes([]);
-            setFeaturedNodes([]);
-        }
-    }, []);
+    useEffect(() => {
+        senseArticleEntryStatusMapRef.current = senseArticleEntryStatusMap;
+    }, [senseArticleEntryStatusMap]);
 
     // 初始化WebGL场景
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1106,7 +691,7 @@ const App = () => {
             };
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [view, currentNodeDetail, currentTitleDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
+    }, [view, currentNodeDetail, currentTitleDetail, isAdmin, userLocation, travelStatus.isTraveling]);
 
     useEffect(() => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
@@ -1353,23 +938,6 @@ const App = () => {
     }
   };
 
-  const handleRefreshLocationNodeDetail = async () => {
-    if (!userLocation || userLocation === '任意') return;
-    await fetchLocationNodeDetail(userLocation, { silent: false });
-  };
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const wasExpanded = isLocationDockExpandedRef.current;
-    isLocationDockExpandedRef.current = isLocationDockExpanded;
-    if (!isLocationDockExpanded || wasExpanded) return;
-    if (isAdmin || travelStatus?.isTraveling) return;
-    const locationName = (userLocation || '').trim();
-    if (!locationName || locationName === '任意') return;
-    fetchLocationNodeDetail(locationName, { silent: false });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLocationDockExpanded, isAdmin, travelStatus?.isTraveling, userLocation]);
-
   const syncUserLocation = (location) => {
     const nextLocation = location || '';
     const prevLocation = userLocation || '';
@@ -1385,7 +953,7 @@ const App = () => {
     localStorage.setItem('userLocation', location);
   };
 
-  const parseApiResponse = async (response) => {
+  const parseApiResponse = useCallback(async (response) => {
     const rawText = await response.text();
     let data = null;
     try {
@@ -1394,9 +962,9 @@ const App = () => {
       data = null;
     }
     return { response, data, rawText };
-  };
+  }, []);
 
-  const getApiErrorMessage = ({ response, data, rawText }, fallbackText) => {
+  const getApiErrorMessage = useCallback(({ response, data, rawText }, fallbackText) => {
     if (data?.error) return data.error;
     if (data?.message) return data.message;
     if (typeof rawText === 'string' && rawText.includes('Cannot POST /api/travel/start')) {
@@ -1412,7 +980,136 @@ const App = () => {
       return '移动预估接口不存在（后端可能未重启，请重启后端服务）';
     }
     return `${fallbackText}（HTTP ${response.status}）`;
-  };
+  }, []);
+
+  const {
+    notifications,
+    notificationUnreadCount,
+    isNotificationsLoading,
+    isClearingNotifications,
+    isMarkingAllRead,
+    isMarkingAnnouncementsRead,
+    notificationActionId,
+    adminPendingNodes,
+    pendingMasterApplyCount,
+    systemAnnouncements,
+    allianceAnnouncements,
+    announcementUnreadCount,
+    notificationBadgeCount,
+    fetchNotifications,
+    fetchAdminPendingNodeReminders,
+    markNotificationRead,
+    markAllNotificationsRead,
+    markAnnouncementNotificationsRead,
+    clearNotifications,
+    respondDomainAdminInvite,
+    resetNotificationCenter
+  } = useNotificationCenter({
+    authenticated,
+    isAdmin,
+    parseApiResponse,
+    getApiErrorMessage
+  });
+
+  const {
+    showNotificationsPanel,
+    showRelatedDomainsPanel,
+    showMilitaryMenu,
+    isLocationDockExpanded,
+    isAnnouncementDockExpanded,
+    announcementDockTab,
+    relatedDomainsData,
+    favoriteActionDomainId,
+    domainMasterDomains,
+    domainAdminDomains,
+    favoriteDomains,
+    recentDomains,
+    favoriteDomainSet,
+    relatedDomainCount,
+    announcementGroups,
+    isLocationDockExpandedRef,
+    setShowNotificationsPanel,
+    setShowMilitaryMenu,
+    setIsLocationDockExpanded,
+    setIsAnnouncementDockExpanded,
+    setAnnouncementDockTab,
+    fetchRelatedDomains,
+    toggleFavoriteDomain,
+    toggleNotificationsPanel,
+    toggleRelatedDomainsPanel,
+    toggleMilitaryMenu,
+    closeHeaderPanels,
+    collapseRightDocksBeforeNavigation,
+    handleRefreshLocationNodeDetail,
+    resetAppShellState
+  } = useAppShellState({
+    authenticated,
+    isAdmin,
+    parseApiResponse,
+    getApiErrorMessage,
+    notificationsWrapperRef,
+    relatedDomainsWrapperRef,
+    militaryMenuWrapperRef,
+    fetchNotifications,
+    fetchAdminPendingNodeReminders,
+    systemAnnouncements,
+    allianceAnnouncements,
+    view,
+    currentNodeDetail,
+    currentTitleDetail,
+    userLocation,
+    travelStatus,
+    fetchLocationNodeDetail
+  });
+
+  function resetAppNavigationStateToHome(options = {}) {
+    const clearHomeCollections = options?.clearHomeCollections === true;
+
+    hasRestoredPageRef.current = true;
+    isRestoringPageRef.current = false;
+    localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
+    localStorage.removeItem('senseArticleContext');
+    localStorage.removeItem('sense-article-editor.preview-pane.v1');
+    localStorage.removeItem('sense-article-editor.preview-pane.v2');
+    knowledgeDomainReturnContextRef.current = null;
+
+    setView('home');
+    setNavigationPath(createHomeNavigationPath());
+    setShowKnowledgeDomain(false);
+    setKnowledgeDomainNode(null);
+    setKnowledgeDomainMode('normal');
+    setDomainTransitionProgress(0);
+    setIsTransitioningToDomain(false);
+    setClickedNodeForTransition(null);
+    setCurrentNodeDetail(null);
+    setCurrentTitleDetail(null);
+    setTitleGraphData(null);
+    setTitleRelationInfo(null);
+    setSenseArticleContext(null);
+    setShowNodeInfoModal(false);
+    setNodeInfoModalTarget(null);
+    setShowAssociationModal(false);
+    setViewingAssociationNode(null);
+    setShowCreateNodeModal(false);
+    setSenseSelectorSourceNode(null);
+    setSenseSelectorSourceSceneNodeId('');
+    setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
+    setIsSenseSelectorVisible(false);
+    setSenseSelectorOverviewNode(null);
+    setSenseSelectorOverviewLoading(false);
+    setSenseSelectorOverviewError('');
+    setHomeSearchQuery('');
+    setHomeSearchResults([]);
+    setShowSearchResults(false);
+    closeHeaderPanels();
+    resetDistributionState();
+    setIsLocationDockExpanded(false);
+    setIsAnnouncementDockExpanded(false);
+    if (clearHomeCollections) {
+      setRootNodes([]);
+      setFeaturedNodes([]);
+    }
+  }
 
   const fetchHeaderUserStats = useCallback(async ({ silent = true } = {}) => {
     const token = localStorage.getItem('token');
@@ -1463,7 +1160,7 @@ const App = () => {
       setHeaderUserStats((prev) => ({ ...prev, loading: false }));
       return null;
     }
-  }, [authenticated]);
+  }, [authenticated, parseApiResponse]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -1500,75 +1197,6 @@ const App = () => {
     };
   }, [authenticated, fetchHeaderUserStats]);
 
-  const fetchRelatedDomains = async (silent = true) => {
-    const token = localStorage.getItem('token');
-    if (!token) return null;
-
-    if (!silent) {
-      setRelatedDomainsData((prev) => ({ ...prev, loading: true, error: '' }));
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/nodes/me/related-domains`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-
-      if (!response.ok || !data) {
-        const errorText = getApiErrorMessage(parsed, '获取相关知识域失败');
-        setRelatedDomainsData((prev) => ({
-          ...prev,
-          loading: false,
-          error: errorText
-        }));
-        return null;
-      }
-
-      const nextData = {
-        loading: false,
-        error: '',
-        domainMasterDomains: data.domainMasterDomains || [],
-        domainAdminDomains: data.domainAdminDomains || [],
-        favoriteDomains: data.favoriteDomains || [],
-        recentDomains: data.recentDomains || []
-      };
-      setRelatedDomainsData(nextData);
-      return nextData;
-    } catch (error) {
-      setRelatedDomainsData((prev) => ({
-        ...prev,
-        loading: false,
-        error: `获取相关知识域失败: ${error.message}`
-      }));
-      return null;
-    }
-  };
-
-  const toggleFavoriteDomain = async (domainId) => {
-    const token = localStorage.getItem('token');
-    const normalizedId = normalizeObjectId(domainId);
-    if (!token || !normalizedId) return;
-
-    setFavoriteActionDomainId(normalizedId);
-    try {
-      const response = await fetch(`${API_BASE}/nodes/${normalizedId}/favorite`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const parsed = await parseApiResponse(response);
-      if (!response.ok) {
-        window.alert(getApiErrorMessage(parsed, '更新收藏失败'));
-        return;
-      }
-      await fetchRelatedDomains(true);
-    } catch (error) {
-      window.alert(`更新收藏失败: ${error.message}`);
-    } finally {
-      setFavoriteActionDomainId('');
-    }
-  };
-
   const trackRecentDomain = async (nodeOrId, options = {}) => {
     const token = localStorage.getItem('token');
     const domainId = normalizeObjectId(nodeOrId?._id || nodeOrId);
@@ -1599,239 +1227,6 @@ const App = () => {
     const value = Number(node?.knowledgePoint?.value);
     if (!Number.isFinite(value)) return '知识点: --';
     return `知识点: ${value.toFixed(2)}`;
-  };
-
-  const fetchNotifications = async (silent = true) => {
-    const token = localStorage.getItem('token');
-    if (!token) return null;
-
-    if (!silent) {
-      setIsNotificationsLoading(true);
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/notifications`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-
-      if (!response.ok || !data) {
-        if (!silent) {
-          window.alert(getApiErrorMessage(parsed, '获取通知失败'));
-        }
-        return null;
-      }
-
-      setNotifications(data.notifications || []);
-      setNotificationUnreadCount(data.unreadCount || 0);
-      return data;
-    } catch (error) {
-      if (!silent) {
-        window.alert(`获取通知失败: ${error.message}`);
-      }
-      return null;
-    } finally {
-      if (!silent) {
-        setIsNotificationsLoading(false);
-      }
-    }
-  };
-
-  const fetchAdminPendingNodeReminders = async (silent = true) => {
-    const token = localStorage.getItem('token');
-    if (!token || !isAdmin) {
-      setAdminPendingNodes([]);
-      return [];
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/nodes/pending`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-
-      if (!response.ok || !Array.isArray(data)) {
-        if (!silent) {
-          window.alert(getApiErrorMessage(parsed, '获取待审批创建申请失败'));
-        }
-        return [];
-      }
-
-      setAdminPendingNodes(data);
-      return data;
-    } catch (error) {
-      if (!silent) {
-        window.alert(`获取待审批创建申请失败: ${error.message}`);
-      }
-      return [];
-    }
-  };
-
-  const markNotificationRead = async (notificationId) => {
-    const token = localStorage.getItem('token');
-    if (!token || !notificationId) return;
-    const target = notifications.find((item) => item._id === notificationId);
-    if (target?.read) return;
-
-    try {
-      const response = await fetch(`${API_BASE}/notifications/${notificationId}/read`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const parsed = await parseApiResponse(response);
-      if (!response.ok) {
-        window.alert(getApiErrorMessage(parsed, '标记已读失败'));
-        return;
-      }
-
-      setNotifications((prev) => prev.map((item) => (
-        item._id === notificationId ? { ...item, read: true } : item
-      )));
-      if (!target?.read) {
-        setNotificationUnreadCount((prev) => Math.max(0, prev - 1));
-      }
-    } catch (error) {
-      window.alert(`标记已读失败: ${error.message}`);
-    }
-  };
-
-  const markAllNotificationsRead = async () => {
-    const token = localStorage.getItem('token');
-    if (!token || notificationUnreadCount <= 0) return;
-
-    setIsMarkingAllRead(true);
-    try {
-      const response = await fetch(`${API_BASE}/notifications/read-all`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const parsed = await parseApiResponse(response);
-      if (!response.ok || !parsed.data) {
-        return;
-      }
-
-      setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
-      setNotificationUnreadCount(0);
-    } catch (error) {
-      // 忽略提示，避免打断用户
-    } finally {
-      setIsMarkingAllRead(false);
-    }
-  };
-
-  const markAnnouncementNotificationsRead = async () => {
-    const token = localStorage.getItem('token');
-    if (!token || isMarkingAnnouncementsRead) return;
-
-    const unreadAnnouncementIds = notifications
-      .filter((notification) => (
-        isAnnouncementNotification(notification) &&
-        !notification.read &&
-        notification._id
-      ))
-      .map((notification) => notification._id);
-
-    if (unreadAnnouncementIds.length === 0) {
-      return;
-    }
-
-    setIsMarkingAnnouncementsRead(true);
-    setNotifications((prev) => prev.map((item) => (
-      isAnnouncementNotification(item) ? { ...item, read: true } : item
-    )));
-    setNotificationUnreadCount((prev) => Math.max(0, prev - unreadAnnouncementIds.length));
-
-    try {
-      await Promise.all(unreadAnnouncementIds.map(async (notificationId) => {
-        const response = await fetch(`${API_BASE}/notifications/${notificationId}/read`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        });
-        if (!response.ok) {
-          throw new Error('标记公告已读失败');
-        }
-      }));
-    } catch (error) {
-      await fetchNotifications(true);
-      if (isAdmin) {
-        await fetchAdminPendingNodeReminders(true);
-      }
-    } finally {
-      setIsMarkingAnnouncementsRead(false);
-    }
-  };
-
-  const clearNotifications = async () => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
-
-    if (!notifications.length) return;
-
-    setIsClearingNotifications(true);
-    try {
-      const response = await fetch(`${API_BASE}/notifications/clear`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-      if (!response.ok || !data) {
-        window.alert(getApiErrorMessage(parsed, '清空通知失败'));
-        return;
-      }
-
-      await fetchNotifications(true);
-      if (isAdmin) {
-        await fetchAdminPendingNodeReminders(true);
-      }
-    } catch (error) {
-      window.alert(`清空通知失败: ${error.message}`);
-    } finally {
-      setIsClearingNotifications(false);
-    }
-  };
-
-  const respondDomainAdminInvite = async (notificationId, action) => {
-    const token = localStorage.getItem('token');
-    if (!token || !notificationId) return;
-
-    const actionKey = `${notificationId}:${action}`;
-    setNotificationActionId(actionKey);
-
-    try {
-      const response = await fetch(`${API_BASE}/notifications/${notificationId}/respond`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ action })
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-
-      if (!response.ok || !data) {
-        window.alert(getApiErrorMessage(parsed, '处理失败'));
-        return;
-      }
-
-      window.alert(data.message || '处理完成');
-      await fetchNotifications(true);
-    } catch (error) {
-      window.alert(`处理失败: ${error.message}`);
-    } finally {
-      setNotificationActionId('');
-    }
   };
 
   const applyDomainMaster = async (nodeId, reason) => {
@@ -1936,6 +1331,45 @@ const App = () => {
     }
   };
 
+  const {
+    intelHeistStatus,
+    intelHeistDialog,
+    siegeStatus,
+    siegeDialog,
+    siegeSupportDraft,
+    pveBattleState,
+    siegeBattlefieldPreviewState,
+    setIntelHeistDialog,
+    setSiegeSupportDraft,
+    fetchSiegeStatus,
+    fetchIntelHeistStatus,
+    clearSiegeStatus,
+    resetDomainConflictState,
+    refreshDomainConflictForNode,
+    closeIntelHeistDialog,
+    resetSiegeDialog,
+    closeSiegePveBattle,
+    closeSiegeBattlefieldPreview,
+    handleIntelHeistSnapshotCaptured,
+    handleSiegeAction,
+    startSiege,
+    requestSiegeSupport,
+    retreatSiege,
+    submitSiegeSupport,
+    handleOpenSiegeBattlefieldPreview,
+    handleOpenSiegePveBattle,
+    handlePveBattleFinished
+  } = useDomainConflictState({
+    authenticated,
+    isAdmin,
+    currentTitleDetail,
+    currentNodeDetail,
+    parseApiResponse,
+    getApiErrorMessage,
+    fetchNotifications,
+    fetchSiegeSupportStatuses
+  });
+
   const fetchTravelStatus = async (silent = true) => {
     const token = localStorage.getItem('token');
     if (!token) return null;
@@ -1981,92 +1415,6 @@ const App = () => {
     } catch (error) {
       if (!silent) {
         window.alert(`获取移动状态失败: ${error.message}`);
-      }
-      return null;
-    }
-  };
-
-  const normalizeDistributionParticipationData = (raw = {}, fallbackNodeId = '') => {
-    const rawPool = raw?.pool && typeof raw.pool === 'object' ? raw.pool : {};
-    const hasRewardValue = rawPool.rewardValue !== null && rawPool.rewardValue !== undefined;
-    const parsedRewardValue = Number(rawPool.rewardValue);
-    return {
-      active: !!raw.active,
-      nodeId: normalizeObjectId(raw.nodeId) || fallbackNodeId || '',
-      nodeName: raw.nodeName || '',
-      phase: raw.phase || 'none',
-      executeAt: raw.executeAt || null,
-      entryCloseAt: raw.entryCloseAt || null,
-      endAt: raw.endAt || null,
-      executedAt: raw.executedAt || null,
-      secondsToEntryClose: Number(raw.secondsToEntryClose || 0),
-      secondsToExecute: Number(raw.secondsToExecute || 0),
-      secondsToEnd: Number(raw.secondsToEnd || 0),
-      requiresManualEntry: !!raw.requiresManualEntry,
-      autoEntry: !!raw.autoEntry,
-      joined: !!raw.joined,
-      joinedManual: !!raw.joinedManual,
-      canJoin: !!raw.canJoin,
-      canExit: !!raw.canExit,
-      canExitWithoutConfirm: !!raw.canExitWithoutConfirm,
-      joinTip: raw.joinTip || '',
-      participantTotal: Number(raw.participantTotal || 0),
-      pool: {
-        key: rawPool.key || '',
-        label: rawPool.label || '',
-        poolPercent: Number(rawPool.poolPercent || 0),
-        participantCount: Number(rawPool.participantCount || 0),
-        userActualPercent: Number(rawPool.userActualPercent || 0),
-        estimatedReward: Number(rawPool.estimatedReward || 0),
-        rewardValue: hasRewardValue && Number.isFinite(parsedRewardValue) ? parsedRewardValue : null,
-        rewardFrozen: !!rawPool.rewardFrozen,
-        users: Array.isArray(rawPool.users) ? rawPool.users : []
-      }
-    };
-  };
-
-  const fetchDistributionParticipationStatus = async (nodeId, silent = true, options = {}) => {
-    const token = localStorage.getItem('token');
-    if (!token || !nodeId || isAdmin) {
-      return null;
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/nodes/${nodeId}/distribution-participation`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-
-      if (!response.ok || !data) {
-        if (!silent) {
-          window.alert(getApiErrorMessage(parsed, '获取分发参与状态失败'));
-        }
-        return null;
-      }
-      const normalized = normalizeDistributionParticipationData(data, nodeId);
-      setNodeDistributionStatus({
-        nodeId: normalized.nodeId,
-        active: normalized.active,
-        phase: normalized.phase,
-        requiresManualEntry: normalized.requiresManualEntry,
-        joined: normalized.joined,
-        canJoin: normalized.canJoin,
-        canExit: normalized.canExit,
-        joinTip: normalized.joinTip
-      });
-      if (options.updatePanel) {
-        setDistributionPanelState((prev) => ({
-          ...prev,
-          data: normalized,
-          loading: false,
-          error: ''
-        }));
-      }
-      return normalized;
-    } catch (error) {
-      if (!silent) {
-        window.alert(`获取分发参与状态失败: ${error.message}`);
       }
       return null;
     }
@@ -2185,8 +1533,7 @@ const App = () => {
     if (!targetNode || !targetNode._id) return;
     const promptMode = options?.promptMode === 'distribution' ? 'distribution' : 'default';
     // 触发移动前先收起顶部弹层，避免“我的知识域”面板遮挡移动状态反馈。
-    setShowRelatedDomainsPanel(false);
-    setShowNotificationsPanel(false);
+    closeHeaderPanels();
 
     if (isAdmin) {
       window.alert('管理员不可执行移动操作');
@@ -2246,6 +1593,25 @@ const App = () => {
     return startResult === 'queued';
   };
 
+  const {
+    nodeDistributionStatus,
+    showDistributionPanel,
+    distributionPanelState,
+    fetchDistributionParticipationStatus,
+    handleDistributionParticipationAction,
+    closeDistributionPanel,
+    resetDistributionState,
+    joinDistributionFromPanel,
+    exitDistributionFromPanel
+  } = useDistributionPanelState({
+    isAdmin,
+    currentTitleDetail,
+    userLocation,
+    parseApiResponse,
+    getApiErrorMessage,
+    handleMoveToNode
+  });
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!authenticated || isAdmin) {
@@ -2282,7 +1648,7 @@ const App = () => {
   useEffect(() => {
     const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
     if (!authenticated || isAdmin || !isTitleBattleView(view) || !targetNodeId) {
-      setNodeDistributionStatus(createEmptyNodeDistributionStatus());
+      resetDistributionState();
       return undefined;
     }
 
@@ -2300,7 +1666,7 @@ const App = () => {
     if (!showDistributionPanel) return undefined;
     const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
     if (!targetNodeId || !isTitleBattleView(view)) {
-      setShowDistributionPanel(false);
+      closeDistributionPanel();
       return undefined;
     }
     fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
@@ -2312,10 +1678,10 @@ const App = () => {
   }, [showDistributionPanel, view, currentTitleDetail?._id]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
-    if (!authenticated || isAdmin || !isTitleBattleView(view) || !targetNodeId) {
-      setSiegeStatus(createEmptySiegeStatus());
+    useEffect(() => {
+        const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
+        if (!authenticated || isAdmin || !isTitleBattleView(view) || !targetNodeId) {
+      clearSiegeStatus();
       return undefined;
     }
 
@@ -2326,33 +1692,6 @@ const App = () => {
     return () => clearInterval(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, isAdmin, view, currentTitleDetail?._id, userLocation, travelStatus.isTraveling, siegeDialog.open]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!authenticated) {
-      setNotifications([]);
-      setNotificationUnreadCount(0);
-      setShowNotificationsPanel(false);
-      setAdminPendingNodes([]);
-      return;
-    }
-
-    fetchNotifications(true);
-    if (isAdmin) {
-      fetchAdminPendingNodeReminders(true);
-    } else {
-      setAdminPendingNodes([]);
-    }
-    const timer = setInterval(() => {
-      fetchNotifications(true);
-      if (isAdmin) {
-        fetchAdminPendingNodeReminders(true);
-      }
-    }, 8000);
-
-    return () => clearInterval(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated, isAdmin]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -2370,31 +1709,6 @@ const App = () => {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, authenticated, isAdmin]);
-
-  useEffect(() => {
-    if (!authenticated || isAdmin) {
-      setRelatedDomainsData({
-        loading: false,
-        error: '',
-        domainMasterDomains: [],
-        domainAdminDomains: [],
-        favoriteDomains: [],
-        recentDomains: []
-      });
-      setShowRelatedDomainsPanel(false);
-      return;
-    }
-
-    fetchRelatedDomains(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated, isAdmin]);
-
-  useEffect(() => {
-    if (!showRelatedDomainsPanel) return;
-    if (!authenticated || isAdmin) return;
-    fetchRelatedDomains(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showRelatedDomainsPanel, authenticated, isAdmin]);
 
   useEffect(() => {
     if (!authenticated || showLocationModal || hasRestoredPageRef.current) return;
@@ -2529,51 +1843,6 @@ const App = () => {
     }
   }, [authenticated, showLocationModal, view, isAdmin, currentNodeDetail, currentTitleDetail]);
 
-  useEffect(() => {
-    if (!showNotificationsPanel) return undefined;
-
-    const handleClickOutside = (event) => {
-      if (notificationsWrapperRef.current && !notificationsWrapperRef.current.contains(event.target)) {
-        setShowNotificationsPanel(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showNotificationsPanel]);
-
-  useEffect(() => {
-    if (!showRelatedDomainsPanel) return undefined;
-
-    const handleClickOutside = (event) => {
-      if (relatedDomainsWrapperRef.current && !relatedDomainsWrapperRef.current.contains(event.target)) {
-        setShowRelatedDomainsPanel(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showRelatedDomainsPanel]);
-
-  useEffect(() => {
-    if (!showMilitaryMenu) return undefined;
-
-    const handleClickOutside = (event) => {
-      if (militaryMenuWrapperRef.current && !militaryMenuWrapperRef.current.contains(event.target)) {
-        setShowMilitaryMenu(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showMilitaryMenu]);
-
     const handleLogout = () => {
         clearStoredAuthState();
         hasRestoredPageRef.current = false;
@@ -2588,44 +1857,16 @@ const App = () => {
         setUserLocation('');
         applyTravelStatus({ isTraveling: false });
         setIsStoppingTravel(false);
-        setNotifications([]);
-        setNotificationUnreadCount(0);
-        setShowNotificationsPanel(false);
-        setIsNotificationsLoading(false);
-        setNotificationActionId('');
-        setAdminPendingNodes([]);
-        setShowRelatedDomainsPanel(false);
-        setShowMilitaryMenu(false);
-        setRelatedDomainsData({
-            loading: false,
-            error: '',
-            domainMasterDomains: [],
-            domainAdminDomains: [],
-            favoriteDomains: [],
-            recentDomains: []
-        });
-        setFavoriteActionDomainId('');
+        resetNotificationCenter();
+        resetAppShellState();
         setIsApplyingDomainMaster(false);
         setCurrentLocationNodeDetail(null);
         setUserAvatar('default_male_1');
         setSelectedLocationNode(null);
         setShowLocationModal(false);
-        setSiegeStatus(createEmptySiegeStatus());
+        resetDistributionState();
+        resetDomainConflictState();
         setSiegeSupportStatuses([]);
-        setSiegeSupportDraft({
-            gateKey: '',
-            autoRetreatPercent: 40,
-            units: {}
-        });
-        setSiegeDialog({
-            open: false,
-            loading: false,
-            submitting: false,
-            supportSubmitting: false,
-            node: null,
-            error: '',
-            message: ''
-        });
         
         // 清理socket连接和引用
         if (socket) {
@@ -2837,17 +2078,6 @@ const App = () => {
         return `${mins} 分 ${remain} 秒`;
     };
 
-    const collapseRightDocksBeforeNavigation = async () => {
-        if (isAdmin) return;
-        const hasExpanded = isLocationDockExpanded || isAnnouncementDockExpanded;
-        if (!hasExpanded) return;
-        setIsLocationDockExpanded(false);
-        setIsAnnouncementDockExpanded(false);
-        await new Promise((resolve) => {
-            setTimeout(resolve, RIGHT_DOCK_COLLAPSE_MS);
-        });
-    };
-
     const closeKnowledgeDomainBeforeNavigation = () => {
         if (showKnowledgeDomain || isTransitioningToDomain || knowledgeDomainNode) {
             setShowKnowledgeDomain(false);
@@ -2859,8 +2089,7 @@ const App = () => {
             knowledgeDomainReturnContextRef.current = null;
         }
         if (showDistributionPanel) {
-            setShowDistributionPanel(false);
-            setDistributionPanelState(createDefaultDistributionPanelState());
+            closeDistributionPanel();
         }
         if (siegeDialog.open) {
             resetSiegeDialog();
@@ -2884,162 +2113,6 @@ const App = () => {
         setIsSenseSelectorVisible(false);
         setSenseSelectorSourceNode(null);
         setNavigationPath(createHomeNavigationPath());
-    };
-
-    const resetSiegeDialog = () => {
-        setSiegeDialog({
-            open: false,
-            loading: false,
-            submitting: false,
-            supportSubmitting: false,
-            node: null,
-            error: '',
-            message: ''
-        });
-        setSiegeBattlefieldPreviewState({
-            open: false,
-            loading: false,
-            error: '',
-            nodeId: '',
-            gateKey: '',
-            gateLabel: '',
-            layoutBundle: null
-        });
-    };
-
-    const buildInitialSiegeSupportDraft = (status) => {
-        const units = {};
-        (status?.ownRoster?.units || []).forEach((entry) => {
-            if (!entry?.unitTypeId) return;
-            units[entry.unitTypeId] = 0;
-        });
-        return {
-            gateKey: status?.supportGate || status?.compareGate || status?.preferredGate || '',
-            autoRetreatPercent: 40,
-            units
-        };
-    };
-
-    const fetchSiegeStatus = async (targetNodeId, { silent = true, force = false, preserveIntelView = false } = {}) => {
-        const token = localStorage.getItem('token');
-        if (!token || !targetNodeId || !authenticated || isAdmin) {
-            if (!silent) {
-                setSiegeStatus(createEmptySiegeStatus());
-            }
-            return null;
-        }
-
-        if (!silent) {
-            setSiegeStatus((prev) => ({
-                ...prev,
-                loading: true,
-                nodeId: targetNodeId
-            }));
-        }
-
-        try {
-            const requestUrl = force
-                ? `${API_BASE}/nodes/${targetNodeId}/siege?_=${Date.now()}`
-                : `${API_BASE}/nodes/${targetNodeId}/siege`;
-            const response = await fetch(requestUrl, {
-                headers: { Authorization: `Bearer ${token}` },
-                cache: 'no-store'
-            });
-            const parsed = await parseApiResponse(response);
-            if (!response.ok || !parsed.data) {
-                const fallback = createEmptySiegeStatus();
-                const next = {
-                    ...fallback,
-                    loading: false,
-                    nodeId: targetNodeId,
-                    startDisabledReason: getApiErrorMessage(parsed, '无法获取围城状态'),
-                    supportDisabledReason: getApiErrorMessage(parsed, '无法获取围城状态')
-                };
-                let resolved = next;
-                setSiegeStatus((prev) => {
-                    resolved = preserveIntelView ? mergeSiegeStatusPreservingIntelView(prev, next, targetNodeId) : next;
-                    return resolved;
-                });
-                return resolved;
-            }
-            const normalized = normalizeSiegeStatus(parsed.data, targetNodeId);
-            let resolved = normalized;
-            setSiegeStatus((prev) => {
-                resolved = preserveIntelView ? mergeSiegeStatusPreservingIntelView(prev, normalized, targetNodeId) : normalized;
-                return resolved;
-            });
-            return resolved;
-        } catch (error) {
-            const fallback = createEmptySiegeStatus();
-            const next = {
-                ...fallback,
-                loading: false,
-                nodeId: targetNodeId,
-                startDisabledReason: `获取围城状态失败: ${error.message}`,
-                supportDisabledReason: `获取围城状态失败: ${error.message}`
-            };
-            let resolved = next;
-            setSiegeStatus((prev) => {
-                resolved = preserveIntelView ? mergeSiegeStatusPreservingIntelView(prev, next, targetNodeId) : next;
-                return resolved;
-            });
-            return resolved;
-        }
-    };
-
-    const fetchIntelHeistStatus = async (targetNodeId, { silent = true } = {}) => {
-        const token = localStorage.getItem('token');
-        if (!token || !targetNodeId || !authenticated || isAdmin) {
-            if (!silent) {
-                setIntelHeistStatus(createEmptyIntelHeistStatus());
-            }
-            return null;
-        }
-
-        if (!silent) {
-            setIntelHeistStatus((prev) => ({
-                ...prev,
-                loading: true,
-                nodeId: targetNodeId
-            }));
-        }
-
-        try {
-            const response = await fetch(`${API_BASE}/nodes/${targetNodeId}/intel-heist`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            const data = await response.json();
-            if (!response.ok || !data) {
-                const next = {
-                    loading: false,
-                    nodeId: targetNodeId,
-                    canSteal: false,
-                    reason: data?.error || '无法获取情报窃取状态',
-                    latestSnapshot: null
-                };
-                setIntelHeistStatus(next);
-                return next;
-            }
-            const next = {
-                loading: false,
-                nodeId: targetNodeId,
-                canSteal: !!data.canSteal,
-                reason: data.reason || '',
-                latestSnapshot: data.latestSnapshot ? normalizeIntelSnapshot(data.latestSnapshot) : null
-            };
-            setIntelHeistStatus(next);
-            return next;
-        } catch (error) {
-            const next = {
-                loading: false,
-                nodeId: targetNodeId,
-                canSteal: false,
-                reason: `获取情报窃取状态失败: ${error.message}`,
-                latestSnapshot: null
-            };
-            setIntelHeistStatus(next);
-            return next;
-        }
     };
 
     const startIntelHeistMiniGame = (targetNode) => {
@@ -3100,400 +2173,6 @@ const App = () => {
         }));
     };
 
-    const handleIntelHeistSnapshotCaptured = (snapshot, nodeInfo) => {
-        const normalized = snapshot ? normalizeIntelSnapshot(snapshot) : null;
-        const targetNodeId = normalizeObjectId(nodeInfo?._id || snapshot?.nodeId);
-        if (!normalized || !targetNodeId) return;
-        setIntelHeistStatus((prev) => {
-            if (prev.nodeId && prev.nodeId !== targetNodeId) return prev;
-            return {
-                loading: false,
-                nodeId: targetNodeId,
-                canSteal: true,
-                reason: '',
-                latestSnapshot: normalized
-            };
-        });
-        const currentSiegeNodeId = normalizeObjectId(siegeDialog.node?._id || siegeStatus.nodeId);
-        if (currentSiegeNodeId && currentSiegeNodeId === targetNodeId) {
-            fetchSiegeStatus(targetNodeId, { silent: false, force: true, preserveIntelView: true });
-        }
-    };
-
-    const handleSiegeAction = async (targetNode) => {
-        if (!targetNode?._id || isAdmin) return;
-        const nodeId = normalizeObjectId(targetNode._id);
-        if (!nodeId) return;
-
-        setSiegeDialog({
-            open: true,
-            loading: true,
-            submitting: false,
-            supportSubmitting: false,
-            node: targetNode,
-            error: '',
-            message: ''
-        });
-
-        const status = await fetchSiegeStatus(nodeId, { silent: false, force: true, preserveIntelView: true });
-        if (!status) {
-            setSiegeDialog((prev) => ({
-                ...prev,
-                loading: false,
-                error: '无法获取围城状态'
-            }));
-            return;
-        }
-
-        setSiegeSupportDraft(buildInitialSiegeSupportDraft(status));
-        setSiegeDialog((prev) => ({
-            ...prev,
-            loading: false,
-            error: '',
-            message: ''
-        }));
-    };
-
-    const startSiege = async () => {
-        const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
-        if (!token || !nodeId || siegeDialog.submitting) return;
-
-        setSiegeDialog((prev) => ({
-            ...prev,
-            submitting: true,
-            error: '',
-            message: ''
-        }));
-
-        try {
-            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/start`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`
-                }
-            });
-            const parsed = await parseApiResponse(response);
-            if (!response.ok || !parsed.data) {
-                setSiegeDialog((prev) => ({
-                    ...prev,
-                    submitting: false,
-                    error: getApiErrorMessage(parsed, '发起围城失败')
-                }));
-                return;
-            }
-
-            const normalized = normalizeSiegeStatus(parsed.data, nodeId);
-            setSiegeStatus(normalized);
-            setSiegeSupportDraft(buildInitialSiegeSupportDraft(normalized));
-            setSiegeDialog((prev) => ({
-                ...prev,
-                submitting: false,
-                error: '',
-                message: parsed.data.message || '已发起围城'
-            }));
-            await fetchSiegeSupportStatuses(true);
-        } catch (error) {
-            setSiegeDialog((prev) => ({
-                ...prev,
-                submitting: false,
-                error: `发起围城失败: ${error.message}`
-            }));
-        }
-    };
-
-    const requestSiegeSupport = async () => {
-        const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
-        if (!token || !nodeId || siegeDialog.submitting) return;
-
-        setSiegeDialog((prev) => ({
-            ...prev,
-            submitting: true,
-            error: '',
-            message: ''
-        }));
-
-        try {
-            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/request-support`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`
-                }
-            });
-            const parsed = await parseApiResponse(response);
-            if (!response.ok || !parsed.data) {
-                setSiegeDialog((prev) => ({
-                    ...prev,
-                    submitting: false,
-                    error: getApiErrorMessage(parsed, '呼叫支援失败')
-                }));
-                return;
-            }
-
-            const normalized = normalizeSiegeStatus(parsed.data, nodeId);
-            setSiegeStatus(normalized);
-            setSiegeDialog((prev) => ({
-                ...prev,
-                submitting: false,
-                error: '',
-                message: parsed.data.message || '已呼叫熵盟支援'
-            }));
-            await fetchNotifications(true);
-        } catch (error) {
-            setSiegeDialog((prev) => ({
-                ...prev,
-                submitting: false,
-                error: `呼叫支援失败: ${error.message}`
-            }));
-        }
-    };
-
-    const retreatSiege = async () => {
-        const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
-        if (!token || !nodeId || siegeDialog.submitting) return;
-
-        setSiegeDialog((prev) => ({
-            ...prev,
-            submitting: true,
-            error: '',
-            message: ''
-        }));
-
-        try {
-            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/retreat`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`
-                }
-            });
-            const parsed = await parseApiResponse(response);
-            if (!response.ok || !parsed.data) {
-                setSiegeDialog((prev) => ({
-                    ...prev,
-                    submitting: false,
-                    error: getApiErrorMessage(parsed, '撤退失败')
-                }));
-                return;
-            }
-
-            const normalized = normalizeSiegeStatus(parsed.data, nodeId);
-            setSiegeStatus(normalized);
-            setSiegeSupportDraft(buildInitialSiegeSupportDraft(normalized));
-            setSiegeDialog((prev) => ({
-                ...prev,
-                submitting: false,
-                error: '',
-                message: parsed.data.message || '已撤退并取消攻城'
-            }));
-            await fetchSiegeSupportStatuses(true);
-        } catch (error) {
-            setSiegeDialog((prev) => ({
-                ...prev,
-                submitting: false,
-                error: `撤退失败: ${error.message}`
-            }));
-        }
-    };
-
-    const submitSiegeSupport = async () => {
-        const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
-        if (!token || !nodeId || siegeDialog.supportSubmitting) return;
-
-        const units = Object.entries(siegeSupportDraft.units || {})
-            .map(([unitTypeId, count]) => ({
-                unitTypeId,
-                count: Math.max(0, Math.floor(Number(count) || 0))
-            }))
-            .filter((item) => item.unitTypeId && item.count > 0);
-        if (units.length === 0) {
-            setSiegeDialog((prev) => ({
-                ...prev,
-                error: '请至少选择一支兵种和数量'
-            }));
-            return;
-        }
-
-        setSiegeDialog((prev) => ({
-            ...prev,
-            supportSubmitting: true,
-            error: '',
-            message: ''
-        }));
-        try {
-            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/support`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    gateKey: siegeSupportDraft.gateKey || siegeStatus.supportGate || siegeStatus.compareGate || '',
-                    autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(siegeSupportDraft.autoRetreatPercent) || 40))),
-                    units
-                })
-            });
-            const parsed = await parseApiResponse(response);
-            if (!response.ok || !parsed.data) {
-                setSiegeDialog((prev) => ({
-                    ...prev,
-                    supportSubmitting: false,
-                    error: getApiErrorMessage(parsed, '派遣支援失败')
-                }));
-                return;
-            }
-
-            const normalized = normalizeSiegeStatus(parsed.data, nodeId);
-            setSiegeStatus(normalized);
-            setSiegeSupportDraft(buildInitialSiegeSupportDraft(normalized));
-            setSiegeDialog((prev) => ({
-                ...prev,
-                supportSubmitting: false,
-                error: '',
-                message: parsed.data.message || '已派遣支援'
-            }));
-            await fetchNotifications(true);
-            await fetchSiegeSupportStatuses(true);
-        } catch (error) {
-            setSiegeDialog((prev) => ({
-                ...prev,
-                supportSubmitting: false,
-                error: `派遣支援失败: ${error.message}`
-            }));
-        }
-    };
-
-    const closeSiegePveBattle = () => {
-        setPveBattleState({
-            open: false,
-            loading: false,
-            error: '',
-            nodeId: '',
-            gateKey: '',
-            data: null
-        });
-    };
-
-    const closeSiegeBattlefieldPreview = () => {
-        setSiegeBattlefieldPreviewState({
-            open: false,
-            loading: false,
-            error: '',
-            nodeId: '',
-            gateKey: '',
-            gateLabel: '',
-            layoutBundle: null
-        });
-    };
-
-    const handleOpenSiegeBattlefieldPreview = async () => {
-        const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
-        const gateKey = (
-            (siegeStatus.compareGate && (siegeStatus.activeGateKeys || []).includes(siegeStatus.compareGate) ? siegeStatus.compareGate : '')
-            || (siegeStatus.activeGateKeys || [])[0]
-            || ''
-        );
-        if (!token || !nodeId || !gateKey) return;
-
-        setSiegeBattlefieldPreviewState({
-            open: false,
-            loading: true,
-            error: '',
-            nodeId,
-            gateKey,
-            gateLabel: CITY_GATE_LABEL_MAP[gateKey] || gateKey,
-            layoutBundle: null
-        });
-        try {
-            const response = await fetch(`${API_BASE}/nodes/${nodeId}/siege/battlefield-preview?gateKey=${encodeURIComponent(gateKey)}`, {
-                headers: {
-                    Authorization: `Bearer ${token}`
-                }
-            });
-            const parsed = await parseApiResponse(response);
-            if (!response.ok || !parsed.data) {
-                setSiegeBattlefieldPreviewState((prev) => ({
-                    ...prev,
-                    open: false,
-                    loading: false,
-                    error: getApiErrorMessage(parsed, '加载战场预览失败')
-                }));
-                return;
-            }
-
-            const payload = parsed.data;
-            setSiegeBattlefieldPreviewState({
-                open: true,
-                loading: false,
-                error: '',
-                nodeId: payload.nodeId || nodeId,
-                gateKey: payload.gateKey || gateKey,
-                gateLabel: payload.gateLabel || CITY_GATE_LABEL_MAP[payload.gateKey || gateKey] || gateKey,
-                layoutBundle: payload.layoutBundle && typeof payload.layoutBundle === 'object' ? payload.layoutBundle : null
-            });
-        } catch (error) {
-            setSiegeBattlefieldPreviewState((prev) => ({
-                ...prev,
-                open: false,
-                loading: false,
-                error: `加载战场预览失败: ${error.message}`
-            }));
-        }
-    };
-
-    const handleOpenSiegePveBattle = async () => {
-        const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
-        const gateKey = (
-            (siegeStatus.compareGate && (siegeStatus.activeGateKeys || []).includes(siegeStatus.compareGate) ? siegeStatus.compareGate : '')
-            || (siegeStatus.activeGateKeys || [])[0]
-            || ''
-        );
-        if (!token || !nodeId || !gateKey) return;
-
-        setPveBattleState({
-            open: true,
-            loading: true,
-            error: '',
-            nodeId,
-            gateKey,
-            data: null
-        });
-
-        try {            const data = await BattleDataService.getPveBattleInit({ nodeId, gateKey });
-            setPveBattleState({
-                open: true,
-                loading: false,
-                error: '',
-                nodeId,
-                gateKey,
-                data
-            });
-        } catch (error) {
-            setPveBattleState({
-                open: true,
-                loading: false,
-                error: `初始化战斗失败: ${error.message}`,
-                nodeId,
-                gateKey,
-                data: null
-            });
-        }
-    };
-
-    const handlePveBattleFinished = async () => {
-        const nodeId = normalizeObjectId(pveBattleState.nodeId || siegeDialog.node?._id || currentTitleDetail?._id || currentNodeDetail?._id || siegeStatus.nodeId);
-        if (nodeId) {
-            await fetchSiegeStatus(nodeId, { silent: false, preserveIntelView: true });
-        }
-    };
-
     // 获取标题主视角详情
     const fetchTitleDetail = async (nodeId, clickedNode = null, navOptions = {}) => {
         const shouldAlert = navOptions?.silent !== true;
@@ -3504,9 +2183,23 @@ const App = () => {
             }
             return null;
         }
+        const request = beginPrimaryNavigationRequest(
+            `title:${normalizedNodeId}`,
+            typeof navOptions?.requestSource === 'string' ? navOptions.requestSource : 'title-detail'
+        );
         try {
             await prepareForPrimaryNavigation();
-            const response = await fetch(`${API_BASE}/nodes/public/title-detail/${normalizedNodeId}?depth=1`);
+            if (!isPrimaryNavigationRequestCurrent(request)) {
+                return null;
+            }
+
+            const response = await fetchPrimaryNavigationResponse(
+                `${API_BASE}/nodes/public/title-detail/${normalizedNodeId}?depth=1`,
+                request
+            );
+            if (!response) {
+                return null;
+            }
             if (!response.ok) {
                 if (shouldAlert) {
                     const parsed = await parseApiResponse(response);
@@ -3519,6 +2212,9 @@ const App = () => {
             const graph = data?.graph || {};
             const centerNode = graph?.centerNode || null;
             const targetNodeId = normalizeObjectId(centerNode?._id);
+            if (!isPrimaryNavigationRequestCurrent(request)) {
+                return null;
+            }
             if (!targetNodeId || !centerNode) {
                 if (shouldAlert) {
                     alert('标题主视角数据无效');
@@ -3537,10 +2233,7 @@ const App = () => {
             setView('titleDetail');
             setIsSenseSelectorVisible(false);
             setSenseSelectorSourceNode(centerNode);
-            setIntelHeistStatus(createEmptyIntelHeistStatus());
-            setSiegeStatus(createEmptySiegeStatus());
-            fetchIntelHeistStatus(targetNodeId, { silent: false });
-            fetchSiegeStatus(targetNodeId, { silent: false });
+            refreshDomainConflictForNode(targetNodeId);
 
             if (clickedNode) {
                 setClickedNodeForTransition(clickedNode);
@@ -3594,11 +2287,16 @@ const App = () => {
 
             return centerNode;
         } catch (error) {
+            if (!isPrimaryNavigationRequestCurrent(request) || isAbortError(error)) {
+                return null;
+            }
             console.error('获取标题主视角失败:', error);
             if (shouldAlert) {
                 alert(`获取标题主视角失败: ${error.message}`);
             }
             return null;
+        } finally {
+            finishPrimaryNavigationRequest(request);
         }
     };
 
@@ -3612,16 +2310,29 @@ const App = () => {
             }
             return null;
         }
+        const requestedSenseId = typeof navOptions?.activeSenseId === 'string' ? navOptions.activeSenseId.trim() : '';
+        const request = beginPrimaryNavigationRequest(
+            `sense:${normalizedNodeId}:${requestedSenseId}`,
+            typeof navOptions?.requestSource === 'string' ? navOptions.requestSource : 'node-detail'
+        );
         try {
             await prepareForPrimaryNavigation();
-            const requestedSenseId = typeof navOptions?.activeSenseId === 'string' ? navOptions.activeSenseId.trim() : '';
+            if (!isPrimaryNavigationRequestCurrent(request)) {
+                return null;
+            }
             const detailUrl = requestedSenseId
                 ? `${API_BASE}/nodes/public/node-detail/${normalizedNodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
                 : `${API_BASE}/nodes/public/node-detail/${normalizedNodeId}`;
-            const response = await fetch(detailUrl);
+            const response = await fetchPrimaryNavigationResponse(detailUrl, request);
+            if (!response) {
+                return null;
+            }
             if (response.ok) {
                 const data = await response.json();
                 const targetNodeId = normalizeObjectId(data?.node?._id);
+                if (!isPrimaryNavigationRequestCurrent(request)) {
+                    return null;
+                }
                 const currentNodeBeforeNavigate = currentNodeDetail;
                 const shouldResetTrail = navOptions?.resetTrail === true || !isKnowledgeDetailView(view);
                 const relation = resolveNavigationRelationAgainstCurrent(
@@ -3643,10 +2354,7 @@ const App = () => {
                 setTitleGraphData(null);
                 setTitleRelationInfo(null);
                 setView('nodeDetail');
-                setIntelHeistStatus(createEmptyIntelHeistStatus());
-                setSiegeStatus(createEmptySiegeStatus());
-                fetchIntelHeistStatus(normalizeObjectId(data?.node?._id), { silent: false });
-                fetchSiegeStatus(normalizeObjectId(data?.node?._id), { silent: false });
+                refreshDomainConflictForNode(targetNodeId);
 
                 // 保存被点击的节点，用于WebGL过渡动画
                 if (clickedNode) {
@@ -3715,11 +2423,16 @@ const App = () => {
                 return null;
             }
         } catch (error) {
+            if (!isPrimaryNavigationRequestCurrent(request) || isAbortError(error)) {
+                return null;
+            }
             console.error('获取节点详情失败:', error);
             if (shouldAlert) {
                 alert(`获取节点详情失败: ${error.message}`);
             }
             return null;
+        } finally {
+            finishPrimaryNavigationRequest(request);
         }
     };
 
@@ -3749,6 +2462,29 @@ const App = () => {
         setSenseSelectorAnchor(next);
     };
 
+    const updateSenseSelectorAnchorByElement = (element) => {
+        const rect = element?.getBoundingClientRect?.();
+        if (!rect) return;
+        const next = {
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+            visible: true
+        };
+        senseSelectorAnchorRef.current = next;
+        setSenseSelectorAnchor(next);
+    };
+
+    const handleHomeDomainActivate = useCallback((node, anchorElement = null) => {
+        if (!node?._id) return;
+        setTitleRelationInfo(null);
+        setSenseSelectorSourceNode(node);
+        setSenseSelectorSourceSceneNodeId('');
+        if (anchorElement) {
+            updateSenseSelectorAnchorByElement(anchorElement);
+        }
+        setIsSenseSelectorVisible(true);
+    }, []);
+
     const handleJumpToCurrentLocationView = async () => {
         if (!currentLocationNodeDetail?._id) {
             return;
@@ -3761,38 +2497,6 @@ const App = () => {
 
         const clickedNode = buildClickedNodeFromScene(currentLocationNodeDetail._id);
         await fetchTitleDetail(currentLocationNodeDetail._id, clickedNode);
-    };
-
-    const openDistributionPanel = (participationData) => {
-        if (!participationData || !participationData.active) return;
-        setDistributionPanelState({
-            loading: false,
-            joining: false,
-            exiting: false,
-            error: '',
-            feedback: '',
-            data: participationData
-        });
-        setShowDistributionPanel(true);
-    };
-
-    const handleDistributionParticipationAction = async (targetNodeDetail) => {
-        if (!targetNodeDetail?._id) return;
-        if (isAdmin) {
-            window.alert('系统管理员不参与知识点分发');
-            return;
-        }
-
-        const participation = await fetchDistributionParticipationStatus(targetNodeDetail._id, false);
-        if (!participation) return;
-        if (!participation.active) {
-            window.alert('该知识域当前没有进行中的分发活动');
-            return;
-        }
-
-        const refreshed = await fetchDistributionParticipationStatus(targetNodeDetail._id, true);
-        const panelData = refreshed && refreshed.active ? refreshed : participation;
-        if (panelData.active) openDistributionPanel(panelData);
     };
 
     const handleDistributionAnnouncementClick = async (notification) => {
@@ -3844,187 +2548,6 @@ const App = () => {
         }
     };
 
-    const closeDistributionPanel = () => {
-        setShowDistributionPanel(false);
-        setDistributionPanelState(createDefaultDistributionPanelState());
-    };
-
-    const joinDistributionFromPanel = async () => {
-        const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(currentTitleDetail?._id);
-        const panelData = distributionPanelState.data;
-        if (!token || !nodeId || !panelData) return;
-
-        if (!panelData.active) {
-            setDistributionPanelState((prev) => ({
-                ...prev,
-                error: ''
-            }));
-            return;
-        }
-        if (!panelData.canJoin) {
-            const currentNodeName = (currentTitleDetail?.name || '').trim();
-            const currentLocationName = (userLocation || '').trim();
-            const shouldPromptMove = (
-                panelData.requiresManualEntry &&
-                !panelData.joined &&
-                panelData.phase === 'entry_open' &&
-                !!currentNodeName &&
-                currentLocationName !== currentNodeName
-            );
-            if (shouldPromptMove && currentTitleDetail?._id) {
-                await handleMoveToNode(currentTitleDetail, { promptMode: 'distribution' });
-            }
-            setDistributionPanelState((prev) => ({
-                ...prev,
-                error: ''
-            }));
-            return;
-        }
-
-        const confirmed = window.confirm(
-            `确认参与知识域「${currentTitleDetail?.name || ''}」分发活动？确认后在本次分发结束前不可移动。`
-        );
-        if (!confirmed) return;
-
-        setDistributionPanelState((prev) => ({
-            ...prev,
-            joining: true,
-            error: '',
-            feedback: ''
-        }));
-        try {
-            const response = await fetch(`${API_BASE}/nodes/${nodeId}/distribution-participation/join`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            const parsed = await parseApiResponse(response);
-            const data = parsed.data;
-            if (!response.ok || !data) {
-                setDistributionPanelState((prev) => ({
-                    ...prev,
-                    joining: false,
-                    error: getApiErrorMessage(parsed, '参与分发失败')
-                }));
-                return;
-            }
-            const refreshed = await fetchDistributionParticipationStatus(nodeId, true, { updatePanel: true });
-            setDistributionPanelState((prev) => ({
-                ...prev,
-                joining: false,
-                feedback: '',
-                data: refreshed || prev.data
-            }));
-        } catch (error) {
-            setDistributionPanelState((prev) => ({
-                ...prev,
-                joining: false,
-                error: `参与分发失败: ${error.message}`
-            }));
-        }
-    };
-
-    const exitDistributionFromPanel = async () => {
-        const token = localStorage.getItem('token');
-        const nodeId = normalizeObjectId(currentTitleDetail?._id);
-        const panelData = distributionPanelState.data;
-        if (!token || !nodeId || !panelData?.canExit) return;
-
-        if (!panelData.canExitWithoutConfirm) {
-            const confirmed = window.confirm(`确认退出知识域「${currentTitleDetail?.name || ''}」分发活动？`);
-            if (!confirmed) return;
-        }
-
-        setDistributionPanelState((prev) => ({
-            ...prev,
-            exiting: true,
-            error: '',
-            feedback: ''
-        }));
-        try {
-            const response = await fetch(`${API_BASE}/nodes/${nodeId}/distribution-participation/exit`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            const parsed = await parseApiResponse(response);
-            const data = parsed.data;
-            if (!response.ok || !data) {
-                setDistributionPanelState((prev) => ({
-                    ...prev,
-                    exiting: false,
-                    error: getApiErrorMessage(parsed, '退出分发失败')
-                }));
-                return;
-            }
-            const refreshed = await fetchDistributionParticipationStatus(nodeId, true, { updatePanel: true });
-            setDistributionPanelState((prev) => ({
-                ...prev,
-                exiting: false,
-                feedback: '',
-                data: refreshed || prev.data
-            }));
-        } catch (error) {
-            setDistributionPanelState((prev) => ({
-                ...prev,
-                exiting: false,
-                error: `退出分发失败: ${error.message}`
-            }));
-        }
-    };
-
-    const domainMasterDomains = relatedDomainsData.domainMasterDomains || [];
-    const domainAdminDomains = relatedDomainsData.domainAdminDomains || [];
-    const favoriteDomains = relatedDomainsData.favoriteDomains || [];
-    const recentDomains = relatedDomainsData.recentDomains || [];
-
-    const favoriteDomainSet = new Set(favoriteDomains.map((node) => normalizeObjectId(node?._id)));
-    const relatedDomainCount = new Set([
-        ...domainMasterDomains.map((node) => normalizeObjectId(node?._id)),
-        ...domainAdminDomains.map((node) => normalizeObjectId(node?._id)),
-        ...favoriteDomains.map((node) => normalizeObjectId(node?._id)),
-        ...recentDomains.map((node) => normalizeObjectId(node?._id))
-    ].filter(Boolean)).size;
-    const pendingMasterApplyCount = notifications.filter((notification) => (
-        notification.type === 'domain_master_apply' &&
-        notification.status === 'pending'
-    )).length;
-    const systemAnnouncements = notifications
-        .filter((notification) => notification.type === 'domain_distribution_announcement')
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        .slice(0, 10);
-    const allianceAnnouncements = notifications
-        .filter((notification) => notification.type === 'alliance_announcement')
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        .slice(0, 10);
-    const announcementGroups = {
-        system: systemAnnouncements,
-        alliance: allianceAnnouncements
-    };
-    const announcementUnreadCount = notifications.filter((notification) => (
-        isAnnouncementNotification(notification) && !notification.read
-    )).length;
-	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    useEffect(() => {
-        if (announcementDockTab === 'system' && systemAnnouncements.length === 0 && allianceAnnouncements.length > 0) {
-            setAnnouncementDockTab('alliance');
-        } else if (announcementDockTab === 'alliance' && allianceAnnouncements.length === 0 && systemAnnouncements.length > 0) {
-            setAnnouncementDockTab('system');
-        }
-    }, [announcementDockTab, systemAnnouncements.length, allianceAnnouncements.length]);
-	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    useEffect(() => {
-        const canRenderDock = !isAdmin && (
-            view === 'home'
-            || (view === 'nodeDetail' && currentNodeDetail)
-            || (view === 'titleDetail' && currentTitleDetail)
-        );
-        if (!canRenderDock) {
-            setIsLocationDockExpanded(false);
-            setIsAnnouncementDockExpanded(false);
-        }
-    }, [view, currentNodeDetail, currentTitleDetail, isAdmin]);
-    const adminPendingApprovalCount = pendingMasterApplyCount + adminPendingNodes.length;
-    const notificationBadgeCount = isAdmin ? adminPendingApprovalCount : notificationUnreadCount;
     const currentNodeMasterId = normalizeObjectId(nodeInfoModalTarget?.domainMaster);
     const currentNodeOwnerRole = nodeInfoModalTarget?.owner?.role || '';
     const canApplyDomainMaster = Boolean(
@@ -4076,7 +2599,7 @@ const App = () => {
     const handleOpenRelatedDomain = async (node, sectionType = 'default') => {
         const nodeId = normalizeObjectId(node?._id);
         if (!nodeId) return;
-        setShowRelatedDomainsPanel(false);
+        closeHeaderPanels();
         const clickedNode = buildClickedNodeFromScene(nodeId);
         if (sectionType === 'recent' && node?.recentVisitMode === 'sense') {
             await fetchNodeDetail(nodeId, clickedNode, {
@@ -4095,87 +2618,80 @@ const App = () => {
         await fetchTitleDetail(nodeId, clickedNode);
     };
 
-    const renderRelatedDomainSection = (title, domainList, emptyText, sectionType = 'default') => (
-        <div className="related-domain-section">
-            <div className="related-domain-section-title">
-                <span>{title}</span>
-                <span className="related-domain-count">{domainList.length}</span>
-            </div>
-            {domainList.length === 0 ? (
-                <div className="related-domain-empty">{emptyText}</div>
-            ) : (
-                <div className="related-domain-list">
-                    {domainList.map((domain, index) => {
-                        const domainId = normalizeObjectId(domain?._id);
-                        const isFavorite = favoriteDomainSet.has(domainId);
-                        const isUpdatingFavorite = favoriteActionDomainId === domainId;
-                        const isTitleOnlySection = sectionType === 'master_title'
-                            || sectionType === 'admin_title'
-                            || sectionType === 'title_only';
-                        const titleOnlyName = String(domain?.name || '').trim() || '未命名知识域';
-                        const relatedDomainName = sectionType === 'recent'
-                            ? ((typeof domain?.recentVisitDisplayName === 'string' && domain.recentVisitDisplayName.trim())
-                                ? domain.recentVisitDisplayName.trim()
-                                : getNodeDisplayName(domain))
-                            : (isTitleOnlySection ? titleOnlyName : getNodeDisplayName(domain));
-                        const domainKey = sectionType === 'recent'
-                            ? `${title}-${domainId}-${domain?.recentVisitMode || 'title'}-${domain?.recentVisitSenseId || ''}-${domain?.visitedAt || index}`
-                            : `${title}-${domainId}`;
-                        return (
-                            <div key={domainKey} className="related-domain-item">
-                                <button
-                                    type="button"
-                                    className="related-domain-link"
-                                    onClick={() => handleOpenRelatedDomain(domain, sectionType)}
-                                >
-                                    <span className="related-domain-name">{relatedDomainName}</span>
-                                    <span className="related-domain-meta">{formatDomainKnowledgePoint(domain)}</span>
-                                </button>
-                                <button
-                                    type="button"
-                                    className={`related-domain-fav-btn ${isFavorite ? 'active' : ''}`}
-                                    onClick={() => toggleFavoriteDomain(domainId)}
-                                    disabled={isUpdatingFavorite}
-                                    title={isFavorite ? '取消收藏' : '加入收藏'}
-                                >
-                                    <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
-                                </button>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
-        </div>
-    );
+    const handleKnowledgeSearchChange = (event) => {
+        setHomeSearchQuery(event.target.value);
+    };
 
-    const renderRelatedDomainsPanel = () => {
-        if (!showRelatedDomainsPanel) return null;
+    const handleKnowledgeSearchFocus = () => {
+        setShowSearchResults(true);
+    };
 
-        return (
-            <div className="related-domains-panel">
-                <div className="related-domains-header">
-                    <h3>与我相关的知识域</h3>
-                    <button
-                        type="button"
-                        className="related-domains-refresh-btn"
-                        onClick={() => fetchRelatedDomains(false)}
-                        disabled={relatedDomainsData.loading}
-                    >
-                        {relatedDomainsData.loading ? '刷新中...' : '刷新'}
-                    </button>
-                </div>
-                <div className="related-domains-body">
-                    {relatedDomainsData.loading && <div className="related-domain-empty">加载中...</div>}
-                    {!relatedDomainsData.loading && relatedDomainsData.error && (
-                        <div className="related-domains-error">{relatedDomainsData.error}</div>
-                    )}
-                    {renderRelatedDomainSection('作为域主', domainMasterDomains, '当前没有作为域主的知识域', 'title_only')}
-                    {renderRelatedDomainSection('作为域相', domainAdminDomains, '当前没有域相身份的知识域', 'title_only')}
-                    {renderRelatedDomainSection('收藏的知识域', favoriteDomains, '暂无收藏，点击右侧星标可收藏')}
-                    {renderRelatedDomainSection('最近访问的知识域', recentDomains, '暂无访问记录', 'recent')}
-                </div>
-            </div>
-        );
+    const handleKnowledgeSearchClear = () => {
+        setHomeSearchQuery('');
+        setHomeSearchResults([]);
+        setShowSearchResults(true);
+    };
+
+    const handleHomeKnowledgeSearchResultClick = (node) => {
+        const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
+        if (!targetNodeId) return;
+        fetchNodeDetail(targetNodeId, {
+            id: `search-${targetNodeId || node?._id}`,
+            data: node,
+            type: 'search'
+        }, {
+            resetTrail: true,
+            relationHint: 'jump',
+            activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
+        });
+        setShowSearchResults(false);
+    };
+
+    const handleDetailKnowledgeSearchResultClick = (node) => {
+        const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
+        if (!targetNodeId) return;
+        fetchNodeDetail(targetNodeId, {
+            id: `search-${targetNodeId || node?._id}`,
+            data: node,
+            type: 'search'
+        }, {
+            relationHint: 'jump',
+            activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
+        });
+        setShowSearchResults(false);
+    };
+
+    const handleKnowledgeNavigateHistory = (item, index) => {
+        if (!item?.nodeId) return;
+        if (item?.mode === 'title') {
+            fetchTitleDetail(item.nodeId, null, {
+                historyIndex: index,
+                relationHint: item.relation
+            });
+            return;
+        }
+        fetchNodeDetail(item.nodeId, null, {
+            historyIndex: index,
+            relationHint: item.relation,
+            activeSenseId: item.senseId || ''
+        });
+    };
+
+    const handleTitleDetailNavigate = (nodeId, navOptions = {}) => {
+        fetchTitleDetail(nodeId, null, navOptions);
+    };
+
+    const handleNodeDetailNavigate = (nodeId, navOptions = {}) => {
+        fetchNodeDetail(nodeId, null, navOptions);
+    };
+
+    const handleKnowledgeHome = async () => {
+        await navigateToHomeWithDockCollapse();
+    };
+
+    const handleOpenCurrentNodeInfo = () => {
+        setNodeInfoModalTarget(currentNodeDetail);
+        setShowNodeInfoModal(true);
     };
 
     const getNodeDetailButtonContext = (nodeDetail) => {
@@ -4419,8 +2935,8 @@ const App = () => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
         if (view !== 'home') return;
 
-        // 无论数据是否为空都刷新首页场景，避免空白画布
-        sceneManagerRef.current.showHome(rootNodes, featuredNodes, []);
+        // 首页主入口改为 HTML/SVG 六边形层，WebGL 在首页只承担背景氛围层。
+        sceneManagerRef.current.showHome([], [], []);
         if (isMapDebugEnabled()) {
             console.info('[MapDebug] showHome', {
                 rootCount: rootNodes.length,
@@ -4688,22 +3204,27 @@ const App = () => {
                 const senseId = typeof sense?.senseId === 'string' ? sense.senseId.trim() : '';
                 if (!senseId) return null;
                 const key = `${nodeId}:${senseId}`;
-                const cached = senseArticleEntryStatusMap[key];
-                if (cached?.resolved) return null;
+                const cached = senseArticleEntryStatusMapRef.current[key];
+                if (cached?.resolved || cached?.loading) return null;
                 return { key, nodeId, senseId };
             })
             .filter(Boolean);
         if (pendingTargets.length === 0) return undefined;
 
         setSenseArticleEntryStatusMap((prev) => {
+            let hasChanges = false;
             const next = { ...prev };
             pendingTargets.forEach(({ key }) => {
-                next[key] = { ...(prev[key] || {}), loading: true, resolved: false, hasPublishedRevision: false };
+                const previous = prev[key] || {};
+                if (previous.loading && !previous.resolved) {
+                    return;
+                }
+                next[key] = { ...previous, loading: true, resolved: false, hasPublishedRevision: false };
+                hasChanges = true;
             });
-            return next;
+            return hasChanges ? next : prev;
         });
 
-        let cancelled = false;
         (async () => {
             const results = await Promise.all(pendingTargets.map(async ({ key, nodeId: targetNodeId, senseId }) => {
                 try {
@@ -4723,7 +3244,6 @@ const App = () => {
                     };
                 }
             }));
-            if (cancelled) return;
             setSenseArticleEntryStatusMap((prev) => {
                 const next = { ...prev };
                 results.forEach((item) => {
@@ -4738,23 +3258,38 @@ const App = () => {
                 return next;
             });
         })();
-
-        return () => {
-            cancelled = true;
-        };
+        return undefined;
 	    }, [
 	        currentNodeDetail,
 	        currentTitleDetail,
 	        isSenseSelectorVisible,
 	        senseSelectorOverviewNode,
-	        senseSelectorSourceNode,
-	        senseArticleEntryStatusMap
+	        senseSelectorSourceNode
 	    ]);
 
 
     // 新节点创建相关函数
     const openCreateNodeModal = () => {
         setShowCreateNodeModal(true);
+    };
+
+    const closeAssociationModal = () => {
+        setShowAssociationModal(false);
+    };
+
+    const closeNodeInfoModal = () => {
+        setShowNodeInfoModal(false);
+        setNodeInfoModalTarget(null);
+    };
+
+    const closeCreateNodeModal = () => {
+        setShowCreateNodeModal(false);
+    };
+
+    const handleCreateNodeSuccess = (newNode) => {
+        if (newNode) {
+            setNodes((prev) => [...prev, newNode]);
+        }
     };
 
     // 进入知识域
@@ -4829,12 +3364,16 @@ const App = () => {
         const restoreKnowledgeDomainView = async () => {
             if (!returnContext?.nodeId) return;
             if (returnContext.view === 'titleDetail') {
-                await fetchTitleDetail(returnContext.nodeId, null, { silent: true });
+                await fetchTitleDetail(returnContext.nodeId, null, {
+                    silent: true,
+                    requestSource: 'knowledge-domain-restore:title'
+                });
                 return;
             }
             await fetchNodeDetail(returnContext.nodeId, null, {
                 silent: true,
-                activeSenseId: typeof returnContext.senseId === 'string' ? returnContext.senseId : ''
+                activeSenseId: typeof returnContext.senseId === 'string' ? returnContext.senseId : '',
+                requestSource: 'knowledge-domain-restore:sense'
             });
         };
         if (!sceneManagerRef.current) {
@@ -4881,1511 +3420,35 @@ const App = () => {
         );
     };
 
-    const renderUnifiedRightDock = () => {
-        if (isAdmin) return null;
-        const isKnowledgeDomainActive = showKnowledgeDomain || isTransitioningToDomain;
-        const activeDetailNode = isTitleBattleView(view) ? currentTitleDetail : currentNodeDetail;
-        const canRenderDock = view === 'home' || (isKnowledgeDetailView(view) && activeDetailNode);
-        if (!canRenderDock) return null;
-        const shouldRenderLocationDock = !isKnowledgeDomainActive;
-
-        const canJumpToLocationView = Boolean(
-            !travelStatus.isTraveling &&
-            currentLocationNodeDetail &&
-            userLocation &&
-            !(isKnowledgeDetailView(view) && activeDetailNode?.name === userLocation)
-        );
-        const activeAnnouncements = announcementDockTab === 'alliance'
-            ? allianceAnnouncements
-            : systemAnnouncements;
-        const locationParentLabels = (() => {
-            const parentNodes = Array.isArray(currentLocationNodeDetail?.parentNodesInfo)
-                ? currentLocationNodeDetail.parentNodesInfo
-                : [];
-            const labelsFromNodes = parentNodes
-                .map((item) => (typeof item?.name === 'string' ? item.name.trim() : ''))
-                .filter(Boolean);
-            if (labelsFromNodes.length > 0) return labelsFromNodes;
-            return (Array.isArray(currentLocationNodeDetail?.relatedParentDomains)
-                ? currentLocationNodeDetail.relatedParentDomains
-                : [])
-                .map((name) => (typeof name === 'string' ? name.trim() : ''))
-                .filter(Boolean);
-        })();
-        const locationChildLabels = (() => {
-            const childNodes = Array.isArray(currentLocationNodeDetail?.childNodesInfo)
-                ? currentLocationNodeDetail.childNodesInfo
-                : [];
-            const labelsFromNodes = childNodes
-                .map((item) => (typeof item?.name === 'string' ? item.name.trim() : ''))
-                .filter(Boolean);
-            if (labelsFromNodes.length > 0) return labelsFromNodes;
-            return (Array.isArray(currentLocationNodeDetail?.relatedChildDomains)
-                ? currentLocationNodeDetail.relatedChildDomains
-                : [])
-                .map((name) => (typeof name === 'string' ? name.trim() : ''))
-                .filter(Boolean);
-        })();
-        const locationDomainMaster = currentLocationNodeDetail?.domainMaster || null;
-        const locationDomainMasterId = normalizeObjectId(locationDomainMaster?._id);
-        const locationDomainAdmins = (Array.isArray(currentLocationNodeDetail?.domainAdmins)
-            ? currentLocationNodeDetail.domainAdmins
-            : [])
-            .filter(Boolean)
-            .filter((admin, index, list) => {
-                const adminId = normalizeObjectId(admin?._id);
-                if (!adminId) return true;
-                if (adminId === locationDomainMasterId) return false;
-                return list.findIndex((candidate) => normalizeObjectId(candidate?._id) === adminId) === index;
-            });
-        const locationDisplayMaster = (locationDomainMaster && (locationDomainMaster._id || locationDomainMaster.username))
-            ? locationDomainMaster
-            : null;
-        const locationKnowledgePointValue = Number(currentLocationNodeDetail?.knowledgePoint?.value);
-        const locationProsperityValue = Number(currentLocationNodeDetail?.prosperity);
-        const locationContentScoreValue = Number(currentLocationNodeDetail?.contentScore);
-        const locationFavoriteUserCountValue = Number(currentLocationNodeDetail?.favoriteUserCount);
-        const locationStatItems = [
-            {
-                label: '知识点',
-                value: Number.isFinite(locationKnowledgePointValue) ? locationKnowledgePointValue.toFixed(2) : '--'
-            },
-            {
-                label: '繁荣度',
-                value: Number.isFinite(locationProsperityValue) ? Math.round(locationProsperityValue) : '--'
-            },
-            {
-                label: '内容分数',
-                value: Number.isFinite(locationContentScoreValue) ? locationContentScoreValue.toFixed(2) : '--'
-            },
-            {
-                label: '收藏人数',
-                value: Number.isFinite(locationFavoriteUserCountValue) ? Math.max(0, Math.round(locationFavoriteUserCountValue)) : '--'
-            }
-        ];
-
-        return (
-            <>
-                <div className={`home-announcement-dock ${isAnnouncementDockExpanded ? 'expanded' : 'collapsed'}`}>
-                    <aside className={`home-announcement-dock-panel ${isAnnouncementDockExpanded ? 'expanded' : ''}`}>
-                        <div className="home-announcement-dock-header">
-                            <h3>公告栏</h3>
-                            <div className="home-announcement-header-actions">
-                                <button
-                                    type="button"
-                                    className="home-announcement-readall-btn"
-                                    onClick={() => markAnnouncementNotificationsRead()}
-                                    disabled={isMarkingAnnouncementsRead || announcementUnreadCount <= 0}
-                                >
-                                    {isMarkingAnnouncementsRead ? '处理中...' : '全部已读'}
-                                </button>
-                                <button
-                                    type="button"
-                                    className="home-announcement-collapse-btn"
-                                    onClick={() => setIsAnnouncementDockExpanded(false)}
-                                >
-                                    收起
-                                </button>
-                            </div>
-                        </div>
-                        <div className="home-announcement-tab-row">
-                            <button
-                                type="button"
-                                className={`home-announcement-tab ${announcementDockTab === 'system' ? 'active' : ''}`}
-                                onClick={() => setAnnouncementDockTab('system')}
-                            >
-                                系统公告
-                            </button>
-                            <button
-                                type="button"
-                                className={`home-announcement-tab ${announcementDockTab === 'alliance' ? 'active' : ''}`}
-                                onClick={() => setAnnouncementDockTab('alliance')}
-                            >
-                                熵盟公告
-                            </button>
-                        </div>
-                        <div className="home-announcement-dock-body">
-                            {activeAnnouncements.length === 0 ? (
-                                <div className="home-announcement-empty">
-                                    {announcementDockTab === 'alliance' ? '暂无熵盟公告' : '暂无系统公告'}
-                                </div>
-                            ) : (
-                                activeAnnouncements.map((item) => (
-                                    <button
-                                        type="button"
-                                        key={item._id}
-                                        className={`home-announcement-item ${item.read ? '' : 'unread'}`}
-                                        onClick={() => handleHomeAnnouncementClick(item)}
-                                    >
-                                        {!item.read && <span className="home-announcement-new">NEW!</span>}
-                                        <span className="home-announcement-title">{item.title || '知识点分发预告'}</span>
-                                        <span className="home-announcement-message">{item.message || ''}</span>
-                                    </button>
-                                ))
-                            )}
-                        </div>
-                    </aside>
-                    <button
-                        type="button"
-                        className="home-announcement-dock-toggle"
-                        onClick={() => {
-                            setIsAnnouncementDockExpanded((prev) => {
-                                const next = !prev;
-                                if (next) {
-                                    markAnnouncementNotificationsRead();
-                                }
-                                return next;
-                            });
-                        }}
-                        title={isAnnouncementDockExpanded ? '收起公告栏' : '展开公告栏'}
-                    >
-                        <Bell size={18} />
-                        <span className="home-announcement-dock-label">公告</span>
-                        {announcementUnreadCount > 0 && <span className="home-announcement-dock-dot" />}
-                        {isAnnouncementDockExpanded ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-                    </button>
-                </div>
-
-                {shouldRenderLocationDock && (
-                    <div className={`home-location-dock ${isLocationDockExpanded ? 'expanded' : 'collapsed'}`}>
-                        <aside className={`home-location-dock-panel ${isLocationDockExpanded ? 'expanded' : ''}`}>
-                            <div className="location-sidebar-header home-location-sidebar-header">
-                                <div className="home-location-header-row">
-                                    <h3>{travelStatus?.isTraveling ? '移动状态' : '当前所在的知识域'}</h3>
-                                    <div className="home-location-header-actions">
-                                        <button
-                                            type="button"
-                                            className="home-location-refresh-btn"
-                                            onClick={handleRefreshLocationNodeDetail}
-                                            disabled={isRefreshingLocationDetail || !userLocation || userLocation === '任意' || travelStatus?.isTraveling}
-                                        >
-                                            {isRefreshingLocationDetail ? '刷新中...' : '刷新'}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="home-location-collapse-btn"
-                                            onClick={() => setIsLocationDockExpanded(false)}
-                                        >
-                                            收起
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="home-location-panel-body">
-                                {travelStatus?.isTraveling ? (
-                                    <div className="travel-sidebar-content">
-                                        <div className="travel-main-info">
-                                            <div className="travel-destination">
-                                                {travelStatus?.isStopping ? '停止目标' : '目标节点'}: <strong>{travelStatus?.targetNode?.nodeName}</strong>
-                                            </div>
-                                            <div className="travel-metrics">
-                                                <span>剩余距离: {travelStatus?.remainingDistanceUnits?.toFixed?.(2) ?? travelStatus?.remainingDistanceUnits} 单位</span>
-                                                <span>剩余时间: {formatTravelSeconds(travelStatus?.remainingSeconds)}</span>
-                                                {travelStatus?.queuedTargetNode?.nodeName && (
-                                                    <span>已排队目标: {travelStatus.queuedTargetNode.nodeName}</span>
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        <div className="travel-anim-layout">
-                                            <button
-                                                type="button"
-                                                className={`travel-node-card next ${normalizeObjectId(travelStatus?.nextNode?.nodeId) ? 'clickable' : 'disabled'}`}
-                                                onClick={() => handleOpenTravelNode(travelStatus?.nextNode)}
-                                                disabled={!normalizeObjectId(travelStatus?.nextNode?.nodeId)}
-                                            >
-                                                <div className="travel-node-label">下一目的地</div>
-                                                <div className="travel-node-name">{travelStatus?.nextNode?.nodeName || '-'}</div>
-                                            </button>
-                                            <div className="travel-track-wrap">
-                                                <div className="travel-track">
-                                                    <div
-                                                        className="travel-progress-dot"
-                                                        style={{ left: `${(1 - (travelStatus?.progressInCurrentSegment || 0)) * 100}%` }}
-                                                    />
-                                                </div>
-                                            </div>
-                                            <button
-                                                type="button"
-                                                className={`travel-node-card reached ${normalizeObjectId(travelStatus?.lastReachedNode?.nodeId) ? 'clickable' : 'disabled'}`}
-                                                onClick={() => handleOpenTravelNode(travelStatus?.lastReachedNode)}
-                                                disabled={!normalizeObjectId(travelStatus?.lastReachedNode?.nodeId)}
-                                            >
-                                                <div className="travel-node-label">最近到达</div>
-                                                <div className="travel-node-name">{travelStatus?.lastReachedNode?.nodeName || '-'}</div>
-                                            </button>
-                                        </div>
-
-                                        <button
-                                            type="button"
-                                            className="btn btn-danger travel-stop-btn"
-                                            onClick={stopTravel}
-                                            disabled={isStoppingTravel || travelStatus?.isStopping}
-                                        >
-                                            {(isStoppingTravel || travelStatus?.isStopping) ? '停止进行中...' : '停止移动'}
-                                        </button>
-
-                                        {siegeSupportStatuses.length > 0 && (
-                                            <div className="location-siege-support-section">
-                                                <div className="section-label">派遣兵力状态</div>
-                                                <div className="location-siege-support-list">
-                                                    {siegeSupportStatuses.map((item) => (
-                                                        <button
-                                                            type="button"
-                                                            key={`moving-support-${item.nodeId}-${item.gateKey}-${item.requestedAt || ''}`}
-                                                            className="location-siege-support-row"
-                                                            onClick={() => handleOpenTravelNode(item)}
-                                                            disabled={!item.nodeId}
-                                                        >
-                                                            <span>{item.nodeName || '未知知识域'}</span>
-                                                            <span>{item.gateLabel || CITY_GATE_LABEL_MAP[item.gateKey] || item.gateKey}</span>
-                                                            <span>{item.statusLabel || item.status || '-'}</span>
-                                                            <em>{item.totalCount || 0}</em>
-                                                            {item.status === 'moving' && (
-                                                                <small>剩余 {formatTravelSeconds(item.remainingSeconds)}</small>
-                                                            )}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                ) : currentLocationNodeDetail ? (
-                                    <div
-                                        className={`location-sidebar-content ${canJumpToLocationView ? 'location-sidebar-jumpable' : ''}`}
-                                        onClick={() => {
-                                            if (canJumpToLocationView) {
-                                                handleJumpToCurrentLocationView();
-                                            }
-                                        }}
-                                    >
-                                        <div className="location-node-title-row">
-                                            <div className="location-node-title">{currentLocationNodeDetail?.name || '未命名知识域'}</div>
-                                            <button
-                                                type="button"
-                                                className="location-node-jump-btn"
-                                                onClick={(event) => {
-                                                    event.stopPropagation();
-                                                    if (canJumpToLocationView) {
-                                                        handleJumpToCurrentLocationView();
-                                                    }
-                                                }}
-                                                disabled={!canJumpToLocationView}
-                                            >
-                                                转到
-                                            </button>
-                                        </div>
-
-                                        {currentLocationNodeDetail.description && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">概述</div>
-                                                <div className="section-content">{currentLocationNodeDetail.description}</div>
-                                            </div>
-                                        )}
-
-                                        <div className="location-node-section">
-                                            <div className="domain-managers-card">
-                                                <div className="domain-manager-section">
-                                                    <div className="domain-admins-subtitle">域主</div>
-                                                    <div className="domain-manager-avatar-row">
-                                                        {locationDisplayMaster ? (
-                                                            <div
-                                                                className="domain-manager-avatar-item master"
-                                                                title={`域主：${locationDisplayMaster.username || '未命名用户'}`}
-                                                            >
-                                                                <img
-                                                                    src={resolveAvatarSrc(locationDisplayMaster.avatar)}
-                                                                    alt={locationDisplayMaster.username || '域主'}
-                                                                    className="domain-manager-avatar-img"
-                                                                />
-                                                                <span className="domain-manager-name">{locationDisplayMaster.username || '未设置域主'}</span>
-                                                            </div>
-                                                        ) : (
-                                                            <div className="domain-manage-tip">暂无域主信息</div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                <div className="domain-manager-section">
-                                                    <div className="domain-admins-subtitle">域相</div>
-                                                    <div className="domain-manager-avatar-row admins">
-                                                        {locationDomainAdmins.length > 0 ? (
-                                                            locationDomainAdmins.map((admin, index) => {
-                                                                const adminId = normalizeObjectId(admin?._id);
-                                                                const key = adminId || `location-domain-admin-${index}`;
-                                                                return (
-                                                                    <div
-                                                                        key={key}
-                                                                        className="domain-manager-avatar-item"
-                                                                        title={`域相：${admin?.username || '未命名用户'}`}
-                                                                    >
-                                                                        <img
-                                                                            src={resolveAvatarSrc(admin?.avatar)}
-                                                                            alt={admin?.username || '域相'}
-                                                                            className="domain-manager-avatar-img"
-                                                                        />
-                                                                        <span className="domain-manager-name">{admin?.username || '未命名'}</span>
-                                                                    </div>
-                                                                );
-                                                            })
-                                                        ) : (
-                                                            <div className="domain-manage-tip">暂无域相</div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="location-node-section">
-                                            <div className="section-label">知识域状态</div>
-                                            <div className="location-domain-stats-grid">
-                                                {locationStatItems.map((item) => (
-                                                    <div key={item.label} className="location-domain-stat-card">
-                                                        <div className="location-domain-stat-label">{item.label}</div>
-                                                        <div className="location-domain-stat-value">{item.value}</div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-
-                                        {locationParentLabels.length > 0 && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">父域</div>
-                                                <div className="section-tags">
-                                                    {locationParentLabels.map((parent, idx) => (
-                                                        <span key={idx} className="node-tag parent-tag">{parent}</span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {locationChildLabels.length > 0 && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">子域</div>
-                                                <div className="section-tags">
-                                                    {locationChildLabels.map((child, idx) => (
-                                                        <span key={idx} className="node-tag child-tag">{child}</span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {siegeSupportStatuses.length > 0 && (
-                                            <div className="location-node-section location-siege-support-section">
-                                                <div className="section-label">派遣兵力状态</div>
-                                                <div className="location-siege-support-list">
-                                                    {siegeSupportStatuses.map((item) => (
-                                                        <button
-                                                            type="button"
-                                                            key={`idle-support-${item.nodeId}-${item.gateKey}-${item.requestedAt || ''}`}
-                                                            className="location-siege-support-row"
-                                                            onClick={(event) => {
-                                                                event.stopPropagation();
-                                                                handleOpenTravelNode(item);
-                                                            }}
-                                                            disabled={!item.nodeId}
-                                                        >
-                                                            <span>{item.nodeName || '未知知识域'}</span>
-                                                            <span>{item.gateLabel || CITY_GATE_LABEL_MAP[item.gateKey] || item.gateKey}</span>
-                                                            <span>{item.statusLabel || item.status || '-'}</span>
-                                                            <em>{item.totalCount || 0}</em>
-                                                            {item.status === 'moving' && (
-                                                                <small>剩余 {formatTravelSeconds(item.remainingSeconds)}</small>
-                                                            )}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                ) : (
-                                    <div className="location-sidebar-empty">
-                                        <p>
-                                            {(userLocation && userLocation !== '任意')
-                                                ? `当前位于「${userLocation}」，点击上方“刷新”获取状态`
-                                                : '暂未降临到任何知识域'}
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-                        </aside>
-
-                        <button
-                            type="button"
-                            className="home-location-dock-toggle"
-                            onClick={() => setIsLocationDockExpanded((prev) => !prev)}
-                            title={isLocationDockExpanded ? '收起当前所在知识域' : '展开当前所在知识域'}
-                        >
-                            <MapPin size={18} />
-                            <span className="home-location-dock-label">
-                                {travelStatus?.isTraveling ? '移动中' : '知识域'}
-                            </span>
-                            {isLocationDockExpanded ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-                        </button>
-                    </div>
-                )}
-            </>
-        );
-    };
-
-    const renderDistributionParticipationPanel = () => {
-        if (view !== 'titleDetail' || !showDistributionPanel || !currentTitleDetail) return null;
-        const data = distributionPanelState.data;
-        if (!data) return null;
-        const activeNode = currentTitleDetail;
-        const pool = data.pool || {};
-        const phaseLabelMap = {
-            entry_open: '可入场',
-            entry_closed: '入场截止',
-            settling: '结算中',
-            ended: '已结束',
-            none: '未开始'
-        };
-        const phaseLabel = phaseLabelMap[data.phase] || '进行中';
-        const participationStatusText = data.joined
-            ? '你已参与'
-            : (data.phase === 'entry_open' ? '你未参与' : '已无法参与');
-        const participationStatusClass = data.joined
-            ? 'joined'
-            : (data.phase === 'entry_open' ? 'not-joined' : 'locked');
-        const rewardLabel = pool.rewardFrozen ? '实际获得知识点' : '当前可获得';
-        const rewardText = (pool.rewardValue === null || pool.rewardValue === undefined)
-            ? ''
-            : Number(pool.rewardValue).toFixed(2);
-        const poolUsers = Array.isArray(pool.users) ? pool.users : [];
-        const canPromptMoveThenJoin = (
-            !!data.requiresManualEntry &&
-            !data.joined &&
-            data.phase === 'entry_open' &&
-            ((userLocation || '').trim() !== (activeNode?.name || '').trim())
-        );
-        const joinButtonDisabled = (!data.canJoin && !canPromptMoveThenJoin) || distributionPanelState.joining;
-        return (
-            <div className="distribution-panel-overlay">
-                <div className="distribution-panel-modal">
-                    <button type="button" className="distribution-panel-close" onClick={closeDistributionPanel}>×</button>
-                    <div className="distribution-panel-title-row">
-                        <h3>{`分发活动：${getNodeDisplayName(activeNode)}`}</h3>
-                        <div className="distribution-panel-title-tags">
-                            <span className={`distribution-panel-phase phase-${data.phase}`}>{phaseLabel}</span>
-                            <span className={`distribution-panel-participation-status ${participationStatusClass}`}>{participationStatusText}</span>
-                        </div>
-                    </div>
-
-                    {data.phase === 'entry_open' && (
-                        <div className="distribution-panel-timer-row">
-                            <span>{`入场截止：${formatCountdownText(data.secondsToEntryClose)}`}</span>
-                            <span>{`执行倒计时：${formatCountdownText(data.secondsToExecute)}`}</span>
-                        </div>
-                    )}
-                    {data.phase === 'entry_closed' && (
-                        <div className="distribution-panel-timer-row">
-                            <span>{`执行倒计时：${formatCountdownText(data.secondsToExecute)}`}</span>
-                        </div>
-                    )}
-                    {data.phase === 'settling' && (
-                        <div className="distribution-panel-timer-row">
-                            <span>{`活动结束：${formatCountdownText(data.secondsToEnd)}`}</span>
-                        </div>
-                    )}
-
-                    <div className="distribution-panel-grid">
-                        <div className="distribution-panel-card"><span>参与总人数</span><strong>{data.participantTotal || 0}</strong></div>
-                        <div className="distribution-panel-card"><span>本池总比例</span><strong>{Number(pool.poolPercent || 0).toFixed(2)}%</strong></div>
-                        <div className="distribution-panel-card"><span>你的实际比例</span><strong>{Number(pool.userActualPercent || 0).toFixed(2)}%</strong></div>
-                        <div className="distribution-panel-card"><span>{rewardLabel}</span><strong>{rewardText}</strong></div>
-                        <div className="distribution-panel-card"><span>所在规则池</span><strong>{pool.label || '未命中规则池'}</strong></div>
-                    </div>
-
-                    {distributionPanelState.error && <div className="distribution-panel-error">{distributionPanelState.error}</div>}
-                    <div className="distribution-panel-pool-row">
-                        <div className="distribution-panel-pool-row-title">
-                            {`同池人数：${pool.participantCount || 0}`}
-                        </div>
-                        <div className="distribution-panel-pool-avatars">
-                            {poolUsers.length > 0 ? poolUsers.map((item) => (
-                                <div
-                                    key={item.userId || item.username}
-                                    className="distribution-panel-pool-avatar"
-                                    title={item.displayName || item.username || ''}
-                                >
-                                    <img
-                                        src={avatarMap[item.avatar] || avatarMap.default_male_1}
-                                        alt={item.username || '用户'}
-                                    />
-                                </div>
-                            )) : (
-                                <span className="distribution-panel-pool-empty">暂无</span>
-                            )}
-                        </div>
-                    </div>
-
-                    <div className="distribution-panel-actions">
-                        <button
-                            type="button"
-                            className="btn btn-small btn-success"
-                            onClick={joinDistributionFromPanel}
-                            disabled={joinButtonDisabled}
-                        >
-                            {distributionPanelState.joining ? '参与中...' : '参与分发'}
-                        </button>
-                        {data.canExit && (
-                            <button
-                                type="button"
-                                className="btn btn-small btn-danger"
-                                onClick={exitDistributionFromPanel}
-                                disabled={distributionPanelState.exiting}
-                            >
-                                {distributionPanelState.exiting ? '退出中...' : '退出分发活动'}
-                            </button>
-                        )}
-                    </div>
-                </div>
-            </div>
-        );
-    };
-
-    const renderNotificationsPanel = () => {
-        if (!showNotificationsPanel) return null;
-        const refreshNotifications = async () => {
-            await fetchNotifications(false);
-            if (isAdmin) {
-                await fetchAdminPendingNodeReminders(false);
-            }
-        };
-
-        if (isAdmin) {
-            const latestPendingNode = [...adminPendingNodes]
-                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] || null;
-            const adminReminders = [];
-
-            if (pendingMasterApplyCount > 0) {
-                adminReminders.push({
-                    key: 'pending-master-apply',
-                    title: '有用户申请域主',
-                    message: `当前有 ${pendingMasterApplyCount} 条域主申请待处理。`,
-                    createdAt: notifications.find((item) => (
-                        item.type === 'domain_master_apply' && item.status === 'pending'
-                    ))?.createdAt || null
-                });
-            }
-
-            if (adminPendingNodes.length > 0) {
-                adminReminders.push({
-                    key: 'pending-node-create',
-                    title: (adminPendingNodes.length === 1 && latestPendingNode?.name)
-                        ? `有用户提交了「${latestPendingNode.name}」新知识域创建申请`
-                        : '有用户提交了创建新知识域申请',
-                    message: `当前有 ${adminPendingNodes.length} 条创建新知识域申请待审批。`,
-                    createdAt: latestPendingNode?.createdAt || null
-                });
-            }
-
-            return (
-                <div className="notifications-panel">
-                    <div className="notifications-header">
-                        <h3>通知中心</h3>
-                        <button
-                            type="button"
-                            className="btn btn-small btn-blue"
-                            onClick={markAllNotificationsRead}
-                            disabled={isNotificationsLoading || isMarkingAllRead || notificationUnreadCount === 0}
-                        >
-                            {isMarkingAllRead ? '处理中...' : '全部已读'}
-                        </button>
-                        <button
-                            type="button"
-                            className="btn btn-small btn-danger"
-                            onClick={clearNotifications}
-                            disabled={isNotificationsLoading || isClearingNotifications || notifications.length === 0}
-                        >
-                            {isClearingNotifications ? '清空中...' : '清空通知'}
-                        </button>
-                        <button
-                            type="button"
-                            className="btn btn-small btn-secondary"
-                            onClick={refreshNotifications}
-                            disabled={isNotificationsLoading}
-                        >
-                            {isNotificationsLoading ? '刷新中...' : '刷新'}
-                        </button>
-                    </div>
-                    <div className="notifications-body">
-                        {adminReminders.length === 0 ? (
-                            <div className="no-notifications">暂无审批提醒</div>
-                        ) : (
-                            <div className="notifications-list">
-                                {adminReminders.map((reminder) => (
-                                    <div key={reminder.key} className="notification-item unread">
-                                        <div className="notification-item-title-row">
-                                            <h4>{reminder.title}</h4>
-                                            <span className="notification-dot" />
-                                        </div>
-                                        <div className="notification-item-message">{reminder.message}</div>
-                                        <div className="notification-item-meta">
-                                            {formatNotificationTime(reminder.createdAt)}
-                                        </div>
-                                        <div className="notification-actions">
-                                            <button
-                                                type="button"
-                                                className="btn btn-small btn-warning"
-                                                onClick={() => {
-                                                    setShowNotificationsPanel(false);
-                                                    openAdminPanel('pending');
-                                                }}
-                                            >
-                                                前往待审批
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            );
-        }
-
-        return (
-            <div className="notifications-panel">
-                <div className="notifications-header">
-                    <h3>通知中心</h3>
-                    <button
-                        type="button"
-                        className="btn btn-small btn-blue"
-                        onClick={markAllNotificationsRead}
-                        disabled={isNotificationsLoading || isMarkingAllRead || notificationUnreadCount === 0}
-                    >
-                        {isMarkingAllRead ? '处理中...' : '全部已读'}
-                    </button>
-                    <button
-                        type="button"
-                        className="btn btn-small btn-danger"
-                        onClick={clearNotifications}
-                        disabled={isNotificationsLoading || isClearingNotifications || notifications.length === 0}
-                    >
-                        {isClearingNotifications ? '清空中...' : '清空通知'}
-                    </button>
-                    <button
-                        type="button"
-                        className="btn btn-small btn-secondary"
-                        onClick={refreshNotifications}
-                        disabled={isNotificationsLoading}
-                    >
-                        {isNotificationsLoading ? '刷新中...' : '刷新'}
-                    </button>
-                </div>
-                <div className="notifications-body">
-                    {notifications.length === 0 ? (
-                        <div className="no-notifications">暂无通知</div>
-                    ) : (
-                        <div className="notifications-list">
-                            {notifications.map((notification) => {
-                                const isInvitePending =
-                                    notification.type === 'domain_admin_invite' &&
-                                    notification.status === 'pending';
-                                const isResignRequestPending =
-                                    notification.type === 'domain_admin_resign_request' &&
-                                    notification.status === 'pending';
-                                const isMasterApplyPending =
-                                    notification.type === 'domain_master_apply' &&
-                                    notification.status === 'pending';
-                                const isAllianceJoinApplyPending =
-                                    notification.type === 'alliance_join_apply' &&
-                                    notification.status === 'pending';
-                                const isDistributionAnnouncement =
-                                    notification.type === 'domain_distribution_announcement';
-                                const isArrivalNotification =
-                                    notification.type === 'info' &&
-                                    typeof notification.nodeName === 'string' &&
-                                    notification.nodeName.trim() !== '';
-                                const currentActionKey = notificationActionId.split(':')[0];
-                                const isActing = currentActionKey === notification._id;
-
-                                return (
-                                    <div
-                                        key={notification._id}
-                                        className={`notification-item ${notification.read ? '' : 'unread'}`}
-                                        onClick={(event) => {
-                                            if (event.target.closest('.notification-actions')) {
-                                                return;
-                                            }
-                                            if (isDistributionAnnouncement) {
-                                                handleDistributionAnnouncementClick(notification);
-                                                return;
-                                            }
-                                            if (isArrivalNotification) {
-                                                handleArrivalNotificationClick(notification);
-                                                return;
-                                            }
-                                            if (isSenseArticleNotification(notification)) {
-                                                handleSenseArticleNotificationClick(notification);
-                                                return;
-                                            }
-                                            if (!notification.read) {
-                                                markNotificationRead(notification._id);
-                                            }
-                                        }}
-                                    >
-                                        <div className="notification-item-title-row">
-                                            <h4>{notification.title || '系统通知'}</h4>
-                                            {!notification.read && <span className="notification-dot" />}
-                                        </div>
-                                        <div className="notification-item-message">{notification.message || ''}</div>
-                                        <div className="notification-item-meta">
-                                            {formatNotificationTime(notification.createdAt)}
-                                        </div>
-                                        {(notification.type === 'domain_admin_invite_result'
-                                            || notification.type === 'domain_admin_resign_result'
-                                            || notification.type === 'domain_master_apply_result'
-                                            || notification.type === 'alliance_join_apply_result') && (
-                                            <div className={`notification-result-tag ${notification.status === 'accepted' ? 'accepted' : 'rejected'}`}>
-                                                {notification.status === 'accepted'
-                                                    ? (notification.type === 'domain_admin_resign_result'
-                                                        ? '域主已同意卸任'
-                                                        : notification.type === 'domain_master_apply_result'
-                                                            ? '管理员已同意你成为域主'
-                                                            : notification.type === 'alliance_join_apply_result'
-                                                                ? '盟主已同意入盟'
-                                                            : '对方已接受')
-                                                    : (notification.type === 'domain_admin_resign_result'
-                                                        ? '域主已拒绝卸任'
-                                                        : notification.type === 'domain_master_apply_result'
-                                                            ? '管理员已拒绝你的域主申请'
-                                                            : notification.type === 'alliance_join_apply_result'
-                                                                ? '盟主已拒绝入盟'
-                                                            : '对方已拒绝')}
-                                            </div>
-                                        )}
-
-                                        {isInvitePending ? (
-                                            <div className="notification-actions">
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-small btn-success"
-                                                    onClick={() => respondDomainAdminInvite(notification._id, 'accept')}
-                                                    disabled={isActing}
-                                                >
-                                                    接受
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-small btn-danger"
-                                                    onClick={() => respondDomainAdminInvite(notification._id, 'reject')}
-                                                    disabled={isActing}
-                                                >
-                                                    拒绝
-                                                </button>
-                                            </div>
-                                        ) : isResignRequestPending ? (
-                                            <div className="notification-actions">
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-small btn-success"
-                                                    onClick={() => respondDomainAdminInvite(notification._id, 'accept')}
-                                                    disabled={isActing}
-                                                >
-                                                    同意卸任
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-small btn-danger"
-                                                    onClick={() => respondDomainAdminInvite(notification._id, 'reject')}
-                                                    disabled={isActing}
-                                                >
-                                                    拒绝
-                                                </button>
-                                            </div>
-                                        ) : isMasterApplyPending ? (
-                                            <div className="notification-actions">
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-small btn-warning"
-                                                    onClick={() => {
-                                                        setShowNotificationsPanel(false);
-                                                        openAdminPanel('pending');
-                                                    }}
-                                                >
-                                                    前往待审批
-                                                </button>
-                                            </div>
-                                        ) : isAllianceJoinApplyPending ? (
-                                            <div className="notification-actions">
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-small btn-success"
-                                                    onClick={() => respondDomainAdminInvite(notification._id, 'accept')}
-                                                    disabled={isActing}
-                                                >
-                                                    同意加入
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-small btn-danger"
-                                                    onClick={() => respondDomainAdminInvite(notification._id, 'reject')}
-                                                    disabled={isActing}
-                                                >
-                                                    拒绝
-                                                </button>
-                                            </div>
-                                        ) : (isDistributionAnnouncement && notification.requiresArrival) ? (
-                                            <div className="notification-actions">
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-small btn-warning"
-                                                    onClick={() => handleDistributionAnnouncementClick(notification)}
-                                                >
-                                                    点击前往
-                                                </button>
-                                            </div>
-                                        ) : null}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-                </div>
-            </div>
-        );
-    };
-
-    const resolveSenseSelectorNode = () => {
-        if (view === 'titleDetail' && currentTitleDetail) return currentTitleDetail;
-        if (view === 'nodeDetail' && currentNodeDetail) return currentNodeDetail;
-        if (senseSelectorSourceNode) return senseSelectorSourceNode;
-        return null;
-    };
-
-    const handleSwitchTitleView = async () => {
-        const selectorNode = resolveSenseSelectorNode();
-        const nodeId = normalizeObjectId(selectorNode?._id);
-        if (!nodeId) return;
-        if (view === 'titleDetail' && normalizeObjectId(currentTitleDetail?._id) === nodeId) {
-            setIsSenseSelectorVisible(false);
-            return;
-        }
-        const clickedNode = buildClickedNodeFromScene(nodeId);
-        await fetchTitleDetail(nodeId, clickedNode, {
-            relationHint: 'jump'
-        });
-        setIsSenseSelectorVisible(false);
-    };
-
-    const handleSwitchSenseView = async (senseId) => {
-        const selectorNode = resolveSenseSelectorNode();
-        const nodeId = normalizeObjectId(selectorNode?._id);
-        const nextSenseId = typeof senseId === 'string' ? senseId.trim() : '';
-        if (!nodeId || !nextSenseId) return;
-        if (
-            view === 'nodeDetail'
-            && normalizeObjectId(currentNodeDetail?._id) === nodeId
-            && currentNodeDetail?.activeSenseId === nextSenseId
-        ) {
-            setIsSenseSelectorVisible(false);
-            return;
-        }
-        const clickedNode = buildClickedNodeFromScene(nodeId);
-        await fetchNodeDetail(nodeId, clickedNode, {
-            relationHint: 'jump',
-            activeSenseId: nextSenseId
-        });
-        setIsSenseSelectorVisible(false);
-    };
-
-    const openSenseArticleView = (target = {}, options = {}) => {
-        const nextContext = buildSenseArticleNavigationState({
-            target,
-            options,
-            currentView: view,
-            currentContext: senseArticleContext,
-            currentNodeId: normalizeObjectId(currentNodeDetail?._id),
-            currentTitleId: normalizeObjectId(currentTitleDetail?._id)
-        });
-        if (!nextContext) return;
-        setShowNodeInfoModal(false);
-        setNodeInfoModalTarget(null);
-        setIsSenseSelectorVisible(false);
-        setSenseArticleContext(nextContext);
-        setView(options.view || 'senseArticle');
-    };
-
-    const openSenseArticleFromNode = (node, options = {}) => {
-        const target = getNodeSenseArticleTarget(node, options.senseId);
-        if (!target) {
-            window.alert('当前节点没有可打开的释义百科页');
-            return;
-        }
-        openSenseArticleView(target, options);
-    };
-
-    const resolveEditableSenseArticleRevision = useCallback(async (nodeId, senseId) => {
-        const data = await senseArticleApi.getMyEdits(nodeId, senseId, { limit: 50 }, { view: 'senseArticlePage' });
-        return {
-            articleId: data?.article?._id || '',
-            currentRevisionId: data?.article?.currentRevisionId || '',
-            revision: data?.activeFullDraft || null
-        };
-    }, []);
-
-    const handleSenseArticleBack = async (payload = null) => {
-        if (payload?.action === 'openArticle') {
-            openSenseArticleView({ nodeId: payload.nodeId, senseId: payload.senseId }, {
-                originView: 'senseArticle',
-                sourceHint: payload.sourceHint || '',
-                returnTarget: { ...(senseArticleContext || {}), view }
-            });
-            return;
-        }
-        const backTarget = resolveSenseArticleBackTarget({ context: senseArticleContext });
-        if (backTarget.kind === 'article' && backTarget.context) {
-            if (payload?.action === 'returnFromEditor' && (payload?.hasPersistedDraftSave || payload?.wasDiscarded)) {
-                setSenseArticleContext(createSenseArticleContext({
-                    ...backTarget.context,
-                    myEditsRefreshKey: Date.now(),
-                    draftReturnRevisionId: payload?.wasDiscarded ? '' : normalizeObjectId(payload?.revisionId),
-                    draftReturnState: payload?.wasDiscarded ? 'discarded' : 'saved'
-                }, backTarget.context));
-            } else {
-                setSenseArticleContext(backTarget.context);
-            }
-            setView(backTarget.view || 'senseArticle');
-            return;
-        }
-        if (backTarget.view === 'titleDetail' && currentTitleDetail) {
-            setView('titleDetail');
-            return;
-        }
-        if (backTarget.view === 'nodeDetail' && currentNodeDetail) {
-            setView('nodeDetail');
-            return;
-        }
-        if (backTarget.view === 'home') {
-            await navigateToHomeWithDockCollapse();
-            return;
-        }
-        await navigateToHomeWithDockCollapse();
-    };
-
-    const handleOpenSenseArticleEditor = async ({ mode = 'full', anchor = null, headingId = '', preferExisting = false, revisionId = '' } = {}) => {
-        const targetNodeId = normalizeObjectId(senseArticleContext?.nodeId);
-        const targetSenseId = typeof senseArticleContext?.senseId === 'string' ? senseArticleContext.senseId.trim() : '';
-        if (!targetNodeId || !targetSenseId) return;
-        try {
-            let data = null;
-            const shouldPreferExisting = !!preferExisting || mode === 'full';
-            const requestedRevisionId = normalizeObjectId(revisionId);
-            if (requestedRevisionId) {
-                navigateSenseArticleSubView('senseArticleEditor', {
-                    nodeId: targetNodeId,
-                    senseId: targetSenseId,
-                    articleId: senseArticleContext?.articleId || '',
-                    currentRevisionId: senseArticleContext?.currentRevisionId || '',
-                    selectedRevisionId: requestedRevisionId,
-                    revisionId: requestedRevisionId,
-                    draftLaunchMode: 'explicit'
-                });
-                return;
-            }
-            if (mode === 'full') {
-                navigateSenseArticleSubView('senseArticleEditor', {
-                    nodeId: targetNodeId,
-                    senseId: targetSenseId,
-                    articleId: senseArticleContext?.articleId || '',
-                    currentRevisionId: senseArticleContext?.currentRevisionId || '',
-                    selectedRevisionId: '',
-                    revisionId: '',
-                    draftLaunchMode: 'pending_full'
-                });
-                return;
-            }
-            if (shouldPreferExisting) {
-                const existing = await resolveEditableSenseArticleRevision(targetNodeId, targetSenseId);
-                if (existing?.revision?._id) {
-                    navigateSenseArticleSubView('senseArticleEditor', {
-                        nodeId: targetNodeId,
-                        senseId: targetSenseId,
-                        articleId: existing.articleId || senseArticleContext?.articleId || '',
-                        currentRevisionId: existing.currentRevisionId || senseArticleContext?.currentRevisionId || '',
-                        selectedRevisionId: existing.revision._id,
-                        revisionId: existing.revision._id,
-                        draftLaunchMode: 'reused'
-                    });
-                    return;
-                }
-            }
-            if (mode === 'selection') {
-                data = await senseArticleApi.createFromSelection(targetNodeId, targetSenseId, {
-                    selectedRangeAnchor: anchor,
-                    proposerNote: '从阅读页选段发起修订',
-                    contentFormat: 'rich_html'
-                });
-            } else if (mode === 'heading') {
-                data = await senseArticleApi.createFromHeading(targetNodeId, targetSenseId, {
-                    targetHeadingId: headingId,
-                    proposerNote: headingId ? ('从小节 ' + headingId + ' 发起修订') : '从小节发起修订',
-                    contentFormat: 'rich_html'
-                });
-            } else {
-                data = await senseArticleApi.createDraft(targetNodeId, targetSenseId, {
-                    proposerNote: '整页百科修订草稿',
-                    contentFormat: 'rich_html'
-                });
-            }
-            navigateSenseArticleSubView('senseArticleEditor', {
-                nodeId: targetNodeId,
-                senseId: targetSenseId,
-                articleId: data?.article?._id || senseArticleContext?.articleId || '',
-                currentRevisionId: data?.article?.currentRevisionId || senseArticleContext?.currentRevisionId || '',
-                selectedRevisionId: data?.revision?._id || '',
-                revisionId: data?.revision?._id || '',
-                draftLaunchMode: mode === 'full' ? 'created' : 'explicit'
-            });
-        } catch (error) {
-            window.alert(error.message);
-        }
-    };
-
-    const handleOpenSenseArticleHistory = () => {
-        if (!senseArticleContext?.nodeId || !senseArticleContext?.senseId) return;
-        navigateSenseArticleSubView('senseArticleHistory');
-    };
-
-    const handleOpenSenseArticleDashboard = () => {
-        const targetNodeId = normalizeObjectId(senseArticleContext?.nodeId);
-        const targetSenseId = typeof senseArticleContext?.senseId === 'string' ? senseArticleContext.senseId.trim() : '';
-        if (!targetNodeId) return;
-        if (isDevEnvironment) {
-            console.debug('[sense-article] open dashboard', {
-                currentView: view,
-                nextView: 'senseArticleDashboard',
-                nodeId: targetNodeId,
-                senseId: targetSenseId
-            });
-        }
-        navigateSenseArticleSubView('senseArticleDashboard', {
-            nodeId: targetNodeId,
-            senseId: targetSenseId
-        });
-    };
-
-    const handleOpenSenseArticleReview = async ({ latest = false, revision = null } = {}) => {
-        const targetNodeId = normalizeObjectId(senseArticleContext?.nodeId);
-        const targetSenseId = typeof senseArticleContext?.senseId === 'string' ? senseArticleContext.senseId.trim() : '';
-        if (!targetNodeId || !targetSenseId) return;
-        let targetRevisionId = revision?._id || revision?.revisionId || senseArticleContext?.revisionId || '';
-        if (latest || !targetRevisionId) {
-            try {
-                const data = await senseArticleApi.getRevisions(targetNodeId, targetSenseId, { pageSize: 20 });
-                const revisions = Array.isArray(data?.revisions) ? data.revisions : [];
-                const preferred = revisions.find((item) => item.status === 'pending_review' || item.status === 'pending_domain_admin_review' || item.status === 'pending_domain_master_review') || revisions[0];
-                targetRevisionId = preferred?._id || '';
-            } catch (error) {
-                window.alert(error.message);
-                return;
-            }
-        }
-        if (!targetRevisionId) {
-            window.alert('当前没有可审阅的修订');
-            return;
-        }
-        navigateSenseArticleSubView('senseArticleReview', {
-            nodeId: targetNodeId,
-            senseId: targetSenseId,
-            selectedRevisionId: targetRevisionId,
-            revisionId: targetRevisionId
-        });
-    };
-
-    const handleSenseArticleNotificationClick = async (notification) => {
-        const navigation = resolveSenseArticleNotificationNavigation(notification);
-        if (!navigation) return;
-        if (!notification.read && notification._id) {
-            await markNotificationRead(notification._id);
-        }
-        openSenseArticleView(navigation.target, navigation.options);
-    };
-
-    const renderSenseSelectorPanel = () => {
-        if (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail') return null;
-        const selectorNode = resolveSenseSelectorNode();
-        if (!selectorNode) return null;
-        if (!isSenseSelectorVisible || !senseSelectorAnchor.visible) return null;
-        const selectorNodeId = normalizeObjectId(selectorNode?._id);
-        const overviewNode = normalizeObjectId(senseSelectorOverviewNode?._id) === selectorNodeId
-            ? senseSelectorOverviewNode
-            : selectorNode;
-        const senses = Array.isArray(overviewNode?.synonymSenses) && overviewNode.synonymSenses.length > 0
-            ? overviewNode.synonymSenses
-            : [{
-                senseId: overviewNode?.activeSenseId || 'sense_1',
-                title: overviewNode?.activeSenseTitle || '基础释义',
-                content: overviewNode?.activeSenseContent || overviewNode?.description || ''
-            }];
-        const activeSenseId = (
-            view === 'nodeDetail'
-            && normalizeObjectId(currentNodeDetail?._id) === selectorNodeId
-        )
-            ? (currentNodeDetail?.activeSenseId || '')
-            : '';
-        const style = overviewNode?.visualStyle || selectorNode?.visualStyle || {};
-        const overviewName = typeof overviewNode?.name === 'string' && overviewNode.name.trim()
-            ? overviewNode.name.trim()
-            : (typeof selectorNode?.name === 'string' ? selectorNode.name.trim() : '');
-        const overviewDescription = typeof overviewNode?.description === 'string'
-            ? overviewNode.description.trim()
-            : '';
-        const showSenseRelations = view === 'nodeDetail';
-        const relationNameFromItem = (item) => {
-            if (typeof item === 'string') return item.trim();
-            if (!item || typeof item !== 'object') return '';
-            if (typeof item?.displayName === 'string' && item.displayName.trim()) return item.displayName.trim();
-            const title = typeof item?.name === 'string' ? item.name.trim() : '';
-            const senseTitle = typeof item?.activeSenseTitle === 'string'
-                ? item.activeSenseTitle.trim()
-                : (typeof item?.senseTitle === 'string' ? item.senseTitle.trim() : '');
-            if (title && senseTitle) return `${title}-${senseTitle}`;
-            if (title) return title;
-            return '';
-        };
-        const uniqueRelationNames = (items = []) => Array.from(new Set(
-            (Array.isArray(items) ? items : [])
-                .map(relationNameFromItem)
-                .filter(Boolean)
-        ));
-        const includes = showSenseRelations
-            ? uniqueRelationNames(overviewNode?.childNodesInfo)
-            : [];
-        const extendsTo = showSenseRelations
-            ? uniqueRelationNames(overviewNode?.parentNodesInfo)
-            : [];
-        const managerIdOf = (user) => normalizeObjectId(user?._id || user?.id || user);
-        const domainMasterRaw = overviewNode?.domainMaster;
-        const domainMaster = (
-            domainMasterRaw
-            && typeof domainMasterRaw === 'object'
-            && managerIdOf(domainMasterRaw)
-        ) ? domainMasterRaw : null;
-        const masterId = managerIdOf(domainMaster);
-        const domainAdmins = Array.isArray(overviewNode?.domainAdmins)
-            ? overviewNode.domainAdmins
-                .filter((admin) => admin && typeof admin === 'object')
-                .filter((admin, index, arr) => {
-                    const adminId = managerIdOf(admin);
-                    if (!adminId) return true;
-                    if (adminId === masterId) return false;
-                    return arr.findIndex((item) => managerIdOf(item) === adminId) === index;
-                })
-            : [];
-        const masterAllianceRaw = domainMaster?.alliance || domainMaster?.allianceId;
-        const masterAllianceName = typeof masterAllianceRaw?.name === 'string'
-            ? masterAllianceRaw.name.trim()
-            : '';
-        const allianceName = (
-            typeof style?.allianceName === 'string' && style.allianceName.trim()
-                ? style.allianceName.trim()
-                : masterAllianceName
-        ) || '';
-        const allianceFlag = (
-            typeof masterAllianceRaw?.flag === 'string' && masterAllianceRaw.flag.trim()
-                ? masterAllianceRaw.flag.trim()
-                : ''
-        );
-        const panelStyle = {
-            left: `${senseSelectorAnchor.x}px`,
-            top: `${senseSelectorAnchor.y}px`,
-            background: `linear-gradient(120deg, ${hexToRgba(style.primaryColor || '#1e293b', 0.76)} 0%, ${hexToRgba(style.secondaryColor || '#334155', 0.68)} 100%)`,
-            borderColor: hexToRgba(style.rimColor || style.primaryColor || '#a855f7', 0.74),
-            color: style.textColor || '#f8fafc'
-        };
-
-        return (
-            <div className="sense-selector-panel" style={panelStyle}>
-                <div className="sense-selector-overview-header">
-                    <button
-                        type="button"
-                        className="sense-selector-title sense-selector-title-btn"
-                        onClick={handleSwitchTitleView}
-                    >
-                        {overviewName || '未命名知识域'}
-                    </button>
-                    <div className="sense-selector-overview-mode">
-                        {view === 'titleDetail' ? '当前：标题主视角' : '点击标题切换到标题主视角'}
-                    </div>
-                </div>
-
-                <div className="sense-selector-list-title">释义选择</div>
-                <div className="sense-selector-list">
-                    {senses.map((sense) => {
-                        const isActive = !!activeSenseId && sense?.senseId === activeSenseId;
-                        const entryKey = `${normalizeObjectId(overviewNode?._id) || ''}:${typeof sense?.senseId === 'string' ? sense.senseId.trim() : ''}`;
-                        const articleEntryState = senseArticleEntryStatusMap[entryKey] || null;
-                        return (
-                            <div key={sense?.senseId || sense?.title} className="sense-selector-item-row">
-                                <button
-                                    type="button"
-                                    className={`sense-selector-item ${isActive ? 'active' : ''}`}
-                                    onClick={() => handleSwitchSenseView(sense?.senseId)}
-                                >
-                                    {sense?.title || '未命名释义'}
-                                </button>
-                                <button
-                                    type="button"
-                                    className="sense-selector-item-article-btn"
-                                    onClick={() => openSenseArticleFromNode(overviewNode, { senseId: sense?.senseId })}
-                                    disabled={!!articleEntryState?.loading && !articleEntryState?.resolved}
-                                >
-                                    {getSenseArticleEntryActionLabel({
-                                        hasPublishedRevision: !!articleEntryState?.hasPublishedRevision,
-                                        loading: !!articleEntryState?.loading && !articleEntryState?.resolved
-                                    }) || SENSE_ARTICLE_ENTRY_SHORT_LABEL}
-                                </button>
-                            </div>
-                        );
-                    })}
-                </div>
-
-                <div className="sense-selector-overview-grid">
-                    <div className="sense-selector-overview-field">
-                        <span className="sense-selector-overview-label">概述</span>
-                        <span className="sense-selector-overview-desc-content single-line">
-                            {overviewDescription}
-                        </span>
-                    </div>
-                    <div className="sense-selector-overview-field alliance">
-                        <span className="sense-selector-overview-label">所属熵盟</span>
-                        <span className="sense-selector-overview-alliance">
-                            {allianceFlag ? (
-                                <span className="sense-selector-overview-alliance-flag" style={{ backgroundColor: allianceFlag }} />
-                            ) : null}
-                            <span className="sense-selector-overview-value">{allianceName}</span>
-                        </span>
-                    </div>
-                </div>
-
-                <div className="sense-selector-overview-managers">
-                    <div className="sense-selector-overview-people-row">
-                        <div className="sense-selector-overview-people-group">
-                            <span className="sense-selector-overview-label">域主</span>
-                            <div className="sense-selector-overview-people-list">
-                                {domainMaster ? (
-                                    <div
-                                        className="sense-selector-manager-chip master"
-                                        title={`域主：${domainMaster.username || '未命名用户'}`}
-                                    >
-                                        <img
-                                            src={resolveAvatarSrc(domainMaster.avatar)}
-                                            alt={domainMaster.username || '域主'}
-                                            className="sense-selector-manager-avatar"
-                                        />
-                                        <span className="sense-selector-manager-name">{domainMaster.username || '未设置域主'}</span>
-                                    </div>
-                                ) : null}
-                            </div>
-                        </div>
-                        <div className="sense-selector-overview-people-group">
-                            <span className="sense-selector-overview-label">域相</span>
-                            <div className="sense-selector-overview-people-list">
-                                {domainAdmins.length > 0 ? (
-                                    domainAdmins.map((admin, index) => (
-                                        <div
-                                            key={managerIdOf(admin) || `sense-selector-admin-${index}`}
-                                            className="sense-selector-manager-chip"
-                                            title={`域相：${admin?.username || '未命名用户'}`}
-                                        >
-                                            <img
-                                                src={resolveAvatarSrc(admin?.avatar)}
-                                                alt={admin?.username || '域相'}
-                                                className="sense-selector-manager-avatar"
-                                            />
-                                            <span className="sense-selector-manager-name">{admin?.username || '未命名'}</span>
-                                        </div>
-                                    ))
-                                ) : null}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                {showSenseRelations && (
-                    <div className="sense-selector-overview-relations">
-                        <div className="sense-selector-overview-relation-block">
-                            <div className="sense-selector-overview-label">包含</div>
-                            <div className="sense-selector-overview-tag-list">
-                                {includes.length > 0 ? includes.map((item) => (
-                                    <span key={`contain-${item}`} className="sense-selector-overview-tag">
-                                        {item}
-                                    </span>
-                                )) : null}
-                            </div>
-                        </div>
-                        <div className="sense-selector-overview-relation-block">
-                            <div className="sense-selector-overview-label">扩展</div>
-                            <div className="sense-selector-overview-tag-list">
-                                {extendsTo.length > 0 ? extendsTo.map((item) => (
-                                    <span key={`extend-${item}`} className="sense-selector-overview-tag">
-                                        {item}
-                                    </span>
-                                )) : null}
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {senseSelectorOverviewLoading && (
-                    <div className="sense-selector-overview-hint">正在加载标题总览...</div>
-                )}
-                {!senseSelectorOverviewLoading && senseSelectorOverviewError && (
-                    <div className="sense-selector-overview-hint error">{senseSelectorOverviewError}</div>
-                )}
-            </div>
-        );
-    };
-
-    const renderTitleRelationInfoPanel = () => {
-        if (view !== 'titleDetail' || !titleRelationInfo) return null;
-        const edge = titleRelationInfo;
-        const leftName = edge?.nodeAName || '未命名标题';
-        const rightName = edge?.nodeBName || '未命名标题';
-        const pairRows = Array.isArray(edge?.pairs) ? edge.pairs : [];
-        const nodeAId = normalizeObjectId(edge?.nodeAId);
-        const nodeBId = normalizeObjectId(edge?.nodeBId);
-        const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-        const estimateSenseComplexity = (text = '') => (
-            Array.from(typeof text === 'string' ? text.trim() : '')
-                .reduce((sum, ch) => {
-                    if (/\s/.test(ch)) return sum + 0.2;
-                    if (/[A-Za-z0-9]/.test(ch)) return sum + 0.55;
-                    return sum + 1;
-                }, 0)
-        );
-        const resolveTitleByNodeId = (nodeId) => {
-            const normalized = normalizeObjectId(nodeId);
-            if (normalized && normalized === nodeAId) return leftName;
-            if (normalized && normalized === nodeBId) return rightName;
-            return '未命名标题';
-        };
-        const diagramMap = new Map();
-        pairRows.forEach((item) => {
-            const relationType = item?.relationType === 'contains' || item?.relationType === 'extends'
-                ? item.relationType
-                : '';
-            if (!relationType) return;
-
-            const sourceNodeId = normalizeObjectId(item?.sourceNodeId);
-            const targetNodeId = normalizeObjectId(item?.targetNodeId);
-            const sourceSenseId = typeof item?.sourceSenseId === 'string' ? item.sourceSenseId.trim() : '';
-            const targetSenseId = typeof item?.targetSenseId === 'string' ? item.targetSenseId.trim() : '';
-            const sourceTitleName = resolveTitleByNodeId(sourceNodeId);
-            const targetTitleName = resolveTitleByNodeId(targetNodeId);
-            const sourceSenseTitle = typeof item?.sourceSenseTitle === 'string' ? item.sourceSenseTitle.trim() : '';
-            const targetSenseTitle = typeof item?.targetSenseTitle === 'string' ? item.targetSenseTitle.trim() : '';
-
-            // 统一语义：大椭圆 = 包含方；小椭圆 = 被包含方（互反 contains/extends 合并为同一图）
-            const upper = relationType === 'contains'
-                ? {
-                    nodeId: sourceNodeId,
-                    senseId: sourceSenseId,
-                    titleName: sourceTitleName,
-                    senseTitle: sourceSenseTitle || '未命名释义'
-                }
-                : {
-                    nodeId: targetNodeId,
-                    senseId: targetSenseId,
-                    titleName: targetTitleName,
-                    senseTitle: targetSenseTitle || '未命名释义'
-                };
-            const lower = relationType === 'contains'
-                ? {
-                    nodeId: targetNodeId,
-                    senseId: targetSenseId,
-                    titleName: targetTitleName,
-                    senseTitle: targetSenseTitle || '未命名释义'
-                }
-                : {
-                    nodeId: sourceNodeId,
-                    senseId: sourceSenseId,
-                    titleName: sourceTitleName,
-                    senseTitle: sourceSenseTitle || '未命名释义'
-                };
-
-            const mergeKey = `${upper.nodeId || 'u'}|${upper.senseId || 'us'}|${lower.nodeId || 'l'}|${lower.senseId || 'ls'}`;
-            if (!diagramMap.has(mergeKey)) {
-                diagramMap.set(mergeKey, {
-                    key: mergeKey,
-                    bigTitle: upper.titleName || '未命名标题',
-                    bigSense: upper.senseTitle || '未命名释义',
-                    smallTitle: lower.titleName || '未命名标题',
-                    smallSense: lower.senseTitle || '未命名释义'
-                });
-            }
-        });
-        const diagrams = Array.from(diagramMap.values()).map((item) => {
-            const complexity = estimateSenseComplexity(item.bigSense);
-            const overlapRatio = 0.8;
-            const bigWidthPct = clamp(30 + complexity * 1.15, 30, 54);
-            const smallWidthPct = clamp(bigWidthPct * 0.72, 24, 32);
-            // 基于相对坐标先构建，再整体平移到容器中心，保证组合图在弹窗中居中
-            const bigLeftBase = 0;
-            const smallLeftBase = bigWidthPct - smallWidthPct * overlapRatio;
-            const groupLeftBase = Math.min(bigLeftBase, smallLeftBase);
-            const groupRightBase = Math.max(bigLeftBase + bigWidthPct, smallLeftBase + smallWidthPct);
-            const groupWidthPct = groupRightBase - groupLeftBase;
-            const idealGroupLeftPct = 50 - groupWidthPct / 2;
-            const minGroupLeftPct = 2 - groupLeftBase;
-            const maxGroupLeftPct = 98 - groupRightBase;
-            const groupLeftShiftPct = clamp(idealGroupLeftPct, minGroupLeftPct, maxGroupLeftPct);
-            const bigLeftPct = groupLeftShiftPct + bigLeftBase;
-            const smallLeftPct = groupLeftShiftPct + smallLeftBase;
-            const overlapPct = smallWidthPct * overlapRatio;
-            const bigTextSafePct = clamp(((bigWidthPct - overlapPct - 1.5) / bigWidthPct) * 100, 30, 58);
-            return {
-                ...item,
-                bigWidthPct,
-                bigLeftPct,
-                smallWidthPct,
-                smallLeftPct,
-                bigTextSafePct
-            };
-        });
-        return (
-            <div className="title-relation-popup">
-                <button
-                    type="button"
-                    className="title-relation-close"
-                    onClick={() => setTitleRelationInfo(null)}
-                >
-                    ×
-                </button>
-                <div className="title-relation-diagram-list">
-                    {diagrams.length > 0 ? diagrams.map((item) => (
-                        <div key={item.key} className="title-relation-diagram-item">
-                            <div
-                                className="title-relation-venn"
-                                style={{
-                                    '--big-width': `${item.bigWidthPct}%`,
-                                    '--big-left': `${item.bigLeftPct}%`,
-                                    '--small-width': `${item.smallWidthPct}%`,
-                                    '--small-left': `${item.smallLeftPct}%`,
-                                    '--big-safe-width': `${item.bigTextSafePct}%`
-                                }}
-                            >
-                                <div className="title-relation-ellipse-title large-title">{item.bigTitle}</div>
-                                <div className="title-relation-ellipse-title small-title">{item.smallTitle}</div>
-                                <div className="title-relation-ellipse large left">
-                                    <span className="title-relation-ellipse-text">{item.bigSense}</span>
-                                </div>
-                                <div className="title-relation-ellipse small right">
-                                    <span className="title-relation-ellipse-text">{item.smallSense}</span>
-                                </div>
-                            </div>
-                        </div>
-                    )) : (
-                        <div className="title-relation-empty">暂无可展示的释义关联图</div>
-                    )}
-                </div>
-            </div>
-        );
-    };
+    const {
+        openSenseArticleView,
+        openSenseArticleFromNode,
+        handleSenseArticleBack,
+        handleOpenSenseArticleDashboard,
+        handleOpenSenseArticleEditor,
+        handleOpenSenseArticleHistory,
+        handleOpenSenseArticleReview,
+        handleSenseArticleNotificationClick,
+        handleSwitchSenseView,
+        handleSwitchTitleView
+    } = useSenseArticleNavigation({
+        view,
+        setView,
+        senseArticleContext,
+        setSenseArticleContext,
+        currentNodeDetail,
+        currentTitleDetail,
+        senseSelectorSourceNode,
+        setShowNodeInfoModal,
+        setNodeInfoModalTarget,
+        setIsSenseSelectorVisible,
+        buildClickedNodeFromScene,
+        fetchTitleDetail,
+        fetchNodeDetail,
+        navigateToHomeWithDockCollapse,
+        navigateSenseArticleSubView,
+        markNotificationRead
+    });
 
     // 如果需要显示位置选择弹窗，只显示弹窗，不显示其他内容
     if (authenticated && showLocationModal) {
@@ -6422,505 +3485,176 @@ const App = () => {
             }}
         >
             <div className="game-content">
-                {/* 头部 */}
-                <div ref={headerRef} className={`header ${isKnowledgeDomainActive ? 'header-knowledge-domain-active' : ''}`}>
-                    <div className="header-content">
-                        <h1 className="header-title">
-                            <Home className="icon" />
-                            多节点策略系统
-                        </h1>
-                        <div className="header-right">
-                            <div className="header-buttons">
-                                <div className="header-action-shell">
-                                    <div className="user-identity-group">
-                                        <div
-                                            className="user-avatar-container"
-                                            onClick={async () => {
-                                                await prepareForPrimaryNavigation();
-                                                setView('profile');
-                                            }}
-                                            title={profession ? `点击进入个人中心（${profession}）` : '点击进入个人中心'}
-                                        >
-                                            <img
-                                                src={avatarMap[userAvatar] || avatarMap['default_male_1']}
-                                                alt="头像"
-                                                className="user-avatar-small"
-                                            />
-                                            <div className="user-avatar-main">
-                                                <div className="user-avatar-top-row">
-                                                    <span className="user-level-badge">{`Lv.${headerLevel}`}</span>
-                                                    <span className="user-avatar-username">{username}</span>
-                                                </div>
-                                                <div className="user-exp-row">
-                                                    <div className="user-exp-track">
-                                                        <div
-                                                            className="user-exp-fill"
-                                                            style={{ width: `${headerExpProgress}%` }}
-                                                        />
-                                                    </div>
-                                                    <span className="user-exp-text">{`${headerExperience}/${headerExpTarget}`}</span>
-                                                </div>
-                                                <div className="user-resource-row">
-                                                    <span className="user-resource-item">{`兵力 ${headerArmyCount}`}</span>
-                                                    <span className="user-resource-item">{`知识点 ${headerKnowledgeBalance.toFixed(2)}`}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <button
-                                            onClick={handleLogout}
-                                            className="btn btn-logout"
-                                        >
-                                            退出
-                                        </button>
-                                    </div>
-                                </div>
-                                <div className="header-action-shell">
-                                    <div className="notifications-wrapper" ref={notificationsWrapperRef}>
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary notification-trigger-btn"
-                                            onClick={async () => {
-                                                const nextVisible = !showNotificationsPanel;
-                                                setShowNotificationsPanel(nextVisible);
-                                                setShowRelatedDomainsPanel(false);
-                                                setShowMilitaryMenu(false);
-                                                if (nextVisible) {
-                                                    await fetchNotifications(false);
-                                                    if (isAdmin) {
-                                                        await fetchAdminPendingNodeReminders(false);
-                                                    }
-                                                }
-                                            }}
-                                        >
-                                            <Bell size={18} />
-                                            通知
-                                            {notificationBadgeCount > 0 && (
-                                                <span className="notification-badge">
-                                                    {notificationBadgeCount > 99 ? '99+' : notificationBadgeCount}
-                                                </span>
-                                            )}
-                                        </button>
-                                        {renderNotificationsPanel()}
-                                    </div>
-                                </div>
-                                <div className="header-action-shell">
-                                    <div className="related-domains-wrapper" ref={relatedDomainsWrapperRef}>
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary related-domains-trigger-btn"
-                                            onClick={() => {
-                                                const nextVisible = !showRelatedDomainsPanel;
-                                                setShowNotificationsPanel(false);
-                                                setShowRelatedDomainsPanel(nextVisible);
-                                                setShowMilitaryMenu(false);
-                                            }}
-                                        >
-                                            <Layers size={18} />
-                                            我的知识域
-                                            {relatedDomainCount > 0 && (
-                                                <span className="notification-badge">
-                                                    {relatedDomainCount > 99 ? '99+' : relatedDomainCount}
-                                                </span>
-                                            )}
-                                        </button>
-                                        {renderRelatedDomainsPanel()}
-                                    </div>
-                                </div>
-                                <div className="header-action-shell">
-                                    <button
-                                        onClick={async () => {
-                                            setShowMilitaryMenu(false);
-                                            await navigateToHomeWithDockCollapse();
-                                        }}
-                                        className="btn btn-primary"
-                                    >
-                                        <Home size={18} />
-                                        首页
-                                    </button>
-                                </div>
-                                <div className="header-action-shell">
-                                    <button
-                                        onClick={async () => {
-                                            setShowMilitaryMenu(false);
-                                            await prepareForPrimaryNavigation();
-                                            setView('alliance');
-                                        }}
-                                        className="btn btn-secondary"
-                                    >
-                                        <Shield size={18} />
-                                        熵盟
-                                    </button>
-                                </div>
-                                {!isAdmin && (
-                                    <div className="header-action-shell">
-                                        <div className="military-menu-wrapper" ref={militaryMenuWrapperRef}>
-                                            <button
-                                                type="button"
-                                                className="btn btn-secondary military-menu-trigger"
-                                                onClick={() => {
-                                                    const nextVisible = !showMilitaryMenu;
-                                                    setShowNotificationsPanel(false);
-                                                    setShowRelatedDomainsPanel(false);
-                                                    setShowMilitaryMenu(nextVisible);
-                                                }}
-                                            >
-                                                <Users size={18} />
-                                                军事
-                                            </button>
-                                            {showMilitaryMenu && (
-                                                <div className="military-menu-panel">
-                                                    <button
-                                                        type="button"
-                                                        className="military-menu-item"
-                                                        onClick={async () => {
-                                                            setShowMilitaryMenu(false);
-                                                            await prepareForPrimaryNavigation();
-                                                            setView('army');
-                                                        }}
-                                                    >
-                                                        兵营
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        className="military-menu-item"
-                                                        onClick={async () => {
-                                                            setShowMilitaryMenu(false);
-                                                            await prepareForPrimaryNavigation();
-                                                            setView('trainingGround');
-                                                        }}
-                                                    >
-                                                        训练场
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        className="military-menu-item"
-                                                        onClick={async () => {
-                                                            setShowMilitaryMenu(false);
-                                                            await prepareForPrimaryNavigation();
-                                                            setView('equipment');
-                                                        }}
-                                                    >
-                                                        装备库
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
-                                {isAdmin && (
-                                    <div className="header-action-shell">
-                                        <button
-                                            onClick={() => {
-                                                setShowMilitaryMenu(false);
-                                                openAdminPanel('users');
-                                            }}
-                                            className="btn btn-warning"
-                                        >
-                                            管理员面板
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <AppShellChrome
+                    headerRef={headerRef}
+                    isKnowledgeDomainActive={isKnowledgeDomainActive}
+                    profession={profession}
+                    username={username}
+                    userAvatar={userAvatar}
+                    headerLevel={headerLevel}
+                    headerExpProgress={headerExpProgress}
+                    headerExperience={headerExperience}
+                    headerExpTarget={headerExpTarget}
+                    headerArmyCount={headerArmyCount}
+                    headerKnowledgeBalance={headerKnowledgeBalance}
+                    handleLogout={handleLogout}
+                    notificationsWrapperRef={notificationsWrapperRef}
+                    toggleNotificationsPanel={toggleNotificationsPanel}
+                    notificationBadgeCount={notificationBadgeCount}
+                    showNotificationsPanel={showNotificationsPanel}
+                    fetchNotifications={fetchNotifications}
+                    isAdmin={isAdmin}
+                    fetchAdminPendingNodeReminders={fetchAdminPendingNodeReminders}
+                    adminPendingNodes={adminPendingNodes}
+                    pendingMasterApplyCount={pendingMasterApplyCount}
+                    notifications={notifications}
+                    markAllNotificationsRead={markAllNotificationsRead}
+                    isNotificationsLoading={isNotificationsLoading}
+                    isMarkingAllRead={isMarkingAllRead}
+                    notificationUnreadCount={notificationUnreadCount}
+                    clearNotifications={clearNotifications}
+                    isClearingNotifications={isClearingNotifications}
+                    formatNotificationTime={formatNotificationTime}
+                    setShowNotificationsPanel={setShowNotificationsPanel}
+                    openAdminPanel={openAdminPanel}
+                    notificationActionId={notificationActionId}
+                    handleDistributionAnnouncementClick={handleDistributionAnnouncementClick}
+                    handleArrivalNotificationClick={handleArrivalNotificationClick}
+                    handleSenseArticleNotificationClick={handleSenseArticleNotificationClick}
+                    markNotificationRead={markNotificationRead}
+                    respondDomainAdminInvite={respondDomainAdminInvite}
+                    relatedDomainsWrapperRef={relatedDomainsWrapperRef}
+                    toggleRelatedDomainsPanel={toggleRelatedDomainsPanel}
+                    relatedDomainCount={relatedDomainCount}
+                    showRelatedDomainsPanel={showRelatedDomainsPanel}
+                    relatedDomainsData={relatedDomainsData}
+                    domainMasterDomains={domainMasterDomains}
+                    domainAdminDomains={domainAdminDomains}
+                    favoriteDomains={favoriteDomains}
+                    recentDomains={recentDomains}
+                    favoriteDomainSet={favoriteDomainSet}
+                    favoriteActionDomainId={favoriteActionDomainId}
+                    fetchRelatedDomains={fetchRelatedDomains}
+                    handleOpenRelatedDomain={handleOpenRelatedDomain}
+                    toggleFavoriteDomain={toggleFavoriteDomain}
+                    formatDomainKnowledgePoint={formatDomainKnowledgePoint}
+                    closeHeaderPanels={closeHeaderPanels}
+                    navigateToHomeWithDockCollapse={navigateToHomeWithDockCollapse}
+                    prepareForPrimaryNavigation={prepareForPrimaryNavigation}
+                    setView={setView}
+                    militaryMenuWrapperRef={militaryMenuWrapperRef}
+                    toggleMilitaryMenu={toggleMilitaryMenu}
+                    showMilitaryMenu={showMilitaryMenu}
+                    setShowMilitaryMenu={setShowMilitaryMenu}
+                    showKnowledgeDomain={showKnowledgeDomain}
+                    isTransitioningToDomain={isTransitioningToDomain}
+                    view={view}
+                    currentTitleDetail={currentTitleDetail}
+                    currentNodeDetail={currentNodeDetail}
+                    isAnnouncementDockExpanded={isAnnouncementDockExpanded}
+                    setIsAnnouncementDockExpanded={setIsAnnouncementDockExpanded}
+                    announcementDockTab={announcementDockTab}
+                    setAnnouncementDockTab={setAnnouncementDockTab}
+                    isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
+                    announcementUnreadCount={announcementUnreadCount}
+                    markAnnouncementNotificationsRead={markAnnouncementNotificationsRead}
+                    allianceAnnouncements={allianceAnnouncements}
+                    systemAnnouncements={systemAnnouncements}
+                    handleHomeAnnouncementClick={handleHomeAnnouncementClick}
+                    isLocationDockExpanded={isLocationDockExpanded}
+                    setIsLocationDockExpanded={setIsLocationDockExpanded}
+                    travelStatus={travelStatus}
+                    currentLocationNodeDetail={currentLocationNodeDetail}
+                    userLocation={userLocation}
+                    handleRefreshLocationNodeDetail={handleRefreshLocationNodeDetail}
+                    isRefreshingLocationDetail={isRefreshingLocationDetail}
+                    formatTravelSeconds={formatTravelSeconds}
+                    handleOpenTravelNode={handleOpenTravelNode}
+                    stopTravel={stopTravel}
+                    isStoppingTravel={isStoppingTravel}
+                    siegeSupportStatuses={siegeSupportStatuses}
+                    handleJumpToCurrentLocationView={handleJumpToCurrentLocationView}
+                    showDistributionPanel={showDistributionPanel}
+                    distributionPanelState={distributionPanelState}
+                    closeDistributionPanel={closeDistributionPanel}
+                    joinDistributionFromPanel={joinDistributionFromPanel}
+                    exitDistributionFromPanel={exitDistributionFromPanel}
+                />
 
-                {/* 首页视图 */}
-                {view === "home" && (
-                    <HomeView
-                        webglCanvasRef={webglCanvasRef}
-                        searchQuery={homeSearchQuery}
-                        onSearchChange={(e) => setHomeSearchQuery(e.target.value)}
-                        onSearchFocus={() => setShowSearchResults(true)}
-                        onSearchClear={() => {
-                            setHomeSearchQuery("");
-                            setHomeSearchResults([]);
-                            setShowSearchResults(true);
-                        }}
-                        searchResults={homeSearchResults}
-                        showSearchResults={showSearchResults}
-                        isSearching={isSearching}
-                        onSearchResultClick={(node) => {
-                            const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
-                            if (!targetNodeId) return;
-                            fetchNodeDetail(targetNodeId, {
-                                id: `search-${targetNodeId || node?._id}`,
-                                data: node,
-                                type: "search"
-                            }, {
-                                resetTrail: true,
-                                relationHint: 'jump',
-                                activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
-                            });
-                            setShowSearchResults(false);
-                        }}
-                        onCreateNode={openCreateNodeModal}
-                        isAdmin={isAdmin}
-                        currentLocationNodeDetail={currentLocationNodeDetail}
-                        travelStatus={travelStatus}
-                        onStopTravel={stopTravel}
-                        isStoppingTravel={isStoppingTravel}
-                        canJumpToLocationView={Boolean(
-                            !travelStatus.isTraveling &&
-                            currentLocationNodeDetail &&
-                            userLocation
-                        )}
-                        onJumpToLocationView={handleJumpToCurrentLocationView}
-                        announcementGroups={announcementGroups}
-                        announcementUnreadCount={announcementUnreadCount}
-                        isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
-                        onAnnouncementClick={handleHomeAnnouncementClick}
-                        onMarkAllAnnouncementsRead={markAnnouncementNotificationsRead}
-                        onAnnouncementPanelViewed={markAnnouncementNotificationsRead}
-                        showRightDocks={false}
-                    />
-                )}
-                {view === "titleDetail" && currentTitleDetail && (
-                    <>
-                        <NodeDetail
-                            node={currentTitleDetail}
-                            navigationPath={navigationPath}
-                            onNavigate={(nodeId, navOptions = {}) => fetchTitleDetail(nodeId, null, navOptions)}
-                            onNavigateHistory={(item, index) => {
-                                if (!item?.nodeId) return;
-                                if (item?.mode === 'title') {
-                                    fetchTitleDetail(item.nodeId, null, {
-                                        historyIndex: index,
-                                        relationHint: item.relation
-                                    });
-                                    return;
-                                }
-                                fetchNodeDetail(item.nodeId, null, {
-                                    historyIndex: index,
-                                    relationHint: item.relation,
-                                    activeSenseId: item.senseId || ''
-                                });
-                            }}
-                            onHome={async () => {
-                                await navigateToHomeWithDockCollapse();
-                            }}
-                            searchQuery={homeSearchQuery}
-                            onSearchChange={(e) => setHomeSearchQuery(e.target.value)}
-                            onSearchFocus={() => setShowSearchResults(true)}
-                            onSearchClear={() => {
-                                setHomeSearchQuery("");
-                                setHomeSearchResults([]);
-                                setShowSearchResults(true);
-                            }}
-                            searchResults={homeSearchResults}
-                            showSearchResults={showSearchResults}
-                            isSearching={isSearching}
-                            onSearchResultClick={(node) => {
-                                const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
-                                if (!targetNodeId) return;
-                                fetchNodeDetail(targetNodeId, {
-                                    id: `search-${targetNodeId || node?._id}`,
-                                    data: node,
-                                    type: "search"
-                                }, {
-                                    relationHint: 'jump',
-                                    activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
-                                });
-                                setShowSearchResults(false);
-                            }}
-                            onCreateNode={openCreateNodeModal}
-                            onNodeInfoClick={() => {}}
-                            webglCanvasRef={webglCanvasRef}
-                        />
-                        {renderTitleRelationInfoPanel()}
-                    </>
-                )}
-                {/* 节点详情视图 */}
-                {view === "nodeDetail" && currentNodeDetail && (
-                    <>
-                        <NodeDetail
-                            node={currentNodeDetail}
-                            navigationPath={navigationPath}
-                            onNavigate={(nodeId, navOptions = {}) => fetchNodeDetail(nodeId, null, navOptions)}
-                            onNavigateHistory={(item, index) => {
-                                if (!item?.nodeId) return;
-                                if (item?.mode === 'title') {
-                                    fetchTitleDetail(item.nodeId, null, {
-                                        historyIndex: index,
-                                        relationHint: item.relation
-                                    });
-                                    return;
-                                }
-                                fetchNodeDetail(item.nodeId, null, {
-                                    historyIndex: index,
-                                    relationHint: item.relation,
-                                    activeSenseId: item.senseId || ''
-                                });
-                            }}
-                            onHome={async () => {
-                                await navigateToHomeWithDockCollapse();
-                            }}
-                            searchQuery={homeSearchQuery}
-                            onSearchChange={(e) => setHomeSearchQuery(e.target.value)}
-                            onSearchFocus={() => setShowSearchResults(true)}
-                            onSearchClear={() => {
-                                setHomeSearchQuery("");
-                                setHomeSearchResults([]);
-                                setShowSearchResults(true);
-                            }}
-                            searchResults={homeSearchResults}
-                            showSearchResults={showSearchResults}
-                            isSearching={isSearching}
-                            onSearchResultClick={(node) => {
-                                const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
-                                if (!targetNodeId) return;
-                                fetchNodeDetail(targetNodeId, {
-                                    id: `search-${targetNodeId || node?._id}`,
-                                    data: node,
-                                    type: "search"
-                                }, {
-                                    relationHint: 'jump',
-                                    activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
-                                });
-                                setShowSearchResults(false);
-                            }}
-                            onCreateNode={openCreateNodeModal}
-                            onNodeInfoClick={() => {
-                                setNodeInfoModalTarget(currentNodeDetail);
-                                setShowNodeInfoModal(true);
-                            }}
-                            webglCanvasRef={webglCanvasRef}
-                        />
-                        <div className="sense-article-entry-banner">
-                            <button
-                                type="button"
-                                className="btn btn-primary"
-                                onClick={() => openSenseArticleFromNode(currentNodeDetail)}
-                            >
-                                {SENSE_ARTICLE_ENTRY_LABEL}
-                            </button>
-                        </div>
-                    </>
-                )}
-                {view === "senseArticle" && senseArticleContext?.nodeId && senseArticleContext?.senseId && (
-                    <SenseArticleErrorBoundary
-                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
-                        onBack={handleSenseArticleBack}
-                        title="释义百科页渲染失败"
-                    >
-                        <SenseArticlePage
-                            nodeId={senseArticleContext.nodeId}
-                            senseId={senseArticleContext.senseId}
-                            articleContext={senseArticleContext}
-                            onContextPatch={patchSenseArticleContext}
-                            onBack={handleSenseArticleBack}
-                            onOpenEditor={handleOpenSenseArticleEditor}
-                            onOpenHistory={handleOpenSenseArticleHistory}
-                            onOpenDashboard={handleOpenSenseArticleDashboard}
-                            onOpenReview={(revision) => handleOpenSenseArticleReview({ revision })}
-                        />
-                    </SenseArticleErrorBoundary>
-                )}
-                {view === "senseArticleEditor" && senseArticleContext?.nodeId && senseArticleContext?.senseId && (
-                    <SenseArticleErrorBoundary
-                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
-                        onBack={handleSenseArticleBack}
-                        title="释义编辑页发生异常"
-                    >
-                        <SenseArticleEditor
-                            nodeId={senseArticleContext.nodeId}
-                            senseId={senseArticleContext.senseId}
-                            revisionId={senseArticleContext.revisionId || senseArticleContext.selectedRevisionId}
-                            articleContext={senseArticleContext}
-                            onContextPatch={patchSenseArticleContext}
-                            onBack={handleSenseArticleBack}
-                            onOpenDashboard={handleOpenSenseArticleDashboard}
-                            onSubmitted={() => {
-                                navigateSenseArticleSubView('senseArticle', { selectedRevisionId: '', revisionId: '', revisionStatus: '' });
-                                fetchNotifications(true);
-                            }}
-                        />
-                    </SenseArticleErrorBoundary>
-                )}
-                {view === "senseArticleReview" && senseArticleContext?.nodeId && senseArticleContext?.senseId && senseArticleContext?.revisionId && (
-                    <SenseArticleErrorBoundary
-                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
-                        onBack={handleSenseArticleBack}
-                        title="释义审核页发生异常"
-                    >
-                        <SenseArticleReviewPage
-                            nodeId={senseArticleContext.nodeId}
-                            senseId={senseArticleContext.senseId}
-                            revisionId={senseArticleContext.revisionId || senseArticleContext.selectedRevisionId}
-                            articleContext={senseArticleContext}
-                            onContextPatch={patchSenseArticleContext}
-                            onBack={handleSenseArticleBack}
-                            onOpenDashboard={handleOpenSenseArticleDashboard}
-                            onReviewed={(revision) => {
-                                const nextView = revision?.status === 'published' ? 'senseArticleHistory' : 'senseArticleReview';
-                                navigateSenseArticleSubView(nextView, { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
-                                fetchNotifications(true);
-                            }}
-                        />
-                    </SenseArticleErrorBoundary>
-                )}
-                {view === "senseArticleHistory" && senseArticleContext?.nodeId && senseArticleContext?.senseId && (
-                    <SenseArticleErrorBoundary
-                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
-                        onBack={handleSenseArticleBack}
-                        title="释义历史页发生异常"
-                    >
-                        <SenseArticleHistoryPage
-                            nodeId={senseArticleContext.nodeId}
-                            senseId={senseArticleContext.senseId}
-                            articleContext={senseArticleContext}
-                            onContextPatch={patchSenseArticleContext}
-                            onBack={handleSenseArticleBack}
-                            onOpenDashboard={handleOpenSenseArticleDashboard}
-                            onOpenRevision={(revision) => handleOpenSenseArticleReview({ revision })}
-                            onEditRevision={(revision) => {
-                                navigateSenseArticleSubView('senseArticleEditor', { selectedRevisionId: revision?._id || '', revisionId: revision?._id || '' });
-                            }}
-                        />
-                    </SenseArticleErrorBoundary>
-                )}
-                {view === "senseArticleDashboard" && senseArticleContext?.nodeId && (
-                    <SenseArticleErrorBoundary
-                        resetKey={`${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId || ''}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`}
-                        onBack={handleSenseArticleBack}
-                        title="词条管理页面发生异常"
-                    >
-                        <SenseArticleDashboardPage
-                            nodeId={senseArticleContext.nodeId}
-                            articleContext={senseArticleContext}
-                            onContextPatch={patchSenseArticleContext}
-                            onBack={handleSenseArticleBack}
-                            onOpenReview={(revision) => {
-                                navigateSenseArticleSubView('senseArticleReview', {
-                                    nodeId: revision?.nodeId || senseArticleContext.nodeId,
-                                    senseId: revision?.senseId || senseArticleContext.senseId,
-                                    selectedRevisionId: revision?._id || '',
-                                    revisionId: revision?._id || ''
-                                });
-                            }}
-                            onOpenHistory={(revision) => {
-                                navigateSenseArticleSubView('senseArticleHistory', {
-                                    nodeId: revision?.nodeId || senseArticleContext.nodeId,
-                                    senseId: revision?.senseId || senseArticleContext.senseId,
-                                    selectedRevisionId: revision?._id || '',
-                                    revisionId: revision?._id || ''
-                                });
-                            }}
-                            onEditRevision={(revision) => {
-                                navigateSenseArticleSubView('senseArticleEditor', {
-                                    nodeId: revision?.nodeId || senseArticleContext.nodeId,
-                                    senseId: revision?.senseId || senseArticleContext.senseId,
-                                    selectedRevisionId: revision?._id || '',
-                                    revisionId: revision?._id || ''
-                                });
-                            }}
-                            onOpenArticle={(target) => openSenseArticleView({ nodeId: target.nodeId, senseId: target.senseId }, { returnTarget: { ...(senseArticleContext || {}), view } })}
-                        />
-                    </SenseArticleErrorBoundary>
-                )}
-                {renderSenseSelectorPanel()}
-                {renderUnifiedRightDock()}
-                {renderDistributionParticipationPanel()}
+                <KnowledgeViewRouter
+                    view={view}
+                    webglCanvasRef={webglCanvasRef}
+                    navigationPath={navigationPath}
+                    currentTitleDetail={currentTitleDetail}
+                    currentNodeDetail={currentNodeDetail}
+                    titleRelationInfo={titleRelationInfo}
+                    onCloseTitleRelationInfo={() => setTitleRelationInfo(null)}
+                    searchQuery={homeSearchQuery}
+                    onSearchChange={handleKnowledgeSearchChange}
+                    onSearchFocus={handleKnowledgeSearchFocus}
+                    onSearchClear={handleKnowledgeSearchClear}
+                    searchResults={homeSearchResults}
+                    showSearchResults={showSearchResults}
+                    isSearching={isSearching}
+                    onHomeSearchResultClick={handleHomeKnowledgeSearchResultClick}
+                    onDetailSearchResultClick={handleDetailKnowledgeSearchResultClick}
+                    onCreateNode={openCreateNodeModal}
+                    isAdmin={isAdmin}
+                    currentLocationNodeDetail={currentLocationNodeDetail}
+                    travelStatus={travelStatus}
+                    onStopTravel={stopTravel}
+                    isStoppingTravel={isStoppingTravel}
+                    canJumpToLocationView={Boolean(
+                        !travelStatus.isTraveling &&
+                        currentLocationNodeDetail &&
+                        userLocation
+                    )}
+                    onJumpToLocationView={handleJumpToCurrentLocationView}
+                    announcementGroups={announcementGroups}
+                    announcementUnreadCount={announcementUnreadCount}
+                    isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
+                    onAnnouncementClick={handleHomeAnnouncementClick}
+                    onMarkAllAnnouncementsRead={markAnnouncementNotificationsRead}
+                    onAnnouncementPanelViewed={markAnnouncementNotificationsRead}
+                    onTitleNavigate={handleTitleDetailNavigate}
+                    onNodeNavigate={handleNodeDetailNavigate}
+                    onNavigateHistory={handleKnowledgeNavigateHistory}
+                    onHome={handleKnowledgeHome}
+                    onOpenCurrentNodeInfo={handleOpenCurrentNodeInfo}
+                    openSenseArticleFromNode={openSenseArticleFromNode}
+                    rootNodes={rootNodes}
+                    featuredNodes={featuredNodes}
+                    onHomeDomainActivate={handleHomeDomainActivate}
+                    activeHomeNodeId={view === 'home' && isSenseSelectorVisible ? normalizeObjectId(senseSelectorSourceNode?._id) : ''}
+                />
+                <SenseArticleViewRouter
+                    view={view}
+                    senseArticleContext={senseArticleContext}
+                    patchSenseArticleContext={patchSenseArticleContext}
+                    handleSenseArticleBack={handleSenseArticleBack}
+                    handleOpenSenseArticleEditor={handleOpenSenseArticleEditor}
+                    handleOpenSenseArticleHistory={handleOpenSenseArticleHistory}
+                    handleOpenSenseArticleDashboard={handleOpenSenseArticleDashboard}
+                    handleOpenSenseArticleReview={handleOpenSenseArticleReview}
+                    navigateSenseArticleSubView={navigateSenseArticleSubView}
+                    fetchNotifications={fetchNotifications}
+                    openSenseArticleView={openSenseArticleView}
+                />
+                <SenseSelectorPanel
+                    view={view}
+                    currentTitleDetail={currentTitleDetail}
+                    currentNodeDetail={currentNodeDetail}
+                    senseSelectorSourceNode={senseSelectorSourceNode}
+                    isSenseSelectorVisible={isSenseSelectorVisible}
+                    senseSelectorAnchor={senseSelectorAnchor}
+                    senseSelectorOverviewNode={senseSelectorOverviewNode}
+                    senseSelectorOverviewLoading={senseSelectorOverviewLoading}
+                    senseSelectorOverviewError={senseSelectorOverviewError}
+                    senseArticleEntryStatusMap={senseArticleEntryStatusMap}
+                    handleSwitchTitleView={handleSwitchTitleView}
+                    handleSwitchSenseView={handleSwitchSenseView}
+                    openSenseArticleFromNode={openSenseArticleFromNode}
+                />
                 {view === "alliance" && (
                     <AlliancePanel 
                         username={username} 
@@ -6979,463 +3713,56 @@ const App = () => {
                     </div>
                 )}
 
-                {intelHeistDialog.open && (
-                    <div
-                        className="modal-overlay"
-                        onClick={() => setIntelHeistDialog({
-                            open: false,
-                            loading: false,
-                            node: null,
-                            snapshot: null,
-                            error: ''
-                        })}
-                    >
-                        <div className="modal-content intel-heist-modal" onClick={(event) => event.stopPropagation()}>
-                            <div className="modal-header">
-                                <h3>{`情报窃取：${intelHeistDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || '知识域'}`}</h3>
-                                <button
-                                    type="button"
-                                    className="btn-close"
-                                    onClick={() => setIntelHeistDialog({
-                                        open: false,
-                                        loading: false,
-                                        node: null,
-                                        snapshot: null,
-                                        error: ''
-                                    })}
-                                >
-                                    ×
-                                </button>
-                            </div>
-                            <div className="modal-body intel-heist-modal-body">
-                                {intelHeistDialog.loading && (
-                                    <div className="intel-heist-tip">读取情报状态中...</div>
-                                )}
-                                {!intelHeistDialog.loading && intelHeistDialog.error && (
-                                    <div className="intel-heist-error">{intelHeistDialog.error}</div>
-                                )}
-                                {!intelHeistDialog.loading && intelHeistDialog.snapshot && (
-                                    <div className="intel-heist-snapshot">
-                                        <div className="intel-heist-tip">
-                                            上次快照时间：{formatDateTimeText(intelHeistDialog.snapshot.capturedAt)}
-                                        </div>
-                                        <div className="intel-heist-tip">
-                                            部署执行时间：{formatDateTimeText(intelHeistDialog.snapshot.deploymentUpdatedAt)}
-                                            {`（${getElapsedMinutesText(intelHeistDialog.snapshot.deploymentUpdatedAt) || '未知时刻'}）`}
-                                        </div>
-                                        <div className="intel-heist-gate-block">
-                                            <strong>承口驻防</strong>
-                                            {(intelHeistDialog.snapshot?.gateDefense?.cheng || []).length > 0 ? (
-                                                (intelHeistDialog.snapshot.gateDefense.cheng || []).map((entry) => (
-                                                    <div key={`cheng-${entry.unitTypeId}`} className="intel-heist-gate-row">
-                                                        <span>{entry.unitName || entry.unitTypeId}</span>
-                                                        <em>{entry.count}</em>
-                                                    </div>
-                                                ))
-                                            ) : (
-                                                <div className="intel-heist-tip">无驻防</div>
-                                            )}
-                                        </div>
-                                        <div className="intel-heist-gate-block">
-                                            <strong>启口驻防</strong>
-                                            {(intelHeistDialog.snapshot?.gateDefense?.qi || []).length > 0 ? (
-                                                (intelHeistDialog.snapshot.gateDefense.qi || []).map((entry) => (
-                                                    <div key={`qi-${entry.unitTypeId}`} className="intel-heist-gate-row">
-                                                        <span>{entry.unitName || entry.unitTypeId}</span>
-                                                        <em>{entry.count}</em>
-                                                    </div>
-                                                ))
-                                            ) : (
-                                                <div className="intel-heist-tip">无驻防</div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
-                                {!intelHeistDialog.loading && !intelHeistDialog.snapshot && !intelHeistDialog.error && (
-                                    <div className="intel-heist-tip">当前没有该知识域的情报快照，可直接执行窃取。</div>
-                                )}
-                            </div>
-                            <div className="modal-footer">
-                                <button
-                                    type="button"
-                                    className="btn btn-secondary"
-                                    onClick={() => setIntelHeistDialog({
-                                        open: false,
-                                        loading: false,
-                                        node: null,
-                                        snapshot: null,
-                                        error: ''
-                                    })}
-                                >
-                                    关闭
-                                </button>
-                                {!intelHeistDialog.loading && intelHeistStatus.canSteal && (
-                                    <button
-                                        type="button"
-                                        className="btn btn-primary"
-                                        onClick={() => startIntelHeistMiniGame(intelHeistDialog.node || currentTitleDetail || currentNodeDetail)}
-                                    >
-                                        {intelHeistDialog.snapshot ? '再次窃取' : '开始窃取'}
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {siegeDialog.open && (
-                    <div className="modal-overlay" onClick={resetSiegeDialog}>
-                        <div className="modal-content siege-modal" onClick={(event) => event.stopPropagation()}>
-                            <div className="modal-header">
-                                <h3>
-                                    {isSiegeDomainMasterViewer
-                                        ? '你的知识域正被攻击！'
-                                        : (isSiegeDomainAdminViewer
-                                            ? '你管理的知识域正被攻击！'
-                                            : `攻占知识域：${siegeDialog.node?.name || currentTitleDetail?.name || currentNodeDetail?.name || siegeStatus.nodeName || '知识域'}`)}
-                                </h3>
-                                <button
-                                    type="button"
-                                    className="btn-close"
-                                    onClick={resetSiegeDialog}
-                                >
-                                    ×
-                                </button>
-                            </div>
-                            <div className="modal-body siege-modal-body">
-                                {siegeDialog.loading ? (
-                                    <div className="intel-heist-tip">读取围城状态中...</div>
-                                ) : (
-                                    <>
-                                        {siegeDialog.error && <div className="siege-error">{siegeDialog.error}</div>}
-                                        {siegeDialog.message && <div className="siege-message">{siegeDialog.message}</div>}
-
-                                        {isSiegeDomainAdminViewer ? (
-                                            <div className="siege-support-panel">
-                                                <strong>围城预警</strong>
-                                                {siegeActiveGateRows.length > 0 ? (
-                                                    siegeActiveGateRows.map((gate) => (
-                                                        <div key={`siege-warning-${gate.gateKey}`} className="siege-defender-gate">
-                                                            <div className="siege-defender-gate-title">
-                                                                <span>{gate.gateLabel || CITY_GATE_LABEL_MAP[gate.gateKey] || gate.gateKey}</span>
-                                                                <em>{`${gate.attackers.length}人`}</em>
-                                                            </div>
-                                                            {gate.attackers.length > 0 ? (
-                                                                gate.attackers.map((attacker) => (
-                                                                    <div key={`siege-warning-${gate.gateKey}-${attacker.userId || attacker.username}`} className="siege-force-row">
-                                                                        <span>{attacker.username || '未知成员'}</span>
-                                                                        <em>{attacker.statusLabel || attacker.status || '-'}</em>
-                                                                    </div>
-                                                                ))
-                                                            ) : (
-                                                                <div className="intel-heist-tip">暂无可见攻击用户</div>
-                                                            )}
-                                                        </div>
-                                                    ))
-                                                ) : (
-                                                    <div className="intel-heist-tip">当前没有进行中的围城</div>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            <>
-                                                <div className="siege-vs-block">
-                                                    <div className="siege-force-card attacker">
-                                                        <strong>我方兵力</strong>
-                                                        <div className="siege-force-total">{siegeStatus.compare?.attacker?.totalCount || 0}</div>
-                                                        {(siegeStatus.compare?.attacker?.units || []).length > 0 ? (
-                                                            <div className="siege-force-list">
-                                                                {(siegeStatus.compare.attacker.units || []).map((entry) => (
-                                                                    <div key={`attacker-${entry.unitTypeId}`} className="siege-force-row">
-                                                                        <span>{entry.unitName || entry.unitTypeId}</span>
-                                                                        <em>{entry.count}</em>
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                        ) : (
-                                                            <div className="intel-heist-tip">无兵力</div>
-                                                        )}
-                                                        {siegeStatus.hasActiveSiege && siegeStatus.canRequestSupport && (
-                                                            <button
-                                                                type="button"
-                                                                className="btn btn-warning siege-request-support-btn"
-                                                                onClick={requestSiegeSupport}
-                                                                disabled={siegeDialog.submitting}
-                                                            >
-                                                                {siegeDialog.submitting ? '呼叫中...' : '呼叫熵盟支援'}
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="siege-vs-label">VS</div>
-                                                    <div className="siege-force-card defender">
-                                                        <strong>守方兵力</strong>
-                                                        <div className="siege-force-total">
-                                                            {siegeStatus.compare?.defender?.source === 'intel'
-                                                                ? (siegeStatus.compare?.defender?.totalCount || 0)
-                                                                : '未知'}
-                                                        </div>
-                                                        <div className="siege-force-source">
-                                                            {siegeStatus.compare?.defender?.source === 'intel'
-                                                                ? (isSiegeDomainMasterViewer ? '守备视图' : '情报视图')
-                                                                : '无情报'}
-                                                        </div>
-                                                        {siegeStatus.compare?.defender?.source === 'intel' && siegeStatus.intelDeploymentUpdatedAt && (
-                                                            <div className="siege-force-source">
-                                                                部署时间：{formatDateTimeText(siegeStatus.intelDeploymentUpdatedAt)}
-                                                                {`（${getElapsedMinutesText(siegeStatus.intelDeploymentUpdatedAt) || '未知时刻'}）`}
-                                                            </div>
-                                                        )}
-                                                        {siegeStatus.compare?.defender?.source === 'intel' && siegeStatus.hasActiveSiege && (
-                                                            <div className="siege-support-panel">
-                                                                <button
-                                                                    type="button"
-                                                                    className="btn btn-secondary"
-                                                                    onClick={handleOpenSiegeBattlefieldPreview}
-                                                                    disabled={!canPreviewSiegeBattlefield || siegeBattlefieldPreviewState.loading}
-                                                                    title={canPreviewSiegeBattlefield ? '' : '当前门位无可预览战场'}
-                                                                >
-                                                                    {siegeBattlefieldPreviewState.loading ? '预览加载中...' : '预览战场'}
-                                                                </button>
-                                                                {siegeBattlefieldPreviewState.error && (
-                                                                    <div className="intel-heist-tip">{siegeBattlefieldPreviewState.error}</div>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                        {siegeStatus.compare?.defender?.source === 'intel' ? (
-                                                            <details className="siege-force-gates" open>
-                                                                <summary className="siege-force-source">展开驻防信息</summary>
-                                                                {(siegeStatus.compare?.defender?.gates || []).length > 0 ? (
-                                                                    (siegeStatus.compare?.defender?.gates || []).map((gate) => (
-                                                                        <div key={`defender-gate-${gate.gateKey}`} className={`siege-defender-gate ${gate.highlight ? 'highlight' : ''}`}>
-                                                                            <div className="siege-defender-gate-title">
-                                                                                <span>{gate.gateLabel || CITY_GATE_LABEL_MAP[gate.gateKey] || gate.gateKey}</span>
-                                                                                <em>{gate.totalCount || 0}</em>
-                                                                            </div>
-                                                                            {(gate.entries || []).length > 0 ? (
-                                                                                (gate.entries || []).map((entry) => (
-                                                                                    <div key={`defender-${gate.gateKey}-${entry.unitTypeId}`} className="siege-force-row">
-                                                                                        <span>{entry.unitName || entry.unitTypeId}</span>
-                                                                                        <em>{entry.count}</em>
-                                                                                    </div>
-                                                                                ))
-                                                                            ) : (
-                                                                                <div className="intel-heist-tip">无驻防</div>
-                                                                            )}
-                                                                        </div>
-                                                                    ))
-                                                                ) : (
-                                                                    <div className="intel-heist-tip">当前门位无驻防信息</div>
-                                                                )}
-                                                            </details>
-                                                        ) : (
-                                                            <div className="intel-heist-tip">暂无情报文件，无法查看守方驻防信息</div>
-                                                        )}
-                                                    </div>
-                                                </div>
-
-                                                {siegeStatus.hasActiveSiege && (siegeStatus.compare?.attacker?.supporters || []).length > 0 && (
-                                                    <div className="siege-supporter-list">
-                                                        <strong>攻方参战成员</strong>
-                                                        {(siegeStatus.compare.attacker.supporters || []).map((item) => (
-                                                            <div key={`supporter-${item.userId || item.username}`} className="siege-supporter-row">
-                                                                <span>{item.username || '未知成员'}</span>
-                                                                <span>{item.statusLabel || item.status || '-'}</span>
-                                                                <em>{item.totalCount || 0}</em>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                )}
-
-                                                {siegeStatus.hasActiveSiege && (
-                                                    <div className="siege-support-panel">
-                                                        <strong>同战场支援</strong>
-                                                        {siegeStatus.canSupportSameBattlefield ? (
-                                                            <>
-                                                                <div className="siege-support-meta">
-                                                                    <label>目标战场</label>
-                                                                    <select
-                                                                        value={siegeSupportDraft.gateKey || siegeStatus.supportGate || ''}
-                                                                        onChange={(event) => setSiegeSupportDraft((prev) => ({
-                                                                            ...prev,
-                                                                            gateKey: event.target.value
-                                                                        }))}
-                                                                    >
-                                                                        {(siegeStatus.activeGateKeys || []).map((gateKey) => (
-                                                                            <option key={`support-gate-${gateKey}`} value={gateKey}>
-                                                                                {CITY_GATE_LABEL_MAP[gateKey] || gateKey}
-                                                                            </option>
-                                                                        ))}
-                                                                    </select>
-                                                                </div>
-                                                                <div className="siege-support-meta">
-                                                                    <label>自动撤出阈值</label>
-                                                                    <div className="siege-support-retreat">
-                                                                        <input
-                                                                            type="range"
-                                                                            min="1"
-                                                                            max="99"
-                                                                            value={Math.max(1, Math.min(99, Number(siegeSupportDraft.autoRetreatPercent) || 40))}
-                                                                            onChange={(event) => setSiegeSupportDraft((prev) => ({
-                                                                                ...prev,
-                                                                                autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(event.target.value) || 40)))
-                                                                            }))}
-                                                                        />
-                                                                        <input
-                                                                            type="number"
-                                                                            min="1"
-                                                                            max="99"
-                                                                            value={Math.max(1, Math.min(99, Number(siegeSupportDraft.autoRetreatPercent) || 40))}
-                                                                            onChange={(event) => setSiegeSupportDraft((prev) => ({
-                                                                                ...prev,
-                                                                                autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(event.target.value) || 40)))
-                                                                            }))}
-                                                                        />
-                                                                        <span>%</span>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="siege-support-unit-list">
-                                                                    {(siegeStatus.ownRoster?.units || []).map((entry) => (
-                                                                        <div key={`support-unit-${entry.unitTypeId}`} className="siege-support-unit-row">
-                                                                            <span>{entry.unitName || entry.unitTypeId}</span>
-                                                                            <small>可用 {entry.count}</small>
-                                                                            <input
-                                                                                type="number"
-                                                                                min="0"
-                                                                                max={entry.count}
-                                                                                value={Math.max(0, Math.floor(Number(siegeSupportDraft.units?.[entry.unitTypeId]) || 0))}
-                                                                                onChange={(event) => {
-                                                                                    const nextQty = Math.max(0, Math.min(entry.count, Math.floor(Number(event.target.value) || 0)));
-                                                                                    setSiegeSupportDraft((prev) => ({
-                                                                                        ...prev,
-                                                                                        units: {
-                                                                                            ...(prev.units || {}),
-                                                                                            [entry.unitTypeId]: nextQty
-                                                                                        }
-                                                                                    }));
-                                                                                }}
-                                                                            />
-                                                                        </div>
-                                                                    ))}
-                                                                </div>
-                                                                <button
-                                                                    type="button"
-                                                                    className="btn btn-primary"
-                                                                    onClick={submitSiegeSupport}
-                                                                    disabled={siegeDialog.supportSubmitting}
-                                                                >
-                                                                    {siegeDialog.supportSubmitting ? '派遣中...' : '派遣支援'}
-                                                                </button>
-                                                            </>
-                                                        ) : (
-                                                            <div className="intel-heist-tip">
-                                                                {siegeStatus.supportDisabledReason || '当前不可支援该战场'}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                            </>
-                                        )}
-                                    </>
-                                )}
-                            </div>
-                            <div className="modal-footer">
-                                <button type="button" className="btn btn-secondary" onClick={resetSiegeDialog}>
-                                    {siegeStatus.hasActiveSiege ? '关闭' : '取消'}
-                                </button>
-                                {!siegeDialog.loading && !siegeStatus.hasActiveSiege && !isSiegeReadonlyViewer && (
-                                    <button
-                                        type="button"
-                                        className="btn btn-danger"
-                                        onClick={startSiege}
-                                        disabled={!siegeStatus.canStartSiege || siegeDialog.submitting}
-                                    >
-                                        {siegeDialog.submitting ? '开始中...' : '开始围城'}
-                                    </button>
-                                )}
-                                {!siegeDialog.loading && siegeStatus.hasActiveSiege && !isSiegeReadonlyViewer && (
-                                    <>
-                                        <button
-                                            type="button"
-                                            className="btn btn-warning"
-                                            onClick={handleOpenSiegePveBattle}
-                                            disabled={!canLaunchSiegePveBattle}
-                                            title={canLaunchSiegePveBattle ? '' : '仅当前门向参战攻方可进入战斗'}
-                                        >
-                                            进攻
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="btn btn-danger"
-                                            onClick={retreatSiege}
-                                            disabled={!siegeStatus.canRetreat || siegeDialog.submitting}
-                                            title={siegeStatus.canRetreat ? '' : (siegeStatus.retreatDisabledReason || '当前不可撤退')}
-                                        >
-                                            {siegeDialog.submitting ? '撤退中...' : '撤退'}
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                <BattleSceneModal
-                    open={pveBattleState.open}
-                    loading={pveBattleState.loading}
-                    error={pveBattleState.error}
-                    battleInitData={pveBattleState.data}
-                    mode="siege"
-                    startLabel="开战"
-                    requireResultReport
-                    onClose={closeSiegePveBattle}
-                    onBattleFinished={handlePveBattleFinished}
-                />
-
-                <BattlefieldPreviewModal
-                    open={siegeBattlefieldPreviewState.open}
-                    nodeId={siegeBattlefieldPreviewState.nodeId}
-                    gateKey={siegeBattlefieldPreviewState.gateKey || 'cheng'}
-                    gateLabel={siegeBattlefieldPreviewState.gateLabel}
-                    canEdit={false}
-                    layoutBundleOverride={siegeBattlefieldPreviewState.layoutBundle}
-                    onClose={closeSiegeBattlefieldPreview}
-                />
-                
-                <AssociationModal 
-                    isOpen={showAssociationModal}
-                    onClose={() => setShowAssociationModal(false)}
+                <AppOverlays
+                    intelHeistDialog={intelHeistDialog}
+                    closeIntelHeistDialog={closeIntelHeistDialog}
+                    formatDateTimeText={formatDateTimeText}
+                    getElapsedMinutesText={getElapsedMinutesText}
+                    intelHeistStatus={intelHeistStatus}
+                    startIntelHeistMiniGame={startIntelHeistMiniGame}
+                    currentTitleDetail={currentTitleDetail}
+                    currentNodeDetail={currentNodeDetail}
+                    siegeDialog={siegeDialog}
+                    resetSiegeDialog={resetSiegeDialog}
+                    isSiegeDomainMasterViewer={isSiegeDomainMasterViewer}
+                    isSiegeDomainAdminViewer={isSiegeDomainAdminViewer}
+                    siegeStatus={siegeStatus}
+                    siegeActiveGateRows={siegeActiveGateRows}
+                    requestSiegeSupport={requestSiegeSupport}
+                    siegeBattlefieldPreviewState={siegeBattlefieldPreviewState}
+                    canPreviewSiegeBattlefield={canPreviewSiegeBattlefield}
+                    handleOpenSiegeBattlefieldPreview={handleOpenSiegeBattlefieldPreview}
+                    siegeSupportDraft={siegeSupportDraft}
+                    setSiegeSupportDraft={setSiegeSupportDraft}
+                    submitSiegeSupport={submitSiegeSupport}
+                    startSiege={startSiege}
+                    isSiegeReadonlyViewer={isSiegeReadonlyViewer}
+                    canLaunchSiegePveBattle={canLaunchSiegePveBattle}
+                    handleOpenSiegePveBattle={handleOpenSiegePveBattle}
+                    retreatSiege={retreatSiege}
+                    pveBattleState={pveBattleState}
+                    closeSiegePveBattle={closeSiegePveBattle}
+                    handlePveBattleFinished={handlePveBattleFinished}
+                    closeSiegeBattlefieldPreview={closeSiegeBattlefieldPreview}
+                    showAssociationModal={showAssociationModal}
+                    closeAssociationModal={closeAssociationModal}
                     viewingAssociationNode={viewingAssociationNode}
-                />
-
-                <NodeInfoModal
-                    isOpen={showNodeInfoModal}
-                    onClose={() => {
-                        setShowNodeInfoModal(false);
-                        setNodeInfoModalTarget(null);
-                    }}
-                    nodeDetail={nodeInfoModalTarget}
-                    onEnterKnowledgeDomain={handleEnterKnowledgeDomain}
-                    onOpenSenseArticle={openSenseArticleFromNode}
-                    simpleOnly
+                    showNodeInfoModal={showNodeInfoModal}
+                    closeNodeInfoModal={closeNodeInfoModal}
+                    nodeInfoModalTarget={nodeInfoModalTarget}
+                    handleEnterKnowledgeDomain={handleEnterKnowledgeDomain}
+                    openSenseArticleFromNode={openSenseArticleFromNode}
                     canApplyDomainMaster={canApplyDomainMaster}
                     isApplyingDomainMaster={isApplyingDomainMaster}
-                    onApplyDomainMaster={handleApplyDomainMaster}
+                    handleApplyDomainMaster={handleApplyDomainMaster}
+                    showCreateNodeModal={showCreateNodeModal}
+                    closeCreateNodeModal={closeCreateNodeModal}
+                    username={username}
+                    isAdmin={isAdmin}
+                    nodes={nodes}
+                    sceneManager={sceneManagerRef.current}
+                    handleCreateNodeSuccess={handleCreateNodeSuccess}
                 />
-
-                {showCreateNodeModal && (
-                    <CreateNodeModal
-                        isOpen={showCreateNodeModal}
-                        onClose={() => setShowCreateNodeModal(false)}
-                        username={username}
-                        isAdmin={isAdmin}
-                        existingNodes={nodes}
-                        sceneManager={sceneManagerRef.current}
-                        onSuccess={(newNode) => {
-                            if (newNode) {
-                                setNodes(prev => [...prev, newNode]);
-                            }
-                        }}
-                    />
-                )}
 
                 {/* 知识域场景 */}
                 <KnowledgeDomainScene

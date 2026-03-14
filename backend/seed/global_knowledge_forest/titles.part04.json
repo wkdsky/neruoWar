@@ -1,0 +1,5002 @@
+[
+  {
+    "titleId": "gkf_t01925",
+    "name": "惯性导航",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01936",
+    "name": "惯性导航保护议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01937",
+    "name": "惯性导航比较地理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01929",
+    "name": "惯性导航地表过程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01938",
+    "name": "惯性导航地图表达",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01930",
+    "name": "惯性导航典型景观",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01934",
+    "name": "惯性导航风险问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01935",
+    "name": "惯性导航监测方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01927",
+    "name": "惯性导航空间分布",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01928",
+    "name": "惯性导航内部结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01931",
+    "name": "惯性导航气候影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01939",
+    "name": "惯性导航人地关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01932",
+    "name": "惯性导航生态联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01926",
+    "name": "惯性导航形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01933",
+    "name": "惯性导航资源利用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01973",
+    "name": "灌溉社会",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01986",
+    "name": "灌溉社会比较案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01979",
+    "name": "灌溉社会地理范围",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01975",
+    "name": "灌溉社会关键阶段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01978",
+    "name": "灌溉社会技术因素",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01985",
+    "name": "灌溉社会解释争议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01981",
+    "name": "灌溉社会经济后果",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01974",
+    "name": "灌溉社会历史背景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01980",
+    "name": "灌溉社会社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01984",
+    "name": "灌溉社会史料来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01982",
+    "name": "灌溉社会思想传播",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01983",
+    "name": "灌溉社会文化记忆",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01987",
+    "name": "灌溉社会长期遗产",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01977",
+    "name": "灌溉社会制度条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01976",
+    "name": "灌溉社会主要参与者",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13415",
+    "name": "灌溉系统",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10846",
+    "name": "光谱分析",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10859",
+    "name": "光谱分析比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10855",
+    "name": "光谱分析典型现象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10853",
+    "name": "光谱分析分类体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10854",
+    "name": "光谱分析关键变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10852",
+    "name": "光谱分析观测手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10848",
+    "name": "光谱分析核心机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10847",
+    "name": "光谱分析基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10849",
+    "name": "光谱分析结构组成",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10857",
+    "name": "光谱分析历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10860",
+    "name": "光谱分析前沿议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10851",
+    "name": "光谱分析实验方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10850",
+    "name": "光谱分析形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10856",
+    "name": "光谱分析应用价值",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10858",
+    "name": "光谱分析争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10411",
+    "name": "光学",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13305",
+    "name": "光学信号",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01818",
+    "name": "光学遥感",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01829",
+    "name": "光学遥感保护议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01830",
+    "name": "光学遥感比较地理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01822",
+    "name": "光学遥感地表过程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01831",
+    "name": "光学遥感地图表达",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01823",
+    "name": "光学遥感典型景观",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01827",
+    "name": "光学遥感风险问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01828",
+    "name": "光学遥感监测方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01820",
+    "name": "光学遥感空间分布",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01821",
+    "name": "光学遥感内部结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01824",
+    "name": "光学遥感气候影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01832",
+    "name": "光学遥感人地关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01825",
+    "name": "光学遥感生态联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01819",
+    "name": "光学遥感形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01826",
+    "name": "光学遥感资源利用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08185",
+    "name": "广播电视",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08434",
+    "name": "广告模式",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08444",
+    "name": "广告模式产业结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08443",
+    "name": "广告模式传播渠道",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08438",
+    "name": "广告模式创作方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08440",
+    "name": "广告模式代表流派",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08435",
+    "name": "广告模式基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08442",
+    "name": "广告模式技术条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08447",
+    "name": "广告模式教育应用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08448",
+    "name": "广告模式跨媒介联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08439",
+    "name": "广告模式历史流变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08436",
+    "name": "广告模式媒介材料",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08446",
+    "name": "广告模式批评框架",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08441",
+    "name": "广告模式审美议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08445",
+    "name": "广告模式受众关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08437",
+    "name": "广告模式形式语言",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10552",
+    "name": "广义相对论",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10565",
+    "name": "广义相对论比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10561",
+    "name": "广义相对论典型现象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10559",
+    "name": "广义相对论分类体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10560",
+    "name": "广义相对论关键变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10558",
+    "name": "广义相对论观测手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10554",
+    "name": "广义相对论核心机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10553",
+    "name": "广义相对论基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10555",
+    "name": "广义相对论结构组成",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10563",
+    "name": "广义相对论历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10566",
+    "name": "广义相对论前沿议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10557",
+    "name": "广义相对论实验方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10556",
+    "name": "广义相对论形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10562",
+    "name": "广义相对论应用价值",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10564",
+    "name": "广义相对论争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03629",
+    "name": "规范与权利",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13222",
+    "name": "规划模型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11588",
+    "name": "规划算法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11598",
+    "name": "规划算法安全风险",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11601",
+    "name": "规划算法比较方案",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11599",
+    "name": "规划算法产业生态",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11592",
+    "name": "规划算法工作机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11591",
+    "name": "规划算法关键组件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11589",
+    "name": "规划算法基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11596",
+    "name": "规划算法兼容标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11600",
+    "name": "规划算法历史演进",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11593",
+    "name": "规划算法实现方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11590",
+    "name": "规划算法系统结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11594",
+    "name": "规划算法性能指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11595",
+    "name": "规划算法应用场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11602",
+    "name": "规划算法优化策略",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11597",
+    "name": "规划算法运维问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11542",
+    "name": "规则系统",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11552",
+    "name": "规则系统安全风险",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11555",
+    "name": "规则系统比较方案",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11553",
+    "name": "规则系统产业生态",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11546",
+    "name": "规则系统工作机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11545",
+    "name": "规则系统关键组件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11543",
+    "name": "规则系统基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11550",
+    "name": "规则系统兼容标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11554",
+    "name": "规则系统历史演进",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11547",
+    "name": "规则系统实现方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11544",
+    "name": "规则系统系统结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11548",
+    "name": "规则系统性能指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11549",
+    "name": "规则系统应用场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11556",
+    "name": "规则系统优化策略",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11551",
+    "name": "规则系统运维问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12145",
+    "name": "轨道交通",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12155",
+    "name": "轨道交通安全风险",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12158",
+    "name": "轨道交通比较方案",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12156",
+    "name": "轨道交通产业生态",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12149",
+    "name": "轨道交通工作机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12148",
+    "name": "轨道交通关键组件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12146",
+    "name": "轨道交通基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12153",
+    "name": "轨道交通兼容标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12157",
+    "name": "轨道交通历史演进",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12150",
+    "name": "轨道交通实现方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12147",
+    "name": "轨道交通系统结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12151",
+    "name": "轨道交通性能指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12152",
+    "name": "轨道交通应用场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12159",
+    "name": "轨道交通优化策略",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12154",
+    "name": "轨道交通运维问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03395",
+    "name": "国际法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00432",
+    "name": "国际法学者",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00433",
+    "name": "国际法学者代表人物",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00434",
+    "name": "国际法学者典型贡献",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00445",
+    "name": "国际法学者工作场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00442",
+    "name": "国际法学者公众形象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00436",
+    "name": "国际法学者核心技能",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00441",
+    "name": "国际法学者跨界合作",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00438",
+    "name": "国际法学者历史变迁",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00439",
+    "name": "国际法学者伦理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00443",
+    "name": "国际法学者评价标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00437",
+    "name": "国际法学者社会角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00444",
+    "name": "国际法学者相关奖项",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00446",
+    "name": "国际法学者知识传承",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00435",
+    "name": "国际法学者职业训练",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00440",
+    "name": "国际法学者制度环境",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02606",
+    "name": "国际供应链",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02619",
+    "name": "国际供应链比较案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02612",
+    "name": "国际供应链地理范围",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02608",
+    "name": "国际供应链关键阶段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02611",
+    "name": "国际供应链技术因素",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02618",
+    "name": "国际供应链解释争议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02614",
+    "name": "国际供应链经济后果",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02607",
+    "name": "国际供应链历史背景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02613",
+    "name": "国际供应链社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02617",
+    "name": "国际供应链史料来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02615",
+    "name": "国际供应链思想传播",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02616",
+    "name": "国际供应链文化记忆",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02620",
+    "name": "国际供应链长期遗产",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02610",
+    "name": "国际供应链制度条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02609",
+    "name": "国际供应链主要参与者",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03950",
+    "name": "国际经济学",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03966",
+    "name": "国际收支",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03977",
+    "name": "国际收支比较视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03973",
+    "name": "国际收支测量指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03976",
+    "name": "国际收支典型案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03975",
+    "name": "国际收支风险来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03968",
+    "name": "国际收支核心变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03967",
+    "name": "国际收支基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03979",
+    "name": "国际收支技术关联",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03978",
+    "name": "国际收支历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03971",
+    "name": "国际收支市场结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03969",
+    "name": "国际收支运行机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03974",
+    "name": "国际收支政策工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03970",
+    "name": "国际收支制度条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03980",
+    "name": "国际收支治理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03972",
+    "name": "国际收支组织形式",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03582",
+    "name": "国际组织",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00760",
+    "name": "国际组织秘书长",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00761",
+    "name": "国际组织秘书长代表人物",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00762",
+    "name": "国际组织秘书长典型贡献",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00773",
+    "name": "国际组织秘书长工作场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00770",
+    "name": "国际组织秘书长公众形象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00764",
+    "name": "国际组织秘书长核心技能",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00769",
+    "name": "国际组织秘书长跨界合作",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00766",
+    "name": "国际组织秘书长历史变迁",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00767",
+    "name": "国际组织秘书长伦理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00771",
+    "name": "国际组织秘书长评价标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00765",
+    "name": "国际组织秘书长社会角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00772",
+    "name": "国际组织秘书长相关奖项",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00774",
+    "name": "国际组织秘书长知识传承",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00763",
+    "name": "国际组织秘书长职业训练",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00768",
+    "name": "国际组织秘书长制度环境",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05306",
+    "name": "国家安全",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02465",
+    "name": "国家建构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03073",
+    "name": "国家结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00652",
+    "name": "国家元首",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04747",
+    "name": "国家战略",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13178",
+    "name": "过程模型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01115",
+    "name": "海岸地貌",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12727",
+    "name": "海岸生态系统",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12740",
+    "name": "海岸生态系统比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12729",
+    "name": "海岸生态系统病因基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12730",
+    "name": "海岸生态系统分类方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12736",
+    "name": "海岸生态系统环境影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12728",
+    "name": "海岸生态系统基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12731",
+    "name": "海岸生态系统临床表现",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12737",
+    "name": "海岸生态系统人群差异",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12739",
+    "name": "海岸生态系统实践场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12735",
+    "name": "海岸生态系统营养关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12734",
+    "name": "海岸生态系统预防措施",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12741",
+    "name": "海岸生态系统长期管理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12732",
+    "name": "海岸生态系统诊断手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12738",
+    "name": "海岸生态系统政策治理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12733",
+    "name": "海岸生态系统治疗路径",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01444",
+    "name": "海沟",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01455",
+    "name": "海沟保护议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01456",
+    "name": "海沟比较地理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01448",
+    "name": "海沟地表过程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01457",
+    "name": "海沟地图表达",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01449",
+    "name": "海沟典型景观",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01453",
+    "name": "海沟风险问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01454",
+    "name": "海沟监测方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01446",
+    "name": "海沟空间分布",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01447",
+    "name": "海沟内部结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01450",
+    "name": "海沟气候影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01458",
+    "name": "海沟人地关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01451",
+    "name": "海沟生态联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01445",
+    "name": "海沟形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01452",
+    "name": "海沟资源利用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04980",
+    "name": "海军",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04981",
+    "name": "海军航空兵",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04995",
+    "name": "海军航空兵典型场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04992",
+    "name": "海军航空兵法律约束",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04988",
+    "name": "海军航空兵风险类型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04993",
+    "name": "海军航空兵国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04982",
+    "name": "海军航空兵基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04986",
+    "name": "海军航空兵技术手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04994",
+    "name": "海军航空兵历史演化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04987",
+    "name": "海军航空兵情报来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04989",
+    "name": "海军航空兵响应流程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04991",
+    "name": "海军航空兵协同机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04984",
+    "name": "海军航空兵行动原则",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04990",
+    "name": "海军航空兵训练方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04985",
+    "name": "海军航空兵装备基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04983",
+    "name": "海军航空兵组织体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05213",
+    "name": "海空平台",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10972",
+    "name": "海流",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10985",
+    "name": "海流比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10981",
+    "name": "海流典型现象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10979",
+    "name": "海流分类体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10980",
+    "name": "海流关键变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10978",
+    "name": "海流观测手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10974",
+    "name": "海流核心机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10973",
+    "name": "海流基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10975",
+    "name": "海流结构组成",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10983",
+    "name": "海流历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10986",
+    "name": "海流前沿议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10977",
+    "name": "海流实验方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10976",
+    "name": "海流形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10982",
+    "name": "海流应用价值",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10984",
+    "name": "海流争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01459",
+    "name": "海盆",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01470",
+    "name": "海盆保护议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01471",
+    "name": "海盆比较地理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01463",
+    "name": "海盆地表过程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01472",
+    "name": "海盆地图表达",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01464",
+    "name": "海盆典型景观",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01468",
+    "name": "海盆风险问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01469",
+    "name": "海盆监测方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01461",
+    "name": "海盆空间分布",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01462",
+    "name": "海盆内部结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01465",
+    "name": "海盆气候影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01473",
+    "name": "海盆人地关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01466",
+    "name": "海盆生态联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01460",
+    "name": "海盆形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01467",
+    "name": "海盆资源利用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10987",
+    "name": "海气相互作用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11000",
+    "name": "海气相互作用比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10996",
+    "name": "海气相互作用典型现象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10994",
+    "name": "海气相互作用分类体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10995",
+    "name": "海气相互作用关键变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10993",
+    "name": "海气相互作用观测手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10989",
+    "name": "海气相互作用核心机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10988",
+    "name": "海气相互作用基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10990",
+    "name": "海气相互作用结构组成",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10998",
+    "name": "海气相互作用历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11001",
+    "name": "海气相互作用前沿议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10992",
+    "name": "海气相互作用实验方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10991",
+    "name": "海气相互作用形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10997",
+    "name": "海气相互作用应用价值",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10999",
+    "name": "海气相互作用争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02034",
+    "name": "海上帝国",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02047",
+    "name": "海上帝国比较案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02040",
+    "name": "海上帝国地理范围",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02036",
+    "name": "海上帝国关键阶段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02039",
+    "name": "海上帝国技术因素",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02046",
+    "name": "海上帝国解释争议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02042",
+    "name": "海上帝国经济后果",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02035",
+    "name": "海上帝国历史背景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02041",
+    "name": "海上帝国社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02045",
+    "name": "海上帝国史料来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02043",
+    "name": "海上帝国思想传播",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02044",
+    "name": "海上帝国文化记忆",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02048",
+    "name": "海上帝国长期遗产",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02038",
+    "name": "海上帝国制度条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02037",
+    "name": "海上帝国主要参与者",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02096",
+    "name": "海上贸易",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02109",
+    "name": "海上贸易比较案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02102",
+    "name": "海上贸易地理范围",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02098",
+    "name": "海上贸易关键阶段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02101",
+    "name": "海上贸易技术因素",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02108",
+    "name": "海上贸易解释争议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02104",
+    "name": "海上贸易经济后果",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02097",
+    "name": "海上贸易历史背景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02103",
+    "name": "海上贸易社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02107",
+    "name": "海上贸易史料来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02105",
+    "name": "海上贸易思想传播",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02106",
+    "name": "海上贸易文化记忆",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02110",
+    "name": "海上贸易长期遗产",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02100",
+    "name": "海上贸易制度条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02099",
+    "name": "海上贸易主要参与者",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05495",
+    "name": "海上运输",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05509",
+    "name": "海上运输典型场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05506",
+    "name": "海上运输法律约束",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05502",
+    "name": "海上运输风险类型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05507",
+    "name": "海上运输国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05496",
+    "name": "海上运输基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05500",
+    "name": "海上运输技术手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05508",
+    "name": "海上运输历史演化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05501",
+    "name": "海上运输情报来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05503",
+    "name": "海上运输响应流程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05505",
+    "name": "海上运输协同机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05498",
+    "name": "海上运输行动原则",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05504",
+    "name": "海上运输训练方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05499",
+    "name": "海上运输装备基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05497",
+    "name": "海上运输组织体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01116",
+    "name": "海蚀崖",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01127",
+    "name": "海蚀崖保护议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01128",
+    "name": "海蚀崖比较地理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01120",
+    "name": "海蚀崖地表过程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01129",
+    "name": "海蚀崖地图表达",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01121",
+    "name": "海蚀崖典型景观",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01125",
+    "name": "海蚀崖风险问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01126",
+    "name": "海蚀崖监测方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01118",
+    "name": "海蚀崖空间分布",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01119",
+    "name": "海蚀崖内部结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01122",
+    "name": "海蚀崖气候影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01130",
+    "name": "海蚀崖人地关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01123",
+    "name": "海蚀崖生态联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01117",
+    "name": "海蚀崖形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01124",
+    "name": "海蚀崖资源利用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12664",
+    "name": "海水养殖",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12677",
+    "name": "海水养殖比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12666",
+    "name": "海水养殖病因基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12667",
+    "name": "海水养殖分类方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12673",
+    "name": "海水养殖环境影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12665",
+    "name": "海水养殖基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12668",
+    "name": "海水养殖临床表现",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12674",
+    "name": "海水养殖人群差异",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12676",
+    "name": "海水养殖实践场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12672",
+    "name": "海水养殖营养关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12671",
+    "name": "海水养殖预防措施",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12678",
+    "name": "海水养殖长期管理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12669",
+    "name": "海水养殖诊断手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12675",
+    "name": "海水养殖政策治理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12670",
+    "name": "海水养殖治疗路径",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01787",
+    "name": "海图",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01798",
+    "name": "海图保护议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01799",
+    "name": "海图比较地理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01791",
+    "name": "海图地表过程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01800",
+    "name": "海图地图表达",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01792",
+    "name": "海图典型景观",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01796",
+    "name": "海图风险问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01797",
+    "name": "海图监测方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01789",
+    "name": "海图空间分布",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01790",
+    "name": "海图内部结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01793",
+    "name": "海图气候影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01801",
+    "name": "海图人地关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01794",
+    "name": "海图生态联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01788",
+    "name": "海图形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01795",
+    "name": "海图资源利用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03396",
+    "name": "海洋法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03409",
+    "name": "海洋法典型案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03399",
+    "name": "海洋法法律基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03407",
+    "name": "海洋法改革议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03405",
+    "name": "海洋法国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03397",
+    "name": "海洋法核心概念",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03406",
+    "name": "海洋法历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03401",
+    "name": "海洋法权力边界",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03404",
+    "name": "海洋法社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03408",
+    "name": "海洋法数据指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03400",
+    "name": "海洋法运行机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03410",
+    "name": "海洋法争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03402",
+    "name": "海洋法政策工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03398",
+    "name": "海洋法制度结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03403",
+    "name": "海洋法组织角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11002",
+    "name": "海洋生态",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11015",
+    "name": "海洋生态比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11011",
+    "name": "海洋生态典型现象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11009",
+    "name": "海洋生态分类体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11010",
+    "name": "海洋生态关键变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11008",
+    "name": "海洋生态观测手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11004",
+    "name": "海洋生态核心机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11003",
+    "name": "海洋生态基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11005",
+    "name": "海洋生态结构组成",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11013",
+    "name": "海洋生态历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11016",
+    "name": "海洋生态前沿议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11007",
+    "name": "海洋生态实验方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11006",
+    "name": "海洋生态形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11012",
+    "name": "海洋生态应用价值",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t11014",
+    "name": "海洋生态争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01661",
+    "name": "海洋性气候",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01672",
+    "name": "海洋性气候保护议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01673",
+    "name": "海洋性气候比较地理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01665",
+    "name": "海洋性气候地表过程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01674",
+    "name": "海洋性气候地图表达",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01666",
+    "name": "海洋性气候典型景观",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01670",
+    "name": "海洋性气候风险问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01671",
+    "name": "海洋性气候监测方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01663",
+    "name": "海洋性气候空间分布",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01664",
+    "name": "海洋性气候内部结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01667",
+    "name": "海洋性气候气候影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01675",
+    "name": "海洋性气候人地关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01668",
+    "name": "海洋性气候生态联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01662",
+    "name": "海洋性气候形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01669",
+    "name": "海洋性气候资源利用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10971",
+    "name": "海洋学",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01395",
+    "name": "海洋与大陆",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04748",
+    "name": "海洋战略",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04762",
+    "name": "海洋战略典型场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04759",
+    "name": "海洋战略法律约束",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04755",
+    "name": "海洋战略风险类型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04760",
+    "name": "海洋战略国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04749",
+    "name": "海洋战略基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04753",
+    "name": "海洋战略技术手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04761",
+    "name": "海洋战略历史演化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04754",
+    "name": "海洋战略情报来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04756",
+    "name": "海洋战略响应流程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04758",
+    "name": "海洋战略协同机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04751",
+    "name": "海洋战略行动原则",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04757",
+    "name": "海洋战略训练方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04752",
+    "name": "海洋战略装备基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04750",
+    "name": "海洋战略组织体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09517",
+    "name": "函数列",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09528",
+    "name": "函数列比较方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09521",
+    "name": "函数列表示形式",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09525",
+    "name": "函数列常见问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09519",
+    "name": "函数列核心定理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09518",
+    "name": "函数列基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09522",
+    "name": "函数列计算技巧",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09527",
+    "name": "函数列教学视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09531",
+    "name": "函数列经典例题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09529",
+    "name": "函数列扩展方向",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09524",
+    "name": "函数列历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09526",
+    "name": "函数列相关符号",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09530",
+    "name": "函数列研究问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09523",
+    "name": "函数列应用场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09520",
+    "name": "函数列证明方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12160",
+    "name": "航空运输",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12170",
+    "name": "航空运输安全风险",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12173",
+    "name": "航空运输比较方案",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12171",
+    "name": "航空运输产业生态",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12164",
+    "name": "航空运输工作机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12163",
+    "name": "航空运输关键组件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12161",
+    "name": "航空运输基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12168",
+    "name": "航空运输兼容标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12172",
+    "name": "航空运输历史演进",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12165",
+    "name": "航空运输实现方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12162",
+    "name": "航空运输系统结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12166",
+    "name": "航空运输性能指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12167",
+    "name": "航空运输应用场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12174",
+    "name": "航空运输优化策略",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12169",
+    "name": "航空运输运维问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05229",
+    "name": "航母",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05243",
+    "name": "航母典型场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05240",
+    "name": "航母法律约束",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05236",
+    "name": "航母风险类型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05241",
+    "name": "航母国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05230",
+    "name": "航母基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05234",
+    "name": "航母技术手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05242",
+    "name": "航母历史演化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05235",
+    "name": "航母情报来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05237",
+    "name": "航母响应流程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05239",
+    "name": "航母协同机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05232",
+    "name": "航母行动原则",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05238",
+    "name": "航母训练方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05233",
+    "name": "航母装备基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05231",
+    "name": "航母组织体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13340",
+    "name": "航行协议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03304",
+    "name": "合同法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03317",
+    "name": "合同法典型案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03307",
+    "name": "合同法法律基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03315",
+    "name": "合同法改革议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03313",
+    "name": "合同法国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03305",
+    "name": "合同法核心概念",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03314",
+    "name": "合同法历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03309",
+    "name": "合同法权力边界",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03312",
+    "name": "合同法社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03316",
+    "name": "合同法数据指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03308",
+    "name": "合同法运行机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03318",
+    "name": "合同法争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03310",
+    "name": "合同法政策工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03306",
+    "name": "合同法制度结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03311",
+    "name": "合同法组织角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13344",
+    "name": "合作协议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00073",
+    "name": "河流地貌",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13277",
+    "name": "河网结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13154",
+    "name": "核",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13433",
+    "name": "核心单元",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02888",
+    "name": "核心家庭",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02901",
+    "name": "核心家庭典型案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02891",
+    "name": "核心家庭法律基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02899",
+    "name": "核心家庭改革议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02897",
+    "name": "核心家庭国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02889",
+    "name": "核心家庭核心概念",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02898",
+    "name": "核心家庭历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02893",
+    "name": "核心家庭权力边界",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02896",
+    "name": "核心家庭社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02900",
+    "name": "核心家庭数据指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02892",
+    "name": "核心家庭运行机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02902",
+    "name": "核心家庭争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02894",
+    "name": "核心家庭政策工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02890",
+    "name": "核心家庭制度结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02895",
+    "name": "核心家庭组织角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13328",
+    "name": "核心协议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10659",
+    "name": "恒星演化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10672",
+    "name": "恒星演化比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10668",
+    "name": "恒星演化典型现象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10666",
+    "name": "恒星演化分类体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10667",
+    "name": "恒星演化关键变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10665",
+    "name": "恒星演化观测手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10661",
+    "name": "恒星演化核心机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10660",
+    "name": "恒星演化基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10662",
+    "name": "恒星演化结构组成",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10670",
+    "name": "恒星演化历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10673",
+    "name": "恒星演化前沿议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10664",
+    "name": "恒星演化实验方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10663",
+    "name": "恒星演化形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10669",
+    "name": "恒星演化应用价值",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10671",
+    "name": "恒星演化争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05027",
+    "name": "轰炸机部队",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05041",
+    "name": "轰炸机部队典型场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05038",
+    "name": "轰炸机部队法律约束",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05034",
+    "name": "轰炸机部队风险类型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05039",
+    "name": "轰炸机部队国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05028",
+    "name": "轰炸机部队基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05032",
+    "name": "轰炸机部队技术手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05040",
+    "name": "轰炸机部队历史演化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05033",
+    "name": "轰炸机部队情报来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05035",
+    "name": "轰炸机部队响应流程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05037",
+    "name": "轰炸机部队协同机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05030",
+    "name": "轰炸机部队行动原则",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05036",
+    "name": "轰炸机部队训练方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05031",
+    "name": "轰炸机部队装备基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05029",
+    "name": "轰炸机部队组织体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00059",
+    "name": "宏观经济学",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00340",
+    "name": "宏观经济学家",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00341",
+    "name": "宏观经济学家代表人物",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00342",
+    "name": "宏观经济学家典型贡献",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00353",
+    "name": "宏观经济学家工作场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00350",
+    "name": "宏观经济学家公众形象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00344",
+    "name": "宏观经济学家核心技能",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00349",
+    "name": "宏观经济学家跨界合作",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00346",
+    "name": "宏观经济学家历史变迁",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00347",
+    "name": "宏观经济学家伦理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00351",
+    "name": "宏观经济学家评价标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00345",
+    "name": "宏观经济学家社会角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00352",
+    "name": "宏观经济学家相关奖项",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00354",
+    "name": "宏观经济学家知识传承",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00343",
+    "name": "宏观经济学家职业训练",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00348",
+    "name": "宏观经济学家制度环境",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03814",
+    "name": "宏观与微观分析",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05073",
+    "name": "后勤保障部队",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05087",
+    "name": "后勤保障部队典型场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05084",
+    "name": "后勤保障部队法律约束",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05080",
+    "name": "后勤保障部队风险类型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05085",
+    "name": "后勤保障部队国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05074",
+    "name": "后勤保障部队基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05078",
+    "name": "后勤保障部队技术手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05086",
+    "name": "后勤保障部队历史演化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05079",
+    "name": "后勤保障部队情报来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05081",
+    "name": "后勤保障部队响应流程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05083",
+    "name": "后勤保障部队协同机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05076",
+    "name": "后勤保障部队行动原则",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05082",
+    "name": "后勤保障部队训练方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05077",
+    "name": "后勤保障部队装备基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05075",
+    "name": "后勤保障部队组织体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05541",
+    "name": "后送体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05555",
+    "name": "后送体系典型场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05552",
+    "name": "后送体系法律约束",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05548",
+    "name": "后送体系风险类型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05553",
+    "name": "后送体系国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05542",
+    "name": "后送体系基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05546",
+    "name": "后送体系技术手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05554",
+    "name": "后送体系历史演化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05547",
+    "name": "后送体系情报来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05549",
+    "name": "后送体系响应流程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05551",
+    "name": "后送体系协同机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05544",
+    "name": "后送体系行动原则",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05550",
+    "name": "后送体系训练方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05545",
+    "name": "后送体系装备基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05543",
+    "name": "后送体系组织体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06372",
+    "name": "后现代思想",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13428",
+    "name": "呼吸系统",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13318",
+    "name": "呼吸信号",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12176",
+    "name": "呼吸医学",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12189",
+    "name": "呼吸医学比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12178",
+    "name": "呼吸医学病因基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12179",
+    "name": "呼吸医学分类方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12185",
+    "name": "呼吸医学环境影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12177",
+    "name": "呼吸医学基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12180",
+    "name": "呼吸医学临床表现",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12186",
+    "name": "呼吸医学人群差异",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12188",
+    "name": "呼吸医学实践场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12184",
+    "name": "呼吸医学营养关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12183",
+    "name": "呼吸医学预防措施",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12190",
+    "name": "呼吸医学长期管理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12181",
+    "name": "呼吸医学诊断手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12187",
+    "name": "呼吸医学政策治理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12182",
+    "name": "呼吸医学治疗路径",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00386",
+    "name": "互动论者",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00387",
+    "name": "互动论者代表人物",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00388",
+    "name": "互动论者典型贡献",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00399",
+    "name": "互动论者工作场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00396",
+    "name": "互动论者公众形象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00390",
+    "name": "互动论者核心技能",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00395",
+    "name": "互动论者跨界合作",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00392",
+    "name": "互动论者历史变迁",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00393",
+    "name": "互动论者伦理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00397",
+    "name": "互动论者评价标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00391",
+    "name": "互动论者社会角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00398",
+    "name": "互动论者相关奖项",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00400",
+    "name": "互动论者知识传承",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00389",
+    "name": "互动论者职业训练",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00394",
+    "name": "互动论者制度环境",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13342",
+    "name": "互联协议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07444",
+    "name": "互文性",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07453",
+    "name": "互文性比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07448",
+    "name": "互文性表达功能",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07458",
+    "name": "互文性代表作品",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07456",
+    "name": "互文性读者接受",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07454",
+    "name": "互文性翻译问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07446",
+    "name": "互文性核心单位",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07445",
+    "name": "互文性基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07455",
+    "name": "互文性教学应用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07447",
+    "name": "互文性结构特征",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07452",
+    "name": "互文性理论视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07449",
+    "name": "互文性历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07457",
+    "name": "互文性媒介转化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07450",
+    "name": "互文性文本传统",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07451",
+    "name": "互文性修辞方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13006",
+    "name": "户外休闲",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13019",
+    "name": "户外休闲比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13008",
+    "name": "户外休闲病因基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13009",
+    "name": "户外休闲分类方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13015",
+    "name": "户外休闲环境影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13007",
+    "name": "户外休闲基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13010",
+    "name": "户外休闲临床表现",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13016",
+    "name": "户外休闲人群差异",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13018",
+    "name": "户外休闲实践场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13014",
+    "name": "户外休闲营养关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13013",
+    "name": "户外休闲预防措施",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13020",
+    "name": "户外休闲长期管理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13011",
+    "name": "户外休闲诊断手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13017",
+    "name": "户外休闲政策治理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13012",
+    "name": "户外休闲治疗路径",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10689",
+    "name": "化学",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10815",
+    "name": "化学动力学",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10828",
+    "name": "化学动力学比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10824",
+    "name": "化学动力学典型现象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10822",
+    "name": "化学动力学分类体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10823",
+    "name": "化学动力学关键变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10821",
+    "name": "化学动力学观测手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10817",
+    "name": "化学动力学核心机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10816",
+    "name": "化学动力学基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10818",
+    "name": "化学动力学结构组成",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10826",
+    "name": "化学动力学历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10829",
+    "name": "化学动力学前沿议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10820",
+    "name": "化学动力学实验方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10819",
+    "name": "化学动力学形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10825",
+    "name": "化学动力学应用价值",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10827",
+    "name": "化学动力学争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00138",
+    "name": "化学家",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13298",
+    "name": "化学信号",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00527",
+    "name": "画家",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00528",
+    "name": "画家代表人物",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00529",
+    "name": "画家典型贡献",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00540",
+    "name": "画家工作场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00537",
+    "name": "画家公众形象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00531",
+    "name": "画家核心技能",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00536",
+    "name": "画家跨界合作",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00533",
+    "name": "画家历史变迁",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00534",
+    "name": "画家伦理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00538",
+    "name": "画家评价标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00532",
+    "name": "画家社会角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00539",
+    "name": "画家相关奖项",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00541",
+    "name": "画家知识传承",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00530",
+    "name": "画家职业训练",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00535",
+    "name": "画家制度环境",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06388",
+    "name": "话语分析",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06395",
+    "name": "话语分析比较视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06390",
+    "name": "话语分析概念边界",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06389",
+    "name": "话语分析基本命题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06400",
+    "name": "话语分析教学议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06391",
+    "name": "话语分析经典文本",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06393",
+    "name": "话语分析历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06392",
+    "name": "话语分析论证方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06394",
+    "name": "话语分析内部流派",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06397",
+    "name": "话语分析批评意见",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06399",
+    "name": "话语分析诠释传统",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06396",
+    "name": "话语分析实践影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06398",
+    "name": "话语分析现代转化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06402",
+    "name": "话语分析相关人物",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06401",
+    "name": "话语分析争论焦点",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05726",
+    "name": "怀疑论",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05733",
+    "name": "怀疑论比较视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05728",
+    "name": "怀疑论概念边界",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05727",
+    "name": "怀疑论基本命题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05738",
+    "name": "怀疑论教学议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05729",
+    "name": "怀疑论经典文本",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05731",
+    "name": "怀疑论历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05730",
+    "name": "怀疑论论证方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05732",
+    "name": "怀疑论内部流派",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05735",
+    "name": "怀疑论批评意见",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05737",
+    "name": "怀疑论诠释传统",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05734",
+    "name": "怀疑论实践影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05736",
+    "name": "怀疑论现代转化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05740",
+    "name": "怀疑论相关人物",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05739",
+    "name": "怀疑论争论焦点",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00791",
+    "name": "环境活动家",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00792",
+    "name": "环境活动家代表人物",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00793",
+    "name": "环境活动家典型贡献",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00804",
+    "name": "环境活动家工作场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00801",
+    "name": "环境活动家公众形象",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00795",
+    "name": "环境活动家核心技能",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00800",
+    "name": "环境活动家跨界合作",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00797",
+    "name": "环境活动家历史变迁",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00798",
+    "name": "环境活动家伦理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00802",
+    "name": "环境活动家评价标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00796",
+    "name": "环境活动家社会角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00803",
+    "name": "环境活动家相关奖项",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00805",
+    "name": "环境活动家知识传承",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00794",
+    "name": "环境活动家职业训练",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00799",
+    "name": "环境活动家制度环境",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12772",
+    "name": "环境科学",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13199",
+    "name": "环境模型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13299",
+    "name": "环境信号",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02652",
+    "name": "环境运动",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02665",
+    "name": "环境运动比较案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02658",
+    "name": "环境运动地理范围",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02654",
+    "name": "环境运动关键阶段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02657",
+    "name": "环境运动技术因素",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02664",
+    "name": "环境运动解释争议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02660",
+    "name": "环境运动经济后果",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02653",
+    "name": "环境运动历史背景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02659",
+    "name": "环境运动社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02663",
+    "name": "环境运动史料来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02661",
+    "name": "环境运动思想传播",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02662",
+    "name": "环境运动文化记忆",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02666",
+    "name": "环境运动长期遗产",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02656",
+    "name": "环境运动制度条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02655",
+    "name": "环境运动主要参与者",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03227",
+    "name": "环境政策",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03240",
+    "name": "环境政策典型案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03230",
+    "name": "环境政策法律基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03238",
+    "name": "环境政策改革议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03236",
+    "name": "环境政策国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03228",
+    "name": "环境政策核心概念",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03237",
+    "name": "环境政策历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03232",
+    "name": "环境政策权力边界",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03235",
+    "name": "环境政策社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03239",
+    "name": "环境政策数据指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03231",
+    "name": "环境政策运行机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03241",
+    "name": "环境政策争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03233",
+    "name": "环境政策政策工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03229",
+    "name": "环境政策制度结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03234",
+    "name": "环境政策组织角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12726",
+    "name": "环境治理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09627",
+    "name": "环论",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09638",
+    "name": "环论比较方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09631",
+    "name": "环论表示形式",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09635",
+    "name": "环论常见问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09629",
+    "name": "环论核心定理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09628",
+    "name": "环论基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09632",
+    "name": "环论计算技巧",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09637",
+    "name": "环论教学视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09641",
+    "name": "环论经典例题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09639",
+    "name": "环论扩展方向",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09634",
+    "name": "环论历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09636",
+    "name": "环论相关符号",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09640",
+    "name": "环论研究问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09633",
+    "name": "环论应用场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t09630",
+    "name": "环论证明方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13240",
+    "name": "环形结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10014",
+    "name": "回归分析",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10025",
+    "name": "回归分析比较方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10018",
+    "name": "回归分析表示形式",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10022",
+    "name": "回归分析常见问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10016",
+    "name": "回归分析核心定理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10015",
+    "name": "回归分析基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10019",
+    "name": "回归分析计算技巧",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10024",
+    "name": "回归分析教学视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10028",
+    "name": "回归分析经典例题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10026",
+    "name": "回归分析扩展方向",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10021",
+    "name": "回归分析历史脉络",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10023",
+    "name": "回归分析相关符号",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10027",
+    "name": "回归分析研究问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10020",
+    "name": "回归分析应用场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t10017",
+    "name": "回归分析证明方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03981",
+    "name": "汇率制度",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03992",
+    "name": "汇率制度比较视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03988",
+    "name": "汇率制度测量指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03991",
+    "name": "汇率制度典型案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03990",
+    "name": "汇率制度风险来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03983",
+    "name": "汇率制度核心变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03982",
+    "name": "汇率制度基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03994",
+    "name": "汇率制度技术关联",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03993",
+    "name": "汇率制度历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03986",
+    "name": "汇率制度市场结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03984",
+    "name": "汇率制度运行机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03989",
+    "name": "汇率制度政策工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03985",
+    "name": "汇率制度制度条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03995",
+    "name": "汇率制度治理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03987",
+    "name": "汇率制度组织形式",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06841",
+    "name": "会话含义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06850",
+    "name": "会话含义比较研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06845",
+    "name": "会话含义表达功能",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06855",
+    "name": "会话含义代表作品",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06853",
+    "name": "会话含义读者接受",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06851",
+    "name": "会话含义翻译问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06843",
+    "name": "会话含义核心单位",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06842",
+    "name": "会话含义基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06852",
+    "name": "会话含义教学应用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06844",
+    "name": "会话含义结构特征",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06849",
+    "name": "会话含义理论视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06846",
+    "name": "会话含义历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06854",
+    "name": "会话含义媒介转化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06847",
+    "name": "会话含义文本传统",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t06848",
+    "name": "会话含义修辞方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04370",
+    "name": "会计与商业",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13325",
+    "name": "会商协议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t07538",
+    "name": "绘画",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08791",
+    "name": "混合学习",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08796",
+    "name": "混合学习测量工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08805",
+    "name": "混合学习典型研究",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08793",
+    "name": "混合学习发展阶段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08804",
+    "name": "混合学习干预策略",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08794",
+    "name": "混合学习核心机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08792",
+    "name": "混合学习基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08797",
+    "name": "混合学习教学应用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08801",
+    "name": "混合学习跨文化比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08802",
+    "name": "混合学习历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08800",
+    "name": "混合学习伦理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08799",
+    "name": "混合学习社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08803",
+    "name": "混合学习实践场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08795",
+    "name": "混合学习研究方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t08798",
+    "name": "混合学习制度环境",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03196",
+    "name": "混合制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03209",
+    "name": "混合制典型案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03199",
+    "name": "混合制法律基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03207",
+    "name": "混合制改革议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03205",
+    "name": "混合制国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03197",
+    "name": "混合制核心概念",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03206",
+    "name": "混合制历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03201",
+    "name": "混合制权力边界",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03204",
+    "name": "混合制社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03208",
+    "name": "混合制数据指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03200",
+    "name": "混合制运行机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03210",
+    "name": "混合制争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03202",
+    "name": "混合制政策工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03198",
+    "name": "混合制制度结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03203",
+    "name": "混合制组织角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01505",
+    "name": "火山岛",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01516",
+    "name": "火山岛保护议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01517",
+    "name": "火山岛比较地理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01509",
+    "name": "火山岛地表过程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01518",
+    "name": "火山岛地图表达",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01510",
+    "name": "火山岛典型景观",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01514",
+    "name": "火山岛风险问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01515",
+    "name": "火山岛监测方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01507",
+    "name": "火山岛空间分布",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01508",
+    "name": "火山岛内部结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01511",
+    "name": "火山岛气候影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01519",
+    "name": "火山岛人地关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01512",
+    "name": "火山岛生态联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01506",
+    "name": "火山岛形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01513",
+    "name": "火山岛资源利用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01026",
+    "name": "火山地貌",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01037",
+    "name": "火山地貌保护议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01038",
+    "name": "火山地貌比较地理",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01030",
+    "name": "火山地貌地表过程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01039",
+    "name": "火山地貌地图表达",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01031",
+    "name": "火山地貌典型景观",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01035",
+    "name": "火山地貌风险问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01036",
+    "name": "火山地貌监测方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01028",
+    "name": "火山地貌空间分布",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01029",
+    "name": "火山地貌内部结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01032",
+    "name": "火山地貌气候影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01040",
+    "name": "火山地貌人地关系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01033",
+    "name": "火山地貌生态联系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01027",
+    "name": "火山地貌形成条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t01034",
+    "name": "火山地貌资源利用",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13382",
+    "name": "火山平台",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03906",
+    "name": "货币供给",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03917",
+    "name": "货币供给比较视角",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03913",
+    "name": "货币供给测量指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03916",
+    "name": "货币供给典型案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03915",
+    "name": "货币供给风险来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03908",
+    "name": "货币供给核心变量",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03907",
+    "name": "货币供给基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03919",
+    "name": "货币供给技术关联",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03918",
+    "name": "货币供给历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03911",
+    "name": "货币供给市场结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03909",
+    "name": "货币供给运行机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03914",
+    "name": "货币供给政策工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03910",
+    "name": "货币供给制度条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03920",
+    "name": "货币供给治理议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03912",
+    "name": "货币供给组织形式",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00060",
+    "name": "货币理论",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02111",
+    "name": "货币流通",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02124",
+    "name": "货币流通比较案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02117",
+    "name": "货币流通地理范围",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02113",
+    "name": "货币流通关键阶段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02116",
+    "name": "货币流通技术因素",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02123",
+    "name": "货币流通解释争议",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02119",
+    "name": "货币流通经济后果",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02112",
+    "name": "货币流通历史背景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02118",
+    "name": "货币流通社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02122",
+    "name": "货币流通史料来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02120",
+    "name": "货币流通思想传播",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02121",
+    "name": "货币流通文化记忆",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02125",
+    "name": "货币流通长期遗产",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02115",
+    "name": "货币流通制度条件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t02114",
+    "name": "货币流通主要参与者",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00061",
+    "name": "货币政策",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04794",
+    "name": "机动作战",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04808",
+    "name": "机动作战典型场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04805",
+    "name": "机动作战法律约束",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04801",
+    "name": "机动作战风险类型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04806",
+    "name": "机动作战国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04795",
+    "name": "机动作战基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04799",
+    "name": "机动作战技术手段",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04807",
+    "name": "机动作战历史演化",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04800",
+    "name": "机动作战情报来源",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04802",
+    "name": "机动作战响应流程",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04804",
+    "name": "机动作战协同机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04797",
+    "name": "机动作战行动原则",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04803",
+    "name": "机动作战训练方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04798",
+    "name": "机动作战装备基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t04796",
+    "name": "机动作战组织体系",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12038",
+    "name": "机构学",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12048",
+    "name": "机构学安全风险",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12051",
+    "name": "机构学比较方案",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12049",
+    "name": "机构学产业生态",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12042",
+    "name": "机构学工作机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12041",
+    "name": "机构学关键组件",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12039",
+    "name": "机构学基本定义",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12046",
+    "name": "机构学兼容标准",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12050",
+    "name": "机构学历史演进",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12043",
+    "name": "机构学实现方法",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12040",
+    "name": "机构学系统结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12044",
+    "name": "机构学性能指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12045",
+    "name": "机构学应用场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12052",
+    "name": "机构学优化策略",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t12047",
+    "name": "机构学运维问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03706",
+    "name": "机会平等",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03719",
+    "name": "机会平等典型案例",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03709",
+    "name": "机会平等法律基础",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03717",
+    "name": "机会平等改革议题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03715",
+    "name": "机会平等国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03707",
+    "name": "机会平等核心概念",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03716",
+    "name": "机会平等历史演变",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03711",
+    "name": "机会平等权力边界",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03714",
+    "name": "机会平等社会影响",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03718",
+    "name": "机会平等数据指标",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03710",
+    "name": "机会平等运行机制",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03720",
+    "name": "机会平等争议问题",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03712",
+    "name": "机会平等政策工具",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03708",
+    "name": "机会平等制度结构",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t03713",
+    "name": "机会平等组织角色",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t00066",
+    "name": "机器学习",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t13106",
+    "name": "机器学习模型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05137",
+    "name": "机枪",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05151",
+    "name": "机枪典型场景",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05148",
+    "name": "机枪法律约束",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05144",
+    "name": "机枪风险类型",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05149",
+    "name": "机枪国际比较",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "titleId": "gkf_t05138",
+    "name": "机枪基本定义",
+    "marker": "global_knowledge_forest_v1"
+  }
+]

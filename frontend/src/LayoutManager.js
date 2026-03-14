@@ -30,9 +30,69 @@ class LayoutManager {
     this.centerY = height / 2;
   }
 
+  calculateHoneycombSectionLayout(nodes = [], options = {}) {
+    const nodeList = Array.isArray(nodes) ? nodes : [];
+    const centerX = Number.isFinite(options.centerX) ? options.centerX : this.centerX;
+    const topY = Number.isFinite(options.topY) ? options.topY : 0;
+    const availableWidth = Math.max(140, Number.isFinite(options.availableWidth) ? options.availableWidth : this.width);
+    const radius = Math.max(18, Number.isFinite(options.radius) ? options.radius : 56);
+    const type = options.type || 'root';
+    const minColumns = Math.max(1, Number.isFinite(options.minColumns) ? options.minColumns : 1);
+    const maxColumns = Math.max(minColumns, Number.isFinite(options.maxColumns) ? options.maxColumns : 4);
+
+    if (nodeList.length < 1) {
+      return {
+        nodes: [],
+        rows: 0,
+        bottomY: topY
+      };
+    }
+
+    const minSpacing = radius * 2.42;
+    const computedColumns = Math.floor((availableWidth + minSpacing * 0.5) / minSpacing);
+    const columns = Math.max(minColumns, Math.min(maxColumns, nodeList.length, computedColumns || 1));
+    const xSpacing = Math.max(radius * 2.42, Math.min(radius * 2.74, availableWidth / Math.max(1, columns - 0.15)));
+    const ySpacing = radius * 2.08;
+    const rows = Math.ceil(nodeList.length / columns);
+    const sectionNodes = [];
+
+    for (let row = 0; row < rows; row += 1) {
+      const startIndex = row * columns;
+      const rowNodes = nodeList.slice(startIndex, startIndex + columns);
+      const rowOffset = row % 2 === 1 ? xSpacing * 0.5 : 0;
+      const rowWidth = rowNodes.length > 0
+        ? ((rowNodes.length - 1) * xSpacing + rowOffset)
+        : 0;
+      const rowStartX = centerX - rowWidth * 0.5;
+
+      rowNodes.forEach((node, columnIndex) => {
+        sectionNodes.push({
+          id: `${type}-${node._id}`,
+          x: rowStartX + columnIndex * xSpacing + rowOffset,
+          y: topY + radius + row * ySpacing,
+          radius,
+          scale: 1,
+          opacity: 1,
+          type,
+          label: this.resolveNodeLabel(node, { includeSense: false }),
+          visualStyle: node.visualStyle || null,
+          labelColor: node.visualStyle?.textColor || '',
+          data: node,
+          visible: true
+        });
+      });
+    }
+
+    return {
+      nodes: sectionNodes,
+      rows,
+      bottomY: topY + radius * 2 + Math.max(0, rows - 1) * ySpacing
+    };
+  }
+
   /**
    * 首页布局
-   * 包括：搜索栏、根节点网格、热门节点横向滚动
+   * 包括：根节点区、分割线、热门节点区
    */
   calculateHomeLayout(rootNodes, featuredNodes, searchResults = []) {
     const layout = {
@@ -49,104 +109,86 @@ class LayoutManager {
       return layout;
     }
 
-    // 正常首页布局
+    const leftInset = this.width < 900 ? 56 : 112;
+    const rightInset = this.width < 900 ? 56 : 112;
+    const sectionWidth = Math.max(220, this.width - leftInset - rightInset);
+    const topInset = Math.max(182, this.height * 0.22);
+    const bottomInset = Math.max(72, this.height * 0.08);
+    const dividerGap = this.height < 820 ? 92 : 124;
+    const availableVertical = Math.max(260, this.height - topInset - bottomInset - dividerGap);
+    const defaultRootHeight = 232;
+    const defaultFeaturedHeight = 184;
+    const verticalScale = Math.min(1, availableVertical / (defaultRootHeight + defaultFeaturedHeight));
+    const rootRadius = Math.max(38, Math.min(60, 60 * verticalScale));
+    const featuredRadius = Math.max(30, Math.min(46, 46 * verticalScale));
 
-    // 整体下移偏移量
-    const yOffset = 70;
-
-    // 根节点：网格布局
-    const rootStartY = this.height * 0.35 + yOffset;
-    const rootCols = Math.min(3, rootNodes.length);
-    const rootSpacingX = Math.min(250, this.width * 0.25);
-    const rootSpacingY = 180;
-    const rootRows = rootCols > 0 ? Math.ceil(rootNodes.length / rootCols) : 0;
-    const rootAreaBottomY = rootRows > 0
-      ? (rootStartY + (rootRows - 1) * rootSpacingY + 70)
-      : rootStartY;
-
-    rootNodes.forEach((node, index) => {
-      const row = Math.floor(index / rootCols);
-      const col = index % rootCols;
-      const rowWidth = Math.min(rootNodes.length - row * rootCols, rootCols);
-      const offsetX = (rowWidth - 1) * rootSpacingX / 2;
-
-      layout.nodes.push({
-        id: `root-${node._id}`,
-        x: this.centerX - offsetX + col * rootSpacingX,
-        y: rootStartY + row * rootSpacingY,
-        radius: 70,
-        scale: 1,
-        opacity: 1,
-        type: 'root',
-        label: this.resolveNodeLabel(node, { includeSense: false }),
-        visualStyle: node.visualStyle || null,
-        labelColor: node.visualStyle?.textColor || '',
-        data: node,
-        visible: true
-      });
+    const rootSection = this.calculateHoneycombSectionLayout(rootNodes, {
+      centerX: this.centerX,
+      topY: topInset,
+      availableWidth: sectionWidth,
+      radius: rootRadius,
+      type: 'root',
+      minColumns: 1,
+      maxColumns: this.width < 900 ? 3 : 5
     });
+    layout.nodes.push(...rootSection.nodes);
 
-    // 热门节点：横向排列，至少与根节点区域保持一段清晰的视觉间隔
-    const baseFeaturedY = this.height * 0.70 + yOffset;
-    const minFeaturedY = rootAreaBottomY + Math.max(120, this.height * 0.08);
-    const featuredY = Math.min(Math.max(baseFeaturedY, minFeaturedY), this.height - 90);
-    const featuredSpacing = 150;
-    const featuredStartX = this.centerX - (featuredNodes.length - 1) * featuredSpacing / 2;
-
-    featuredNodes.forEach((node, index) => {
-      layout.nodes.push({
-        id: `featured-${node._id}`,
-        x: featuredStartX + index * featuredSpacing,
-        y: featuredY,
-        radius: 55,
-        scale: 1,
-        opacity: 1,
-        type: 'featured',
-        label: this.resolveNodeLabel(node, { includeSense: false }),
-        visualStyle: node.visualStyle || null,
-        labelColor: node.visualStyle?.textColor || '',
-        data: node,
-        visible: true
-      });
+    const featuredTopY = rootSection.bottomY + dividerGap;
+    const featuredSection = this.calculateHoneycombSectionLayout(featuredNodes, {
+      centerX: this.centerX,
+      topY: featuredTopY,
+      availableWidth: sectionWidth * 0.92,
+      radius: featuredRadius,
+      type: 'featured',
+      minColumns: 1,
+      maxColumns: this.width < 900 ? 3 : 4
     });
+    layout.nodes.push(...featuredSection.nodes);
 
-    if (rootNodes.length > 0 && featuredNodes.length > 0) {
-      const dividerY = rootAreaBottomY + (featuredY - rootAreaBottomY) * 0.5;
-      const dividerInsetLeft = Math.max(96, this.width * 0.16);
-      const dividerInsetRight = Math.max(36, this.width * 0.06);
-      const dividerLeftId = 'home-divider-anchor-left';
-      const dividerRightId = 'home-divider-anchor-right';
+    if (rootSection.nodes.length > 0 && featuredSection.nodes.length > 0) {
+      const dividerY = rootSection.bottomY + dividerGap * 0.5;
+      const dividerInsetLeft = Math.max(72, leftInset + sectionWidth * 0.08);
+      const dividerInsetRight = Math.max(72, rightInset + sectionWidth * 0.08);
+      const dividerOffsets = [
+        { suffix: 'top', offsetY: -7, color: [0.45, 0.77, 0.96, 0.22] },
+        { suffix: 'mid', offsetY: 0, color: [0.92, 0.95, 1.0, 0.62] },
+        { suffix: 'bottom', offsetY: 7, color: [0.98, 0.75, 0.31, 0.18] }
+      ];
 
-      layout.nodes.push({
-        id: dividerLeftId,
-        x: dividerInsetLeft,
-        y: dividerY,
-        radius: 0,
-        scale: 1,
-        opacity: 1,
-        type: 'home-divider-anchor',
-        label: '',
-        data: null,
-        visible: true
-      });
-      layout.nodes.push({
-        id: dividerRightId,
-        x: this.width - dividerInsetRight,
-        y: dividerY,
-        radius: 0,
-        scale: 1,
-        opacity: 1,
-        type: 'home-divider-anchor',
-        label: '',
-        data: null,
-        visible: true
-      });
-      layout.lines.push({
-        id: 'home-root-featured-divider',
-        from: dividerLeftId,
-        to: dividerRightId,
-        color: [0.62, 0.67, 0.78, 0.5],
-        noCaps: true
+      dividerOffsets.forEach((item) => {
+        const leftId = `home-divider-anchor-left-${item.suffix}`;
+        const rightId = `home-divider-anchor-right-${item.suffix}`;
+        layout.nodes.push({
+          id: leftId,
+          x: dividerInsetLeft,
+          y: dividerY + item.offsetY,
+          radius: 0,
+          scale: 1,
+          opacity: 1,
+          type: 'home-divider-anchor',
+          label: '',
+          data: null,
+          visible: true
+        });
+        layout.nodes.push({
+          id: rightId,
+          x: this.width - dividerInsetRight,
+          y: dividerY + item.offsetY,
+          radius: 0,
+          scale: 1,
+          opacity: 1,
+          type: 'home-divider-anchor',
+          label: '',
+          data: null,
+          visible: true
+        });
+        layout.lines.push({
+          id: `home-root-featured-divider-${item.suffix}`,
+          from: leftId,
+          to: rightId,
+          color: item.color,
+          noCaps: true
+        });
       });
     }
 

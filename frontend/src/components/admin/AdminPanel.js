@@ -2863,7 +2863,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
             setDeleteSenseDecisionApplying(false);
             setDeleteSensePreviewData(null);
             setDeleteSensePreviewLoading(false);
-            fetchAllNodes(adminDomainPage, adminDomainSearchKeyword);
+            const targetPage = data?.deletedNodeWithSense && adminDomainPage > 1 && allNodes.length <= 1
+                ? adminDomainPage - 1
+                : adminDomainPage;
+            fetchAllNodes(targetPage, adminDomainSearchKeyword);
         } catch (error) {
             console.error('删除释义失败:', error);
             alert('删除释义失败');
@@ -3062,6 +3065,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
             .map((item) => item?.line)
             .filter(Boolean)
         : [];
+    const deleteSenseWillDeleteNode = !!deleteSensePreviewData?.willDeleteNode;
     const deleteSenseLostBridgePairs = useMemo(() => (
         Array.isArray(deleteSensePreviewSummary?.lostBridgePairs)
             ? deleteSensePreviewSummary.lostBridgePairs
@@ -7389,7 +7393,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                         </div>
                         <div className="modal-body">
                             <p className="admin-delete-domain-hint">
-                                删除后将清理该释义全部关联。请先查看删除前/删除后关联变化并确认承接策略。
+                                {deleteSenseWillDeleteNode
+                                    ? `该释义是标题「${deletingSenseContext.node.name}」的最后一个释义。确认后会同时删除整个知识域，并清理相关关联。请先查看删除前/删除后关联变化并确认承接策略。`
+                                    : '删除后将清理该释义全部关联。请先查看删除前/删除后关联变化并确认承接策略。'}
                             </p>
 
                             <div className="admin-delete-domain-total-preview">
@@ -7426,7 +7432,9 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                 </span>
                                             ))
                                         ) : (
-                                            <span className="admin-delete-domain-assoc-empty">删除后未保留该释义关联</span>
+                                            <span className="admin-delete-domain-assoc-empty">
+                                                {deleteSenseWillDeleteNode ? '删除后该知识域将被整体移除，不再保留关联' : '删除后未保留该释义关联'}
+                                            </span>
                                         )}
                                     </div>
                                 </div>
@@ -7547,7 +7555,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                     || (deleteSensePreviewData?.unresolvedBridgeDecisionCount || 0) > 0
                                 }
                             >
-                                {isDeletingSense ? '删除中...' : '确认删除释义'}
+                                {isDeletingSense ? '删除中...' : (deleteSenseWillDeleteNode ? '确认删除释义并删除标题' : '确认删除释义')}
                             </button>
                         </div>
                     </div>

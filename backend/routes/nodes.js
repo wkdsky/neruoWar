@@ -318,6 +318,125 @@ const buildNodeSenseSearchEntries = (node = {}, keywords = []) => {
     .filter((item) => normalizedKeywords.length === 0 || item.matchCount > 0);
 };
 
+const splitSearchKeywords = (value = '') => (
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+);
+
+const getSearchTextLength = (value = '') => Array.from(String(value || '').trim()).length;
+
+const compareSearchCoverageScore = (left = {}, right = {}) => (
+  Number(right?.ratio || 0) - Number(left?.ratio || 0)
+  || Number(right?.exactMatch || 0) - Number(left?.exactMatch || 0)
+  || Number(right?.matchedKeywordCount || 0) - Number(left?.matchedKeywordCount || 0)
+  || Number(right?.prefixMatch || 0) - Number(left?.prefixMatch || 0)
+  || Number(right?.fieldPriority || 0) - Number(left?.fieldPriority || 0)
+  || Number(left?.textLength || Number.MAX_SAFE_INTEGER) - Number(right?.textLength || Number.MAX_SAFE_INTEGER)
+  || Number(left?.candidateIndex || 0) - Number(right?.candidateIndex || 0)
+);
+
+const computeTextSearchCoverageScore = ({
+  text = '',
+  keywords = [],
+  fullKeyword = '',
+  fieldPriority = 0,
+  candidateIndex = 0
+} = {}) => {
+  const normalizedText = String(text || '').trim().toLowerCase();
+  const textLength = getSearchTextLength(normalizedText);
+  if (!normalizedText || textLength < 1) {
+    return {
+      ratio: 0,
+      exactMatch: 0,
+      prefixMatch: 0,
+      matchedKeywordCount: 0,
+      matchedCharLength: 0,
+      fieldPriority,
+      textLength,
+      candidateIndex
+    };
+  }
+
+  const uniqueKeywords = Array.from(new Set(
+    (Array.isArray(keywords) ? keywords : [])
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean)
+  ));
+
+  let matchedKeywordCount = 0;
+  let matchedCharLength = 0;
+  uniqueKeywords.forEach((keyword) => {
+    if (!normalizedText.includes(keyword)) return;
+    matchedKeywordCount += 1;
+    matchedCharLength += getSearchTextLength(keyword);
+  });
+
+  const normalizedFullKeyword = String(fullKeyword || '').trim().toLowerCase();
+  return {
+    ratio: matchedCharLength > 0 ? Math.min(1, matchedCharLength / textLength) : 0,
+    exactMatch: normalizedFullKeyword && normalizedText === normalizedFullKeyword ? 1 : 0,
+    prefixMatch: normalizedFullKeyword && normalizedText.startsWith(normalizedFullKeyword) ? 1 : 0,
+    matchedKeywordCount,
+    matchedCharLength,
+    fieldPriority,
+    textLength,
+    candidateIndex
+  };
+};
+
+const computeAdminNodeSearchCoverageScore = (node = {}, keyword = '') => {
+  const keywords = splitSearchKeywords(keyword);
+  if (keywords.length < 1) {
+    return {
+      ratio: 0,
+      exactMatch: 0,
+      prefixMatch: 0,
+      matchedKeywordCount: 0,
+      matchedCharLength: 0,
+      fieldPriority: 0,
+      textLength: Number.MAX_SAFE_INTEGER,
+      candidateIndex: Number.MAX_SAFE_INTEGER
+    };
+  }
+
+  const senses = normalizeNodeSenseList(node);
+  const candidateTexts = [
+    { text: node?.name || '', fieldPriority: 4 },
+    ...senses.map((sense) => ({ text: sense?.title || '', fieldPriority: 3 })),
+    { text: node?.description || '', fieldPriority: 2 },
+    ...senses.map((sense) => ({ text: sense?.content || '', fieldPriority: 1 }))
+  ];
+
+  let bestScore = null;
+  candidateTexts.forEach((candidate, index) => {
+    const score = computeTextSearchCoverageScore({
+      text: candidate.text,
+      keywords,
+      fullKeyword: keyword,
+      fieldPriority: candidate.fieldPriority,
+      candidateIndex: index
+    });
+    if (score.matchedKeywordCount < 1) return;
+    if (!bestScore || compareSearchCoverageScore(score, bestScore) < 0) {
+      bestScore = score;
+    }
+  });
+
+  return bestScore || {
+    ratio: 0,
+    exactMatch: 0,
+    prefixMatch: 0,
+    matchedKeywordCount: 0,
+    matchedCharLength: 0,
+    fieldPriority: 0,
+    textLength: Number.MAX_SAFE_INTEGER,
+    candidateIndex: Number.MAX_SAFE_INTEGER
+  };
+};
+
 const buildNodeTitleCard = (node = {}) => {
   const source = node && typeof node.toObject === 'function' ? node.toObject() : node;
   const senses = normalizeNodeSenseList(source);
@@ -850,6 +969,44 @@ const countNodeSenseAssociationRefs = async (node = null) => {
     incomingCount,
     totalCount: outgoingCount + incomingCount
   };
+};
+
+const removeNodeReferencesForDeletion = async (node = null) => {
+  if (!node?._id) return;
+  const nodeId = getIdString(node._id);
+  const nodeName = String(node?.name || '').trim();
+
+  if (nodeName) {
+    await Node.updateMany(
+      { relatedParentDomains: nodeName },
+      { $pull: { relatedParentDomains: nodeName } }
+    );
+
+    await Node.updateMany(
+      { relatedChildDomains: nodeName },
+      { $pull: { relatedChildDomains: nodeName } }
+    );
+  }
+
+  await Node.updateMany(
+    { 'associations.targetNode': nodeId },
+    { $pull: { associations: { targetNode: nodeId } } }
+  );
+};
+
+const deleteNodeWithResources = async (node = null) => {
+  if (!node?._id) return;
+  await Node.findByIdAndDelete(node._id);
+  await NodeSense.deleteMany({ nodeId: node._id });
+  await deleteNodeTitleStatesByNodeIds([node._id]);
+  await deleteDomainTitleProjectionByNodeIds([node._id]);
+
+  const ownerId = getIdString(node?.owner);
+  if (isValidObjectId(ownerId)) {
+    await User.findByIdAndUpdate(ownerId, {
+      $pull: { ownedNodes: node._id }
+    });
+  }
 };
 
 const mapProjectionRowToNodeLike = (row = {}) => ({
@@ -4451,16 +4608,27 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
       ];
     }
 
-    const [nodes, total] = await Promise.all([
-      Node.find(query)
-      .populate('owner', 'username profession')
-      .populate('domainMaster', 'username profession')
-      .populate('associations.targetNode', 'name description synonymSenses')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * pageSize)
-      .limit(pageSize),
-      Node.countDocuments(query)
-    ]);
+    let nodes = [];
+    let total = 0;
+    if (keyword) {
+      nodes = await Node.find(query)
+        .populate('owner', 'username profession')
+        .populate('domainMaster', 'username profession')
+        .populate('associations.targetNode', 'name description synonymSenses')
+        .sort({ createdAt: -1 });
+      total = Array.isArray(nodes) ? nodes.length : 0;
+    } else {
+      [nodes, total] = await Promise.all([
+        Node.find(query)
+          .populate('owner', 'username profession')
+          .populate('domainMaster', 'username profession')
+          .populate('associations.targetNode', 'name description synonymSenses')
+          .sort({ createdAt: -1 })
+          .skip((page - 1) * pageSize)
+          .limit(pageSize),
+        Node.countDocuments(query)
+      ]);
+    }
     await hydrateNodeSensesForNodes(nodes);
     const associationTargetNodes = [];
     (Array.isArray(nodes) ? nodes : []).forEach((nodeDoc) => {
@@ -4491,16 +4659,33 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
         targetNode.synonymSenses = normalizeNodeSenseList(targetNode, { actorUserId: req.user?.userId || null });
       });
     });
+
+    const pagedNodes = keyword
+      ? responseNodes
+        .map((nodeDoc, index) => ({
+          node: nodeDoc,
+          score: computeAdminNodeSearchCoverageScore(nodeDoc, keyword),
+          index
+        }))
+        .sort((left, right) => (
+          compareSearchCoverageScore(left.score, right.score)
+          || new Date(right.node?.createdAt || 0).getTime() - new Date(left.node?.createdAt || 0).getTime()
+          || String(left.node?.name || '').localeCompare(String(right.node?.name || ''), 'zh-Hans-CN')
+          || left.index - right.index
+        ))
+        .slice((page - 1) * pageSize, page * pageSize)
+        .map((item) => item.node)
+      : responseNodes;
     
     res.json({
       success: true,
-      count: responseNodes.length,
+      count: pagedNodes.length,
       total,
       page,
       pageSize,
       hasMore: page * pageSize < total,
       latest: requestLatest,
-      nodes: responseNodes
+      nodes: pagedNodes
     });
   } catch (error) {
     console.error('获取节点列表错误:', error);
@@ -4838,11 +5023,15 @@ router.post('/:nodeId/admin/senses/:senseId/delete-preview', authenticateToken, 
       onRemovalStrategy,
       bridgeDecisions
     });
+    const remainingSenseCount = Math.max(0, sourceSenses.length - 1);
 
     return res.json({
       success: true,
       strategy: previewData.strategy,
       deletingSense: targetSense,
+      deletingNodeName: node.name || '',
+      remainingSenseCount,
+      willDeleteNode: remainingSenseCount < 1,
       bridgeDecisionItems: previewData.bridgeDecisionItems,
       unresolvedBridgeDecisionCount: previewData.unresolvedBridgeDecisionCount,
       summary: previewData.mutationSummary,
@@ -4901,6 +5090,27 @@ router.delete('/:nodeId/admin/senses/:senseId', authenticateToken, isAdmin, asyn
     }
 
     const nextSenses = sourceSenses.filter((sense) => sense.senseId !== targetSenseId);
+    const willDeleteNode = nextSenses.length < 1;
+
+    if (willDeleteNode) {
+      if (previewData.reconnectPairs.length > 0) {
+        await applyReconnectPairs(previewData.reconnectPairs);
+      }
+
+      await removeNodeReferencesForDeletion(node);
+      await deleteNodeWithResources(node);
+
+      return res.json({
+        success: true,
+        message: `释义「${targetSense.title}」已删除；因其为最后一个释义，知识域「${node.name}」已一并删除`,
+        strategy: previewData.strategy,
+        summary: previewData.mutationSummary,
+        deletedSense: targetSense.title,
+        deletedNode: node.name,
+        deletedNodeWithSense: true
+      });
+    }
+
     node.associations = nextAssociations;
     await rebuildRelatedDomainNamesForNodes([node]);
     await node.save();
@@ -5030,39 +5240,13 @@ router.delete('/:nodeId', authenticateToken, isAdmin, async (req, res) => {
       });
     }
 
-    // 清理所有关联：从所有引用了这个节点的节点中移除
-    // 1. 移除所有relatedParentDomains中包含此节点名称的记录
-    await Node.updateMany(
-      { relatedParentDomains: nodeName },
-      { $pull: { relatedParentDomains: nodeName } }
-    );
-
-    // 2. 移除所有relatedChildDomains中包含此节点名称的记录
-    await Node.updateMany(
-      { relatedChildDomains: nodeName },
-      { $pull: { relatedChildDomains: nodeName } }
-    );
-
-    // 3. 移除所有associations中引用此节点的记录
-    await Node.updateMany(
-      { 'associations.targetNode': nodeId },
-      { $pull: { associations: { targetNode: nodeId } } }
-    );
+    await removeNodeReferencesForDeletion(node);
 
     if (reconnectResolve.reconnectPairs.length > 0) {
       await applyReconnectPairs(reconnectResolve.reconnectPairs);
     }
 
-    // 删除节点
-    await Node.findByIdAndDelete(nodeId);
-    await NodeSense.deleteMany({ nodeId: node._id });
-    await deleteNodeTitleStatesByNodeIds([node._id]);
-    await deleteDomainTitleProjectionByNodeIds([node._id]);
-
-    // 从用户拥有的节点列表中移除
-    await User.findByIdAndUpdate(node.owner, {
-      $pull: { ownedNodes: nodeId }
-    });
+    await deleteNodeWithResources(node);
 
     res.json({
       success: true,

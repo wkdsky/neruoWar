@@ -1,467 +1,298 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Search, Plus, X, MapPin, Bell, ChevronLeft, ChevronRight } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Search, Plus, X, Bell } from 'lucide-react';
+import HexDomainGrid from './HexDomainGrid';
+import RightUtilityDock from './RightUtilityDock';
+import AnnouncementPanel from './AnnouncementPanel';
+import {
+  buildHomeSafeAreaInsets,
+  getNodeDisplayName
+} from './hexUtils';
 import './Home.css';
-
-const getNodePrimarySense = (node) => {
-    const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
-    if (typeof node?.activeSenseId === 'string' && node.activeSenseId.trim()) {
-        const matched = senses.find((item) => item?.senseId === node.activeSenseId.trim());
-        if (matched) return matched;
-    }
-    return senses[0] || null;
-};
-
-const getNodeDisplayName = (node) => {
-    if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
-    const name = typeof node?.name === 'string' ? node.name.trim() : '';
-    const senseTitle = typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()
-        ? node.activeSenseTitle.trim()
-        : (typeof getNodePrimarySense(node)?.title === 'string' ? getNodePrimarySense(node).title.trim() : '');
-    return senseTitle ? `${name}-${senseTitle}` : (name || '未命名知识域');
-};
-
-const getNodeSenseTitle = (node) => {
-    if (typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()) return node.activeSenseTitle.trim();
-    const sense = getNodePrimarySense(node);
-    return typeof sense?.title === 'string' ? sense.title.trim() : '';
-};
-
-const getNodeSenseSummary = (node) => {
-    if (typeof node?.description === 'string' && node.description.trim()) return node.description.trim();
-    if (typeof node?.knowledge === 'string' && node.knowledge.trim()) return node.knowledge.trim();
-    return '';
-};
 
 const escapeRegExp = (text = '') => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const renderKeywordHighlight = (text, rawQuery) => {
-    const content = typeof text === 'string' ? text : '';
-    const keywords = String(rawQuery || '')
-        .trim()
-        .split(/\s+/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-    if (!content || keywords.length === 0) return content;
-    const uniqueKeywords = Array.from(new Set(keywords.map((item) => item.toLowerCase())));
-    const pattern = uniqueKeywords.map((item) => escapeRegExp(item)).join('|');
-    if (!pattern) return content;
-    const matcher = new RegExp(`(${pattern})`, 'ig');
-    const parts = content.split(matcher);
-    return parts.map((part, index) => {
-        const lowered = part.toLowerCase();
-        const matched = uniqueKeywords.some((keyword) => keyword === lowered);
-        if (!matched) return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
-        return <mark key={`mark-${index}`} className="subtle-keyword-highlight">{part}</mark>;
-    });
+  const content = typeof text === 'string' ? text : '';
+  const keywords = String(rawQuery || '')
+    .trim()
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!content || keywords.length === 0) return content;
+  const uniqueKeywords = Array.from(new Set(keywords.map((item) => item.toLowerCase())));
+  const pattern = uniqueKeywords.map((item) => escapeRegExp(item)).join('|');
+  if (!pattern) return content;
+  const matcher = new RegExp(`(${pattern})`, 'ig');
+  const parts = content.split(matcher);
+  return parts.map((part, index) => {
+    const lowered = part.toLowerCase();
+    const matched = uniqueKeywords.some((keyword) => keyword === lowered);
+    if (!matched) return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
+    return <mark key={`mark-${index}`} className="subtle-keyword-highlight">{part}</mark>;
+  });
 };
 
+const readViewport = () => ({
+  width: typeof window === 'undefined' ? 1440 : window.innerWidth,
+  height: typeof window === 'undefined' ? 900 : window.innerHeight
+});
+
 const Home = ({
-    webglCanvasRef,
-    searchQuery,
-    onSearchChange,
-    onSearchFocus,
-    onSearchClear,
-    searchResults,
-    showSearchResults,
-    isSearching,
-    onSearchResultClick,
-    onCreateNode,
-    isAdmin,
-    currentLocationNodeDetail,
-    travelStatus,
-    onStopTravel,
-    isStoppingTravel,
-    canJumpToLocationView,
-    onJumpToLocationView,
-    announcementGroups = {},
-    announcementUnreadCount = 0,
-    isMarkingAnnouncementsRead = false,
+  webglCanvasRef,
+  searchQuery,
+  onSearchChange,
+  onSearchFocus,
+  onSearchClear,
+  searchResults,
+  showSearchResults,
+  isSearching,
+  onSearchResultClick,
+  onCreateNode,
+  isAdmin,
+  currentLocationNodeDetail,
+  travelStatus,
+  onStopTravel,
+  isStoppingTravel,
+  canJumpToLocationView,
+  onJumpToLocationView,
+  announcementGroups = {},
+  announcementUnreadCount = 0,
+  isMarkingAnnouncementsRead = false,
+  onAnnouncementClick,
+  onMarkAllAnnouncementsRead,
+  onAnnouncementPanelViewed,
+  showRightDocks = true,
+  rootNodes = [],
+  featuredNodes = [],
+  onHomeDomainActivate,
+  activeHomeNodeId = ''
+}) => {
+  const searchBarRef = useRef(null);
+  const hasMarkedAnnouncementViewRef = useRef(false);
+  const [viewport, setViewport] = useState(readViewport);
+  const [isAnnouncementPanelExpanded, setIsAnnouncementPanelExpanded] = useState(false);
+  const [activeAnnouncementTab, setActiveAnnouncementTab] = useState('system');
+
+  const systemAnnouncements = Array.isArray(announcementGroups?.system) ? announcementGroups.system : [];
+  const allianceAnnouncements = Array.isArray(announcementGroups?.alliance) ? announcementGroups.alliance : [];
+  const unreadAnnouncementTotal = Number.isFinite(announcementUnreadCount)
+    ? Math.max(0, announcementUnreadCount)
+    : 0;
+  const activeAnnouncements = activeAnnouncementTab === 'alliance'
+    ? allianceAnnouncements
+    : systemAnnouncements;
+
+  useEffect(() => {
+    const handleResize = () => setViewport(readViewport());
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (activeAnnouncementTab === 'system' && systemAnnouncements.length === 0 && allianceAnnouncements.length > 0) {
+      setActiveAnnouncementTab('alliance');
+    } else if (activeAnnouncementTab === 'alliance' && allianceAnnouncements.length === 0 && systemAnnouncements.length > 0) {
+      setActiveAnnouncementTab('system');
+    }
+  }, [activeAnnouncementTab, systemAnnouncements.length, allianceAnnouncements.length]);
+
+  useEffect(() => {
+    if (!isAnnouncementPanelExpanded) {
+      hasMarkedAnnouncementViewRef.current = false;
+      return;
+    }
+    if (hasMarkedAnnouncementViewRef.current) return;
+    if (typeof onAnnouncementPanelViewed === 'function') {
+      hasMarkedAnnouncementViewRef.current = true;
+      onAnnouncementPanelViewed();
+    }
+  }, [isAnnouncementPanelExpanded, onAnnouncementPanelViewed]);
+
+  const safeInsets = useMemo(
+    () => buildHomeSafeAreaInsets(viewport.width, viewport.height),
+    [viewport.height, viewport.width]
+  );
+
+  const shellStyle = useMemo(() => ({
+    '--home-safe-left': `${safeInsets.left}px`,
+    '--home-safe-right': `${safeInsets.right}px`,
+    '--home-safe-top': `${safeInsets.top}px`,
+    '--home-safe-bottom': `${safeInsets.bottom}px`
+  }), [safeInsets.bottom, safeInsets.left, safeInsets.right, safeInsets.top]);
+
+  const summaryStats = [
+    { label: '根知识域', value: rootNodes.length },
+    { label: '热门知识域', value: featuredNodes.length },
+    { label: '搜索结果', value: searchQuery ? searchResults.length : '待检索' }
+  ];
+  const utilitySections = useMemo(() => {
+    if (!showRightDocks) return [];
+    return [
+      {
+        id: 'announcement',
+        label: '公告',
+        icon: Bell,
+        badge: unreadAnnouncementTotal > 0 ? 'dot' : null,
+        active: isAnnouncementPanelExpanded,
+        onToggle: () => setIsAnnouncementPanelExpanded((prev) => !prev),
+        panel: (
+          <AnnouncementPanel
+            activeTab={activeAnnouncementTab}
+            tabs={[
+              { id: 'system', label: '系统公告' },
+              { id: 'alliance', label: '频道公告' }
+            ]}
+            announcements={activeAnnouncements}
+            onTabChange={setActiveAnnouncementTab}
+            onReadAll={() => {
+              if (typeof onMarkAllAnnouncementsRead === 'function') {
+                onMarkAllAnnouncementsRead();
+              }
+            }}
+            onClose={() => setIsAnnouncementPanelExpanded(false)}
+            onItemClick={(item) => {
+              if (typeof onAnnouncementClick === 'function') {
+                onAnnouncementClick(item);
+              }
+            }}
+            readAllDisabled={isMarkingAnnouncementsRead || unreadAnnouncementTotal <= 0}
+            isReadAllLoading={isMarkingAnnouncementsRead}
+          />
+        )
+      }
+    ];
+  }, [
+    activeAnnouncementTab,
+    activeAnnouncements,
+    isAnnouncementPanelExpanded,
+    isMarkingAnnouncementsRead,
     onAnnouncementClick,
     onMarkAllAnnouncementsRead,
-    onAnnouncementPanelViewed,
-    showRightDocks = true
-}) => {
-    const searchBarRef = useRef(null);
-    const hasMarkedAnnouncementViewRef = useRef(false);
-    const [isLocationPanelExpanded, setIsLocationPanelExpanded] = useState(false);
-    const [isAnnouncementPanelExpanded, setIsAnnouncementPanelExpanded] = useState(false);
-    const [activeAnnouncementTab, setActiveAnnouncementTab] = useState('system');
-    const systemAnnouncements = Array.isArray(announcementGroups?.system) ? announcementGroups.system : [];
-    const allianceAnnouncements = Array.isArray(announcementGroups?.alliance) ? announcementGroups.alliance : [];
-    const unreadAnnouncementTotal = Number.isFinite(announcementUnreadCount)
-        ? Math.max(0, announcementUnreadCount)
-        : 0;
-    const activeAnnouncements = activeAnnouncementTab === 'alliance'
-        ? allianceAnnouncements
-        : systemAnnouncements;
-    const locationParentLabels = (() => {
-        const parentNodes = Array.isArray(currentLocationNodeDetail?.parentNodesInfo)
-            ? currentLocationNodeDetail.parentNodesInfo
-            : [];
-        const labelsFromNodes = parentNodes
-            .map((item) => getNodeDisplayName(item))
-            .filter(Boolean);
-        if (labelsFromNodes.length > 0) return labelsFromNodes;
-        return (Array.isArray(currentLocationNodeDetail?.relatedParentDomains)
-            ? currentLocationNodeDetail.relatedParentDomains
-            : [])
-            .map((name) => (typeof name === 'string' ? name.trim() : ''))
-            .filter(Boolean);
-    })();
-    const locationChildLabels = (() => {
-        const childNodes = Array.isArray(currentLocationNodeDetail?.childNodesInfo)
-            ? currentLocationNodeDetail.childNodesInfo
-            : [];
-        const labelsFromNodes = childNodes
-            .map((item) => getNodeDisplayName(item))
-            .filter(Boolean);
-        if (labelsFromNodes.length > 0) return labelsFromNodes;
-        return (Array.isArray(currentLocationNodeDetail?.relatedChildDomains)
-            ? currentLocationNodeDetail.relatedChildDomains
-            : [])
-            .map((name) => (typeof name === 'string' ? name.trim() : ''))
-            .filter(Boolean);
-    })();
-    const locationSenseTitle = getNodeSenseTitle(currentLocationNodeDetail);
-    const formatSeconds = (seconds) => {
-        if (!Number.isFinite(seconds) || seconds <= 0) return '0 秒';
-        const rounded = Math.round(seconds);
-        const mins = Math.floor(rounded / 60);
-        const remain = rounded % 60;
-        if (mins <= 0) return `${remain} 秒`;
-        return `${mins} 分 ${remain} 秒`;
-    };
+    showRightDocks,
+    unreadAnnouncementTotal
+  ]);
 
-    useEffect(() => {
-        if (activeAnnouncementTab === 'system' && systemAnnouncements.length === 0 && allianceAnnouncements.length > 0) {
-            setActiveAnnouncementTab('alliance');
-        } else if (activeAnnouncementTab === 'alliance' && allianceAnnouncements.length === 0 && systemAnnouncements.length > 0) {
-            setActiveAnnouncementTab('system');
-        }
-    }, [activeAnnouncementTab, systemAnnouncements.length, allianceAnnouncements.length]);
+  return (
+    <div className="home-shell" style={shellStyle}>
+      <div className="home-background-layer" aria-hidden="true">
+        <div className="home-background-gradient" />
+        <div className="home-background-grid" />
+        <div className="home-background-stars" />
+        <div className="webgl-scene-container home-scene-shell">
+          <canvas ref={webglCanvasRef} className="webgl-canvas home-atmosphere-canvas" />
+        </div>
+      </div>
 
-    useEffect(() => {
-        if (!isAnnouncementPanelExpanded) {
-            hasMarkedAnnouncementViewRef.current = false;
-            return;
-        }
-        if (hasMarkedAnnouncementViewRef.current) {
-            return;
-        }
-        if (typeof onAnnouncementPanelViewed === 'function') {
-            hasMarkedAnnouncementViewRef.current = true;
-            onAnnouncementPanelViewed();
-        }
-    }, [isAnnouncementPanelExpanded, onAnnouncementPanelViewed]);
+      <div className="navigation-sidebar">
+        <div className="nav-item active">
+          <span className="nav-label">首页</span>
+        </div>
+      </div>
 
-    return (
-        <>
-            {/* Left Sidebar - Navigation */}
-            <div className="navigation-sidebar">
-                <div className="nav-item active">
-                    <span className="nav-label">首页</span>
-                </div>
-            </div>
-
-            {/* Main Content */}
-            <div className="webgl-scene-container">
-                {/* WebGL Canvas */}
-                <canvas
-                    ref={webglCanvasRef}
-                    className="webgl-canvas"
+      <div className="home-main-layer">
+        <div className="search-container home-search-container" ref={searchBarRef}>
+          <div className="floating-search-bar home-floating-search-bar">
+            <div className="search-and-create-container">
+              <div className="search-input-wrapper" onClick={onSearchFocus}>
+                <Search className="search-icon" size={22} />
+                <input
+                  type="text"
+                  placeholder="搜索标题或释义题目...（支持多关键词）"
+                  value={searchQuery}
+                  onChange={onSearchChange}
+                  className="search-input-floating"
+                  onFocus={onSearchFocus}
                 />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSearchClear();
+                    }}
+                    className="search-clear-btn"
+                  >
+                    <X size={18} />
+                  </button>
+                )}
+              </div>
+              {!isAdmin && (
+                <button
+                  type="button"
+                  onClick={onCreateNode}
+                  className="btn btn-success create-node-btn home-create-node-btn"
+                >
+                  <Plus size={18} />
+                  创建新知识域
+                </button>
+              )}
+            </div>
+          </div>
 
-                {/* Search Bar Container */}
-                <div className="search-container" ref={searchBarRef}>
-                    {/* Floating Search Bar */}
-                    <div className="floating-search-bar">
-                        <div className="search-and-create-container">
-                           <div className="search-input-wrapper" onClick={onSearchFocus}>
-                                <Search className="search-icon" size={24} />
-                                <input
-                                    type="text"
-                                    placeholder="搜索标题或释义题目...（支持多关键词）"
-                                    value={searchQuery}
-                                    onChange={onSearchChange}
-                                    className="search-input-floating"
-                                    onFocus={onSearchFocus}
-                                />
-                                {searchQuery && (
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            onSearchClear();
-                                        }}
-                                        className="search-clear-btn"
-                                    >
-                                        <X size={18} />
-                                    </button>
-                                )}
-                            </div>
-                            {!isAdmin && (
-                                <button
-                                    onClick={onCreateNode}
-                                    className="btn btn-success create-node-btn"
-                                >
-                                    <Plus size={18} />
-                                    创建新知识域
-                                </button>
-                            )}
-                        </div>
-                    </div>
+          {searchQuery && searchResults.length > 0 && showSearchResults && (
+            <div className="search-results-panel">
+              <div className="search-results-scroll">
+                {searchResults.map((node) => (
+                  <div
+                    key={node.searchKey || `${node._id || ''}-${node.senseId || ''}`}
+                    className="search-result-card"
+                    onClick={() => onSearchResultClick(node)}
+                  >
+                    <div className="search-card-title">{renderKeywordHighlight(getNodeDisplayName(node), searchQuery)}</div>
+                    <div className="search-card-desc">{node.description || ''}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
-                    {/* Search Results */}
-                    {searchQuery && searchResults.length > 0 && showSearchResults && (
-                        <div className="search-results-panel">
-                            <div className="search-results-scroll">
-                                {searchResults.map((node) => (
-                                    <div
-                                        key={node.searchKey || `${node._id || ''}-${node.senseId || ''}`}
-                                        className="search-result-card"
-                                        onClick={() => onSearchResultClick(node)}
-                                    >
-                                        <div className="search-card-title">{renderKeywordHighlight(getNodeDisplayName(node), searchQuery)}</div>
-                                        <div className="search-card-desc">{getNodeSenseSummary(node) || node.description}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+          {searchQuery && !isSearching && searchResults.length === 0 && showSearchResults && (
+            <div className="search-no-results">
+              未找到匹配的节点
+            </div>
+          )}
 
-                    {/* No Results */}
-                    {searchQuery && !isSearching && searchResults.length === 0 && showSearchResults && (
-                        <div className="search-no-results">
-                            未找到匹配的节点
-                        </div>
-                    )}
+          {isSearching && showSearchResults && (
+            <div className="search-loading-indicator">
+              搜索中...
+            </div>
+          )}
+        </div>
 
-                    {/* Loading */}
-                    {isSearching && showSearchResults && (
-                        <div className="search-loading-indicator">
-                            搜索中...
-                        </div>
-                    )}
-                </div>
-
+        <div className="home-hero-safe-area">
+          <div className="home-hero-panel">
+            <div className="home-hero-copy">
+              <span className="home-hero-eyebrow">Knowledge Domain Atlas</span>
+              <h1 className="home-hero-title">知识域总览首页</h1>
+              <p className="home-hero-description">
+                以蜂窝式六边形入口统摄根知识域与热门知识域。首页只承载总览、检索与入口，不抢占右侧状态区与顶部操作区的层级。
+              </p>
+              <div className="home-hero-stats">
+                {summaryStats.map((item) => (
+                  <div key={item.label} className="home-hero-stat">
+                    <span className="home-hero-stat-label">{item.label}</span>
+                    <strong className="home-hero-stat-value">{item.value}</strong>
+                  </div>
+                ))}
+              </div>
             </div>
 
-            {/* Right Sidebar - Normal User Only */}
-            {!isAdmin && showRightDocks && (
-                <>
-                    <div className={`home-announcement-dock ${isAnnouncementPanelExpanded ? 'expanded' : 'collapsed'}`}>
-                        <aside className={`home-announcement-dock-panel ${isAnnouncementPanelExpanded ? 'expanded' : ''}`}>
-                            <div className="home-announcement-dock-header">
-                                <h3>公告栏</h3>
-                                <div className="home-announcement-header-actions">
-                                    <button
-                                        type="button"
-                                        className="home-announcement-readall-btn"
-                                        onClick={() => {
-                                            if (typeof onMarkAllAnnouncementsRead === 'function') {
-                                                onMarkAllAnnouncementsRead();
-                                            }
-                                        }}
-                                        disabled={isMarkingAnnouncementsRead || unreadAnnouncementTotal <= 0}
-                                    >
-                                        {isMarkingAnnouncementsRead ? '处理中...' : '全部已读'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="home-announcement-collapse-btn"
-                                        onClick={() => setIsAnnouncementPanelExpanded(false)}
-                                    >
-                                        收起
-                                    </button>
-                                </div>
-                            </div>
-                            <div className="home-announcement-tab-row">
-                                <button
-                                    type="button"
-                                    className={`home-announcement-tab ${activeAnnouncementTab === 'system' ? 'active' : ''}`}
-                                    onClick={() => setActiveAnnouncementTab('system')}
-                                >
-                                    系统公告
-                                </button>
-                                <button
-                                    type="button"
-                                    className={`home-announcement-tab ${activeAnnouncementTab === 'alliance' ? 'active' : ''}`}
-                                    onClick={() => setActiveAnnouncementTab('alliance')}
-                                >
-                                    熵盟公告
-                                </button>
-                            </div>
-                            <div className="home-announcement-dock-body">
-                                {activeAnnouncements.length === 0 ? (
-                                    <div className="home-announcement-empty">
-                                        {activeAnnouncementTab === 'alliance' ? '暂无熵盟公告' : '暂无系统公告'}
-                                    </div>
-                                ) : (
-                                    activeAnnouncements.map((item) => (
-                                        <button
-                                            type="button"
-                                            key={item._id}
-                                            className={`home-announcement-item ${item.read ? '' : 'unread'}`}
-                                            onClick={() => {
-                                                if (typeof onAnnouncementClick === 'function') {
-                                                    onAnnouncementClick(item);
-                                                }
-                                            }}
-                                        >
-                                            {!item.read && <span className="home-announcement-new">NEW!</span>}
-                                            <span className="home-announcement-title">{item.title || '知识点分发预告'}</span>
-                                            <span className="home-announcement-message">{item.message || ''}</span>
-                                        </button>
-                                    ))
-                                )}
-                            </div>
-                        </aside>
+            <div className="home-hex-safe-zone">
+              <div className="home-hex-safe-zone__halo" aria-hidden="true" />
+              <HexDomainGrid
+                rootNodes={rootNodes}
+                featuredNodes={featuredNodes}
+                activeNodeId={activeHomeNodeId}
+                onActivate={onHomeDomainActivate}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
 
-                        <button
-                            type="button"
-                            className="home-announcement-dock-toggle"
-                            onClick={() => setIsAnnouncementPanelExpanded((prev) => !prev)}
-                            title={isAnnouncementPanelExpanded ? '收起公告栏' : '展开公告栏'}
-                        >
-                            <Bell size={18} />
-                            <span className="home-announcement-dock-label">公告</span>
-                            {unreadAnnouncementTotal > 0 && <span className="home-announcement-dock-dot" />}
-                            {isAnnouncementPanelExpanded ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-                        </button>
-                    </div>
-
-                    <div className={`home-location-dock ${isLocationPanelExpanded ? 'expanded' : 'collapsed'}`}>
-                        <aside className={`home-location-dock-panel ${isLocationPanelExpanded ? 'expanded' : ''}`}>
-                            <div className="location-sidebar-header home-location-sidebar-header">
-                                <div className="home-location-header-row">
-                                    <h3>{travelStatus?.isTraveling ? '移动状态' : '当前所在的知识域'}</h3>
-                                    <button
-                                        type="button"
-                                        className="home-location-collapse-btn"
-                                        onClick={() => setIsLocationPanelExpanded(false)}
-                                    >
-                                        收起
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="home-location-panel-body">
-                                {travelStatus?.isTraveling ? (
-                                    <div className="travel-sidebar-content">
-                                        <div className="travel-main-info">
-                                            <div className="travel-destination">
-                                                {travelStatus?.isStopping ? '停止目标' : '目标节点'}: <strong>{travelStatus?.targetNode?.nodeName}</strong>
-                                            </div>
-                                            <div className="travel-metrics">
-                                                <span>剩余距离: {travelStatus?.remainingDistanceUnits?.toFixed?.(2) ?? travelStatus?.remainingDistanceUnits} 单位</span>
-                                                <span>剩余时间: {formatSeconds(travelStatus?.remainingSeconds)}</span>
-                                                {travelStatus?.queuedTargetNode?.nodeName && (
-                                                    <span>已排队目标: {travelStatus.queuedTargetNode.nodeName}</span>
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        <div className="travel-anim-layout">
-                                            <div className="travel-node-card next">
-                                                <div className="travel-node-label">下一目的地</div>
-                                                <div className="travel-node-name">{travelStatus?.nextNode?.nodeName || '-'}</div>
-                                            </div>
-                                            <div className="travel-track-wrap">
-                                                <div className="travel-track">
-                                                    <div
-                                                        className="travel-progress-dot"
-                                                        style={{ left: `${(1 - (travelStatus?.progressInCurrentSegment || 0)) * 100}%` }}
-                                                    />
-                                                </div>
-                                            </div>
-                                            <div className="travel-node-card reached">
-                                                <div className="travel-node-label">最近到达</div>
-                                                <div className="travel-node-name">{travelStatus?.lastReachedNode?.nodeName || '-'}</div>
-                                            </div>
-                                        </div>
-
-                                        <button
-                                            type="button"
-                                            className="btn btn-danger travel-stop-btn"
-                                            onClick={onStopTravel}
-                                            disabled={isStoppingTravel || travelStatus?.isStopping}
-                                        >
-                                            {(isStoppingTravel || travelStatus?.isStopping) ? '停止进行中...' : '停止移动'}
-                                        </button>
-                                    </div>
-                                ) : currentLocationNodeDetail ? (
-                                    <div
-                                        className={`location-sidebar-content ${canJumpToLocationView ? 'location-sidebar-jumpable' : ''}`}
-                                        onClick={() => {
-                                            if (canJumpToLocationView && onJumpToLocationView) {
-                                                onJumpToLocationView();
-                                            }
-                                        }}
-                                    >
-                                        <div className="location-node-title">{getNodeDisplayName(currentLocationNodeDetail)}</div>
-
-                                        {currentLocationNodeDetail.description && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">概述</div>
-                                                <div className="section-content">{currentLocationNodeDetail.description}</div>
-                                            </div>
-                                        )}
-
-                                        {locationSenseTitle && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">当前释义</div>
-                                                <div className="section-content">{locationSenseTitle}</div>
-                                            </div>
-                                        )}
-
-                                        {locationParentLabels.length > 0 && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">父域</div>
-                                                <div className="section-tags">
-                                                    {locationParentLabels.map((parent, idx) => (
-                                                        <span key={idx} className="node-tag parent-tag">{parent}</span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {locationChildLabels.length > 0 && (
-                                            <div className="location-node-section">
-                                                <div className="section-label">子域</div>
-                                                <div className="section-tags">
-                                                    {locationChildLabels.map((child, idx) => (
-                                                        <span key={idx} className="node-tag child-tag">{child}</span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-
-
-                                    </div>
-                                ) : (
-                                    <div className="location-sidebar-empty">
-                                        <p>暂未降临到任何知识域</p>
-                                    </div>
-                                )}
-                            </div>
-                        </aside>
-
-                        <button
-                            type="button"
-                            className="home-location-dock-toggle"
-                            onClick={() => setIsLocationPanelExpanded((prev) => !prev)}
-                            title={isLocationPanelExpanded ? '收起当前所在知识域' : '展开当前所在知识域'}
-                        >
-                            <MapPin size={18} />
-                            <span className="home-location-dock-label">
-                                {travelStatus?.isTraveling ? '移动中' : '知识域'}
-                            </span>
-                            {isLocationPanelExpanded ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-                        </button>
-                    </div>
-                </>
-            )}
-        </>
-    );
+      <RightUtilityDock sections={utilitySections} />
+    </div>
+  );
 };
 
 export default Home;

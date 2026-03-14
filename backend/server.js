@@ -54,6 +54,21 @@ const parseOrigin = (origin = '') => {
 
 const isLocalhostHost = (hostname = '') => LOCALHOST_HOSTS.has(String(hostname || '').trim().toLowerCase());
 
+const isPrivateIpv4Host = (hostname = '') => {
+  const safeHostname = String(hostname || '').trim();
+  const matched = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(safeHostname);
+  if (!matched) return false;
+  const octets = matched.slice(1).map((item) => Number.parseInt(item, 10));
+  if (octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+    return false;
+  }
+  const [first, second] = octets;
+  if (first === 10 || first === 127) return true;
+  if (first === 192 && second === 168) return true;
+  if (first === 172 && second >= 16 && second <= 31) return true;
+  return false;
+};
+
 const formatOrigin = ({ protocol = 'http:', hostname = 'localhost', port = '' } = {}) => {
   const safeHostname = String(hostname || '').includes(':') ? `[${hostname}]` : hostname;
   return `${protocol}//${safeHostname}${port ? `:${port}` : ''}`;
@@ -88,6 +103,11 @@ const isLocalDevelopmentOrigin = (origin = '') => {
   return Boolean(parsed && isLocalhostHost(parsed.hostname));
 };
 
+const isPrivateDevelopmentOrigin = (origin = '') => {
+  const parsed = parseOrigin(origin);
+  return Boolean(parsed && (isLocalhostHost(parsed.hostname) || isPrivateIpv4Host(parsed.hostname)));
+};
+
 const createCorsOriginValidator = (allowList = []) => (origin, callback) => {
   const expandedAllowList = expandOriginAliases(allowList);
   if (isOriginAllowed(origin, expandedAllowList)) {
@@ -95,7 +115,7 @@ const createCorsOriginValidator = (allowList = []) => (origin, callback) => {
     return;
   }
 
-  if (isDevelopmentEnvironment && isLocalDevelopmentOrigin(origin)) {
+  if (isDevelopmentEnvironment && isPrivateDevelopmentOrigin(origin)) {
     callback(null, true);
     return;
   }

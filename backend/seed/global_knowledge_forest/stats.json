@@ -1,0 +1,125 @@
+{
+  "marker": "global_knowledge_forest_v1",
+  "titleCount": 13451,
+  "senseCount": 13767,
+  "containsCount": 13788,
+  "extendsCount": 13788,
+  "rootSenseCount": 14,
+  "leafSenseCount": 12393,
+  "chainCount6to7": 11772,
+  "polysemyTitleCount": 311,
+  "rootDistribution": [
+    {
+      "rootKey": "people",
+      "rootName": "人物",
+      "titleCount": 935,
+      "senseCount": 935,
+      "containsCount": 934,
+      "extendsCount": 934
+    },
+    {
+      "rootKey": "geography",
+      "rootName": "地理与地点",
+      "titleCount": 940,
+      "senseCount": 940,
+      "containsCount": 940,
+      "extendsCount": 940
+    },
+    {
+      "rootKey": "history",
+      "rootName": "历史与事件",
+      "titleCount": 936,
+      "senseCount": 936,
+      "containsCount": 942,
+      "extendsCount": 940
+    },
+    {
+      "rootKey": "society",
+      "rootName": "社会、政治、法律与政府",
+      "titleCount": 982,
+      "senseCount": 982,
+      "containsCount": 995,
+      "extendsCount": 984
+    },
+    {
+      "rootKey": "economy",
+      "rootName": "经济与管理",
+      "titleCount": 982,
+      "senseCount": 982,
+      "containsCount": 984,
+      "extendsCount": 984
+    },
+    {
+      "rootKey": "military",
+      "rootName": "军事与安全",
+      "titleCount": 935,
+      "senseCount": 935,
+      "containsCount": 935,
+      "extendsCount": 935
+    },
+    {
+      "rootKey": "philosophy",
+      "rootName": "哲学、宗教与思想",
+      "titleCount": 936,
+      "senseCount": 936,
+      "containsCount": 933,
+      "extendsCount": 940
+    },
+    {
+      "rootKey": "language",
+      "rootName": "语言与文学",
+      "titleCount": 995,
+      "senseCount": 995,
+      "containsCount": 1011,
+      "extendsCount": 997
+    },
+    {
+      "rootKey": "art_media",
+      "rootName": "艺术与媒体",
+      "titleCount": 943,
+      "senseCount": 943,
+      "containsCount": 930,
+      "extendsCount": 944
+    },
+    {
+      "rootKey": "education_psychology",
+      "rootName": "教育与心理",
+      "titleCount": 955,
+      "senseCount": 955,
+      "containsCount": 979,
+      "extendsCount": 957
+    },
+    {
+      "rootKey": "math_logic",
+      "rootName": "数学与逻辑",
+      "titleCount": 994,
+      "senseCount": 994,
+      "containsCount": 987,
+      "extendsCount": 993
+    },
+    {
+      "rootKey": "science",
+      "rootName": "自然与生命科学",
+      "titleCount": 993,
+      "senseCount": 994,
+      "containsCount": 999,
+      "extendsCount": 997
+    },
+    {
+      "rootKey": "engineering",
+      "rootName": "工程、技术与计算",
+      "titleCount": 1261,
+      "senseCount": 1262,
+      "containsCount": 1264,
+      "extendsCount": 1264
+    },
+    {
+      "rootKey": "health_life",
+      "rootName": "医学、健康、农业、生态、环境、生活、体育与休闲",
+      "titleCount": 978,
+      "senseCount": 978,
+      "containsCount": 955,
+      "extendsCount": 979
+    }
+  ]
+}

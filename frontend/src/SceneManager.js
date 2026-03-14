@@ -58,6 +58,8 @@ class SceneManager {
    */
   async showHome(rootNodes, featuredNodes, searchResults = []) {
     this.renderer.setSceneType('home');
+    this.renderer.setCameraPanEnabled(false);
+    this.renderer.setCameraOffset(0, 0);
 
     // 清除节点按钮（首页不需要）
     this.renderer.clearNodeButtons();
@@ -87,6 +89,7 @@ class SceneManager {
    */
   async showNodeDetail(centerNode, parentNodes, childNodes, clickedNode = null, buttonContext = {}) {
     this.renderer.setSceneType('nodeDetail');
+    this.renderer.setCameraPanEnabled(true);
     this.centerNodeButtonContext = buttonContext || {};
 
     // 清除之前的按钮
@@ -131,6 +134,7 @@ class SceneManager {
    */
   async showTitleDetail(centerNode, graphNodes = [], graphEdges = [], levelByNodeId = {}, clickedNode = null, buttonContext = {}) {
     this.renderer.setSceneType('titleDetail');
+    this.renderer.setCameraPanEnabled(true);
     this.centerNodeButtonContext = buttonContext || {};
     this.renderer.clearNodeButtons();
 

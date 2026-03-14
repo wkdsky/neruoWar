@@ -1,0 +1,5630 @@
+[
+  {
+    "titleId": "gkf_t13141",
+    "name": "苹果",
+    "senses": [
+      {
+        "senseId": "gkf_s013142",
+        "senseLabel": "科技公司",
+        "rootKey": "economy",
+        "summary": "苹果作为科技公司，是从事消费电子与软件生态经营的企业主体。"
+      },
+      {
+        "senseId": "gkf_s013141",
+        "senseLabel": "水果",
+        "rootKey": "health_life",
+        "summary": "苹果作为水果，是常见的温带果实与饮食对象。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13142",
+    "name": "Java",
+    "senses": [
+      {
+        "senseId": "gkf_s013143",
+        "senseLabel": "编程语言",
+        "rootKey": "engineering",
+        "summary": "Java作为编程语言，是面向对象且广泛用于企业与平台开发的程序语言。"
+      },
+      {
+        "senseId": "gkf_s013145",
+        "senseLabel": "咖啡",
+        "rootKey": "health_life",
+        "summary": "Java作为咖啡名称，可指代咖啡饮品及其流通语境中的称谓。"
+      },
+      {
+        "senseId": "gkf_s013144",
+        "senseLabel": "印度尼西亚岛屿",
+        "rootKey": "geography",
+        "summary": "Java作为印度尼西亚岛屿，是东南亚人口密集且历史重要的岛屿。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13143",
+    "name": "Python",
+    "senses": [
+      {
+        "senseId": "gkf_s013146",
+        "senseLabel": "编程语言",
+        "rootKey": "engineering",
+        "summary": "Python作为编程语言，是以高可读性著称的通用程序语言。"
+      },
+      {
+        "senseId": "gkf_s013147",
+        "senseLabel": "蟒蛇",
+        "rootKey": "science",
+        "summary": "Python作为蟒蛇，是大型无毒蛇类的通称。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13144",
+    "name": "网络",
+    "senses": [
+      {
+        "senseId": "gkf_s013148",
+        "senseLabel": "计算机网络",
+        "rootKey": "engineering",
+        "summary": "网络作为计算机网络，是用于节点互联与数据传输的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013149",
+        "senseLabel": "社会网络",
+        "rootKey": "society",
+        "summary": "网络作为社会网络，是由个体、组织与关系构成的社会联系结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13145",
+    "name": "细胞",
+    "senses": [
+      {
+        "senseId": "gkf_s013151",
+        "senseLabel": "电池单元",
+        "rootKey": "engineering",
+        "summary": "细胞作为电池单元，是构成电化学储能系统的基本模块。"
+      },
+      {
+        "senseId": "gkf_s013150",
+        "senseLabel": "生物学中的细胞",
+        "rootKey": "science",
+        "summary": "细胞作为生物学概念，是生命体结构与功能的基本单位。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13146",
+    "name": "模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013153",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "模型作为机器学习模型，是从数据中训练得到的预测或生成结构。"
+      },
+      {
+        "senseId": "gkf_s013154",
+        "senseLabel": "实体模型",
+        "rootKey": "art_media",
+        "summary": "模型作为实体模型，是用于展示形态、比例或方案的物理原型。"
+      },
+      {
+        "senseId": "gkf_s013152",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "模型作为数学模型，是对变量、关系与约束的形式化表达。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13147",
+    "name": "结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013155",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "结构作为工程结构，是由构件、连接与受力关系组成的实体体系。"
+      },
+      {
+        "senseId": "gkf_s013156",
+        "senseLabel": "数据结构",
+        "rootKey": "engineering",
+        "summary": "结构作为数据结构，是组织、索引与访问数据的计算机抽象。"
+      },
+      {
+        "senseId": "gkf_s013157",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "结构作为语言结构，是语言单位之间的组合层次与规则关系。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13148",
+    "name": "介质",
+    "senses": [
+      {
+        "senseId": "gkf_s013159",
+        "senseLabel": "材料介质",
+        "rootKey": "science",
+        "summary": "介质作为材料介质，是波、场或反应得以发生的物质环境。"
+      },
+      {
+        "senseId": "gkf_s013158",
+        "senseLabel": "传播介质",
+        "rootKey": "art_media",
+        "summary": "介质作为传播介质，是承载、传递与扩散信息的媒介形式。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13149",
+    "name": "平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013162",
+        "senseLabel": "地质平台",
+        "rootKey": "science",
+        "summary": "平台作为地质平台，是稳定陆块或沉积环境中的地质构造单元。"
+      },
+      {
+        "senseId": "gkf_s013160",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "平台作为计算平台，是提供运行、部署与调度能力的技术基础。"
+      },
+      {
+        "senseId": "gkf_s013161",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "平台作为商业平台，是连接供给与需求并组织交易的经营结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13150",
+    "name": "信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013164",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "信号作为生理信号，是反映机体状态与生命活动的监测数据。"
+      },
+      {
+        "senseId": "gkf_s013163",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "信号作为通信信号，是携带信息并可被传输与处理的物理量。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13151",
+    "name": "场",
+    "senses": [
+      {
+        "senseId": "gkf_s013166",
+        "senseLabel": "社会场域",
+        "rootKey": "society",
+        "summary": "场作为社会场域，是社会行动者围绕资本、规则与位置展开竞争的关系空间。"
+      },
+      {
+        "senseId": "gkf_s013165",
+        "senseLabel": "物理学中的场",
+        "rootKey": "science",
+        "summary": "场作为物理学概念，是在空间中分布并对对象施加作用的物理量结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13152",
+    "name": "协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013168",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "协议作为社会协议，是用于协调合作、停火或谈判的约定文本。"
+      },
+      {
+        "senseId": "gkf_s013167",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "协议作为网络协议，是用于互联互通与数据交换的规则集合。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13153",
+    "name": "病毒",
+    "senses": [
+      {
+        "senseId": "gkf_s013170",
+        "senseLabel": "计算机病毒",
+        "rootKey": "engineering",
+        "summary": "病毒作为计算机病毒，是能够自我复制或破坏系统的恶意程序。"
+      },
+      {
+        "senseId": "gkf_s013169",
+        "senseLabel": "生物病毒",
+        "rootKey": "science",
+        "summary": "病毒作为生物病毒，是依赖宿主细胞复制的亚显微感染因子。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13154",
+    "name": "核",
+    "senses": [
+      {
+        "senseId": "gkf_s013173",
+        "senseLabel": "地核",
+        "rootKey": "science",
+        "summary": "核作为地核，是地球内部由金属物质主导的深部结构层。"
+      },
+      {
+        "senseId": "gkf_s013172",
+        "senseLabel": "计算机内核",
+        "rootKey": "engineering",
+        "summary": "核作为计算机内核，是操作系统负责资源管理与调度的核心部分。"
+      },
+      {
+        "senseId": "gkf_s013171",
+        "senseLabel": "原子核",
+        "rootKey": "science",
+        "summary": "核作为原子核，是原子中由质子与中子构成的中心部分。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13155",
+    "name": "系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013175",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "系统作为技术系统，是由组件、接口与流程协同构成的工程体系。"
+      },
+      {
+        "senseId": "gkf_s013174",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "系统作为生命系统，是由多层次结构与调节过程构成的生物体系。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13156",
+    "name": "接口",
+    "senses": [
+      {
+        "senseId": "gkf_s013177",
+        "senseLabel": "离子通道界面",
+        "rootKey": "science",
+        "summary": "接口作为离子通道界面，是膜蛋白与离子交换发生作用的生物学边界。"
+      },
+      {
+        "senseId": "gkf_s013176",
+        "senseLabel": "软件接口",
+        "rootKey": "engineering",
+        "summary": "接口作为软件接口，是系统之间交换调用约定与数据格式的边界。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13157",
+    "name": "层",
+    "senses": [
+      {
+        "senseId": "gkf_s013179",
+        "senseLabel": "地层",
+        "rootKey": "science",
+        "summary": "层作为地层，是地质年代与沉积过程形成的岩层单元。"
+      },
+      {
+        "senseId": "gkf_s013178",
+        "senseLabel": "网络层",
+        "rootKey": "engineering",
+        "summary": "层作为网络层，是协议栈中承担特定通信职能的层级。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13158",
+    "name": "流",
+    "senses": [
+      {
+        "senseId": "gkf_s013180",
+        "senseLabel": "数据流",
+        "rootKey": "engineering",
+        "summary": "流作为数据流，是在系统中连续传递、处理或缓存的信息序列。"
+      },
+      {
+        "senseId": "gkf_s013181",
+        "senseLabel": "洋流",
+        "rootKey": "science",
+        "summary": "流作为洋流，是海洋中具有稳定方向与动力机制的水体运动。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13159",
+    "name": "载体",
+    "senses": [
+      {
+        "senseId": "gkf_s013182",
+        "senseLabel": "传播载体",
+        "rootKey": "art_media",
+        "summary": "载体作为传播载体，是承载信息、符号或内容的媒介形式。"
+      },
+      {
+        "senseId": "gkf_s013183",
+        "senseLabel": "药物载体",
+        "rootKey": "health_life",
+        "summary": "载体作为药物载体，是帮助药物递送、释放或定位的材料系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13160",
+    "name": "单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013185",
+        "senseLabel": "电池单元",
+        "rootKey": "engineering",
+        "summary": "单元作为电池单元，是构成储能模组的基本电化学组件。"
+      },
+      {
+        "senseId": "gkf_s013184",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "单元作为教学单元，是围绕目标与主题组织的课程片段。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13161",
+    "name": "网格",
+    "senses": [
+      {
+        "senseId": "gkf_s013187",
+        "senseLabel": "计算网格",
+        "rootKey": "engineering",
+        "summary": "网格作为计算网格，是用于分布式资源协同计算的基础设施。"
+      },
+      {
+        "senseId": "gkf_s013186",
+        "senseLabel": "设计网格",
+        "rootKey": "art_media",
+        "summary": "网格作为设计网格，是组织版式、信息与视觉节奏的排版系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13162",
+    "name": "框架",
+    "senses": [
+      {
+        "senseId": "gkf_s013189",
+        "senseLabel": "理论框架",
+        "rootKey": "philosophy",
+        "summary": "框架作为理论框架，是组织概念、命题与分析路径的解释结构。"
+      },
+      {
+        "senseId": "gkf_s013188",
+        "senseLabel": "软件框架",
+        "rootKey": "engineering",
+        "summary": "框架作为软件框架，是约束应用结构与扩展方式的开发骨架。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13163",
+    "name": "驱动",
+    "senses": [
+      {
+        "senseId": "gkf_s013190",
+        "senseLabel": "设备驱动",
+        "rootKey": "engineering",
+        "summary": "驱动作为设备驱动，是连接操作系统与硬件设备的底层软件。"
+      },
+      {
+        "senseId": "gkf_s013191",
+        "senseLabel": "增长驱动",
+        "rootKey": "economy",
+        "summary": "驱动作为增长驱动，是推动产出、需求或投资扩张的关键力量。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13164",
+    "name": "线性模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013193",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "线性模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013192",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "线性模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13165",
+    "name": "非线性模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013195",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "非线性模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013194",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "非线性模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13166",
+    "name": "动态模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013197",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "动态模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013196",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "动态模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13167",
+    "name": "静态模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013199",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "静态模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013198",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "静态模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13168",
+    "name": "分层模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013201",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "分层模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013200",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "分层模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13169",
+    "name": "复合模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013203",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "复合模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013202",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "复合模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13170",
+    "name": "离散模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013205",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "离散模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013204",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "离散模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13171",
+    "name": "连续模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013207",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "连续模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013206",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "连续模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13172",
+    "name": "概率模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013209",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "概率模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013208",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "概率模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13173",
+    "name": "决策模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013211",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "决策模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013210",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "决策模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13174",
+    "name": "预测模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013213",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "预测模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013212",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "预测模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13175",
+    "name": "解释模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013215",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "解释模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013214",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "解释模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13176",
+    "name": "结构模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013217",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "结构模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013216",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "结构模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13177",
+    "name": "因果模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013219",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "因果模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013218",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "因果模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13178",
+    "name": "过程模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013221",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "过程模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013220",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "过程模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13179",
+    "name": "机制模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013223",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "机制模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013222",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "机制模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13180",
+    "name": "反馈模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013225",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "反馈模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013224",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "反馈模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13181",
+    "name": "平衡模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013227",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "平衡模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013226",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "平衡模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13182",
+    "name": "多变量模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013229",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "多变量模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013228",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "多变量模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13183",
+    "name": "单变量模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013231",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "单变量模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013230",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "单变量模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13184",
+    "name": "随机模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013233",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "随机模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013232",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "随机模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13185",
+    "name": "决定性模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013235",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "决定性模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013234",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "决定性模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13186",
+    "name": "生成模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013237",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "生成模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013236",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "生成模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13187",
+    "name": "判别模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013239",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "判别模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013238",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "判别模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13188",
+    "name": "图形模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013241",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "图形模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013240",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "图形模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13189",
+    "name": "几何模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013243",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "几何模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013242",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "几何模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13190",
+    "name": "网络模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013245",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "网络模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013244",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "网络模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13191",
+    "name": "时序模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013247",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "时序模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013246",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "时序模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13192",
+    "name": "空间模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013249",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "空间模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013248",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "空间模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13193",
+    "name": "行为模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013251",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "行为模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013250",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "行为模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13194",
+    "name": "系统模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013253",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "系统模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013252",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "系统模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13195",
+    "name": "协同模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013255",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "协同模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013254",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "协同模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13196",
+    "name": "资源模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013257",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "资源模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013256",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "资源模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13197",
+    "name": "风险模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013259",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "风险模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013258",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "风险模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13198",
+    "name": "能量模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013261",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "能量模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013260",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "能量模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13199",
+    "name": "环境模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013263",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "环境模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013262",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "环境模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13200",
+    "name": "认知模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013265",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "认知模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013264",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "认知模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13201",
+    "name": "发展模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013267",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "发展模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013266",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "发展模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13202",
+    "name": "演化模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013269",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "演化模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013268",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "演化模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13203",
+    "name": "区域模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013271",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "区域模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013270",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "区域模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13204",
+    "name": "产业模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013273",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "产业模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013272",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "产业模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13205",
+    "name": "组织模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013275",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "组织模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013274",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "组织模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13206",
+    "name": "市场模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013277",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "市场模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013276",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "市场模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13207",
+    "name": "传播模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013279",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "传播模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013278",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "传播模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13208",
+    "name": "交通模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013281",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "交通模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013280",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "交通模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13209",
+    "name": "生态模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013283",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "生态模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013282",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "生态模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13210",
+    "name": "生长模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013285",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "生长模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013284",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "生长模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13211",
+    "name": "诊断模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013287",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "诊断模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013286",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "诊断模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13212",
+    "name": "治疗模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013289",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "治疗模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013288",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "治疗模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13213",
+    "name": "学习模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013291",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "学习模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013290",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "学习模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13214",
+    "name": "记忆模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013293",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "记忆模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013292",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "记忆模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13215",
+    "name": "语言模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013295",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "语言模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013294",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "语言模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13216",
+    "name": "视觉模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013297",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "视觉模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013296",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "视觉模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13217",
+    "name": "声学模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013299",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "声学模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013298",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "声学模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13218",
+    "name": "逻辑模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013301",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "逻辑模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013300",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "逻辑模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13219",
+    "name": "形式模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013303",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "形式模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013302",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "形式模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13220",
+    "name": "计算模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013305",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "计算模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013304",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "计算模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13221",
+    "name": "推理模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013307",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "推理模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013306",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "推理模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13222",
+    "name": "规划模型",
+    "senses": [
+      {
+        "senseId": "gkf_s013309",
+        "senseLabel": "机器学习模型",
+        "rootKey": "engineering",
+        "summary": "规划模型在工程、技术与计算方向中表示用于训练、推断或生成任务的机器学习模型。"
+      },
+      {
+        "senseId": "gkf_s013308",
+        "senseLabel": "数学模型",
+        "rootKey": "math_logic",
+        "summary": "规划模型在数学与逻辑方向中表示用于描述变量关系、结构条件或推导规则的数学模型。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13223",
+    "name": "层次结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013310",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "层次结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013311",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "层次结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13224",
+    "name": "模块结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013312",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "模块结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013313",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "模块结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13225",
+    "name": "树形结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013314",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "树形结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013315",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "树形结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13226",
+    "name": "网状结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013316",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "网状结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013317",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "网状结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13227",
+    "name": "递归结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013318",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "递归结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013319",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "递归结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13228",
+    "name": "并行结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013320",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "并行结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013321",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "并行结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13229",
+    "name": "顺序结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013322",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "顺序结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013323",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "顺序结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13230",
+    "name": "复合结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013324",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "复合结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013325",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "复合结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13231",
+    "name": "开放结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013326",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "开放结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013327",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "开放结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13232",
+    "name": "封闭结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013328",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "封闭结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013329",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "封闭结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13233",
+    "name": "线性结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013330",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "线性结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013331",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "线性结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13234",
+    "name": "非线性结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013332",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "非线性结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013333",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "非线性结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13235",
+    "name": "语义结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013334",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "语义结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013335",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "语义结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13236",
+    "name": "语法结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013336",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "语法结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013337",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "语法结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13237",
+    "name": "叙事结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013338",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "叙事结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013339",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "叙事结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13238",
+    "name": "节点结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013340",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "节点结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013341",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "节点结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13239",
+    "name": "矩阵结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013342",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "矩阵结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013343",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "矩阵结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13240",
+    "name": "环形结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013344",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "环形结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013345",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "环形结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13241",
+    "name": "网格结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013346",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "网格结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013347",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "网格结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13242",
+    "name": "链式结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013348",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "链式结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013349",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "链式结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13243",
+    "name": "框架结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013350",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "框架结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013351",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "框架结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13244",
+    "name": "分布结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013352",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "分布结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013353",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "分布结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13245",
+    "name": "聚合结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013354",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "聚合结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013355",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "聚合结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13246",
+    "name": "嵌套结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013356",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "嵌套结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013357",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "嵌套结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13247",
+    "name": "对称结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013358",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "对称结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013359",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "对称结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13248",
+    "name": "非对称结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013360",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "非对称结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013361",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "非对称结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13249",
+    "name": "稳定结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013362",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "稳定结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013363",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "稳定结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13250",
+    "name": "动态结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013364",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "动态结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013365",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "动态结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13251",
+    "name": "组织结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013366",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "组织结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013367",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "组织结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13252",
+    "name": "制度结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013368",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "制度结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013369",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "制度结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13253",
+    "name": "城市结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013370",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "城市结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013371",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "城市结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13254",
+    "name": "材料结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013372",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "材料结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013373",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "材料结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13255",
+    "name": "控制结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013374",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "控制结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013375",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "控制结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13256",
+    "name": "接口结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013376",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "接口结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013377",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "接口结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13257",
+    "name": "协议结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013378",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "协议结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013379",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "协议结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13258",
+    "name": "层叠结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013380",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "层叠结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013381",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "层叠结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13259",
+    "name": "栈式结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013382",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "栈式结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013383",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "栈式结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13260",
+    "name": "索引结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013384",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "索引结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013385",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "索引结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13261",
+    "name": "编码结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013386",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "编码结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013387",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "编码结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13262",
+    "name": "载荷结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013388",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "载荷结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013389",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "载荷结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13263",
+    "name": "支撑结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013390",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "支撑结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013391",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "支撑结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13264",
+    "name": "纤维结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013392",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "纤维结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013393",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "纤维结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13265",
+    "name": "晶体结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013394",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "晶体结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013395",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "晶体结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13266",
+    "name": "分子结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013396",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "分子结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013397",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "分子结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13267",
+    "name": "句法结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013398",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "句法结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013399",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "句法结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13268",
+    "name": "音系结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013400",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "音系结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013401",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "音系结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13269",
+    "name": "词汇结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013402",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "词汇结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013403",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "词汇结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13270",
+    "name": "叙述结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013404",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "叙述结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013405",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "叙述结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13271",
+    "name": "图像结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013406",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "图像结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013407",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "图像结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13272",
+    "name": "乐句结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013408",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "乐句结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013409",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "乐句结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13273",
+    "name": "版式结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013410",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "版式结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013411",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "版式结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13274",
+    "name": "建筑结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013412",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "建筑结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013413",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "建筑结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13275",
+    "name": "路网结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013414",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "路网结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013415",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "路网结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13276",
+    "name": "供应结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013416",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "供应结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013417",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "供应结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13277",
+    "name": "河网结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013418",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "河网结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013419",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "河网结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13278",
+    "name": "神经结构",
+    "senses": [
+      {
+        "senseId": "gkf_s013420",
+        "senseLabel": "工程结构",
+        "rootKey": "engineering",
+        "summary": "神经结构在工程、技术与计算方向中表示由构件、约束或载荷关系组成的工程结构。"
+      },
+      {
+        "senseId": "gkf_s013421",
+        "senseLabel": "语言结构",
+        "rootKey": "language",
+        "summary": "神经结构在语言与文学方向中表示语音、词法、句法或叙事层面的语言结构。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13279",
+    "name": "模拟信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013423",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "模拟信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013422",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "模拟信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13280",
+    "name": "数字信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013425",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "数字信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013424",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "数字信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13281",
+    "name": "离散信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013427",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "离散信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013426",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "离散信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13282",
+    "name": "连续信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013429",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "连续信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013428",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "连续信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13283",
+    "name": "周期信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013431",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "周期信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013430",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "周期信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13284",
+    "name": "脉冲信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013433",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "脉冲信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013432",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "脉冲信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13285",
+    "name": "调制信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013435",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "调制信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013434",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "调制信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13286",
+    "name": "宽带信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013437",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "宽带信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013436",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "宽带信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13287",
+    "name": "窄带信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013439",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "窄带信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013438",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "窄带信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13288",
+    "name": "基带信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013441",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "基带信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013440",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "基带信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13289",
+    "name": "复合信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013443",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "复合信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013442",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "复合信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13290",
+    "name": "噪声信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013445",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "噪声信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013444",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "噪声信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13291",
+    "name": "生物信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013447",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "生物信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013446",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "生物信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13292",
+    "name": "神经信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013449",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "神经信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013448",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "神经信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13293",
+    "name": "心电信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013451",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "心电信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013450",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "心电信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13294",
+    "name": "肌电信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013453",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "肌电信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013452",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "肌电信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13295",
+    "name": "视觉信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013455",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "视觉信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013454",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "视觉信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13296",
+    "name": "听觉信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013457",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "听觉信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013456",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "听觉信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13297",
+    "name": "触觉信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013459",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "触觉信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013458",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "触觉信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13298",
+    "name": "化学信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013461",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "化学信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013460",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "化学信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13299",
+    "name": "环境信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013463",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "环境信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013462",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "环境信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13300",
+    "name": "预警信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013465",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "预警信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013464",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "预警信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13301",
+    "name": "反馈信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013467",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "反馈信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013466",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "反馈信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13302",
+    "name": "导航信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013469",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "导航信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013468",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "导航信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13303",
+    "name": "控制信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013471",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "控制信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013470",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "控制信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13304",
+    "name": "雷达信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013473",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "雷达信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013472",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "雷达信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13305",
+    "name": "光学信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013475",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "光学信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013474",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "光学信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13306",
+    "name": "声学信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013477",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "声学信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013476",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "声学信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13307",
+    "name": "时序信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013479",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "时序信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013478",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "时序信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13308",
+    "name": "空间信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013481",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "空间信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013480",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "空间信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13309",
+    "name": "网络信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013483",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "网络信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013482",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "网络信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13310",
+    "name": "群体信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013485",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "群体信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013484",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "群体信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13311",
+    "name": "传播信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013487",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "传播信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013486",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "传播信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13312",
+    "name": "交易信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013489",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "交易信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013488",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "交易信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13313",
+    "name": "市场信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013491",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "市场信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013490",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "市场信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13314",
+    "name": "行为信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013493",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "行为信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013492",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "行为信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13315",
+    "name": "风险信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013495",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "风险信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013494",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "风险信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13316",
+    "name": "生命信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013497",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "生命信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013496",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "生命信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13317",
+    "name": "运动信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013499",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "运动信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013498",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "运动信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13318",
+    "name": "呼吸信号",
+    "senses": [
+      {
+        "senseId": "gkf_s013501",
+        "senseLabel": "生理信号",
+        "rootKey": "health_life",
+        "summary": "呼吸信号在医学、健康、农业、生态、环境、生活、体育与休闲方向中表示来自人体、生命活动或临床监测的生理信号。"
+      },
+      {
+        "senseId": "gkf_s013500",
+        "senseLabel": "通信信号",
+        "rootKey": "engineering",
+        "summary": "呼吸信号在工程、技术与计算方向中表示可被编码、传输、调制或检测的通信信号。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13319",
+    "name": "开放协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013503",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "开放协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013502",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "开放协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13320",
+    "name": "封闭协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013505",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "封闭协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013504",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "封闭协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13321",
+    "name": "分层协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013507",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "分层协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013506",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "分层协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13322",
+    "name": "双边协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013509",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "双边协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013508",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "双边协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13323",
+    "name": "多边协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013511",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "多边协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013510",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "多边协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13324",
+    "name": "安全协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013513",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "安全协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013512",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "安全协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13325",
+    "name": "会商协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013515",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "会商协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013514",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "会商协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13326",
+    "name": "紧急协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013517",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "紧急协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013516",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "紧急协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13327",
+    "name": "基础协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013519",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "基础协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013518",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "基础协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13328",
+    "name": "核心协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013521",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "核心协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013520",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "核心协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13329",
+    "name": "兼容协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013523",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "兼容协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013522",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "兼容协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13330",
+    "name": "协调协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013525",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "协调协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013524",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "协调协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13331",
+    "name": "联合协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013527",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "联合协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013526",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "联合协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13332",
+    "name": "交换协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013529",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "交换协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013528",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "交换协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13333",
+    "name": "访问协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013531",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "访问协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013530",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "访问协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13334",
+    "name": "通信协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013533",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "通信协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013532",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "通信协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13335",
+    "name": "认证协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013535",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "认证协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013534",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "认证协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13336",
+    "name": "加密协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013537",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "加密协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013536",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "加密协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13337",
+    "name": "谈判协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013539",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "谈判协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013538",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "谈判协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13338",
+    "name": "停火协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013541",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "停火协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013540",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "停火协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13339",
+    "name": "边境协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013543",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "边境协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013542",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "边境协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13340",
+    "name": "航行协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013545",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "航行协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013544",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "航行协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13341",
+    "name": "数据协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013547",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "数据协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013546",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "数据协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13342",
+    "name": "互联协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013549",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "互联协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013548",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "互联协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13343",
+    "name": "接入协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013551",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "接入协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013550",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "接入协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13344",
+    "name": "合作协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013553",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "合作协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013552",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "合作协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13345",
+    "name": "监管协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013555",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "监管协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013554",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "监管协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13346",
+    "name": "贸易协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013557",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "贸易协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013556",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "贸易协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13347",
+    "name": "医疗协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013559",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "医疗协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013558",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "医疗协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13348",
+    "name": "教育协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013561",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "教育协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013560",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "教育协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13349",
+    "name": "科研协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013563",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "科研协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013562",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "科研协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13350",
+    "name": "生态协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013565",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "生态协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013564",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "生态协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13351",
+    "name": "救援协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013567",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "救援协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013566",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "救援协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13352",
+    "name": "应急协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013569",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "应急协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013568",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "应急协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13353",
+    "name": "结算协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013571",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "结算协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013570",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "结算协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13354",
+    "name": "交接协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013573",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "交接协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013572",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "交接协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13355",
+    "name": "礼宾协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013575",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "礼宾协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013574",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "礼宾协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13356",
+    "name": "组织协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013577",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "组织协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013576",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "组织协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13357",
+    "name": "执行协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013579",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "执行协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013578",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "执行协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13358",
+    "name": "保密协议",
+    "senses": [
+      {
+        "senseId": "gkf_s013581",
+        "senseLabel": "社会协议",
+        "rootKey": "society",
+        "summary": "保密协议在社会、政治、法律与政府方向中表示用于协商、停火、礼宾或合作的社会与外交协议。"
+      },
+      {
+        "senseId": "gkf_s013580",
+        "senseLabel": "网络协议",
+        "rootKey": "engineering",
+        "summary": "保密协议在工程、技术与计算方向中表示用于互联、认证、交换或控制的数据通信协议。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13359",
+    "name": "开放平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013582",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "开放平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013583",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "开放平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13360",
+    "name": "综合平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013584",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "综合平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013585",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "综合平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13361",
+    "name": "区域平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013586",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "区域平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013587",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "区域平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13362",
+    "name": "数字平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013588",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "数字平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013589",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "数字平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13363",
+    "name": "云端平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013590",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "云端平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013591",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "云端平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13364",
+    "name": "交易平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013592",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "交易平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013593",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "交易平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13365",
+    "name": "服务平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013594",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "服务平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013595",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "服务平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13366",
+    "name": "分发平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013596",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "分发平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013597",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "分发平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13367",
+    "name": "教育平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013598",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "教育平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013599",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "教育平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13368",
+    "name": "医疗平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013600",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "医疗平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013601",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "医疗平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13369",
+    "name": "科研平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013602",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "科研平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013603",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "科研平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13370",
+    "name": "工业平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013604",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "工业平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013605",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "工业平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13371",
+    "name": "开发平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013606",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "开发平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013607",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "开发平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13372",
+    "name": "内容平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013608",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "内容平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013609",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "内容平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13373",
+    "name": "支付平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013610",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "支付平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013611",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "支付平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13374",
+    "name": "协同平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013612",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "协同平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013613",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "协同平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13375",
+    "name": "物流平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013614",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "物流平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013615",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "物流平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13376",
+    "name": "旅游平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013616",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "旅游平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013617",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "旅游平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13377",
+    "name": "城市平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013618",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "城市平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013619",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "城市平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13378",
+    "name": "港口平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013620",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "港口平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013621",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "港口平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13379",
+    "name": "近海平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013622",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "近海平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013623",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "近海平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13380",
+    "name": "大陆平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013624",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "大陆平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013625",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "大陆平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13381",
+    "name": "碳酸盐平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013626",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "碳酸盐平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013627",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "碳酸盐平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13382",
+    "name": "火山平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013628",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "火山平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013629",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "火山平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13383",
+    "name": "沉积平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013630",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "沉积平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013631",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "沉积平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13384",
+    "name": "创新平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013632",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "创新平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013633",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "创新平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13385",
+    "name": "投资平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013634",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "投资平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013635",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "投资平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13386",
+    "name": "供应平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013636",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "供应平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013637",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "供应平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13387",
+    "name": "文化平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013638",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "文化平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013639",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "文化平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13388",
+    "name": "媒体平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013640",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "媒体平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013641",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "媒体平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13389",
+    "name": "社群平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013642",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "社群平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013643",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "社群平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13390",
+    "name": "数据平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013644",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "数据平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013645",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "数据平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13391",
+    "name": "安全平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013646",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "安全平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013647",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "安全平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13392",
+    "name": "运维平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013648",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "运维平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013649",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "运维平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13393",
+    "name": "能源平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013650",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "能源平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013651",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "能源平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13394",
+    "name": "交通平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013652",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "交通平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013653",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "交通平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13395",
+    "name": "农业平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013654",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "农业平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013655",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "农业平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13396",
+    "name": "监测平台",
+    "senses": [
+      {
+        "senseId": "gkf_s013656",
+        "senseLabel": "计算平台",
+        "rootKey": "engineering",
+        "summary": "监测平台在工程、技术与计算方向中表示提供计算、开发、运维或数据处理能力的平台。"
+      },
+      {
+        "senseId": "gkf_s013657",
+        "senseLabel": "商业平台",
+        "rootKey": "economy",
+        "summary": "监测平台在经济与管理方向中表示撮合交易、组织服务或汇聚资源的商业平台。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13397",
+    "name": "开放系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013659",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "开放系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013658",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "开放系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13398",
+    "name": "封闭系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013661",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "封闭系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013660",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "封闭系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13399",
+    "name": "分布式系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013663",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "分布式系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013662",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "分布式系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13400",
+    "name": "集中式系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013665",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "集中式系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013664",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "集中式系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13401",
+    "name": "循环系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013667",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "循环系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013666",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "循环系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13402",
+    "name": "代谢系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013669",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "代谢系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013668",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "代谢系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13403",
+    "name": "免疫系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013671",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "免疫系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013670",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "免疫系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13404",
+    "name": "神经系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013673",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "神经系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013672",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "神经系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13405",
+    "name": "感知系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013675",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "感知系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013674",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "感知系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13406",
+    "name": "控制系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013677",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "控制系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013676",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "控制系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13407",
+    "name": "反馈系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013679",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "反馈系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013678",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "反馈系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13408",
+    "name": "供应系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013681",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "供应系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013680",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "供应系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13409",
+    "name": "制造系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013683",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "制造系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013682",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "制造系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13410",
+    "name": "教育系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013685",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "教育系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013684",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "教育系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13411",
+    "name": "治理系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013687",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "治理系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013686",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "治理系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13412",
+    "name": "监测系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013689",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "监测系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013688",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "监测系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13413",
+    "name": "通信系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013691",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "通信系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013690",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "通信系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13414",
+    "name": "导航系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013693",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "导航系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013692",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "导航系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13415",
+    "name": "灌溉系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013695",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "灌溉系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013694",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "灌溉系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13416",
+    "name": "支付系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013697",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "支付系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013696",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "支付系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13417",
+    "name": "记忆系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013699",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "记忆系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013698",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "记忆系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13418",
+    "name": "诊断系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013701",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "诊断系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013700",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "诊断系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13419",
+    "name": "治疗系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013703",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "治疗系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013702",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "治疗系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13420",
+    "name": "资源系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013705",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "资源系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013704",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "资源系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13421",
+    "name": "生产系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013707",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "生产系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013706",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "生产系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13422",
+    "name": "交换系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013709",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "交换系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013708",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "交换系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13423",
+    "name": "服务系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013711",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "服务系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013710",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "服务系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13424",
+    "name": "组织系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013713",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "组织系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013712",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "组织系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13425",
+    "name": "评价系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013715",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "评价系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013714",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "评价系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13426",
+    "name": "传播系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013717",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "传播系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013716",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "传播系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13427",
+    "name": "训练系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013719",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "训练系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013718",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "训练系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13428",
+    "name": "呼吸系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013721",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "呼吸系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013720",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "呼吸系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13429",
+    "name": "数据库系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013723",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "数据库系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013722",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "数据库系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13430",
+    "name": "编码系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013725",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "编码系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013724",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "编码系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13431",
+    "name": "推荐系统",
+    "senses": [
+      {
+        "senseId": "gkf_s013727",
+        "senseLabel": "技术系统",
+        "rootKey": "engineering",
+        "summary": "推荐系统在工程、技术与计算方向中表示由硬件、软件、流程或控制关系构成的技术系统。"
+      },
+      {
+        "senseId": "gkf_s013726",
+        "senseLabel": "生命系统",
+        "rootKey": "science",
+        "summary": "推荐系统在自然与生命科学方向中表示具有结构、功能或调节机制的生命与自然系统。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13432",
+    "name": "基础单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013729",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "基础单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013728",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "基础单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13433",
+    "name": "核心单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013731",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "核心单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013730",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "核心单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13434",
+    "name": "模块单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013733",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "模块单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013732",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "模块单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13435",
+    "name": "训练单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013735",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "训练单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013734",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "训练单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13436",
+    "name": "实验单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013737",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "实验单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013736",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "实验单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13437",
+    "name": "处理单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013739",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "处理单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013738",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "处理单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13438",
+    "name": "控制单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013741",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "控制单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013740",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "控制单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13439",
+    "name": "显示单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013743",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "显示单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013742",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "显示单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13440",
+    "name": "存储单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013745",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "存储单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013744",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "存储单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13441",
+    "name": "评估单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013747",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "评估单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013746",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "评估单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13442",
+    "name": "调度单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013749",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "调度单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013748",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "调度单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13443",
+    "name": "输入单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013751",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "输入单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013750",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "输入单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13444",
+    "name": "输出单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013753",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "输出单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013752",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "输出单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13445",
+    "name": "传感单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013755",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "传感单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013754",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "传感单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13446",
+    "name": "执行单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013757",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "执行单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013756",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "执行单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13447",
+    "name": "学习单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013759",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "学习单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013758",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "学习单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13448",
+    "name": "课程单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013761",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "课程单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013760",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "课程单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13449",
+    "name": "功能单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013763",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "功能单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013762",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "功能单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13450",
+    "name": "监测单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013765",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "监测单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013764",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "监测单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  },
+  {
+    "titleId": "gkf_t13451",
+    "name": "储能单元",
+    "senses": [
+      {
+        "senseId": "gkf_s013767",
+        "senseLabel": "工程单元",
+        "rootKey": "engineering",
+        "summary": "储能单元在工程、技术与计算方向中表示构成设备、模组或控制系统的工程单元。"
+      },
+      {
+        "senseId": "gkf_s013766",
+        "senseLabel": "教学单元",
+        "rootKey": "education_psychology",
+        "summary": "储能单元在教育与心理方向中表示围绕目标、内容与活动组织的教学单元。"
+      }
+    ]
+  }
+]

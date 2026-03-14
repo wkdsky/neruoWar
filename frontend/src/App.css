@@ -2578,6 +2578,15 @@ body {
     opacity: 0.95;
 }
 
+.webgl-node-label.is-home-hex {
+    text-shadow: 0 1px 1px rgba(2, 6, 23, 0.95), 0 0 12px rgba(8, 15, 28, 0.88);
+    letter-spacing: 0.02em;
+}
+
+.webgl-node-label.is-home-hex .node-label-title {
+    font-weight: 800;
+}
+
 .webgl-node-label.is-preview {
     color: #bae6fd;
 }

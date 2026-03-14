@@ -1,0 +1,3458 @@
+[
+  {
+    "sourceSenseId": "gkf_s013192",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013193",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013194",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013195",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013196",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013197",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013198",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013199",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013200",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013201",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013202",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013203",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013204",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013205",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013206",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013207",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013208",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013209",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013210",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013211",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013212",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013213",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013214",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013215",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013216",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013217",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013218",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013219",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013220",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013221",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013222",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013223",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013224",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013225",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013226",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013227",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013228",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013229",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013230",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013231",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013232",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013233",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013234",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013235",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013236",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013237",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013238",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013239",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013240",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013241",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013242",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013243",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013244",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013245",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013246",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013247",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013248",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013249",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013250",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013251",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013252",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013253",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013254",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013255",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013256",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013257",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013258",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013259",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013260",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013261",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013262",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013263",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013264",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013265",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013266",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013267",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013268",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013269",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013270",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013271",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013272",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013273",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013274",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013275",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013276",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013277",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013278",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013279",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013280",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013281",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013282",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013283",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013284",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013285",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013286",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013287",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013288",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013289",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013290",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013291",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013292",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013293",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013294",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013295",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013296",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013297",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013298",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013299",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013300",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013301",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013302",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013303",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013304",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013305",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013306",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013307",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013308",
+    "targetSenseId": "gkf_s013105",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013309",
+    "targetSenseId": "gkf_s013106",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013310",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013311",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013312",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013313",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013314",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013315",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013316",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013317",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013318",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013319",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013320",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013321",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013322",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013323",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013324",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013325",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013326",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013327",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013328",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013329",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013330",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013331",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013332",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013333",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013334",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013335",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013336",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013337",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013338",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013339",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013340",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013341",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013342",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013343",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013344",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013345",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013346",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013347",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013348",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013349",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013350",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013351",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013352",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013353",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013354",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013355",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013356",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013357",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013358",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013359",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013360",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013361",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013362",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013363",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013364",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013365",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013366",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013367",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013368",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013369",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013370",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013371",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013372",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013373",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013374",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013375",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013376",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013377",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013378",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013379",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013380",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013381",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013382",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013383",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013384",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013385",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013386",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013387",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013388",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013389",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013390",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013391",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013392",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013393",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013394",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013395",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013396",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013397",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013398",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013399",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013400",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013401",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013402",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013403",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013404",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013405",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013406",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013407",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013408",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013409",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013410",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013411",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013412",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013413",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013414",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013415",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013416",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013417",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013418",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013419",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013420",
+    "targetSenseId": "gkf_s013108",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013421",
+    "targetSenseId": "gkf_s013109",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013422",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013423",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013424",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013425",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013426",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013427",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013428",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013429",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013430",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013431",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013432",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013433",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013434",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013435",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013436",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013437",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013438",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013439",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013440",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013441",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013442",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013443",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013444",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013445",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013446",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013447",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013448",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013449",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013450",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013451",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013452",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013453",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013454",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013455",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013456",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013457",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013458",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013459",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013460",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013461",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013462",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013463",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013464",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013465",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013466",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013467",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013468",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013469",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013470",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013471",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013472",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013473",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013474",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013475",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013476",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013477",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013478",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013479",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013480",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013481",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013482",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013483",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013484",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013485",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013486",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013487",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013488",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013489",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013490",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013491",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013492",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013493",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013494",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013495",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013496",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013497",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013498",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013499",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013500",
+    "targetSenseId": "gkf_s013115",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013501",
+    "targetSenseId": "gkf_s013116",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013502",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013503",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013504",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013505",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013506",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013507",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013508",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013509",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013510",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013511",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013512",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013513",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013514",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013515",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013516",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013517",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013518",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013519",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013520",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013521",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013522",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013523",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013524",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013525",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013526",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013527",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013528",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013529",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013530",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013531",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013532",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013533",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013534",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013535",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013536",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013537",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013538",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013539",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013540",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013541",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013542",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013543",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013544",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013545",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013546",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013547",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013548",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013549",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013550",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013551",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013552",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013553",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013554",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013555",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013556",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013557",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013558",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013559",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013560",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013561",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013562",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013563",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013564",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013565",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013566",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013567",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013568",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013569",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013570",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013571",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013572",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013573",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013574",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013575",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013576",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013577",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013578",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013579",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013580",
+    "targetSenseId": "gkf_s013119",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013581",
+    "targetSenseId": "gkf_s013120",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013582",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013583",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013584",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013585",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013586",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013587",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013588",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013589",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013590",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013591",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013592",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013593",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013594",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013595",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013596",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013597",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013598",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013599",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013600",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013601",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013602",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013603",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013604",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013605",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013606",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013607",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013608",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013609",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013610",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013611",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013612",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013613",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013614",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013615",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013616",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013617",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013618",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013619",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013620",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013621",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013622",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013623",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013624",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013625",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013626",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013627",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013628",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013629",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013630",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013631",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013632",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013633",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013634",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013635",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013636",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013637",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013638",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013639",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013640",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013641",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013642",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013643",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013644",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013645",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013646",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013647",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013648",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013649",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013650",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013651",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013652",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013653",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013654",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013655",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013656",
+    "targetSenseId": "gkf_s013112",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013657",
+    "targetSenseId": "gkf_s013113",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013658",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013659",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013660",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013661",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013662",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013663",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013664",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013665",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013666",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013667",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013668",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013669",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013670",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013671",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013672",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013673",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013674",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013675",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013676",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013677",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013678",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013679",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013680",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013681",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013682",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013683",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013684",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013685",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013686",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013687",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013688",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013689",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013690",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013691",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013692",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013693",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013694",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013695",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013696",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013697",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013698",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013699",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013700",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013701",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013702",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013703",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013704",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013705",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013706",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013707",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013708",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013709",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013710",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013711",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013712",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013713",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013714",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013715",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013716",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013717",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013718",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013719",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013720",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013721",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013722",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013723",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013724",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013725",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013726",
+    "targetSenseId": "gkf_s011064",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013727",
+    "targetSenseId": "gkf_s013126",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013728",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013729",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013730",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013731",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013732",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013733",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013734",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013735",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013736",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013737",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013738",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013739",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013740",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013741",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013742",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013743",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013744",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013745",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013746",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013747",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013748",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013749",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013750",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013751",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013752",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013753",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013754",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013755",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013756",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013757",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013758",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013759",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013760",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013761",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013762",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013763",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013764",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013765",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013766",
+    "targetSenseId": "gkf_s013133",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  },
+  {
+    "sourceSenseId": "gkf_s013767",
+    "targetSenseId": "gkf_s013134",
+    "relationType": "extends",
+    "marker": "global_knowledge_forest_v1"
+  }
+]
