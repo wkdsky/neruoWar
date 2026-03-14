@@ -1252,16 +1252,33 @@ const App = () => {
     const updatedLocation = await updateUserLocation(locationName);
 
     if (updatedLocation) {
+      const selectedNodeId = normalizeObjectId(selectedNode._id || selectedNode.nodeId);
       setUserLocation(updatedLocation);
       setSelectedLocationNode(selectedNode);
       setCurrentLocationNodeDetail(selectedNode);
       localStorage.setItem('userLocation', updatedLocation);
 
-      // 关闭modal并切换到home视图
+      // 关闭modal并优先进入当前降临知识域的主视角
       setShowLocationModal(false);
-      setView('home');
+      const resolvedLocationDetail = await fetchLocationNodeDetail(updatedLocation, { silent: true });
+      const targetNodeId = normalizeObjectId(
+        resolvedLocationDetail?._id
+        || resolvedLocationDetail?.nodeId
+        || selectedNodeId
+      );
 
-      // 首次降临后主动拉取首页数据，避免首屏空白
+      if (targetNodeId) {
+        const opened = await fetchTitleDetail(targetNodeId, null, {
+          resetTrail: true,
+          relationHint: 'jump'
+        });
+        if (opened) {
+          return;
+        }
+      }
+
+      // 回退到首页，避免在极端情况下卡在空白状态
+      setView('home');
       fetchRootNodes();
       fetchFeaturedNodes();
     }
