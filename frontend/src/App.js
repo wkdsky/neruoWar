@@ -38,7 +38,7 @@ import {
     resolveSenseArticleNotificationNavigation
 } from './components/senseArticle/senseArticleNavigation';
 import { senseArticleApi } from './utils/senseArticleApi';
-import { API_BASE, BACKEND_ORIGIN } from './runtimeConfig';
+import { API_BASE, SOCKET_ENDPOINT } from './runtimeConfig';
 import BattleDataService from './game/battle/data/BattleDataService';
 import { isSenseEditorDebugEnabled } from './components/senseArticle/editor/editorDebug';
 
@@ -78,6 +78,10 @@ const resolveAvatarSrc = (avatarKey = '') => {
 
 const PAGE_STATE_STORAGE_KEY = 'app:lastPageState';
 const isDevEnvironment = process.env.NODE_ENV !== 'production';
+const SENSE_EDITOR_PREVIEW_RESIZE_CLASS = 'sense-editor-preview-resizing';
+const LOCALHOST_STORAGE_RESET_KEY = 'app:localhostStorageResetVersion';
+const LOCALHOST_STORAGE_RESET_VERSION = '2026-03-14-localhost-reset-v1';
+const LOCAL_DEVELOPMENT_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const SENSE_ARTICLE_SUB_VIEWS = Object.freeze([
     'senseArticle',
     'senseArticleEditor',
@@ -94,6 +98,37 @@ const createDefaultHeaderUserStats = () => ({
     armyCount: 0
 });
 
+const KNOWN_PERSISTED_VIEWS = new Set([
+    'home',
+    'nodeDetail',
+    'titleDetail',
+    'knowledgeDomain',
+    'alliance',
+    'admin',
+    'profile',
+    'army',
+    'equipment',
+    'trainingGround'
+]);
+
+const clearStoredAuthState = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('userId');
+    localStorage.removeItem('username');
+    localStorage.removeItem('userLocation');
+    localStorage.removeItem('profession');
+    localStorage.removeItem('userAvatar');
+    localStorage.removeItem('userRole');
+    localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
+};
+
+const clearStoredLocalhostRuntimeState = () => {
+    clearStoredAuthState();
+    localStorage.removeItem('senseArticleContext');
+    localStorage.removeItem('sense-article-editor.preview-pane.v1');
+    localStorage.removeItem('sense-article-editor.preview-pane.v2');
+};
+
 const readSavedPageState = () => {
     try {
         const raw = localStorage.getItem(PAGE_STATE_STORAGE_KEY);
@@ -101,11 +136,16 @@ const readSavedPageState = () => {
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== 'object') return null;
         const view = typeof parsed.view === 'string' ? parsed.view : '';
+        if (!view || isSenseArticleSubView(view) || !KNOWN_PERSISTED_VIEWS.has(view)) {
+            localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
+            return null;
+        }
         const nodeId = typeof parsed.nodeId === 'string' && /^[0-9a-fA-F]{24}$/.test(parsed.nodeId)
             ? parsed.nodeId
             : '';
         return { view, nodeId };
     } catch (error) {
+        localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
         return null;
     }
 };
@@ -496,7 +536,7 @@ const App = () => {
     const [userAvatar, setUserAvatar] = useState('default_male_1');
     const [headerUserStats, setHeaderUserStats] = useState(createDefaultHeaderUserStats);
     const [nodes, setNodes] = useState([]);
-    const [technologies, setTechnologies] = useState([]);
+    const [, setTechnologies] = useState([]);
     const [view, setView] = useState('login');
     const socketRef = useRef(null);
     const isRestoringPageRef = useRef(false);
@@ -552,7 +592,62 @@ const App = () => {
                 checkAdminStatus();
             }
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []); // 只在组件挂载时执行一次
+
+    useEffect(() => {
+        if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
+        const currentHostname = String(window.location.hostname || '').trim().toLowerCase();
+        if (!LOCAL_DEVELOPMENT_HOSTS.has(currentHostname)) return;
+
+        const currentVersion = localStorage.getItem(LOCALHOST_STORAGE_RESET_KEY);
+        if (currentVersion === LOCALHOST_STORAGE_RESET_VERSION) {
+            return;
+        }
+
+        clearStoredLocalhostRuntimeState();
+        localStorage.setItem(LOCALHOST_STORAGE_RESET_KEY, LOCALHOST_STORAGE_RESET_VERSION);
+    }, []);
+
+    useEffect(() => {
+        const token = localStorage.getItem('token');
+        const storedUsername = localStorage.getItem('username');
+        if (!token || !storedUsername) return undefined;
+
+        let cancelled = false;
+        const validateStoredSession = async () => {
+            try {
+                const response = await fetch(`${API_BASE}/profile`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (cancelled) return;
+                if (response.status !== 401 && response.status !== 403) return;
+                if (localStorage.getItem('token') !== token || localStorage.getItem('username') !== storedUsername) {
+                    return;
+                }
+
+                clearStoredAuthState();
+                hasRestoredPageRef.current = false;
+                isRestoringPageRef.current = false;
+                setAuthenticated(false);
+                setUserId('');
+                setUsername('');
+                setProfession('');
+                setUserLocation('');
+                setUserAvatar('default_male_1');
+                setIsAdmin(false);
+                setShowLocationModal(false);
+                setView('login');
+            } catch (_error) {
+                // 启动校验失败时不阻塞现有流程，避免临时网络波动把用户踢回登录页
+            }
+        };
+
+        validateStoredSession();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     useEffect(() => {
         if (!authenticated) {
@@ -560,7 +655,6 @@ const App = () => {
             isRestoringPageRef.current = false;
         }
     }, [authenticated]);
-
 
     // 新节点创建状态
     const [showCreateNodeModal, setShowCreateNodeModal] = useState(false);
@@ -573,8 +667,13 @@ const App = () => {
 
     // 用户位置相关状态
     const [userLocation, setUserLocation] = useState('');
+
+    useEffect(() => {
+        if (typeof document === 'undefined') return;
+        document.body.classList.remove(SENSE_EDITOR_PREVIEW_RESIZE_CLASS);
+    }, []);
     const [showLocationModal, setShowLocationModal] = useState(false);
-    const [selectedLocationNode, setSelectedLocationNode] = useState(null);
+    const [, setSelectedLocationNode] = useState(null);
     const [currentLocationNodeDetail, setCurrentLocationNodeDetail] = useState(null);
     const [isRefreshingLocationDetail, setIsRefreshingLocationDetail] = useState(false);
     const [travelStatus, setTravelStatus] = useState({ isTraveling: false });
@@ -640,6 +739,7 @@ const App = () => {
     const navigateSenseArticleSubView = useCallback((nextView, patch = {}, options = {}) => {
         setSenseArticleContext((prev) => buildSenseArticleSubViewContext(prev, view, patch, options));
         setView(nextView);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [view]);
     const [isApplyingDomainMaster, setIsApplyingDomainMaster] = useState(false);
     const [intelHeistStatus, setIntelHeistStatus] = useState(createEmptyIntelHeistStatus);
@@ -779,7 +879,59 @@ const App = () => {
         });
     }, [senseArticleContext, view]);
 
+    const resetAppNavigationStateToHome = useCallback((options = {}) => {
+        const clearHomeCollections = options?.clearHomeCollections === true;
+
+        hasRestoredPageRef.current = true;
+        isRestoringPageRef.current = false;
+        localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
+        localStorage.removeItem('senseArticleContext');
+        localStorage.removeItem('sense-article-editor.preview-pane.v1');
+        localStorage.removeItem('sense-article-editor.preview-pane.v2');
+        knowledgeDomainReturnContextRef.current = null;
+
+        setView('home');
+        setNavigationPath(createHomeNavigationPath());
+        setShowKnowledgeDomain(false);
+        setKnowledgeDomainNode(null);
+        setKnowledgeDomainMode('normal');
+        setDomainTransitionProgress(0);
+        setIsTransitioningToDomain(false);
+        setClickedNodeForTransition(null);
+        setCurrentNodeDetail(null);
+        setCurrentTitleDetail(null);
+        setTitleGraphData(null);
+        setTitleRelationInfo(null);
+        setSenseArticleContext(null);
+        setShowNodeInfoModal(false);
+        setNodeInfoModalTarget(null);
+        setShowAssociationModal(false);
+        setViewingAssociationNode(null);
+        setShowCreateNodeModal(false);
+        setSenseSelectorSourceNode(null);
+        setSenseSelectorSourceSceneNodeId('');
+        setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
+        setIsSenseSelectorVisible(false);
+        setSenseSelectorOverviewNode(null);
+        setSenseSelectorOverviewLoading(false);
+        setSenseSelectorOverviewError('');
+        setHomeSearchQuery('');
+        setHomeSearchResults([]);
+        setShowSearchResults(false);
+        setShowNotificationsPanel(false);
+        setShowRelatedDomainsPanel(false);
+        setShowMilitaryMenu(false);
+        setShowDistributionPanel(false);
+        setIsLocationDockExpanded(false);
+        setIsAnnouncementDockExpanded(false);
+        if (clearHomeCollections) {
+            setRootNodes([]);
+            setFeaturedNodes([]);
+        }
+    }, []);
+
     // 初始化WebGL场景
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
         const canvas = webglCanvasRef.current;
         if (!canvas) {
@@ -927,6 +1079,7 @@ const App = () => {
         } catch (error) {
             console.error('WebGL初始化失败:', error);
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [view]);
 
     // 更新按钮点击回调（确保获取最新的当前主视角节点）
@@ -952,6 +1105,7 @@ const App = () => {
                 }
             };
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [view, currentNodeDetail, currentTitleDetail, isAdmin, userLocation, travelStatus.isTraveling, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
 
     useEffect(() => {
@@ -965,7 +1119,7 @@ const App = () => {
             initializeSocket();
         }
     
-        const newSocket = io(BACKEND_ORIGIN, {
+        const newSocket = io(SOCKET_ENDPOINT, {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
@@ -1006,6 +1160,7 @@ const App = () => {
 
 
   const handleLoginSuccess = async (data) => {
+    resetAppNavigationStateToHome({ clearHomeCollections: true });
     localStorage.setItem('token', data.token);
     localStorage.setItem('userId', normalizeObjectId(data.userId));
     localStorage.setItem('username', data.username);
@@ -1027,7 +1182,6 @@ const App = () => {
     } else {
       setShowLocationModal(false);
     }
-
     // 重新初始化socket连接（连接事件中会处理认证）
     initializeSocket(data.token);
 
@@ -1047,10 +1201,10 @@ const App = () => {
         await updateUserLocation('任意');
         setUserLocation('任意');
         localStorage.setItem('userLocation', '任意');
-        setView('home');
+        resetAppNavigationStateToHome();
       }
     } else {
-      setView('home');
+      resetAppNavigationStateToHome();
     }
   };
 
@@ -1187,6 +1341,7 @@ const App = () => {
     await fetchLocationNodeDetail(userLocation, { silent: false });
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const wasExpanded = isLocationDockExpandedRef.current;
     isLocationDockExpandedRef.current = isLocationDockExpanded;
@@ -1195,6 +1350,7 @@ const App = () => {
     const locationName = (userLocation || '').trim();
     if (!locationName || locationName === '任意') return;
     fetchLocationNodeDetail(locationName, { silent: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLocationDockExpanded, isAdmin, travelStatus?.isTraveling, userLocation]);
 
   const syncUserLocation = (location) => {
@@ -1292,6 +1448,7 @@ const App = () => {
     }
   }, [authenticated]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!authenticated) {
       setHeaderUserStats(createDefaultHeaderUserStats());
@@ -1308,6 +1465,7 @@ const App = () => {
     };
   }, [authenticated, fetchHeaderUserStats]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!authenticated) return undefined;
 
@@ -2071,6 +2229,7 @@ const App = () => {
     return startResult === 'queued';
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!authenticated || isAdmin) {
       setTravelStatus({ isTraveling: false });
@@ -2084,8 +2243,10 @@ const App = () => {
     }, 1000);
 
     return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, isAdmin]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!authenticated || isAdmin) {
       setSiegeSupportStatuses([]);
@@ -2097,8 +2258,10 @@ const App = () => {
       fetchSiegeSupportStatuses(true);
     }, 3000);
     return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, isAdmin]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
     if (!authenticated || isAdmin || !isTitleBattleView(view) || !targetNodeId) {
@@ -2112,8 +2275,10 @@ const App = () => {
     }, 4000);
 
     return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, isAdmin, view, currentTitleDetail?._id, userLocation, travelStatus.isTraveling]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!showDistributionPanel) return undefined;
     const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
@@ -2126,8 +2291,10 @@ const App = () => {
       fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
     }, 1000);
     return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDistributionPanel, view, currentTitleDetail?._id]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
     if (!authenticated || isAdmin || !isTitleBattleView(view) || !targetNodeId) {
@@ -2140,8 +2307,10 @@ const App = () => {
       fetchSiegeStatus(targetNodeId, { silent: true, preserveIntelView: siegeDialog.open });
     }, siegeDialog.open ? 2000 : 4000);
     return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, isAdmin, view, currentTitleDetail?._id, userLocation, travelStatus.isTraveling, siegeDialog.open]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!authenticated) {
       setNotifications([]);
@@ -2165,8 +2334,10 @@ const App = () => {
     }, 8000);
 
     return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, isAdmin]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!socket) return;
 
@@ -2180,6 +2351,7 @@ const App = () => {
     return () => {
       socket.off('admin-sync-pending', handleAdminSyncPending);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, authenticated, isAdmin]);
 
   useEffect(() => {
@@ -2197,12 +2369,14 @@ const App = () => {
     }
 
     fetchRelatedDomains(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, isAdmin]);
 
   useEffect(() => {
     if (!showRelatedDomainsPanel) return;
     if (!authenticated || isAdmin) return;
     fetchRelatedDomains(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showRelatedDomainsPanel, authenticated, isAdmin]);
 
   useEffect(() => {
@@ -2269,6 +2443,7 @@ const App = () => {
         hasRestoredPageRef.current = true;
         isRestoringPageRef.current = false;
       });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authenticated, showLocationModal, isAdmin]);
 
   useEffect(() => {
@@ -2383,14 +2558,7 @@ const App = () => {
   }, [showMilitaryMenu]);
 
     const handleLogout = () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('userId');
-        localStorage.removeItem('username');
-        localStorage.removeItem('userLocation');
-        localStorage.removeItem('profession');
-        localStorage.removeItem('userAvatar');
-        localStorage.removeItem('userRole');
-        localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
+        clearStoredAuthState();
         hasRestoredPageRef.current = false;
         isRestoringPageRef.current = false;
         setAuthenticated(false);
@@ -2466,7 +2634,7 @@ const App = () => {
             socketRef.current = null;
         }
     
-        const newSocket = io(BACKEND_ORIGIN, {
+        const newSocket = io(SOCKET_ENDPOINT, {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
@@ -2564,11 +2732,7 @@ const App = () => {
         return newSocket;
     };
 
-    const handleUpgradeTech = (techId) => {
-        socket.emit('upgradeTech', { techId });
-    };
-
-    const checkAdminStatus = async () => {
+	    const checkAdminStatus = async () => {
         const token = localStorage.getItem('token');
         const storedUserRole = localStorage.getItem('userRole');
         if (!token) return;
@@ -3822,14 +3986,16 @@ const App = () => {
     const announcementUnreadCount = notifications.filter((notification) => (
         isAnnouncementNotification(notification) && !notification.read
     )).length;
-    useEffect(() => {
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    useEffect(() => {
         if (announcementDockTab === 'system' && systemAnnouncements.length === 0 && allianceAnnouncements.length > 0) {
             setAnnouncementDockTab('alliance');
         } else if (announcementDockTab === 'alliance' && allianceAnnouncements.length === 0 && systemAnnouncements.length > 0) {
             setAnnouncementDockTab('system');
         }
     }, [announcementDockTab, systemAnnouncements.length, allianceAnnouncements.length]);
-    useEffect(() => {
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    useEffect(() => {
         const canRenderDock = !isAdmin && (
             view === 'home'
             || (view === 'nodeDetail' && currentNodeDetail)
@@ -4111,7 +4277,8 @@ const App = () => {
         };
     };
 
-    useEffect(() => {
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    useEffect(() => {
         if (!sceneManagerRef.current) return;
 
         sceneManagerRef.current.onNodeClick = (node) => {
@@ -4156,7 +4323,8 @@ const App = () => {
                 });
             }
         };
-    }, [view, currentNodeDetail, currentTitleDetail]);
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    }, [view, currentNodeDetail, currentTitleDetail]);
 
     // 实时搜索
     const performHomeSearch = async (query) => {
@@ -4181,7 +4349,8 @@ const App = () => {
     };
 
     // 监听搜索输入变化
-    useEffect(() => {
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    useEffect(() => {
         const timeoutId = setTimeout(() => {
             if (view === 'home' || view === 'nodeDetail' || view === 'titleDetail') {
                 performHomeSearch(homeSearchQuery);
@@ -4193,10 +4362,11 @@ const App = () => {
         }, 300); // 防抖：300ms后执行搜索
 
         return () => clearTimeout(timeoutId);
-    }, [homeSearchQuery]); // 移除view依赖，只在搜索词变化时触发
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    }, [homeSearchQuery]); // 移除view依赖，只在搜索词变化时触发
 
     // 全局点击事件监听器 - 用于控制搜索结果显示/隐藏
-    useEffect(() => {
+	    useEffect(() => {
         const handleClickOutside = (event) => {
             // 只在首页和节点详情页监听点击事件
             if (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail') return;
@@ -4224,7 +4394,8 @@ const App = () => {
             fetchFeaturedNodes();
             setNavigationPath(createHomeNavigationPath());
         }
-    }, [authenticated, view]);
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    }, [authenticated, view]);
 
     // 更新WebGL首页场景
     useEffect(() => {
@@ -4279,7 +4450,8 @@ const App = () => {
             getNodeDetailButtonContext(currentTitleDetail)
         );
         setClickedNodeForTransition(null);
-    }, [isWebGLReady, view, currentTitleDetail, titleGraphData, clickedNodeForTransition]);
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    }, [isWebGLReady, view, currentTitleDetail, titleGraphData, clickedNodeForTransition]);
 
     useEffect(() => {
         if (!sceneManagerRef.current) return;
@@ -4297,7 +4469,8 @@ const App = () => {
         if (view !== 'titleDetail' && view !== 'nodeDetail') {
             sceneManagerRef.current.clearNodeButtons();
         }
-    }, [view, currentNodeDetail, currentTitleDetail, isAdmin, userId, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	    }, [view, currentNodeDetail, currentTitleDetail, isAdmin, userId, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
 
     useEffect(() => {
         if (!isWebGLReady) {
@@ -4552,13 +4725,14 @@ const App = () => {
         return () => {
             cancelled = true;
         };
-    }, [
-        currentNodeDetail,
-        currentTitleDetail,
-        isSenseSelectorVisible,
-        senseSelectorOverviewNode,
-        senseSelectorSourceNode
-    ]);
+	    }, [
+	        currentNodeDetail,
+	        currentTitleDetail,
+	        isSenseSelectorVisible,
+	        senseSelectorOverviewNode,
+	        senseSelectorSourceNode,
+	        senseArticleEntryStatusMap
+	    ]);
 
 
     // 新节点创建相关函数

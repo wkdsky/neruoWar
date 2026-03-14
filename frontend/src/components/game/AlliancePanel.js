@@ -30,9 +30,11 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
     const [showAllianceDetailModal, setShowAllianceDetailModal] = useState(false);
     const [showCreateAllianceModal, setShowCreateAllianceModal] = useState(false);
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
         fetchAlliances({ page: 1 });
         fetchUserAlliance();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const fetchAlliances = async ({ page = alliancesPage, pageSize = ALLIANCE_LIST_PAGE_SIZE } = {}) => {

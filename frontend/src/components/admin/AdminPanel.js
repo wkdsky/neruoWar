@@ -238,6 +238,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
             setAdminUserActionFeedback({ type: '', message: '' });
             adminUserActionFeedbackTimerRef.current = null;
         }, 2800);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => () => {
@@ -389,6 +390,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         fetchArmyUnitTypes();
         fetchBattlefieldItemCatalog();
         fetchCityBuildingTypeCatalog();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // --- User Management Functions ---
@@ -6428,7 +6430,14 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                                 <div className="conflict-badge">申请 #{index + 1}</div>
                                                             )}
                                                             <div className="node-header">
-                                                                <h3 className="node-title">{node.name}</h3>
+                                                                <div className="pending-node-title-row">
+                                                                    <h3 className="node-title">{node.name}</h3>
+                                                                    {node.description ? (
+                                                                        <span className="pending-node-overview-inline" title={node.description}>
+                                                                            {node.description}
+                                                                        </span>
+                                                                    ) : null}
+                                                                </div>
                                                                 <div className="pending-card-badges">
                                                                     <span className="pending-card-type pending-card-type-node">创建新知识域申请</span>
                                                                     <span className={`status-badge status-${node.status}`}>
@@ -6439,20 +6448,14 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                             </div>
 
                                                             <div className="node-details">
-                                                                <p className="node-description">{node.description}</p>
-
                                                                 <div className="node-meta">
-                                                                    <div className="meta-item">
+                                                                    <div className="meta-item pending-meta-inline">
                                                                         <strong>创建者:</strong> {node.owner?.username || '未知用户'}
                                                                         {node.owner?.profession && (
                                                                             <span className="user-profession">【{node.owner.profession}】</span>
                                                                         )}
-                                                                    </div>
-                                                                    <div className="meta-item">
+                                                                        <span className="pending-meta-divider">·</span>
                                                                         <strong>提交时间:</strong> {new Date(node.createdAt).toLocaleString('zh-CN')}
-                                                                    </div>
-                                                                    <div className="meta-item">
-                                                                        <strong>位置:</strong> ({Math.round(node.position?.x || 0)}, {Math.round(node.position?.y || 0)})
                                                                     </div>
                                                                 </div>
 
@@ -6461,16 +6464,15 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                                     <div className="pending-sense-chip-list">
                                                                         {pendingSenseList.map((sense) => {
                                                                             const isActive = selectedSenseId === sense.senseId;
-                                                                            const associationCount = (senseAssociationMap.get(sense.senseId) || []).length;
                                                                             return (
                                                                                 <button
                                                                                     key={sense.senseId}
                                                                                     type="button"
                                                                                     className={`pending-sense-chip ${isActive ? 'active' : ''}`}
                                                                                     onClick={() => selectPendingNodeSense(node._id, sense.senseId)}
+                                                                                    title={sense.title || sense.senseId}
                                                                                 >
                                                                                     <span className="pending-sense-chip-title">{sense.title || sense.senseId}</span>
-                                                                                    <span className="pending-sense-chip-count">{associationCount} 条关联</span>
                                                                                 </button>
                                                                             );
                                                                         })}
@@ -6480,16 +6482,15 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                                                         <div className="pending-sense-detail-panel">
                                                                             <div className="pending-sense-detail-header">
                                                                                 <h5>{selectedSense.title || selectedSense.senseId}</h5>
-                                                                                <span>关联关系：{selectedSenseAssociations.length} 条</span>
                                                                             </div>
-                                                                            <p className="pending-sense-detail-content">
-                                                                                {selectedSense.content || '（该释义暂无内容）'}
-                                                                            </p>
-
                                                                             <div className="pending-sense-relation-list">
                                                                                 {selectedSenseAssociations.length > 0 ? (
                                                                                     selectedSenseAssociations.map((relationItem) => (
-                                                                                        <div key={relationItem.id} className="pending-sense-relation-item">
+                                                                                        <div
+                                                                                            key={relationItem.id}
+                                                                                            className="pending-sense-relation-item"
+                                                                                            title={relationItem.displayText}
+                                                                                        >
                                                                                             <span className="pending-sense-relation-text">{relationItem.displayText}</span>
                                                                                             <span className={`admin-relation-badge ${relationItem.relationClassName}`}>
                                                                                                 {relationItem.relationLabel}

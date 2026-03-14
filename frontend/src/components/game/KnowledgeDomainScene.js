@@ -942,8 +942,8 @@ const KnowledgeDomainScene = ({
   const [isSubmittingResign, setIsSubmittingResign] = useState(false);
   const [manageFeedback, setManageFeedback] = useState('');
   const [gateDefenseViewerDraftIds, setGateDefenseViewerDraftIds] = useState([]);
-  const [gateDefenseViewerDirty, setGateDefenseViewerDirty] = useState(false);
-  const [isSavingGateDefenseViewerPerms, setIsSavingGateDefenseViewerPerms] = useState(false);
+  const [, setGateDefenseViewerDirty] = useState(false);
+  const [, setIsSavingGateDefenseViewerPerms] = useState(false);
   const [isDomainAdminPermissionModalOpen, setIsDomainAdminPermissionModalOpen] = useState(false);
   const [domainAdminPermissionDraftMap, setDomainAdminPermissionDraftMap] = useState({});
   const [domainAdminPermissionDirty, setDomainAdminPermissionDirty] = useState(false);
@@ -1506,6 +1506,7 @@ const KnowledgeDomainScene = ({
     }
   };
 
+  // eslint-disable-next-line no-unused-vars
   const openGateDeployPanel = (gateKey) => {
     const canOpen = defenseLayoutState.canEdit || defenseLayoutState.canViewGateDefense;
     if (!canOpen) return;
@@ -1532,6 +1533,7 @@ const KnowledgeDomainScene = ({
     }
   };
 
+  // eslint-disable-next-line no-unused-vars
   const closeGateDeployPanel = () => {
     if (
       defenseLayoutState.canEdit
@@ -1559,6 +1561,7 @@ const KnowledgeDomainScene = ({
     }));
   };
 
+  // eslint-disable-next-line no-unused-vars
   const startGateDeployEdit = () => {
     if (!defenseLayoutState.canEdit || defenseLayoutState.buildMode || !gateDeployState.activeGateKey) return;
     closeGateDeployDialog();
@@ -1579,6 +1582,7 @@ const KnowledgeDomainScene = ({
     }
   };
 
+  // eslint-disable-next-line no-unused-vars
   const cancelGateDeployEdit = () => {
     if (!gateDeployState.editMode) return;
     if (defenseLayoutState.canEdit && defenseLayoutState.isDirty && !defenseLayoutState.buildMode) {
@@ -1624,11 +1628,13 @@ const KnowledgeDomainScene = ({
     });
   };
 
+  // eslint-disable-next-line no-unused-vars
   const removeGateDefenseUnit = (gateKey, unitTypeId) => {
     if (!unitTypeId) return;
     updateGateDefenseEntries(gateKey, (entries) => entries.filter((entry) => entry.unitTypeId !== unitTypeId));
   };
 
+  // eslint-disable-next-line no-unused-vars
   const handleGateDeployDrop = (gateKey, unitTypeId) => {
     if (!defenseLayoutState.canEdit) return;
     if (!gateKey || !unitTypeId) return;
@@ -1678,6 +1684,7 @@ const KnowledgeDomainScene = ({
     });
   };
 
+  // eslint-disable-next-line no-unused-vars
   const confirmGateDeployQuantity = (qty) => {
     const gateKey = gateDeployDialogState.gateKey;
     const unitTypeId = gateDeployDialogState.unitTypeId;
@@ -2182,6 +2189,7 @@ const KnowledgeDomainScene = ({
     }
   };
 
+  // eslint-disable-next-line no-unused-vars
   const saveGateDeployment = async () => {
     if (!defenseLayoutState.canEdit) return;
     const result = await saveDefenseLayout({
@@ -2469,6 +2477,7 @@ const KnowledgeDomainScene = ({
     }
   };
 
+  // eslint-disable-next-line no-unused-vars
   const toggleGateDefenseViewerAdmin = (adminUserId) => {
     if (!domainAdminState.canEdit || !adminUserId) return;
     setGateDefenseViewerDraftIds((prev) => {
@@ -2482,6 +2491,7 @@ const KnowledgeDomainScene = ({
     setManageFeedback('');
   };
 
+  // eslint-disable-next-line no-unused-vars
   const saveGateDefenseViewerPermissions = async () => {
     const token = localStorage.getItem('token');
     if (!token || !node?._id || !domainAdminState.canEdit) return;
@@ -3103,18 +3113,21 @@ const KnowledgeDomainScene = ({
     ? 0
     : Math.min(1, (transitionProgress - 0.4) / 0.5);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     return () => {
       clearDistributionToastTimer();
     };
   }, []);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     setInfoPanelNode(node || null);
     setInfoPanelError('');
     setIsRefreshingInfoPanel(false);
   }, [node]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!isDistributionRuleModalOpen) {
       clearDistributionToastTimer();
@@ -3145,6 +3158,7 @@ const KnowledgeDomainScene = ({
     }
   }, [isDistributionRuleModalOpen, distributionState.error, distributionState.feedback]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!isVisible || !canvasRef.current) return;
 
@@ -3191,8 +3205,10 @@ const KnowledgeDomainScene = ({
         rendererRef.current = null;
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisible, hasParentEntrance, hasChildEntrance]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!isVisible || !node?._id) return;
 
@@ -3233,17 +3249,21 @@ const KnowledgeDomainScene = ({
       fetchDomainAdmins(false);
     }
     fetchDefenseLayout(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisible, node?._id, isIntelHeistMode]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!showManageTab && activeTab === 'manage') {
       setActiveTab('info');
     }
   }, [showManageTab, activeTab]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!isVisible || activeTab !== 'manage' || !node?._id || hasUnsavedDistributionDraft) return;
     fetchDistributionSettings(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, isVisible, node?._id, hasUnsavedDistributionDraft]);
 
   useEffect(() => {
@@ -3268,6 +3288,7 @@ const KnowledgeDomainScene = ({
       fetchDistributionSettings(true);
     }, 15000);
     return () => clearInterval(timerId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, isVisible, node?._id, distributionState.canView, hasUnsavedDistributionDraft, isDistributionRuleModalOpen]);
 
   useEffect(() => {
@@ -3455,6 +3476,7 @@ const KnowledgeDomainScene = ({
       window.removeEventListener('pointerup', stopPanning);
       window.removeEventListener('pointercancel', stopPanning);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisible, isScenePanning]);
 
   useEffect(() => {
@@ -3602,6 +3624,7 @@ const KnowledgeDomainScene = ({
     });
     setIsDistributionRuleModalOpen(false);
     closeGateDeployDialog();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisible, isIntelHeistMode, node?._id, defenseLayoutState.loading, defenseLayoutState.savedLayout]);
 
   useEffect(() => {
@@ -3624,6 +3647,7 @@ const KnowledgeDomainScene = ({
       searchStartedAtMs: 0
     }));
     resolveIntelHeistSearch(targetBuildingId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     isVisible,
     isIntelHeistMode,
@@ -3767,7 +3791,6 @@ const KnowledgeDomainScene = ({
     qi: getGateDefenseTotal(activeDefenseLayout, 'qi')
   };
   const canInspectGateDefense = !!defenseLayoutState.canViewGateDefense;
-  const canOpenGateDeployPanel = canInspectGateDefense && (!canEditGateDefense || !defenseLayoutState.buildMode);
   const selectedDefenseBuilding = (defenseLayoutState.buildMode
     ? (defenseLayoutState.draftLayout?.buildings || [])
     : defenseBuildings
@@ -3816,45 +3839,6 @@ const KnowledgeDomainScene = ({
     ordinal: index + 1,
     isIntel: defenseLayoutState.canEdit && activeDefenseLayout?.intelBuildingId === building.buildingId
   }));
-  const armyUnitTypeMap = new Map(
-    (Array.isArray(gateDeployState.unitTypes) ? gateDeployState.unitTypes : [])
-      .map((unitType) => [unitType?.id || unitType?.unitTypeId, unitType])
-      .filter(([id]) => !!id)
-  );
-  const rosterMap = new Map(
-    (Array.isArray(gateDeployState.roster) ? gateDeployState.roster : [])
-      .map((entry) => [
-        typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '',
-        Math.max(0, Math.floor(Number(entry?.count) || 0))
-      ])
-      .filter(([id]) => !!id)
-  );
-  const deployedCounter = getDeployedCountByUnitType(activeDefenseLayout);
-  const rosterItems = (Array.isArray(gateDeployState.roster) ? gateDeployState.roster : [])
-    .filter((entry) => (Math.max(0, Math.floor(Number(entry?.count) || 0)) > 0))
-    .map((entry) => {
-      const unitTypeId = typeof entry?.unitTypeId === 'string' ? entry.unitTypeId : '';
-      const totalCount = rosterMap.get(unitTypeId) || 0;
-      const deployedCount = deployedCounter.get(unitTypeId) || 0;
-      return {
-        unitTypeId,
-        totalCount,
-        deployedCount,
-        availableCount: Math.max(0, totalCount - deployedCount),
-        name: armyUnitTypeMap.get(unitTypeId)?.name || unitTypeId
-      };
-    })
-    .filter((entry) => !!entry.unitTypeId);
-  const activeGateKey = gateDeployState.activeGateKey;
-  const activeGateEntries = activeGateKey
-    ? getGateDefenseEntries(activeDefenseLayout, activeGateKey)
-    : [];
-  const gateDeployOverview = rosterItems.reduce((acc, item) => ({
-    roster: acc.roster + item.totalCount,
-    deployed: acc.deployed + item.deployedCount,
-    available: acc.available + item.availableCount
-  }), { roster: 0, deployed: 0, available: 0 });
-  const hasGateDeployChanges = canEditGateDefense && defenseLayoutState.isDirty;
   const intelHeistRemainingMs = isIntelHeistMode && intelHeistState.deadlineMs > 0
     ? Math.max(0, intelHeistState.deadlineMs - intelHeistClockMs)
     : 0;

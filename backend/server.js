@@ -25,7 +25,7 @@ const usersRoutes = require('./routes/users');
 // 初始化Express
 const app = express();
 const server = http.createServer(app);
-const DEFAULT_FRONTEND_ORIGIN = 'http://localhost:3000';
+const isDevelopmentEnvironment = (process.env.NODE_ENV || 'development') !== 'production';
 const LOCALHOST_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
 const parseOriginList = (...inputs) => {
@@ -35,8 +35,7 @@ const parseOriginList = (...inputs) => {
     .map((item) => item.trim())
     .filter(Boolean);
 
-  const unique = Array.from(new Set(merged));
-  return unique.length > 0 ? unique : [DEFAULT_FRONTEND_ORIGIN];
+  return Array.from(new Set(merged));
 };
 
 const parseOrigin = (origin = '') => {
@@ -84,9 +83,19 @@ const isOriginAllowed = (origin, allowList = []) => {
   return allowList.includes(origin);
 };
 
+const isLocalDevelopmentOrigin = (origin = '') => {
+  const parsed = parseOrigin(origin);
+  return Boolean(parsed && isLocalhostHost(parsed.hostname));
+};
+
 const createCorsOriginValidator = (allowList = []) => (origin, callback) => {
   const expandedAllowList = expandOriginAliases(allowList);
   if (isOriginAllowed(origin, expandedAllowList)) {
+    callback(null, true);
+    return;
+  }
+
+  if (isDevelopmentEnvironment && isLocalDevelopmentOrigin(origin)) {
     callback(null, true);
     return;
   }
@@ -108,15 +117,14 @@ const createCorsOriginValidator = (allowList = []) => (origin, callback) => {
 
 const corsOrigins = parseOriginList(
   process.env.CORS_ORIGINS,
-  process.env.FRONTEND_ORIGIN,
-  DEFAULT_FRONTEND_ORIGIN
+  process.env.FRONTEND_ORIGIN
 );
 const socketCorsOrigins = parseOriginList(
   process.env.SOCKET_CORS_ORIGINS,
   process.env.CORS_ORIGINS,
-  process.env.FRONTEND_ORIGIN,
-  DEFAULT_FRONTEND_ORIGIN
+  process.env.FRONTEND_ORIGIN
 );
+const expandedCorsOrigins = expandOriginAliases(corsOrigins);
 
 // 初始化Socket.IO
 const io = socketIo(server, {
@@ -530,16 +538,36 @@ if (!ENABLE_LEGACY_ADMIN_RESIGN_TICK && !ENABLE_LEGACY_DISTRIBUTION_TICK && ENAB
   setInterval(enqueueWithLog, SCHEDULED_TASK_ENQUEUE_INTERVAL_MS);
 }
 
-// 启动服务��
+// 启动服务
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, '0.0.0.0', () => {
+const SERVER_BIND_HOST = typeof process.env.BIND_HOST === 'string' && process.env.BIND_HOST.trim()
+  ? process.env.BIND_HOST.trim()
+  : '';
+const PUBLIC_BACKEND_ORIGIN = typeof process.env.PUBLIC_ORIGIN === 'string' && process.env.PUBLIC_ORIGIN.trim()
+  ? process.env.PUBLIC_ORIGIN.trim().replace(/\/+$/, '')
+  : formatOrigin({ protocol: 'http:', hostname: '127.0.0.1', port: PORT });
+
+const handleServerStart = () => {
   console.log(`========================================`);
   console.log(`服务器运行在端口 ${PORT}`);
+  console.log(`监听地址: ${SERVER_BIND_HOST || ':: / 0.0.0.0 (auto)'}`);
   console.log(`环境: ${process.env.NODE_ENV || 'development'}`);
   console.log(`HTTP CORS 来源: ${corsOrigins.join(', ')}`);
   console.log(`Socket CORS 来源: ${socketCorsOrigins.join(', ')}`);
+  console.log(`Backend actual origin: ${PUBLIC_BACKEND_ORIGIN}`);
+  if (isDevelopmentEnvironment) {
+    console.log(`开发态 CORS: 允许 localhost / 127.0.0.1 / ::1 的任意端口`);
+  } else {
+    console.log(`生产态 CORS allowList: ${expandedCorsOrigins.join(', ')}`);
+  }
   console.log(`========================================`);
-});
+};
+
+if (SERVER_BIND_HOST) {
+  server.listen(PORT, SERVER_BIND_HOST, handleServerStart);
+} else {
+  server.listen(PORT, handleServerStart);
+}
 
 // 优雅关闭
 process.on('SIGTERM', () => {

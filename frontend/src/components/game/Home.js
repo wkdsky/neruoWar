@@ -123,7 +123,6 @@ const Home = ({
             .filter(Boolean);
     })();
     const locationSenseTitle = getNodeSenseTitle(currentLocationNodeDetail);
-    const locationSenseSummary = getNodeSenseSummary(currentLocationNodeDetail);
     const formatSeconds = (seconds) => {
         if (!Number.isFinite(seconds) || seconds <= 0) return '0 秒';
         const rounded = Math.round(seconds);

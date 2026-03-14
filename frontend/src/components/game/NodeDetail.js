@@ -232,69 +232,6 @@ const NodeDetail = ({
 
     }, [node]);
 
-    // Handle canvas click
-    const handleDetailCanvasClick = (e) => {
-        if (!detailCanvasRef.current || !node) return;
-
-        const canvas = detailCanvasRef.current;
-        const rect = canvas.getBoundingClientRect();
-
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-
-        const x = (e.clientX - rect.left) * scaleX;
-        const y = (e.clientY - rect.top) * scaleY;
-
-        const width = canvas.width;
-        const height = canvas.height;
-        const centerX = width / 2;
-        const centerY = height / 2;
-        const centerRadius = 80;
-
-        // Check center node click
-        const distanceToCenter = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
-        if (distanceToCenter <= centerRadius) {
-            if (onNodeInfoClick) onNodeInfoClick(node);
-            return;
-        }
-
-        // Check parent nodes click
-        const parentNodes = node.parentNodesInfo || [];
-        const parentRadius = 50;
-        const parentDistance = 200;
-        for (let i = 0; i < parentNodes.length; i++) {
-            const angle = Math.PI + (Math.PI / (parentNodes.length + 1)) * (i + 1);
-            const nodeX = centerX + Math.cos(angle) * parentDistance;
-            const nodeY = centerY + Math.sin(angle) * parentDistance;
-            const distance = Math.sqrt((x - nodeX) ** 2 + (y - nodeY) ** 2);
-            if (distance <= parentRadius) {
-                onNavigate(parentNodes[i]._id, {
-                    relationHint: 'parent',
-                    activeSenseId: parentNodes[i]?.activeSenseId || ''
-                });
-                return;
-            }
-        }
-
-        // Check child nodes click
-        const childNodes = node.childNodesInfo || [];
-        const childRadius = 40;
-        const childDistance = 180;
-        for (let i = 0; i < childNodes.length; i++) {
-            const angle = (Math.PI / (childNodes.length + 1)) * (i + 1);
-            const nodeX = centerX + Math.cos(angle) * childDistance;
-            const nodeY = centerY + Math.sin(angle) * childDistance;
-            const distance = Math.sqrt((x - nodeX) ** 2 + (y - nodeY) ** 2);
-            if (distance <= childRadius) {
-                onNavigate(childNodes[i]._id, {
-                    relationHint: 'child',
-                    activeSenseId: childNodes[i]?.activeSenseId || ''
-                });
-                return;
-            }
-        }
-    };
-
     return (
         <>
             {/* Navigation Sidebar */}

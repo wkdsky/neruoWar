@@ -13,37 +13,46 @@ export PATH="$HOME/.local/bin:$PATH"
 export PM2_HOME="${PM2_HOME:-$HOME/.pm2}"
 
 MONGO_PORT="${MONGO_PORT:-27017}"
-MONGO_BIN="${MONGO_BIN:-$HOME/.local/bin/mongod}"
+DEFAULT_MONGO_BIN="$HOME/.local/bin/mongod"
+if [ ! -x "$DEFAULT_MONGO_BIN" ] && command -v mongod >/dev/null 2>&1; then
+    DEFAULT_MONGO_BIN="$(command -v mongod)"
+fi
+MONGO_BIN="${MONGO_BIN:-$DEFAULT_MONGO_BIN}"
 MONGO_DB_PATH="${MONGO_DB_PATH:-$HOME/.local/share/mongodb/data}"
 MONGO_LOG_DIR="${MONGO_LOG_DIR:-$HOME/.local/share/mongodb/log}"
 MONGO_LOG_PATH="${MONGO_LOG_PATH:-$MONGO_LOG_DIR/mongod.log}"
 MONGO_PM2_NAME="${MONGO_PM2_NAME:-neurowar-mongodb}"
-BACKEND_DEFAULT_PORT="${BACKEND_DEFAULT_PORT:-5000}"
-FRONTEND_DEFAULT_PORT="${FRONTEND_DEFAULT_PORT:-3000}"
+BACKEND_DEFAULT_PORT="${BACKEND_DEFAULT_PORT:-5001}"
+FRONTEND_DEFAULT_PORT="${FRONTEND_DEFAULT_PORT:-3001}"
 MAX_PORT_SCAN_STEPS="${MAX_PORT_SCAN_STEPS:-2000}"
 MONGODB_URI_ENV="${MONGODB_URI:-mongodb://localhost:${MONGO_PORT}/strategy-game}"
 
 FORCE_RESET_ADMIN=false
 CLEAR_DOMAINS=false
+INIT_DB=false
 
 print_usage() {
     cat <<'EOF'
 用法: ./start.sh [选项]
 
 选项:
+  --init-db             仅在数据库为空时注入基础数据
   --force-reset-admin   强制重置 admin 用户（密码恢复为 123456）
   --clear-domains       清空所有知识域数据（保留用户/熵盟/目录配置）
   -h, --help            显示帮助
 
 说明:
-  - 启动时若检测到数据库已有业务数据（用户/知识域/熵盟任一非空），将跳过基础注入。
-  - 若数据库为空，则执行基础注入（目录配置 + 管理员 + 用户字段初始化）。
+  - 默认无参数启动时，只重启 MongoDB / 前端 / 后端服务，不修改数据库内容。
+  - 仅当传入 --init-db 时，才会在数据库为空时执行基础注入（目录配置 + 管理员 + 用户字段初始化）。
 EOF
 }
 
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
+            --init-db|init-db)
+                INIT_DB=true
+                ;;
             --force-reset-admin|force-reset-admin|reset-admin|admin-reset)
                 FORCE_RESET_ADMIN=true
                 ;;
@@ -130,8 +139,10 @@ start_mongo() {
     pm2 start "$MONGO_BIN" --name "$MONGO_PM2_NAME" -- \
         --dbpath "$MONGO_DB_PATH" \
         --logpath "$MONGO_LOG_PATH" \
+        --logappend \
         --bind_ip 127.0.0.1 \
         --port "$MONGO_PORT" \
+        --nounixsocket \
         --quiet >/dev/null
 
     sleep 3
@@ -461,10 +472,14 @@ if [ "$CLEAR_DOMAINS" = true ]; then
     clear_knowledge_domain_data
 fi
 
-if has_existing_gameplay_data; then
-    echo "检测到数据库已有业务数据，跳过基础注入。"
-else
-    inject_db
+if [ "$INIT_DB" = true ]; then
+    if has_existing_gameplay_data; then
+        echo "检测到数据库已有业务数据，跳过基础注入。"
+    else
+        inject_db
+    fi
+elif [ "$CLEAR_DOMAINS" != true ] && [ "$FORCE_RESET_ADMIN" != true ]; then
+    echo "默认启动：跳过数据库维护，仅重启服务。"
 fi
 
 if [ "$FORCE_RESET_ADMIN" = true ]; then
@@ -476,8 +491,10 @@ pm2 delete neurowar-frontend >/dev/null 2>&1 || true
 
 BACKEND_PORT="$(find_available_port "$BACKEND_DEFAULT_PORT")"
 FRONTEND_PORT="$(find_available_port "$FRONTEND_DEFAULT_PORT" "$BACKEND_PORT")"
-BACKEND_ORIGIN="http://localhost:${BACKEND_PORT}"
-FRONTEND_ORIGIN="http://localhost:${FRONTEND_PORT}"
+BACKEND_PUBLIC_ORIGIN="http://127.0.0.1:${BACKEND_PORT}"
+FRONTEND_LOCALHOST_ORIGIN="http://localhost:${FRONTEND_PORT}"
+FRONTEND_LOOPBACK_ORIGIN="http://127.0.0.1:${FRONTEND_PORT}"
+FRONTEND_ALLOWED_ORIGINS="${FRONTEND_LOCALHOST_ORIGIN},${FRONTEND_LOOPBACK_ORIGIN}"
 
 if [ "$BACKEND_PORT" != "$BACKEND_DEFAULT_PORT" ]; then
     echo "后端默认端口 ${BACKEND_DEFAULT_PORT} 已占用，切换为 ${BACKEND_PORT}"
@@ -489,9 +506,10 @@ fi
 echo "启动后端服务..."
 cd "$BACKEND_DIR"
 PORT="$BACKEND_PORT" \
-FRONTEND_ORIGIN="$FRONTEND_ORIGIN" \
-CORS_ORIGINS="$FRONTEND_ORIGIN" \
-SOCKET_CORS_ORIGINS="$FRONTEND_ORIGIN" \
+PUBLIC_ORIGIN="$BACKEND_PUBLIC_ORIGIN" \
+FRONTEND_ORIGIN="$FRONTEND_ALLOWED_ORIGINS" \
+CORS_ORIGINS="$FRONTEND_ALLOWED_ORIGINS" \
+SOCKET_CORS_ORIGINS="$FRONTEND_ALLOWED_ORIGINS" \
 pm2 start server.js --name neurowar-backend >/dev/null
 
 sleep 3
@@ -499,14 +517,17 @@ sleep 3
 echo "启动前端服务..."
 cd "$FRONTEND_DIR"
 PORT="$FRONTEND_PORT" \
-REACT_APP_BACKEND_ORIGIN="$BACKEND_ORIGIN" \
+REACT_APP_BACKEND_ORIGIN="$BACKEND_PUBLIC_ORIGIN" \
 pm2 start npm --name neurowar-frontend -- start >/dev/null
 
 echo "========================================="
 pm2 list
 echo "========================================="
-echo "后端服务: ${BACKEND_ORIGIN}"
-echo "前端服务: ${FRONTEND_ORIGIN}"
+echo "Frontend actual origin: ${FRONTEND_LOCALHOST_ORIGIN}"
+echo "Frontend actual origin: ${FRONTEND_LOOPBACK_ORIGIN}"
+echo "Backend actual origin:  ${BACKEND_PUBLIC_ORIGIN}"
+echo "API_BASE:               ${BACKEND_PUBLIC_ORIGIN}/api"
+echo "WebSocket endpoint:     ${BACKEND_PUBLIC_ORIGIN}"
 echo "MongoDB:   mongodb://localhost:${MONGO_PORT}/strategy-game"
 echo "========================================="
 echo "查看日志:"

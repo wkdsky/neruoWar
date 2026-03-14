@@ -566,14 +566,6 @@ const SenseArticlePage = ({
     if (match.headingId) setActiveHeadingId(match.headingId);
   };
 
-  const navigateSearch = (direction = 1) => {
-    if (!searchData.matches.length) return;
-    setActiveSearchIndex((prev) => {
-      const next = prev < 0 ? 0 : (prev + direction + searchData.matches.length) % searchData.matches.length;
-      return next;
-    });
-  };
-
   const handleReferenceClick = (reference) => {
     if (!reference?.targetNodeId || !reference?.targetSenseId) return;
     onBack && onBack({

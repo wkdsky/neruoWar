@@ -2,7 +2,6 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
-import { BACKEND_ORIGIN, DEFAULT_BACKEND_ORIGIN, mapBackendUrl } from './runtimeConfig';
 
 const isResizeObserverNoise = (message = '') => {
   if (typeof message !== 'string') return false;
@@ -44,29 +43,6 @@ window.addEventListener('unhandledrejection', (event) => {
   event.preventDefault?.();
   event.stopImmediatePropagation?.();
 }, true);
-
-const patchLegacyBackendFetchUrl = () => {
-  if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
-  if (BACKEND_ORIGIN === DEFAULT_BACKEND_ORIGIN) return;
-
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = (input, init) => {
-    if (typeof input === 'string') {
-      return nativeFetch(mapBackendUrl(input), init);
-    }
-
-    if (input instanceof Request) {
-      const rewrittenUrl = mapBackendUrl(input.url);
-      if (rewrittenUrl !== input.url) {
-        return nativeFetch(new Request(rewrittenUrl, input), init);
-      }
-    }
-
-    return nativeFetch(input, init);
-  };
-};
-
-patchLegacyBackendFetchUrl();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

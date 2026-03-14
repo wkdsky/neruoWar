@@ -3772,7 +3772,7 @@ const BattlefieldPreviewModal = ({
     return () => {
       cancelled = true;
     };
-  }, [canEdit, defaultLayoutMeta, gateKey, hasLayoutBundleOverride, layoutBundleOverride, open, nodeId]);
+  }, [canEdit, defaultLayoutMeta, gateKey, hasLayoutBundleOverride, layoutBundleOverride, open, nodeId, setWallsWithRecompute]);
 
   useEffect(() => {
     if (!open || !layoutReady || !pendingCacheSyncRef.current) return;

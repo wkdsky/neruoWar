@@ -474,7 +474,6 @@ class SceneManager {
     };
 
     // 中心节点和被点击节点：特殊处理
-    const oldCenterNode = this.currentLayout.nodes.find(n => n.type === 'center');
     const newCenterNode = newLayout.nodes.find(n => n.type === 'center');
 
     // 阶段1: 旧中心节点和其他节点移开/缩小 (300ms)

@@ -173,7 +173,7 @@ const AllianceDetailModal = ({
             ...activeSenseArticleStyle,
             name: `${alliance.name || '熵盟'}百科风格${(alliance.senseArticleStyles || []).length + 1}`
         }, `百科风格${(alliance.senseArticleStyles || []).length + 1}`, activeVisualStyle));
-    }, [isOpen, alliance?._id, alliance?.announcement, alliance?.declaration, alliance?.name, alliance?.visualStyles, alliance?.senseArticleStyles, alliance?.knowledgeContributionPercent, activeVisualStyle, activeSenseArticleStyle]);
+    }, [isOpen, alliance, alliance?._id, alliance?.announcement, alliance?.declaration, alliance?.name, alliance?.visualStyles, alliance?.senseArticleStyles, alliance?.knowledgeContributionPercent, activeVisualStyle, activeSenseArticleStyle]);
 
     const fetchOverviewAnnouncements = useCallback(async () => {
         if (!isOpen || !alliance?._id) {
