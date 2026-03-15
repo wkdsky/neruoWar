@@ -278,6 +278,7 @@ const App = () => {
     const notificationsWrapperRef = useRef(null);
     const relatedDomainsWrapperRef = useRef(null);
     const militaryMenuWrapperRef = useRef(null);
+    const senseSelectorPanelRef = useRef(null);
     const senseSelectorAnchorRef = useRef({ x: 0, y: 0, visible: false });
     const knowledgeDomainReturnContextRef = useRef(null);
     const senseArticleEntryStatusMapRef = useRef({});
@@ -3099,6 +3100,22 @@ const App = () => {
     }, [isSenseSelectorVisible, view, currentNodeDetail?._id, currentTitleDetail?._id]);
 
     useEffect(() => {
+        if (view !== 'home' || !isSenseSelectorVisible) return undefined;
+
+        const handleDocumentPointerDown = (event) => {
+            if (senseSelectorPanelRef.current?.contains(event.target)) {
+                return;
+            }
+            setIsSenseSelectorVisible(false);
+        };
+
+        document.addEventListener('pointerdown', handleDocumentPointerDown);
+        return () => {
+            document.removeEventListener('pointerdown', handleDocumentPointerDown);
+        };
+    }, [isSenseSelectorVisible, view]);
+
+    useEffect(() => {
         if (!isSenseSelectorVisible || (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail')) {
             setSenseSelectorOverviewLoading(false);
             setSenseSelectorOverviewError('');
@@ -3478,7 +3495,7 @@ const App = () => {
 
     return (
         <div
-            className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''}`}
+            className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''} ${view === 'home' ? 'home-view-active' : ''}`}
             style={{
               '--knowledge-header-offset': `${knowledgeHeaderOffset}px`,
               '--knowledge-domain-top-offset': isKnowledgeDomainActive ? `${knowledgeHeaderOffset}px` : '0px'
@@ -3586,6 +3603,7 @@ const App = () => {
                     webglCanvasRef={webglCanvasRef}
                     navigationPath={navigationPath}
                     currentTitleDetail={currentTitleDetail}
+                    titleGraphData={titleGraphData}
                     currentNodeDetail={currentNodeDetail}
                     titleRelationInfo={titleRelationInfo}
                     onCloseTitleRelationInfo={() => setTitleRelationInfo(null)}
@@ -3647,6 +3665,7 @@ const App = () => {
                     senseSelectorSourceNode={senseSelectorSourceNode}
                     isSenseSelectorVisible={isSenseSelectorVisible}
                     senseSelectorAnchor={senseSelectorAnchor}
+                    panelRef={senseSelectorPanelRef}
                     senseSelectorOverviewNode={senseSelectorOverviewNode}
                     senseSelectorOverviewLoading={senseSelectorOverviewLoading}
                     senseSelectorOverviewError={senseSelectorOverviewError}

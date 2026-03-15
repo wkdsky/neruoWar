@@ -9,6 +9,7 @@ const KnowledgeViewRouter = ({
   webglCanvasRef,
   navigationPath,
   currentTitleDetail,
+  titleGraphData,
   currentNodeDetail,
   titleRelationInfo,
   onCloseTitleRelationInfo,
@@ -86,6 +87,8 @@ const KnowledgeViewRouter = ({
       <>
         <NodeDetail
           node={currentTitleDetail}
+          detailViewMode="title"
+          titleRelatedDomainCount={Math.max(0, (Number(titleGraphData?.nodeCount) || 0) - 1)}
           navigationPath={navigationPath}
           onNavigate={onTitleNavigate}
           onNavigateHistory={onNavigateHistory}
@@ -116,6 +119,7 @@ const KnowledgeViewRouter = ({
       <>
         <NodeDetail
           node={currentNodeDetail}
+          detailViewMode="sense"
           navigationPath={navigationPath}
           onNavigate={onNodeNavigate}
           onNavigateHistory={onNavigateHistory}

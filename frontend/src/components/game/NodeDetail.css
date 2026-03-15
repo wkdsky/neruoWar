@@ -1,10 +1,30 @@
 /* ===== 节点详情页面样式 ===== */
 .node-detail-container {
     min-height: calc(100vh - 120px);
-    padding: 2rem;
+    padding: 0.45rem 2rem 2rem;
     display: flex;
     flex-direction: column;
     margin-left: 200px;
+}
+
+.node-detail-scene-container {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: calc(100vh - var(--knowledge-header-offset, 92px) - 6.5rem);
+    height: calc(100vh - var(--knowledge-header-offset, 92px) - 6.5rem);
+    border-radius: 24px;
+    border: 1px solid rgba(103, 232, 249, 0.12);
+    box-shadow: 0 18px 36px rgba(2, 6, 23, 0.22);
+    overflow: hidden;
+}
+
+.node-detail-top-panel {
+    position: absolute;
+    top: 0.35rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 3;
+    width: min(90%, 820px);
 }
 
 /* ===== 悬浮导航栏样式 ===== */
@@ -155,6 +175,23 @@
     background: transparent;
     border: none;
     cursor: pointer;
+}
+
+@media (max-width: 920px) {
+    .node-detail-container {
+        margin-left: 0;
+        padding: 0.35rem 1rem 1rem;
+    }
+
+    .node-detail-scene-container {
+        min-height: calc(100vh - var(--knowledge-header-offset, 92px) - 5rem);
+        height: calc(100vh - var(--knowledge-header-offset, 92px) - 5rem);
+    }
+
+    .node-detail-top-panel {
+        top: 0.2rem;
+        width: calc(100% - 1rem);
+    }
 }
 
 /* 科技区域 */

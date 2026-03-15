@@ -150,6 +150,12 @@ body {
     z-index: 150;
 }
 
+.home-view-active .header {
+    position: sticky;
+    top: 0;
+    z-index: 150;
+}
+
 @media (min-width: 769px) {
     .knowledge-domain-active .knowledge-domain-container .domain-info-panel {
         top: 20px;
@@ -2667,9 +2673,19 @@ body {
     background: rgba(15, 23, 42, 0.42);
 }
 
+.sense-selector-overview-summary {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 9px;
+    background: rgba(15, 23, 42, 0.34);
+    padding: 0.3rem 0.42rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+}
+
 .sense-selector-overview-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.32rem;
 }
 
@@ -2721,16 +2737,8 @@ body {
     color: rgba(241, 245, 249, 0.95);
     font-size: 0.76rem;
     line-height: 1.2;
-    max-height: 100%;
-    overflow-y: auto;
     white-space: pre-wrap;
     word-break: break-word;
-}
-
-.sense-selector-overview-desc-content.single-line {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
 .sense-selector-overview-people-row {

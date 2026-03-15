@@ -437,6 +437,56 @@ const computeAdminNodeSearchCoverageScore = (node = {}, keyword = '') => {
   };
 };
 
+const computePublicSearchEntryCoverageScore = (entry = {}, keyword = '') => {
+  const keywords = splitSearchKeywords(keyword);
+  if (keywords.length < 1) {
+    return {
+      ratio: 0,
+      exactMatch: 0,
+      prefixMatch: 0,
+      matchedKeywordCount: 0,
+      matchedCharLength: 0,
+      fieldPriority: 0,
+      textLength: Number.MAX_SAFE_INTEGER,
+      candidateIndex: Number.MAX_SAFE_INTEGER
+    };
+  }
+
+  const candidateTexts = [
+    { text: entry?.domainName || entry?.name || '', fieldPriority: 4 },
+    { text: entry?.senseTitle || '', fieldPriority: 3 },
+    { text: entry?.displayName || entry?.name || '', fieldPriority: 3 },
+    { text: entry?.description || '', fieldPriority: 2 },
+    { text: entry?.senseContent || '', fieldPriority: 1 }
+  ];
+
+  let bestScore = null;
+  candidateTexts.forEach((candidate, index) => {
+    const score = computeTextSearchCoverageScore({
+      text: candidate.text,
+      keywords,
+      fullKeyword: keyword,
+      fieldPriority: candidate.fieldPriority,
+      candidateIndex: index
+    });
+    if (score.matchedKeywordCount < 1) return;
+    if (!bestScore || compareSearchCoverageScore(score, bestScore) < 0) {
+      bestScore = score;
+    }
+  });
+
+  return bestScore || {
+    ratio: 0,
+    exactMatch: 0,
+    prefixMatch: 0,
+    matchedKeywordCount: 0,
+    matchedCharLength: 0,
+    fieldPriority: 0,
+    textLength: Number.MAX_SAFE_INTEGER,
+    candidateIndex: Number.MAX_SAFE_INTEGER
+  };
+};
+
 const buildNodeTitleCard = (node = {}) => {
   const source = node && typeof node.toObject === 'function' ? node.toObject() : node;
   const senses = normalizeNodeSenseList(source);
@@ -5676,9 +5726,22 @@ router.get('/public/search', async (req, res) => {
 
     const searchResults = allNodes
       .flatMap((node) => buildNodeSenseSearchEntries(node, keywords))
-      .sort((a, b) => b.matchCount - a.matchCount || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN'))
+      .map((item, index) => ({
+        item,
+        score: computePublicSearchEntryCoverageScore(item, normalizedQuery),
+        index
+      }))
+      .sort((left, right) => (
+        compareSearchCoverageScore(left.score, right.score)
+        || Number(right.item?.matchCount || 0) - Number(left.item?.matchCount || 0)
+        || String(left.item?.displayName || '').localeCompare(String(right.item?.displayName || ''), 'zh-Hans-CN')
+        || left.index - right.index
+      ))
       .slice(0, 300)
-      .map(({ matchCount, ...item }) => item);
+      .map(({ item }) => {
+        const { matchCount, ...rest } = item;
+        return rest;
+      });
 
     res.json({
       success: true,

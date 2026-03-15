@@ -1,36 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Plus, X, Bell } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import HexDomainGrid from './HexDomainGrid';
+import KnowledgeTopPanel from './KnowledgeTopPanel';
 import RightUtilityDock from './RightUtilityDock';
 import AnnouncementPanel from './AnnouncementPanel';
 import {
-  buildHomeSafeAreaInsets,
-  getNodeDisplayName
+  buildHomeSafeAreaInsets
 } from './hexUtils';
 import './Home.css';
-
-const escapeRegExp = (text = '') => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-const renderKeywordHighlight = (text, rawQuery) => {
-  const content = typeof text === 'string' ? text : '';
-  const keywords = String(rawQuery || '')
-    .trim()
-    .split(/\s+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (!content || keywords.length === 0) return content;
-  const uniqueKeywords = Array.from(new Set(keywords.map((item) => item.toLowerCase())));
-  const pattern = uniqueKeywords.map((item) => escapeRegExp(item)).join('|');
-  if (!pattern) return content;
-  const matcher = new RegExp(`(${pattern})`, 'ig');
-  const parts = content.split(matcher);
-  return parts.map((part, index) => {
-    const lowered = part.toLowerCase();
-    const matched = uniqueKeywords.some((keyword) => keyword === lowered);
-    if (!matched) return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
-    return <mark key={`mark-${index}`} className="subtle-keyword-highlight">{part}</mark>;
-  });
-};
 
 const readViewport = () => ({
   width: typeof window === 'undefined' ? 1440 : window.innerWidth,
@@ -122,8 +99,7 @@ const Home = ({
 
   const summaryStats = [
     { label: '根知识域', value: rootNodes.length },
-    { label: '热门知识域', value: featuredNodes.length },
-    { label: '搜索结果', value: searchQuery ? searchResults.length : '待检索' }
+    { label: '热门知识域', value: featuredNodes.length }
   ];
   const utilitySections = useMemo(() => {
     if (!showRightDocks) return [];
@@ -190,101 +166,37 @@ const Home = ({
       </div>
 
       <div className="home-main-layer">
-        <div className="search-container home-search-container" ref={searchBarRef}>
-          <div className="floating-search-bar home-floating-search-bar">
-            <div className="search-and-create-container">
-              <div className="search-input-wrapper" onClick={onSearchFocus}>
-                <Search className="search-icon" size={22} />
-                <input
-                  type="text"
-                  placeholder="搜索标题或释义题目...（支持多关键词）"
-                  value={searchQuery}
-                  onChange={onSearchChange}
-                  className="search-input-floating"
-                  onFocus={onSearchFocus}
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onSearchClear();
-                    }}
-                    className="search-clear-btn"
-                  >
-                    <X size={18} />
-                  </button>
-                )}
-              </div>
-              {!isAdmin && (
-                <button
-                  type="button"
-                  onClick={onCreateNode}
-                  className="btn btn-success create-node-btn home-create-node-btn"
-                >
-                  <Plus size={18} />
-                  创建新知识域
-                </button>
-              )}
-            </div>
+        <div className="home-content-stack">
+          <div className="home-sticky-overview">
+            <KnowledgeTopPanel
+              className="home-knowledge-top-panel"
+              title="知识域总览"
+              stats={summaryStats}
+              searchBarRef={searchBarRef}
+              searchQuery={searchQuery}
+              onSearchChange={onSearchChange}
+              onSearchFocus={onSearchFocus}
+              onSearchClear={onSearchClear}
+              searchResults={searchResults}
+              showSearchResults={showSearchResults}
+              isSearching={isSearching}
+              onSearchResultClick={onSearchResultClick}
+              onCreateNode={onCreateNode}
+              showCreateButton={!isAdmin}
+            />
           </div>
 
-          {searchQuery && searchResults.length > 0 && showSearchResults && (
-            <div className="search-results-panel">
-              <div className="search-results-scroll">
-                {searchResults.map((node) => (
-                  <div
-                    key={node.searchKey || `${node._id || ''}-${node.senseId || ''}`}
-                    className="search-result-card"
-                    onClick={() => onSearchResultClick(node)}
-                  >
-                    <div className="search-card-title">{renderKeywordHighlight(getNodeDisplayName(node), searchQuery)}</div>
-                    <div className="search-card-desc">{node.description || ''}</div>
-                  </div>
-                ))}
+          <div className="home-content-body">
+            <div className="home-hero-panel">
+              <div className="home-hex-safe-zone">
+                <div className="home-hex-safe-zone__halo" aria-hidden="true" />
+                <HexDomainGrid
+                  rootNodes={rootNodes}
+                  featuredNodes={featuredNodes}
+                  activeNodeId={activeHomeNodeId}
+                  onActivate={onHomeDomainActivate}
+                />
               </div>
-            </div>
-          )}
-
-          {searchQuery && !isSearching && searchResults.length === 0 && showSearchResults && (
-            <div className="search-no-results">
-              未找到匹配的节点
-            </div>
-          )}
-
-          {isSearching && showSearchResults && (
-            <div className="search-loading-indicator">
-              搜索中...
-            </div>
-          )}
-        </div>
-
-        <div className="home-hero-safe-area">
-          <div className="home-hero-panel">
-            <div className="home-hero-copy">
-              <span className="home-hero-eyebrow">Knowledge Domain Atlas</span>
-              <h1 className="home-hero-title">知识域总览首页</h1>
-              <p className="home-hero-description">
-                以蜂窝式六边形入口统摄根知识域与热门知识域。首页只承载总览、检索与入口，不抢占右侧状态区与顶部操作区的层级。
-              </p>
-              <div className="home-hero-stats">
-                {summaryStats.map((item) => (
-                  <div key={item.label} className="home-hero-stat">
-                    <span className="home-hero-stat-label">{item.label}</span>
-                    <strong className="home-hero-stat-value">{item.value}</strong>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="home-hex-safe-zone">
-              <div className="home-hex-safe-zone__halo" aria-hidden="true" />
-              <HexDomainGrid
-                rootNodes={rootNodes}
-                featuredNodes={featuredNodes}
-                activeNodeId={activeHomeNodeId}
-                onActivate={onHomeDomainActivate}
-              />
             </div>
           </div>
         </div>

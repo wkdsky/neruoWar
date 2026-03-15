@@ -1,41 +1,12 @@
-import React, { useEffect, useRef } from 'react';
-import { Search, Plus, X } from 'lucide-react';
+import React, { useEffect, useMemo, useRef } from 'react';
+import KnowledgeTopPanel from './KnowledgeTopPanel';
+import { getNodeSenseTitle } from './hexUtils';
 import './NodeDetail.css';
-
-const getSearchNodeDisplayName = (node) => {
-    if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
-    const name = typeof node?.name === 'string' ? node.name.trim() : '';
-    const senseTitle = typeof node?.senseTitle === 'string' && node.senseTitle.trim()
-        ? node.senseTitle.trim()
-        : (typeof node?.activeSenseTitle === 'string' ? node.activeSenseTitle.trim() : '');
-    return senseTitle ? `${name}-${senseTitle}` : name;
-};
-
-const escapeRegExp = (text = '') => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-const renderKeywordHighlight = (text, rawQuery) => {
-    const content = typeof text === 'string' ? text : '';
-    const keywords = String(rawQuery || '')
-        .trim()
-        .split(/\s+/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-    if (!content || keywords.length === 0) return content;
-    const uniqueKeywords = Array.from(new Set(keywords.map((item) => item.toLowerCase())));
-    const pattern = uniqueKeywords.map((item) => escapeRegExp(item)).join('|');
-    if (!pattern) return content;
-    const matcher = new RegExp(`(${pattern})`, 'ig');
-    const parts = content.split(matcher);
-    return parts.map((part, index) => {
-        const lowered = part.toLowerCase();
-        const matched = uniqueKeywords.some((keyword) => keyword === lowered);
-        if (!matched) return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
-        return <mark key={`mark-${index}`} className="subtle-keyword-highlight">{part}</mark>;
-    });
-};
 
 const NodeDetail = ({ 
     node, 
+    detailViewMode = 'sense',
+    titleRelatedDomainCount = 0,
     navigationPath, 
     onNavigate, 
     onNavigateHistory,
@@ -56,6 +27,32 @@ const NodeDetail = ({
     const detailCanvasRef = useRef(null);
     const searchBarRef = useRef(null);
     const currentNodeId = String(node?._id || '');
+    const panelTitle = useMemo(() => {
+        const nodeName = typeof node?.name === 'string' && node.name.trim() ? node.name.trim() : '未命名知识域';
+        if (detailViewMode !== 'sense') return nodeName;
+        const senseTitle = getNodeSenseTitle(node);
+        return senseTitle ? `${nodeName}/${senseTitle}` : nodeName;
+    }, [detailViewMode, node]);
+    const summaryStats = useMemo(() => {
+        if (detailViewMode === 'title') {
+            return [
+                {
+                    label: '关联的知识域',
+                    value: Math.max(0, Number(titleRelatedDomainCount) || 0)
+                }
+            ];
+        }
+        return [
+            {
+                label: '上层知识域数量',
+                value: Array.isArray(node?.parentNodesInfo) ? node.parentNodesInfo.length : 0
+            },
+            {
+                label: '下层知识域数量',
+                value: Array.isArray(node?.childNodesInfo) ? node.childNodesInfo.length : 0
+            }
+        ];
+    }, [detailViewMode, node, titleRelatedDomainCount]);
     const getRelationText = (relation) => {
         if (relation === 'parent') return '上级知识域';
         if (relation === 'child') return '下级知识域';
@@ -233,7 +230,7 @@ const NodeDetail = ({
     }, [node]);
 
     return (
-        <>
+        <div className="node-detail-container">
             {/* Navigation Sidebar */}
             <div className="navigation-sidebar">
                 <div className="navigation-header">
@@ -276,7 +273,7 @@ const NodeDetail = ({
             </div>
 
             {/* Main Content - WebGL Canvas (placeholder for now) or Detail Canvas */}
-            <div className="webgl-scene-container">
+            <div className="webgl-scene-container node-detail-scene-container">
                  {/* Here we are using the 2D canvas for detail view as per previous logic, 
                      but App.js also had a WebGL canvas. 
                      If we want to keep WebGL, we need to pass the ref or handle it here. 
@@ -321,73 +318,25 @@ const NodeDetail = ({
                  />
 
                  {/* Search Bar */}
-                 <div className="search-container" ref={searchBarRef}>
-                    <div className="floating-search-bar">
-                        <div className="search-and-create-container">
-                           <div className="search-input-wrapper" onClick={onSearchFocus}>
-                                <Search className="search-icon" size={24} />
-                                <input
-                                    type="text"
-                                    placeholder="搜索标题或释义题目...（支持多关键词）"
-                                    value={searchQuery}
-                                    onChange={onSearchChange}
-                                    className="search-input-floating"
-                                    onFocus={onSearchFocus}
-                                />
-                                {searchQuery && (
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            onSearchClear();
-                                        }}
-                                        className="search-clear-btn"
-                                    >
-                                        <X size={18} />
-                                    </button>
-                                )}
-                            </div>
-                            <button
-                                onClick={onCreateNode}
-                                className="btn btn-success create-node-btn"
-                            >
-                                <Plus size={18} />
-                                创建新知识域
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* Search Results */}
-                    {searchQuery && searchResults.length > 0 && showSearchResults && (
-                        <div className="search-results-panel">
-                            <div className="search-results-scroll">
-                                {searchResults.map((node) => (
-                                    <div
-                                        key={node.searchKey || `${node._id || ''}-${node.senseId || ''}`}
-                                        className="search-result-card"
-                                        onClick={() => onSearchResultClick(node)}
-                                    >
-                                        <div className="search-card-title">{renderKeywordHighlight(getSearchNodeDisplayName(node), searchQuery)}</div>
-                                        <div className="search-card-desc">{node.description}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {searchQuery && !isSearching && searchResults.length === 0 && showSearchResults && (
-                        <div className="search-no-results">
-                            未找到匹配的节点
-                        </div>
-                    )}
-
-                    {isSearching && showSearchResults && (
-                        <div className="search-loading-indicator">
-                            搜索中...
-                        </div>
-                    )}
-                </div>
+                 <KnowledgeTopPanel
+                    className="node-detail-top-panel"
+                    eyebrow="Knowledge Domain Main View"
+                    title={panelTitle}
+                    stats={summaryStats}
+                    searchBarRef={searchBarRef}
+                    searchQuery={searchQuery}
+                    onSearchChange={onSearchChange}
+                    onSearchFocus={onSearchFocus}
+                    onSearchClear={onSearchClear}
+                    searchResults={searchResults}
+                    showSearchResults={showSearchResults}
+                    isSearching={isSearching}
+                    onSearchResultClick={onSearchResultClick}
+                    onCreateNode={onCreateNode}
+                    showCreateButton={typeof onCreateNode === 'function'}
+                 />
             </div>
-        </>
+        </div>
     );
 };
 

@@ -1210,6 +1210,7 @@ export const SenseSelectorPanel = ({
     senseSelectorSourceNode,
     isSenseSelectorVisible,
     senseSelectorAnchor,
+    panelRef,
     senseSelectorOverviewNode,
     senseSelectorOverviewLoading,
     senseSelectorOverviewError,
@@ -1317,7 +1318,7 @@ export const SenseSelectorPanel = ({
     };
 
     return (
-        <div className="sense-selector-panel" style={panelStyle}>
+        <div ref={panelRef} className="sense-selector-panel" style={panelStyle}>
             <div className="sense-selector-overview-header">
                 <button
                     type="button"
@@ -1329,6 +1330,13 @@ export const SenseSelectorPanel = ({
                 <div className="sense-selector-overview-mode">
                     {view === 'titleDetail' ? '当前：标题主视角' : '点击标题切换到标题主视角'}
                 </div>
+            </div>
+
+            <div className="sense-selector-overview-summary">
+                <span className="sense-selector-overview-label">概述</span>
+                <span className="sense-selector-overview-desc-content">
+                    {overviewDescription || '暂无概述'}
+                </span>
             </div>
 
             <div className="sense-selector-list-title">释义选择</div>
@@ -1363,12 +1371,6 @@ export const SenseSelectorPanel = ({
             </div>
 
             <div className="sense-selector-overview-grid">
-                <div className="sense-selector-overview-field">
-                    <span className="sense-selector-overview-label">概述</span>
-                    <span className="sense-selector-overview-desc-content single-line">
-                        {overviewDescription}
-                    </span>
-                </div>
                 <div className="sense-selector-overview-field alliance">
                     <span className="sense-selector-overview-label">所属熵盟</span>
                     <span className="sense-selector-overview-alliance">

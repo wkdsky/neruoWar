@@ -53,13 +53,17 @@ class SceneManager {
     };
   }
 
+  resetCameraToLayoutCenter() {
+    this.renderer.setCameraOffset(0, 0);
+  }
+
   /**
    * 显示首页场景
    */
   async showHome(rootNodes, featuredNodes, searchResults = []) {
     this.renderer.setSceneType('home');
     this.renderer.setCameraPanEnabled(false);
-    this.renderer.setCameraOffset(0, 0);
+    this.resetCameraToLayoutCenter();
 
     // 清除节点按钮（首页不需要）
     this.renderer.clearNodeButtons();
@@ -89,7 +93,8 @@ class SceneManager {
    */
   async showNodeDetail(centerNode, parentNodes, childNodes, clickedNode = null, buttonContext = {}) {
     this.renderer.setSceneType('nodeDetail');
-    this.renderer.setCameraPanEnabled(true);
+    this.renderer.setCameraPanEnabled(false);
+    this.resetCameraToLayoutCenter();
     this.centerNodeButtonContext = buttonContext || {};
 
     // 清除之前的按钮
@@ -102,6 +107,7 @@ class SceneManager {
       this.setLayout(newLayout);
       this.setupCenterNodeButtons(centerNode, buttonContext);
       this.currentScene = 'nodeDetail';
+      this.resetCameraToLayoutCenter();
       if (this.onSceneChange) {
         this.onSceneChange('nodeDetail', centerNode);
       }
@@ -123,6 +129,7 @@ class SceneManager {
     this.setupCenterNodeButtons(centerNode, buttonContext);
 
     this.currentScene = 'nodeDetail';
+    this.resetCameraToLayoutCenter();
 
     if (this.onSceneChange) {
       this.onSceneChange('nodeDetail', centerNode);
@@ -134,7 +141,8 @@ class SceneManager {
    */
   async showTitleDetail(centerNode, graphNodes = [], graphEdges = [], levelByNodeId = {}, clickedNode = null, buttonContext = {}) {
     this.renderer.setSceneType('titleDetail');
-    this.renderer.setCameraPanEnabled(true);
+    this.renderer.setCameraPanEnabled(false);
+    this.resetCameraToLayoutCenter();
     this.centerNodeButtonContext = buttonContext || {};
     this.renderer.clearNodeButtons();
 
@@ -144,6 +152,7 @@ class SceneManager {
       this.setLayout(newLayout);
       this.setupCenterNodeButtons(centerNode, buttonContext);
       this.currentScene = 'titleDetail';
+      this.resetCameraToLayoutCenter();
       if (this.onSceneChange) {
         this.onSceneChange('titleDetail', centerNode);
       }
@@ -160,6 +169,7 @@ class SceneManager {
 
     this.setupCenterNodeButtons(centerNode, buttonContext);
     this.currentScene = 'titleDetail';
+    this.resetCameraToLayoutCenter();
 
     if (this.onSceneChange) {
       this.onSceneChange('titleDetail', centerNode);
@@ -635,6 +645,7 @@ class SceneManager {
       if (centerNode) {
         const newLayout = this.layout.calculateNodeDetailLayout(centerNode, parentNodes, childNodes);
         this.setLayout(newLayout);
+        this.resetCameraToLayoutCenter();
       }
     } else if (this.currentScene === 'titleDetail' && this.currentLayout.nodes.length > 0) {
       const centerNode = this.currentLayout.nodes.find((n) => n.type === 'center')?.data;
@@ -658,6 +669,7 @@ class SceneManager {
         .filter(Boolean);
       const newLayout = this.layout.calculateTitleDetailLayout(centerNode, graphNodes, graphEdges, levelByNodeId);
       this.setLayout(newLayout);
+      this.resetCameraToLayoutCenter();
     }
   }
 
