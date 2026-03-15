@@ -9,6 +9,7 @@ import ArmyPanel from './components/game/ArmyPanel';
 import TrainingGroundPanel from './components/game/TrainingGroundPanel';
 import KnowledgeViewRouter from './components/game/KnowledgeViewRouter';
 import KnowledgeDomainScene from './components/game/KnowledgeDomainScene';
+import TransitionGhostLayer from './components/game/TransitionGhostLayer';
 import SceneManager from './SceneManager';
 import LocationSelectionModal from './LocationSelectionModal';
 import SenseArticleViewRouter from './components/senseArticle/SenseArticleViewRouter';
@@ -20,6 +21,7 @@ import {
     AppShellChrome,
     SenseSelectorPanel
 } from './components/layout/AppShellPanels';
+import SystemConfirmDialog from './components/common/SystemConfirmDialog';
 import {
     buildSenseArticleSubViewContext,
     createSenseArticleContext,
@@ -64,6 +66,26 @@ import useAppShellState from './hooks/useAppShellState';
 
 const PRIMARY_NAVIGATION_TIMEOUT_MS = 10000;
 const PRIMARY_NAVIGATION_RETRY_DELAYS_MS = [250, 700];
+const clampRevealProgress = (value) => Math.max(0.04, Math.min(1, Number(value) || 0));
+const createIdleHomeTransition = () => ({
+    runId: 0,
+    sourceRect: null,
+    sourceCenter: null,
+    sourceSize: null,
+    sourceTitle: '',
+    sourceSenseTitle: '',
+    sourceSummary: '',
+    sourceVariant: 'root',
+    sourceNodeId: '',
+    targetMode: '',
+    targetNodeId: '',
+    targetSenseId: '',
+    targetCenter: null,
+    targetSize: 0,
+    targetLayoutNodeId: '',
+    status: 'idle',
+    triggeredAt: 0
+});
 
 const App = () => {
     const [socket, setSocket] = useState(null);
@@ -76,6 +98,14 @@ const App = () => {
     const [nodes, setNodes] = useState([]);
     const [, setTechnologies] = useState([]);
     const [view, setView] = useState('login');
+    const [systemConfirmState, setSystemConfirmState] = useState({
+        open: false,
+        title: '',
+        message: '',
+        confirmText: '确认',
+        confirmTone: 'danger',
+        onConfirm: null
+    });
     const socketRef = useRef(null);
     const isRestoringPageRef = useRef(false);
     const hasRestoredPageRef = useRef(false);
@@ -271,6 +301,9 @@ const App = () => {
     const sceneManagerRef = useRef(null);
     const [isWebGLReady, setIsWebGLReady] = useState(false);
     const [clickedNodeForTransition, setClickedNodeForTransition] = useState(null);
+    const [homeDetailTransition, setHomeDetailTransition] = useState(createIdleHomeTransition);
+    const homeDetailTransitionRef = useRef(createIdleHomeTransition());
+    const homeDetailTransitionRunIdRef = useRef(0);
 
     // 搜索栏相关引用
     const searchBarRef = useRef(null);
@@ -289,6 +322,11 @@ const App = () => {
         source: ''
     });
     const [knowledgeHeaderOffset, setKnowledgeHeaderOffset] = useState(92);
+    const [isSenseArticleHeaderPinned, setIsSenseArticleHeaderPinned] = useState(false);
+
+    useEffect(() => {
+        homeDetailTransitionRef.current = homeDetailTransition;
+    }, [homeDetailTransition]);
 
     const delay = useCallback((ms) => new Promise((resolve) => {
         window.setTimeout(resolve, Math.max(0, Number(ms) || 0));
@@ -316,6 +354,106 @@ const App = () => {
         primarySignal.addEventListener('abort', forwardAbort(primarySignal), { once: true });
         secondarySignal.addEventListener('abort', forwardAbort(secondarySignal), { once: true });
         return controller.signal;
+    }, []);
+
+    const clearHomeDetailTransition = useCallback((options = {}) => {
+        const immediate = options?.immediate === true;
+        const current = homeDetailTransitionRef.current;
+        if (sceneManagerRef.current?.renderer && current?.targetLayoutNodeId) {
+            sceneManagerRef.current.renderer.setNodeRevealProgress('', 1);
+        }
+        if (immediate) {
+            setHomeDetailTransition(createIdleHomeTransition());
+            return;
+        }
+        setHomeDetailTransition((prev) => {
+            if (!prev || prev.status === 'idle') return createIdleHomeTransition();
+            return {
+                ...prev,
+                status: 'done'
+            };
+        });
+        window.setTimeout(() => {
+            if (homeDetailTransitionRef.current?.status === 'done') {
+                setHomeDetailTransition(createIdleHomeTransition());
+            }
+        }, 150);
+    }, []);
+
+    const resolveHomeNodeVariant = useCallback((nodeId) => {
+        const normalized = normalizeObjectId(nodeId);
+        if (!normalized) return 'root';
+        if (featuredNodes.some((item) => normalizeObjectId(item?._id) === normalized)) return 'featured';
+        return 'root';
+    }, [featuredNodes]);
+
+    const armHomeDetailTransition = useCallback((node, anchorElement = null) => {
+        const rect = anchorElement?.getBoundingClientRect?.();
+        const nodeId = normalizeObjectId(node?._id);
+        if (!rect || !nodeId) {
+            clearHomeDetailTransition({ immediate: true });
+            return;
+        }
+        homeDetailTransitionRunIdRef.current += 1;
+        setHomeDetailTransition({
+            runId: homeDetailTransitionRunIdRef.current,
+            sourceRect: {
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height
+            },
+            sourceCenter: {
+                x: rect.left + rect.width * 0.5,
+                y: rect.top + rect.height * 0.5
+            },
+            sourceSize: {
+                width: rect.width,
+                height: rect.height
+            },
+            sourceTitle: typeof node?.name === 'string' ? node.name.trim() : '',
+            sourceSenseTitle: typeof node?.activeSenseTitle === 'string' ? node.activeSenseTitle.trim() : '',
+            sourceSummary: typeof node?.description === 'string' ? node.description.trim() : '',
+            sourceVariant: resolveHomeNodeVariant(nodeId),
+            sourceNodeId: nodeId,
+            targetMode: '',
+            targetNodeId: '',
+            targetSenseId: '',
+            targetCenter: null,
+            targetSize: 0,
+            targetLayoutNodeId: '',
+            status: 'armed',
+            triggeredAt: Date.now()
+        });
+    }, [clearHomeDetailTransition, resolveHomeNodeVariant]);
+
+    const prepareHomeDetailTransitionTarget = useCallback(({ mode = '', nodeId = '', senseId = '' } = {}) => {
+        const normalizedNodeId = normalizeObjectId(nodeId);
+        if (!normalizedNodeId) return;
+        setHomeDetailTransition((prev) => {
+            if (!prev || prev.status === 'idle' || !prev.sourceRect) return prev;
+            return {
+                ...prev,
+                targetMode: mode === 'titleDetail' ? 'titleDetail' : 'nodeDetail',
+                targetNodeId: normalizedNodeId,
+                targetSenseId: typeof senseId === 'string' ? senseId.trim() : '',
+                targetCenter: null,
+                targetSize: 0,
+                targetLayoutNodeId: '',
+                status: 'navigating'
+            };
+        });
+    }, []);
+
+    const updateHomeTransitionReveal = useCallback((runId, progress = 1) => {
+        const current = homeDetailTransitionRef.current;
+        if (!current || current.runId !== runId) return;
+        if (!current.targetLayoutNodeId) return;
+        if (!sceneManagerRef.current?.renderer) return;
+        sceneManagerRef.current.renderer.setNodeRevealProgress(
+            current.targetLayoutNodeId,
+            clampRevealProgress(progress)
+        );
     }, []);
 
     const isAbortError = useCallback((error) => (
@@ -489,6 +627,40 @@ const App = () => {
             }
         };
     }, [showKnowledgeDomain, isTransitioningToDomain, view]);
+
+    useEffect(() => {
+        if (!isSenseArticleSubView(view)) {
+            setIsSenseArticleHeaderPinned(false);
+            return undefined;
+        }
+
+        let frameId = null;
+        const syncPinnedState = () => {
+            const nextPinned = (window.scrollY || window.pageYOffset || 0) > 24;
+            setIsSenseArticleHeaderPinned((prev) => (prev === nextPinned ? prev : nextPinned));
+        };
+        const scheduleSync = () => {
+            if (frameId !== null) {
+                cancelAnimationFrame(frameId);
+            }
+            frameId = requestAnimationFrame(() => {
+                frameId = null;
+                syncPinnedState();
+            });
+        };
+
+        syncPinnedState();
+        window.addEventListener('scroll', scheduleSync, { passive: true });
+        window.addEventListener('resize', scheduleSync);
+
+        return () => {
+            window.removeEventListener('scroll', scheduleSync);
+            window.removeEventListener('resize', scheduleSync);
+            if (frameId !== null) {
+                cancelAnimationFrame(frameId);
+            }
+        };
+    }, [view]);
 
     const applyTravelStatus = useCallback((nextTravel) => {
       const normalizedTravel = (nextTravel && typeof nextTravel === 'object')
@@ -1102,6 +1274,7 @@ const App = () => {
     setHomeSearchQuery('');
     setHomeSearchResults([]);
     setShowSearchResults(false);
+    setHomeDetailTransition(createIdleHomeTransition());
     closeHeaderPanels();
     resetDistributionState();
     setIsLocationDockExpanded(false);
@@ -2116,6 +2289,24 @@ const App = () => {
         setNavigationPath(createHomeNavigationPath());
     };
 
+    const handleHeaderHomeNavigation = async () => {
+        if (view === 'senseArticleEditor') {
+            setSystemConfirmState({
+                open: true,
+                title: '确认返回首页',
+                message: '当前位于百科编辑页，返回首页将直接丢失本次未保存内容，是否继续返回首页？',
+                confirmText: '直接返回首页',
+                confirmTone: 'danger',
+                onConfirm: async () => {
+                    setSystemConfirmState((prev) => ({ ...prev, open: false }));
+                    await navigateToHomeWithDockCollapse();
+                }
+            });
+            return;
+        }
+        await navigateToHomeWithDockCollapse();
+    };
+
     const startIntelHeistMiniGame = (targetNode) => {
         if (!targetNode?._id) return;
         setIntelHeistDialog({
@@ -2480,11 +2671,38 @@ const App = () => {
         setTitleRelationInfo(null);
         setSenseSelectorSourceNode(node);
         setSenseSelectorSourceSceneNodeId('');
+        armHomeDetailTransition(node, anchorElement);
         if (anchorElement) {
             updateSenseSelectorAnchorByElement(anchorElement);
         }
         setIsSenseSelectorVisible(true);
+    }, [armHomeDetailTransition]);
+
+    const handleGhostStatusChange = useCallback((runId, status) => {
+        setHomeDetailTransition((prev) => {
+            if (!prev || prev.runId !== runId || prev.status === 'idle') return prev;
+            if (prev.status === status) return prev;
+            return {
+                ...prev,
+                status
+            };
+        });
     }, []);
+
+    const handleGhostSettleProgress = useCallback((runId, progress) => {
+        const current = homeDetailTransitionRef.current;
+        if (!current || current.runId !== runId) return;
+        updateHomeTransitionReveal(runId, progress);
+    }, [updateHomeTransitionReveal]);
+
+    const handleGhostSettleComplete = useCallback((runId) => {
+        const current = homeDetailTransitionRef.current;
+        if (!current || current.runId !== runId) return;
+        if (current.targetLayoutNodeId && sceneManagerRef.current?.renderer) {
+            sceneManagerRef.current.renderer.setNodeRevealProgress(current.targetLayoutNodeId, 1);
+        }
+        clearHomeDetailTransition();
+    }, [clearHomeDetailTransition]);
 
     const handleJumpToCurrentLocationView = async () => {
         if (!currentLocationNodeDetail?._id) {
@@ -2988,6 +3206,108 @@ const App = () => {
 	    }, [isWebGLReady, view, currentTitleDetail, titleGraphData, clickedNodeForTransition]);
 
     useEffect(() => {
+        const transition = homeDetailTransitionRef.current;
+        if (!transition || transition.status !== 'navigating') return undefined;
+        if (!isWebGLReady || !sceneManagerRef.current || !webglCanvasRef.current) return undefined;
+        if (!isKnowledgeDetailView(view)) return undefined;
+        if (transition.targetMode && transition.targetMode !== view) return undefined;
+
+        const targetNodeId = normalizeObjectId(transition.targetNodeId);
+        const activeNodeId = view === 'titleDetail'
+            ? normalizeObjectId(currentTitleDetail?._id)
+            : normalizeObjectId(currentNodeDetail?._id);
+        if (!targetNodeId || !activeNodeId || targetNodeId !== activeNodeId) return undefined;
+
+        let rafId = 0;
+        let attempts = 0;
+        let cancelled = false;
+        const locateTarget = () => {
+            if (cancelled) return;
+            const sceneManager = sceneManagerRef.current;
+            const renderer = sceneManager?.renderer;
+            const canvas = webglCanvasRef.current;
+            const centerNode = Array.isArray(sceneManager?.currentLayout?.nodes)
+                ? sceneManager.currentLayout.nodes.find((item) => (
+                    item?.type === 'center'
+                    && normalizeObjectId(item?.data?._id) === targetNodeId
+                ))
+                : null;
+
+            if (!renderer || !canvas || !centerNode) {
+                attempts += 1;
+                if (attempts < 36) {
+                    rafId = requestAnimationFrame(locateTarget);
+                } else {
+                    clearHomeDetailTransition({ immediate: true });
+                }
+                return;
+            }
+
+            const rect = canvas.getBoundingClientRect();
+            const screenPos = renderer.worldToScreen(centerNode.x, centerNode.y);
+            const radius = typeof renderer.getNodeScreenRadius === 'function'
+                ? renderer.getNodeScreenRadius(centerNode)
+                : Math.max(48, Number(centerNode.radius) || 80);
+            renderer.setNodeRevealProgress(centerNode.id, 0.04);
+            setHomeDetailTransition((prev) => {
+                if (!prev || prev.runId !== transition.runId) return prev;
+                return {
+                    ...prev,
+                    targetCenter: {
+                        x: Math.round(rect.left + screenPos.x),
+                        y: Math.round(rect.top + screenPos.y)
+                    },
+                    targetSize: Math.max(112, radius * 2.32),
+                    targetLayoutNodeId: centerNode.id,
+                    status: 'target-ready'
+                };
+            });
+        };
+
+        rafId = requestAnimationFrame(locateTarget);
+        return () => {
+            cancelled = true;
+            if (rafId) {
+                cancelAnimationFrame(rafId);
+            }
+        };
+    }, [
+        clearHomeDetailTransition,
+        currentNodeDetail?._id,
+        currentTitleDetail?._id,
+        isWebGLReady,
+        view
+    ]);
+
+    useEffect(() => {
+        const status = homeDetailTransition.status;
+        if (view === 'home' && !isSenseSelectorVisible && status === 'armed') {
+            clearHomeDetailTransition({ immediate: true });
+            return;
+        }
+        if (status === 'idle' || status === 'done') return;
+        if (view !== 'home' && !isKnowledgeDetailView(view)) {
+            clearHomeDetailTransition({ immediate: true });
+        }
+    }, [clearHomeDetailTransition, homeDetailTransition.status, isSenseSelectorVisible, view]);
+
+    useEffect(() => {
+        const status = homeDetailTransition.status;
+        if (status === 'idle' || status === 'done') return undefined;
+        const handleResize = () => {
+            const current = homeDetailTransitionRef.current;
+            if (current?.targetLayoutNodeId && sceneManagerRef.current?.renderer) {
+                sceneManagerRef.current.renderer.setNodeRevealProgress(current.targetLayoutNodeId, 1);
+            }
+            clearHomeDetailTransition({ immediate: true });
+        };
+        window.addEventListener('resize', handleResize);
+        return () => {
+            window.removeEventListener('resize', handleResize);
+        };
+    }, [clearHomeDetailTransition, homeDetailTransition.status]);
+
+    useEffect(() => {
         if (!sceneManagerRef.current) return;
         if (view === 'titleDetail' && currentTitleDetail) {
             sceneManagerRef.current.setupCenterNodeButtons(
@@ -3459,6 +3779,8 @@ const App = () => {
         setShowNodeInfoModal,
         setNodeInfoModalTarget,
         setIsSenseSelectorVisible,
+        prepareHomeDetailTransitionTarget,
+        cancelHomeDetailTransition: () => clearHomeDetailTransition({ immediate: true }),
         buildClickedNodeFromScene,
         fetchTitleDetail,
         fetchNodeDetail,
@@ -3495,7 +3817,7 @@ const App = () => {
 
     return (
         <div
-            className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''} ${view === 'home' ? 'home-view-active' : ''}`}
+            className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''} ${view === 'home' ? 'home-view-active' : ''} ${(view === 'titleDetail' || view === 'nodeDetail') ? 'knowledge-mainview-active' : ''} ${isSenseArticleSubView(view) ? 'sense-article-shell-active' : ''} ${isSenseArticleHeaderPinned ? 'sense-article-shell-pinned' : ''}`}
             style={{
               '--knowledge-header-offset': `${knowledgeHeaderOffset}px`,
               '--knowledge-domain-top-offset': isKnowledgeDomainActive ? `${knowledgeHeaderOffset}px` : '0px'
@@ -3505,6 +3827,7 @@ const App = () => {
                 <AppShellChrome
                     headerRef={headerRef}
                     isKnowledgeDomainActive={isKnowledgeDomainActive}
+                    isCompact={isSenseArticleSubView(view) && isSenseArticleHeaderPinned}
                     profession={profession}
                     username={username}
                     userAvatar={userAvatar}
@@ -3557,6 +3880,7 @@ const App = () => {
                     formatDomainKnowledgePoint={formatDomainKnowledgePoint}
                     closeHeaderPanels={closeHeaderPanels}
                     navigateToHomeWithDockCollapse={navigateToHomeWithDockCollapse}
+                    handleHeaderHomeNavigation={handleHeaderHomeNavigation}
                     prepareForPrimaryNavigation={prepareForPrimaryNavigation}
                     setView={setView}
                     militaryMenuWrapperRef={militaryMenuWrapperRef}
@@ -3673,6 +3997,12 @@ const App = () => {
                     handleSwitchTitleView={handleSwitchTitleView}
                     handleSwitchSenseView={handleSwitchSenseView}
                     openSenseArticleFromNode={openSenseArticleFromNode}
+                />
+                <TransitionGhostLayer
+                    transition={homeDetailTransition}
+                    onStatusChange={handleGhostStatusChange}
+                    onSettleProgress={handleGhostSettleProgress}
+                    onSettleComplete={handleGhostSettleComplete}
                 />
                 {view === "alliance" && (
                     <AlliancePanel 
@@ -3791,6 +4121,22 @@ const App = () => {
                     transitionProgress={domainTransitionProgress}
                     mode={knowledgeDomainMode}
                     onIntelSnapshotCaptured={handleIntelHeistSnapshotCaptured}
+                />
+                <SystemConfirmDialog
+                    open={systemConfirmState.open}
+                    title={systemConfirmState.title}
+                    message={systemConfirmState.message}
+                    confirmText={systemConfirmState.confirmText}
+                    confirmTone={systemConfirmState.confirmTone}
+                    onClose={() => setSystemConfirmState({
+                        open: false,
+                        title: '',
+                        message: '',
+                        confirmText: '确认',
+                        confirmTone: 'danger',
+                        onConfirm: null
+                    })}
+                    onConfirm={() => systemConfirmState.onConfirm && systemConfirmState.onConfirm()}
                 />
             </div>
         </div>

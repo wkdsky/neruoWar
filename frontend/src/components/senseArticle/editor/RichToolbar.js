@@ -21,7 +21,6 @@ import {
   Minus,
   Outdent,
   Redo2,
-  Type,
   Undo2,
   Video
 } from 'lucide-react';
@@ -64,6 +63,13 @@ const ORDERED_LIST_STYLE_OPTIONS = [
   { value: 'decimal-leading-zero', label: '01. 02. 03.' },
   { value: 'lower-alpha', label: 'a. b. c.' },
   { value: 'lower-roman', label: 'i. ii. iii.' }
+];
+
+const PARAGRAPH_TYPE_OPTIONS = [
+  { value: 'paragraph', label: '正文' },
+  { value: 'h1', label: '标题 1' },
+  { value: 'h2', label: '标题 2' },
+  { value: 'h3', label: '标题 3' }
 ];
 
 const collectSavedMediaAttachments = (editor, mediaLibrary = null) => {
@@ -130,6 +136,7 @@ const RichToolbar = ({
   const mediaToolbarGroupRef = useRef(null);
   const mediaMenuAnchorRef = useRef(null);
   const referenceMenuAnchorRef = useRef(null);
+  const paragraphMenuAnchorRef = useRef(null);
   const bulletListMenuAnchorRef = useRef(null);
   const orderedListMenuAnchorRef = useRef(null);
   const formatBlockMenuAnchorRef = useRef(null);
@@ -176,17 +183,20 @@ const RichToolbar = ({
   const mediaAttachments = collectSavedMediaAttachments(editor, mediaLibrary);
   const activeBulletListStyle = editor.getAttributes('bulletList')?.listStyleType || 'disc';
   const activeOrderedListStyle = editor.getAttributes('orderedList')?.listStyleType || 'decimal';
+  const paragraphTypeOption = PARAGRAPH_TYPE_OPTIONS.find((option) => option.value === paragraphType) || PARAGRAPH_TYPE_OPTIONS[0];
 
   useEffect(() => {
     if (!toolbarMenu) return undefined;
     const handlePointerDown = (event) => {
       const mediaMenuOpen = toolbarMenu === 'media';
       const referenceMenuOpen = toolbarMenu === 'reference';
+      const paragraphMenuOpen = toolbarMenu === 'paragraph';
       const bulletListMenuOpen = toolbarMenu === 'bullet-list';
       const orderedListMenuOpen = toolbarMenu === 'ordered-list';
       const formatBlockMenuOpen = toolbarMenu === 'format-block';
       if (mediaMenuOpen && mediaMenuAnchorRef.current?.contains(event.target)) return;
       if (referenceMenuOpen && referenceMenuAnchorRef.current?.contains(event.target)) return;
+      if (paragraphMenuOpen && paragraphMenuAnchorRef.current?.contains(event.target)) return;
       if (bulletListMenuOpen && bulletListMenuAnchorRef.current?.contains(event.target)) return;
       if (orderedListMenuOpen && orderedListMenuAnchorRef.current?.contains(event.target)) return;
       if (formatBlockMenuOpen && formatBlockMenuAnchorRef.current?.contains(event.target)) return;
@@ -440,6 +450,7 @@ const RichToolbar = ({
       if (value === 'h3') return chain.toggleHeading({ level: 3 }).run();
       return false;
     });
+    setToolbarMenu('');
   };
 
   const handleFormatBlockChange = (value) => {
@@ -676,20 +687,30 @@ const RichToolbar = ({
         </ToolbarGroup>
 
         <ToolbarGroup title="段落">
-          <div className="sense-rich-toolbar-select">
-            <Heading size={16} />
-            <select
-              aria-label="段落类型"
-              value={paragraphType}
+          <div ref={paragraphMenuAnchorRef} className="sense-table-menu-anchor">
+            <ToolbarButton
+              title="段落类型"
+              active={paragraphType !== 'paragraph' || toolbarMenu === 'paragraph'}
               onMouseDownCapture={preserveSelection}
-              onChange={(event) => handleParagraphChange(event.target.value)}
+              onClick={() => toggleToolbarMenu('paragraph')}
             >
-              <option value="paragraph">正文</option>
-              <option value="h1">标题 1</option>
-              <option value="h2">标题 2</option>
-              <option value="h3">标题 3</option>
-            </select>
-            <ChevronDown size={14} />
+              {menuButtonLabel(paragraphTypeOption.label, <Heading size={16} />)}
+            </ToolbarButton>
+            {toolbarMenu === 'paragraph' ? (
+              <div className="sense-table-menu-panel" role="menu" aria-label="段落类型菜单">
+                {PARAGRAPH_TYPE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`sense-table-menu-item${paragraphType === option.value ? ' checked' : ''}`}
+                    onClick={() => handleParagraphChange(option.value)}
+                  >
+                    <span className="sense-table-menu-check">{paragraphType === option.value ? <Check size={14} /> : null}</span>
+                    <span>{option.label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         </ToolbarGroup>
 
@@ -727,10 +748,10 @@ const RichToolbar = ({
         </ToolbarGroup>
 
         <ToolbarGroup title="文字样式">
-          <ToolbarButton active={editor.isActive('bold')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleBold().run())} title="粗体 (Ctrl/Cmd+B)" ariaLabel="切换粗体">{buttonLabel('粗体', <Type size={16} />)}</ToolbarButton>
-          <ToolbarButton active={editor.isActive('italic')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleItalic().run())} title="斜体 (Ctrl/Cmd+I)" ariaLabel="切换斜体">{buttonLabel('斜体', <Type size={16} />)}</ToolbarButton>
-          <ToolbarButton active={editor.isActive('underline')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleUnderline().run())} title="下划线" ariaLabel="切换下划线">{buttonLabel('下划线', <Type size={16} />)}</ToolbarButton>
-          <ToolbarButton active={editor.isActive('strike')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleStrike().run())} title="删除线" ariaLabel="切换删除线">{buttonLabel('删除线', <Type size={16} />)}</ToolbarButton>
+          <ToolbarButton active={editor.isActive('bold')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleBold().run())} title="粗体 (Ctrl/Cmd+B)" ariaLabel="切换粗体"><strong>B</strong></ToolbarButton>
+          <ToolbarButton active={editor.isActive('italic')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleItalic().run())} title="斜体 (Ctrl/Cmd+I)" ariaLabel="切换斜体"><em>I</em></ToolbarButton>
+          <ToolbarButton active={editor.isActive('underline')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleUnderline().run())} title="下划线" ariaLabel="切换下划线"><span style={{ textDecoration: 'underline' }}>U</span></ToolbarButton>
+          <ToolbarButton active={editor.isActive('strike')} onMouseDownCapture={preserveSelection} onClick={() => runWithPreservedSelection((chain) => chain.toggleStrike().run())} title="删除线" ariaLabel="切换删除线"><span style={{ textDecoration: 'line-through' }}>S</span></ToolbarButton>
           <ToolbarButton active={editor.isActive('formulaInline') || editor.isActive('formulaBlock') || formulaDialogOpen} onMouseDownCapture={preserveSelection} onClick={() => openSingleFloatingUi(() => setFormulaDialogOpen(true), 'formula-dialog')} title="公式 / 特殊字符" ariaLabel="插入公式或特殊字符">{buttonLabel('公式/特殊字符', <Calculator size={16} />)}</ToolbarButton>
         </ToolbarGroup>
 

@@ -18,7 +18,7 @@ import {
   buildSenseArticleBreadcrumb,
   getReferenceTargetStatusLabel,
   getRelocationStatusLabel,
-  getRevisionDisplayTitle,
+  getRevisionListLabel,
   getRevisionStatusLabel,
   getSourceModeLabel,
   isEditableSenseArticleStatus,
@@ -35,6 +35,12 @@ import { buildSenseArticleAllianceContext, buildSenseArticleThemeStyle } from '.
 import useSenseArticleDisplayMode from './hooks/useSenseArticleDisplayMode';
 
 const ANNOTATION_COLORS = ['#fde68a', '#fca5a5', '#86efac', '#93c5fd', '#d8b4fe'];
+const FLOATING_PANEL_WIDTH = 280;
+const FLOATING_PANEL_GAP = 16;
+const SELECTION_TOOLBAR_ESTIMATED_HEIGHT = 208;
+const REFERENCE_PREVIEW_ESTIMATED_HEIGHT = 172;
+const MY_EDITS_PANEL_WIDTH = 428;
+const MY_EDITS_PANEL_ESTIMATED_HEIGHT = 540;
 
 const getMyEditBadgeLabel = (revision = {}, activeFullDraftId = '') => {
   const revisionId = String(revision?._id || '').trim();
@@ -70,6 +76,59 @@ const resolveArticleAvatarSrc = (avatarKey = '') => {
   if (articleAvatarMap[key]) return articleAvatarMap[key];
   if (/^https?:\/\//i.test(key) || key.startsWith('/') || key.startsWith('data:image/')) return key;
   return articleAvatarMap.default_male_1;
+};
+
+const readShellCssPixelValue = (name, fallback) => {
+  if (typeof window === 'undefined') return fallback;
+  const scope = document.querySelector('.sense-article-page')
+    || document.querySelector('.game-container')
+    || document.documentElement;
+  const rawValue = window.getComputedStyle(scope).getPropertyValue(name);
+  const parsed = Number.parseFloat(rawValue);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const getFloatingViewportInsets = () => ({
+  top: readShellCssPixelValue('--knowledge-header-offset', 92) + FLOATING_PANEL_GAP,
+  right: readShellCssPixelValue('--app-shell-right-safe-area', 108) + FLOATING_PANEL_GAP,
+  bottom: FLOATING_PANEL_GAP,
+  left: FLOATING_PANEL_GAP
+});
+
+const clampFloatingLeft = (left, width = FLOATING_PANEL_WIDTH) => {
+  if (typeof window === 'undefined') return left;
+  const insets = getFloatingViewportInsets();
+  const minLeft = window.scrollX + insets.left;
+  const maxLeft = Math.max(minLeft, window.scrollX + window.innerWidth - insets.right - width);
+  return Math.min(Math.max(left, minLeft), maxLeft);
+};
+
+const clampFloatingTop = (top, estimatedHeight) => {
+  if (typeof window === 'undefined') return top;
+  const insets = getFloatingViewportInsets();
+  const minTop = window.scrollY + insets.top;
+  const maxTop = Math.max(minTop, window.scrollY + window.innerHeight - insets.bottom - estimatedHeight);
+  return Math.min(Math.max(top, minTop), maxTop);
+};
+
+const buildMyEditsPanelStyle = (anchorElement) => {
+  if (typeof window === 'undefined' || !anchorElement) return null;
+  const rect = anchorElement.getBoundingClientRect();
+  const viewportPadding = Math.max(16, readShellCssPixelValue('--app-shell-inline-gap', 24));
+  const collapsedDockAllowance = 76;
+  const maxWidth = Math.max(300, window.innerWidth - (viewportPadding * 2) - collapsedDockAllowance);
+  const width = Math.min(MY_EDITS_PANEL_WIDTH, maxWidth);
+  const preferredLeft = window.scrollX + rect.right - width;
+  const left = Math.min(
+    Math.max(window.scrollX + viewportPadding, preferredLeft),
+    Math.max(window.scrollX + viewportPadding, window.scrollX + window.innerWidth - collapsedDockAllowance - width)
+  );
+  const top = clampFloatingTop(window.scrollY + rect.bottom + 8, MY_EDITS_PANEL_ESTIMATED_HEIGHT);
+  return {
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${width}px`
+  };
 };
 
 const simpleHash = (value = '') => {
@@ -155,11 +214,13 @@ const SenseArticlePage = ({
   const [myEditsLoaded, setMyEditsLoaded] = useState(false);
   const [activeFullDraft, setActiveFullDraft] = useState(null);
   const [abandoningRevisionId, setAbandoningRevisionId] = useState('');
+  const [myEditsPanelStyle, setMyEditsPanelStyle] = useState(null);
   const hasSearchQuery = !!searchQuery.trim();
   const hasSearchResults = hasSearchQuery && searchData.total > 0;
   const selectionToolbarRef = useRef(null);
   const readingSearchRef = useRef(null);
   const readingSearchInputRef = useRef(null);
+  const myEditsButtonRef = useRef(null);
   const loadCurrentSequenceRef = useRef(0);
   const readingSideDataRequestSequenceRef = useRef(0);
   const myEditsRequestSequenceRef = useRef(0);
@@ -421,6 +482,25 @@ const SenseArticlePage = ({
   }, [loadMyEdits, myEditsLoaded, myEditsOpen]);
 
   useEffect(() => {
+    if (!myEditsOpen) {
+      setMyEditsPanelStyle(null);
+      return undefined;
+    }
+
+    const syncMyEditsPanelStyle = () => {
+      setMyEditsPanelStyle(buildMyEditsPanelStyle(myEditsButtonRef.current));
+    };
+
+    syncMyEditsPanelStyle();
+    window.addEventListener('resize', syncMyEditsPanelStyle);
+    window.addEventListener('scroll', syncMyEditsPanelStyle, true);
+    return () => {
+      window.removeEventListener('resize', syncMyEditsPanelStyle);
+      window.removeEventListener('scroll', syncMyEditsPanelStyle, true);
+    };
+  }, [myEditsOpen]);
+
+  useEffect(() => {
     if (!pageData?.permissions?.canCreateRevision) return;
     if (myEditsLoaded || myEditsRequestRef.current) return;
     loadMyEdits();
@@ -593,9 +673,14 @@ const SenseArticlePage = ({
 
   const renderSelectionToolbar = () => {
     if (!selectionAnchor?.selectionText) return null;
+    const left = clampFloatingLeft(selectionAnchor.rect.left, FLOATING_PANEL_WIDTH);
+    const top = clampFloatingTop(
+      selectionAnchor.rect.top - 12,
+      SELECTION_TOOLBAR_ESTIMATED_HEIGHT
+    ) + SELECTION_TOOLBAR_ESTIMATED_HEIGHT;
     const style = {
-      left: `${selectionAnchor.rect.left}px`,
-      top: `${Math.max(24, selectionAnchor.rect.top - 12)}px`
+      left: `${left}px`,
+      top: `${top}px`
     };
     return (
       <div className="sense-selection-toolbar" style={style} ref={selectionToolbarRef}>
@@ -622,7 +707,10 @@ const SenseArticlePage = ({
 
   const renderReferencePreview = () => {
     if (!referencePreview?.reference) return null;
-    const style = { left: `${referencePreview.rect.left}px`, top: `${referencePreview.rect.top}px` };
+    const style = {
+      left: `${clampFloatingLeft(referencePreview.rect.left, FLOATING_PANEL_WIDTH)}px`,
+      top: `${clampFloatingTop(referencePreview.rect.top, REFERENCE_PREVIEW_ESTIMATED_HEIGHT)}px`
+    };
     const ref = referencePreview.reference;
     return (
       <div className="sense-reference-preview-card" style={style}>
@@ -653,7 +741,11 @@ const SenseArticlePage = ({
     if (!myEditsOpen) return null;
     return (
       <div className="sense-floating-backdrop" onClick={() => setMyEditsOpen(false)}>
-        <div className="sense-floating-panel" onClick={(event) => event.stopPropagation()}>
+        <div
+          className="sense-floating-panel sense-my-edits-panel"
+          style={myEditsPanelStyle || undefined}
+          onClick={(event) => event.stopPropagation()}
+        >
           <div className="sense-floating-panel-header">
             <div>
               <div className="sense-side-card-title"><Sparkles size={16} /> 我的编辑</div>
@@ -680,7 +772,7 @@ const SenseArticlePage = ({
               {myEdits.length === 0 ? <SenseArticleStateView compact kind="empty" title="暂无我的编辑" description="这里会显示你自己的草稿，以及你已提交但仍待审核的修订。" /> : myEdits.map((item) => (
                 <div key={item._id} className="sense-annotation-card sense-my-edit-card">
                   <div className="sense-annotation-card-head">
-                    <strong>{getRevisionDisplayTitle(item)}</strong>
+                    <strong>{getRevisionListLabel(item, pageData?.nodeSense?.title || senseId)}</strong>
                     <span className="sense-my-edit-badge">{getMyEditBadgeLabel(item, activeFullDraft?._id || '')}</span>
                   </div>
                   <div className="sense-annotation-card-meta">{item.updatedAt ? new Date(item.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '--'} · {getRevisionStatusLabel(item.status || 'draft')}</div>
@@ -744,14 +836,19 @@ const SenseArticlePage = ({
               <PenSquare size={16} /> 创建首个百科版本
             </button>
           ) : null}
-          <button type="button" className="btn btn-secondary" onClick={() => setMyEditsOpen(true)}>
-            <Sparkles size={16} /> 我的编辑
-          </button>
           {onOpenHistory ? (
             <button type="button" className="btn btn-secondary" onClick={() => onOpenHistory()}>
               <History size={16} /> 历史版本
             </button>
           ) : null}
+          <button
+            ref={myEditsButtonRef}
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setMyEditsOpen(true)}
+          >
+            <Sparkles size={16} /> 我的编辑
+          </button>
           <button type="button" className="btn btn-secondary" onClick={onBack}>返回</button>
         </>
       )
@@ -872,7 +969,12 @@ const SenseArticlePage = ({
             <button type="button" className="btn btn-secondary" onClick={() => onOpenHistory && onOpenHistory()}>
               <History size={16} /> 历史版本
             </button>
-            <button type="button" className="btn btn-secondary" onClick={() => setMyEditsOpen(true)}>
+            <button
+              ref={myEditsButtonRef}
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setMyEditsOpen(true)}
+            >
               <Sparkles size={16} /> 我的编辑
             </button>
             {(permissions.canReviewDomainAdmin || permissions.canReviewDomainMaster || permissions.isSystemAdmin) && onOpenDashboard ? (
@@ -892,6 +994,7 @@ const SenseArticlePage = ({
               <SenseArticleOutlineTree
                 items={headingIndex}
                 activeHeadingId={activeHeadingId}
+                resetKey={`reading:${nodeId}:${senseId}:${pageData?.revision?._id || ''}`}
                 onJump={(heading) => jumpToHeading(heading.headingId)}
                 emptyTitle="暂无目录"
                 emptyDescription="当前发布版没有可索引的小节标题。"

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Sparkles, XCircle } from 'lucide-react';
 import { senseArticleApi } from '../../utils/senseArticleApi';
 import defaultMale1 from '../../assets/avatars/default_male_1.svg';
@@ -53,32 +53,39 @@ const SenseArticleReviewPage = ({ nodeId, senseId, revisionId, articleContext, o
   const [acting, setActing] = useState('');
   const pageThemeStyle = useMemo(() => buildSenseArticleThemeStyle(detail?.node ? { ...articleContext, node: detail.node } : articleContext), [detail, articleContext]);
 
+  const loadDetail = useCallback(async ({ signal = null, activeRef = null, showLoading = true } = {}) => {
+    if (showLoading) setLoading(true);
+    setError(null);
+    try {
+      const data = await senseArticleApi.getRevisionDetail(nodeId, senseId, revisionId, {
+        signal
+      });
+      if (!activeRef || activeRef.current) {
+        setDetail(data);
+      }
+      return data;
+    } catch (requestError) {
+      if (requestError?.name === 'AbortError') return null;
+      if (!activeRef || activeRef.current) {
+        setError(requestError);
+      }
+      throw requestError;
+    } finally {
+      if (showLoading && (!signal || !signal.aborted) && (!activeRef || activeRef.current)) {
+        setLoading(false);
+      }
+    }
+  }, [nodeId, revisionId, senseId]);
+
   useEffect(() => {
     const controller = new AbortController();
-    let active = true;
-
-    const load = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const data = await senseArticleApi.getRevisionDetail(nodeId, senseId, revisionId, {
-          signal: controller.signal
-        });
-        if (active) setDetail(data);
-      } catch (requestError) {
-        if (requestError?.name === 'AbortError') return;
-        if (active) setError(requestError);
-      } finally {
-        if (active && !controller.signal.aborted) setLoading(false);
-      }
-    };
-
-    load();
+    const activeRef = { current: true };
+    loadDetail({ signal: controller.signal, activeRef, showLoading: true }).catch(() => {});
     return () => {
-      active = false;
+      activeRef.current = false;
       controller.abort();
     };
-  }, [nodeId, senseId, revisionId]);
+  }, [loadDetail]);
 
   useEffect(() => {
     if (!detail) return;
@@ -148,7 +155,20 @@ const SenseArticleReviewPage = ({ nodeId, senseId, revisionId, articleContext, o
     setActing(action);
     try {
       const data = await senseArticleApi.reviewRevision(nodeId, senseId, revisionId, { action, comment });
-      onReviewed && onReviewed(data.revision);
+      setDetail((prev) => (
+        prev
+          ? {
+              ...prev,
+              revision: {
+                ...(prev.revision || {}),
+                ...(data?.revision || {})
+              }
+            }
+          : prev
+      ));
+      const refreshedDetail = await loadDetail({ showLoading: false }).catch(() => null);
+      setComment('');
+      onReviewed && onReviewed((refreshedDetail?.revision || data?.revision || null));
     } catch (requestError) {
       window.alert(requestError.message);
     } finally {

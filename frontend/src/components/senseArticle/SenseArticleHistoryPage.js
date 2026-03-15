@@ -10,6 +10,7 @@ import {
   buildSenseArticleBreadcrumb,
   buildSenseArticleTitle,
   getRevisionDisplayTitle,
+  getRevisionListLabel,
   resolveSenseArticleStateFromError
 } from './senseArticleUi';
 import './SenseArticle.css';
@@ -134,7 +135,7 @@ const SenseArticleHistoryPage = ({ nodeId, senseId, articleContext, onContextPat
               <div key={revision._id} className={`sense-history-card ${isCurrent ? 'current' : ''}`}>
                 <div className="sense-history-main">
                   <div className="sense-history-title">
-                    <strong>{getRevisionDisplayTitle(revision)}</strong>
+                    <strong>{getRevisionListLabel(revision, articleContext?.senseTitle || senseId)}</strong>
                     {isCurrent ? <SenseArticleStatusBadge tone="success">当前版本</SenseArticleStatusBadge> : null}
                   </div>
                   <div className="sense-history-meta">发起人：{revision.proposerUsername || revision.proposerId || '--'} · {revision.publishedAt ? new Date(revision.publishedAt).toLocaleString('zh-CN', { hour12: false }) : '--'}</div>

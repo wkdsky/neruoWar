@@ -83,6 +83,7 @@ const RichSenseArticleEditorShell = ({
   onChange,
   onSearchReferences,
   onUploadMedia,
+  outlineResetKey = '',
   scopedFocus = null,
   mediaLibrary = null,
   mediaLibraryState = 'idle',
@@ -92,7 +93,9 @@ const RichSenseArticleEditorShell = ({
   onEditorNotice = null,
   onSaveDraft = null,
   saveDisabled = false,
-  savePending = false
+  savePending = false,
+  headerContent = null,
+  commandbarActions = null
 }) => {
   const toolbarRef = useRef(null);
   const shellRef = useRef(null);
@@ -542,6 +545,11 @@ const RichSenseArticleEditorShell = ({
   return (
     <div ref={shellRef} className="sense-rich-editor-shell" style={{ '--sense-editor-toolbar-height': `${toolbarHeight}px` }}>
       <div ref={toolbarRef} className="sense-rich-toolbar-shell">
+        {headerContent ? (
+          <div className="sense-rich-editor-shell-head">
+            {headerContent}
+          </div>
+        ) : null}
         <div className="sense-rich-editor-commandbar">
           <div className="sense-rich-editor-commandbar-actions">
             <button
@@ -562,6 +570,11 @@ const RichSenseArticleEditorShell = ({
               <span>{isOutlineCollapsed ? '展开目录' : '收起目录'}</span>
             </button>
           </div>
+          {commandbarActions ? (
+            <div className="sense-rich-editor-commandbar-actions sense-rich-editor-commandbar-actions-extra">
+              {commandbarActions}
+            </div>
+          ) : null}
         </div>
         <RichToolbar
           editor={editor}
@@ -586,6 +599,7 @@ const RichSenseArticleEditorShell = ({
               </div>
               <SenseArticleOutlineTree
                 items={outlineItems}
+                resetKey={outlineResetKey}
                 onJump={handleOutlineJump}
                 emptyTitle="暂无目录项"
                 emptyDescription=""

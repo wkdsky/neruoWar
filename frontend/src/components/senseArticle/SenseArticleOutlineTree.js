@@ -94,26 +94,33 @@ const SenseArticleOutlineTree = ({
   activeHeadingId = '',
   onJump,
   renderActions = null,
+  resetKey = '',
   emptyTitle = '暂无目录项',
   emptyDescription = ''
 }) => {
   const outlineTree = useMemo(() => buildOutlineTree(items), [items]);
   const [expandedIds, setExpandedIds] = useState([]);
   const hasInitializedStateRef = useRef(false);
+  const seenExpandableIdsRef = useRef(new Set());
   const treeRef = useRef(null);
   const expandedIdSet = useMemo(() => new Set(expandedIds), [expandedIds]);
 
   useEffect(() => {
+    hasInitializedStateRef.current = false;
     const nextExpandableIds = collectExpandableIds(outlineTree);
     setExpandedIds((previousIds) => {
       if (!hasInitializedStateRef.current) {
         hasInitializedStateRef.current = true;
+        seenExpandableIdsRef.current = new Set(nextExpandableIds);
         return nextExpandableIds;
       }
+      const seenExpandableIds = seenExpandableIdsRef.current || new Set();
       const previousIdSet = new Set(previousIds);
-      return nextExpandableIds.filter((id) => previousIdSet.has(id));
+      const nextExpandedIds = nextExpandableIds.filter((id) => previousIdSet.has(id) || !seenExpandableIds.has(id));
+      seenExpandableIdsRef.current = new Set(nextExpandableIds);
+      return nextExpandedIds;
     });
-  }, [outlineTree]);
+  }, [outlineTree, resetKey]);
 
   useEffect(() => {
     if (!activeHeadingId) return;
@@ -149,7 +156,15 @@ const SenseArticleOutlineTree = ({
   };
 
   if (!items.length) {
-    return <SenseArticleStateView compact kind="empty" title={emptyTitle} description={emptyDescription} />;
+    return (
+      <SenseArticleStateView
+        compact
+        kind="empty"
+        title={emptyTitle}
+        description={emptyDescription}
+        className="sense-reading-outline-empty"
+      />
+    );
   }
 
   return (

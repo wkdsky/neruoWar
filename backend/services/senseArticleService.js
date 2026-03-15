@@ -583,9 +583,8 @@ const compareHasAnyChanges = (compare = null) => {
   if (!compare || typeof compare !== 'object') return false;
   const summary = compare.summary && typeof compare.summary === 'object' ? compare.summary : {};
   if (Object.values(summary).some((value) => Number(value || 0) > 0)) return true;
-  if (Array.isArray(compare.changes) && compare.changes.length > 0) return true;
-  const stats = compare.stats && typeof compare.stats === 'object' ? compare.stats : {};
-  return Object.values(stats).some((value) => Number(value || 0) > 0);
+  if (Array.isArray(compare.sections) && compare.sections.some((section) => !!section?.hasChanges)) return true;
+  return false;
 };
 
 const revisionHasMeaningfulSubmissionChanges = ({ revision = null, currentSenseTitle = '' } = {}) => {
@@ -682,11 +681,17 @@ const buildRevisionMediaAndValidation = async ({ revisionLike = null, nodeId = '
     senseId: String(senseId || revisionLike?.senseId || '').trim(),
     references: rawMediaReferences
   });
+  const revisionForValidation = revisionLike?.toObject
+    ? {
+        ...revisionLike.toObject(),
+        mediaReferences
+      }
+    : {
+        ...(revisionLike || {}),
+        mediaReferences
+      };
   const validationSnapshot = validateRevisionContent({
-    revision: {
-      ...(revisionLike || {}),
-      mediaReferences
-    },
+    revision: revisionForValidation,
     mediaReferences
   });
   return {
@@ -966,12 +971,13 @@ const ensureRevisionDerivedState = async ({
   nodeId = '',
   senseId = '',
   persist = true,
+  force = false,
   requestMeta = null
 } = {}) => {
   if (!revision) return null;
   const needsMediaReferences = !Array.isArray(revision.mediaReferences) || revision.mediaReferences.length === 0;
   const needsValidationSnapshot = !revision.validationSnapshot;
-  if (!needsMediaReferences && !needsValidationSnapshot) return revision;
+  if (!force && !needsMediaReferences && !needsValidationSnapshot) return revision;
   const startedAt = nowMs();
   const derived = await buildRevisionMediaAndValidation({
     revisionLike: revision,
@@ -999,6 +1005,7 @@ const ensureRevisionDerivedState = async ({
     senseId: String(senseId || revision?.senseId || '').trim(),
     revisionId: getIdString(revision?._id),
     persisted: !!(persist && revision?.save),
+    forced: !!force,
     durationMs: durationMs(startedAt),
     mediaReferenceCount: Array.isArray(derived.mediaReferences) ? derived.mediaReferences.length : 0,
     blockingCount: Array.isArray(derived.validationSnapshot?.blocking) ? derived.validationSnapshot.blocking.length : 0,
@@ -1196,6 +1203,7 @@ const getRevisionDetail = async ({ nodeId, senseId, revisionId, userId, requestM
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
     persist: false,
+    force: true,
     requestMeta
   });
   const fullRevision = decoratedRevision
@@ -1527,7 +1535,13 @@ const updateDraftRevision = async ({ nodeId, senseId, revisionId, userId, payloa
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
     revisionId: getIdString(revision?._id),
-    durationMs: durationMs(startedAt)
+    durationMs: durationMs(startedAt),
+    contentFormat: revision?.contentFormat || '',
+    sourceMode: revision?.sourceMode || 'full',
+    editorSourceLength: typeof revision?.editorSource === 'string' ? revision.editorSource.length : 0,
+    plainTextLength: typeof revision?.plainTextSnapshot === 'string' ? revision.plainTextSnapshot.length : 0,
+    headingCount: Array.isArray(revision?.headingIndex) ? revision.headingIndex.length : 0,
+    blockingCodes: Array.isArray(revision?.validationSnapshot?.blocking) ? revision.validationSnapshot.blocking.map((item) => item?.code || '').filter(Boolean) : []
   });
   return response;
 };
@@ -1618,7 +1632,24 @@ const submitRevision = async ({ nodeId, senseId, revisionId, userId }) => {
     revision,
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
-    persist: true
+    persist: true,
+    force: true
+  });
+  diagLog('sense.revision.submit.precheck', {
+    nodeId: bundle.nodeId,
+    senseId: bundle.senseId,
+    revisionId: getIdString(revision?._id),
+    baseRevisionId: getIdString(revision?.baseRevisionId),
+    contentFormat: revision?.contentFormat || '',
+    sourceMode: revision?.sourceMode || 'full',
+    editorSourceLength: typeof revision?.editorSource === 'string' ? revision.editorSource.length : 0,
+    plainTextLength: typeof revision?.plainTextSnapshot === 'string' ? revision.plainTextSnapshot.length : 0,
+    headingCount: Array.isArray(revision?.headingIndex) ? revision.headingIndex.length : 0,
+    hasMeaningfulChanges: revisionHasMeaningfulSubmissionChanges({
+      revision,
+      currentSenseTitle: bundle?.nodeSense?.title || senseId
+    }),
+    blockingCodes: Array.isArray(revision?.validationSnapshot?.blocking) ? revision.validationSnapshot.blocking.map((item) => item?.code || '').filter(Boolean) : []
   });
   if (!revisionHasMeaningfulSubmissionChanges({
     revision,
@@ -2417,6 +2448,7 @@ const getRevisionValidation = async ({ nodeId, senseId, revisionId, userId, requ
     nodeId: bundle.nodeId,
     senseId: bundle.senseId,
     persist: true,
+    force: true,
     requestMeta
   });
   const response = {

@@ -37,8 +37,13 @@
   --sense-editor-handle-width: 16px;
   --sense-editor-divider-width: 20px;
   --sense-editor-preview-collapsed-width: 88px;
-  --sense-editor-sticky-top: 16px;
-  --sense-editor-sticky-offset: 16px;
+  --sense-editor-sticky-top: calc(var(--knowledge-header-offset, 92px) + 12px);
+  --sense-editor-sticky-offset: var(--sense-editor-sticky-top);
+  --sense-reading-sticky-top: calc(var(--knowledge-header-offset, 92px) + 12px);
+  --sense-reading-sticky-bottom-gap: 24px;
+  --sense-floating-top-offset: calc(var(--knowledge-header-offset, 92px) + 28px);
+  --sense-floating-right-safe-area: calc(var(--app-shell-right-safe-area, 108px) + 24px);
+  --sense-floating-bottom-gap: 24px;
   --sense-editor-pane-transition: 180ms ease;
   min-height: 100vh;
   background: var(--sense-theme-page-bg);
@@ -108,6 +113,28 @@
   justify-content: space-between;
   padding: 18px 20px;
   margin-bottom: 20px;
+  transition:
+    top 180ms ease,
+    padding 180ms ease,
+    margin-bottom 180ms ease,
+    border-radius 180ms ease,
+    box-shadow 180ms ease,
+    gap 180ms ease;
+}
+
+.sense-article-shell-active .sense-article-topbar {
+  position: sticky;
+  top: calc(var(--knowledge-header-offset, 92px) + 8px);
+  z-index: var(--app-shell-z-subheader, 36700);
+}
+
+.sense-article-shell-active .sense-article-page {
+  --sense-reading-sticky-top: calc(var(--knowledge-header-offset, 92px) + 84px);
+}
+
+.sense-article-title-group {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .sense-article-title-group h1 {
@@ -116,6 +143,59 @@
   align-items: center;
   gap: 10px;
   color: var(--sense-theme-title);
+}
+
+.sense-article-topbar.page-senseArticle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.sense-article-shell-pinned .sense-article-topbar {
+  padding: 11px 13px;
+  margin-bottom: 14px;
+  border-radius: 14px;
+  gap: 10px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.18);
+}
+
+.sense-article-shell-pinned .sense-article-page {
+  --sense-reading-sticky-top: calc(var(--knowledge-header-offset, 92px) + 72px);
+}
+
+.sense-article-shell-pinned .sense-article-topbar.page-senseArticle {
+  padding: 9px 11px;
+  margin-bottom: 12px;
+  gap: 8px;
+}
+
+.sense-article-topbar.page-senseArticle .btn {
+  min-height: 34px;
+  padding: 0.38rem 0.72rem;
+  border-radius: 10px;
+  gap: 0.36rem;
+  font-size: 0.8rem;
+}
+
+.sense-article-topbar.page-senseArticle .sense-article-title-group {
+  display: grid;
+  gap: 4px;
+}
+
+.sense-article-topbar.page-senseArticle .sense-article-title-group h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 2vw, 1.92rem);
+  line-height: 1.08;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sense-article-shell-pinned .sense-article-title-group h1 {
+  font-size: clamp(1.26rem, 1.7vw, 1.68rem);
 }
 
 .sense-editor-header-title {
@@ -136,9 +216,18 @@
   transition: border-color 0.18s ease, color 0.18s ease;
 }
 
+.sense-editor-header-editable.disabled {
+  cursor: default;
+}
+
 .sense-editor-header-editable:hover {
   color: var(--sense-theme-glow);
   border-bottom-color: var(--sense-theme-border-strong);
+}
+
+.sense-editor-header-editable.disabled:hover {
+  color: inherit;
+  border-bottom-color: transparent;
 }
 
 .sense-editor-header-input {
@@ -155,6 +244,15 @@
   font-weight: 700;
 }
 
+.sense-editor-header-hint {
+  flex: 0 0 auto;
+  color: var(--sense-theme-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 .sense-article-kicker {
   color: var(--sense-theme-kicker);
   font-size: 13px;
@@ -168,6 +266,26 @@
   gap: 12px;
   color: var(--sense-theme-muted);
   font-size: 13px;
+}
+
+.sense-article-shell-pinned .sense-article-meta-row {
+  gap: 7px 10px;
+  font-size: 12px;
+}
+
+.sense-article-topbar.page-senseArticle .sense-article-meta-row {
+  flex-wrap: nowrap;
+  gap: 8px 12px;
+  font-size: 12px;
+  line-height: 1.25;
+  overflow: hidden;
+}
+
+.sense-article-topbar.page-senseArticle .sense-article-meta-row > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sense-reading-meta-person {
@@ -193,6 +311,31 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.sense-article-shell-pinned .sense-article-actions {
+  gap: 6px;
+}
+
+.sense-article-shell-pinned .sense-article-topbar .btn,
+.sense-article-shell-pinned .sense-article-topbar .btn.btn-small {
+  min-height: 32px;
+  padding: 0.34rem 0.58rem;
+  border-radius: 10px;
+  gap: 0.34rem;
+  font-size: 0.76rem;
+}
+
+.sense-article-shell-pinned .sense-article-topbar .btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sense-article-topbar.page-senseArticle .sense-article-actions {
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .sense-article-layout,
@@ -736,6 +879,20 @@
     padding: 22px;
   }
 
+  .sense-article-topbar.page-senseArticle {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .sense-article-topbar.page-senseArticle .sense-article-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .sense-article-topbar.page-senseArticle .sense-article-meta-row {
+    flex-wrap: wrap;
+  }
+
   .sense-editor-layout.resizable {
     grid-template-columns: 1fr;
   }
@@ -746,6 +903,14 @@
 
   .sense-editor-insert-menu {
     max-width: min(240px, calc(100vw - 64px));
+  }
+
+  .sense-my-edits-panel {
+    left: 16px !important;
+    right: 16px;
+    top: calc(var(--knowledge-header-offset, 92px) + 18px) !important;
+    width: auto !important;
+    max-width: none;
   }
 }
 
@@ -863,6 +1028,45 @@
   color: inherit;
   text-align: left;
   padding: 12px;
+}
+
+.sense-dashboard-group {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--sense-theme-border-soft);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.12);
+}
+
+.sense-dashboard-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--sense-theme-muted);
+  font-size: 12px;
+}
+
+.sense-dashboard-group-header strong {
+  color: var(--sense-theme-title);
+  font-size: 13px;
+}
+
+.sense-dashboard-group-list {
+  display: grid;
+  gap: 8px;
+}
+
+.sense-dashboard-item.sense-dashboard-item-subitem {
+  margin-left: 12px;
+}
+
+.sense-dashboard-item.sense-dashboard-item-subitem small {
+  display: block;
+  margin-top: 4px;
+  color: var(--sense-theme-muted);
+  font-size: 11px;
 }
 
 .sense-dashboard-item.static {
@@ -999,21 +1203,24 @@
   position: fixed;
   inset: 0;
   z-index: 40;
-  background: rgba(15, 23, 42, 0.45);
-  display: flex;
-  justify-content: flex-end;
-  padding: 88px 24px 24px;
+  background: rgba(15, 23, 42, 0.2);
 }
 
 .sense-floating-panel {
-  width: min(420px, 100%);
-  max-height: calc(100vh - 112px);
+  width: min(460px, 100%);
+  max-height: calc(100vh - var(--knowledge-header-offset, 92px) - 52px);
   overflow: auto;
   background: var(--sense-theme-surface-strong);
   border: 1px solid var(--sense-theme-border);
   border-radius: 18px;
   box-shadow: 0 24px 48px var(--sense-theme-shadow-strong);
   padding: 16px;
+}
+
+.sense-my-edits-panel {
+  position: fixed;
+  max-width: calc(100vw - 32px);
+  max-height: min(70vh, calc(100vh - var(--knowledge-header-offset, 92px) - 36px));
 }
 
 .sense-floating-panel-header {
@@ -1126,7 +1333,7 @@
   padding: 12px 16px;
   margin-bottom: 16px;
   position: sticky;
-  top: 12px;
+  top: var(--sense-editor-sticky-offset);
   z-index: 6;
   overflow: visible;
   border: 1px solid var(--sense-theme-border-soft);
@@ -1344,9 +1551,9 @@
 
 .sense-reading-outline-card {
   position: sticky;
-  top: var(--sense-editor-sticky-offset);
+  top: var(--sense-reading-sticky-top);
   align-self: start;
-  max-height: calc(100vh - var(--sense-editor-sticky-offset) - 12px);
+  max-height: calc(100vh - var(--sense-reading-sticky-top) - var(--sense-reading-sticky-bottom-gap));
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(56, 189, 248, 0.34) rgba(226, 232, 240, 0.72);
@@ -1390,7 +1597,7 @@
 
 .sense-reading-search-shell {
   position: sticky;
-  top: 8px;
+  top: var(--sense-reading-sticky-top);
   z-index: 24;
   margin-bottom: 18px;
   display: block;
@@ -1842,6 +2049,40 @@ body.sense-editor-preview-resizing * {
   padding: 16px;
 }
 
+.sense-reading-outline-empty {
+  border-style: solid;
+}
+
+.sense-display-mode-day .sense-reading-outline-empty {
+  background: linear-gradient(180deg, #ffffff 0%, #f6fbff 100%);
+  border-color: rgba(148, 163, 184, 0.24);
+  color: #475569;
+}
+
+.sense-display-mode-day .sense-reading-outline-empty .sense-state-view-icon,
+.sense-display-mode-day .sense-reading-outline-empty .sense-state-view-desc {
+  color: #64748b;
+}
+
+.sense-display-mode-day .sense-reading-outline-empty .sense-state-view-title {
+  color: #0f172a;
+}
+
+.sense-display-mode-night .sense-reading-outline-empty {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.96) 0%, rgba(8, 15, 28, 0.98) 100%);
+  border-color: rgba(96, 165, 250, 0.18);
+  color: rgba(191, 219, 254, 0.86);
+}
+
+.sense-display-mode-night .sense-reading-outline-empty .sense-state-view-icon,
+.sense-display-mode-night .sense-reading-outline-empty .sense-state-view-desc {
+  color: rgba(191, 219, 254, 0.78);
+}
+
+.sense-display-mode-night .sense-reading-outline-empty .sense-state-view-title {
+  color: #f8fafc;
+}
+
 .sense-state-view-icon {
   color: var(--sense-theme-muted);
 }
@@ -2152,7 +2393,7 @@ body.sense-editor-preview-resizing * {
 }
 
 .rich-editor-mode {
-  --sense-editor-sticky-offset: 0px;
+  --sense-editor-sticky-offset: calc(var(--knowledge-header-offset, 92px) + 4px);
 }
 
 .sense-editor-metadata-card {
@@ -2169,6 +2410,14 @@ body.sense-editor-preview-resizing * {
 .sense-editor-status-band {
   display: grid;
   gap: 14px;
+}
+
+.editor-mode .sense-editor-status-band {
+  margin-bottom: 6px;
+}
+
+.sense-article-page.editor-mode {
+  padding-top: 14px;
 }
 
 .sense-editor-status-grid {
@@ -2260,7 +2509,7 @@ body.sense-editor-preview-resizing * {
 
 .sense-editor-toast-stack {
   position: fixed;
-  top: 16px;
+  top: calc(var(--knowledge-header-offset, 92px) + 16px);
   left: 16px;
   z-index: 120;
   pointer-events: none;
@@ -2402,20 +2651,57 @@ body.sense-editor-preview-resizing * {
 
 .sense-rich-editor-shell {
   --sense-editor-toolbar-height: 0px;
+  display: grid;
+  gap: 0;
+  padding: 0 14px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--sense-theme-border-strong);
+  background: var(--sense-theme-surface);
+  box-shadow: 0 20px 48px var(--sense-theme-shadow);
+  overflow: clip;
+}
+
+.sense-rich-editor-commandbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.sense-rich-editor-shell-head {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.sense-rich-editor-shell-head-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.sense-rich-editor-shell-back {
+  justify-self: start;
+}
+
+.sense-rich-editor-shell-title {
+  min-width: 0;
 }
 
 .sense-rich-toolbar-shell {
   position: sticky;
   top: var(--sense-editor-sticky-offset);
   z-index: 30;
-  margin-bottom: 12px;
+  margin-bottom: 0;
   display: grid;
   gap: 8px;
-  padding: 10px 12px 12px;
-  border-radius: 16px;
-  border: 1px solid var(--sense-theme-border-strong);
-  background: linear-gradient(180deg, rgba(12, 21, 39, 0.98) 0%, rgba(7, 13, 26, 0.98) 100%);
-  box-shadow: 0 18px 46px rgba(2, 6, 23, 0.42);
+  padding: 0 0 12px;
+  border-radius: 0;
+  border: none;
+  background: var(--sense-theme-surface);
+  box-shadow: none;
 }
 
 .sense-display-mode-day .sense-editor-metadata-card,
@@ -2423,19 +2709,31 @@ body.sense-editor-preview-resizing * {
   color: #0f172a;
 }
 
-.sense-display-mode-day .sense-rich-toolbar-shell {
-  border-color: rgba(56, 189, 248, 0.28);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.995) 0%, rgba(239, 246, 255, 0.98) 100%);
+.sense-display-mode-day .sense-rich-editor-shell {
+  border-color: rgba(125, 211, 252, 0.44);
+  background:
+    radial-gradient(circle at top right, rgba(186, 230, 253, 0.22), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.995) 0%, rgba(241, 245, 249, 0.988) 100%);
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+}
+
+.sense-display-mode-day .sense-rich-toolbar-shell {
+  background: transparent;
 }
 
 .sense-rich-editor-commandbar-actions {
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.sense-rich-editor-commandbar-actions-extra {
+  margin-left: auto;
+  justify-content: flex-end;
 }
 
 .sense-display-mode-day .sense-rich-editor-commandbar-actions {
@@ -2521,10 +2819,60 @@ body.sense-editor-preview-resizing * {
   color: #e2e8f0;
 }
 
+.sense-display-mode-night .sense-rich-editor-shell {
+  border-color: rgba(96, 165, 250, 0.24);
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 24%),
+    linear-gradient(180deg, rgba(9, 16, 30, 0.99) 0%, rgba(4, 9, 18, 0.995) 100%);
+  box-shadow: 0 20px 42px rgba(2, 6, 23, 0.42);
+}
+
 .editor-mode .sense-article-topbar {
   padding: 14px 16px;
   margin-bottom: 14px;
   border-radius: 18px;
+}
+
+.editor-mode .sense-article-topbar.page-senseArticleEditor {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.editor-mode .sense-article-topbar.page-senseArticleEditor .sense-article-kicker,
+.editor-mode .sense-article-topbar.page-senseArticleEditor .sense-article-breadcrumb,
+.editor-mode .sense-article-topbar.page-senseArticleEditor .sense-article-meta-row,
+.editor-mode .sense-article-topbar.page-senseArticleEditor .sense-article-actions {
+  display: none;
+}
+
+.editor-mode .sense-article-topbar.page-senseArticleEditor .sense-article-title-group {
+  display: block;
+  min-width: 0;
+}
+
+.editor-mode .sense-article-topbar.page-senseArticleEditor .sense-article-title-group h1 {
+  margin: 0;
+  font-size: clamp(1.24rem, 1.6vw, 1.52rem);
+  line-height: 1.08;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sense-article-shell-pinned .editor-mode .sense-article-topbar.page-senseArticleEditor,
+.sense-article-shell-pinned .sense-article-topbar.page-senseArticleEditor {
+  padding: 8px 11px;
+  margin-bottom: 8px;
+  gap: 8px;
+}
+
+.sense-article-shell-pinned .editor-mode .sense-article-topbar.page-senseArticleEditor .sense-article-title-group h1,
+.sense-article-shell-pinned .sense-article-topbar.page-senseArticleEditor .sense-article-title-group h1 {
+  font-size: clamp(1.1rem, 1.35vw, 1.32rem);
 }
 
 .editor-mode .sense-article-title-group h1 {
@@ -2621,15 +2969,19 @@ body.sense-editor-preview-resizing * {
 }
 
 .editor-mode .sense-rich-toolbar-shell {
-  margin-bottom: 10px;
+  margin-bottom: 0;
   gap: 6px;
-  padding: 8px 10px 10px;
-  border-radius: 18px;
+  padding: 0 0 10px;
+  border-radius: 0;
 }
 
 .editor-mode .sense-rich-editor-commandbar-actions {
   gap: 6px;
   padding-bottom: 6px;
+}
+
+.editor-mode .sense-rich-editor-commandbar-actions-extra {
+  margin-left: auto;
 }
 
 .editor-mode .sense-rich-editor-utility-button {
@@ -2733,11 +3085,8 @@ body.sense-editor-preview-resizing * {
 }
 
 .editor-mode.sense-display-mode-day .sense-rich-toolbar-shell {
-  border-color: rgba(125, 211, 252, 0.44);
-  background:
-    radial-gradient(circle at top right, rgba(186, 230, 253, 0.3), transparent 24%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.995) 0%, rgba(241, 245, 249, 0.985) 100%);
-  box-shadow: 0 16px 34px rgba(148, 163, 184, 0.14);
+  background: transparent;
+  box-shadow: none;
 }
 
 .editor-mode.sense-display-mode-day .sense-rich-editor-utility-button,
@@ -2763,6 +3112,42 @@ body.sense-editor-preview-resizing * {
   color: #075985;
 }
 
+.editor-mode.sense-display-mode-day .sense-rich-toolbar-button:hover:not(:disabled),
+.editor-mode.sense-display-mode-day .sense-rich-toolbar-button:focus-visible,
+.editor-mode.sense-display-mode-day .sense-table-band-trigger:hover,
+.editor-mode.sense-display-mode-day .sense-table-band-trigger:focus-visible {
+  border-color: rgba(125, 211, 252, 0.92);
+  background: linear-gradient(180deg, rgba(248, 252, 255, 0.995) 0%, rgba(226, 232, 240, 0.98) 100%);
+  color: #1e293b;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 10px 22px rgba(148, 163, 184, 0.12);
+  transform: translateY(-1px);
+}
+
+.editor-mode.sense-display-mode-day .sense-table-menu-panel {
+  border-color: rgba(191, 219, 254, 0.92);
+  background:
+    radial-gradient(circle at top right, rgba(125, 211, 252, 0.22), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.995) 0%, rgba(241, 245, 249, 0.985) 100%);
+  box-shadow: 0 18px 38px rgba(148, 163, 184, 0.18);
+}
+
+.editor-mode.sense-display-mode-day .sense-table-menu-item {
+  color: #1e293b;
+}
+
+.editor-mode.sense-display-mode-day .sense-table-menu-item:hover,
+.editor-mode.sense-display-mode-day .sense-table-menu-item:focus-visible,
+.editor-mode.sense-display-mode-day .sense-table-menu-item.checked {
+  border-color: rgba(14, 165, 233, 0.28);
+  background: linear-gradient(180deg, rgba(224, 242, 254, 0.98) 0%, rgba(186, 230, 253, 0.82) 100%);
+  color: #075985;
+}
+
+.editor-mode.sense-display-mode-day .sense-table-menu-check,
+.editor-mode.sense-display-mode-day .sense-table-menu-icon {
+  color: #0284c7;
+}
+
 .editor-mode.sense-display-mode-day .sense-rich-editor-surface {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.995) 0%, rgba(248, 250, 252, 0.99) 100%);
@@ -2780,11 +3165,19 @@ body.sense-editor-preview-resizing * {
 }
 
 .editor-mode.sense-display-mode-night .sense-rich-toolbar-shell {
-  border-color: rgba(96, 165, 250, 0.24);
-  background:
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 24%),
-    linear-gradient(180deg, rgba(9, 16, 30, 0.99) 0%, rgba(4, 9, 18, 0.995) 100%);
-  box-shadow: 0 20px 42px rgba(2, 6, 23, 0.42);
+  background: transparent;
+  box-shadow: none;
+}
+
+.sense-rich-editor-shell .sense-editor-layout {
+  padding-top: 8px;
+}
+
+.sense-rich-editor-shell .sense-editor-pane {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
 }
 
 .editor-mode.sense-display-mode-night .sense-rich-editor-utility-button,
@@ -2802,6 +3195,13 @@ body.sense-editor-preview-resizing * {
   border-color: rgba(56, 189, 248, 0.42);
   background: linear-gradient(180deg, rgba(8, 47, 73, 0.9) 0%, rgba(12, 74, 110, 0.66) 100%);
   color: #e0f2fe;
+}
+
+.editor-mode.sense-display-mode-night .sense-table-menu-panel {
+  border-color: rgba(71, 85, 105, 0.46);
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(9, 16, 30, 0.985) 0%, rgba(4, 9, 18, 0.995) 100%);
 }
 
 .editor-mode.sense-display-mode-night .sense-rich-editor-utility-button.save-draft {
@@ -3178,9 +3578,12 @@ body.sense-editor-preview-resizing * {
   gap: 4px;
   padding: 8px;
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(2, 6, 23, 0.98);
+  border: 1px solid rgba(71, 85, 105, 0.42);
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(9, 16, 30, 0.985) 0%, rgba(4, 9, 18, 0.995) 100%);
   box-shadow: 0 18px 40px rgba(2, 6, 23, 0.42);
+  backdrop-filter: blur(14px);
 }
 
 .sense-table-menu-item {
@@ -3196,13 +3599,17 @@ body.sense-editor-preview-resizing * {
   color: #e2e8f0;
   cursor: pointer;
   text-align: left;
+  font-weight: 600;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
 
 .sense-table-menu-item:hover,
 .sense-table-menu-item:focus-visible,
 .sense-table-menu-item.checked {
   border-color: rgba(56, 189, 248, 0.28);
-  background: rgba(14, 116, 144, 0.18);
+  background: linear-gradient(180deg, rgba(8, 47, 73, 0.72) 0%, rgba(12, 74, 110, 0.44) 100%);
+  color: #e0f2fe;
+  transform: translateY(-1px);
 }
 
 .sense-table-menu-item.destructive {
@@ -3227,6 +3634,7 @@ body.sense-editor-preview-resizing * {
 .sense-table-menu-icon {
   display: inline-flex;
   align-items: center;
+  color: #7dd3fc;
 }
 
 .sense-rich-table-popover,
@@ -4028,6 +4436,14 @@ body.sense-editor-preview-resizing * {
 .sense-rich-renderer .sense-article-block[id],
 .sense-rich-renderer [id] {
   scroll-margin-top: calc(var(--sense-editor-sticky-offset) + var(--sense-editor-toolbar-height, 0px) + 28px);
+}
+
+.sense-article-renderer > .sense-article-block > p:empty::before,
+.sense-rich-renderer .sense-rich-block-body > p:empty::before,
+.sense-rich-renderer blockquote p:empty::before {
+  content: '\00a0';
+  display: inline-block;
+  min-height: 1.75em;
 }
 
 .sense-rich-block-body > :first-child {
@@ -4933,6 +5349,15 @@ body.sense-editor-preview-resizing * {
   .sense-rich-editor-commandbar-actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .sense-rich-editor-commandbar-actions-extra {
+    margin-left: 0;
+  }
+
+  .editor-mode .sense-article-topbar.page-senseArticleEditor {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
   }
 
   .sense-rich-toolbar {

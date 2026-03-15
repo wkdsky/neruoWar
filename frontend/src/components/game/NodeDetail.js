@@ -274,47 +274,15 @@ const NodeDetail = ({
 
             {/* Main Content - WebGL Canvas (placeholder for now) or Detail Canvas */}
             <div className="webgl-scene-container node-detail-scene-container">
-                 {/* Here we are using the 2D canvas for detail view as per previous logic, 
-                     but App.js also had a WebGL canvas. 
-                     If we want to keep WebGL, we need to pass the ref or handle it here. 
-                     For now, I'll assume the 2D canvas 'detailCanvasRef' is the main visual for node detail in this component.
-                     Wait, the previous code used 'webglCanvasRef' AND 'detailCanvasRef'.
-                     Actually, in the previous code, for view='nodeDetail', it rendered:
-                     <div className="webgl-scene-container">
-                        <canvas ref={webglCanvasRef} ... />
-                        <div className="search-container"> ... </div>
-                     </div>
-                     
-                     Wait, where was 'detailCanvasRef' used?
-                     It was defined but I don't see it in the JSX for 'nodeDetail' view in App.js!
-                     Let me double check App.js content again.
-                 */}
-                 
-                 {/* 
-                    Checking App.js around line 2600...
-                    It renders <canvas ref={webglCanvasRef} className="webgl-canvas" />
-                    It seems 'detailCanvasRef' was used for drawing logic (useEffect) but maybe not rendered?
-                    
-                    Ah, I see `useEffect` using `detailCanvasRef`.
-                    But where is the `<canvas ref={detailCanvasRef}>`?
-                    
-                    In the original `App.js`:
-                    `const detailCanvasRef = useRef(null);`
-                    Then `useEffect` draws on it.
-                    
-                    But I missed finding the `<canvas>` element in the JSX for `view === 'nodeDetail'`.
-                    Let me search for `ref={detailCanvasRef}` in App.js.
-                 */}
-                 
+                 <div className="node-detail-atmosphere" aria-hidden="true">
+                    <div className="node-detail-atmosphere__gradient" />
+                    <div className="node-detail-atmosphere__mesh" />
+                    <div className="node-detail-atmosphere__halo" />
+                 </div>
+
                  <canvas
                      ref={webglCanvasRef}
                      className="webgl-canvas"
-                     // Note: In App.js, the SceneManager handles WebGL. 
-                     // This component needs to coordinate with SceneManager or just provide the canvas.
-                     // For this refactoring, I'll leave WebGL handling in App.js for now or pass the ref.
-                     // Actually, passing refs is tricky if we want to move logic.
-                     // Let's assume we want to use the 2D canvas logic I just copied?
-                     // If the original app used WebGL for details, then my copy of 2D canvas logic might be for an overlay or alternative view?
                  />
 
                  {/* Search Bar */}

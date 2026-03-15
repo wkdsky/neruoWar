@@ -97,11 +97,80 @@ export const getSourceModeLabel = (mode = '') => ({
 
 export const buildDefaultRevisionTitle = (username = '') => `来自 ${String(username || '').trim() || '该用户'} 的修订`;
 
+export const getRevisionActorLabel = (revision = {}, fallbackLabel = '该用户') => {
+  const proposerUsername = String(revision?.proposerUsername || '').trim();
+  if (proposerUsername) return proposerUsername;
+  const proposerId = String(revision?.proposerId || '').trim();
+  if (proposerId) return proposerId;
+  return fallbackLabel;
+};
+
 export const getRevisionDisplayTitle = (revision = {}, fallbackUsername = '') => {
   const customTitle = String(revision?.revisionTitle || '').trim();
   if (customTitle) return customTitle;
-  const proposerUsername = String(revision?.proposerUsername || fallbackUsername || '').trim();
-  return buildDefaultRevisionTitle(proposerUsername);
+  return buildDefaultRevisionTitle(getRevisionActorLabel(revision, fallbackUsername || '该用户'));
+};
+
+const truncateRevisionSnippet = (value = '', maxLength = 16) => {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(1, maxLength - 1))}…`;
+};
+
+export const getRevisionListLabel = (revision = {}, fallbackSenseTitle = '') => {
+  const fallbackTitle = String(fallbackSenseTitle || '').trim();
+  const proposedSenseTitle = String(revision?.proposedSenseTitle || '').trim();
+  if (proposedSenseTitle && proposedSenseTitle !== fallbackTitle) {
+    return `释义更名 · ${proposedSenseTitle}`;
+  }
+
+  const sourceMode = String(revision?.sourceMode || 'full').trim();
+  if (sourceMode === 'section') {
+    const headingTitle = String(revision?.scopedChange?.headingTitle || revision?.targetHeadingId || '').trim();
+    return headingTitle ? `小节修订 · ${headingTitle}` : '小节修订';
+  }
+  if (sourceMode === 'selection') {
+    const selectionText = truncateRevisionSnippet(
+      revision?.selectedRangeAnchor?.selectionText
+      || revision?.selectedRangeAnchor?.textQuote
+      || revision?.scopedChange?.currentText
+      || revision?.scopedChange?.originalText
+      || ''
+    );
+    return selectionText ? `选段修订 · ${selectionText}` : '选段修订';
+  }
+  return '整页修订';
+};
+
+const resolveRevisionSortTime = (revision = {}) => new Date(
+  revision?.updatedAt || revision?.submittedAt || revision?.publishedAt || revision?.createdAt || 0
+).getTime();
+
+export const groupRevisionItemsByProposer = (items = []) => {
+  const groups = new Map();
+  (Array.isArray(items) ? items : []).forEach((item, index) => {
+    const actorLabel = getRevisionActorLabel(item, '未命名用户');
+    const actorKey = String(item?.proposerId || '').trim() || `user:${actorLabel}` || `unknown:${index}`;
+    const existing = groups.get(actorKey);
+    if (existing) {
+      existing.items.push(item);
+      existing.sortTime = Math.max(existing.sortTime, resolveRevisionSortTime(item));
+      return;
+    }
+    groups.set(actorKey, {
+      key: actorKey,
+      actorLabel,
+      sortTime: resolveRevisionSortTime(item),
+      items: [item]
+    });
+  });
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      items: [...group.items].sort((left, right) => resolveRevisionSortTime(right) - resolveRevisionSortTime(left))
+    }))
+    .sort((left, right) => right.sortTime - left.sortTime);
 };
 
 export const formatRevisionLabel = (revisionNumber = null) => Number.isFinite(Number(revisionNumber))

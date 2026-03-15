@@ -270,6 +270,67 @@ const blendHexColors = (hexA, hexB, ratio = 0.5) => {
   return `#${r}${g}${b}`;
 };
 
+const mixVec4 = (colorA = [1, 1, 1, 1], colorB = [1, 1, 1, 1], ratio = 0.5) => {
+  const t = Math.max(0, Math.min(1, ratio));
+  return [
+    colorA[0] * (1 - t) + colorB[0] * t,
+    colorA[1] * (1 - t) + colorB[1] * t,
+    colorA[2] * (1 - t) + colorB[2] * t,
+    colorA[3] * (1 - t) + colorB[3] * t
+  ];
+};
+
+const ROLE_ACCENT_MAP = {
+  center: {
+    glow: hexToVec4('#8fe7ff', 1),
+    rim: hexToVec4('#f3fbff', 1),
+    patternType: PATTERN_TYPE_MAP.rings,
+    opacityFactor: 1,
+    subTextColor: '#d8f7ff'
+  },
+  parent: {
+    glow: hexToVec4('#6df5c0', 1),
+    rim: hexToVec4('#dcfff3', 1),
+    patternType: PATTERN_TYPE_MAP.grid,
+    opacityFactor: 0.92,
+    subTextColor: '#c4ffeb'
+  },
+  child: {
+    glow: hexToVec4('#ffd875', 1),
+    rim: hexToVec4('#fff6d5', 1),
+    patternType: PATTERN_TYPE_MAP.dots,
+    opacityFactor: 0.9,
+    subTextColor: '#fff0b4'
+  },
+  title: {
+    glow: hexToVec4('#91caff', 1),
+    rim: hexToVec4('#e5f2ff', 1),
+    patternType: PATTERN_TYPE_MAP.rings,
+    opacityFactor: 0.88,
+    subTextColor: '#d5e8ff'
+  },
+  search: {
+    glow: hexToVec4('#6ab4ff', 1),
+    rim: hexToVec4('#e0efff', 1),
+    patternType: PATTERN_TYPE_MAP.diagonal,
+    opacityFactor: 0.9,
+    subTextColor: '#d6e9ff'
+  }
+};
+
+const applyRoleAccent = (style, type = '') => {
+  const accent = ROLE_ACCENT_MAP[type];
+  if (!accent) return style;
+  return {
+    ...style,
+    glow: mixVec4(style.glow, accent.glow, 0.6),
+    rim: mixVec4(style.rim, accent.rim, 0.72),
+    patternType: accent.patternType ?? style.patternType,
+    opacityFactor: accent.opacityFactor ?? style.opacityFactor,
+    subTextColor: accent.subTextColor || style.subTextColor
+  };
+};
+
 const readMapDebugFlag = () => {
   if (typeof window === 'undefined') return false;
   const value = new URLSearchParams(window.location.search).get('mapDebug');
@@ -341,6 +402,10 @@ class WebGLNodeRenderer {
 
     // DOM 标签缓存
     this.labelElements = new Map();
+    this.nodeRevealState = {
+      nodeId: '',
+      progress: 1
+    };
 
     // 节点操作按钮配置
     this.nodeButtons = new Map(); // nodeId -> [{id, icon, angle, action}]
@@ -521,6 +586,15 @@ class WebGLNodeRenderer {
   setCameraOffset(offsetX, offsetY) {
     this.camera.offsetX = offsetX;
     this.camera.offsetY = offsetY;
+    this.render();
+  }
+
+  // 让真实中心节点在跨层 ghost 落场时延迟提亮，避免硬重影。
+  setNodeRevealProgress(nodeId = '', progress = 1) {
+    this.nodeRevealState = {
+      nodeId: typeof nodeId === 'string' ? nodeId : '',
+      progress: Math.max(0, Math.min(1, Number(progress) || 0))
+    };
     this.render();
   }
 
@@ -916,7 +990,7 @@ class WebGLNodeRenderer {
       const patternType = typeof visualStyle.patternType === 'string'
         ? visualStyle.patternType.trim().toLowerCase()
         : DEFAULT_ALLIANCE_NODE_VISUAL_STYLE.patternType;
-      return {
+      return applyRoleAccent({
         base: hexToVec4(primary, 1),
         secondary: hexToVec4(secondary, 1),
         rim: hexToVec4(rim, 1),
@@ -925,12 +999,12 @@ class WebGLNodeRenderer {
         textColor,
         subTextColor: blendHexColors(textColor, '#cbd5e1', 0.45),
         opacityFactor: 1
-      };
+      }, node?.type);
     }
 
     const isKnowledgeDomainNode = ['root', 'featured', 'center', 'parent', 'child', 'search', 'title'].includes(node?.type);
     if (isKnowledgeDomainNode) {
-      return {
+      return applyRoleAccent({
         base: hexToVec4(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.primaryColor, 1),
         secondary: hexToVec4(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.secondaryColor, 1),
         rim: hexToVec4(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.rimColor, 1),
@@ -939,7 +1013,7 @@ class WebGLNodeRenderer {
         textColor: DEFAULT_UNALLIED_NODE_VISUAL_STYLE.textColor,
         subTextColor: blendHexColors(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.textColor, '#bfdbfe', 0.45),
         opacityFactor: 0.78
-      };
+      }, node?.type);
     }
 
     const fallback = NodeColors[node?.type] || NodeColors.center;
@@ -973,6 +1047,7 @@ class WebGLNodeRenderer {
     this.nodes.clear();
     this.lines = [];
     this.nodeButtons.clear();
+    this.nodeRevealState = { nodeId: '', progress: 1 };
   }
 
   // 设置连线
@@ -1197,6 +1272,27 @@ class WebGLNodeRenderer {
     this.renderLoopId = requestAnimationFrame(() => this.startRenderLoop());
   }
 
+  getRevealProgressForNode(nodeId = '') {
+    if (!nodeId || this.nodeRevealState.nodeId !== nodeId) return 1;
+    return Math.max(0, Math.min(1, Number(this.nodeRevealState.progress) || 0));
+  }
+
+  getDetailNodeLayerProfile(node) {
+    if (node?.type === 'center') {
+      return { glowScale: 1.34, shellScale: 1.12, faceScale: 1, coreScale: 0.72, glowOpacity: 0.22 };
+    }
+    if (node?.type === 'parent') {
+      return { glowScale: 1.24, shellScale: 1.08, faceScale: 0.98, coreScale: 0.76, glowOpacity: 0.18 };
+    }
+    if (node?.type === 'child') {
+      return { glowScale: 1.18, shellScale: 1.05, faceScale: 0.96, coreScale: 0.74, glowOpacity: 0.16 };
+    }
+    if (node?.type === 'title') {
+      return { glowScale: 1.16, shellScale: 1.04, faceScale: 0.95, coreScale: 0.7, glowOpacity: 0.14 };
+    }
+    return { glowScale: 1.14, shellScale: 1.04, faceScale: 0.96, coreScale: 0.72, glowOpacity: 0.14 };
+  }
+
   renderLines() {
     const gl = this.gl;
 
@@ -1225,8 +1321,16 @@ class WebGLNodeRenderer {
       gl.vertexAttribPointer(this.lineLocations.position, 2, gl.FLOAT, false, 0, 0);
 
       const color = line.color || [0.66, 0.33, 0.97, 0.6];
+      const revealProgress = Math.min(
+        this.getRevealProgressForNode(fromNode.id),
+        this.getRevealProgressForNode(toNode.id)
+      );
+      const hoverBoost = this.hoveredLine?.line === line ? 1.18 : 1;
       gl.uniform4fv(this.lineLocations.color, color);
-      gl.uniform1f(this.lineLocations.opacity, Math.min(fromNode.opacity, toNode.opacity));
+      gl.uniform1f(
+        this.lineLocations.opacity,
+        Math.min(fromNode.opacity, toNode.opacity) * Math.max(0.16, revealProgress) * hoverBoost
+      );
 
       gl.lineWidth(2);
       gl.drawArrays(gl.LINES, 0, 2);
@@ -1259,6 +1363,9 @@ class WebGLNodeRenderer {
       const nodePos = this.worldToScreen(node.x, node.y);
       const isHoneycombNode = this.sceneType === 'home' && (node.type === 'root' || node.type === 'featured');
       const shapeMorph = Number.isFinite(node.shapeMorph) ? node.shapeMorph : (isHoneycombNode ? 0 : 1);
+      const revealProgress = this.getRevealProgressForNode(node.id);
+      const revealOpacity = 0.16 + revealProgress * 0.84;
+      const revealScale = 0.94 + revealProgress * 0.06;
 
       if (isHoneycombNode) {
         const glowScale = node.type === 'root' ? 1.22 : 1.18;
@@ -1327,6 +1434,39 @@ class WebGLNodeRenderer {
         continue;
       }
 
+      const profile = this.getDetailNodeLayerProfile(node);
+      const hoverBoost = this.hoveredNode === node ? 1.12 : 1;
+      const hoverScale = this.hoveredNode === node ? 1.035 : 1;
+      this.drawNodeSprite({
+        nodePos,
+        size,
+        node,
+        color: style.glow,
+        secondaryColor: style.base,
+        rimColor: style.rim,
+        glowColor: style.glow,
+        glowIntensity: (this.hoveredNode === node ? 1.06 : Math.max(0.52, node.glowIntensity + 0.18)) * (1.1 - revealProgress * 0.22),
+        opacity: node.opacity * profile.glowOpacity * revealOpacity,
+        shapeType: 2,
+        patternType: PATTERN_TYPE_MAP.none,
+        sizeScale: profile.glowScale * hoverBoost * revealScale,
+        shapeMorph
+      });
+      this.drawNodeSprite({
+        nodePos,
+        size,
+        node,
+        color: style.secondary,
+        secondaryColor: style.base,
+        rimColor: style.rim,
+        glowColor: style.glow,
+        glowIntensity: this.hoveredNode === node ? 0.94 : Math.max(0.46, node.glowIntensity * 0.9),
+        opacity: node.opacity * 0.88 * revealOpacity,
+        shapeType: 2,
+        patternType: PATTERN_TYPE_MAP.none,
+        sizeScale: profile.shellScale * revealScale * hoverScale,
+        shapeMorph
+      });
       this.drawNodeSprite({
         nodePos,
         size,
@@ -1335,11 +1475,26 @@ class WebGLNodeRenderer {
         secondaryColor: style.secondary,
         rimColor: style.rim,
         glowColor: style.glow,
-        glowIntensity: this.hoveredNode === node ? 0.8 : node.glowIntensity,
-        opacity: node.opacity * (style.opacityFactor ?? 1),
+        glowIntensity: (this.hoveredNode === node ? 0.9 : Math.max(0.42, node.glowIntensity)) * hoverBoost,
+        opacity: node.opacity * (style.opacityFactor ?? 1) * revealOpacity,
         shapeType: 2,
         patternType: style.patternType ?? PATTERN_TYPE_MAP.none,
-        sizeScale: 1,
+        sizeScale: profile.faceScale * revealScale * hoverScale,
+        shapeMorph
+      });
+      this.drawNodeSprite({
+        nodePos,
+        size,
+        node,
+        color: style.rim,
+        secondaryColor: style.base,
+        rimColor: style.rim,
+        glowColor: style.glow,
+        glowIntensity: 0.1,
+        opacity: node.opacity * 0.18 * revealOpacity,
+        shapeType: 2,
+        patternType: PATTERN_TYPE_MAP.none,
+        sizeScale: profile.coreScale * revealScale * hoverScale,
         shapeMorph
       });
     }
@@ -1396,6 +1551,8 @@ class WebGLNodeRenderer {
     for (const [nodeId, buttons] of this.nodeButtons) {
       const node = this.nodes.get(nodeId);
       if (!node || !node.visible || node.opacity < 0.3) continue;
+      const revealProgress = this.getRevealProgressForNode(node.id);
+      if (revealProgress < 0.48) continue;
 
       for (const button of buttons) {
         const btnPos = this.getButtonPosition(node, button.angle);
@@ -1431,7 +1588,7 @@ class WebGLNodeRenderer {
         ]);
         gl.uniform4fv(this.nodeLocations.glowColor, glowColor);
         gl.uniform1f(this.nodeLocations.glowIntensity, isDisabled ? 0.05 : 0.3);
-        gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isDisabled ? 0.45 : 0.8));
+        gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isDisabled ? 0.45 : 0.8) * revealProgress);
         gl.uniform1i(this.nodeLocations.shapeType, 0); // 圆形
         gl.uniform1i(this.nodeLocations.patternType, PATTERN_TYPE_MAP.none);
         gl.uniform2f(this.nodeLocations.size, btnSize, btnSize);
@@ -1532,21 +1689,31 @@ class WebGLNodeRenderer {
       const nodePos = this.worldToScreen(node.x, node.y);
       const screenRadius = Math.max(10, node.radius * node.scale * this.camera.zoom);
       const isHomeHexNode = this.sceneType === 'home' && (node.type === 'root' || node.type === 'featured');
+      const revealProgress = this.getRevealProgressForNode(node.id);
       const baseFontSize = isHomeHexNode
         ? Math.max(8, Math.min(18, screenRadius * 0.22))
-        : Math.max(10, Math.min(30, screenRadius * 0.42));
+        : Math.max(11, Math.min(28, screenRadius * (node.type === 'center' ? 0.35 : 0.31)));
       const labelLength = Math.max(1, String(node.label || '').trim().length);
-      const fitByLength = ((isHomeHexNode ? screenRadius * 1.1 : screenRadius * 1.7)) / (labelLength * 0.56);
+      const fitByLength = ((isHomeHexNode ? screenRadius * 1.1 : screenRadius * 1.5)) / (labelLength * 0.56);
       const fontSize = Math.max(8, Math.min(baseFontSize, fitByLength));
+      const labelOpacity = isHomeHexNode
+        ? Math.max(0, Math.min(1, node.opacity))
+        : Math.max(0, Math.min(1, node.opacity * Math.max(0, Math.min(1, (revealProgress - 0.24) / 0.76))));
 
       applyLabelContent(labelEl, node.label);
       labelEl.classList.toggle('is-home-hex', isHomeHexNode);
+      labelEl.classList.toggle('is-center', node.type === 'center');
+      labelEl.classList.toggle('is-parent', node.type === 'parent');
+      labelEl.classList.toggle('is-child', node.type === 'child');
+      labelEl.classList.toggle('is-title', node.type === 'title');
       labelEl.style.left = `${nodePos.x}px`;
       labelEl.style.top = `${nodePos.y}px`;
       labelEl.style.fontSize = `${fontSize}px`;
-      labelEl.style.lineHeight = `${Math.max(1, fontSize * 1.08)}px`;
-      labelEl.style.maxWidth = isHomeHexNode ? `${Math.max(72, screenRadius * 1.15)}px` : 'none';
-      labelEl.style.opacity = `${Math.max(0, Math.min(1, node.opacity))}`;
+      labelEl.style.lineHeight = `${Math.max(1, fontSize * 1.12)}px`;
+      labelEl.style.maxWidth = isHomeHexNode
+        ? `${Math.max(72, screenRadius * 1.15)}px`
+        : `${Math.max(96, screenRadius * (node.type === 'center' ? 2.25 : 2))}px`;
+      labelEl.style.opacity = `${labelOpacity}`;
     };
 
     normalNodes.forEach((node) => syncLabel(node, false));
@@ -1566,6 +1733,7 @@ class WebGLNodeRenderer {
     const ctx = overlayCanvas.getContext('2d');
     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
+    this.renderLineGlowTrails(ctx);
     this.renderLineConnectionCaps(ctx);
     this.renderButtonIcons(ctx);
     if (this.shouldRenderUserMarkerOverlay()) {
@@ -1577,6 +1745,53 @@ class WebGLNodeRenderer {
     }
 
     ctx.globalAlpha = 1;
+  }
+
+  renderLineGlowTrails(ctx) {
+    if (!Array.isArray(this.lines) || this.lines.length === 0) return;
+
+    for (const line of this.lines) {
+      const fromNode = this.nodes.get(line?.from);
+      const toNode = this.nodes.get(line?.to);
+      if (!fromNode || !toNode || !fromNode.visible || !toNode.visible) continue;
+
+      const segment = this.getVisibleLineSegment(fromNode, toNode, { insetPx: 2, minLengthPx: 1 });
+      if (!segment) continue;
+
+      const revealProgress = Math.min(
+        this.getRevealProgressForNode(fromNode.id),
+        this.getRevealProgressForNode(toNode.id)
+      );
+      if (revealProgress <= 0.02) continue;
+
+      const baseColor = line?.color || [0.66, 0.33, 0.97, 0.6];
+      const isHovered = this.hoveredLine?.line === line;
+      const alphaScale = Math.min(fromNode.opacity, toNode.opacity) * (isHovered ? 0.38 : 0.22) * revealProgress;
+      const glowStroke = ctx.createLinearGradient(segment.start.x, segment.start.y, segment.end.x, segment.end.y);
+      glowStroke.addColorStop(0, this.toCssRgba(baseColor, alphaScale * 0.4));
+      glowStroke.addColorStop(0.5, this.toCssRgba(baseColor, alphaScale));
+      glowStroke.addColorStop(1, this.toCssRgba(baseColor, alphaScale * 0.4));
+
+      ctx.save();
+      ctx.strokeStyle = glowStroke;
+      ctx.lineWidth = isHovered ? 8 : 6;
+      ctx.lineCap = 'round';
+      ctx.shadowBlur = isHovered ? 18 : 12;
+      ctx.shadowColor = this.toCssRgba(baseColor, isHovered ? 0.4 : 0.24);
+      ctx.beginPath();
+      ctx.moveTo(segment.start.x, segment.start.y);
+      ctx.lineTo(segment.end.x, segment.end.y);
+      ctx.stroke();
+
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = isHovered ? 2.4 : 1.8;
+      ctx.strokeStyle = this.toCssRgba([1, 1, 1, 1], alphaScale * 0.12);
+      ctx.beginPath();
+      ctx.moveTo(segment.start.x, segment.start.y);
+      ctx.lineTo(segment.end.x, segment.end.y);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   renderEmptyStateBackdrop() {
@@ -1648,6 +1863,8 @@ class WebGLNodeRenderer {
     for (const [nodeId, buttons] of this.nodeButtons) {
       const node = this.nodes.get(nodeId);
       if (!node || !node.visible || node.opacity < 0.3) continue;
+      const revealProgress = this.getRevealProgressForNode(node.id);
+      if (revealProgress < 0.48) continue;
 
       for (const button of buttons) {
         const btnPos = this.getButtonPosition(node, button.angle);
@@ -1656,7 +1873,7 @@ class WebGLNodeRenderer {
           this.hoveredButton.button.id === button.id;
         const isDisabled = !!button.disabled;
 
-        ctx.globalAlpha = node.opacity * (isDisabled ? 0.55 : 0.9);
+        ctx.globalAlpha = node.opacity * (isDisabled ? 0.55 : 0.9) * revealProgress;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
@@ -1715,14 +1932,15 @@ class WebGLNodeRenderer {
       if (minOpacity <= 0.08) continue;
 
       const color = line?.color || [0.66, 0.33, 0.97, 0.6];
+      const isHovered = this.hoveredLine?.line === line;
       const capRadius = Math.max(2, Math.min(5.5, Math.min(
         this.getNodeScreenRadius(fromNode),
         this.getNodeScreenRadius(toNode)
-      ) * 0.1));
+      ) * (isHovered ? 0.12 : 0.1)));
 
       const drawCap = (point) => {
         const glow = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, capRadius * 2.6);
-        glow.addColorStop(0, this.toCssRgba(color, minOpacity * 0.78));
+        glow.addColorStop(0, this.toCssRgba(color, minOpacity * (isHovered ? 0.96 : 0.78)));
         glow.addColorStop(1, this.toCssRgba(color, 0));
         ctx.fillStyle = glow;
         ctx.beginPath();
@@ -2339,6 +2557,7 @@ class WebGLNodeRenderer {
     this.animations = [];
     this.nodes.clear();
     this.nodeButtons.clear();
+    this.nodeRevealState = { nodeId: '', progress: 1 };
     this.previewNodes.clear();
     this.previewLines = [];
     this.savedState = null;

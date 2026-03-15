@@ -72,12 +72,26 @@ export const buildSenseArticleNavigationState = ({
   }, currentContext);
 };
 
-export const buildSenseArticleSubViewContext = (currentContext = null, currentView = '', patch = {}, options = {}) => createSenseArticleContext({
-  ...(patch || {}),
-  originView: options.originView || currentContext?.originView || currentView,
-  originArticle: options.originArticle || currentContext?.originArticle || (isSenseArticleView(currentView) ? snapshotSenseArticleLocation(currentContext, currentView) : null),
-  returnTarget: options.returnTarget || snapshotSenseArticleLocation(currentContext, currentView)
-}, currentContext);
+export const buildSenseArticleSubViewContext = (currentContext = null, currentView = '', patch = {}, options = {}) => {
+  const hasExplicitReturnTarget = Object.prototype.hasOwnProperty.call(options, 'returnTarget');
+  const hasExplicitOriginArticle = Object.prototype.hasOwnProperty.call(options, 'originArticle');
+  const returnTarget = hasExplicitReturnTarget
+    ? options.returnTarget
+    : options.preserveReturnTarget
+      ? (currentContext?.returnTarget || null)
+      : snapshotSenseArticleLocation(currentContext, currentView);
+  const originArticle = hasExplicitOriginArticle
+    ? options.originArticle
+    : options.preserveOriginArticle
+      ? (currentContext?.originArticle || null)
+      : (currentContext?.originArticle || (isSenseArticleView(currentView) ? snapshotSenseArticleLocation(currentContext, currentView) : null));
+  return createSenseArticleContext({
+    ...(patch || {}),
+    originView: options.originView || currentContext?.originView || currentView,
+    originArticle,
+    returnTarget
+  }, currentContext);
+};
 
 export const resolveSenseArticleBackTarget = ({ context = null }) => {
   const returnTarget = context?.returnTarget || null;

@@ -28,6 +28,7 @@ const useSenseArticleAutosave = ({
   const snapshotRef = useRef(snapshot);
   const timerRef = useRef(null);
   const savingRef = useRef(false);
+  const savePromiseRef = useRef(null);
 
   useEffect(() => {
     snapshotRef.current = snapshot;
@@ -40,37 +41,53 @@ const useSenseArticleAutosave = ({
     setError(null);
   }, [initialLastSavedAt, revisionVersion, revisionId]);
 
-  const saveNow = useCallback(async ({ reason = 'manual' } = {}) => {
-    if (!enabled || savingRef.current || typeof onSave !== 'function') return { ok: true, skipped: true };
+  const saveNow = useCallback(async ({ reason = 'manual', snapshotOverride = null, force = false } = {}) => {
+    if (!enabled || typeof onSave !== 'function') return { ok: true, skipped: true };
     window.clearTimeout(timerRef.current);
-    const latestSnapshot = snapshotRef.current || {};
+    while (savingRef.current && savePromiseRef.current) {
+      try {
+        await savePromiseRef.current;
+      } catch (_error) {
+        break;
+      }
+    }
+    const latestSnapshot = snapshotOverride || snapshotRef.current || {};
     const signature = JSON.stringify(latestSnapshot);
-    if (signature === lastSavedSignatureRef.current) {
+    if (!force && signature === lastSavedSignatureRef.current) {
       setStatus('saved');
       return { ok: true, skipped: true };
     }
     savingRef.current = true;
     setStatus('saving');
     setError(null);
-    try {
-      const response = await onSave({
-        snapshot: latestSnapshot,
-        expectedRevisionVersion: revisionVersion,
-        reason
-      });
-      lastSavedSignatureRef.current = signature;
-      setLastSavedAt(response?.revision?.updatedAt || new Date().toISOString());
-      setStatus('saved');
-      setError(null);
-      if (typeof onAfterSave === 'function') onAfterSave(response);
-      return { ok: true, response };
-    } catch (requestError) {
-      setStatus(requestError?.code === 'revision_edit_conflict' || requestError?.payload?.code === 'revision_edit_conflict' ? 'conflict' : 'error');
-      setError(requestError);
-      return { ok: false, error: requestError };
-    } finally {
-      savingRef.current = false;
-    }
+    let currentSavePromise = null;
+    currentSavePromise = (async () => {
+      try {
+        const response = await onSave({
+          snapshot: latestSnapshot,
+          expectedRevisionVersion: revisionVersion,
+          reason
+        });
+        snapshotRef.current = latestSnapshot;
+        lastSavedSignatureRef.current = signature;
+        setLastSavedAt(response?.revision?.updatedAt || new Date().toISOString());
+        setStatus('saved');
+        setError(null);
+        if (typeof onAfterSave === 'function') onAfterSave(response, latestSnapshot);
+        return { ok: true, response };
+      } catch (requestError) {
+        setStatus(requestError?.code === 'revision_edit_conflict' || requestError?.payload?.code === 'revision_edit_conflict' ? 'conflict' : 'error');
+        setError(requestError);
+        return { ok: false, error: requestError };
+      } finally {
+        savingRef.current = false;
+        if (savePromiseRef.current === currentSavePromise) {
+          savePromiseRef.current = null;
+        }
+      }
+    })();
+    savePromiseRef.current = currentSavePromise;
+    return currentSavePromise;
   }, [enabled, onAfterSave, onSave, revisionVersion]);
 
   useEffect(() => {

@@ -1,11 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, HelpCircle, Send, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowUp, HelpCircle, Send, Sparkles, Trash2 } from 'lucide-react';
 import { senseArticleApi } from '../../utils/senseArticleApi';
 import { API_BASE } from '../../runtimeConfig';
-import SenseArticlePageHeader from './SenseArticlePageHeader';
 import SenseArticleRenderer from './SenseArticleRenderer';
 import SenseArticleStateView from './SenseArticleStateView';
-import SenseArticleStatusBadge from './SenseArticleStatusBadge';
 import SenseArticleEditorStatusBand from './SenseArticleEditorStatusBand';
 import SenseArticleDisplayModeToggle from './SenseArticleDisplayModeToggle';
 import RichSenseArticleEditorShell from './editor/RichSenseArticleEditorShell';
@@ -20,11 +18,12 @@ import useSenseArticleAutosave, { formatAutosaveTime } from './hooks/useSenseArt
 import useSenseArticleAsyncSideData from './hooks/useSenseArticleAsyncSideData';
 import useSenseArticleDisplayMode from './hooks/useSenseArticleDisplayMode';
 import useUnsavedChangesGuard from './hooks/useUnsavedChangesGuard';
+import SystemConfirmDialog from '../common/SystemConfirmDialog';
 import SenseArticleEditorHelpDialog from './editor/dialogs/SenseArticleEditorHelpDialog';
 import {
   buildDefaultRevisionTitle,
   buildSenseArticleBreadcrumb,
-  buildSenseArticleTitle,
+  getSenseArticleBackLabel,
   getRevisionDisplayTitle,
   getSourceModeLabel,
   resolveSenseArticleStateFromError
@@ -36,7 +35,8 @@ import './SenseArticle.css';
 const EMPTY_REVISION = Object.freeze({});
 const EDITABLE_DRAFT_STATUSES = new Set(['draft', 'changes_requested_by_domain_admin', 'changes_requested_by_domain_master']);
 
-const buildValidationFailureMessage = (validation = null, fallback = '提交失败') => {
+const buildValidationFailureMessage = (validation = null, fallback = '提交失败', errorCode = '') => {
+  if (String(errorCode || '').trim() === 'unchanged_revision') return fallback;
   const blocking = Array.isArray(validation?.blocking) ? validation.blocking : [];
   const messages = blocking
     .map((item) => String(item?.message || '').trim())
@@ -44,6 +44,30 @@ const buildValidationFailureMessage = (validation = null, fallback = '提交失�
   if (messages.length === 0) return fallback;
   const summary = messages.slice(0, 3).join('；');
   return messages.length > 3 ? `${summary}；另有 ${messages.length - 3} 项问题` : summary;
+};
+
+const resolveRevisionRichHtml = (revisionLike = null) => {
+  const editorSource = typeof revisionLike?.editorSource === 'string' ? revisionLike.editorSource : '';
+  if (!editorSource.trim()) {
+    return {
+      html: '<p></p>',
+      converted: false,
+      parseErrors: 0
+    };
+  }
+  if (String(revisionLike?.contentFormat || '').trim() === 'rich_html') {
+    return {
+      html: editorSource,
+      converted: false,
+      parseErrors: Array.isArray(revisionLike?.parseErrors) ? revisionLike.parseErrors.length : 0
+    };
+  }
+  const converted = legacyMarkupToRichHtmlWithDiagnostics(editorSource || '');
+  return {
+    html: converted.html || '<p></p>',
+    converted: true,
+    parseErrors: Array.isArray(converted.parseErrors) ? converted.parseErrors.length : 0
+  };
 };
 
 const extractMediaSourceUrlsFromHtml = (html = '') => {
@@ -66,12 +90,13 @@ const SenseArticleEditor = ({
   onSubmitted,
   onOpenDashboard
 }) => {
+  const senseTitleInputRef = useRef(null);
   const [detail, setDetail] = useState(null);
   const [editorHtml, setEditorHtml] = useState('<p></p>');
   const [fullEditorHtml, setFullEditorHtml] = useState('<p></p>');
-  const [revisionTitle, setRevisionTitle] = useState('');
-  const [note, setNote] = useState('');
   const [senseTitle, setSenseTitle] = useState('');
+  const [senseTitleDraft, setSenseTitleDraft] = useState('');
+  const [isEditingSenseTitle, setIsEditingSenseTitle] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -82,9 +107,18 @@ const SenseArticleEditor = ({
   const [helpOpen, setHelpOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [showBackToTop, setShowBackToTop] = useState(false);
+  const [confirmDialogState, setConfirmDialogState] = useState({
+    open: false,
+    title: '',
+    message: '',
+    confirmText: '确认',
+    busy: false,
+    onConfirm: null
+  });
   const [resolvedRevisionId, setResolvedRevisionId] = useState(String(revisionId || '').trim());
   const toastTimerRef = useRef(0);
   const tempMediaSessionIdRef = useRef(`temp-media-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+  const latestEditorHtmlRef = useRef('<p></p>');
   const draftLaunchModeRef = useRef(String(articleContext?.draftLaunchMode || '').trim());
   const hasPersistedDraftSaveRef = useRef(String(articleContext?.draftLaunchMode || '').trim() !== 'created');
   const latestRevisionStatusRef = useRef('');
@@ -108,14 +142,6 @@ const SenseArticleEditor = ({
     selectedRangeAnchor: revision?.selectedRangeAnchor || null,
     headingTitle: revision?.scopedChange?.headingTitle || ''
   }), [fullEditorHtml, revision?.scopedChange?.headingTitle, revision?.selectedRangeAnchor, revision?.sourceMode, revision?.targetHeadingId]);
-  const composedEditorHtml = useMemo(() => composeScopedRichEditorDocument({
-    fullHtml: fullEditorHtml,
-    sourceMode: revision?.sourceMode || 'full',
-    targetHeadingId: revision?.targetHeadingId || '',
-    selectedRangeAnchor: revision?.selectedRangeAnchor || null,
-    headingTitle: revision?.scopedChange?.headingTitle || '',
-    editableHtml: normalizedEditorHtml
-  }), [fullEditorHtml, normalizedEditorHtml, revision?.scopedChange?.headingTitle, revision?.selectedRangeAnchor, revision?.sourceMode, revision?.targetHeadingId]);
   const {
     mediaLibrary,
     mediaState,
@@ -132,6 +158,10 @@ const SenseArticleEditor = ({
   useEffect(() => {
     setResolvedRevisionId(String(revisionId || '').trim());
   }, [revisionId]);
+
+  useEffect(() => {
+    latestEditorHtmlRef.current = normalizeRichHtmlContent(editorHtml) || '<p></p>';
+  }, [editorHtml]);
 
   useEffect(() => {
     const externalLaunchMode = String(articleContext?.draftLaunchMode || '').trim();
@@ -241,52 +271,59 @@ const SenseArticleEditor = ({
       try {
         const data = await senseArticleApi.getRevisionDetail(nodeId, senseId, effectiveRevisionId, {
           signal: controller.signal,
-          view: 'senseArticleEditor',
-          mode: 'bootstrap'
+          view: 'senseArticleEditor'
         });
         if (controller.signal.aborted) return;
         setDetail(data);
         const nextRevision = data?.revision || {};
-        const nextRevisionTitle = nextRevision.revisionTitle
-          || buildDefaultRevisionTitle(nextRevision.proposerUsername || localStorage.getItem('username') || '');
-        setRevisionTitle(nextRevisionTitle);
-        setNote(nextRevision.proposerNote || '');
-        setSenseTitle(nextRevision.proposedSenseTitle || data?.nodeSense?.title || senseId);
+        const nextSenseTitle = nextRevision.proposedSenseTitle || data?.nodeSense?.title || senseId;
+        setSenseTitle(nextSenseTitle);
+        setSenseTitleDraft(nextSenseTitle);
+        setIsEditingSenseTitle(false);
         setReadOnlyLegacyFallback(false);
         setConversionWarning('');
-
-        if (nextRevision.contentFormat === 'rich_html') {
-          const fullHtml = nextRevision.editorSource || '<p></p>';
-          const scopedDocument = extractScopedRichEditorDocument({
-            fullHtml,
-            sourceMode: nextRevision.sourceMode || 'full',
-            targetHeadingId: nextRevision.targetHeadingId || '',
-            selectedRangeAnchor: nextRevision.selectedRangeAnchor || null,
-            headingTitle: nextRevision.scopedChange?.headingTitle || ''
-          });
-          setFullEditorHtml(fullHtml);
-          setEditorHtml(scopedDocument.editableHtml || '<p></p>');
-          return;
-        }
-
         try {
-          const converted = legacyMarkupToRichHtmlWithDiagnostics(nextRevision.editorSource || '');
-          const fullHtml = converted.html || '<p></p>';
-          const scopedDocument = extractScopedRichEditorDocument({
-            fullHtml,
+          const workingHtmlState = resolveRevisionRichHtml(nextRevision);
+          const baseHtmlState = resolveRevisionRichHtml(data?.baseRevision || null);
+          const scopedArgs = {
             sourceMode: nextRevision.sourceMode || 'full',
             targetHeadingId: nextRevision.targetHeadingId || '',
             selectedRangeAnchor: nextRevision.selectedRangeAnchor || null,
             headingTitle: nextRevision.scopedChange?.headingTitle || ''
+          };
+          let fullHtml = workingHtmlState.html || '<p></p>';
+          let scopedDocument = extractScopedRichEditorDocument({
+            fullHtml,
+            ...scopedArgs
           });
+          const isScopedRevision = ['section', 'selection'].includes(String(nextRevision?.sourceMode || '').trim());
+          if (
+            isScopedRevision
+            && !scopedDocument.resolved
+            && typeof baseHtmlState.html === 'string'
+            && baseHtmlState.html.trim()
+          ) {
+            const fallbackDocument = extractScopedRichEditorDocument({
+              fullHtml: baseHtmlState.html,
+              ...scopedArgs
+            });
+            if (fallbackDocument.resolved) {
+              fullHtml = baseHtmlState.html;
+              scopedDocument = fallbackDocument;
+            }
+          }
           setFullEditorHtml(fullHtml);
           setEditorHtml(scopedDocument.editableHtml || '<p></p>');
-          const parseErrors = converted.parseErrors.length || (Array.isArray(nextRevision.parseErrors) ? nextRevision.parseErrors.length : 0);
-          setConversionWarning(`当前修订是旧版 legacy_markup，已保守转换为 rich_html${parseErrors > 0 ? `（原内容含 ${parseErrors} 个解析异常）` : ''}；保存后将按新格式提交。`);
+          latestEditorHtmlRef.current = normalizeRichHtmlContent(scopedDocument.editableHtml || '<p></p>') || '<p></p>';
+          if (workingHtmlState.converted) {
+            const parseErrors = workingHtmlState.parseErrors || (Array.isArray(nextRevision.parseErrors) ? nextRevision.parseErrors.length : 0);
+            setConversionWarning(`当前修订是旧版 legacy_markup，已保守转换为 rich_html${parseErrors > 0 ? `（原内容含 ${parseErrors} 个解析异常）` : ''}；保存后将按新格式提交。`);
+          }
         } catch (conversionError) {
           setReadOnlyLegacyFallback(true);
           setFullEditorHtml('<p></p>');
           setEditorHtml('<p></p>');
+          latestEditorHtmlRef.current = '<p></p>';
           setConversionWarning(`旧版内容未能自动转换到富文本，本次仅提供只读预览。${conversionError?.message ? `失败原因：${conversionError.message}` : ''}`);
         }
       } catch (requestError) {
@@ -312,16 +349,28 @@ const SenseArticleEditor = ({
       revisionId: nextRevision._id || effectiveRevisionId,
       revisionStatus: nextRevision.status || '',
       nodeName: detail.node?.name || articleContext?.nodeName || '',
-      senseTitle: detail.nodeSense?.title || articleContext?.senseTitle || senseId,
+      senseTitle: senseTitle || detail.nodeSense?.title || articleContext?.senseTitle || senseId,
       ...buildSenseArticleAllianceContext(detail.node, articleContext),
       breadcrumb: buildSenseArticleBreadcrumb({
         nodeName: detail.node?.name || articleContext?.nodeName || '',
-        senseTitle: detail.nodeSense?.title || articleContext?.senseTitle || senseId,
+        senseTitle: senseTitle || detail.nodeSense?.title || articleContext?.senseTitle || senseId,
         pageType: 'senseArticleEditor',
         revisionTitle: getRevisionDisplayTitle(nextRevision)
       })
     });
-  }, [articleContext, detail, effectiveRevisionId, nodeId, onContextPatch, senseId]);
+  }, [articleContext, detail, effectiveRevisionId, nodeId, onContextPatch, senseId, senseTitle]);
+
+  useEffect(() => {
+    if (!isEditingSenseTitle) {
+      setSenseTitleDraft(senseTitle || '');
+    }
+  }, [isEditingSenseTitle, senseTitle]);
+
+  useEffect(() => {
+    if (!isEditingSenseTitle || !senseTitleInputRef.current) return;
+    senseTitleInputRef.current.focus();
+    senseTitleInputRef.current.select();
+  }, [isEditingSenseTitle]);
 
   const scopedFocus = useMemo(() => {
     const selectionText = revision?.selectedRangeAnchor?.selectionText || revision?.selectedRangeAnchor?.textQuote || '';
@@ -340,30 +389,54 @@ const SenseArticleEditor = ({
     };
   }, [revision]);
 
-  const snapshot = useMemo(() => ({
-    editorSource: composedEditorHtml,
-    contentFormat: 'rich_html',
-    proposerNote: note,
-    revisionTitle: revisionTitle.trim(),
-    proposedSenseTitle: senseTitle.trim(),
-    sourceMode: revision.sourceMode || 'full',
-    targetHeadingId: revision.targetHeadingId || '',
-    selectedRangeAnchor: revision.selectedRangeAnchor || null,
-    scopedChange: ['section', 'selection'].includes(String(revision?.sourceMode || '').trim())
-      ? {
-          mode: revision.sourceMode || 'full',
-          headingTitle: scopedEditorDocument.headingTitle || revision?.scopedChange?.headingTitle || '',
-          originalText: revision?.scopedChange?.originalText || scopedEditorDocument.originalText || '',
-          currentText: extractPlainTextFromRichHtml(normalizedEditorHtml),
-          resolveMessage: scopedEditorDocument.resolveMessage || ''
-        }
-      : (revision.scopedChange || null)
-  }), [composedEditorHtml, note, normalizedEditorHtml, revision, revisionTitle, scopedEditorDocument.headingTitle, scopedEditorDocument.originalText, scopedEditorDocument.resolveMessage, senseTitle]);
+  const buildSnapshot = useCallback((editableHtmlOverride = null) => {
+    const effectiveEditableHtml = normalizeRichHtmlContent(
+      editableHtmlOverride == null ? latestEditorHtmlRef.current || editorHtml : editableHtmlOverride
+    ) || '<p></p>';
+    const effectiveComposedHtml = composeScopedRichEditorDocument({
+      fullHtml: fullEditorHtml,
+      sourceMode: revision?.sourceMode || 'full',
+      targetHeadingId: revision?.targetHeadingId || '',
+      selectedRangeAnchor: revision?.selectedRangeAnchor || null,
+      headingTitle: revision?.scopedChange?.headingTitle || '',
+      editableHtml: effectiveEditableHtml
+    });
+    return {
+      editorSource: effectiveComposedHtml,
+      contentFormat: 'rich_html',
+      proposerNote: String(revision?.proposerNote || '').trim(),
+      revisionTitle: buildDefaultRevisionTitle(revision?.proposerUsername || localStorage.getItem('username') || ''),
+      proposedSenseTitle: senseTitle.trim(),
+      sourceMode: revision.sourceMode || 'full',
+      targetHeadingId: revision.targetHeadingId || '',
+      selectedRangeAnchor: revision.selectedRangeAnchor || null,
+      scopedChange: ['section', 'selection'].includes(String(revision?.sourceMode || '').trim())
+        ? {
+            mode: revision.sourceMode || 'full',
+            headingTitle: scopedEditorDocument.headingTitle || revision?.scopedChange?.headingTitle || '',
+            originalText: revision?.scopedChange?.originalText || scopedEditorDocument.originalText || '',
+            currentText: extractPlainTextFromRichHtml(effectiveEditableHtml),
+            resolveMessage: scopedEditorDocument.resolveMessage || ''
+          }
+        : (revision.scopedChange || null)
+    };
+  }, [
+    editorHtml,
+    fullEditorHtml,
+    revision,
+    scopedEditorDocument.headingTitle,
+    scopedEditorDocument.originalText,
+    scopedEditorDocument.resolveMessage,
+    senseTitle
+  ]);
+
+  const snapshot = useMemo(() => buildSnapshot(editorHtml), [buildSnapshot, editorHtml]);
 
   const applySavedRevision = useCallback((data, fallbackSnapshot = snapshot) => {
     if (!data?.revision) return;
     hasPersistedDraftSaveRef.current = true;
     setFullEditorHtml(fallbackSnapshot.editorSource || '<p></p>');
+    latestEditorHtmlRef.current = normalizeRichHtmlContent(editorHtml || '<p></p>') || '<p></p>';
     if (data?.revision?.validationSnapshot) {
       setValidationSnapshot(data.revision.validationSnapshot);
     }
@@ -380,7 +453,7 @@ const SenseArticleEditor = ({
       }
     }));
     reloadMediaLibrary();
-  }, [reloadMediaLibrary, setValidationSnapshot, snapshot]);
+  }, [editorHtml, reloadMediaLibrary, setValidationSnapshot, snapshot]);
 
   const autosave = useSenseArticleAutosave({
     nodeId,
@@ -397,7 +470,7 @@ const SenseArticleEditor = ({
     }, {
       view: 'senseArticleEditor'
     }),
-    onAfterSave: (response) => applySavedRevision(response)
+    onAfterSave: (response, savedSnapshot) => applySavedRevision(response, savedSnapshot || snapshot)
   });
 
   const showToast = useCallback((message, tone = 'success') => {
@@ -423,29 +496,76 @@ const SenseArticleEditor = ({
     window.clearTimeout(toastTimerRef.current);
   }, []);
 
-  const confirmNavigation = useUnsavedChangesGuard({
-    enabled: autosave.isDirty || autosave.status === 'saving'
+  const hasUnsavedChanges = autosave.isDirty || autosave.status === 'saving';
+
+  useUnsavedChangesGuard({
+    enabled: hasUnsavedChanges
   });
 
-  const handleBack = useCallback(() => {
-    if (!confirmNavigation()) return;
+  const closeConfirmDialog = useCallback(() => {
+    setConfirmDialogState({
+      open: false,
+      title: '',
+      message: '',
+      confirmText: '确认',
+      busy: false,
+      onConfirm: null
+    });
+  }, []);
+
+  const executeEditorBack = useCallback(() => {
     onBack && onBack({
       action: 'returnFromEditor',
       revisionId: effectiveRevisionId,
       hasPersistedDraftSave: hasPersistedDraftSaveRef.current,
       wasDiscarded: hasDiscardedDraftRef.current
     });
-  }, [confirmNavigation, effectiveRevisionId, onBack]);
+  }, [effectiveRevisionId, onBack]);
+
+  const handleBack = useCallback(() => {
+    if (!hasUnsavedChanges) {
+      executeEditorBack();
+      return;
+    }
+    setConfirmDialogState({
+      open: true,
+      title: '确认返回',
+      message: '当前百科草稿还有未保存修改，返回后这些改动将直接丢失，是否继续返回？',
+      confirmText: '直接返回',
+      busy: false,
+      onConfirm: () => {
+        closeConfirmDialog();
+        executeEditorBack();
+      }
+    });
+  }, [closeConfirmDialog, executeEditorBack, hasUnsavedChanges]);
 
   const handleBackToTop = useCallback(() => {
     if (typeof window === 'undefined') return;
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
+  const handleEditorHtmlChange = useCallback((nextHtml = '<p></p>') => {
+    const normalized = normalizeRichHtmlContent(nextHtml) || '<p></p>';
+    latestEditorHtmlRef.current = normalized;
+    setEditorHtml(normalized);
+  }, []);
+
+  const commitSenseTitleEdit = useCallback(() => {
+    const nextSenseTitle = String(senseTitleDraft || '').trim();
+    setSenseTitle(nextSenseTitle || detail?.nodeSense?.title || articleContext?.senseTitle || senseId);
+    setIsEditingSenseTitle(false);
+  }, [articleContext?.senseTitle, detail?.nodeSense?.title, senseId, senseTitleDraft]);
+
+  const cancelSenseTitleEdit = useCallback(() => {
+    setSenseTitleDraft(senseTitle || detail?.nodeSense?.title || articleContext?.senseTitle || senseId || '');
+    setIsEditingSenseTitle(false);
+  }, [articleContext?.senseTitle, detail?.nodeSense?.title, senseId, senseTitle]);
+
   const saveDraft = async () => {
     if (!detail || readOnlyLegacyFallback) return;
     setSaving(true);
-    const result = await autosave.saveNow({ reason: 'manual_save' });
+    const result = await autosave.saveNow({ reason: 'manual_save', snapshotOverride: buildSnapshot(), force: true });
     setSaving(false);
     if (!result.ok && !result.skipped) {
       showToast(result.error?.message || '保存失败，请稍后重试。', 'danger');
@@ -457,7 +577,7 @@ const SenseArticleEditor = ({
   const submitRevision = async () => {
     if (!detail || readOnlyLegacyFallback) return;
     setSubmitting(true);
-    const saveResult = await autosave.saveNow({ reason: 'before_submit' });
+    const saveResult = await autosave.saveNow({ reason: 'before_submit', snapshotOverride: buildSnapshot(), force: true });
     if (!saveResult.ok && !saveResult.skipped) {
       setSubmitting(false);
       showToast(saveResult.error?.message || '提交前自动保存失败，请先解决保存问题。', 'danger');
@@ -480,7 +600,14 @@ const SenseArticleEditor = ({
           }
         }));
       }
-      showToast(buildValidationFailureMessage(validation, requestError.message || '提交失败'), 'danger');
+      showToast(
+        buildValidationFailureMessage(
+          validation,
+          requestError.message || '提交失败',
+          requestError?.payload?.code || ''
+        ),
+        'danger'
+      );
     } finally {
       setSubmitting(false);
     }
@@ -640,6 +767,77 @@ const SenseArticleEditor = ({
     return notices;
   }, [conversionWarning, readOnlyLegacyFallback, revision?.sourceMode, scopedEditorDocument.resolveMessage]);
 
+  const editorCommandbarActions = (
+    <>
+      {canOpenDashboard && onOpenDashboard ? (
+        <button type="button" className="btn btn-secondary" onClick={onOpenDashboard}>
+          <Sparkles size={16} /> 词条管理
+        </button>
+      ) : null}
+      <button type="button" className="btn btn-secondary" onClick={() => setHelpOpen(true)}>
+        <HelpCircle size={16} /> 帮助
+      </button>
+      <button type="button" className="btn btn-primary" onClick={submitRevision} disabled={submitting || !canEdit || readOnlyLegacyFallback}>
+        <Send size={16} /> {submitting ? '提交中…' : '提交审核'}
+      </button>
+      <button type="button" className="btn btn-danger" onClick={abandonDraft} disabled={abandoning || !canEdit}>
+        <Trash2 size={16} /> {abandoning ? '处理中…' : '放弃'}
+      </button>
+    </>
+  );
+
+  const editorHeaderTitle = (
+    <span className="sense-editor-header-title">
+      <span>{detail?.node?.name || articleContext?.nodeName || nodeId}</span>
+      <span className="sense-editor-header-separator">/</span>
+      {isEditingSenseTitle ? (
+        <input
+          ref={senseTitleInputRef}
+          value={senseTitleDraft}
+          onChange={(event) => setSenseTitleDraft(event.target.value)}
+          onBlur={commitSenseTitleEdit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitSenseTitleEdit();
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              cancelSenseTitleEdit();
+            }
+          }}
+          className="sense-editor-header-input"
+          disabled={!canEdit}
+          aria-label="释义名"
+        />
+      ) : (
+        <span
+          className={`sense-editor-header-editable${canEdit ? '' : ' disabled'}`}
+          onDoubleClick={() => {
+            if (!canEdit) return;
+            setSenseTitleDraft(senseTitle || detail?.nodeSense?.title || articleContext?.senseTitle || senseId || '');
+            setIsEditingSenseTitle(true);
+          }}
+          title={canEdit ? '双击释义名进行修改' : ''}
+        >
+          {senseTitle || detail?.nodeSense?.title || articleContext?.senseTitle || senseId}
+        </span>
+      )}
+      {canEdit && !isEditingSenseTitle ? <span className="sense-editor-header-hint">双击释义名修改</span> : null}
+    </span>
+  );
+
+  const editorHeaderContent = (
+    <div className="sense-rich-editor-shell-head-row">
+      <button type="button" className="btn btn-secondary sense-rich-editor-shell-back" onClick={handleBack}>
+        <ArrowLeft size={16} /> {getSenseArticleBackLabel(articleContext)}
+      </button>
+      <div className="sense-rich-editor-shell-title">
+        {editorHeaderTitle}
+      </div>
+    </div>
+  );
+
   if (loading) {
     const isResolvingDraft = !effectiveRevisionId;
     return <div className={`sense-article-page sense-display-mode-${displayMode}`} style={pageThemeStyle}><SenseArticleStateView kind="loading" title={isResolvingDraft ? '正在准备编辑草稿' : '正在加载编辑页'} description={isResolvingDraft ? '正在检查可复用草稿；如无可复用草稿，将自动创建新的整页草稿。' : '正在读取修订内容、局部范围与当前权限。'} /></div>;
@@ -658,65 +856,10 @@ const SenseArticleEditor = ({
 
   return (
     <div className={`sense-article-page editor-mode rich-editor-mode sense-display-mode-${displayMode}`} style={pageThemeStyle}>
-      <SenseArticlePageHeader
-        pageType="senseArticleEditor"
-        articleContext={articleContext}
-        title={buildSenseArticleTitle({
-          nodeName: detail?.node?.name || articleContext?.nodeName || nodeId,
-          senseTitle: detail?.nodeSense?.title || articleContext?.senseTitle || senseId,
-          revisionTitle: getRevisionDisplayTitle(revision)
-        })}
-        revisionStatus={revision.status || ''}
-        badges={[
-          <SenseArticleStatusBadge key="mode" tone="info">{revision.contentFormat === 'rich_html' ? 'rich_html' : 'legacy_markup → rich_html'}</SenseArticleStatusBadge>
-        ]}
-        metaItems={[
-          `修订范围：${getSourceModeLabel(revision.sourceMode)}`,
-          `保存格式：rich_html`,
-          readOnlyLegacyFallback ? '当前为只读 fallback' : '富文本编辑已启用'
-        ]}
-        onBack={handleBack}
-        actions={(
-          <>
-            {canOpenDashboard && onOpenDashboard ? (
-              <button type="button" className="btn btn-secondary" onClick={onOpenDashboard}>
-                <Sparkles size={16} /> 词条管理
-              </button>
-            ) : null}
-            <button type="button" className="btn btn-secondary" onClick={() => setHelpOpen(true)}>
-              <HelpCircle size={16} /> 帮助
-            </button>
-            <button type="button" className="btn btn-primary" onClick={submitRevision} disabled={submitting || !canEdit || readOnlyLegacyFallback}>
-              <Send size={16} /> {submitting ? '提交中…' : '提交审核'}
-            </button>
-            <button type="button" className="btn btn-danger" onClick={abandonDraft} disabled={abandoning || !canEdit}>
-              <Trash2 size={16} /> {abandoning ? '处理中…' : '放弃'}
-            </button>
-          </>
-        )}
+      <SenseArticleEditorStatusBand
+        scopedLabel={revision.sourceMode !== 'full' ? `${getSourceModeLabel(revision.sourceMode)}发起的局部修订` : ''}
+        notices={statusNotices}
       />
-
-      <div className="sense-editor-metadata-card">
-        <SenseArticleEditorStatusBand
-          scopedLabel={revision.sourceMode !== 'full' ? `${getSourceModeLabel(revision.sourceMode)}发起的局部修订` : ''}
-          notices={statusNotices}
-        />
-
-        <div className="sense-editor-metadata-grid">
-          <label>
-            <span>修订标题</span>
-            <input value={revisionTitle} onChange={(event) => setRevisionTitle(event.target.value)} className="sense-editor-title-input" disabled={!canEdit} />
-          </label>
-          <label>
-            <span>释义名称</span>
-            <input value={senseTitle} onChange={(event) => setSenseTitle(event.target.value)} className="sense-editor-title-input" disabled={!canEdit} />
-          </label>
-          <label className="note">
-            <span>修订说明</span>
-            <textarea value={note} onChange={(event) => setNote(event.target.value)} className="sense-review-comment" disabled={!canEdit} />
-          </label>
-        </div>
-      </div>
 
       {readOnlyLegacyFallback ? (
         <section className="sense-editor-pane legacy-readonly">
@@ -727,10 +870,12 @@ const SenseArticleEditor = ({
         </section>
       ) : (
         <RichSenseArticleEditorShell
+          headerContent={editorHeaderContent}
           value={editorHtml}
-          onChange={setEditorHtml}
+          onChange={handleEditorHtmlChange}
           onSearchReferences={(query) => senseArticleApi.searchReferenceTargets(query)}
           onUploadMedia={uploadMedia}
+          outlineResetKey={`editor:${nodeId}:${senseId}:${effectiveRevisionId}:${revision?.updatedAt || ''}`}
           scopedFocus={scopedFocus}
           mediaLibrary={mediaLibrary}
           mediaLibraryState={mediaState.status}
@@ -741,6 +886,7 @@ const SenseArticleEditor = ({
           onSaveDraft={saveDraft}
           saveDisabled={saving || !canEdit || readOnlyLegacyFallback}
           savePending={saving}
+          commandbarActions={editorCommandbarActions}
         />
       )}
       {toast ? (
@@ -763,6 +909,16 @@ const SenseArticleEditor = ({
       ) : null}
       <SenseArticleDisplayModeToggle displayMode={displayMode} onToggle={toggleDisplayMode} />
       <SenseArticleEditorHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <SystemConfirmDialog
+        open={confirmDialogState.open}
+        title={confirmDialogState.title}
+        message={confirmDialogState.message}
+        confirmText={confirmDialogState.confirmText}
+        confirmTone="danger"
+        busy={confirmDialogState.busy}
+        onClose={closeConfirmDialog}
+        onConfirm={() => confirmDialogState.onConfirm && confirmDialogState.onConfirm()}
+      />
     </div>
   );
 };

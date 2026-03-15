@@ -22,6 +22,7 @@ import RightUtilityDock from '../game/RightUtilityDock';
 export const GameHeader = ({
     headerRef,
     isKnowledgeDomainActive,
+    isCompact,
     profession,
     username,
     userAvatar,
@@ -52,12 +53,18 @@ export const GameHeader = ({
     onOpenEquipment,
     onOpenAdmin
 }) => (
-    <div ref={headerRef} className={`header ${isKnowledgeDomainActive ? 'header-knowledge-domain-active' : ''}`}>
+    <div ref={headerRef} className={`header ${isKnowledgeDomainActive ? 'header-knowledge-domain-active' : ''} ${isCompact ? 'header-compact' : ''}`.trim()}>
         <div className="header-content">
-            <h1 className="header-title">
+            <button
+                type="button"
+                className="header-title header-home-trigger"
+                onClick={onHomeClick}
+                aria-label="返回首页"
+                title="返回首页"
+            >
                 <Home className="icon" />
                 多节点策略系统
-            </h1>
+            </button>
             <div className="header-right">
                 <div className="header-buttons">
                     <div className="header-action-shell">
@@ -132,12 +139,6 @@ export const GameHeader = ({
                             </button>
                             {relatedDomainsPanel}
                         </div>
-                    </div>
-                    <div className="header-action-shell">
-                        <button type="button" onClick={onHomeClick} className="btn btn-primary">
-                            <Home size={18} />
-                            首页
-                        </button>
                     </div>
                     <div className="header-action-shell">
                         <button type="button" onClick={onAllianceClick} className="btn btn-secondary">
@@ -282,7 +283,6 @@ export const RelatedDomainsPanel = ({
 };
 
 export const UnifiedRightDock = ({
-    isAdmin,
     showKnowledgeDomain,
     isTransitioningToDomain,
     view,
@@ -312,12 +312,10 @@ export const UnifiedRightDock = ({
     siegeSupportStatuses,
     handleJumpToCurrentLocationView
 }) => {
-    if (isAdmin) return null;
-
     const isKnowledgeDomainActive = showKnowledgeDomain || isTransitioningToDomain;
     const activeDetailNode = isTitleBattleView(view) ? currentTitleDetail : currentNodeDetail;
-    const canRenderDock = view === 'home' || (isKnowledgeDetailView(view) && activeDetailNode);
-    if (!canRenderDock) return null;
+    const shouldHideDock = view === 'senseArticleEditor';
+    if (shouldHideDock) return null;
 
     const shouldRenderLocationDock = !isKnowledgeDomainActive;
     const canJumpToLocationView = Boolean(
@@ -638,6 +636,7 @@ export const DistributionParticipationPanel = ({
 export const AppShellChrome = ({
     headerRef,
     isKnowledgeDomainActive,
+    isCompact,
     profession,
     username,
     userAvatar,
@@ -690,6 +689,7 @@ export const AppShellChrome = ({
     formatDomainKnowledgePoint,
     closeHeaderPanels,
     navigateToHomeWithDockCollapse,
+    handleHeaderHomeNavigation,
     prepareForPrimaryNavigation,
     setView,
     militaryMenuWrapperRef,
@@ -734,6 +734,7 @@ export const AppShellChrome = ({
         <GameHeader
             headerRef={headerRef}
             isKnowledgeDomainActive={isKnowledgeDomainActive}
+            isCompact={isCompact}
             profession={profession}
             username={username}
             userAvatar={userAvatar}
@@ -798,7 +799,7 @@ export const AppShellChrome = ({
             )}
             onHomeClick={async () => {
                 closeHeaderPanels();
-                await navigateToHomeWithDockCollapse();
+                await handleHeaderHomeNavigation();
             }}
             onAllianceClick={async () => {
                 closeHeaderPanels();

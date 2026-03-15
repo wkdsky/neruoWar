@@ -3,18 +3,53 @@ import { BarChart3, BookMarked, Clock3, Eye, GitBranchPlus, AlertTriangle } from
 import { senseArticleApi } from '../../utils/senseArticleApi';
 import SenseArticlePageHeader from './SenseArticlePageHeader';
 import SenseArticleStateView from './SenseArticleStateView';
-import { buildSenseArticleBreadcrumb, getRevisionDisplayTitle, getRevisionStatusLabel } from './senseArticleUi';
+import {
+  buildSenseArticleBreadcrumb,
+  getRevisionActorLabel,
+  getRevisionListLabel,
+  getRevisionStatusLabel,
+  groupRevisionItemsByProposer
+} from './senseArticleUi';
 import './SenseArticle.css';
 import { buildSenseArticleAllianceContext, buildSenseArticleThemeStyle } from './senseArticleTheme';
 
-const DashboardList = ({ title, icon: Icon, items = [], emptyText = '暂无数据', renderItem }) => (
+const DashboardList = ({ title, icon: Icon, items = [], emptyText = '暂无数据', renderItem, children = null }) => (
   <section className="sense-side-card sense-dashboard-card">
     <div className="sense-side-card-title"><Icon size={16} /> {title}</div>
     <div className="sense-dashboard-list">
-      {items.length === 0 ? <SenseArticleStateView kind="empty" compact title={emptyText} description="当前没有可处理项。" /> : items.map(renderItem)}
+      {children || (items.length === 0 ? <SenseArticleStateView kind="empty" compact title={emptyText} description="当前没有可处理项。" /> : items.map(renderItem))}
     </div>
   </section>
 );
+
+const formatRevisionTime = (revision = {}) => {
+  const timestamp = revision?.updatedAt || revision?.submittedAt || revision?.publishedAt || revision?.createdAt || '';
+  return timestamp ? new Date(timestamp).toLocaleString('zh-CN', { hour12: false }) : '--';
+};
+
+const RevisionGroupList = ({ items = [], emptyText = '暂无数据', fallbackSenseTitle = '', onItemClick = null }) => {
+  const groups = groupRevisionItemsByProposer(items);
+  if (groups.length === 0) {
+    return <SenseArticleStateView kind="empty" compact title={emptyText} description="当前没有可处理项。" />;
+  }
+  return groups.map((group) => (
+    <section key={group.key} className="sense-dashboard-group">
+      <div className="sense-dashboard-group-header">
+        <strong>{group.actorLabel || getRevisionActorLabel(group.items[0])}</strong>
+        <span>{group.items.length} 条修订</span>
+      </div>
+      <div className="sense-dashboard-group-list">
+        {group.items.map((item) => (
+          <button key={item._id} type="button" className="sense-dashboard-item sense-dashboard-item-subitem" onClick={() => onItemClick && onItemClick(item)}>
+            <strong>{getRevisionListLabel(item, fallbackSenseTitle)}</strong>
+            <span>{getRevisionStatusLabel(item.status)}</span>
+            <small>{formatRevisionTime(item)}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  ));
+};
 
 const SenseArticleDashboardPage = ({ nodeId, articleContext, onContextPatch, onBack, onOpenReview, onOpenHistory, onOpenArticle, onEditRevision }) => {
   const [data, setData] = useState(null);
@@ -73,49 +108,53 @@ const SenseArticleDashboardPage = ({ nodeId, articleContext, onContextPatch, onB
           icon={Clock3}
           items={data?.pendingMyReview || []}
           emptyText="暂无待审修订"
-          renderItem={(item) => (
-            <button key={item._id} type="button" className="sense-dashboard-item" onClick={() => onOpenReview && onOpenReview(item)}>
-              <strong>{getRevisionDisplayTitle(item)}</strong>
-              <span>{getRevisionStatusLabel(item.status)}</span>
-            </button>
-          )}
-        />
+        >
+          <RevisionGroupList
+            items={data?.pendingMyReview || []}
+            emptyText="暂无待审修订"
+            fallbackSenseTitle={articleContext?.senseTitle || ''}
+            onItemClick={onOpenReview}
+          />
+        </DashboardList>
         <DashboardList
           title="我发起且被要求修改"
           icon={GitBranchPlus}
           items={data?.requestedChangesMine || []}
           emptyText="暂无要求修改项"
-          renderItem={(item) => (
-            <button key={item._id} type="button" className="sense-dashboard-item" onClick={() => onEditRevision && onEditRevision(item)}>
-              <strong>{getRevisionDisplayTitle(item)}</strong>
-              <span>{getRevisionStatusLabel(item.status)}</span>
-            </button>
-          )}
-        />
+        >
+          <RevisionGroupList
+            items={data?.requestedChangesMine || []}
+            emptyText="暂无要求修改项"
+            fallbackSenseTitle={articleContext?.senseTitle || ''}
+            onItemClick={onEditRevision}
+          />
+        </DashboardList>
         <DashboardList
           title="长时间未处理"
           icon={AlertTriangle}
           items={data?.stalePending || []}
           emptyText="暂无超时待处理修订"
-          renderItem={(item) => (
-            <button key={item._id} type="button" className="sense-dashboard-item" onClick={() => onOpenReview && onOpenReview(item)}>
-              <strong>{getRevisionDisplayTitle(item)}</strong>
-              <span>{getRevisionStatusLabel(item.status)}</span>
-            </button>
-          )}
-        />
+        >
+          <RevisionGroupList
+            items={data?.stalePending || []}
+            emptyText="暂无超时待处理修订"
+            fallbackSenseTitle={articleContext?.senseTitle || ''}
+            onItemClick={onOpenReview}
+          />
+        </DashboardList>
         <DashboardList
           title="最近发布"
           icon={BookMarked}
           items={data?.recentlyPublished || []}
           emptyText="暂无最近发布记录"
-          renderItem={(item) => (
-            <button key={item._id} type="button" className="sense-dashboard-item" onClick={() => onOpenHistory && onOpenHistory(item)}>
-              <strong>{getRevisionDisplayTitle(item)}</strong>
-              <span>{item.publishedAt ? new Date(item.publishedAt).toLocaleString('zh-CN', { hour12: false }) : '--'}</span>
-            </button>
-          )}
-        />
+        >
+          <RevisionGroupList
+            items={data?.recentlyPublished || []}
+            emptyText="暂无最近发布记录"
+            fallbackSenseTitle={articleContext?.senseTitle || ''}
+            onItemClick={onOpenHistory}
+          />
+        </DashboardList>
         <DashboardList
           title="高频被引用词条"
           icon={Eye}

@@ -29,8 +29,8 @@ const SenseArticleViewRouter = ({
   if (!senseArticleContext?.nodeId) return null;
 
   const resetKey = `${view}:${senseArticleContext.nodeId}:${senseArticleContext.senseId || ''}:${senseArticleContext.revisionId || senseArticleContext.selectedRevisionId || ''}`;
-  const openRevisionSubView = (nextView, revision = null) => {
-    navigateSenseArticleSubView(nextView, buildRevisionSubViewPatch(senseArticleContext, revision));
+  const openRevisionSubView = (nextView, revision = null, options = {}) => {
+    navigateSenseArticleSubView(nextView, buildRevisionSubViewPatch(senseArticleContext, revision), options);
   };
   const openArticleWithReturnTarget = (target) => {
     openSenseArticleView(
@@ -81,6 +81,9 @@ const SenseArticleViewRouter = ({
               selectedRevisionId: '',
               revisionId: '',
               revisionStatus: ''
+            }, {
+              preserveReturnTarget: true,
+              preserveOriginArticle: true
             });
             await fetchNotifications(true);
           }}
@@ -105,7 +108,14 @@ const SenseArticleViewRouter = ({
           onBack={handleSenseArticleBack}
           onOpenDashboard={handleOpenSenseArticleDashboard}
           onReviewed={async (revision) => {
-            openRevisionSubView(revision?.status === 'published' ? 'senseArticleHistory' : 'senseArticleReview', revision);
+            openRevisionSubView(
+              revision?.status === 'published' ? 'senseArticleHistory' : 'senseArticleReview',
+              revision,
+              {
+                preserveReturnTarget: true,
+                preserveOriginArticle: true
+              }
+            );
             await fetchNotifications(true);
           }}
         />

@@ -21,11 +21,12 @@ const SenseArticleStateView = ({
   title = '',
   description = '',
   action = null,
-  compact = false
+  compact = false,
+  className = ''
 }) => {
   const Icon = iconMap[kind] || Inbox;
   return (
-    <div className={`sense-state-view ${kind} ${compact ? 'compact' : ''}`.trim()}>
+    <div className={`sense-state-view ${kind} ${compact ? 'compact' : ''} ${className}`.trim()}>
       <div className="sense-state-view-icon"><Icon size={compact ? 18 : 22} className={kind === 'loading' ? 'spin' : ''} /></div>
       <div className="sense-state-view-title">{title || titleMap[kind] || titleMap.empty}</div>
       {description ? <div className="sense-state-view-desc">{description}</div> : null}

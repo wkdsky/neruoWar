@@ -1,3 +1,4 @@
+const { parse } = require('node-html-parser');
 const { getIdString } = require('../utils/objectId');
 const {
   TABLE_BORDER_PRESETS,
@@ -7,6 +8,33 @@ const {
 } = require('./senseArticleTableMetaService');
 
 const FORMULA_MARKUP_PATTERN = /data-formula-placeholder\s*=\s*["']true["']/i;
+
+const normalizeVisibleText = (value = '') => String(value || '')
+  .replace(/\u200b/g, '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const hasVisibleRichHtmlContent = (editorSource = '') => {
+  const source = String(editorSource || '').trim();
+  if (!source) return false;
+  try {
+    const root = parse(`<div class="sense-validation-root">${source}</div>`, {
+      lowerCaseTagName: false,
+      blockTextElements: {
+        script: false,
+        style: false,
+        pre: true
+      }
+    });
+    const container = root.querySelector('.sense-validation-root');
+    if (!container) return false;
+    if (normalizeVisibleText(container.textContent || '')) return true;
+    return !!container.querySelector('img, audio, video, table, hr, [data-formula-placeholder="true"]');
+  } catch (_error) {
+    return /<\s*(h[1-4]|p|blockquote|pre|li|img|audio|video|table|hr)\b/i.test(source)
+      || normalizeVisibleText(source.replace(/<[^>]*>/g, ' ')).length > 0;
+  }
+};
 
 const hasSemanticInlineContent = (block = {}) => {
   const html = String(block?.html || '').trim();
@@ -39,12 +67,13 @@ const validateRevisionContent = ({ revision = null, mediaReferences = null } = {
   const formulaRefs = Array.isArray(revision?.formulaRefs) ? revision.formulaRefs : [];
   const effectiveMediaReferences = Array.isArray(mediaReferences) ? mediaReferences : (Array.isArray(revision?.mediaReferences) ? revision.mediaReferences : []);
   const hasFormulaContent = formulaRefs.some((item) => String(item?.formula || '').trim().length > 0);
+  const hasRawVisibleContent = hasVisibleRichHtmlContent(revision?.editorSource || '');
 
-  if (!hasFormulaContent && !blocks.some(isMeaningfulBlock)) {
+  if (!hasFormulaContent && !blocks.some(isMeaningfulBlock) && !hasRawVisibleContent) {
     pushIssue(blocking, {
       code: 'empty_body',
       level: 'blocking',
-      message: '正文为空，不能提交或发布空百科内容。'
+      message: '未检测到可提交的正文内容，不能提交或发布空百科内容。'
     });
   }
 

@@ -15,13 +15,15 @@ const SenseArticlePageHeader = ({
   onBack,
   actions = null,
   showKicker = true,
-  showBreadcrumb = true
+  showBreadcrumb = true,
+  headerRef = null
 }) => {
   const breadcrumb = Array.isArray(articleContext?.breadcrumb) ? articleContext.breadcrumb : [];
   const backLabel = getSenseArticleBackLabel(articleContext);
+  const pageClassName = `page-${pageType}`;
 
   return (
-    <div className="sense-article-topbar">
+    <div ref={headerRef} className={`sense-article-topbar ${pageClassName}`.trim()}>
       <button type="button" className="btn btn-secondary" onClick={() => onBack && onBack()}>
         <ArrowLeft size={16} /> {backLabel}
       </button>
@@ -39,7 +41,7 @@ const SenseArticlePageHeader = ({
             : <span key={`${pageType}-meta-${index}`}>{item}</span>)}
         </div>
       </div>
-      <div className="sense-article-actions">{actions}</div>
+      <div className={`sense-article-actions ${pageClassName}-actions`.trim()}>{actions}</div>
     </div>
   );
 };

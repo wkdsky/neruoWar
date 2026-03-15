@@ -370,7 +370,7 @@ class SceneManager {
   async fadeTransition(newLayout, duration = 400) {
     // 淡出当前所有节点
     const fadeOutPromises = Array.from(this.renderer.nodes.values()).map(node =>
-      this.renderer.animateNode(node.id, { opacity: 0, scale: node.scale * 0.8 }, duration * 0.5, 'easeInCubic')
+      this.renderer.animateNode(node.id, { opacity: 0, scale: node.scale * 0.82 }, duration * 0.45, 'easeInCubic')
     );
 
     await Promise.all(fadeOutPromises);
@@ -383,12 +383,12 @@ class SceneManager {
       const node = this.renderer.nodes.get(nodeConfig.id);
       if (node) {
         node.opacity = 0;
-        node.scale = nodeConfig.scale * 0.8;
+        node.scale = nodeConfig.scale * 0.84;
         return this.renderer.animateNode(
           nodeConfig.id,
           { opacity: nodeConfig.opacity, scale: nodeConfig.scale },
-          duration * 0.6,
-          'easeOutCubic'
+          duration * 0.7,
+          'easeOutBack'
         );
       }
       return Promise.resolve();
@@ -500,17 +500,20 @@ class SceneManager {
           to: { ...newCenterNode, id }
         };
       } else {
-        // 其他节点：向外移动并淡出
-        const angle = Math.random() * Math.PI * 2;
-        const distance = 300;
+        // 其他节点沿着远离当前焦点的方向退出，避免完全随机带来的噪声感。
+        const dx = node.x - sourceNode.x;
+        const dy = node.y - sourceNode.y;
+        const length = Math.sqrt(dx * dx + dy * dy) || 1;
+        const distance = 240 + Math.min(160, length * 0.35);
         transitions.exit.push({
           id,
           from: { ...node },
           to: {
-            x: node.x + Math.cos(angle) * distance,
-            y: node.y + Math.sin(angle) * distance,
+            x: node.x + (dx / length) * distance,
+            y: node.y + (dy / length) * distance,
             opacity: 0,
-            scale: node.scale * 0.5
+            scale: node.scale * 0.52,
+            rotation: node.rotation + (dx >= 0 ? 0.08 : -0.08)
           }
         });
       }
@@ -560,16 +563,20 @@ class SceneManager {
         ...nodeConfig,
         x: newCenterNode.x,
         y: newCenterNode.y,
-        scale: 0,
-        opacity: 0
+        scale: 0.12,
+        opacity: 0,
+        rotation: nodeConfig.rotation || ((index % 2 === 0) ? -0.12 : 0.12)
       });
 
       // 延迟进入
       return new Promise(resolve => {
         setTimeout(() => {
-          this.renderer.animateNode(nodeConfig.id, nodeConfig, duration * 0.5, 'easeOutBack')
+          this.renderer.animateNode(nodeConfig.id, {
+            ...nodeConfig,
+            rotation: 0
+          }, duration * 0.56, 'easeOutBack')
             .then(resolve);
-        }, index * 50);
+        }, index * 70);
       });
     });
 
