@@ -75,6 +75,45 @@
     z-index: 1;
 }
 
+.node-detail-scene-container.is-star-map {
+    border-color: rgba(163, 198, 255, 0.18);
+    box-shadow:
+        0 24px 60px rgba(2, 6, 23, 0.34),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        inset 0 0 64px rgba(86, 139, 201, 0.08);
+}
+
+.star-map-mode-badge {
+    position: absolute;
+    right: 1.1rem;
+    bottom: 1rem;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+    padding: 0.7rem 0.85rem;
+    border-radius: 16px;
+    border: 1px solid rgba(173, 208, 255, 0.16);
+    background:
+        linear-gradient(180deg, rgba(11, 17, 30, 0.82), rgba(5, 9, 18, 0.7)),
+        rgba(5, 9, 18, 0.66);
+    color: #e6f4ff;
+    box-shadow: 0 18px 32px rgba(2, 6, 23, 0.24);
+    backdrop-filter: blur(14px);
+    pointer-events: none;
+}
+
+.star-map-mode-badge span:first-child {
+    font-size: 0.86rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+}
+
+.star-map-mode-badge span:last-child {
+    font-size: 0.74rem;
+    color: rgba(214, 231, 255, 0.82);
+}
+
 /* ===== 悬浮导航栏样式 ===== */
 .navigation-sidebar {
     position: fixed;

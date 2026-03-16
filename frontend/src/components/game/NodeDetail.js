@@ -6,6 +6,10 @@ import './NodeDetail.css';
 const NodeDetail = ({ 
     node, 
     detailViewMode = 'sense',
+    knowledgeMainViewMode = 'main',
+    starMapNodeCount = 0,
+    starMapNodeLimit = 50,
+    isStarMapLoading = false,
     titleRelatedDomainCount = 0,
     navigationPath, 
     onNavigate, 
@@ -27,13 +31,27 @@ const NodeDetail = ({
     const detailCanvasRef = useRef(null);
     const searchBarRef = useRef(null);
     const currentNodeId = String(node?._id || '');
+    const isStarMapMode = knowledgeMainViewMode === 'starMap';
     const panelTitle = useMemo(() => {
         const nodeName = typeof node?.name === 'string' && node.name.trim() ? node.name.trim() : '未命名知识域';
-        if (detailViewMode !== 'sense') return nodeName;
+        if (detailViewMode !== 'sense') return isStarMapMode ? `${nodeName} · 星盘` : nodeName;
         const senseTitle = getNodeSenseTitle(node);
-        return senseTitle ? `${nodeName}/${senseTitle}` : nodeName;
-    }, [detailViewMode, node]);
+        const baseTitle = senseTitle ? `${nodeName}/${senseTitle}` : nodeName;
+        return isStarMapMode ? `${baseTitle} · 星盘` : baseTitle;
+    }, [detailViewMode, isStarMapMode, node]);
     const summaryStats = useMemo(() => {
+        if (isStarMapMode) {
+            return [
+                {
+                    label: detailViewMode === 'title' ? '星盘已展示标题' : '星盘已展示释义',
+                    value: Math.max(0, Number(starMapNodeCount) || 0)
+                },
+                {
+                    label: '当前上限',
+                    value: Math.max(0, Number(starMapNodeLimit) || 0)
+                }
+            ];
+        }
         if (detailViewMode === 'title') {
             return [
                 {
@@ -52,7 +70,7 @@ const NodeDetail = ({
                 value: Array.isArray(node?.childNodesInfo) ? node.childNodesInfo.length : 0
             }
         ];
-    }, [detailViewMode, node, titleRelatedDomainCount]);
+    }, [detailViewMode, isStarMapMode, node, starMapNodeCount, starMapNodeLimit, titleRelatedDomainCount]);
     const getRelationText = (relation) => {
         if (relation === 'parent') return '上级知识域';
         if (relation === 'child') return '下级知识域';
@@ -273,12 +291,19 @@ const NodeDetail = ({
             </div>
 
             {/* Main Content - WebGL Canvas (placeholder for now) or Detail Canvas */}
-            <div className="webgl-scene-container node-detail-scene-container">
+            <div className={`webgl-scene-container node-detail-scene-container${isStarMapMode ? ' is-star-map' : ''}`}>
                  <div className="node-detail-atmosphere" aria-hidden="true">
                     <div className="node-detail-atmosphere__gradient" />
                     <div className="node-detail-atmosphere__mesh" />
                     <div className="node-detail-atmosphere__halo" />
                  </div>
+
+                 {isStarMapMode && (
+                    <div className="star-map-mode-badge">
+                        <span>星盘模式</span>
+                        <span>{isStarMapLoading ? '加载中' : `滚轮前推返回主视图 · 上限 ${Math.max(0, Number(starMapNodeLimit) || 0)}`}</span>
+                    </div>
+                 )}
 
                  <canvas
                      ref={webglCanvasRef}

@@ -14,6 +14,7 @@ class SceneManager {
 
     this.currentScene = null;  // 'home' | 'nodeDetail' | 'titleDetail'
     this.currentLayout = { nodes: [], lines: [] };
+    this.currentLayoutSource = null;
 
     // 回调函数
     this.onNodeClick = null;
@@ -57,6 +58,23 @@ class SceneManager {
     this.renderer.setCameraOffset(0, 0);
   }
 
+  applyStarMapFraming(layout = this.currentLayout) {
+    const bounds = layout?.bounds;
+    if (!bounds) {
+      this.resetCameraToLayoutCenter();
+      return;
+    }
+
+    const contentCenterX = bounds.left + bounds.width * 0.5;
+    const contentCenterY = bounds.top + bounds.height * 0.5;
+    const viewportCenterX = this.layout.centerX;
+    const viewportCenterY = this.layout.centerY + 42;
+    this.renderer.setCameraOffset(
+      viewportCenterX - contentCenterX,
+      viewportCenterY - contentCenterY
+    );
+  }
+
   /**
    * 显示首页场景
    */
@@ -69,6 +87,13 @@ class SceneManager {
     this.renderer.clearNodeButtons();
 
     const newLayout = this.layout.calculateHomeLayout(rootNodes, featuredNodes, searchResults);
+    this.currentLayoutSource = {
+      mode: 'main',
+      scene: 'home',
+      rootNodes,
+      featuredNodes,
+      searchResults
+    };
 
     if (this.currentScene === null) {
       // 首次加载：直接设置
@@ -101,6 +126,13 @@ class SceneManager {
     this.renderer.clearNodeButtons();
 
     const newLayout = this.layout.calculateNodeDetailLayout(centerNode, parentNodes, childNodes);
+    this.currentLayoutSource = {
+      mode: 'main',
+      scene: 'nodeDetail',
+      centerNode,
+      parentNodes,
+      childNodes
+    };
 
     // 如果当前场景没有节点或者是第一次加载，直接设置布局
     if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
@@ -147,6 +179,14 @@ class SceneManager {
     this.renderer.clearNodeButtons();
 
     const newLayout = this.layout.calculateTitleDetailLayout(centerNode, graphNodes, graphEdges, levelByNodeId);
+    this.currentLayoutSource = {
+      mode: 'main',
+      scene: 'titleDetail',
+      centerNode,
+      graphNodes,
+      graphEdges,
+      levelByNodeId
+    };
 
     if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
       this.setLayout(newLayout);
@@ -173,6 +213,49 @@ class SceneManager {
 
     if (this.onSceneChange) {
       this.onSceneChange('titleDetail', centerNode);
+    }
+  }
+
+  async showStarMap(scene, graph = {}, clickedNode = null) {
+    if (scene !== 'titleDetail' && scene !== 'nodeDetail') return;
+
+    this.renderer.setSceneType(scene);
+    this.renderer.setCameraPanEnabled(true);
+    this.resetCameraToLayoutCenter();
+    this.centerNodeButtonContext = {};
+    this.renderer.clearNodeButtons();
+
+    const layer = scene === 'titleDetail' ? 'title' : 'sense';
+    const newLayout = this.layout.calculateStarMapLayout(graph, { layer });
+    this.currentLayoutSource = {
+      mode: 'starMap',
+      scene,
+      graph
+    };
+
+    if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
+      this.setLayout(newLayout);
+      this.currentScene = scene;
+      this.applyStarMapFraming(newLayout);
+      if (this.onSceneChange) {
+        this.onSceneChange(scene, graph?.centerNode || null);
+      }
+      return;
+    }
+
+    if (this.currentScene !== scene) {
+      await this.fadeTransition(newLayout);
+    } else if (clickedNode) {
+      await this.nodeToNodeTransition(clickedNode, newLayout, 560);
+    } else {
+      await this.transitionTo(newLayout, 560);
+    }
+
+    this.currentScene = scene;
+    this.applyStarMapFraming(newLayout);
+
+    if (this.onSceneChange) {
+      this.onSceneChange(scene, graph?.centerNode || null);
     }
   }
 
@@ -617,7 +700,16 @@ class SceneManager {
     this.renderer.resize(width, height);
 
     // 重新计算并应用当前布局
-    if (this.currentScene === 'home' && this.currentLayout.nodes.length > 0) {
+    if (this.currentLayoutSource?.mode === 'starMap' && this.currentLayout.nodes.length > 0) {
+      const newLayout = this.layout.calculateStarMapLayout(
+        this.currentLayoutSource.graph,
+        {
+          layer: this.currentLayoutSource.scene === 'titleDetail' ? 'title' : 'sense'
+        }
+      );
+      this.setLayout(newLayout);
+      this.applyStarMapFraming(newLayout);
+    } else if (this.currentScene === 'home' && this.currentLayout.nodes.length > 0) {
       const rootNodes = this.currentLayout.nodes
         .filter(n => n.type === 'root')
         .map(n => n.data)
@@ -1040,6 +1132,7 @@ class SceneManager {
     if (this.isInPreviewMode) {
       this.exitAssociationPreview();
     }
+    this.currentLayoutSource = null;
     this.renderer.destroy();
   }
 }

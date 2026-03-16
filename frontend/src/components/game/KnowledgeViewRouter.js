@@ -11,6 +11,11 @@ const KnowledgeViewRouter = ({
   currentTitleDetail,
   titleGraphData,
   currentNodeDetail,
+  knowledgeMainViewMode = 'main',
+  titleStarMapData,
+  nodeStarMapData,
+  currentStarMapLimit = 50,
+  isStarMapLoading = false,
   titleRelationInfo,
   onCloseTitleRelationInfo,
   searchQuery,
@@ -86,9 +91,13 @@ const KnowledgeViewRouter = ({
     return (
       <>
         <NodeDetail
-          node={currentTitleDetail}
+          node={knowledgeMainViewMode === 'starMap' ? (titleStarMapData?.centerNode || currentTitleDetail) : currentTitleDetail}
           detailViewMode="title"
-          titleRelatedDomainCount={Math.max(0, (Number(titleGraphData?.nodeCount) || 0) - 1)}
+          knowledgeMainViewMode={knowledgeMainViewMode}
+          starMapNodeCount={Math.max(0, (Number((knowledgeMainViewMode === 'starMap' ? titleStarMapData?.nodeCount : titleGraphData?.nodeCount) || 0) - 1))}
+          starMapNodeLimit={currentStarMapLimit}
+          isStarMapLoading={isStarMapLoading}
+          titleRelatedDomainCount={Math.max(0, (Number((knowledgeMainViewMode === 'starMap' ? titleStarMapData?.nodeCount : titleGraphData?.nodeCount) || 0) - 1))}
           navigationPath={navigationPath}
           onNavigate={onTitleNavigate}
           onNavigateHistory={onNavigateHistory}
@@ -118,8 +127,12 @@ const KnowledgeViewRouter = ({
     return (
       <>
         <NodeDetail
-          node={currentNodeDetail}
+          node={knowledgeMainViewMode === 'starMap' ? (nodeStarMapData?.centerNode || currentNodeDetail) : currentNodeDetail}
           detailViewMode="sense"
+          knowledgeMainViewMode={knowledgeMainViewMode}
+          starMapNodeCount={Math.max(0, Number(nodeStarMapData?.nodeCount) || 0)}
+          starMapNodeLimit={currentStarMapLimit}
+          isStarMapLoading={isStarMapLoading}
           navigationPath={navigationPath}
           onNavigate={onNodeNavigate}
           onNavigateHistory={onNavigateHistory}
@@ -140,7 +153,7 @@ const KnowledgeViewRouter = ({
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => openSenseArticleFromNode(currentNodeDetail)}
+            onClick={() => openSenseArticleFromNode(knowledgeMainViewMode === 'starMap' ? (nodeStarMapData?.centerNode || currentNodeDetail) : currentNodeDetail)}
           >
             {SENSE_ARTICLE_ENTRY_LABEL}
           </button>

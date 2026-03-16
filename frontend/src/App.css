@@ -2823,6 +2823,126 @@ body {
     border: 1px solid rgba(154, 200, 255, 0.12);
 }
 
+.webgl-node-label.is-sense {
+    border: 1px solid rgba(129, 219, 186, 0.14);
+}
+
+.webgl-node-label.is-below {
+    padding-top: 0.28em;
+    padding-bottom: 0.3em;
+}
+
+.webgl-node-label.is-star-map-label {
+    width: max-content;
+    min-width: 0;
+    max-width: min(var(--label-width-hint, 148px), 20vw);
+    gap: 0.22em;
+    padding: 0.26em 0.46em 0.32em;
+    border-radius: 16px;
+    background:
+        linear-gradient(180deg, rgba(10, 18, 30, 0.72), rgba(4, 8, 16, 0.5)),
+        rgba(4, 8, 16, 0.28);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 8px 20px rgba(2, 6, 23, 0.14);
+    backdrop-filter: blur(10px);
+}
+
+.webgl-node-label.is-star-map-label.is-inside-node {
+    max-width: min(var(--label-width-hint, 148px), 9.8rem);
+    padding: 0;
+    gap: 0.08em;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    text-shadow:
+        0 1px 2px rgba(2, 6, 23, 0.95),
+        0 0 10px rgba(2, 6, 23, 0.72);
+}
+
+.webgl-node-label.is-star-map-label .node-label-title,
+.webgl-node-label.is-star-map-label .node-label-sense {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.webgl-node-label.is-star-map-label .node-label-title {
+    width: min(var(--label-title-width-hint, var(--label-width-hint, 148px)), 100%);
+    font-weight: 760;
+    letter-spacing: 0.012em;
+}
+
+.webgl-node-label.is-star-map-label.is-inside-node .node-label-title {
+    font-size: inherit;
+    line-height: 1.05;
+}
+
+.webgl-node-label.is-star-map-label .node-label-sense {
+    width: min(var(--label-sense-width-hint, var(--label-width-hint, 148px)), 100%);
+    font-size: 0.76em;
+    line-height: 1.18;
+    opacity: 0.8;
+}
+
+.webgl-node-label.is-star-map-label .node-label-line {
+    display: block;
+    width: 100%;
+    line-height: inherit;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.webgl-node-label.is-star-map-label.is-center {
+    background:
+        linear-gradient(180deg, rgba(12, 24, 38, 0.82), rgba(6, 12, 22, 0.58)),
+        rgba(4, 8, 16, 0.38);
+    border-color: rgba(132, 220, 255, 0.16);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        0 10px 24px rgba(3, 10, 20, 0.2);
+}
+
+.webgl-node-label.is-star-map-label.is-inside-node.is-center {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+.webgl-node-label.is-star-map-center::before {
+    content: '中心';
+    position: absolute;
+    top: -0.95rem;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.12rem 0.42rem;
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(111, 224, 255, 0.96), rgba(33, 128, 186, 0.88));
+    border: 1px solid rgba(214, 247, 255, 0.52);
+    color: #f8fdff;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    box-shadow:
+        0 0 0 1px rgba(8, 15, 28, 0.42),
+        0 0 16px rgba(74, 211, 255, 0.34),
+        0 6px 18px rgba(14, 165, 233, 0.22);
+}
+
+.webgl-node-label.is-hidden-by-lod {
+    opacity: 0 !important;
+}
+
 .webgl-node-label.is-preview {
     color: #bae6fd;
 }

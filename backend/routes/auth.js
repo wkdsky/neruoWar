@@ -8,7 +8,6 @@ const Notification = require('../models/Notification');
 const Node = require('../models/Node');
 const DistributionParticipant = require('../models/DistributionParticipant');
 const EntropyAlliance = require('../models/EntropyAlliance');
-const GameSetting = require('../models/GameSetting');
 const {
   countUnreadNotificationsFromCollection,
   clearUserNotificationsFromCollection,
@@ -28,15 +27,12 @@ const KnowledgeDistributionService = require('../services/KnowledgeDistributionS
 const {
   ensureUserBattlefieldInventory
 } = require('../services/battlefieldInventoryService');
+const {
+  getOrCreateSettings
+} = require('../services/gameSettingsService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
-
-const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
-  { key: 'global' },
-  { $setOnInsert: { travelUnitSeconds: 60, distributionAnnouncementLeadHours: 24 } },
-  { new: true, upsert: true, setDefaultsOnInsert: true }
-);
 
 const TRAVEL_STATUS = {
   IDLE: 'idle',

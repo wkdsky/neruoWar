@@ -385,6 +385,8 @@ class WebGLNodeRenderer {
     this.dragState = {
       active: false,
       pointerId: null,
+      mode: 'idle',
+      targetType: 'blank',
       startX: 0,
       startY: 0,
       startOffsetX: 0,
@@ -574,6 +576,8 @@ class WebGLNodeRenderer {
     if (!this.cameraPanEnabled) {
       this.dragState.active = false;
       this.dragState.pointerId = null;
+      this.dragState.mode = 'idle';
+      this.dragState.targetType = 'blank';
       this.dragState.moved = false;
       this.canvas.style.cursor = 'default';
     }
@@ -612,7 +616,11 @@ class WebGLNodeRenderer {
         this.canvas.style.cursor = 'pointer';
       } else {
         this.hoveredLine = this.hitTestLine(x, y);
-        this.canvas.style.cursor = this.hoveredLine ? 'pointer' : 'default';
+        if (this.hoveredLine) {
+          this.canvas.style.cursor = 'pointer';
+        } else {
+          this.canvas.style.cursor = this.cameraPanEnabled ? 'grab' : 'default';
+        }
       }
     }
 
@@ -632,20 +640,25 @@ class WebGLNodeRenderer {
 
     canvas.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
+      const pos = this.getCanvasPositionFromEvent(event);
+      const clickedButton = this.hitTestButton(pos.x, pos.y, { includeDisabled: true });
+      const clickedNode = clickedButton ? null : this.hitTest(pos.x, pos.y);
+
       if (!this.cameraPanEnabled) {
-        const pos = this.getCanvasPositionFromEvent(event);
         this.updateHoverState(pos.x, pos.y);
         return;
       }
-      const pos = this.getCanvasPositionFromEvent(event);
+
       this.dragState.active = true;
       this.dragState.pointerId = event.pointerId;
+      this.dragState.mode = clickedButton || clickedNode ? 'observe' : 'pan';
+      this.dragState.targetType = clickedButton ? 'button' : (clickedNode ? 'node' : 'blank');
       this.dragState.startX = pos.x;
       this.dragState.startY = pos.y;
       this.dragState.startOffsetX = this.camera.offsetX;
       this.dragState.startOffsetY = this.camera.offsetY;
       this.dragState.moved = false;
-      canvas.style.cursor = 'grabbing';
+      canvas.style.cursor = this.dragState.mode === 'pan' ? 'grabbing' : 'pointer';
       canvas.setPointerCapture(event.pointerId);
     });
 
@@ -656,12 +669,14 @@ class WebGLNodeRenderer {
       if (draggingSamePointer) {
         const dx = pos.x - this.dragState.startX;
         const dy = pos.y - this.dragState.startY;
-        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
           this.dragState.moved = true;
         }
-        this.camera.offsetX = this.dragState.startOffsetX + dx;
-        this.camera.offsetY = this.dragState.startOffsetY + dy;
-        this.render();
+        if (this.dragState.mode === 'pan') {
+          this.camera.offsetX = this.dragState.startOffsetX + dx;
+          this.camera.offsetY = this.dragState.startOffsetY + dy;
+          this.render();
+        }
         return;
       }
 
@@ -674,6 +689,8 @@ class WebGLNodeRenderer {
       canvas.releasePointerCapture(event.pointerId);
       this.dragState.active = false;
       this.dragState.pointerId = null;
+      this.dragState.mode = 'idle';
+      this.dragState.targetType = 'blank';
       if (this.dragState.moved) {
         this.dragState.suppressClick = true;
         setTimeout(() => {
@@ -689,10 +706,12 @@ class WebGLNodeRenderer {
       if (!this.dragState.active || this.dragState.pointerId !== event.pointerId) return;
       this.dragState.active = false;
       this.dragState.pointerId = null;
+      this.dragState.mode = 'idle';
+      this.dragState.targetType = 'blank';
       if (canvas.hasPointerCapture(event.pointerId)) {
         canvas.releasePointerCapture(event.pointerId);
       }
-      canvas.style.cursor = 'default';
+      canvas.style.cursor = this.cameraPanEnabled ? 'grab' : 'default';
     });
 
     canvas.addEventListener('click', (event) => {
@@ -878,6 +897,70 @@ class WebGLNodeRenderer {
     return `rgba(${r}, ${g}, ${b}, ${a})`;
   }
 
+  getOrderedRenderableLines(options = {}) {
+    const includeStubs = options.includeStubs !== false;
+    const includeNormal = options.includeNormal !== false;
+    return (Array.isArray(this.lines) ? this.lines : [])
+      .filter((line) => (
+        (includeStubs || !line?.isStub)
+        && (includeNormal || !!line?.isStub)
+      ))
+      .slice()
+      .sort((left, right) => {
+        const leftOrder = Number(left?.drawOrder) || 0;
+        const rightOrder = Number(right?.drawOrder) || 0;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        const leftStub = left?.isStub ? 1 : 0;
+        const rightStub = right?.isStub ? 1 : 0;
+        if (leftStub !== rightStub) return leftStub - rightStub;
+        return String(left?.id || '').localeCompare(String(right?.id || ''));
+      });
+  }
+
+  getCurvedLineGeometry(segment, line = {}) {
+    if (!segment) return null;
+
+    const dx = segment.end.x - segment.start.x;
+    const dy = segment.end.y - segment.start.y;
+    const length = Math.hypot(dx, dy);
+    if (!Number.isFinite(length) || length <= 0.001) return null;
+
+    const midX = (segment.start.x + segment.end.x) * 0.5;
+    const midY = (segment.start.y + segment.end.y) * 0.5;
+    const normalX = -dy / length;
+    const normalY = dx / length;
+    const maxOffset = Math.max(0, length * 0.22);
+    const curveOffset = Math.max(-maxOffset, Math.min(maxOffset, Number(line?.curveOffset) || 0));
+    const controlX = midX + normalX * curveOffset;
+    const controlY = midY + normalY * curveOffset;
+
+    return {
+      start: segment.start,
+      end: segment.end,
+      control: { x: controlX, y: controlY },
+      length
+    };
+  }
+
+  buildLineGradient(ctx, geometry, color, alpha) {
+    const gradient = ctx.createLinearGradient(
+      geometry.start.x,
+      geometry.start.y,
+      geometry.end.x,
+      geometry.end.y
+    );
+    gradient.addColorStop(0, this.toCssRgba(color, alpha * 0.54));
+    gradient.addColorStop(0.5, this.toCssRgba(color, alpha));
+    gradient.addColorStop(1, this.toCssRgba(color, alpha * 0.54));
+    return gradient;
+  }
+
+  traceCurvedLine(ctx, geometry) {
+    ctx.beginPath();
+    ctx.moveTo(geometry.start.x, geometry.start.y);
+    ctx.quadraticCurveTo(geometry.control.x, geometry.control.y, geometry.end.x, geometry.end.y);
+  }
+
   hitTestLine(x, y) {
     if (!Array.isArray(this.lines) || this.lines.length === 0) return null;
     const threshold = 10;
@@ -926,6 +1009,19 @@ class WebGLNodeRenderer {
       visible: config.visible ?? existing?.visible ?? true,
       type: nextType,
       label: config.label ?? existing?.label ?? '',
+      labelPlacement: config.labelPlacement ?? existing?.labelPlacement ?? 'center',
+      labelOffsetX: config.labelOffsetX ?? existing?.labelOffsetX ?? 0,
+      labelOffsetY: config.labelOffsetY ?? existing?.labelOffsetY ?? 0,
+      labelVisible: config.labelVisible ?? existing?.labelVisible ?? true,
+      labelMaxWidthStrategy: config.labelMaxWidthStrategy ?? existing?.labelMaxWidthStrategy ?? 'default',
+      labelWidthHint: config.labelWidthHint ?? existing?.labelWidthHint ?? null,
+      labelHeightHint: config.labelHeightHint ?? existing?.labelHeightHint ?? null,
+      labelLineClamp: config.labelLineClamp ?? existing?.labelLineClamp ?? 2,
+      labelSenseLineClamp: config.labelSenseLineClamp ?? existing?.labelSenseLineClamp ?? 1,
+      labelTitleLines: config.labelTitleLines ?? existing?.labelTitleLines ?? null,
+      labelSenseLines: config.labelSenseLines ?? existing?.labelSenseLines ?? null,
+      labelTitleWidthHint: config.labelTitleWidthHint ?? existing?.labelTitleWidthHint ?? null,
+      labelSenseWidthHint: config.labelSenseWidthHint ?? existing?.labelSenseWidthHint ?? null,
       data: config.data ?? existing?.data ?? null,
       visualStyle: config.visualStyle ?? existing?.visualStyle ?? config.data?.visualStyle ?? existing?.data?.visualStyle ?? null,
       labelColor: config.labelColor ?? existing?.labelColor ?? config.visualStyle?.textColor ?? config.data?.visualStyle?.textColor ?? existing?.labelColor ?? '',
@@ -1002,7 +1098,7 @@ class WebGLNodeRenderer {
       }, node?.type);
     }
 
-    const isKnowledgeDomainNode = ['root', 'featured', 'center', 'parent', 'child', 'search', 'title'].includes(node?.type);
+    const isKnowledgeDomainNode = ['root', 'featured', 'center', 'parent', 'child', 'search', 'title', 'sense'].includes(node?.type);
     if (isKnowledgeDomainNode) {
       return applyRoleAccent({
         base: hexToVec4(DEFAULT_UNALLIED_NODE_VISUAL_STYLE.primaryColor, 1),
@@ -1083,7 +1179,27 @@ class WebGLNodeRenderer {
     );
 
     // 先同步非数值动画字段，避免样式和文案在动画后才生效
-    const staticKeys = ['type', 'label', 'data', 'visualStyle', 'labelColor', 'visible'];
+    const staticKeys = [
+      'type',
+      'label',
+      'data',
+      'visualStyle',
+      'labelColor',
+      'visible',
+      'labelPlacement',
+      'labelOffsetX',
+      'labelOffsetY',
+      'labelVisible',
+      'labelMaxWidthStrategy',
+      'labelWidthHint',
+      'labelHeightHint',
+      'labelLineClamp',
+      'labelSenseLineClamp',
+      'labelTitleLines',
+      'labelSenseLines',
+      'labelTitleWidthHint',
+      'labelSenseWidthHint'
+    ];
     staticKeys.forEach((key) => {
       if (target[key] !== undefined) {
         node[key] = target[key];
@@ -1278,6 +1394,13 @@ class WebGLNodeRenderer {
   }
 
   getDetailNodeLayerProfile(node) {
+    const isStarMapNode = !!node?.data?.starMapLayer;
+    if (isStarMapNode && node?.type === 'center') {
+      return { glowScale: 1.34, shellScale: 1.08, faceScale: 0.94, coreScale: 0.66, glowOpacity: 0.22 };
+    }
+    if (isStarMapNode) {
+      return { glowScale: 1.08, shellScale: 0.98, faceScale: 0.88, coreScale: 0.56, glowOpacity: 0.11 };
+    }
     if (node?.type === 'center') {
       return { glowScale: 1.34, shellScale: 1.12, faceScale: 1, coreScale: 0.72, glowOpacity: 0.22 };
     }
@@ -1301,7 +1424,8 @@ class WebGLNodeRenderer {
     gl.useProgram(this.lineProgram);
     gl.uniform2f(this.lineLocations.resolution, this.canvas.width, this.canvas.height);
 
-    for (const line of this.lines) {
+    for (const line of this.getOrderedRenderableLines({ includeStubs: false })) {
+      if (line?.isStub) continue;
       const fromNode = this.nodes.get(line.from);
       const toNode = this.nodes.get(line.to);
 
@@ -1329,7 +1453,10 @@ class WebGLNodeRenderer {
       gl.uniform4fv(this.lineLocations.color, color);
       gl.uniform1f(
         this.lineLocations.opacity,
-        Math.min(fromNode.opacity, toNode.opacity) * Math.max(0.16, revealProgress) * hoverBoost
+        Math.min(fromNode.opacity, toNode.opacity)
+          * Math.max(0.12, revealProgress)
+          * (Number(line?.lineOpacity) || 0.22)
+          * hoverBoost
       );
 
       gl.lineWidth(2);
@@ -1437,6 +1564,55 @@ class WebGLNodeRenderer {
       const profile = this.getDetailNodeLayerProfile(node);
       const hoverBoost = this.hoveredNode === node ? 1.12 : 1;
       const hoverScale = this.hoveredNode === node ? 1.035 : 1;
+      const isStarMapCenter = !!node?.data?.starMapLayer && node.type === 'center';
+      if (isStarMapCenter) {
+        const pulse = 1 + Math.sin(performance.now() * 0.0046) * 0.06;
+        this.drawNodeSprite({
+          nodePos,
+          size,
+          node,
+          color: [0.48, 0.84, 1, 1],
+          secondaryColor: [0.18, 0.42, 0.74, 1],
+          rimColor: [0.86, 0.98, 1, 1],
+          glowColor: [0.55, 0.9, 1, 1],
+          glowIntensity: 0.38,
+          opacity: node.opacity * 0.12 * revealOpacity,
+          shapeType: 2,
+          patternType: PATTERN_TYPE_MAP.none,
+          sizeScale: 1.88 * pulse * revealScale,
+          shapeMorph
+        });
+        this.drawNodeSprite({
+          nodePos,
+          size,
+          node,
+          color: [0.55, 0.9, 1, 1],
+          secondaryColor: [0.26, 0.6, 0.82, 1],
+          rimColor: [0.88, 0.98, 1, 1],
+          glowColor: [0.55, 0.9, 1, 1],
+          glowIntensity: 0.32,
+          opacity: node.opacity * 0.22 * revealOpacity,
+          shapeType: 2,
+          patternType: PATTERN_TYPE_MAP.none,
+          sizeScale: 1.58 * pulse * revealScale,
+          shapeMorph
+        });
+        this.drawNodeSprite({
+          nodePos,
+          size,
+          node,
+          color: [0.92, 0.99, 1, 1],
+          secondaryColor: [0.4, 0.74, 0.92, 1],
+          rimColor: [1, 1, 1, 1],
+          glowColor: [0.78, 0.95, 1, 1],
+          glowIntensity: 0.12,
+          opacity: node.opacity * 0.2 * revealOpacity,
+          shapeType: 2,
+          patternType: PATTERN_TYPE_MAP.none,
+          sizeScale: 1.12 * revealScale,
+          shapeMorph
+        });
+      }
       this.drawNodeSprite({
         nodePos,
         size,
@@ -1635,7 +1811,9 @@ class WebGLNodeRenderer {
 
   renderLabels(includePreview = false) {
     const normalNodes = Array.from(this.nodes.values()).filter((node) => (
-      node.visible && node.opacity > 0.3 && node.label
+      node.visible
+      && (node.opacity > 0.3 || (!!node?.data?.starMapLayer && node.opacity > 0.06))
+      && node.label
     ));
     const previewNodes = includePreview
       ? Array.from(this.previewNodes.values()).filter((node) => node.visible && node.label)
@@ -1643,34 +1821,54 @@ class WebGLNodeRenderer {
 
     const labelOverlay = this.ensureLabelOverlay();
     const liveKeys = new Set();
-    const applyLabelContent = (labelEl, label) => {
+    const applyLabelContent = (labelEl, node) => {
+      const label = node?.label || '';
       const normalized = String(label || '').trim();
-      if (labelEl.dataset.rawLabel === normalized) return;
-      labelEl.dataset.rawLabel = normalized;
-      labelEl.replaceChildren();
-
       const [titlePart = '', ...senseParts] = normalized.split('\n');
       const title = titlePart.trim();
       const senseTitle = senseParts.join('\n').trim();
+      const titleLines = Array.isArray(node?.labelTitleLines) && node.labelTitleLines.length > 0
+        ? node.labelTitleLines
+        : (title ? [title] : []);
+      const senseLines = Array.isArray(node?.labelSenseLines) && node.labelSenseLines.length > 0
+        ? node.labelSenseLines
+        : (senseTitle ? [senseTitle] : []);
+      const signature = `${normalized}|t:${titleLines.join(' / ')}|s:${senseLines.join(' / ')}`;
+      if (labelEl.dataset.rawLabel === signature) return;
+      labelEl.dataset.rawLabel = signature;
+      labelEl.replaceChildren();
 
-      if (title) {
+      if (titleLines.length > 0) {
         const titleEl = document.createElement('span');
         titleEl.className = 'node-label-title';
-        titleEl.textContent = title;
+        titleLines.forEach((line) => {
+          const lineEl = document.createElement('span');
+          lineEl.className = 'node-label-line';
+          lineEl.textContent = line;
+          titleEl.appendChild(lineEl);
+        });
         labelEl.appendChild(titleEl);
       }
 
-      if (senseTitle) {
+      if (senseLines.length > 0) {
         const senseEl = document.createElement('span');
         senseEl.className = 'node-label-sense';
-        senseEl.textContent = senseTitle;
+        senseLines.forEach((line) => {
+          const lineEl = document.createElement('span');
+          lineEl.className = 'node-label-line';
+          lineEl.textContent = line;
+          senseEl.appendChild(lineEl);
+        });
         labelEl.appendChild(senseEl);
       }
 
-      if (!title && !senseTitle) {
+      if (titleLines.length < 1 && senseLines.length < 1) {
         const fallbackEl = document.createElement('span');
         fallbackEl.className = 'node-label-title';
-        fallbackEl.textContent = '未命名知识域';
+        const lineEl = document.createElement('span');
+        lineEl.className = 'node-label-line';
+        lineEl.textContent = '未命名知识域';
+        fallbackEl.appendChild(lineEl);
         labelEl.appendChild(fallbackEl);
       }
     };
@@ -1689,31 +1887,89 @@ class WebGLNodeRenderer {
       const nodePos = this.worldToScreen(node.x, node.y);
       const screenRadius = Math.max(10, node.radius * node.scale * this.camera.zoom);
       const isHomeHexNode = this.sceneType === 'home' && (node.type === 'root' || node.type === 'featured');
+      const isStarMapNode = !!node?.data?.starMapLayer && !isPreview;
+      const isStarMapCenter = isStarMapNode && node.type === 'center';
       const revealProgress = this.getRevealProgressForNode(node.id);
+      const isHovered = this.hoveredNode === node;
+      const shouldDisplayLabel = node.labelVisible !== false || node.type === 'center' || isHovered;
+      const placement = typeof node.labelPlacement === 'string' ? node.labelPlacement : 'center';
+      const isStarMapInside = isStarMapNode && placement !== 'below' && placement !== 'above';
+      const sidebarButtonFontPx = 14.4;
       const baseFontSize = isHomeHexNode
         ? Math.max(8, Math.min(18, screenRadius * 0.22))
-        : Math.max(11, Math.min(28, screenRadius * (node.type === 'center' ? 0.35 : 0.31)));
+        : isStarMapNode
+          ? (isStarMapInside
+            ? Math.max(13.6, Math.min(15.2, sidebarButtonFontPx + (screenRadius - 28) * 0.028))
+            : Math.max(10, Math.min(15, 11.4 + screenRadius * 0.08)))
+          : Math.max(10, Math.min(24, screenRadius * (node.type === 'center' ? 0.28 : 0.3)));
       const labelLength = Math.max(1, String(node.label || '').trim().length);
-      const fitByLength = ((isHomeHexNode ? screenRadius * 1.1 : screenRadius * 1.5)) / (labelLength * 0.56);
-      const fontSize = Math.max(8, Math.min(baseFontSize, fitByLength));
+      const fitByLength = isStarMapNode
+        ? (isStarMapInside ? Math.max(11, (screenRadius * 1.94) / (labelLength * 0.38)) : Number.POSITIVE_INFINITY)
+        : ((isHomeHexNode ? screenRadius * 1.1 : screenRadius * 1.5)) / (labelLength * 0.56);
+      const fontSize = isStarMapInside
+        ? Math.max(12.8, Math.min(baseFontSize, fitByLength))
+        : Math.max(8, Math.min(baseFontSize, fitByLength));
       const labelOpacity = isHomeHexNode
         ? Math.max(0, Math.min(1, node.opacity))
         : Math.max(0, Math.min(1, node.opacity * Math.max(0, Math.min(1, (revealProgress - 0.24) / 0.76))));
+      const offsetX = Number(node.labelOffsetX) || 0;
+      const offsetY = Number(node.labelOffsetY) || 0;
+      let anchorX = nodePos.x + offsetX;
+      let anchorY = nodePos.y + offsetY;
+      let transform = 'translate(-50%, -50%)';
+      if (placement === 'below') {
+        anchorX = nodePos.x + offsetX;
+        anchorY = nodePos.y + screenRadius + offsetY;
+        transform = 'translate(-50%, 0)';
+      } else if (placement === 'above') {
+        anchorX = nodePos.x + offsetX;
+        anchorY = nodePos.y - screenRadius - offsetY;
+        transform = 'translate(-50%, -100%)';
+      }
+      let maxWidth = Number(node.labelWidthHint) || (
+        isHomeHexNode
+          ? Math.max(72, screenRadius * 1.15)
+          : Math.max(96, screenRadius * (node.type === 'center' ? 2.1 : 1.9))
+      );
+      if (node.labelMaxWidthStrategy === 'tight') {
+        maxWidth *= 0.72;
+      } else if (node.labelMaxWidthStrategy === 'compact') {
+        maxWidth *= 0.84;
+      } else if (node.labelMaxWidthStrategy === 'wide') {
+        maxWidth *= 1.12;
+      }
 
-      applyLabelContent(labelEl, node.label);
+      applyLabelContent(labelEl, node);
       labelEl.classList.toggle('is-home-hex', isHomeHexNode);
       labelEl.classList.toggle('is-center', node.type === 'center');
       labelEl.classList.toggle('is-parent', node.type === 'parent');
       labelEl.classList.toggle('is-child', node.type === 'child');
       labelEl.classList.toggle('is-title', node.type === 'title');
-      labelEl.style.left = `${nodePos.x}px`;
-      labelEl.style.top = `${nodePos.y}px`;
+      labelEl.classList.toggle('is-sense', node.type === 'sense');
+      labelEl.classList.toggle('is-star-map-label', isStarMapNode);
+      labelEl.classList.toggle('is-star-map-center', isStarMapCenter);
+      labelEl.classList.toggle('is-inside-node', isStarMapInside);
+      labelEl.classList.toggle('is-below', placement === 'below');
+      labelEl.classList.toggle('is-above', placement === 'above');
+      labelEl.classList.toggle('is-hidden-by-lod', !shouldDisplayLabel);
+      labelEl.style.display = shouldDisplayLabel ? 'flex' : 'none';
+      labelEl.style.left = `${anchorX}px`;
+      labelEl.style.top = `${anchorY}px`;
+      labelEl.style.transform = transform;
       labelEl.style.fontSize = `${fontSize}px`;
-      labelEl.style.lineHeight = `${Math.max(1, fontSize * 1.12)}px`;
-      labelEl.style.maxWidth = isHomeHexNode
-        ? `${Math.max(72, screenRadius * 1.15)}px`
-        : `${Math.max(96, screenRadius * (node.type === 'center' ? 2.25 : 2))}px`;
-      labelEl.style.opacity = `${labelOpacity}`;
+      labelEl.style.lineHeight = `${Math.max(1, fontSize * (isStarMapNode ? 1.18 : 1.12))}px`;
+      labelEl.style.maxWidth = `${maxWidth}px`;
+      labelEl.style.width = isStarMapInside ? `${Math.round(maxWidth)}px` : 'auto';
+      labelEl.style.minHeight = isStarMapInside && Number(node.labelHeightHint) > 0
+        ? `${Math.round(Number(node.labelHeightHint))}px`
+        : '';
+      labelEl.style.minWidth = isStarMapNode ? '0' : '';
+      labelEl.style.setProperty('--label-line-clamp', `${Math.max(1, Number(node.labelLineClamp) || 2)}`);
+      labelEl.style.setProperty('--label-sense-line-clamp', `${Math.max(1, Number(node.labelSenseLineClamp) || 1)}`);
+      labelEl.style.setProperty('--label-width-hint', `${Math.round(maxWidth)}px`);
+      labelEl.style.setProperty('--label-title-width-hint', `${Math.round(Number(node.labelTitleWidthHint) || maxWidth)}px`);
+      labelEl.style.setProperty('--label-sense-width-hint', `${Math.round(Number(node.labelSenseWidthHint) || maxWidth)}px`);
+      labelEl.style.opacity = shouldDisplayLabel ? `${labelOpacity}` : '0';
     };
 
     normalNodes.forEach((node) => syncLabel(node, false));
@@ -1750,13 +2006,18 @@ class WebGLNodeRenderer {
   renderLineGlowTrails(ctx) {
     if (!Array.isArray(this.lines) || this.lines.length === 0) return;
 
-    for (const line of this.lines) {
+    for (const line of this.getOrderedRenderableLines()) {
       const fromNode = this.nodes.get(line?.from);
       const toNode = this.nodes.get(line?.to);
       if (!fromNode || !toNode || !fromNode.visible || !toNode.visible) continue;
 
       const segment = this.getVisibleLineSegment(fromNode, toNode, { insetPx: 2, minLengthPx: 1 });
       if (!segment) continue;
+
+      if (line?.isStub) {
+        this.renderStubLine(ctx, line, fromNode, toNode, segment);
+        continue;
+      }
 
       const revealProgress = Math.min(
         this.getRevealProgressForNode(fromNode.id),
@@ -1766,30 +2027,55 @@ class WebGLNodeRenderer {
 
       const baseColor = line?.color || [0.66, 0.33, 0.97, 0.6];
       const isHovered = this.hoveredLine?.line === line;
-      const alphaScale = Math.min(fromNode.opacity, toNode.opacity) * (isHovered ? 0.38 : 0.22) * revealProgress;
-      const glowStroke = ctx.createLinearGradient(segment.start.x, segment.start.y, segment.end.x, segment.end.y);
-      glowStroke.addColorStop(0, this.toCssRgba(baseColor, alphaScale * 0.4));
-      glowStroke.addColorStop(0.5, this.toCssRgba(baseColor, alphaScale));
-      glowStroke.addColorStop(1, this.toCssRgba(baseColor, alphaScale * 0.4));
+      const geometry = this.getCurvedLineGeometry(segment, line);
+      if (!geometry) continue;
+      const lineVariant = String(line?.lineVariant || '');
+      const isSenseTrunk = lineVariant === 'sense-trunk';
+      const isSenseCross = lineVariant === 'sense-cross';
+      const isDashedBridge = isSenseCross || lineVariant === 'cross-cluster' || lineVariant === 'title-bridge';
+      const alphaScale = Math.min(fromNode.opacity, toNode.opacity)
+        * (Number(line?.glowOpacity) || (isHovered ? 0.34 : 0.22))
+        * revealProgress
+        * (isHovered ? 1.18 : 1)
+        * (isSenseTrunk ? 1.2 : isSenseCross ? 0.82 : 1);
+      const glowStroke = this.buildLineGradient(ctx, geometry, baseColor, alphaScale);
+      const glowWidth = (Number(line?.glowWidth) || 6) * (isHovered ? 1.14 : 1) * (isSenseTrunk ? 1.12 : isSenseCross ? 0.88 : 1);
+      const coreWidth = Math.max(0.8, (Number(line?.lineWidth) || 1.5) * (isHovered ? 1.12 : 1) * (isSenseTrunk ? 1.12 : isSenseCross ? 0.86 : 1));
 
       ctx.save();
+      ctx.setLineDash(isDashedBridge ? (isSenseCross ? [5, 8] : [7, 6]) : []);
       ctx.strokeStyle = glowStroke;
-      ctx.lineWidth = isHovered ? 8 : 6;
+      ctx.lineWidth = glowWidth;
       ctx.lineCap = 'round';
-      ctx.shadowBlur = isHovered ? 18 : 12;
-      ctx.shadowColor = this.toCssRgba(baseColor, isHovered ? 0.4 : 0.24);
-      ctx.beginPath();
-      ctx.moveTo(segment.start.x, segment.start.y);
-      ctx.lineTo(segment.end.x, segment.end.y);
+      ctx.shadowBlur = glowWidth * (isSenseTrunk ? 2.35 : 2.1);
+      ctx.shadowColor = this.toCssRgba(baseColor, alphaScale * (isSenseTrunk ? 0.98 : 0.86));
+      this.traceCurvedLine(ctx, geometry);
       ctx.stroke();
 
       ctx.shadowBlur = 0;
-      ctx.lineWidth = isHovered ? 2.4 : 1.8;
-      ctx.strokeStyle = this.toCssRgba([1, 1, 1, 1], alphaScale * 0.12);
-      ctx.beginPath();
-      ctx.moveTo(segment.start.x, segment.start.y);
-      ctx.lineTo(segment.end.x, segment.end.y);
+      ctx.lineWidth = coreWidth;
+      ctx.strokeStyle = this.toCssRgba(
+        baseColor,
+        (Number(line?.lineOpacity) || 0.28)
+          * revealProgress
+          * (isHovered ? 1.18 : 1)
+          * (isSenseTrunk ? 1.08 : isSenseCross ? 0.78 : 1)
+      );
+      this.traceCurvedLine(ctx, geometry);
       ctx.stroke();
+
+      ctx.setLineDash([]);
+      ctx.lineWidth = Math.max(0.7, coreWidth * (isSenseTrunk ? 0.46 : 0.38));
+      ctx.strokeStyle = this.toCssRgba([1, 1, 1, 1], alphaScale * (isSenseTrunk ? 0.32 : 0.2));
+      this.traceCurvedLine(ctx, geometry);
+      ctx.stroke();
+
+      if (isSenseTrunk) {
+        ctx.lineWidth = Math.max(0.8, coreWidth * 0.26);
+        ctx.strokeStyle = this.toCssRgba([0.98, 0.99, 1, 1], alphaScale * 0.5);
+        this.traceCurvedLine(ctx, geometry);
+        ctx.stroke();
+      }
       ctx.restore();
     }
   }
@@ -1919,9 +2205,9 @@ class WebGLNodeRenderer {
     let capCount = 0;
     const capLimit = 700;
 
-    for (const line of this.lines) {
+    for (const line of this.getOrderedRenderableLines({ includeStubs: false })) {
       if (capCount >= capLimit) break;
-      if (line?.noCaps) continue;
+      if (line?.noCaps || line?.isStub) continue;
       const fromNode = this.nodes.get(line?.from);
       const toNode = this.nodes.get(line?.to);
       if (!fromNode || !toNode || !fromNode.visible || !toNode.visible) continue;
@@ -1933,10 +2219,12 @@ class WebGLNodeRenderer {
 
       const color = line?.color || [0.66, 0.33, 0.97, 0.6];
       const isHovered = this.hoveredLine?.line === line;
+      const lineVariant = String(line?.lineVariant || '');
+      const isSenseTrunk = lineVariant === 'sense-trunk';
       const capRadius = Math.max(2, Math.min(5.5, Math.min(
         this.getNodeScreenRadius(fromNode),
         this.getNodeScreenRadius(toNode)
-      ) * (isHovered ? 0.12 : 0.1)));
+      ) * (isHovered ? 0.12 : isSenseTrunk ? 0.115 : 0.1)));
 
       const drawCap = (point) => {
         const glow = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, capRadius * 2.6);
@@ -1957,6 +2245,66 @@ class WebGLNodeRenderer {
       drawCap(segment.end);
       capCount += 2;
     }
+  }
+
+  renderStubLine(ctx, line, fromNode, _toNode, segment) {
+    const revealProgress = this.getRevealProgressForNode(fromNode.id);
+    if (revealProgress <= 0.02) return;
+
+    const baseColor = line?.color || [0.76, 0.84, 0.96, 0.4];
+    const geometry = this.getCurvedLineGeometry(segment, line);
+    if (!geometry) return;
+    const alphaScale = Math.max(
+      0.1,
+      Math.min(1, fromNode.opacity * (Number(line?.glowOpacity) || 0.16) * revealProgress * 1.2)
+    );
+    const gradient = ctx.createLinearGradient(geometry.start.x, geometry.start.y, geometry.end.x, geometry.end.y);
+    gradient.addColorStop(0, this.toCssRgba(baseColor, alphaScale));
+    gradient.addColorStop(0.58, this.toCssRgba(baseColor, alphaScale * 0.34));
+    gradient.addColorStop(1, this.toCssRgba(baseColor, 0));
+
+    ctx.save();
+    ctx.strokeStyle = gradient;
+    ctx.lineWidth = Math.max(0.9, Number(line?.glowWidth) || 3.4);
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = Math.max(8, (Number(line?.glowWidth) || 3.4) * 1.9);
+    ctx.shadowColor = this.toCssRgba(baseColor, alphaScale * 0.42);
+    this.traceCurvedLine(ctx, geometry);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = Math.max(0.7, Number(line?.lineWidth) || 1.2);
+    ctx.strokeStyle = this.toCssRgba(baseColor, (Number(line?.lineOpacity) || 0.18) * revealProgress * 1.08);
+    this.traceCurvedLine(ctx, geometry);
+    ctx.stroke();
+    ctx.restore();
+
+    const stubCount = Math.max(0, Number(line?.stubCount) || 0);
+    if (stubCount <= 0) return;
+
+    const dx = geometry.end.x - geometry.control.x;
+    const dy = geometry.end.y - geometry.control.y;
+    const length = Math.hypot(dx, dy) || 1;
+    const labelX = geometry.end.x - (dx / length) * 18;
+    const labelY = geometry.end.y - (dy / length) * 18;
+
+    ctx.save();
+    ctx.font = '600 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const pillText = `+${stubCount}`;
+    const textWidth = ctx.measureText(pillText).width;
+    const pillWidth = textWidth + 10;
+    const pillHeight = 18;
+    ctx.fillStyle = 'rgba(7, 13, 24, 0.78)';
+    ctx.beginPath();
+    ctx.roundRect(labelX - pillWidth / 2, labelY - pillHeight / 2, pillWidth, pillHeight, 9);
+    ctx.fill();
+    ctx.strokeStyle = this.toCssRgba(baseColor, 0.5);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#dbeafe';
+    ctx.fillText(pillText, labelX, labelY + 0.5);
+    ctx.restore();
   }
 
   findVisibleNodeByName(nodeName) {

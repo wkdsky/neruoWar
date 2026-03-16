@@ -3,6 +3,21 @@
  * 负责计算不同场景下节点的位置
  */
 
+import {
+  STAR_MAP_LAYER,
+  getStarMapCenterKey,
+  getStarMapLevelMap,
+  getStarMapNodeKey
+} from './starMap/starMapHelpers';
+import {
+  buildStarMapGraphMeta,
+  buildStarMapEdgeColor,
+  buildStarMapLineVisual,
+  buildStarMapStubVisual,
+  estimateStarMapLabelMetrics
+} from './starMap/starMapLayoutHelpers';
+import { solveStarMapConstellationLayout } from './starMap/starMapForceLayout';
+
 class LayoutManager {
   constructor(width, height) {
     this.width = width;
@@ -419,6 +434,311 @@ class LayoutManager {
         edgeMeta: edge
       });
     });
+
+    return layout;
+  }
+
+  /**
+   * 星盘模式布局
+   * 这里单独抽一层，而不是篡改普通 detail layout，避免主视图语义被污染。
+   */
+  calculateStarMapLayout(graph = {}, options = {}) {
+    const layer = options?.layer === STAR_MAP_LAYER.SENSE ? STAR_MAP_LAYER.SENSE : STAR_MAP_LAYER.TITLE;
+    const centerNode = graph?.centerNode || null;
+    const centerKey = getStarMapCenterKey(graph, layer);
+    if (!centerNode || !centerKey) {
+      return { nodes: [], lines: [] };
+    }
+
+    const levelByKey = getStarMapLevelMap(graph, layer);
+    const graphNodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+    const graphEdges = Array.isArray(graph?.edges) ? graph.edges : [];
+    const boundaryStubs = Array.isArray(graph?.boundaryStubs) ? graph.boundaryStubs : [];
+
+    const layout = {
+      nodes: [],
+      lines: []
+    };
+    const yOffset = 42;
+    const centerX = this.centerX;
+    const centerY = this.centerY + yOffset;
+    const nodeLayoutIdByKey = new Map();
+    const layoutNodeByKey = new Map();
+    const labelMetricsByKey = new Map();
+    const levelGroups = new Map();
+    const graphMeta = buildStarMapGraphMeta(graph, layer, levelByKey);
+    const sortedGraphNodes = graphNodes.slice().sort((left, right) => {
+      const leftLevel = Number(levelByKey?.[getStarMapNodeKey(left, layer)] || 0);
+      const rightLevel = Number(levelByKey?.[getStarMapNodeKey(right, layer)] || 0);
+      return (
+        leftLevel - rightLevel
+        || String(left?.displayName || left?.name || '').localeCompare(String(right?.displayName || right?.name || ''), 'zh-Hans-CN')
+      );
+    });
+
+    const centerLayoutId = `center-${centerKey}`;
+    const centerLabelMetrics = estimateStarMapLabelMetrics(
+      this.resolveNodeLabel(centerNode, { includeSense: layer !== STAR_MAP_LAYER.TITLE })
+    );
+    labelMetricsByKey.set(centerKey, centerLabelMetrics);
+    const centerRadius = Math.max(32, Math.min(42, Math.min(this.width, this.height) * 0.04));
+    const centerConfig = {
+      id: centerLayoutId,
+      x: centerX,
+      y: centerY,
+      radius: centerRadius,
+      scale: 1,
+      opacity: 1,
+      type: 'center',
+      label: this.resolveNodeLabel(centerNode, { includeSense: layer !== STAR_MAP_LAYER.TITLE }),
+      visualStyle: centerNode.visualStyle || null,
+      labelColor: centerNode.visualStyle?.textColor || '',
+      labelPlacement: 'center',
+      labelOffsetY: 0,
+      labelVisible: true,
+      labelMaxWidthStrategy: 'default',
+      labelWidthHint: centerLabelMetrics.widthHint,
+      labelHeightHint: centerLabelMetrics.heightHint,
+      labelLineClamp: centerLabelMetrics.titleLineClamp || 2,
+      labelSenseLineClamp: centerLabelMetrics.senseLineClamp || 1,
+      labelTitleLines: centerLabelMetrics.titleLines || [],
+      labelSenseLines: centerLabelMetrics.senseLines || [],
+      labelTitleWidthHint: centerLabelMetrics.titleWidthHint || centerLabelMetrics.widthHint,
+      labelSenseWidthHint: centerLabelMetrics.senseWidthHint || 0,
+      data: {
+        ...centerNode,
+        starMapLayer: layer,
+        starMapLevel: 0
+      },
+      visible: true
+    };
+    layout.nodes.push(centerConfig);
+    nodeLayoutIdByKey.set(centerKey, centerLayoutId);
+    layoutNodeByKey.set(centerKey, {
+      ...centerConfig,
+      nodeKey: centerKey,
+      starMapLevel: 0,
+      clusterSignature: centerKey,
+      childCount: graphMeta?.nextLevelNeighbors?.get?.(centerKey)?.size || 0,
+      degree: graphMeta?.adjacency?.get?.(centerKey)?.size || 0,
+      importance: 1.28
+    });
+
+    sortedGraphNodes.forEach((node) => {
+      const key = getStarMapNodeKey(node, layer);
+      if (!key || key === centerKey) return;
+      const nodeLabel = this.resolveNodeLabel(node, { includeSense: layer !== STAR_MAP_LAYER.TITLE });
+      const labelMetrics = estimateStarMapLabelMetrics(nodeLabel);
+      labelMetricsByKey.set(key, labelMetrics);
+      const rawLevel = Number(levelByKey?.[key] || 1);
+      const level = Number.isFinite(rawLevel) && rawLevel > 0 ? Math.floor(rawLevel) : 1;
+      const group = levelGroups.get(level) || [];
+      const baseNodeRadius = layer === STAR_MAP_LAYER.TITLE ? 28 : 25.5;
+      const nodeRadius = Math.max(19, baseNodeRadius - Math.min(4, level - 1) * 0.72);
+      const labelOffsetY = 0;
+      const nodeType = layer === STAR_MAP_LAYER.TITLE ? 'title' : 'sense';
+      group.push({
+        key,
+        rawNode: node,
+        label: nodeLabel,
+        labelMetrics,
+        radius: nodeRadius,
+        labelOffsetY,
+        labelPlacement: 'center',
+        nodeType
+      });
+      levelGroups.set(level, group);
+    });
+
+    const levels = Array.from(levelGroups.keys()).sort((a, b) => a - b);
+    // starMap 不再把 BFS level 直接投影成硬圆环。
+    // 这里让 level 只作为“软半径带”约束，再用轻量迭代求解把标签盒也纳入碰撞体。
+    const { bodyByKey, bounds } = solveStarMapConstellationLayout({
+      width: this.width,
+      height: this.height,
+      center: {
+        x: centerX,
+        y: centerY,
+        radius: centerRadius,
+        labelWidthHint: centerLabelMetrics.widthHint,
+        labelHeightHint: centerLabelMetrics.heightHint,
+        labelOffsetY: 0,
+        labelPlacement: 'center'
+      },
+      centerKey,
+      layer,
+      levels,
+      nodesByLevel: levelGroups,
+      graphMeta,
+      labelMetricsByKey
+    });
+    levels.forEach((level) => {
+      const nodes = levelGroups.get(level) || [];
+      nodes.forEach((node) => {
+        const positionedBody = bodyByKey.get(node.key);
+        if (!positionedBody) return;
+        const layoutId = `${layer}-${node.key}`;
+        const config = {
+          id: layoutId,
+          x: positionedBody.x,
+          y: positionedBody.y,
+          radius: positionedBody.radius,
+          scale: 1,
+          opacity: 1,
+          type: node.nodeType,
+          label: node.label,
+          visualStyle: node.rawNode.visualStyle || null,
+          labelColor: node.rawNode.visualStyle?.textColor || '',
+          labelPlacement: 'center',
+          labelOffsetY: positionedBody.labelOffsetY,
+          labelVisible: true,
+          labelMaxWidthStrategy: 'default',
+          labelWidthHint: positionedBody.labelMetrics.widthHint,
+          labelHeightHint: positionedBody.labelMetrics.heightHint,
+          labelLineClamp: positionedBody.labelMetrics.titleLineClamp || 2,
+          labelSenseLineClamp: positionedBody.labelMetrics.senseLineClamp || 1,
+          labelTitleLines: positionedBody.labelMetrics.titleLines || [],
+          labelSenseLines: positionedBody.labelMetrics.senseLines || [],
+          labelTitleWidthHint: positionedBody.labelMetrics.titleWidthHint || positionedBody.labelMetrics.widthHint,
+          labelSenseWidthHint: positionedBody.labelMetrics.senseWidthHint || 0,
+          data: {
+            ...node.rawNode,
+            starMapLayer: layer,
+            starMapLevel: level,
+            starMapAngle: positionedBody.angle,
+            starMapSubtreeWeight: positionedBody.subtreeWeight,
+            starMapClusterSignature: positionedBody.clusterSignature,
+            starMapImportance: positionedBody.importance
+          },
+          visible: true
+        };
+        layout.nodes.push(config);
+        nodeLayoutIdByKey.set(node.key, layoutId);
+        layoutNodeByKey.set(node.key, {
+          ...config,
+          angle: positionedBody.angle,
+          starMapLevel: level,
+          clusterSignature: positionedBody.clusterSignature,
+          nodeKey: positionedBody.nodeKey || node.key,
+          primaryParentKey: positionedBody.primaryParentKey || '',
+          childCount: positionedBody.childCount || 0,
+          degree: positionedBody.degree || 0,
+          importance: positionedBody.importance || 1,
+          siblingIndex: positionedBody.siblingIndex || 0,
+          siblingCount: positionedBody.siblingCount || 0
+        });
+      });
+    });
+
+    graphEdges.forEach((edge) => {
+      const fromKey = layer === STAR_MAP_LAYER.SENSE
+        ? String(edge?.fromVertexKey || '')
+        : String(edge?.nodeAId || '');
+      const toKey = layer === STAR_MAP_LAYER.SENSE
+        ? String(edge?.toVertexKey || '')
+        : String(edge?.nodeBId || '');
+      const from = nodeLayoutIdByKey.get(fromKey);
+      const to = nodeLayoutIdByKey.get(toKey);
+      if (!from || !to) return;
+      const fromNode = layoutNodeByKey.get(fromKey);
+      const toNode = layoutNodeByKey.get(toKey);
+      const dominantColor = buildStarMapEdgeColor({
+        layer,
+        fromNode,
+        toNode,
+        edge
+      });
+      const lineVisual = buildStarMapLineVisual({
+        line: edge,
+        fromNode,
+        toNode,
+        fromLevel: Number(levelByKey?.[fromKey] || 0),
+        toLevel: Number(levelByKey?.[toKey] || 0),
+        centerX,
+        centerY,
+        layer
+      });
+      layout.lines.push({
+        id: edge?.edgeId || `${fromKey}|${toKey}`,
+        from,
+        to,
+        color: dominantColor,
+        edgeMeta: edge,
+        clickable: false,
+        ...lineVisual
+      });
+    });
+
+    boundaryStubs.forEach((stub, index) => {
+      const sourceKey = layer === STAR_MAP_LAYER.SENSE
+        ? String(stub?.sourceVertexKey || '')
+        : String(stub?.sourceNodeId || '');
+      const sourceNode = layoutNodeByKey.get(sourceKey);
+      const sourceLayoutId = nodeLayoutIdByKey.get(sourceKey);
+      if (!sourceNode || !sourceLayoutId) return;
+
+      let dirX = sourceNode.x - centerX;
+      let dirY = sourceNode.y - centerY;
+      const neighborKeys = Array.from(graphMeta.adjacency.get(sourceKey) || []);
+      if (neighborKeys.length > 0) {
+        const averageNeighbor = neighborKeys.reduce((accumulator, key) => {
+          const node = layoutNodeByKey.get(key);
+          if (!node) return accumulator;
+          accumulator.x += sourceNode.x - node.x;
+          accumulator.y += sourceNode.y - node.y;
+          return accumulator;
+        }, { x: 0, y: 0 });
+        if (Math.hypot(averageNeighbor.x, averageNeighbor.y) > 0.001) {
+          dirX = averageNeighbor.x;
+          dirY = averageNeighbor.y;
+        }
+      }
+      const length = Math.hypot(dirX, dirY);
+      if (length <= 0.001) {
+        const angle = -Math.PI / 2 + index * (Math.PI / Math.max(1, boundaryStubs.length));
+        dirX = Math.cos(angle);
+        dirY = Math.sin(angle);
+      } else {
+        dirX /= length;
+        dirY /= length;
+      }
+
+      const stubDistance = Math.max(60, Math.min(118, 68 + (Number(stub?.hiddenNeighborCount) || 0) * 6));
+      const anchorId = `stub-anchor-${sourceKey}-${index}`;
+      const stubVisual = buildStarMapStubVisual({
+        hiddenNeighborCount: Number(stub?.hiddenNeighborCount) || 0,
+        sourceLevel: Number(stub?.sourceLevel || 0)
+      });
+      layout.nodes.push({
+        id: anchorId,
+        x: sourceNode.x + dirX * stubDistance,
+        y: sourceNode.y + dirY * stubDistance,
+        radius: 0,
+        scale: 1,
+        opacity: 1,
+        type: 'stub-anchor',
+        label: '',
+        labelVisible: false,
+        data: {
+          starMapLayer: layer,
+          isStubAnchor: true
+        },
+        visible: true
+      });
+      layout.lines.push({
+        id: String(stub?.stubId || `${sourceKey}-stub`),
+        from: sourceLayoutId,
+        to: anchorId,
+        color: layer === STAR_MAP_LAYER.TITLE ? [0.66, 0.83, 0.99, 0.42] : [0.73, 0.84, 1, 0.42],
+        isStub: true,
+        noCaps: true,
+        stubCount: Math.max(0, Number(stub?.hiddenNeighborCount) || 0),
+        stubMeta: stub,
+        ...stubVisual
+      });
+    });
+
+    layout.bounds = bounds;
 
     return layout;
   }

@@ -17,6 +17,12 @@ const gameSettingSchema = new mongoose.Schema({
     default: 24,
     min: 1,
     max: 168
+  },
+  starMapNodeLimit: {
+    type: Number,
+    default: 50,
+    min: 10,
+    max: 200
   }
 }, {
   timestamps: true

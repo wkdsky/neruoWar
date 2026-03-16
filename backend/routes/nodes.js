@@ -86,6 +86,13 @@ const {
   listActiveTitleRelationsBySourceNodeIds,
   listActiveTitleRelationsByTargetNodeIds
 } = require('../services/domainTitleProjectionStore');
+const {
+  resolveEffectiveStarMapLimit
+} = require('../services/gameSettingsService');
+const {
+  traverseTitleStarMap,
+  traverseSenseStarMap
+} = require('../services/starMapTraversalService');
 const { authenticateToken } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/admin');
 const { encodeTimeCursor, decodeTimeCursor, buildTimeCursorQuery } = require('../utils/cursorPagination');
@@ -6073,6 +6080,136 @@ router.get('/public/title-detail/:nodeId', async (req, res) => {
     });
   } catch (error) {
     console.error('获取标题主视角错误:', error);
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
+  }
+});
+
+// 获取标题层星盘视图（真正的标题层 BFS）
+router.get('/public/title-star-map/:nodeId', async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的节点ID' });
+    }
+
+    const centerNodeDoc = await Node.findById(nodeId)
+      .select('_id status')
+      .lean();
+    if (!centerNodeDoc) {
+      return res.status(404).json({ error: '节点不存在' });
+    }
+    if (centerNodeDoc.status !== 'approved') {
+      return res.status(403).json({ error: '该节点未审批' });
+    }
+
+    const { effectiveLimit } = await resolveEffectiveStarMapLimit(req.query?.limit);
+    const traversal = await traverseTitleStarMap({
+      centerNodeId: nodeId,
+      limit: effectiveLimit
+    });
+
+    const nodeDocs = await Node.find({
+      _id: {
+        $in: traversal.nodeIds
+          .filter((id) => isValidObjectId(id))
+          .map((id) => new mongoose.Types.ObjectId(id))
+      },
+      status: 'approved'
+    })
+      .select('_id name description synonymSenses knowledgePoint contentScore domainMaster domainAdmins allianceId')
+      .lean();
+    await hydrateNodeSensesForNodes(nodeDocs);
+
+    const rawNodeById = new Map(nodeDocs.map((item) => [getIdString(item?._id), item]));
+    const orderedCards = traversal.nodeIds
+      .map((id) => rawNodeById.get(id))
+      .filter(Boolean)
+      .map((item) => buildNodeTitleCard(item));
+    const styledNodes = await attachVisualStyleToNodeList(orderedCards);
+    const styledNodeById = new Map(styledNodes.map((item) => [getIdString(item?._id), item]));
+    const centerNode = styledNodeById.get(getIdString(nodeId)) || null;
+    if (!centerNode) {
+      return res.status(404).json({ error: '标题星盘中心节点不存在' });
+    }
+
+    const edges = traversal.edges
+      .map((edge) => ({
+        ...edge,
+        nodeAName: styledNodeById.get(edge.nodeAId)?.name || '',
+        nodeBName: styledNodeById.get(edge.nodeBId)?.name || ''
+      }))
+      .sort((a, b) => (
+        b.pairCount - a.pairCount
+        || a.edgeId.localeCompare(b.edgeId, 'en')
+      ));
+
+    res.json({
+      success: true,
+      graph: {
+        centerNodeId: getIdString(nodeId),
+        centerNode,
+        nodes: styledNodes,
+        edges,
+        levelByNodeId: traversal.levelByNodeId,
+        maxLevel: traversal.maxLevel,
+        nodeCount: styledNodes.length,
+        edgeCount: edges.length,
+        boundaryStubs: traversal.boundaryStubs,
+        effectiveLimit
+      }
+    });
+  } catch (error) {
+    console.error('获取标题星盘视图错误:', error);
+    sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
+  }
+});
+
+// 获取释义层星盘视图（以 nodeId + senseId 为顶点）
+router.get('/public/sense-star-map/:nodeId', async (req, res) => {
+  try {
+    const { nodeId } = req.params;
+    const requestedSenseId = typeof req.query?.senseId === 'string' ? req.query.senseId.trim() : '';
+    if (!isValidObjectId(nodeId)) {
+      return res.status(400).json({ error: '无效的节点ID' });
+    }
+
+    const { effectiveLimit } = await resolveEffectiveStarMapLimit(req.query?.limit);
+    const traversal = await traverseSenseStarMap({
+      centerNodeId: nodeId,
+      centerSenseId: requestedSenseId,
+      limit: effectiveLimit
+    });
+
+    const styledNodes = await attachVisualStyleToNodeList(traversal.nodes);
+    const styledNodeByVertexKey = new Map(styledNodes.map((item) => [String(item?.vertexKey || ''), item]));
+    const centerNode = styledNodeByVertexKey.get(traversal.centerVertexKey) || null;
+    if (!centerNode) {
+      return res.status(404).json({ error: '释义星盘中心顶点不存在' });
+    }
+
+    const edges = traversal.edges.map((edge) => ({
+      ...edge,
+      fromLabel: styledNodeByVertexKey.get(edge.fromVertexKey)?.displayName || '',
+      toLabel: styledNodeByVertexKey.get(edge.toVertexKey)?.displayName || ''
+    }));
+
+    res.json({
+      success: true,
+      graph: {
+        centerVertexKey: traversal.centerVertexKey,
+        centerNode,
+        nodes: styledNodes,
+        edges,
+        levelByVertexKey: traversal.levelByVertexKey,
+        maxLevel: traversal.maxLevel,
+        nodeCount: styledNodes.length,
+        edgeCount: edges.length,
+        boundaryStubs: traversal.boundaryStubs,
+        effectiveLimit
+      }
+    });
+  } catch (error) {
+    console.error('获取释义星盘视图错误:', error);
     sendNodeRouteError(res, (typeof error !== 'undefined' ? error : null));
   }
 });

@@ -63,6 +63,14 @@ import {
 } from './app/appShared';
 import useNotificationCenter from './hooks/useNotificationCenter';
 import useAppShellState from './hooks/useAppShellState';
+import {
+    DEFAULT_STAR_MAP_LIMIT,
+    KNOWLEDGE_MAIN_VIEW_MODE,
+    STAR_MAP_LAYER,
+    areStarMapCentersEqual,
+    getSenseNodeKey,
+    toSenseVertexKey
+} from './starMap/starMapHelpers';
 
 const PRIMARY_NAVIGATION_TIMEOUT_MS = 10000;
 const PRIMARY_NAVIGATION_RETRY_DELAYS_MS = [250, 700];
@@ -115,6 +123,7 @@ const App = () => {
 
 
     // 修改检查登录状态的useEffect
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
         const token = localStorage.getItem('token');
         const storedUserId = normalizeObjectId(localStorage.getItem('userId'));
@@ -258,6 +267,13 @@ const App = () => {
     const [currentNodeDetail, setCurrentNodeDetail] = useState(null);
     const [currentTitleDetail, setCurrentTitleDetail] = useState(null);
     const [titleGraphData, setTitleGraphData] = useState(null);
+    const [knowledgeMainViewMode, setKnowledgeMainViewMode] = useState(KNOWLEDGE_MAIN_VIEW_MODE.MAIN);
+    const [titleStarMapData, setTitleStarMapData] = useState(null);
+    const [nodeStarMapData, setNodeStarMapData] = useState(null);
+    const [currentStarMapCenter, setCurrentStarMapCenter] = useState(null);
+    const [currentStarMapLimit, setCurrentStarMapLimit] = useState(DEFAULT_STAR_MAP_LIMIT);
+    const [currentStarMapLayer, setCurrentStarMapLayer] = useState('');
+    const [isStarMapLoading, setIsStarMapLoading] = useState(false);
     const [nodeInfoModalTarget, setNodeInfoModalTarget] = useState(null);
     const [titleRelationInfo, setTitleRelationInfo] = useState(null);
     const [senseSelectorSourceNode, setSenseSelectorSourceNode] = useState(null);
@@ -320,6 +336,11 @@ const App = () => {
         controller: null,
         requestKey: '',
         source: ''
+    });
+    const starMapRequestRef = useRef({
+        seq: 0,
+        controller: null,
+        requestKey: ''
     });
     const [knowledgeHeaderOffset, setKnowledgeHeaderOffset] = useState(92);
     const [isSenseArticleHeaderPinned, setIsSenseArticleHeaderPinned] = useState(false);
@@ -582,6 +603,36 @@ const App = () => {
         mergeAbortSignals
     ]);
 
+    const beginStarMapRequest = useCallback((requestKey = '') => {
+        const previous = starMapRequestRef.current;
+        if (previous?.controller && !previous.controller.signal.aborted) {
+            previous.controller.abort(new DOMException('Superseded by a newer star map request', 'AbortError'));
+        }
+
+        const controller = new AbortController();
+        const request = {
+            seq: (previous?.seq || 0) + 1,
+            controller,
+            requestKey
+        };
+        starMapRequestRef.current = request;
+        return request;
+    }, []);
+
+    const isStarMapRequestCurrent = useCallback((request) => {
+        if (!request) return false;
+        const current = starMapRequestRef.current;
+        return current?.seq === request.seq && current?.controller === request.controller;
+    }, []);
+
+    const finishStarMapRequest = useCallback((request) => {
+        if (!isStarMapRequestCurrent(request)) return;
+        starMapRequestRef.current = {
+            ...starMapRequestRef.current,
+            controller: null
+        };
+    }, [isStarMapRequestCurrent]);
+
     useLayoutEffect(() => {
         const headerEl = headerRef.current;
         if (!headerEl) return undefined;
@@ -754,6 +805,10 @@ const App = () => {
 
                 if (view === 'titleDetail') {
                     setTitleRelationInfo(null);
+                    if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
+                        recenterStarMapFromNode(node);
+                        return;
+                    }
                     if (node.type === 'center') {
                         setSenseSelectorSourceNode(currentTitleDetail || node.data);
                         setSenseSelectorSourceSceneNodeId('');
@@ -769,6 +824,10 @@ const App = () => {
 
                 if (view === 'nodeDetail') {
                     setTitleRelationInfo(null);
+                    if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
+                        recenterStarMapFromNode(node);
+                        return;
+                    }
                     if (node.type === 'center') {
                         setSenseSelectorSourceNode(currentNodeDetail || node.data);
                         setSenseSelectorSourceSceneNodeId('');
@@ -785,6 +844,7 @@ const App = () => {
             };
 
             sceneManager.onLineClick = (lineHit) => {
+                if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
                 if (view !== 'titleDetail') return;
                 const meta = lineHit?.line?.edgeMeta;
                 if (!meta) return;
@@ -2270,6 +2330,23 @@ const App = () => {
         }
     };
 
+    const clearStarMapState = useCallback((options = {}) => {
+        const preserveMode = options?.preserveMode === true;
+        const previous = starMapRequestRef.current;
+        if (previous?.controller && !previous.controller.signal.aborted) {
+            previous.controller.abort(new DOMException('Star map state cleared', 'AbortError'));
+        }
+        setTitleStarMapData(null);
+        setNodeStarMapData(null);
+        setCurrentStarMapCenter(null);
+        setCurrentStarMapLayer('');
+        setCurrentStarMapLimit(DEFAULT_STAR_MAP_LIMIT);
+        setIsStarMapLoading(false);
+        if (!preserveMode) {
+            setKnowledgeMainViewMode(KNOWLEDGE_MAIN_VIEW_MODE.MAIN);
+        }
+    }, []);
+
     const prepareForPrimaryNavigation = async () => {
         closeKnowledgeDomainBeforeNavigation();
         setTitleRelationInfo(null);
@@ -2279,6 +2356,7 @@ const App = () => {
 
     const navigateToHomeWithDockCollapse = async () => {
         await prepareForPrimaryNavigation();
+        clearStarMapState();
         setView('home');
         setCurrentTitleDetail(null);
         setTitleGraphData(null);
@@ -2416,6 +2494,9 @@ const App = () => {
 
             const shouldResetTrail = navOptions?.resetTrail === true || !isKnowledgeDetailView(view);
             const relation = normalizeNavigationRelation(navOptions?.relationHint);
+            if (navOptions?.keepStarMapState !== true) {
+                clearStarMapState();
+            }
             trackRecentDomain(centerNode, { mode: 'title' });
             setCurrentTitleDetail(centerNode);
             setTitleGraphData(graph);
@@ -2534,6 +2615,9 @@ const App = () => {
                 );
                 const previousNodeId = normalizeObjectId(currentNodeBeforeNavigate?._id);
                 const isSenseOnlySwitch = !!requestedSenseId && !!targetNodeId && targetNodeId === previousNodeId;
+                if (navOptions?.keepStarMapState !== true) {
+                    clearStarMapState();
+                }
                 if (!isSenseOnlySwitch) {
                     setIsSenseSelectorVisible(false);
                 }
@@ -2628,16 +2712,183 @@ const App = () => {
         }
     };
 
-    const buildClickedNodeFromScene = (targetNodeId) => {
+    const buildStarMapCenterState = useCallback((layer, nodeLike = {}) => {
+        const nodeId = normalizeObjectId(nodeLike?._id);
+        if (!nodeId) return null;
+        return {
+            layer: layer === STAR_MAP_LAYER.SENSE ? STAR_MAP_LAYER.SENSE : STAR_MAP_LAYER.TITLE,
+            nodeId,
+            senseId: layer === STAR_MAP_LAYER.SENSE
+                ? (typeof nodeLike?.activeSenseId === 'string' ? nodeLike.activeSenseId.trim() : '')
+                : '',
+            label: typeof nodeLike?.displayName === 'string' && nodeLike.displayName.trim()
+                ? nodeLike.displayName.trim()
+                : (typeof nodeLike?.name === 'string' ? nodeLike.name.trim() : '')
+        };
+    }, []);
+
+    const fetchTitleStarMap = useCallback(async (nodeId, options = {}) => {
+        const normalizedNodeId = normalizeObjectId(nodeId);
+        if (!isValidObjectId(normalizedNodeId)) return null;
+
+        const request = beginStarMapRequest(`title:${normalizedNodeId}`);
+        const requestedLimit = Number.isFinite(Number(options?.limit))
+            ? Math.max(10, Math.min(150, Number(options.limit)))
+            : null;
+        const query = requestedLimit ? `?limit=${requestedLimit}` : '';
+        setIsStarMapLoading(true);
+
+        try {
+            const response = await fetch(`${API_BASE}/nodes/public/title-star-map/${normalizedNodeId}${query}`, {
+                signal: request.controller.signal
+            });
+            if (!isStarMapRequestCurrent(request)) return null;
+            if (!response.ok) {
+                const parsed = await parseApiResponse(response);
+                if (options?.silent !== true) {
+                    alert(getApiErrorMessage(parsed, '获取标题星盘失败'));
+                }
+                return null;
+            }
+
+            const data = await response.json();
+            if (!isStarMapRequestCurrent(request)) return null;
+            const graph = data?.graph || null;
+            const centerNode = graph?.centerNode || null;
+            const centerState = buildStarMapCenterState(STAR_MAP_LAYER.TITLE, centerNode);
+            if (!graph || !centerState) {
+                if (options?.silent !== true) {
+                    alert('标题星盘数据无效');
+                }
+                return null;
+            }
+
+            setTitleRelationInfo(null);
+            setIsSenseSelectorVisible(false);
+            setTitleStarMapData(graph);
+            setNodeStarMapData(null);
+            setCurrentStarMapCenter(centerState);
+            setCurrentStarMapLayer(STAR_MAP_LAYER.TITLE);
+            setCurrentStarMapLimit(Math.max(10, Number(graph?.effectiveLimit) || DEFAULT_STAR_MAP_LIMIT));
+            setKnowledgeMainViewMode(KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP);
+            setClickedNodeForTransition(options?.clickedNode || null);
+            return graph;
+        } catch (error) {
+            if (!isStarMapRequestCurrent(request) || isAbortError(error)) {
+                return null;
+            }
+            console.error('获取标题星盘失败:', error);
+            if (options?.silent !== true) {
+                alert(`获取标题星盘失败: ${error.message}`);
+            }
+            return null;
+        } finally {
+            if (isStarMapRequestCurrent(request)) {
+                setIsStarMapLoading(false);
+            }
+            finishStarMapRequest(request);
+        }
+    }, [
+        beginStarMapRequest,
+        buildStarMapCenterState,
+        finishStarMapRequest,
+        getApiErrorMessage,
+        isAbortError,
+        isStarMapRequestCurrent,
+        parseApiResponse
+    ]);
+
+    const fetchSenseStarMap = useCallback(async (nodeId, senseId = '', options = {}) => {
+        const normalizedNodeId = normalizeObjectId(nodeId);
+        if (!isValidObjectId(normalizedNodeId)) return null;
+
+        const request = beginStarMapRequest(`sense:${normalizedNodeId}:${String(senseId || '').trim()}`);
+        const requestedLimit = Number.isFinite(Number(options?.limit))
+            ? Math.max(10, Math.min(150, Number(options.limit)))
+            : null;
+        const senseQuery = typeof senseId === 'string' && senseId.trim()
+            ? `senseId=${encodeURIComponent(senseId.trim())}`
+            : '';
+        const limitQuery = requestedLimit ? `limit=${requestedLimit}` : '';
+        const query = [senseQuery, limitQuery].filter(Boolean).join('&');
+        setIsStarMapLoading(true);
+
+        try {
+            const response = await fetch(
+                `${API_BASE}/nodes/public/sense-star-map/${normalizedNodeId}${query ? `?${query}` : ''}`,
+                { signal: request.controller.signal }
+            );
+            if (!isStarMapRequestCurrent(request)) return null;
+            if (!response.ok) {
+                const parsed = await parseApiResponse(response);
+                if (options?.silent !== true) {
+                    alert(getApiErrorMessage(parsed, '获取释义星盘失败'));
+                }
+                return null;
+            }
+
+            const data = await response.json();
+            if (!isStarMapRequestCurrent(request)) return null;
+            const graph = data?.graph || null;
+            const centerNode = graph?.centerNode || null;
+            const centerState = buildStarMapCenterState(STAR_MAP_LAYER.SENSE, centerNode);
+            if (!graph || !centerState) {
+                if (options?.silent !== true) {
+                    alert('释义星盘数据无效');
+                }
+                return null;
+            }
+
+            setTitleRelationInfo(null);
+            setIsSenseSelectorVisible(false);
+            setNodeStarMapData(graph);
+            setTitleStarMapData(null);
+            setCurrentStarMapCenter(centerState);
+            setCurrentStarMapLayer(STAR_MAP_LAYER.SENSE);
+            setCurrentStarMapLimit(Math.max(10, Number(graph?.effectiveLimit) || DEFAULT_STAR_MAP_LIMIT));
+            setKnowledgeMainViewMode(KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP);
+            setClickedNodeForTransition(options?.clickedNode || null);
+            return graph;
+        } catch (error) {
+            if (!isStarMapRequestCurrent(request) || isAbortError(error)) {
+                return null;
+            }
+            console.error('获取释义星盘失败:', error);
+            if (options?.silent !== true) {
+                alert(`获取释义星盘失败: ${error.message}`);
+            }
+            return null;
+        } finally {
+            if (isStarMapRequestCurrent(request)) {
+                setIsStarMapLoading(false);
+            }
+            finishStarMapRequest(request);
+        }
+    }, [
+        beginStarMapRequest,
+        buildStarMapCenterState,
+        finishStarMapRequest,
+        getApiErrorMessage,
+        isAbortError,
+        isStarMapRequestCurrent,
+        parseApiResponse
+    ]);
+
+    const buildClickedNodeFromScene = useCallback((targetNodeId, options = {}) => {
         const sceneNodes = sceneManagerRef.current?.currentLayout?.nodes || [];
-        const matched = sceneNodes.find((n) => n?.data?._id === targetNodeId);
+        const matched = sceneNodes.find((n) => {
+            if (options?.predicate && typeof options.predicate === 'function') {
+                return options.predicate(n);
+            }
+            return n?.data?._id === targetNodeId;
+        });
         if (!matched) return null;
         return {
             id: matched.id,
             data: matched.data,
             type: matched.type
         };
-    };
+    }, []);
 
     const updateSenseSelectorAnchorBySceneNode = (sceneNode) => {
         const renderer = sceneManagerRef.current?.renderer;
@@ -2652,6 +2903,31 @@ const App = () => {
         };
         senseSelectorAnchorRef.current = next;
         setSenseSelectorAnchor(next);
+    };
+
+    const recenterStarMapFromNode = async (node) => {
+        if (!node?.data?._id) return;
+
+        if (view === 'titleDetail') {
+            const nextCenter = buildStarMapCenterState(STAR_MAP_LAYER.TITLE, node.data);
+            if (areStarMapCentersEqual(currentStarMapCenter, nextCenter)) return;
+            await fetchTitleStarMap(node.data._id, {
+                limit: currentStarMapLimit || DEFAULT_STAR_MAP_LIMIT,
+                silent: false,
+                clickedNode: node
+            });
+            return;
+        }
+
+        if (view === 'nodeDetail') {
+            const nextCenter = buildStarMapCenterState(STAR_MAP_LAYER.SENSE, node.data);
+            if (areStarMapCentersEqual(currentStarMapCenter, nextCenter)) return;
+            await fetchSenseStarMap(node.data._id, node?.data?.activeSenseId || '', {
+                limit: currentStarMapLimit || DEFAULT_STAR_MAP_LIMIT,
+                silent: false,
+                clickedNode: node
+            });
+        }
     };
 
     const updateSenseSelectorAnchorByElement = (element) => {
@@ -3047,6 +3323,10 @@ const App = () => {
 
             if (view === 'titleDetail') {
                 setTitleRelationInfo(null);
+                if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
+                    recenterStarMapFromNode(node);
+                    return;
+                }
                 if (node.type === 'center') {
                     setSenseSelectorSourceNode(currentTitleDetail || node.data);
                     setSenseSelectorSourceSceneNodeId('');
@@ -3062,6 +3342,10 @@ const App = () => {
 
             if (view === 'nodeDetail') {
                 setTitleRelationInfo(null);
+                if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
+                    recenterStarMapFromNode(node);
+                    return;
+                }
                 if (node.type === 'center') {
                     setSenseSelectorSourceNode(currentNodeDetail || node.data);
                     setSenseSelectorSourceSceneNodeId('');
@@ -3076,7 +3360,7 @@ const App = () => {
             }
         };
 	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    }, [view, currentNodeDetail, currentTitleDetail]);
+	    }, [view, currentNodeDetail, currentTitleDetail, knowledgeMainViewMode, recenterStarMapFromNode]);
 
     // 实时搜索
     const performHomeSearch = async (query) => {
@@ -3149,6 +3433,14 @@ const App = () => {
 	    // eslint-disable-next-line react-hooks/exhaustive-deps
 	    }, [authenticated, view]);
 
+    useEffect(() => {
+        if (isKnowledgeDetailView(view)) return;
+        if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP && !titleStarMapData && !nodeStarMapData) {
+            return;
+        }
+        clearStarMapState();
+    }, [clearStarMapState, knowledgeMainViewMode, nodeStarMapData, titleStarMapData, view]);
+
     // 更新WebGL首页场景
     useEffect(() => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
@@ -3168,6 +3460,7 @@ const App = () => {
     useEffect(() => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
         if (view !== 'nodeDetail' || !currentNodeDetail) return;
+        if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.MAIN) return;
 
         const parentNodes = currentNodeDetail.parentNodesInfo || [];
         const childNodes = currentNodeDetail.childNodesInfo || [];
@@ -3183,12 +3476,13 @@ const App = () => {
 
         // 动画完成后清除clickedNode状态
         setClickedNodeForTransition(null);
-    }, [isWebGLReady, view, currentNodeDetail, clickedNodeForTransition]);
+    }, [isWebGLReady, view, currentNodeDetail, clickedNodeForTransition, knowledgeMainViewMode]);
 
     // 更新WebGL标题主视角场景
     useEffect(() => {
         if (!sceneManagerRef.current || !isWebGLReady) return;
         if (view !== 'titleDetail' || !currentTitleDetail || !titleGraphData) return;
+        if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.MAIN) return;
 
         const graphNodes = Array.isArray(titleGraphData?.nodes) ? titleGraphData.nodes : [];
         const graphEdges = Array.isArray(titleGraphData?.edges) ? titleGraphData.edges : [];
@@ -3203,7 +3497,149 @@ const App = () => {
         );
         setClickedNodeForTransition(null);
 	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    }, [isWebGLReady, view, currentTitleDetail, titleGraphData, clickedNodeForTransition]);
+	    }, [isWebGLReady, view, currentTitleDetail, titleGraphData, clickedNodeForTransition, knowledgeMainViewMode]);
+
+    useEffect(() => {
+        if (!sceneManagerRef.current || !isWebGLReady) return;
+        if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
+
+        if (view === 'titleDetail' && currentStarMapLayer === STAR_MAP_LAYER.TITLE && titleStarMapData) {
+            sceneManagerRef.current.showStarMap('titleDetail', titleStarMapData, clickedNodeForTransition);
+            setClickedNodeForTransition(null);
+        }
+    }, [clickedNodeForTransition, currentStarMapLayer, isWebGLReady, knowledgeMainViewMode, titleStarMapData, view]);
+
+    useEffect(() => {
+        if (!sceneManagerRef.current || !isWebGLReady) return;
+        if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
+
+        if (view === 'nodeDetail' && currentStarMapLayer === STAR_MAP_LAYER.SENSE && nodeStarMapData) {
+            sceneManagerRef.current.showStarMap('nodeDetail', nodeStarMapData, clickedNodeForTransition);
+            setClickedNodeForTransition(null);
+        }
+    }, [clickedNodeForTransition, currentStarMapLayer, isWebGLReady, knowledgeMainViewMode, nodeStarMapData, view]);
+
+    useEffect(() => {
+        const canvas = webglCanvasRef.current;
+        if (!canvas || !isWebGLReady) return undefined;
+        if (!isKnowledgeDetailView(view)) return undefined;
+
+        const enterStarMapMode = async () => {
+            if (view === 'titleDetail' && currentTitleDetail?._id) {
+                await fetchTitleStarMap(currentTitleDetail._id, {
+                    limit: currentStarMapLimit || DEFAULT_STAR_MAP_LIMIT,
+                    silent: false
+                });
+                return;
+            }
+
+            if (view === 'nodeDetail' && currentNodeDetail?._id) {
+                await fetchSenseStarMap(currentNodeDetail._id, currentNodeDetail?.activeSenseId || '', {
+                    limit: currentStarMapLimit || DEFAULT_STAR_MAP_LIMIT,
+                    silent: false
+                });
+            }
+        };
+
+        const exitStarMapMode = async () => {
+            if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
+
+            if (view === 'titleDetail') {
+                const targetNodeId = normalizeObjectId(currentStarMapCenter?.nodeId || currentTitleDetail?._id);
+                const currentNodeId = normalizeObjectId(currentTitleDetail?._id);
+                if (!targetNodeId) {
+                    clearStarMapState();
+                    return;
+                }
+                if (targetNodeId === currentNodeId) {
+                    clearStarMapState();
+                    return;
+                }
+                const clickedNode = buildClickedNodeFromScene(targetNodeId);
+                const result = await fetchTitleDetail(targetNodeId, clickedNode, {
+                    historyIndex: Math.max(0, (navigationPath?.length || 1) - 1),
+                    requestSource: 'star-map-exit',
+                    keepStarMapState: true,
+                    silent: true
+                });
+                if (result) {
+                    clearStarMapState();
+                }
+                return;
+            }
+
+            if (view === 'nodeDetail') {
+                const targetNodeId = normalizeObjectId(currentStarMapCenter?.nodeId || currentNodeDetail?._id);
+                const targetSenseId = typeof currentStarMapCenter?.senseId === 'string' && currentStarMapCenter.senseId.trim()
+                    ? currentStarMapCenter.senseId.trim()
+                    : (typeof currentNodeDetail?.activeSenseId === 'string' ? currentNodeDetail.activeSenseId.trim() : '');
+                const currentNodeId = normalizeObjectId(currentNodeDetail?._id);
+                const currentSenseId = typeof currentNodeDetail?.activeSenseId === 'string' ? currentNodeDetail.activeSenseId.trim() : '';
+                if (!targetNodeId) {
+                    clearStarMapState();
+                    return;
+                }
+                if (targetNodeId === currentNodeId && targetSenseId === currentSenseId) {
+                    clearStarMapState();
+                    return;
+                }
+                const targetVertexKey = toSenseVertexKey(targetNodeId, targetSenseId);
+                const clickedNode = buildClickedNodeFromScene(targetNodeId, {
+                    predicate: (sceneNode) => (
+                        normalizeObjectId(sceneNode?.data?._id) === targetNodeId
+                        && getSenseNodeKey(sceneNode?.data || {}) === targetVertexKey
+                    )
+                });
+                const result = await fetchNodeDetail(targetNodeId, clickedNode, {
+                    historyIndex: Math.max(0, (navigationPath?.length || 1) - 1),
+                    requestSource: 'star-map-exit',
+                    keepStarMapState: true,
+                    silent: true,
+                    activeSenseId: targetSenseId
+                });
+                if (result) {
+                    clearStarMapState();
+                }
+            }
+        };
+
+        const handleWheel = (event) => {
+            const deltaY = Number(event.deltaY) || 0;
+            if (Math.abs(deltaY) < 16 || isStarMapLoading) return;
+
+            if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.MAIN && deltaY > 0) {
+                event.preventDefault();
+                enterStarMapMode();
+                return;
+            }
+
+            if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP && deltaY < 0) {
+                event.preventDefault();
+                exitStarMapMode();
+            }
+        };
+
+        canvas.addEventListener('wheel', handleWheel, { passive: false });
+        return () => {
+            canvas.removeEventListener('wheel', handleWheel);
+        };
+    }, [
+        buildClickedNodeFromScene,
+        clearStarMapState,
+        currentNodeDetail,
+        currentStarMapCenter,
+        currentStarMapLimit,
+        currentTitleDetail,
+        fetchNodeDetail,
+        fetchSenseStarMap,
+        fetchTitleDetail,
+        fetchTitleStarMap,
+        isStarMapLoading,
+        isWebGLReady,
+        knowledgeMainViewMode,
+        navigationPath,
+        view
+    ]);
 
     useEffect(() => {
         const transition = homeDetailTransitionRef.current;
@@ -3309,6 +3745,10 @@ const App = () => {
 
     useEffect(() => {
         if (!sceneManagerRef.current) return;
+        if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
+            sceneManagerRef.current.clearNodeButtons();
+            return;
+        }
         if (view === 'titleDetail' && currentTitleDetail) {
             sceneManagerRef.current.setupCenterNodeButtons(
                 currentTitleDetail,
@@ -3324,7 +3764,7 @@ const App = () => {
             sceneManagerRef.current.clearNodeButtons();
         }
 	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    }, [view, currentNodeDetail, currentTitleDetail, isAdmin, userId, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
+	    }, [view, currentNodeDetail, currentTitleDetail, knowledgeMainViewMode, isAdmin, userId, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
 
     useEffect(() => {
         if (!isWebGLReady) {
@@ -3929,6 +4369,11 @@ const App = () => {
                     currentTitleDetail={currentTitleDetail}
                     titleGraphData={titleGraphData}
                     currentNodeDetail={currentNodeDetail}
+                    knowledgeMainViewMode={knowledgeMainViewMode}
+                    titleStarMapData={titleStarMapData}
+                    nodeStarMapData={nodeStarMapData}
+                    currentStarMapLimit={currentStarMapLimit}
+                    isStarMapLoading={isStarMapLoading}
                     titleRelationInfo={titleRelationInfo}
                     onCloseTitleRelationInfo={() => setTitleRelationInfo(null)}
                     searchQuery={homeSearchQuery}

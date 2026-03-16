@@ -21,12 +21,10 @@ const {
   serializeBattlefieldItem,
   serializeCityBuildingType
 } = require('../services/placeableCatalogService');
-
-const getOrCreateSettings = async () => GameSetting.findOneAndUpdate(
-  { key: 'global' },
-  { $setOnInsert: { travelUnitSeconds: 60, distributionAnnouncementLeadHours: 24 } },
-  { new: true, upsert: true, setDefaultsOnInsert: true }
-);
+const {
+  DEFAULT_STAR_MAP_NODE_LIMIT,
+  getOrCreateSettings
+} = require('../services/gameSettingsService');
 
 const UNIT_TYPE_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
 const CATALOG_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
@@ -796,7 +794,8 @@ router.get('/settings', authenticateToken, isAdmin, async (req, res) => {
       success: true,
       settings: {
         travelUnitSeconds: settings.travelUnitSeconds,
-        distributionAnnouncementLeadHours: settings.distributionAnnouncementLeadHours
+        distributionAnnouncementLeadHours: settings.distributionAnnouncementLeadHours,
+        starMapNodeLimit: settings.starMapNodeLimit
       }
     });
   } catch (error) {
@@ -808,7 +807,7 @@ router.get('/settings', authenticateToken, isAdmin, async (req, res) => {
 // 更新系统设置
 router.put('/settings', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { travelUnitSeconds, distributionAnnouncementLeadHours } = req.body;
+    const { travelUnitSeconds, distributionAnnouncementLeadHours, starMapNodeLimit } = req.body;
     const currentSettings = await getOrCreateSettings();
     const parsedTravel = travelUnitSeconds === undefined
       ? parseInt(currentSettings.travelUnitSeconds, 10)
@@ -816,6 +815,9 @@ router.put('/settings', authenticateToken, isAdmin, async (req, res) => {
     const parsedLeadHours = distributionAnnouncementLeadHours === undefined
       ? parseInt(currentSettings.distributionAnnouncementLeadHours, 10)
       : parseInt(distributionAnnouncementLeadHours, 10);
+    const parsedStarMapNodeLimit = starMapNodeLimit === undefined
+      ? parseInt(currentSettings.starMapNodeLimit ?? DEFAULT_STAR_MAP_NODE_LIMIT, 10)
+      : parseInt(starMapNodeLimit, 10);
 
     if (!Number.isInteger(parsedTravel) || parsedTravel < 1 || parsedTravel > 86400) {
       return res.status(400).json({ error: '每单位移动耗时必须是 1-86400 的整数秒' });
@@ -823,10 +825,13 @@ router.put('/settings', authenticateToken, isAdmin, async (req, res) => {
     if (!Number.isInteger(parsedLeadHours) || parsedLeadHours < 1 || parsedLeadHours > 168) {
       return res.status(400).json({ error: '分发公告提前时长必须是 1-168 的整数小时' });
     }
+    if (!Number.isInteger(parsedStarMapNodeLimit) || parsedStarMapNodeLimit < 10 || parsedStarMapNodeLimit > 200) {
+      return res.status(400).json({ error: '星盘节点上限必须是 10-200 的整数' });
+    }
 
     const settings = await GameSetting.findOneAndUpdate(
       { key: 'global' },
-      { $set: { travelUnitSeconds: parsedTravel, distributionAnnouncementLeadHours: parsedLeadHours } },
+      { $set: { travelUnitSeconds: parsedTravel, distributionAnnouncementLeadHours: parsedLeadHours, starMapNodeLimit: parsedStarMapNodeLimit } },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
@@ -835,7 +840,8 @@ router.put('/settings', authenticateToken, isAdmin, async (req, res) => {
       message: '系统设置已更新',
       settings: {
         travelUnitSeconds: settings.travelUnitSeconds,
-        distributionAnnouncementLeadHours: settings.distributionAnnouncementLeadHours
+        distributionAnnouncementLeadHours: settings.distributionAnnouncementLeadHours,
+        starMapNodeLimit: settings.starMapNodeLimit
       }
     });
   } catch (error) {

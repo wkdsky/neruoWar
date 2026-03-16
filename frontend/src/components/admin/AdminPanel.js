@@ -153,6 +153,8 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     const [travelUnitInput, setTravelUnitInput] = useState('60');
     const [distributionAnnouncementLeadHours, setDistributionAnnouncementLeadHours] = useState(24);
     const [distributionLeadInput, setDistributionLeadInput] = useState('24');
+    const [starMapNodeLimit, setStarMapNodeLimit] = useState(50);
+    const [starMapNodeLimitInput, setStarMapNodeLimitInput] = useState('50');
     const [armyUnitTypes, setArmyUnitTypes] = useState([]);
     const [isCreatingUnitType, setIsCreatingUnitType] = useState(false);
     const [editingUnitTypeId, setEditingUnitTypeId] = useState('');
@@ -579,10 +581,13 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                 const data = await response.json();
                 const seconds = String(data?.settings?.travelUnitSeconds ?? 60);
                 const leadHours = String(data?.settings?.distributionAnnouncementLeadHours ?? 24);
+                const starMapLimit = String(data?.settings?.starMapNodeLimit ?? 50);
                 setTravelUnitSeconds(parseInt(seconds, 10));
                 setTravelUnitInput(seconds);
                 setDistributionAnnouncementLeadHours(parseInt(leadHours, 10));
                 setDistributionLeadInput(leadHours);
+                setStarMapNodeLimit(parseInt(starMapLimit, 10));
+                setStarMapNodeLimitInput(starMapLimit);
             }
         } catch (error) {
             console.error('获取系统设置失败:', error);
@@ -593,6 +598,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         const token = localStorage.getItem('token');
         const parsed = parseInt(travelUnitInput, 10);
         const parsedLeadHours = parseInt(distributionLeadInput, 10);
+        const parsedStarMapNodeLimit = parseInt(starMapNodeLimitInput, 10);
 
         if (!Number.isInteger(parsed) || parsed < 1 || parsed > 86400) {
             alert('每单位移动耗时必须是 1-86400 的整数秒');
@@ -600,6 +606,10 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
         }
         if (!Number.isInteger(parsedLeadHours) || parsedLeadHours < 1 || parsedLeadHours > 168) {
             alert('分发公告提前时长必须是 1-168 的整数小时');
+            return;
+        }
+        if (!Number.isInteger(parsedStarMapNodeLimit) || parsedStarMapNodeLimit < 10 || parsedStarMapNodeLimit > 200) {
+            alert('星盘节点上限必须是 10-200 的整数');
             return;
         }
 
@@ -612,17 +622,21 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                 },
                 body: JSON.stringify({
                     travelUnitSeconds: parsed,
-                    distributionAnnouncementLeadHours: parsedLeadHours
+                    distributionAnnouncementLeadHours: parsedLeadHours,
+                    starMapNodeLimit: parsedStarMapNodeLimit
                 })
             });
             if (response.ok) {
                 const data = await response.json();
                 const seconds = parseInt(String(data?.settings?.travelUnitSeconds ?? parsed), 10);
                 const leadHours = parseInt(String(data?.settings?.distributionAnnouncementLeadHours ?? parsedLeadHours), 10);
+                const nextStarMapLimit = parseInt(String(data?.settings?.starMapNodeLimit ?? parsedStarMapNodeLimit), 10);
                 setTravelUnitSeconds(seconds);
                 setTravelUnitInput(String(seconds));
                 setDistributionAnnouncementLeadHours(leadHours);
                 setDistributionLeadInput(String(leadHours));
+                setStarMapNodeLimit(nextStarMapLimit);
+                setStarMapNodeLimitInput(String(nextStarMapLimit));
                 alert('系统设置已保存');
             } else {
                 const data = await response.json();
@@ -5737,9 +5751,22 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
                                 className="edit-input-small"
                             />
                         </div>
+                        <div className="admin-settings-row">
+                            <label htmlFor="starMapNodeLimit">星盘节点上限</label>
+                            <input
+                                id="starMapNodeLimit"
+                                type="number"
+                                min="10"
+                                max="200"
+                                value={starMapNodeLimitInput}
+                                onChange={(e) => setStarMapNodeLimitInput(e.target.value)}
+                                className="edit-input-small"
+                            />
+                        </div>
                         <div className="admin-settings-current">
                             当前生效值: <strong>{travelUnitSeconds}</strong> 秒 / 单位，
-                            分发公告提前 <strong>{distributionAnnouncementLeadHours}</strong> 小时
+                            分发公告提前 <strong>{distributionAnnouncementLeadHours}</strong> 小时，
+                            星盘上限 <strong>{starMapNodeLimit}</strong> 个节点
                         </div>
                         <div className="admin-settings-actions">
                             <button onClick={saveAdminSettings} className="btn btn-primary">保存设置</button>
