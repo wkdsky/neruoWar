@@ -15,6 +15,9 @@ class SceneManager {
     this.currentScene = null;  // 'home' | 'nodeDetail' | 'titleDetail'
     this.currentLayout = { nodes: [], lines: [] };
     this.currentLayoutSource = null;
+    this.pendingStarMapMeasuredLabelPass = 0;
+    this.activeStarMapMeasuredLabelKey = '';
+    this.completedStarMapMeasuredLabelKeys = new Set();
 
     // 回调函数
     this.onNodeClick = null;
@@ -73,6 +76,55 @@ class SceneManager {
       viewportCenterX - contentCenterX,
       viewportCenterY - contentCenterY
     );
+  }
+
+  cancelPendingStarMapMeasuredLabelPass() {
+    if (this.pendingStarMapMeasuredLabelPass) {
+      cancelAnimationFrame(this.pendingStarMapMeasuredLabelPass);
+      this.pendingStarMapMeasuredLabelPass = 0;
+    }
+    this.activeStarMapMeasuredLabelKey = '';
+  }
+
+  scheduleStarMapMeasuredLabelPass(layout = this.currentLayout) {
+    const layoutKey = layout?.meta?.layoutKey;
+    if (layout?.meta?.type !== 'starMap' || !layoutKey) return;
+    if (this.completedStarMapMeasuredLabelKeys.has(layoutKey)) return;
+
+    this.cancelPendingStarMapMeasuredLabelPass();
+    this.activeStarMapMeasuredLabelKey = layoutKey;
+
+    let remainingFrames = 2;
+    const runMeasuredPass = () => {
+      const currentLayoutKey = this.currentLayout?.meta?.layoutKey;
+      if (this.currentLayout?.meta?.type !== 'starMap' || currentLayoutKey !== layoutKey) {
+        this.pendingStarMapMeasuredLabelPass = 0;
+        this.activeStarMapMeasuredLabelKey = '';
+        return;
+      }
+
+      if (remainingFrames > 0) {
+        remainingFrames -= 1;
+        this.pendingStarMapMeasuredLabelPass = requestAnimationFrame(runMeasuredPass);
+        return;
+      }
+
+      this.pendingStarMapMeasuredLabelPass = 0;
+      this.activeStarMapMeasuredLabelKey = '';
+      const measuredLabelBoxes = this.renderer.getMeasuredStarMapLabelBoxes();
+      const refined = this.layout.refineStarMapLayoutWithMeasuredLabels(this.currentLayout, measuredLabelBoxes);
+      this.completedStarMapMeasuredLabelKeys.add(layoutKey);
+
+      if (refined?.applied && refined.layout?.meta?.layoutKey === layoutKey) {
+        this.setLayout(refined.layout);
+        this.applyStarMapFraming(refined.layout);
+      } else if (refined?.layout?.debug) {
+        this.renderer.setLayoutDebugData(refined.layout.debug);
+        this.renderer.render();
+      }
+    };
+
+    this.pendingStarMapMeasuredLabelPass = requestAnimationFrame(runMeasuredPass);
   }
 
   /**
@@ -237,6 +289,7 @@ class SceneManager {
       this.setLayout(newLayout);
       this.currentScene = scene;
       this.applyStarMapFraming(newLayout);
+      this.scheduleStarMapMeasuredLabelPass(newLayout);
       if (this.onSceneChange) {
         this.onSceneChange(scene, graph?.centerNode || null);
       }
@@ -253,6 +306,7 @@ class SceneManager {
 
     this.currentScene = scene;
     this.applyStarMapFraming(newLayout);
+    this.scheduleStarMapMeasuredLabelPass(newLayout);
 
     if (this.onSceneChange) {
       this.onSceneChange(scene, graph?.centerNode || null);
@@ -382,7 +436,11 @@ class SceneManager {
    * 直接设置布局 (无动画)
    */
   setLayout(layout) {
+    if (layout?.meta?.type !== 'starMap') {
+      this.cancelPendingStarMapMeasuredLabelPass();
+    }
     this.renderer.clearNodes();
+    this.renderer.setLayoutDebugData(layout?.debug || null);
 
     for (const nodeConfig of layout.nodes) {
       this.renderer.setNode(nodeConfig.id, nodeConfig);
@@ -709,6 +767,7 @@ class SceneManager {
       );
       this.setLayout(newLayout);
       this.applyStarMapFraming(newLayout);
+      this.scheduleStarMapMeasuredLabelPass(newLayout);
     } else if (this.currentScene === 'home' && this.currentLayout.nodes.length > 0) {
       const rootNodes = this.currentLayout.nodes
         .filter(n => n.type === 'root')
@@ -1132,6 +1191,8 @@ class SceneManager {
     if (this.isInPreviewMode) {
       this.exitAssociationPreview();
     }
+    this.cancelPendingStarMapMeasuredLabelPass();
+    this.completedStarMapMeasuredLabelKeys.clear();
     this.currentLayoutSource = null;
     this.renderer.destroy();
   }

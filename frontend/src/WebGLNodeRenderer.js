@@ -370,6 +370,7 @@ class WebGLNodeRenderer {
     this.onButtonClick = null; // 按钮点击回调
     this.onLineClick = null; // 连线点击回调
     this.hoveredLine = null;
+    this.hoverFocusState = this.createHoverFocusState();
 
     // 相机状态（仅平移 + 缩放，禁用旋转）
     this.camera = {
@@ -408,6 +409,7 @@ class WebGLNodeRenderer {
       nodeId: '',
       progress: 1
     };
+    this.layoutDebugData = null;
 
     // 节点操作按钮配置
     this.nodeButtons = new Map(); // nodeId -> [{id, icon, angle, action}]
@@ -602,8 +604,146 @@ class WebGLNodeRenderer {
     this.render();
   }
 
+  createHoverFocusState() {
+    return {
+      active: false,
+      primaryNodeId: '',
+      nodeIds: new Set(),
+      relatedNodeIds: new Set(),
+      lineIds: new Set()
+    };
+  }
+
+  isStarMapHoverFocusCandidate(node) {
+    return !!node?.data?.starMapLayer
+      && node.type !== 'stub-anchor'
+      && node.type !== 'stub-badge';
+  }
+
+  getLineKey(line = {}) {
+    const id = String(line?.id || '').trim();
+    if (id) return id;
+    return `${String(line?.from || '')}|${String(line?.to || '')}|${line?.isStub ? 'stub' : 'line'}`;
+  }
+
+  buildHoverFocusState() {
+    const primaryNode = this.isStarMapHoverFocusCandidate(this.hoveredNode)
+      ? this.hoveredNode
+      : (this.isStarMapHoverFocusCandidate(this.hoveredButton?.node) ? this.hoveredButton.node : null);
+
+    if (!primaryNode) {
+      return this.createHoverFocusState();
+    }
+
+    const state = this.createHoverFocusState();
+    state.active = true;
+    state.primaryNodeId = primaryNode.id;
+    state.nodeIds.add(primaryNode.id);
+
+    for (const line of Array.isArray(this.lines) ? this.lines : []) {
+      if (!line || line.isStub) continue;
+      if (line.from !== primaryNode.id && line.to !== primaryNode.id) continue;
+
+      state.lineIds.add(this.getLineKey(line));
+      const otherId = line.from === primaryNode.id ? line.to : line.from;
+      const otherNode = this.nodes.get(otherId);
+      if (!this.isStarMapHoverFocusCandidate(otherNode)) continue;
+      state.nodeIds.add(otherId);
+      state.relatedNodeIds.add(otherId);
+    }
+
+    return state;
+  }
+
+  getHoverFocusSignature(state = this.hoverFocusState) {
+    if (!state?.active) return 'inactive';
+    return [
+      state.primaryNodeId || '',
+      [...state.nodeIds].sort().join(','),
+      [...state.lineIds].sort().join(',')
+    ].join('|');
+  }
+
+  getNodeHoverState(node) {
+    if (!node) return 'normal';
+    if (!this.hoverFocusState?.active) {
+      return this.hoveredNode === node ? 'primary' : 'normal';
+    }
+    if (this.hoverFocusState.primaryNodeId === node.id) return 'primary';
+    if (this.hoverFocusState.nodeIds.has(node.id)) return 'related';
+    return 'dim';
+  }
+
+  getLineHoverState(line) {
+    if (!line) return 'normal';
+    if (this.hoverFocusState?.active) {
+      return this.hoverFocusState.lineIds.has(this.getLineKey(line)) ? 'focus' : 'dim';
+    }
+    return this.hoveredLine?.line === line ? 'hovered' : 'normal';
+  }
+
+  getNodeRenderPriority(node) {
+    const hoverState = this.getNodeHoverState(node);
+    if (hoverState === 'primary') return 3;
+    if (hoverState === 'related') return 2;
+    if (hoverState === 'dim') return 0;
+    return 1;
+  }
+
+  getLineRenderPriority(line) {
+    const hoverState = this.getLineHoverState(line);
+    if (hoverState === 'focus') return 3;
+    if (hoverState === 'hovered') return 2;
+    if (hoverState === 'dim') return 0;
+    return 1;
+  }
+
+  getOrderedRenderableNodes() {
+    return Array.from(this.nodes.values())
+      .filter((node) => node.visible && node.opacity > 0)
+      .sort((left, right) => {
+        const leftPriority = this.getNodeRenderPriority(left);
+        const rightPriority = this.getNodeRenderPriority(right);
+        if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+        const leftOrder = Number(left?.drawOrder) || 0;
+        const rightOrder = Number(right?.drawOrder) || 0;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        if (left.opacity !== right.opacity) return left.opacity - right.opacity;
+        return String(left?.id || '').localeCompare(String(right?.id || ''));
+      });
+  }
+
+  clearHoverState() {
+    const prevHoveredNodeId = this.hoveredNode?.id || '';
+    const prevHoveredLineKey = this.hoveredLine?.line ? this.getLineKey(this.hoveredLine.line) : '';
+    const prevHoveredButtonKey = this.hoveredButton
+      ? `${this.hoveredButton.nodeId}:${this.hoveredButton.button?.id || ''}`
+      : '';
+    const prevFocusSignature = this.getHoverFocusSignature();
+
+    this.hoveredNode = null;
+    this.hoveredLine = null;
+    this.hoveredButton = null;
+    this.hoverFocusState = this.createHoverFocusState();
+    this.canvas.style.cursor = this.cameraPanEnabled ? 'grab' : 'default';
+
+    const nextHoveredButtonKey = '';
+    const nextFocusSignature = this.getHoverFocusSignature();
+    if (
+      prevHoveredNodeId
+      || prevHoveredLineKey
+      || prevHoveredButtonKey !== nextHoveredButtonKey
+      || prevFocusSignature !== nextFocusSignature
+    ) {
+      this.render();
+    }
+  }
+
   updateHoverState(x, y) {
+    const prevHoveredNodeId = this.hoveredNode?.id || '';
+    const prevHoveredLineKey = this.hoveredLine?.line ? this.getLineKey(this.hoveredLine.line) : '';
     const prevHoveredButton = this.hoveredButton;
+    const prevFocusSignature = this.getHoverFocusSignature();
     this.hoveredButton = this.hitTestButton(x, y, { includeDisabled: true });
     if (this.hoveredButton) {
       this.hoveredNode = null;
@@ -624,12 +764,17 @@ class WebGLNodeRenderer {
       }
     }
 
+    this.hoverFocusState = this.buildHoverFocusState();
+
     const buttonHoverChanged = (prevHoveredButton !== this.hoveredButton) ||
       (prevHoveredButton && this.hoveredButton &&
         (prevHoveredButton.nodeId !== this.hoveredButton.nodeId ||
          prevHoveredButton.button.id !== this.hoveredButton.button.id));
+    const nodeHoverChanged = prevHoveredNodeId !== (this.hoveredNode?.id || '');
+    const lineHoverChanged = prevHoveredLineKey !== (this.hoveredLine?.line ? this.getLineKey(this.hoveredLine.line) : '');
+    const focusChanged = prevFocusSignature !== this.getHoverFocusSignature();
 
-    if (buttonHoverChanged && this.nodeButtons.size > 0) {
+    if (buttonHoverChanged || nodeHoverChanged || lineHoverChanged || focusChanged) {
       this.render();
     }
   }
@@ -714,6 +859,11 @@ class WebGLNodeRenderer {
       canvas.style.cursor = this.cameraPanEnabled ? 'grab' : 'default';
     });
 
+    canvas.addEventListener('pointerleave', () => {
+      if (this.dragState.active) return;
+      this.clearHoverState();
+    });
+
     canvas.addEventListener('click', (event) => {
       if (this.dragState.suppressClick) return;
       const pos = this.getCanvasPositionFromEvent(event);
@@ -790,8 +940,9 @@ class WebGLNodeRenderer {
 
   hitTest(x, y) {
     const worldPos = this.screenToWorld(x, y);
+    const orderedNodes = this.getOrderedRenderableNodes().slice().reverse();
 
-    for (const [, node] of this.nodes) {
+    for (const node of orderedNodes) {
       if (!node.visible) continue;
 
       const dx = worldPos.x - node.x;
@@ -907,6 +1058,9 @@ class WebGLNodeRenderer {
       ))
       .slice()
       .sort((left, right) => {
+        const leftPriority = this.getLineRenderPriority(left);
+        const rightPriority = this.getLineRenderPriority(right);
+        if (leftPriority !== rightPriority) return leftPriority - rightPriority;
         const leftOrder = Number(left?.drawOrder) || 0;
         const rightOrder = Number(right?.drawOrder) || 0;
         if (leftOrder !== rightOrder) return leftOrder - rightOrder;
@@ -966,7 +1120,7 @@ class WebGLNodeRenderer {
     const threshold = 10;
     let best = null;
 
-    for (const line of this.lines) {
+    for (const line of this.getOrderedRenderableLines({ includeStubs: false }).slice().reverse()) {
       if (!line?.clickable) continue;
       const fromNode = this.nodes.get(line.from);
       const toNode = this.nodes.get(line.to);
@@ -1013,6 +1167,7 @@ class WebGLNodeRenderer {
       labelOffsetX: config.labelOffsetX ?? existing?.labelOffsetX ?? 0,
       labelOffsetY: config.labelOffsetY ?? existing?.labelOffsetY ?? 0,
       labelVisible: config.labelVisible ?? existing?.labelVisible ?? true,
+      drawOrder: config.drawOrder ?? existing?.drawOrder ?? 0,
       labelMaxWidthStrategy: config.labelMaxWidthStrategy ?? existing?.labelMaxWidthStrategy ?? 'default',
       labelWidthHint: config.labelWidthHint ?? existing?.labelWidthHint ?? null,
       labelHeightHint: config.labelHeightHint ?? existing?.labelHeightHint ?? null,
@@ -1144,11 +1299,21 @@ class WebGLNodeRenderer {
     this.lines = [];
     this.nodeButtons.clear();
     this.nodeRevealState = { nodeId: '', progress: 1 };
+    this.hoveredNode = null;
+    this.hoveredLine = null;
+    this.hoveredButton = null;
+    this.hoverFocusState = this.createHoverFocusState();
+    this.layoutDebugData = null;
   }
 
   // 设置连线
   setLines(lines) {
     this.lines = lines; // [{from: nodeId, to: nodeId, color: [r,g,b,a]}]
+    this.hoverFocusState = this.buildHoverFocusState();
+  }
+
+  setLayoutDebugData(debugData) {
+    this.layoutDebugData = debugData || null;
   }
 
   // 设置节点操作按钮
@@ -1449,7 +1614,10 @@ class WebGLNodeRenderer {
         this.getRevealProgressForNode(fromNode.id),
         this.getRevealProgressForNode(toNode.id)
       );
-      const hoverBoost = this.hoveredLine?.line === line ? 1.18 : 1;
+      const lineHoverState = this.getLineHoverState(line);
+      const hoverBoost = lineHoverState === 'focus'
+        ? 1.72
+        : (lineHoverState === 'hovered' ? 1.18 : (lineHoverState === 'dim' ? 0.22 : 1));
       gl.uniform4fv(this.lineLocations.color, color);
       gl.uniform1f(
         this.lineLocations.opacity,
@@ -1480,13 +1648,19 @@ class WebGLNodeRenderer {
     gl.uniform2f(this.nodeLocations.resolution, this.canvas.width, this.canvas.height);
 
     // 按opacity排序，先渲染透明的
-    const sortedNodes = Array.from(this.nodes.values())
-      .filter(n => n.visible && n.opacity > 0)
-      .sort((a, b) => a.opacity - b.opacity);
+    const sortedNodes = this.getOrderedRenderableNodes();
 
     for (const node of sortedNodes) {
+      const nodeHoverState = this.getNodeHoverState(node);
+      const isFocusPrimary = nodeHoverState === 'primary';
+      const isFocusRelated = nodeHoverState === 'related';
+      const isDimmed = nodeHoverState === 'dim';
+      const isHovered = isFocusPrimary;
+      const focusOpacity = isDimmed ? 0.18 : 1;
+      const focusGlowBoost = isFocusPrimary ? 1.24 : (isFocusRelated ? 1.12 : (isDimmed ? 0.68 : 1));
+      const focusScale = isFocusPrimary ? 1.07 : (isFocusRelated ? 1.035 : 1);
       const style = this.resolveNodeRenderStyle(node);
-      const size = node.radius * 2 * this.camera.zoom;
+      const size = node.radius * 2 * this.camera.zoom * focusScale;
       const nodePos = this.worldToScreen(node.x, node.y);
       const isHoneycombNode = this.sceneType === 'home' && (node.type === 'root' || node.type === 'featured');
       const shapeMorph = Number.isFinite(node.shapeMorph) ? node.shapeMorph : (isHoneycombNode ? 0 : 1);
@@ -1506,8 +1680,8 @@ class WebGLNodeRenderer {
           secondaryColor: style.base,
           rimColor: style.rim,
           glowColor: style.glow,
-          glowIntensity: this.hoveredNode === node ? 1.08 : Math.max(0.44, node.glowIntensity),
-          opacity: node.opacity * 0.22,
+          glowIntensity: (isHovered ? 1.12 : Math.max(0.44, node.glowIntensity)) * focusGlowBoost,
+          opacity: node.opacity * 0.22 * focusOpacity,
           shapeType: 2,
           patternType: PATTERN_TYPE_MAP.none,
           sizeScale: glowScale,
@@ -1521,8 +1695,8 @@ class WebGLNodeRenderer {
           secondaryColor: style.base,
           rimColor: style.rim,
           glowColor: style.glow,
-          glowIntensity: this.hoveredNode === node ? 0.84 : Math.max(0.36, node.glowIntensity * 0.8),
-          opacity: node.opacity * 0.9,
+          glowIntensity: (isHovered ? 0.9 : Math.max(0.36, node.glowIntensity * 0.8)) * focusGlowBoost,
+          opacity: node.opacity * 0.9 * focusOpacity,
           shapeType: 2,
           patternType: PATTERN_TYPE_MAP.none,
           sizeScale: rimScale,
@@ -1536,8 +1710,8 @@ class WebGLNodeRenderer {
           secondaryColor: style.secondary,
           rimColor: style.rim,
           glowColor: style.glow,
-          glowIntensity: this.hoveredNode === node ? 0.78 : node.glowIntensity,
-          opacity: node.opacity * (style.opacityFactor ?? 1),
+          glowIntensity: (isHovered ? 0.82 : node.glowIntensity) * focusGlowBoost,
+          opacity: node.opacity * (style.opacityFactor ?? 1) * focusOpacity,
           shapeType: 2,
           patternType: style.patternType ?? PATTERN_TYPE_MAP.none,
           sizeScale: faceScale,
@@ -1552,7 +1726,7 @@ class WebGLNodeRenderer {
           rimColor: style.rim,
           glowColor: style.glow,
           glowIntensity: 0.08,
-          opacity: node.opacity * 0.12,
+          opacity: node.opacity * 0.12 * focusOpacity,
           shapeType: 2,
           patternType: PATTERN_TYPE_MAP.none,
           sizeScale: faceScale * 0.84,
@@ -1562,8 +1736,8 @@ class WebGLNodeRenderer {
       }
 
       const profile = this.getDetailNodeLayerProfile(node);
-      const hoverBoost = this.hoveredNode === node ? 1.12 : 1;
-      const hoverScale = this.hoveredNode === node ? 1.035 : 1;
+      const hoverBoost = isFocusPrimary ? 1.18 : (isFocusRelated ? 1.08 : 1);
+      const hoverScale = isFocusPrimary ? 1.05 : (isFocusRelated ? 1.02 : 1);
       const isStarMapCenter = !!node?.data?.starMapLayer && node.type === 'center';
       if (isStarMapCenter) {
         const pulse = 1 + Math.sin(performance.now() * 0.0046) * 0.06;
@@ -1576,7 +1750,7 @@ class WebGLNodeRenderer {
           rimColor: [0.86, 0.98, 1, 1],
           glowColor: [0.55, 0.9, 1, 1],
           glowIntensity: 0.38,
-          opacity: node.opacity * 0.12 * revealOpacity,
+          opacity: node.opacity * 0.12 * revealOpacity * focusOpacity,
           shapeType: 2,
           patternType: PATTERN_TYPE_MAP.none,
           sizeScale: 1.88 * pulse * revealScale,
@@ -1591,7 +1765,7 @@ class WebGLNodeRenderer {
           rimColor: [0.88, 0.98, 1, 1],
           glowColor: [0.55, 0.9, 1, 1],
           glowIntensity: 0.32,
-          opacity: node.opacity * 0.22 * revealOpacity,
+          opacity: node.opacity * 0.22 * revealOpacity * focusOpacity,
           shapeType: 2,
           patternType: PATTERN_TYPE_MAP.none,
           sizeScale: 1.58 * pulse * revealScale,
@@ -1606,7 +1780,7 @@ class WebGLNodeRenderer {
           rimColor: [1, 1, 1, 1],
           glowColor: [0.78, 0.95, 1, 1],
           glowIntensity: 0.12,
-          opacity: node.opacity * 0.2 * revealOpacity,
+          opacity: node.opacity * 0.2 * revealOpacity * focusOpacity,
           shapeType: 2,
           patternType: PATTERN_TYPE_MAP.none,
           sizeScale: 1.12 * revealScale,
@@ -1621,8 +1795,8 @@ class WebGLNodeRenderer {
         secondaryColor: style.base,
         rimColor: style.rim,
         glowColor: style.glow,
-        glowIntensity: (this.hoveredNode === node ? 1.06 : Math.max(0.52, node.glowIntensity + 0.18)) * (1.1 - revealProgress * 0.22),
-        opacity: node.opacity * profile.glowOpacity * revealOpacity,
+        glowIntensity: ((isHovered ? 1.1 : Math.max(0.52, node.glowIntensity + 0.18)) * focusGlowBoost) * (1.1 - revealProgress * 0.22),
+        opacity: node.opacity * profile.glowOpacity * revealOpacity * focusOpacity,
         shapeType: 2,
         patternType: PATTERN_TYPE_MAP.none,
         sizeScale: profile.glowScale * hoverBoost * revealScale,
@@ -1636,8 +1810,8 @@ class WebGLNodeRenderer {
         secondaryColor: style.base,
         rimColor: style.rim,
         glowColor: style.glow,
-        glowIntensity: this.hoveredNode === node ? 0.94 : Math.max(0.46, node.glowIntensity * 0.9),
-        opacity: node.opacity * 0.88 * revealOpacity,
+        glowIntensity: (isHovered ? 0.98 : Math.max(0.46, node.glowIntensity * 0.9)) * focusGlowBoost,
+        opacity: node.opacity * 0.88 * revealOpacity * focusOpacity,
         shapeType: 2,
         patternType: PATTERN_TYPE_MAP.none,
         sizeScale: profile.shellScale * revealScale * hoverScale,
@@ -1651,8 +1825,8 @@ class WebGLNodeRenderer {
         secondaryColor: style.secondary,
         rimColor: style.rim,
         glowColor: style.glow,
-        glowIntensity: (this.hoveredNode === node ? 0.9 : Math.max(0.42, node.glowIntensity)) * hoverBoost,
-        opacity: node.opacity * (style.opacityFactor ?? 1) * revealOpacity,
+        glowIntensity: ((isHovered ? 0.94 : Math.max(0.42, node.glowIntensity)) * hoverBoost) * focusGlowBoost,
+        opacity: node.opacity * (style.opacityFactor ?? 1) * revealOpacity * focusOpacity,
         shapeType: 2,
         patternType: style.patternType ?? PATTERN_TYPE_MAP.none,
         sizeScale: profile.faceScale * revealScale * hoverScale,
@@ -1667,7 +1841,7 @@ class WebGLNodeRenderer {
         rimColor: style.rim,
         glowColor: style.glow,
         glowIntensity: 0.1,
-        opacity: node.opacity * 0.18 * revealOpacity,
+        opacity: node.opacity * 0.18 * revealOpacity * focusOpacity,
         shapeType: 2,
         patternType: PATTERN_TYPE_MAP.none,
         sizeScale: profile.coreScale * revealScale * hoverScale,
@@ -1729,6 +1903,9 @@ class WebGLNodeRenderer {
       if (!node || !node.visible || node.opacity < 0.3) continue;
       const revealProgress = this.getRevealProgressForNode(node.id);
       if (revealProgress < 0.48) continue;
+      const nodeHoverState = this.getNodeHoverState(node);
+      const buttonOpacityFactor = nodeHoverState === 'dim' ? 0.22 : 1;
+      const buttonScaleFactor = nodeHoverState === 'primary' ? 1.06 : (nodeHoverState === 'related' ? 1.02 : 1);
 
       for (const button of buttons) {
         const btnPos = this.getButtonPosition(node, button.angle);
@@ -1738,7 +1915,7 @@ class WebGLNodeRenderer {
         const isDisabled = !!button.disabled;
 
         // 按钮尺寸
-        const btnSize = isHovered && !isDisabled ? 38 : 32;
+        const btnSize = (isHovered && !isDisabled ? 38 : 32) * buttonScaleFactor;
 
         // 按钮颜色 - 使用更柔和的颜色
         const baseColor = button.color || [0.66, 0.33, 0.97, 1];
@@ -1764,7 +1941,7 @@ class WebGLNodeRenderer {
         ]);
         gl.uniform4fv(this.nodeLocations.glowColor, glowColor);
         gl.uniform1f(this.nodeLocations.glowIntensity, isDisabled ? 0.05 : 0.3);
-        gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isDisabled ? 0.45 : 0.8) * revealProgress);
+        gl.uniform1f(this.nodeLocations.opacity, node.opacity * (isDisabled ? 0.45 : 0.8) * revealProgress * buttonOpacityFactor);
         gl.uniform1i(this.nodeLocations.shapeType, 0); // 圆形
         gl.uniform1i(this.nodeLocations.patternType, PATTERN_TYPE_MAP.none);
         gl.uniform2f(this.nodeLocations.size, btnSize, btnSize);
@@ -1890,8 +2067,11 @@ class WebGLNodeRenderer {
       const isStarMapNode = !!node?.data?.starMapLayer && !isPreview;
       const isStarMapCenter = isStarMapNode && node.type === 'center';
       const revealProgress = this.getRevealProgressForNode(node.id);
-      const isHovered = this.hoveredNode === node;
-      const shouldDisplayLabel = node.labelVisible !== false || node.type === 'center' || isHovered;
+      const nodeHoverState = this.getNodeHoverState(node);
+      const isFocusPrimary = nodeHoverState === 'primary';
+      const isFocusRelated = nodeHoverState === 'related';
+      const isDimmed = nodeHoverState === 'dim';
+      const shouldDisplayLabel = node.labelVisible !== false || node.type === 'center' || isFocusPrimary || isFocusRelated;
       const placement = typeof node.labelPlacement === 'string' ? node.labelPlacement : 'center';
       const isStarMapInside = isStarMapNode && placement !== 'below' && placement !== 'above';
       const sidebarButtonFontPx = 14.4;
@@ -1952,10 +2132,13 @@ class WebGLNodeRenderer {
       labelEl.classList.toggle('is-below', placement === 'below');
       labelEl.classList.toggle('is-above', placement === 'above');
       labelEl.classList.toggle('is-hidden-by-lod', !shouldDisplayLabel);
+      labelEl.classList.toggle('is-hover-focus-primary', isFocusPrimary);
+      labelEl.classList.toggle('is-hover-focus-related', isFocusRelated);
+      labelEl.classList.toggle('is-hover-dimmed', isDimmed);
       labelEl.style.display = shouldDisplayLabel ? 'flex' : 'none';
       labelEl.style.left = `${anchorX}px`;
       labelEl.style.top = `${anchorY}px`;
-      labelEl.style.transform = transform;
+      labelEl.style.transform = `${transform}${isFocusPrimary ? ' translateY(-8px) scale(1.05)' : (isFocusRelated ? ' translateY(-4px) scale(1.02)' : '')}`;
       labelEl.style.fontSize = `${fontSize}px`;
       labelEl.style.lineHeight = `${Math.max(1, fontSize * (isStarMapNode ? 1.18 : 1.12))}px`;
       labelEl.style.maxWidth = `${maxWidth}px`;
@@ -1969,7 +2152,13 @@ class WebGLNodeRenderer {
       labelEl.style.setProperty('--label-width-hint', `${Math.round(maxWidth)}px`);
       labelEl.style.setProperty('--label-title-width-hint', `${Math.round(Number(node.labelTitleWidthHint) || maxWidth)}px`);
       labelEl.style.setProperty('--label-sense-width-hint', `${Math.round(Number(node.labelSenseWidthHint) || maxWidth)}px`);
-      labelEl.style.opacity = shouldDisplayLabel ? `${labelOpacity}` : '0';
+      labelEl.style.opacity = shouldDisplayLabel
+        ? `${labelOpacity * (isDimmed ? 0.14 : (isFocusRelated ? 0.96 : 1))}`
+        : '0';
+      labelEl.style.zIndex = isFocusPrimary ? '4' : (isFocusRelated ? '3' : '1');
+      labelEl.style.filter = isDimmed
+        ? 'saturate(0.45) brightness(0.52)'
+        : (isFocusRelated ? 'brightness(1.08)' : '');
     };
 
     normalNodes.forEach((node) => syncLabel(node, false));
@@ -1984,6 +2173,42 @@ class WebGLNodeRenderer {
     this.renderOverlayCanvas();
   }
 
+  getMeasuredStarMapLabelBoxes() {
+    if (!this.canvas || this.labelElements.size < 1) return [];
+    const canvasRect = this.canvas.getBoundingClientRect();
+    if (!canvasRect || canvasRect.width <= 0 || canvasRect.height <= 0) return [];
+    const scaleX = this.canvas.width / canvasRect.width;
+    const scaleY = this.canvas.height / canvasRect.height;
+    const boxes = [];
+
+    for (const node of this.nodes.values()) {
+      if (!node?.data?.starMapLayer || !node.label || !node.visible) continue;
+      const labelEl = this.labelElements.get(`node:${node.id}`);
+      if (!labelEl) continue;
+      const rect = labelEl.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+      const display = window.getComputedStyle(labelEl).display;
+      if (display === 'none') continue;
+      const leftScreen = (rect.left - canvasRect.left) * scaleX;
+      const rightScreen = (rect.right - canvasRect.left) * scaleX;
+      const topScreen = (rect.top - canvasRect.top) * scaleY;
+      const bottomScreen = (rect.bottom - canvasRect.top) * scaleY;
+      const topLeft = this.screenToWorld(leftScreen, topScreen);
+      const bottomRight = this.screenToWorld(rightScreen, bottomScreen);
+      boxes.push({
+        nodeId: node.id,
+        left: Math.min(topLeft.x, bottomRight.x),
+        right: Math.max(topLeft.x, bottomRight.x),
+        top: Math.min(topLeft.y, bottomRight.y),
+        bottom: Math.max(topLeft.y, bottomRight.y),
+        width: Math.abs(bottomRight.x - topLeft.x),
+        height: Math.abs(bottomRight.y - topLeft.y)
+      });
+    }
+
+    return boxes;
+  }
+
   renderOverlayCanvas() {
     const overlayCanvas = this.ensureOverlayCanvas();
     const ctx = overlayCanvas.getContext('2d');
@@ -1991,6 +2216,7 @@ class WebGLNodeRenderer {
 
     this.renderLineGlowTrails(ctx);
     this.renderLineConnectionCaps(ctx);
+    this.renderStubBadges(ctx);
     this.renderButtonIcons(ctx);
     if (this.shouldRenderUserMarkerOverlay()) {
       this.renderUserTravelDot(ctx);
@@ -1999,8 +2225,193 @@ class WebGLNodeRenderer {
     if (this.mapDebugEnabled && this.nodes.size === 0) {
       this.renderEmptyStateOverlay(ctx);
     }
+    if (this.mapDebugEnabled && this.layoutDebugData) {
+      this.renderStarMapDebugOverlay(ctx);
+    }
 
     ctx.globalAlpha = 1;
+  }
+
+  renderStubBadges(ctx) {
+    const badgeNodes = Array.from(this.nodes.values()).filter((node) => (
+      node?.type === 'stub-badge'
+      && node.visible
+      && node.label
+      && node.data?.sourceNodeId
+    ));
+    if (badgeNodes.length < 1) return;
+    const starMapCenter = Array.from(this.nodes.values()).find((node) => node?.type === 'center' && node?.data?.starMapLayer);
+    const canvasRect = this.canvas?.getBoundingClientRect?.();
+    const scaleX = canvasRect?.width ? (this.canvas.width / canvasRect.width) : 1;
+    const scaleY = canvasRect?.height ? (this.canvas.height / canvasRect.height) : 1;
+    const rectsOverlap = (left, right) => (
+      left.left < right.right
+      && left.right > right.left
+      && left.top < right.bottom
+      && left.bottom > right.top
+    );
+    const toScreenRect = (rect) => ({
+      left: (rect.left - canvasRect.left) * scaleX,
+      right: (rect.right - canvasRect.left) * scaleX,
+      top: (rect.top - canvasRect.top) * scaleY,
+      bottom: (rect.bottom - canvasRect.top) * scaleY
+    });
+    const getActualTextRect = (labelEl) => {
+      if (!labelEl || !canvasRect) return null;
+      if (window.getComputedStyle(labelEl).display === 'none') return null;
+
+      const textLineEls = Array.from(labelEl.querySelectorAll('.node-label-line'));
+      const textRects = textLineEls
+        .map((lineEl) => {
+          const textNode = Array.from(lineEl.childNodes).find((node) => (
+            node.nodeType === Node.TEXT_NODE && String(node.textContent || '').trim()
+          ));
+          if (!textNode) return null;
+          const range = document.createRange();
+          range.selectNodeContents(textNode);
+          const rect = range.getBoundingClientRect();
+          range.detach?.();
+          if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+          return toScreenRect(rect);
+        })
+        .filter(Boolean);
+
+      if (textRects.length > 0) {
+        return textRects.reduce((acc, rect) => ({
+          left: Math.min(acc.left, rect.left),
+          right: Math.max(acc.right, rect.right),
+          top: Math.min(acc.top, rect.top),
+          bottom: Math.max(acc.bottom, rect.bottom)
+        }));
+      }
+
+      const fallbackRect = labelEl.getBoundingClientRect();
+      if (!fallbackRect || fallbackRect.width <= 0 || fallbackRect.height <= 0) return null;
+      const screenRect = toScreenRect(fallbackRect);
+      const insetX = Math.min(14, (screenRect.right - screenRect.left) * 0.16);
+      const insetY = Math.min(8, (screenRect.bottom - screenRect.top) * 0.18);
+      return {
+        left: screenRect.left + insetX,
+        right: screenRect.right - insetX,
+        top: screenRect.top + insetY,
+        bottom: screenRect.bottom - insetY
+      };
+    };
+
+    badgeNodes.forEach((badgeNode) => {
+      const sourceNode = this.nodes.get(badgeNode.data.sourceNodeId);
+      if (!sourceNode || !sourceNode.visible) return;
+      const badgeOpacityFactor = this.hoverFocusState.active ? 0.12 : 1;
+
+      const sourcePos = this.worldToScreen(sourceNode.x, sourceNode.y);
+      const screenRadius = Math.max(10, sourceNode.radius * sourceNode.scale * this.camera.zoom);
+      const normalizeVec = (x, y, fallback = { x: 1, y: -1 }) => {
+        const length = Math.hypot(x, y);
+        if (length <= 0.0001) return { ...fallback };
+        return { x: x / length, y: y / length };
+      };
+      const radial = normalizeVec(
+        sourceNode.x - (starMapCenter?.x || 0),
+        sourceNode.y - (starMapCenter?.y || 0),
+        { x: 1, y: -1 }
+      );
+      const tangentSign = radial.y <= 0 ? 1 : -1;
+      const corner = normalizeVec(
+        radial.x + (-radial.y) * 0.72 * tangentSign,
+        radial.y + radial.x * 0.72 * tangentSign,
+        { x: 0.76, y: -0.64 }
+      );
+      const badgeX = sourcePos.x + corner.x * (screenRadius * 0.62);
+      const badgeY = sourcePos.y + corner.y * (screenRadius * 0.62);
+
+      ctx.save();
+      ctx.globalAlpha = badgeOpacityFactor;
+      ctx.font = '600 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const pillText = String(badgeNode.label || '').trim();
+      const textWidth = ctx.measureText(pillText).width;
+      const pillWidth = textWidth + 10;
+      const pillHeight = 18;
+      const sourceLabelEl = this.labelElements.get(`node:${sourceNode.id}`);
+      const sourceLabelRect = getActualTextRect(sourceLabelEl);
+      let resolvedBadgeX = badgeX;
+      let resolvedBadgeY = badgeY;
+      if (sourceLabelRect) {
+        const step = Math.max(4, screenRadius * 0.14);
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          const badgeRect = {
+            left: resolvedBadgeX - pillWidth * 0.5 - 2,
+            right: resolvedBadgeX + pillWidth * 0.5 + 2,
+            top: resolvedBadgeY - pillHeight * 0.5 - 2,
+            bottom: resolvedBadgeY + pillHeight * 0.5 + 2
+          };
+          if (!rectsOverlap(badgeRect, sourceLabelRect)) break;
+          resolvedBadgeX += corner.x * step;
+          resolvedBadgeY += corner.y * step;
+        }
+      }
+      ctx.fillStyle = 'rgba(7, 13, 24, 0.92)';
+      ctx.beginPath();
+      ctx.roundRect(resolvedBadgeX - pillWidth / 2, resolvedBadgeY - pillHeight / 2, pillWidth, pillHeight, 9);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(147, 197, 253, 0.82)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#dbeafe';
+      ctx.fillText(pillText, resolvedBadgeX, resolvedBadgeY + 0.5);
+      ctx.restore();
+    });
+  }
+
+  renderStarMapDebugOverlay(ctx) {
+    const sectorPlan = this.layoutDebugData?.sectorPlan;
+    if (!sectorPlan || !Array.isArray(sectorPlan.sectors) || sectorPlan.sectors.length < 1) return;
+    const centerNode = Array.from(this.nodes.values()).find((node) => node?.type === 'center' && node?.data?.starMapLayer);
+    if (!centerNode) return;
+    const centerPos = this.worldToScreen(centerNode.x, centerNode.y);
+    const debugRadius = Math.max(this.canvas.width, this.canvas.height) * 0.42;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(125, 211, 252, 0.18)';
+    ctx.lineWidth = 1;
+    sectorPlan.sectors.forEach((sector) => {
+      const angle = Number(sector?.angle) || 0;
+      const endX = centerPos.x + Math.cos(angle) * debugRadius;
+      const endY = centerPos.y + Math.sin(angle) * debugRadius;
+      ctx.beginPath();
+      ctx.moveTo(centerPos.x, centerPos.y);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(191, 219, 254, 0.72)';
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(
+        `${sector.sectorIndex}:${Math.round((sector.area + sector.labelArea) / 100)}`,
+        centerPos.x + Math.cos(angle) * (debugRadius * 0.62),
+        centerPos.y + Math.sin(angle) * (debugRadius * 0.62)
+      );
+    });
+
+    const measured = this.layoutDebugData?.measuredLabelRefinement;
+    if (measured?.before && measured?.after) {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+      ctx.fillRect(12, 12, 310, 54);
+      ctx.fillStyle = '#dbeafe';
+      ctx.font = '12px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(
+        `label-pass total ${measured.before.total.toFixed(1)} -> ${measured.after.total.toFixed(1)}`,
+        20,
+        32
+      );
+      ctx.fillText(
+        `edgeLabel ${measured.before.edgeNearLabel.toFixed(1)} -> ${measured.after.edgeNearLabel.toFixed(1)}`,
+        20,
+        50
+      );
+    }
+    ctx.restore();
   }
 
   renderLineGlowTrails(ctx) {
@@ -2026,7 +2437,10 @@ class WebGLNodeRenderer {
       if (revealProgress <= 0.02) continue;
 
       const baseColor = line?.color || [0.66, 0.33, 0.97, 0.6];
-      const isHovered = this.hoveredLine?.line === line;
+      const lineHoverState = this.getLineHoverState(line);
+      const isFocused = lineHoverState === 'focus';
+      const isHovered = lineHoverState === 'hovered';
+      const isDimmed = lineHoverState === 'dim';
       const geometry = this.getCurvedLineGeometry(segment, line);
       if (!geometry) continue;
       const lineVariant = String(line?.lineVariant || '');
@@ -2034,13 +2448,13 @@ class WebGLNodeRenderer {
       const isSenseCross = lineVariant === 'sense-cross';
       const isDashedBridge = isSenseCross || lineVariant === 'cross-cluster' || lineVariant === 'title-bridge';
       const alphaScale = Math.min(fromNode.opacity, toNode.opacity)
-        * (Number(line?.glowOpacity) || (isHovered ? 0.34 : 0.22))
+        * (Number(line?.glowOpacity) || ((isFocused || isHovered) ? 0.34 : 0.22))
         * revealProgress
-        * (isHovered ? 1.18 : 1)
+        * (isFocused ? 1.72 : (isHovered ? 1.18 : (isDimmed ? 0.12 : 1)))
         * (isSenseTrunk ? 1.2 : isSenseCross ? 0.82 : 1);
       const glowStroke = this.buildLineGradient(ctx, geometry, baseColor, alphaScale);
-      const glowWidth = (Number(line?.glowWidth) || 6) * (isHovered ? 1.14 : 1) * (isSenseTrunk ? 1.12 : isSenseCross ? 0.88 : 1);
-      const coreWidth = Math.max(0.8, (Number(line?.lineWidth) || 1.5) * (isHovered ? 1.12 : 1) * (isSenseTrunk ? 1.12 : isSenseCross ? 0.86 : 1));
+      const glowWidth = (Number(line?.glowWidth) || 6) * (isFocused ? 1.22 : (isHovered ? 1.14 : 1)) * (isSenseTrunk ? 1.12 : isSenseCross ? 0.88 : 1);
+      const coreWidth = Math.max(0.8, (Number(line?.lineWidth) || 1.5) * (isFocused ? 1.2 : (isHovered ? 1.12 : 1)) * (isSenseTrunk ? 1.12 : isSenseCross ? 0.86 : 1));
 
       ctx.save();
       ctx.setLineDash(isDashedBridge ? (isSenseCross ? [5, 8] : [7, 6]) : []);
@@ -2058,7 +2472,7 @@ class WebGLNodeRenderer {
         baseColor,
         (Number(line?.lineOpacity) || 0.28)
           * revealProgress
-          * (isHovered ? 1.18 : 1)
+          * (isFocused ? 1.72 : (isHovered ? 1.18 : (isDimmed ? 0.12 : 1)))
           * (isSenseTrunk ? 1.08 : isSenseCross ? 0.78 : 1)
       );
       this.traceCurvedLine(ctx, geometry);
@@ -2159,7 +2573,9 @@ class WebGLNodeRenderer {
           this.hoveredButton.button.id === button.id;
         const isDisabled = !!button.disabled;
 
-        ctx.globalAlpha = node.opacity * (isDisabled ? 0.55 : 0.9) * revealProgress;
+        const nodeHoverState = this.getNodeHoverState(node);
+        const buttonOpacityFactor = nodeHoverState === 'dim' ? 0.22 : 1;
+        ctx.globalAlpha = node.opacity * (isDisabled ? 0.55 : 0.9) * revealProgress * buttonOpacityFactor;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
@@ -2218,24 +2634,27 @@ class WebGLNodeRenderer {
       if (minOpacity <= 0.08) continue;
 
       const color = line?.color || [0.66, 0.33, 0.97, 0.6];
-      const isHovered = this.hoveredLine?.line === line;
+      const lineHoverState = this.getLineHoverState(line);
+      const isFocused = lineHoverState === 'focus';
+      const isHovered = lineHoverState === 'hovered';
+      const isDimmed = lineHoverState === 'dim';
       const lineVariant = String(line?.lineVariant || '');
       const isSenseTrunk = lineVariant === 'sense-trunk';
       const capRadius = Math.max(2, Math.min(5.5, Math.min(
         this.getNodeScreenRadius(fromNode),
         this.getNodeScreenRadius(toNode)
-      ) * (isHovered ? 0.12 : isSenseTrunk ? 0.115 : 0.1)));
+      ) * (isFocused ? 0.128 : (isHovered ? 0.12 : isSenseTrunk ? 0.115 : 0.1))));
 
       const drawCap = (point) => {
         const glow = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, capRadius * 2.6);
-        glow.addColorStop(0, this.toCssRgba(color, minOpacity * (isHovered ? 0.96 : 0.78)));
+        glow.addColorStop(0, this.toCssRgba(color, minOpacity * (isFocused ? 1.12 : (isHovered ? 0.96 : (isDimmed ? 0.16 : 0.78)))));
         glow.addColorStop(1, this.toCssRgba(color, 0));
         ctx.fillStyle = glow;
         ctx.beginPath();
         ctx.arc(point.x, point.y, capRadius * 2.6, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = this.toCssRgba([1, 1, 1, 1], minOpacity * 0.28);
+        ctx.fillStyle = this.toCssRgba([1, 1, 1, 1], minOpacity * (isDimmed ? 0.08 : 0.28));
         ctx.beginPath();
         ctx.arc(point.x, point.y, capRadius * 0.55, 0, Math.PI * 2);
         ctx.fill();
@@ -2254,9 +2673,11 @@ class WebGLNodeRenderer {
     const baseColor = line?.color || [0.76, 0.84, 0.96, 0.4];
     const geometry = this.getCurvedLineGeometry(segment, line);
     if (!geometry) return;
+    const lineHoverState = this.getLineHoverState(line);
+    const lineOpacityFactor = lineHoverState === 'dim' ? 0.12 : (lineHoverState === 'focus' ? 1.18 : 1);
     const alphaScale = Math.max(
       0.1,
-      Math.min(1, fromNode.opacity * (Number(line?.glowOpacity) || 0.16) * revealProgress * 1.2)
+      Math.min(1, fromNode.opacity * (Number(line?.glowOpacity) || 0.16) * revealProgress * 1.2 * lineOpacityFactor)
     );
     const gradient = ctx.createLinearGradient(geometry.start.x, geometry.start.y, geometry.end.x, geometry.end.y);
     gradient.addColorStop(0, this.toCssRgba(baseColor, alphaScale));
@@ -2273,7 +2694,7 @@ class WebGLNodeRenderer {
     ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.lineWidth = Math.max(0.7, Number(line?.lineWidth) || 1.2);
-    ctx.strokeStyle = this.toCssRgba(baseColor, (Number(line?.lineOpacity) || 0.18) * revealProgress * 1.08);
+    ctx.strokeStyle = this.toCssRgba(baseColor, (Number(line?.lineOpacity) || 0.18) * revealProgress * 1.08 * lineOpacityFactor);
     this.traceCurvedLine(ctx, geometry);
     ctx.stroke();
     ctx.restore();
@@ -2281,13 +2702,19 @@ class WebGLNodeRenderer {
     const stubCount = Math.max(0, Number(line?.stubCount) || 0);
     if (stubCount <= 0) return;
 
+    const badgeNode = line?.badgeNodeId ? this.nodes.get(line.badgeNodeId) : null;
     const dx = geometry.end.x - geometry.control.x;
     const dy = geometry.end.y - geometry.control.y;
     const length = Math.hypot(dx, dy) || 1;
-    const labelX = geometry.end.x - (dx / length) * 18;
-    const labelY = geometry.end.y - (dy / length) * 18;
+    const labelX = badgeNode
+      ? this.worldToScreen(badgeNode.x, badgeNode.y).x
+      : (geometry.end.x - (dx / length) * 18);
+    const labelY = badgeNode
+      ? this.worldToScreen(badgeNode.x, badgeNode.y).y
+      : (geometry.end.y - (dy / length) * 18);
 
     ctx.save();
+    ctx.globalAlpha = lineOpacityFactor;
     ctx.font = '600 11px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';

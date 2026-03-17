@@ -16,7 +16,10 @@ import {
   buildStarMapStubVisual,
   estimateStarMapLabelMetrics
 } from './starMap/starMapLayoutHelpers';
-import { solveStarMapConstellationLayout } from './starMap/starMapForceLayout';
+import {
+  solveStarMapConstellationLayout,
+  refineStarMapLayoutWithMeasuredLabels
+} from './starMap/starMapForceLayout';
 
 class LayoutManager {
   constructor(width, height) {
@@ -43,6 +46,39 @@ class LayoutManager {
     this.height = height;
     this.centerX = width / 2;
     this.centerY = height / 2;
+  }
+
+  buildStarMapLayoutKey(graph = {}, layer = STAR_MAP_LAYER.TITLE) {
+    const centerKey = getStarMapCenterKey(graph, layer);
+    const graphNodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+    const graphEdges = Array.isArray(graph?.edges) ? graph.edges : [];
+    const boundaryStubs = Array.isArray(graph?.boundaryStubs) ? graph.boundaryStubs : [];
+    const nodeSignature = graphNodes
+      .map((node) => getStarMapNodeKey(node, layer))
+      .filter(Boolean)
+      .sort()
+      .join(',');
+    const edgeSignature = graphEdges
+      .map((edge) => String(edge?.edgeId || ''))
+      .filter(Boolean)
+      .sort()
+      .join(',');
+    const stubSignature = boundaryStubs
+      .map((stub) => String(stub?.stubId || ''))
+      .filter(Boolean)
+      .sort()
+      .join(',');
+    return [
+      layer,
+      centerKey,
+      this.width,
+      this.height,
+      graphNodes.length,
+      graphEdges.length,
+      nodeSignature,
+      edgeSignature,
+      stubSignature
+    ].join('|');
   }
 
   calculateHoneycombSectionLayout(nodes = [], options = {}) {
@@ -539,6 +575,7 @@ class LayoutManager {
       const nodeType = layer === STAR_MAP_LAYER.TITLE ? 'title' : 'sense';
       group.push({
         key,
+        level,
         rawNode: node,
         label: nodeLabel,
         labelMetrics,
@@ -553,7 +590,8 @@ class LayoutManager {
     const levels = Array.from(levelGroups.keys()).sort((a, b) => a - b);
     // starMap 不再把 BFS level 直接投影成硬圆环。
     // 这里让 level 只作为“软半径带”约束，再用轻量迭代求解把标签盒也纳入碰撞体。
-    const { bodyByKey, bounds } = solveStarMapConstellationLayout({
+    const layoutKey = this.buildStarMapLayoutKey(graph, layer);
+    const { bodyByKey, badgeBodyByStubId, bounds, debug } = solveStarMapConstellationLayout({
       width: this.width,
       height: this.height,
       center: {
@@ -570,7 +608,8 @@ class LayoutManager {
       levels,
       nodesByLevel: levelGroups,
       graphMeta,
-      labelMetricsByKey
+      labelMetricsByKey,
+      boundaryStubs
     });
     levels.forEach((level) => {
       const nodes = levelGroups.get(level) || [];
@@ -676,6 +715,36 @@ class LayoutManager {
       const sourceNode = layoutNodeByKey.get(sourceKey);
       const sourceLayoutId = nodeLayoutIdByKey.get(sourceKey);
       if (!sourceNode || !sourceLayoutId) return;
+      const stubId = String(stub?.stubId || `${sourceKey}:${index}`);
+      const badgeBody = badgeBodyByStubId?.get?.(stubId);
+      const hiddenCount = Math.max(0, Number(stub?.hiddenNeighborCount) || 0);
+      if (badgeBody && hiddenCount > 0) {
+        const badgeLayoutId = `stub-badge-${stubId}`;
+        layout.nodes.push({
+          id: badgeLayoutId,
+          x: sourceNode.x,
+          y: sourceNode.y,
+          radius: Math.max(0, Number(badgeBody.radius) || 0),
+          scale: 1,
+          opacity: 0,
+          type: 'stub-badge',
+          label: badgeBody.label || `+${hiddenCount}`,
+          labelPlacement: 'center',
+          labelOffsetY: 0,
+          labelVisible: false,
+          labelWidthHint: badgeBody.labelWidthHint || 24,
+          labelHeightHint: badgeBody.labelHeightHint || 18,
+          data: {
+            starMapLayer: layer,
+            isStubBadge: true,
+            stubId,
+            sourceNodeId: sourceLayoutId,
+            sourceNodeKey: sourceKey
+          },
+          visible: true
+        });
+        return;
+      }
 
       let dirX = sourceNode.x - centerX;
       let dirY = sourceNode.y - centerY;
@@ -703,10 +772,10 @@ class LayoutManager {
         dirY /= length;
       }
 
-      const stubDistance = Math.max(60, Math.min(118, 68 + (Number(stub?.hiddenNeighborCount) || 0) * 6));
+      const stubDistance = Math.max(60, Math.min(118, 68 + hiddenCount * 6));
       const anchorId = `stub-anchor-${sourceKey}-${index}`;
       const stubVisual = buildStarMapStubVisual({
-        hiddenNeighborCount: Number(stub?.hiddenNeighborCount) || 0,
+        hiddenNeighborCount: hiddenCount,
         sourceLevel: Number(stub?.sourceLevel || 0)
       });
       layout.nodes.push({
@@ -715,7 +784,7 @@ class LayoutManager {
         y: sourceNode.y + dirY * stubDistance,
         radius: 0,
         scale: 1,
-        opacity: 1,
+        opacity: 0,
         type: 'stub-anchor',
         label: '',
         labelVisible: false,
@@ -732,15 +801,38 @@ class LayoutManager {
         color: layer === STAR_MAP_LAYER.TITLE ? [0.66, 0.83, 0.99, 0.42] : [0.73, 0.84, 1, 0.42],
         isStub: true,
         noCaps: true,
-        stubCount: Math.max(0, Number(stub?.hiddenNeighborCount) || 0),
+        stubCount: hiddenCount,
         stubMeta: stub,
         ...stubVisual
       });
     });
 
     layout.bounds = bounds;
+    layout.meta = {
+      type: 'starMap',
+      layer,
+      layoutKey,
+      centerKey,
+      nodeCount: layout.nodes.length,
+      lineCount: layout.lines.length
+    };
+    layout.debug = {
+      graphMeta: {
+        centerKey,
+        layer,
+        levelCount: levels.length
+      },
+      sectorPlan: debug?.sectorPlan || null
+    };
 
     return layout;
+  }
+
+  refineStarMapLayoutWithMeasuredLabels(layout = {}, measuredLabelBoxes = []) {
+    return refineStarMapLayoutWithMeasuredLabels({
+      layout,
+      measuredLabelBoxes
+    });
   }
 
   /**
