@@ -83,6 +83,71 @@
         inset 0 0 64px rgba(86, 139, 201, 0.08);
 }
 
+.star-map-zoom-rail {
+    position: absolute;
+    left: 1rem;
+    top: 50%;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 188px;
+    transform: translateY(-50%);
+    border-radius: 18px;
+    border: 1px solid rgba(173, 208, 255, 0.14);
+    background:
+        linear-gradient(180deg, rgba(11, 17, 30, 0.82), rgba(5, 9, 18, 0.72)),
+        rgba(5, 9, 18, 0.66);
+    box-shadow: 0 18px 32px rgba(2, 6, 23, 0.24);
+    backdrop-filter: blur(14px);
+}
+
+.star-map-zoom-rail input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 132px;
+    height: 18px;
+    margin: 0;
+    transform: rotate(-90deg);
+    background: transparent;
+    cursor: pointer;
+}
+
+.star-map-zoom-rail input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(82, 124, 170, 0.34), rgba(188, 226, 255, 0.92));
+}
+
+.star-map-zoom-rail input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border: 1px solid rgba(220, 242, 255, 0.88);
+    border-radius: 50%;
+    background: linear-gradient(180deg, #f3fbff, #8ec5ff);
+    box-shadow: 0 0 0 4px rgba(117, 185, 255, 0.16);
+}
+
+.star-map-zoom-rail input[type="range"]::-moz-range-track {
+    height: 4px;
+    border: 0;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(82, 124, 170, 0.34), rgba(188, 226, 255, 0.92));
+}
+
+.star-map-zoom-rail input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: 1px solid rgba(220, 242, 255, 0.88);
+    border-radius: 50%;
+    background: linear-gradient(180deg, #f3fbff, #8ec5ff);
+    box-shadow: 0 0 0 4px rgba(117, 185, 255, 0.16);
+}
+
 .star-map-mode-badge {
     position: absolute;
     right: 1.1rem;
@@ -101,6 +166,18 @@
     box-shadow: 0 18px 32px rgba(2, 6, 23, 0.24);
     backdrop-filter: blur(14px);
     pointer-events: none;
+}
+
+@media (max-width: 960px) {
+    .star-map-zoom-rail {
+        left: 0.72rem;
+        width: 38px;
+        height: 154px;
+    }
+
+    .star-map-zoom-rail input[type="range"] {
+        width: 108px;
+    }
 }
 
 .star-map-mode-badge span:first-child {

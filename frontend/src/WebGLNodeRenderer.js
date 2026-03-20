@@ -589,10 +589,20 @@ class WebGLNodeRenderer {
     return this.sceneType === 'titleDetail';
   }
 
-  setCameraOffset(offsetX, offsetY) {
+  setCameraOffset(offsetX, offsetY, options = {}) {
     this.camera.offsetX = offsetX;
     this.camera.offsetY = offsetY;
-    this.render();
+    if (options?.render !== false) {
+      this.render();
+    }
+  }
+
+  setCameraZoom(zoom = 1, options = {}) {
+    const nextZoom = Number.isFinite(Number(zoom)) ? Math.max(0.1, Number(zoom)) : 1;
+    this.camera.zoom = nextZoom;
+    if (options?.render !== false) {
+      this.render();
+    }
   }
 
   // 让真实中心节点在跨层 ghost 落场时延迟提亮，避免硬重影。

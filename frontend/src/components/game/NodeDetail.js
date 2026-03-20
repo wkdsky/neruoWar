@@ -10,6 +10,8 @@ const NodeDetail = ({
     starMapNodeCount = 0,
     starMapNodeLimit = 50,
     isStarMapLoading = false,
+    starMapZoomState = null,
+    onStarMapZoomChange,
     titleRelatedDomainCount = 0,
     navigationPath, 
     onNavigate, 
@@ -32,6 +34,13 @@ const NodeDetail = ({
     const searchBarRef = useRef(null);
     const currentNodeId = String(node?._id || '');
     const isStarMapMode = knowledgeMainViewMode === 'starMap';
+    const starMapZoomValue = Math.max(
+        Number(starMapZoomState?.min) || 0.22,
+        Math.min(
+            Number(starMapZoomState?.max) || 1.12,
+            Number(starMapZoomState?.value) || 1
+        )
+    );
     const panelTitle = useMemo(() => {
         const nodeName = typeof node?.name === 'string' && node.name.trim() ? node.name.trim() : '未命名知识域';
         if (detailViewMode !== 'sense') return isStarMapMode ? `${nodeName} · 星盘` : nodeName;
@@ -299,9 +308,21 @@ const NodeDetail = ({
                  </div>
 
                  {isStarMapMode && (
-                    <div className="star-map-mode-badge">
-                        <span>星盘模式</span>
-                        <span>{isStarMapLoading ? '加载中' : `滚轮前推返回主视图 · 上限 ${Math.max(0, Number(starMapNodeLimit) || 0)}`}</span>
+                    <div className="star-map-zoom-rail" aria-label="星盘缩放">
+                        <input
+                            type="range"
+                            min={Number(starMapZoomState?.min) || 0.22}
+                            max={Number(starMapZoomState?.max) || 1.12}
+                            step="0.01"
+                            value={starMapZoomValue}
+                            onChange={(event) => {
+                                if (typeof onStarMapZoomChange === 'function') {
+                                    onStarMapZoomChange(event.target.value);
+                                }
+                            }}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            aria-label="星盘缩放比例"
+                        />
                     </div>
                  )}
 

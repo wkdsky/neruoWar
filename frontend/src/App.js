@@ -75,6 +75,25 @@ import {
 const PRIMARY_NAVIGATION_TIMEOUT_MS = 10000;
 const PRIMARY_NAVIGATION_RETRY_DELAYS_MS = [250, 700];
 const clampRevealProgress = (value) => Math.max(0.04, Math.min(1, Number(value) || 0));
+const createDefaultStarMapZoomState = () => ({
+    min: 0.22,
+    max: 1.12,
+    value: 1,
+    defaultValue: 1
+});
+const normalizeStarMapZoomState = (state = {}) => {
+    const min = Number.isFinite(Number(state?.min)) ? Number(state.min) : 0.22;
+    const max = Number.isFinite(Number(state?.max)) ? Number(state.max) : 1.12;
+    const safeMax = Math.max(min, max);
+    const defaultValue = Number.isFinite(Number(state?.defaultValue)) ? Number(state.defaultValue) : 1;
+    const value = Number.isFinite(Number(state?.value)) ? Number(state.value) : defaultValue;
+    return {
+        min,
+        max: safeMax,
+        defaultValue: Math.max(min, Math.min(safeMax, defaultValue)),
+        value: Math.max(min, Math.min(safeMax, value))
+    };
+};
 const createIdleHomeTransition = () => ({
     runId: 0,
     sourceRect: null,
@@ -274,6 +293,7 @@ const App = () => {
     const [currentStarMapLimit, setCurrentStarMapLimit] = useState(DEFAULT_STAR_MAP_LIMIT);
     const [currentStarMapLayer, setCurrentStarMapLayer] = useState('');
     const [isStarMapLoading, setIsStarMapLoading] = useState(false);
+    const [starMapZoomState, setStarMapZoomState] = useState(createDefaultStarMapZoomState);
     const [nodeInfoModalTarget, setNodeInfoModalTarget] = useState(null);
     const [titleRelationInfo, setTitleRelationInfo] = useState(null);
     const [senseSelectorSourceNode, setSenseSelectorSourceNode] = useState(null);
@@ -342,6 +362,33 @@ const App = () => {
         controller: null,
         requestKey: ''
     });
+
+    const syncStarMapZoomState = useCallback((nextState = null) => {
+        const resolved = nextState
+            ? normalizeStarMapZoomState(nextState)
+            : normalizeStarMapZoomState(sceneManagerRef.current?.getStarMapZoomState?.());
+        setStarMapZoomState((prev) => {
+            if (
+                prev.min === resolved.min
+                && prev.max === resolved.max
+                && prev.value === resolved.value
+                && prev.defaultValue === resolved.defaultValue
+            ) {
+                return prev;
+            }
+            return resolved;
+        });
+        return resolved;
+    }, []);
+
+    const handleStarMapZoomChange = useCallback((nextValue) => {
+        const sceneManager = sceneManagerRef.current;
+        if (!sceneManager?.setStarMapZoom) return;
+        const resolved = sceneManager.setStarMapZoom(nextValue);
+        if (resolved) {
+            syncStarMapZoomState(resolved);
+        }
+    }, [syncStarMapZoomState]);
     const [knowledgeHeaderOffset, setKnowledgeHeaderOffset] = useState(92);
     const [isSenseArticleHeaderPinned, setIsSenseArticleHeaderPinned] = useState(false);
 
@@ -790,6 +837,9 @@ const App = () => {
 
             // 创建场景管理器
             const sceneManager = new SceneManager(canvas);
+            sceneManager.onStarMapViewportChange = (nextState) => {
+                syncStarMapZoomState(nextState);
+            };
 
             // 设置点击回调
             sceneManager.onNodeClick = (node) => {
@@ -898,7 +948,7 @@ const App = () => {
             console.error('WebGL初始化失败:', error);
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [view]);
+    }, [syncStarMapZoomState, view]);
 
     // 更新按钮点击回调（确保获取最新的当前主视角节点）
     useEffect(() => {
@@ -4482,6 +4532,8 @@ const App = () => {
                     nodeStarMapData={nodeStarMapData}
                     currentStarMapLimit={currentStarMapLimit}
                     isStarMapLoading={isStarMapLoading}
+                    starMapZoomState={starMapZoomState}
+                    onStarMapZoomChange={handleStarMapZoomChange}
                     titleRelationInfo={titleRelationInfo}
                     onCloseTitleRelationInfo={() => setTitleRelationInfo(null)}
                     searchQuery={homeSearchQuery}

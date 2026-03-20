@@ -27,11 +27,13 @@ class SceneManager {
     this.onSceneChange = null;
     this.onButtonClick = null; // 按钮点击回调
     this.onLineClick = null; // 连线点击回调
+    this.onStarMapViewportChange = null;
 
     // 预览模式状态
     this.isInPreviewMode = false;
     this.previewConfig = null;
     this.centerNodeButtonContext = {};
+    this.preferredStarMapZoom = 1;
 
     // 绑定点击事件
     this.renderer.onClick = (node) => {
@@ -60,24 +62,86 @@ class SceneManager {
   }
 
   resetCameraToLayoutCenter() {
+    this.renderer.setCameraZoom(1, { render: false });
     this.renderer.setCameraOffset(0, 0);
   }
 
-  applyStarMapFraming(layout = this.currentLayout) {
+  getStarMapZoomBounds(layout = this.currentLayout) {
+    const fallback = {
+      min: 0.5,
+      max: 1.12,
+      defaultValue: 1
+    };
+    if (layout?.meta?.type !== 'starMap') {
+      return fallback;
+    }
+
+    const bounds = layout?.bounds;
+    const canvasWidth = Math.max(1, Number(this.canvas?.width) || Number(this.layout?.width) || 1);
+    const canvasHeight = Math.max(1, Number(this.canvas?.height) || Number(this.layout?.height) || 1);
+    const paddedWidth = Math.max(1, canvasWidth - 240);
+    const paddedHeight = Math.max(1, canvasHeight - 180);
+    const boundsWidth = Math.max(1, Number(bounds?.width) || 1);
+    const boundsHeight = Math.max(1, Number(bounds?.height) || 1);
+    const fitZoom = Math.min(paddedWidth / boundsWidth, paddedHeight / boundsHeight);
+
+    return {
+      min: Math.max(0.22, Math.min(1, fitZoom)),
+      max: 1.12,
+      defaultValue: 1
+    };
+  }
+
+  getStarMapZoomState(layout = this.currentLayout) {
+    const bounds = this.getStarMapZoomBounds(layout);
+    const value = Math.max(bounds.min, Math.min(bounds.max, Number(this.renderer?.camera?.zoom) || bounds.defaultValue));
+    return {
+      ...bounds,
+      value
+    };
+  }
+
+  emitStarMapViewportChange(layout = this.currentLayout) {
+    if (typeof this.onStarMapViewportChange !== 'function') return;
+    this.onStarMapViewportChange(this.getStarMapZoomState(layout));
+  }
+
+  resolveStarMapZoom(layout = this.currentLayout, requestedZoom = this.preferredStarMapZoom) {
+    const bounds = this.getStarMapZoomBounds(layout);
+    const normalizedZoom = Number.isFinite(Number(requestedZoom)) ? Number(requestedZoom) : bounds.defaultValue;
+    return Math.max(bounds.min, Math.min(bounds.max, normalizedZoom));
+  }
+
+  applyStarMapFraming(layout = this.currentLayout, requestedZoom = this.preferredStarMapZoom) {
     const bounds = layout?.bounds;
     if (!bounds) {
       this.resetCameraToLayoutCenter();
       return;
     }
 
+    const zoom = this.resolveStarMapZoom(layout, requestedZoom);
+    this.preferredStarMapZoom = zoom;
+
     const contentCenterX = bounds.left + bounds.width * 0.5;
     const contentCenterY = bounds.top + bounds.height * 0.5;
     const viewportCenterX = this.layout.centerX;
     const viewportCenterY = this.layout.centerY + 42;
+    this.renderer.setCameraZoom(zoom, { render: false });
     this.renderer.setCameraOffset(
-      viewportCenterX - contentCenterX,
-      viewportCenterY - contentCenterY
+      viewportCenterX - contentCenterX * zoom,
+      viewportCenterY - contentCenterY * zoom,
+      { render: false }
     );
+    this.renderer.render();
+    this.emitStarMapViewportChange(layout);
+  }
+
+  setStarMapZoom(zoom = this.preferredStarMapZoom, layout = this.currentLayout) {
+    if (layout?.meta?.type !== 'starMap') return null;
+    const resolvedZoom = this.resolveStarMapZoom(layout, zoom);
+    this.preferredStarMapZoom = resolvedZoom;
+    this.applyStarMapFraming(layout, resolvedZoom);
+    return this.getStarMapZoomState(layout);
   }
 
   cancelPendingStarMapMeasuredLabelPass() {
@@ -179,6 +243,14 @@ class SceneManager {
    * 显示首页场景
    */
   async showHome(rootNodes, featuredNodes, searchResults = []) {
+    const {
+      version: transitionVersion
+    } = this.beginLayoutTransition({
+      cancelAnimations: true,
+      cancelMeasuredLabelPass: true,
+      restoreStableLayout: true
+    });
+
     this.renderer.setSceneType('home');
     this.renderer.setCameraPanEnabled(false);
     this.resetCameraToLayoutCenter();
@@ -197,16 +269,19 @@ class SceneManager {
 
     if (this.currentScene === null) {
       // 首次加载：直接设置
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
       this.setLayout(newLayout);
       this.currentScene = 'home';
     } else if (this.currentScene === 'home') {
       // 已在首页：平滑过渡 (搜索切换)
-      await this.transitionTo(newLayout);
+      await this.transitionTo(newLayout, 500, transitionVersion);
     } else {
       // 从其他场景返回首页：淡出当前，淡入新场景
-      await this.fadeTransition(newLayout);
-      this.currentScene = 'home';
+      await this.fadeTransition(newLayout, 400, transitionVersion);
     }
+
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
+    this.currentScene = 'home';
 
     if (this.onSceneChange) {
       this.onSceneChange('home');
@@ -217,6 +292,14 @@ class SceneManager {
    * 显示节点详情场景
    */
   async showNodeDetail(centerNode, parentNodes, childNodes, clickedNode = null, buttonContext = {}) {
+    const {
+      version: transitionVersion
+    } = this.beginLayoutTransition({
+      cancelAnimations: true,
+      cancelMeasuredLabelPass: true,
+      restoreStableLayout: true
+    });
+
     this.renderer.setSceneType('nodeDetail');
     this.renderer.setCameraPanEnabled(false);
     this.resetCameraToLayoutCenter();
@@ -236,6 +319,7 @@ class SceneManager {
 
     // 如果当前场景没有节点或者是第一次加载，直接设置布局
     if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
       this.setLayout(newLayout);
       this.setupCenterNodeButtons(centerNode, buttonContext);
       this.currentScene = 'nodeDetail';
@@ -248,14 +332,16 @@ class SceneManager {
 
     if (this.currentScene === 'home' && clickedNode) {
       // 从首页点击节点：特殊过渡动画
-      await this.clickTransition(clickedNode, newLayout);
+      await this.clickTransition(clickedNode, newLayout, 800, transitionVersion);
     } else if (this.currentScene === 'nodeDetail') {
       // 节点详情之间切换
-      await this.nodeToNodeTransition(clickedNode, newLayout);
+      await this.nodeToNodeTransition(clickedNode, newLayout, 700, transitionVersion);
     } else {
       // 其他情况：直接设置布局
       this.setLayout(newLayout);
     }
+
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
     // 设置中心节点的操作按钮
     this.setupCenterNodeButtons(centerNode, buttonContext);
@@ -272,6 +358,14 @@ class SceneManager {
    * 显示标题主视角场景
    */
   async showTitleDetail(centerNode, graphNodes = [], graphEdges = [], levelByNodeId = {}, clickedNode = null, buttonContext = {}) {
+    const {
+      version: transitionVersion
+    } = this.beginLayoutTransition({
+      cancelAnimations: true,
+      cancelMeasuredLabelPass: true,
+      restoreStableLayout: true
+    });
+
     this.renderer.setSceneType('titleDetail');
     this.renderer.setCameraPanEnabled(false);
     this.resetCameraToLayoutCenter();
@@ -289,6 +383,7 @@ class SceneManager {
     };
 
     if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
       this.setLayout(newLayout);
       this.setupCenterNodeButtons(centerNode, buttonContext);
       this.currentScene = 'titleDetail';
@@ -300,12 +395,14 @@ class SceneManager {
     }
 
     if (this.currentScene === 'home' && clickedNode) {
-      await this.clickTransition(clickedNode, newLayout);
+      await this.clickTransition(clickedNode, newLayout, 800, transitionVersion);
     } else if (this.currentScene === 'titleDetail') {
-      await this.nodeToNodeTransition(clickedNode, newLayout);
+      await this.nodeToNodeTransition(clickedNode, newLayout, 700, transitionVersion);
     } else {
-      await this.fadeTransition(newLayout);
+      await this.fadeTransition(newLayout, 400, transitionVersion);
     }
+
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
     this.setupCenterNodeButtons(centerNode, buttonContext);
     this.currentScene = 'titleDetail';
@@ -623,7 +720,8 @@ class SceneManager {
   /**
    * 点击节点过渡动画 (从首页到节点详情)
    */
-  async clickTransition(clickedNode, newLayout, duration = 800) {
+  async clickTransition(clickedNode, newLayout, duration = 800, transitionVersion = null) {
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     const transitions = this.layout.calculateClickTransition(
       clickedNode,
       this.currentLayout,
@@ -636,6 +734,7 @@ class SceneManager {
         this.renderer.animateNode(t.id, t.to, duration * 0.3, 'easeInCubic')
       )
     );
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
     // 移除淡出的节点
     transitions.exit.forEach(t => this.renderer.removeNode(t.id));
@@ -644,6 +743,7 @@ class SceneManager {
     if (transitions.special) {
       const t = transitions.special;
       await this.renderer.animateNode(t.id, t.to, duration * 0.5, 'easeOutCubic');
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
       // 重命名节点ID (从 root-xxx 到 center-xxx)
       const centerNode = newLayout.nodes.find(n => n.type === 'center');
@@ -663,12 +763,19 @@ class SceneManager {
 
     // 阶段3: 母域和子域节点依次出现 (300ms，错开时间)
     const enterAnimations = transitions.enter.map((t, index) => {
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) {
+        return Promise.resolve();
+      }
       // 添加节点
       this.renderer.setNode(t.id, t.from);
 
       // 延迟进入
       return new Promise(resolve => {
-        setTimeout(() => {
+        this.scheduleTransitionTimeout(() => {
+          if (!this.isLayoutTransitionCurrent(transitionVersion)) {
+            resolve();
+            return;
+          }
           this.renderer.animateNode(t.id, t.to, duration * 0.4, 'easeOutBack')
             .then(resolve);
         }, index * 60); // 每个节点延迟60ms
@@ -676,6 +783,7 @@ class SceneManager {
     });
 
     await Promise.all(enterAnimations);
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
     this.currentLayout = newLayout;
 
