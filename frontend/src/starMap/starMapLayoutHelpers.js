@@ -1,5 +1,6 @@
 import {
   STAR_MAP_LAYER,
+  getStarMapCenterKey,
   getStarMapNodeKey
 } from './starMapHelpers';
 
@@ -243,6 +244,87 @@ export const estimateStarMapLabelMetrics = (label = '') => {
   };
 };
 
+const getEdgeEndpointKeys = (edge = {}, layer = STAR_MAP_LAYER.TITLE) => {
+  const fromKey = layer === STAR_MAP_LAYER.SENSE
+    ? String(edge?.fromVertexKey || '')
+    : String(edge?.nodeAId || '');
+  const toKey = layer === STAR_MAP_LAYER.SENSE
+    ? String(edge?.toVertexKey || '')
+    : String(edge?.nodeBId || '');
+  return { fromKey, toKey };
+};
+
+export const buildStarMapShortestHopLevels = (graph = {}, layer = STAR_MAP_LAYER.TITLE) => {
+  const centerKey = getStarMapCenterKey(graph, layer);
+  const graphNodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const graphEdges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const fallbackLevels = layer === STAR_MAP_LAYER.SENSE
+    ? (graph?.levelByVertexKey || {})
+    : (graph?.levelByNodeId || {});
+  const nodeKeys = new Set();
+  const adjacency = new Map();
+
+  const ensureBucket = (key) => {
+    if (!adjacency.has(key)) {
+      adjacency.set(key, new Set());
+    }
+    return adjacency.get(key);
+  };
+
+  graphNodes.forEach((node) => {
+    const key = getStarMapNodeKey(node, layer);
+    if (!key) return;
+    nodeKeys.add(key);
+    ensureBucket(key);
+  });
+
+  if (centerKey) {
+    nodeKeys.add(centerKey);
+    ensureBucket(centerKey);
+  }
+
+  graphEdges.forEach((edge) => {
+    const { fromKey, toKey } = getEdgeEndpointKeys(edge, layer);
+    if (!fromKey || !toKey || fromKey === toKey) return;
+    if (!nodeKeys.has(fromKey) || !nodeKeys.has(toKey)) return;
+    ensureBucket(fromKey).add(toKey);
+    ensureBucket(toKey).add(fromKey);
+  });
+
+  const levelByKey = {};
+  if (centerKey && nodeKeys.has(centerKey)) {
+    const queue = [centerKey];
+    levelByKey[centerKey] = 0;
+    for (let head = 0; head < queue.length; head += 1) {
+      const currentKey = queue[head];
+      const currentLevel = Number(levelByKey[currentKey] || 0);
+      const neighbors = Array.from(adjacency.get(currentKey) || []).sort();
+      neighbors.forEach((neighborKey) => {
+        if (Number.isFinite(levelByKey[neighborKey])) return;
+        levelByKey[neighborKey] = currentLevel + 1;
+        queue.push(neighborKey);
+      });
+    }
+  }
+
+  const reachedLevels = Object.values(levelByKey)
+    .filter((value) => Number.isFinite(value))
+    .map((value) => Number(value));
+  const fallbackBase = reachedLevels.length > 0 ? Math.max(...reachedLevels) + 1 : 1;
+
+  Array.from(nodeKeys)
+    .sort()
+    .forEach((key) => {
+      if (Number.isFinite(levelByKey[key])) return;
+      const rawLevel = Number(fallbackLevels?.[key]);
+      levelByKey[key] = Number.isFinite(rawLevel) && rawLevel > 0
+        ? Math.max(1, Math.floor(rawLevel))
+        : fallbackBase;
+    });
+
+  return levelByKey;
+};
+
 export const buildStarMapGraphMeta = (graph = {}, layer = STAR_MAP_LAYER.TITLE, levelByKey = {}) => {
   const graphNodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   const graphEdges = Array.isArray(graph?.edges) ? graph.edges : [];
@@ -272,12 +354,7 @@ export const buildStarMapGraphMeta = (graph = {}, layer = STAR_MAP_LAYER.TITLE, 
   });
 
   graphEdges.forEach((edge) => {
-    const fromKey = layer === STAR_MAP_LAYER.SENSE
-      ? String(edge?.fromVertexKey || '')
-      : String(edge?.nodeAId || '');
-    const toKey = layer === STAR_MAP_LAYER.SENSE
-      ? String(edge?.toVertexKey || '')
-      : String(edge?.nodeBId || '');
+    const { fromKey, toKey } = getEdgeEndpointKeys(edge, layer);
     if (!fromKey || !toKey || fromKey === toKey) return;
     ensureSet(adjacency, fromKey).add(toKey);
     ensureSet(adjacency, toKey).add(fromKey);

@@ -2303,6 +2303,63 @@ const App = () => {
         return 'jump';
     };
 
+    const appendNavigationTrailItem = (node, relation = 'jump', options = {}) => {
+        const mode = options?.mode === 'title' ? 'title' : 'sense';
+        setNavigationPath((prevPath) => {
+            const safePath = Array.isArray(prevPath) && prevPath.length > 0
+                ? prevPath
+                : createHomeNavigationPath();
+            const targetNavItem = buildNavigationTrailItem(node, relation, { mode });
+            if (!targetNavItem) return safePath;
+
+            const duplicateIndex = safePath.findIndex((item, index) => (
+                index > 0
+                && item?.type === 'node'
+                && normalizeObjectId(item?.nodeId) === targetNavItem.nodeId
+            ));
+            if (duplicateIndex >= 0) {
+                return [
+                    ...safePath.slice(0, duplicateIndex),
+                    targetNavItem
+                ];
+            }
+
+            return [...safePath, targetNavItem];
+        });
+    };
+
+    const replaceNavigationPathAtHistoryIndex = (historyIndex, node, options = {}) => {
+        const mode = options?.mode === 'title' ? 'title' : 'sense';
+        setNavigationPath((prevPath) => {
+            const safePath = Array.isArray(prevPath) && prevPath.length > 0
+                ? prevPath
+                : createHomeNavigationPath();
+            const boundedIndex = Number.isInteger(historyIndex)
+                ? Math.max(0, Math.min(historyIndex, safePath.length - 1))
+                : -1;
+            if (boundedIndex < 0) return safePath;
+
+            const nextPath = safePath.slice(0, boundedIndex + 1);
+            const lastHistory = nextPath[nextPath.length - 1];
+            if (lastHistory?.type !== 'node') {
+                return nextPath;
+            }
+
+            const nextItem = buildNavigationTrailItem(node, lastHistory.relation, { mode });
+            return [
+                ...nextPath.slice(0, -1),
+                {
+                    ...lastHistory,
+                    mode,
+                    senseId: mode === 'sense'
+                        ? (typeof node?.activeSenseId === 'string' ? node.activeSenseId : (lastHistory.senseId || ''))
+                        : '',
+                    label: nextItem?.label || lastHistory.label
+                }
+            ];
+        });
+    };
+
     const formatTravelSeconds = (seconds) => {
         if (!Number.isFinite(seconds) || seconds <= 0) return '0 秒';
         const rounded = Math.round(seconds);
@@ -2733,7 +2790,7 @@ const App = () => {
 
         const request = beginStarMapRequest(`title:${normalizedNodeId}`);
         const requestedLimit = Number.isFinite(Number(options?.limit))
-            ? Math.max(10, Math.min(150, Number(options.limit)))
+            ? Math.max(10, Math.min(200, Number(options.limit)))
             : null;
         const query = requestedLimit ? `?limit=${requestedLimit}` : '';
         setIsStarMapLoading(true);
@@ -2765,6 +2822,14 @@ const App = () => {
 
             setTitleRelationInfo(null);
             setIsSenseSelectorVisible(false);
+            if (options?.syncDetailState) {
+                setCurrentTitleDetail(centerNode);
+                setCurrentNodeDetail(null);
+                setTitleGraphData(null);
+                setNodeInfoModalTarget(null);
+                setView('titleDetail');
+                refreshDomainConflictForNode(normalizedNodeId);
+            }
             setTitleStarMapData(graph);
             setNodeStarMapData(null);
             setCurrentStarMapCenter(centerState);
@@ -2795,7 +2860,8 @@ const App = () => {
         getApiErrorMessage,
         isAbortError,
         isStarMapRequestCurrent,
-        parseApiResponse
+        parseApiResponse,
+        refreshDomainConflictForNode
     ]);
 
     const fetchSenseStarMap = useCallback(async (nodeId, senseId = '', options = {}) => {
@@ -2804,7 +2870,7 @@ const App = () => {
 
         const request = beginStarMapRequest(`sense:${normalizedNodeId}:${String(senseId || '').trim()}`);
         const requestedLimit = Number.isFinite(Number(options?.limit))
-            ? Math.max(10, Math.min(150, Number(options.limit)))
+            ? Math.max(10, Math.min(200, Number(options.limit)))
             : null;
         const senseQuery = typeof senseId === 'string' && senseId.trim()
             ? `senseId=${encodeURIComponent(senseId.trim())}`
@@ -2841,6 +2907,14 @@ const App = () => {
 
             setTitleRelationInfo(null);
             setIsSenseSelectorVisible(false);
+            if (options?.syncDetailState) {
+                setCurrentNodeDetail(centerNode);
+                setCurrentTitleDetail(null);
+                setTitleGraphData(null);
+                setNodeInfoModalTarget(null);
+                setView('nodeDetail');
+                refreshDomainConflictForNode(normalizedNodeId);
+            }
             setNodeStarMapData(graph);
             setTitleStarMapData(null);
             setCurrentStarMapCenter(centerState);
@@ -2871,7 +2945,8 @@ const App = () => {
         getApiErrorMessage,
         isAbortError,
         isStarMapRequestCurrent,
-        parseApiResponse
+        parseApiResponse,
+        refreshDomainConflictForNode
     ]);
 
     const buildClickedNodeFromScene = useCallback((targetNodeId, options = {}) => {
@@ -2907,26 +2982,39 @@ const App = () => {
 
     const recenterStarMapFromNode = async (node) => {
         if (!node?.data?._id) return;
+        const relationHint = getNavigationRelationFromSceneNode(node);
 
         if (view === 'titleDetail') {
             const nextCenter = buildStarMapCenterState(STAR_MAP_LAYER.TITLE, node.data);
             if (areStarMapCentersEqual(currentStarMapCenter, nextCenter)) return;
-            await fetchTitleStarMap(node.data._id, {
-                limit: currentStarMapLimit || DEFAULT_STAR_MAP_LIMIT,
+            const graph = await fetchTitleStarMap(node.data._id, {
                 silent: false,
                 clickedNode: node
             });
+            if (graph?.centerNode) {
+                appendNavigationTrailItem(
+                    graph.centerNode,
+                    normalizeNavigationRelation(relationHint),
+                    { mode: 'title' }
+                );
+            }
             return;
         }
 
         if (view === 'nodeDetail') {
             const nextCenter = buildStarMapCenterState(STAR_MAP_LAYER.SENSE, node.data);
             if (areStarMapCentersEqual(currentStarMapCenter, nextCenter)) return;
-            await fetchSenseStarMap(node.data._id, node?.data?.activeSenseId || '', {
-                limit: currentStarMapLimit || DEFAULT_STAR_MAP_LIMIT,
+            const graph = await fetchSenseStarMap(node.data._id, node?.data?.activeSenseId || '', {
                 silent: false,
                 clickedNode: node
             });
+            if (graph?.centerNode) {
+                appendNavigationTrailItem(
+                    graph.centerNode,
+                    resolveNavigationRelationAgainstCurrent(graph.centerNode?._id, currentNodeDetail, relationHint),
+                    { mode: 'sense' }
+                );
+            }
         }
     };
 
@@ -3158,6 +3246,28 @@ const App = () => {
 
     const handleKnowledgeNavigateHistory = (item, index) => {
         if (!item?.nodeId) return;
+        if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
+            if (item?.mode === 'title') {
+                fetchTitleStarMap(item.nodeId, {
+                    silent: false,
+                    syncDetailState: true
+                }).then((graph) => {
+                    if (!graph?.centerNode) return;
+                    replaceNavigationPathAtHistoryIndex(index, graph.centerNode, { mode: 'title' });
+                });
+                return;
+            }
+
+            fetchSenseStarMap(item.nodeId, item.senseId || '', {
+                silent: false,
+                syncDetailState: true
+            }).then((graph) => {
+                if (!graph?.centerNode) return;
+                replaceNavigationPathAtHistoryIndex(index, graph.centerNode, { mode: 'sense' });
+                });
+            return;
+        }
+
         if (item?.mode === 'title') {
             fetchTitleDetail(item.nodeId, null, {
                 historyIndex: index,
@@ -3527,7 +3637,6 @@ const App = () => {
         const enterStarMapMode = async () => {
             if (view === 'titleDetail' && currentTitleDetail?._id) {
                 await fetchTitleStarMap(currentTitleDetail._id, {
-                    limit: currentStarMapLimit || DEFAULT_STAR_MAP_LIMIT,
                     silent: false
                 });
                 return;
@@ -3535,7 +3644,6 @@ const App = () => {
 
             if (view === 'nodeDetail' && currentNodeDetail?._id) {
                 await fetchSenseStarMap(currentNodeDetail._id, currentNodeDetail?.activeSenseId || '', {
-                    limit: currentStarMapLimit || DEFAULT_STAR_MAP_LIMIT,
                     silent: false
                 });
             }

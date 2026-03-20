@@ -6,7 +6,6 @@
 import {
   STAR_MAP_LAYER,
   getStarMapCenterKey,
-  getStarMapLevelMap,
   getStarMapNodeKey
 } from './starMap/starMapHelpers';
 import {
@@ -14,12 +13,15 @@ import {
   buildStarMapEdgeColor,
   buildStarMapLineVisual,
   buildStarMapStubVisual,
+  buildStarMapShortestHopLevels,
   estimateStarMapLabelMetrics
 } from './starMap/starMapLayoutHelpers';
 import {
-  solveStarMapConstellationLayout,
   refineStarMapLayoutWithMeasuredLabels
 } from './starMap/starMapForceLayout';
+import {
+  radialDagLayout
+} from './starMap/starMapRadialDagLayout';
 
 class LayoutManager {
   constructor(width, height) {
@@ -486,10 +488,10 @@ class LayoutManager {
       return { nodes: [], lines: [] };
     }
 
-    const levelByKey = getStarMapLevelMap(graph, layer);
     const graphNodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
     const graphEdges = Array.isArray(graph?.edges) ? graph.edges : [];
     const boundaryStubs = Array.isArray(graph?.boundaryStubs) ? graph.boundaryStubs : [];
+    const layoutLevelByKey = buildStarMapShortestHopLevels(graph, layer);
 
     const layout = {
       nodes: [],
@@ -502,10 +504,10 @@ class LayoutManager {
     const layoutNodeByKey = new Map();
     const labelMetricsByKey = new Map();
     const levelGroups = new Map();
-    const graphMeta = buildStarMapGraphMeta(graph, layer, levelByKey);
+    const graphMeta = buildStarMapGraphMeta(graph, layer, layoutLevelByKey);
     const sortedGraphNodes = graphNodes.slice().sort((left, right) => {
-      const leftLevel = Number(levelByKey?.[getStarMapNodeKey(left, layer)] || 0);
-      const rightLevel = Number(levelByKey?.[getStarMapNodeKey(right, layer)] || 0);
+      const leftLevel = Number(layoutLevelByKey?.[getStarMapNodeKey(left, layer)] || 0);
+      const rightLevel = Number(layoutLevelByKey?.[getStarMapNodeKey(right, layer)] || 0);
       return (
         leftLevel - rightLevel
         || String(left?.displayName || left?.name || '').localeCompare(String(right?.displayName || right?.name || ''), 'zh-Hans-CN')
@@ -518,55 +520,13 @@ class LayoutManager {
     );
     labelMetricsByKey.set(centerKey, centerLabelMetrics);
     const centerRadius = Math.max(32, Math.min(42, Math.min(this.width, this.height) * 0.04));
-    const centerConfig = {
-      id: centerLayoutId,
-      x: centerX,
-      y: centerY,
-      radius: centerRadius,
-      scale: 1,
-      opacity: 1,
-      type: 'center',
-      label: this.resolveNodeLabel(centerNode, { includeSense: layer !== STAR_MAP_LAYER.TITLE }),
-      visualStyle: centerNode.visualStyle || null,
-      labelColor: centerNode.visualStyle?.textColor || '',
-      labelPlacement: 'center',
-      labelOffsetY: 0,
-      labelVisible: true,
-      labelMaxWidthStrategy: 'default',
-      labelWidthHint: centerLabelMetrics.widthHint,
-      labelHeightHint: centerLabelMetrics.heightHint,
-      labelLineClamp: centerLabelMetrics.titleLineClamp || 2,
-      labelSenseLineClamp: centerLabelMetrics.senseLineClamp || 1,
-      labelTitleLines: centerLabelMetrics.titleLines || [],
-      labelSenseLines: centerLabelMetrics.senseLines || [],
-      labelTitleWidthHint: centerLabelMetrics.titleWidthHint || centerLabelMetrics.widthHint,
-      labelSenseWidthHint: centerLabelMetrics.senseWidthHint || 0,
-      data: {
-        ...centerNode,
-        starMapLayer: layer,
-        starMapLevel: 0
-      },
-      visible: true
-    };
-    layout.nodes.push(centerConfig);
-    nodeLayoutIdByKey.set(centerKey, centerLayoutId);
-    layoutNodeByKey.set(centerKey, {
-      ...centerConfig,
-      nodeKey: centerKey,
-      starMapLevel: 0,
-      clusterSignature: centerKey,
-      childCount: graphMeta?.nextLevelNeighbors?.get?.(centerKey)?.size || 0,
-      degree: graphMeta?.adjacency?.get?.(centerKey)?.size || 0,
-      importance: 1.28
-    });
-
     sortedGraphNodes.forEach((node) => {
       const key = getStarMapNodeKey(node, layer);
       if (!key || key === centerKey) return;
       const nodeLabel = this.resolveNodeLabel(node, { includeSense: layer !== STAR_MAP_LAYER.TITLE });
       const labelMetrics = estimateStarMapLabelMetrics(nodeLabel);
       labelMetricsByKey.set(key, labelMetrics);
-      const rawLevel = Number(levelByKey?.[key] || 1);
+      const rawLevel = Number(layoutLevelByKey?.[key] || 1);
       const level = Number.isFinite(rawLevel) && rawLevel > 0 ? Math.floor(rawLevel) : 1;
       const group = levelGroups.get(level) || [];
       const baseNodeRadius = layer === STAR_MAP_LAYER.TITLE ? 28 : 25.5;
@@ -588,18 +548,22 @@ class LayoutManager {
     });
 
     const levels = Array.from(levelGroups.keys()).sort((a, b) => a - b);
-    // starMap 不再把 BFS level 直接投影成硬圆环。
-    // 这里让 level 只作为“软半径带”约束，再用轻量迭代求解把标签盒也纳入碰撞体。
+    // 星盘节点改为 rooted DAG radial layered layout：
+    // 先做 shortest-hop 分层，再做层内降交叉排序，最后映射到同心层并做局部去重叠。
     const layoutKey = this.buildStarMapLayoutKey(graph, layer);
-    const { bodyByKey, badgeBodyByStubId, bounds, debug } = solveStarMapConstellationLayout({
+    const { levelByKey, bodyByKey, badgeBodyByStubId, bounds, debug } = radialDagLayout({
       width: this.width,
       height: this.height,
       center: {
         x: centerX,
         y: centerY,
         radius: centerRadius,
+        width: this.width,
+        height: this.height,
         labelWidthHint: centerLabelMetrics.widthHint,
         labelHeightHint: centerLabelMetrics.heightHint,
+        labelMetrics: centerLabelMetrics,
+        rawNode: centerNode,
         labelOffsetY: 0,
         labelPlacement: 'center'
       },
@@ -607,15 +571,68 @@ class LayoutManager {
       layer,
       levels,
       nodesByLevel: levelGroups,
+      graphEdges,
       graphMeta,
       labelMetricsByKey,
       boundaryStubs
+    });
+    const positionedCenterBody = bodyByKey.get(centerKey);
+    const centerRing = Number(levelByKey?.[centerKey] || positionedCenterBody?.level || 0);
+    const centerConfig = {
+      id: centerLayoutId,
+      x: positionedCenterBody?.x ?? centerX,
+      y: positionedCenterBody?.y ?? centerY,
+      radius: centerRadius,
+      scale: 1,
+      opacity: 1,
+      type: 'center',
+      label: this.resolveNodeLabel(centerNode, { includeSense: layer !== STAR_MAP_LAYER.TITLE }),
+      visualStyle: centerNode.visualStyle || null,
+      labelColor: centerNode.visualStyle?.textColor || '',
+      labelPlacement: 'center',
+      labelOffsetY: positionedCenterBody?.labelOffsetY ?? 0,
+      labelVisible: true,
+      labelMaxWidthStrategy: 'default',
+      labelWidthHint: centerLabelMetrics.widthHint,
+      labelHeightHint: centerLabelMetrics.heightHint,
+      labelLineClamp: centerLabelMetrics.titleLineClamp || 2,
+      labelSenseLineClamp: centerLabelMetrics.senseLineClamp || 1,
+      labelTitleLines: centerLabelMetrics.titleLines || [],
+      labelSenseLines: centerLabelMetrics.senseLines || [],
+      labelTitleWidthHint: centerLabelMetrics.titleWidthHint || centerLabelMetrics.widthHint,
+      labelSenseWidthHint: centerLabelMetrics.senseWidthHint || 0,
+      data: {
+        ...centerNode,
+        starMapLayer: layer,
+        starMapLevel: centerRing,
+        starMapAngle: positionedCenterBody?.angle,
+        starMapSubtreeWeight: positionedCenterBody?.subtreeWeight,
+        starMapClusterSignature: positionedCenterBody?.clusterSignature || centerKey,
+        starMapImportance: positionedCenterBody?.importance || 1.28
+      },
+      visible: true
+    };
+    layout.nodes.push(centerConfig);
+    nodeLayoutIdByKey.set(centerKey, centerLayoutId);
+    layoutNodeByKey.set(centerKey, {
+      ...centerConfig,
+      angle: positionedCenterBody?.angle,
+      nodeKey: centerKey,
+      starMapLevel: centerRing,
+      clusterSignature: positionedCenterBody?.clusterSignature || centerKey,
+      primaryParentKey: positionedCenterBody?.primaryParentKey || '',
+      childCount: positionedCenterBody?.childCount || 0,
+      degree: positionedCenterBody?.degree || graphMeta?.adjacency?.get?.(centerKey)?.size || 0,
+      importance: positionedCenterBody?.importance || 1.28,
+      siblingIndex: positionedCenterBody?.siblingIndex || 0,
+      siblingCount: positionedCenterBody?.siblingCount || 0
     });
     levels.forEach((level) => {
       const nodes = levelGroups.get(level) || [];
       nodes.forEach((node) => {
         const positionedBody = bodyByKey.get(node.key);
         if (!positionedBody) return;
+        const resolvedLevel = Number(levelByKey?.[node.key] || positionedBody.level || level);
         const layoutId = `${layer}-${node.key}`;
         const config = {
           id: layoutId,
@@ -643,7 +660,7 @@ class LayoutManager {
           data: {
             ...node.rawNode,
             starMapLayer: layer,
-            starMapLevel: level,
+            starMapLevel: resolvedLevel,
             starMapAngle: positionedBody.angle,
             starMapSubtreeWeight: positionedBody.subtreeWeight,
             starMapClusterSignature: positionedBody.clusterSignature,
@@ -656,7 +673,7 @@ class LayoutManager {
         layoutNodeByKey.set(node.key, {
           ...config,
           angle: positionedBody.angle,
-          starMapLevel: level,
+          starMapLevel: resolvedLevel,
           clusterSignature: positionedBody.clusterSignature,
           nodeKey: positionedBody.nodeKey || node.key,
           primaryParentKey: positionedBody.primaryParentKey || '',

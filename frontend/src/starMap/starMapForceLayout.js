@@ -1,4 +1,7 @@
-import { buildStarMapLevelOrdering } from './starMapLayoutHelpers';
+import {
+  buildStarMapLevelOrdering,
+  estimateStarMapLabelMetrics
+} from './starMapLayoutHelpers';
 
 const TAU = Math.PI * 2;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
@@ -1491,6 +1494,7 @@ const buildClusterPackingPlan = ({
   return packingByItemKey;
 };
 
+// eslint-disable-next-line no-unused-vars
 const buildSeedBodies = ({
   center,
   width,
@@ -1837,6 +1841,1577 @@ const buildSeedBodies = ({
   };
 };
 
+const buildNodeSeedMetricsByKey = ({
+  layer,
+  levels = [],
+  nodesByLevel = new Map(),
+  graphMeta,
+  labelMetricsByKey = new Map(),
+  levelMax = 1,
+  maxDegree = 1,
+  maxChildCount = 1
+}) => {
+  const nodeSeedMetricsByKey = new Map();
+  levels.forEach((level) => {
+    const nodes = nodesByLevel.get(level) || [];
+    nodes.forEach((node) => {
+      const labelMetrics = labelMetricsByKey.get(node.key) || node.labelMetrics || estimateStarMapLabelMetrics(node.label);
+      const degree = graphMeta.adjacency.get(node.key)?.size || 0;
+      const childCount = graphMeta.nextLevelNeighbors.get(node.key)?.size || 0;
+      const boundaryCount = graphMeta.boundaryCountByKey.get(node.key) || 0;
+      const importance = computeNodeImportance({
+        layer,
+        level,
+        levelMax,
+        degree,
+        childCount,
+        maxDegree,
+        maxChildCount,
+        boundaryCount
+      });
+      const radius = (Number(node.radius) || 12) * importance;
+      const collisionRadius = Math.max(
+        radius * 0.94,
+        Math.hypot(labelMetrics.widthHint * 0.5, labelMetrics.heightHint * 0.5) * 0.72
+      );
+      const safetyRadius = clamp(
+        18 + collisionRadius * 0.86 + degree * 4.1 + labelMetrics.widthHint * 0.11 + boundaryCount * 2.8,
+        28,
+        132
+      );
+      nodeSeedMetricsByKey.set(node.key, {
+        radius,
+        collisionRadius,
+        safetyRadius,
+        labelWidthHint: labelMetrics.widthHint,
+        labelHeightHint: labelMetrics.heightHint,
+        degree,
+        childCount,
+        boundaryCount,
+        importance,
+        labelMetrics
+      });
+    });
+  });
+  return nodeSeedMetricsByKey;
+};
+
+const buildPrimaryTreeMeta = ({
+  centerKey = '',
+  levels = [],
+  nodesByLevel = new Map(),
+  graphMeta,
+  labelMetricsByKey = new Map(),
+  nodeSeedMetricsByKey = new Map()
+}) => {
+  const primaryParentByKey = new Map();
+  const childrenByParent = new Map();
+  const clusterRootByKey = new Map();
+  const depthByKey = new Map(centerKey ? [[centerKey, 0]] : []);
+  const nodeByKey = new Map();
+  const levelByKey = new Map(centerKey ? [[centerKey, 0]] : []);
+
+  levels.forEach((level) => {
+    (nodesByLevel.get(level) || []).forEach((node) => {
+      nodeByKey.set(node.key, node);
+      levelByKey.set(node.key, level);
+    });
+  });
+
+  const ensureChildren = (parentKey) => {
+    let bucket = childrenByParent.get(parentKey);
+    if (!bucket) {
+      bucket = [];
+      childrenByParent.set(parentKey, bucket);
+    }
+    return bucket;
+  };
+
+  levels.forEach((level) => {
+    const nodes = (nodesByLevel.get(level) || []).slice().sort((left, right) => {
+      const leftDegree = graphMeta.adjacency.get(left.key)?.size || 0;
+      const rightDegree = graphMeta.adjacency.get(right.key)?.size || 0;
+      return rightDegree - leftDegree || String(left.key).localeCompare(String(right.key));
+    });
+    nodes.forEach((node) => {
+      const parentCandidates = Array.from(graphMeta.previousLevelNeighbors.get(node.key) || []);
+      if (level === 1 && centerKey && !parentCandidates.includes(centerKey)) {
+        parentCandidates.unshift(centerKey);
+      }
+      const rootSupportByKey = new Map();
+      parentCandidates.forEach((parentKey) => {
+        const rootKey = parentKey === centerKey
+          ? node.key
+          : (clusterRootByKey.get(parentKey) || parentKey);
+        rootSupportByKey.set(rootKey, (rootSupportByKey.get(rootKey) || 0) + 1);
+      });
+      const parentKey = parentCandidates
+        .map((candidateKey) => {
+          const candidateMetrics = nodeSeedMetricsByKey.get(candidateKey) || {};
+          const rootKey = candidateKey === centerKey
+            ? node.key
+            : (clusterRootByKey.get(candidateKey) || candidateKey);
+          return {
+            candidateKey,
+            rootSupport: rootSupportByKey.get(rootKey) || 0,
+            childCount: graphMeta.nextLevelNeighbors.get(candidateKey)?.size || 0,
+            degree: graphMeta.adjacency.get(candidateKey)?.size || 0,
+            safetyRadius: Number(candidateMetrics.safetyRadius) || 0
+          };
+        })
+        .sort((left, right) => (
+          right.rootSupport - left.rootSupport
+          || right.childCount - left.childCount
+          || right.degree - left.degree
+          || right.safetyRadius - left.safetyRadius
+          || String(left.candidateKey).localeCompare(String(right.candidateKey))
+        ))[0]?.candidateKey || centerKey;
+
+      if (parentKey) {
+        primaryParentByKey.set(node.key, parentKey);
+        ensureChildren(parentKey).push(node.key);
+      }
+      depthByKey.set(node.key, level);
+      if (level === 1 || parentKey === centerKey) {
+        clusterRootByKey.set(node.key, node.key);
+      } else {
+        clusterRootByKey.set(node.key, clusterRootByKey.get(parentKey) || parentKey || node.key);
+      }
+    });
+  });
+
+  const treeEdgeKeySet = new Set();
+  primaryParentByKey.forEach((parentKey, nodeKey) => {
+    const edgeKey = parentKey < nodeKey ? `${parentKey}|${nodeKey}` : `${nodeKey}|${parentKey}`;
+    treeEdgeKeySet.add(edgeKey);
+  });
+
+  const crossEdgeCountByKey = new Map();
+  const crossEdges = [];
+  graphMeta.adjacency.forEach((neighbors, fromKey) => {
+    neighbors.forEach((toKey) => {
+      if (fromKey >= toKey) return;
+      const edgeKey = fromKey < toKey ? `${fromKey}|${toKey}` : `${toKey}|${fromKey}`;
+      if (treeEdgeKeySet.has(edgeKey)) return;
+      crossEdges.push({ fromKey, toKey });
+      crossEdgeCountByKey.set(fromKey, (crossEdgeCountByKey.get(fromKey) || 0) + 1);
+      crossEdgeCountByKey.set(toKey, (crossEdgeCountByKey.get(toKey) || 0) + 1);
+    });
+  });
+
+  const subtreeNodeCountByKey = new Map();
+  const subtreeLabelAreaByKey = new Map();
+  const subtreeMaxDepthByKey = new Map();
+  const subtreeDemandByKey = new Map();
+  const requiredSpanByKey = new Map();
+  const requiredRadiusByKey = new Map();
+  const overflowByKey = new Map();
+
+  levels
+    .slice()
+    .sort((left, right) => right - left)
+    .forEach((level) => {
+      const nodes = nodesByLevel.get(level) || [];
+      nodes.forEach((node) => {
+        const key = node.key;
+        const labelMetrics = labelMetricsByKey.get(key) || node.labelMetrics || estimateStarMapLabelMetrics(node.label);
+        const children = childrenByParent.get(key) || [];
+        const ownLabelArea = (Number(labelMetrics.widthHint) || 112) * (Number(labelMetrics.heightHint) || 28);
+        const ownBoundaryCount = graphMeta.boundaryCountByKey.get(key) || 0;
+        const ownCrossCount = crossEdgeCountByKey.get(key) || 0;
+        const ownMetrics = nodeSeedMetricsByKey.get(key) || {};
+        const childNodeCount = children.reduce((sum, childKey) => sum + (subtreeNodeCountByKey.get(childKey) || 0), 0);
+        const childLabelArea = children.reduce((sum, childKey) => sum + (subtreeLabelAreaByKey.get(childKey) || 0), 0);
+        const childDemand = children.reduce((sum, childKey) => sum + (subtreeDemandByKey.get(childKey) || 0), 0);
+        const childMaxDepth = children.reduce((max, childKey) => Math.max(max, subtreeMaxDepthByKey.get(childKey) || 1), 0);
+        const ownRadius = Number(ownMetrics.radius) || (Number(node.radius) || 18);
+        const ownSafetyRadius = Number(ownMetrics.safetyRadius) || 28;
+        const ownBaseSpan = clamp(
+          (
+            ((Number(labelMetrics.widthHint) || 112) + ownSafetyRadius * 0.6)
+            / Math.max(40, ownRadius + ownSafetyRadius * 0.5)
+          ) * 0.18,
+          0.16,
+          0.72
+        );
+        const childRequiredSpans = children.map((childKey) => requiredSpanByKey.get(childKey) || 0.18);
+        const siblingGap = children.length > 1 ? (children.length - 1) * 0.06 : 0;
+        const childrenSpan = childRequiredSpans.reduce((sum, value) => sum + value, 0) + siblingGap;
+        const ownRequiredSpan = children.length > 0
+          ? clamp(Math.max(ownBaseSpan, childrenSpan * 1.04), ownBaseSpan, Math.min(3.4, ownBaseSpan + childrenSpan + 0.4))
+          : ownBaseSpan;
+        const ownRequiredRadius = clamp(
+          ownRadius + ownSafetyRadius * 0.42 + (children.length > 0 ? Math.max(...children.map((childKey) => requiredRadiusByKey.get(childKey) || ownRadius * 1.2)) * 0.58 : 0),
+          ownRadius + 12,
+          320
+        );
+        const ownDemand = (
+          1
+          + ownLabelArea * 0.00022
+          + ownBoundaryCount * 0.58
+          + ownCrossCount * 0.42
+          + (nodeSeedMetricsByKey.get(key)?.degree || 0) * 0.06
+        );
+        subtreeNodeCountByKey.set(key, 1 + childNodeCount);
+        subtreeLabelAreaByKey.set(key, ownLabelArea + childLabelArea);
+        subtreeMaxDepthByKey.set(key, Math.max(1, childMaxDepth + 1));
+        subtreeDemandByKey.set(key, ownDemand + childDemand);
+        requiredSpanByKey.set(key, ownRequiredSpan);
+        requiredRadiusByKey.set(key, ownRequiredRadius);
+        overflowByKey.set(key, 0);
+      });
+    });
+
+  const clusterMembersByRoot = new Map();
+  levels.forEach((level) => {
+    (nodesByLevel.get(level) || []).forEach((node) => {
+      const clusterRoot = clusterRootByKey.get(node.key) || node.key;
+      const bucket = clusterMembersByRoot.get(clusterRoot) || [];
+      bucket.push(node);
+      clusterMembersByRoot.set(clusterRoot, bucket);
+    });
+  });
+
+  const topLevelNodes = (nodesByLevel.get(1) || []).slice();
+  const clusterIndexByRoot = new Map();
+  topLevelNodes.forEach((node, index) => {
+    clusterIndexByRoot.set(node.key, index);
+  });
+
+  const clusters = topLevelNodes.map((rootNode) => {
+    const nodes = clusterMembersByRoot.get(rootNode.key) || [rootNode];
+    const totalDegree = nodes.reduce((sum, node) => sum + (graphMeta.adjacency.get(node.key)?.size || 0), 0);
+    const totalLabelWidth = nodes.reduce((sum, node) => {
+      const labelMetrics = labelMetricsByKey.get(node.key) || node.labelMetrics || estimateStarMapLabelMetrics(node.label);
+      return sum + (Number(labelMetrics.widthHint) || 112);
+    }, 0);
+    const totalBoundary = nodes.reduce((sum, node) => sum + (graphMeta.boundaryCountByKey.get(node.key) || 0), 0);
+    const rootDemand = subtreeDemandByKey.get(rootNode.key) || nodes.length;
+    return {
+      rootKey: rootNode.key,
+      index: clusterIndexByRoot.get(rootNode.key) ?? 0,
+      nodes,
+      weight: rootDemand,
+      totalDegree,
+      totalLabelWidth,
+      averageDegree: totalDegree / Math.max(1, nodes.length),
+      averageLabelWidth: totalLabelWidth / Math.max(1, nodes.length),
+      spreadScore: rootDemand + nodes.length * 0.32 + totalBoundary * 0.18
+    };
+  }).sort((left, right) => (
+    right.spreadScore - left.spreadScore
+    || right.weight - left.weight
+    || left.index - right.index
+    || String(left.rootKey).localeCompare(String(right.rootKey))
+  ));
+
+  return {
+    primaryParentByKey,
+    childrenByParent,
+    clusterRootByKey,
+    depthByKey,
+    levelByKey,
+    nodeByKey,
+    crossEdges,
+    crossEdgeCountByKey,
+    subtreeNodeCountByKey,
+    subtreeLabelAreaByKey,
+    subtreeMaxDepthByKey,
+    subtreeDemandByKey,
+    requiredSpanByKey,
+    requiredRadiusByKey,
+    overflowByKey,
+    clusterMembersByRoot,
+    clusters
+  };
+};
+
+const buildSiblingOrderingByParent = ({
+  centerKey = '',
+  childrenByParent = new Map(),
+  clusterRootByKey = new Map(),
+  graphMeta,
+  sectorPlan = null,
+  subtreeDemandByKey = new Map()
+}) => {
+  const siblingOrderByParent = new Map();
+  const childPreferredAngleByKey = new Map();
+
+  childrenByParent.forEach((children, parentKey) => {
+    const ordered = children
+      .map((childKey, index) => {
+        const clusterRoot = clusterRootByKey.get(childKey) || childKey;
+        const wedge = sectorPlan?.wedgeByRoot?.get?.(clusterRoot);
+        const externalAngles = Array.from(graphMeta.adjacency.get(childKey) || [])
+          .filter((neighborKey) => neighborKey !== parentKey)
+          .map((neighborKey) => {
+            const neighborRoot = clusterRootByKey.get(neighborKey) || neighborKey;
+            return sectorPlan?.wedgeByRoot?.get?.(neighborRoot)?.centerAngle
+              ?? sectorPlan?.preferredAngleByRoot?.get?.(neighborRoot);
+          })
+          .filter((value) => Number.isFinite(value))
+          .map((angle) => ({ angle, weight: 1.2 }));
+        const preferredAngle = averageAngles([
+          { angle: wedge?.centerAngle ?? -Math.PI / 2, weight: parentKey === centerKey ? 2.8 : 1.6 },
+          ...externalAngles
+        ], wedge?.centerAngle ?? -Math.PI / 2);
+        childPreferredAngleByKey.set(childKey, preferredAngle);
+        return {
+          childKey,
+          preferredAngle: normalizePositiveAngle(preferredAngle),
+          demand: subtreeDemandByKey.get(childKey) || 1,
+          baselineIndex: index
+        };
+      })
+      .sort((left, right) => (
+        left.preferredAngle - right.preferredAngle
+        || right.demand - left.demand
+        || left.baselineIndex - right.baselineIndex
+        || String(left.childKey).localeCompare(String(right.childKey))
+      ))
+      .map((entry) => entry.childKey);
+
+    siblingOrderByParent.set(parentKey, ordered);
+  });
+
+  return {
+    siblingOrderByParent,
+    childPreferredAngleByKey
+  };
+};
+
+const buildTreeNodeScopes = ({
+  centerKey = '',
+  childrenByParent = new Map(),
+  siblingOrderByParent = new Map(),
+  subtreeDemandByKey = new Map(),
+  requiredSpanByKey = new Map(),
+  requiredRadiusByKey = new Map(),
+  clusterRootByKey = new Map(),
+  sectorPlan = null
+}) => {
+  const scopeByKey = new Map();
+  const radialOffsetByKey = new Map();
+  const siblingYieldByParent = new Map();
+
+  const measureAvailableSpan = (parentKey, parentScope, childCount) => clamp(
+    parentKey === centerKey
+      ? parentScope.span
+      : parentScope.span * (childCount > 1 ? 0.8 : 0.56),
+    Math.max(0.2, childCount * 0.12),
+    Math.max(0.24, parentScope.span * 0.92)
+  );
+
+  const assignChildren = (parentKey, parentScope) => {
+    const children = siblingOrderByParent.get(parentKey) || childrenByParent.get(parentKey) || [];
+    if (children.length < 1) return;
+    const usableSpan = measureAvailableSpan(parentKey, parentScope, children.length);
+    const gapCount = Math.max(0, children.length - 1);
+    const baseGap = children.length > 1 ? 0.06 : 0;
+    const requestedSpan = children.reduce((sum, childKey) => sum + (requiredSpanByKey.get(childKey) || 0.18), 0) + gapCount * baseGap;
+    const overflow = Math.max(0, requestedSpan - usableSpan);
+    siblingYieldByParent.set(parentKey, overflow);
+    const shrinkRatio = requestedSpan > 0.0001
+      ? Math.min(1, usableSpan / requestedSpan)
+      : 1;
+    const spanByKey = new Map();
+    const flexibleChildren = [];
+    children.forEach((childKey) => {
+      const requested = requiredSpanByKey.get(childKey) || 0.18;
+      const minSpan = Math.max(0.12, requested * 0.72);
+      const nextSpan = overflow > 0
+        ? Math.max(minSpan, requested * shrinkRatio)
+        : requested;
+      spanByKey.set(childKey, nextSpan);
+      const flexibility = requested - minSpan;
+      if (flexibility > 0.001) {
+        flexibleChildren.push(childKey);
+      }
+    });
+    let allocatedSpan = children.reduce((sum, childKey) => sum + (spanByKey.get(childKey) || 0), 0) + gapCount * baseGap;
+    if (allocatedSpan > usableSpan && flexibleChildren.length > 0) {
+      let extraOverflow = allocatedSpan - usableSpan;
+      const totalFlex = flexibleChildren.reduce((sum, childKey) => {
+        const requested = requiredSpanByKey.get(childKey) || 0.18;
+        const minSpan = Math.max(0.12, requested * 0.72);
+        return sum + Math.max(0, (spanByKey.get(childKey) || requested) - minSpan);
+      }, 0);
+      if (totalFlex > 0.001) {
+        flexibleChildren.forEach((childKey) => {
+          const current = spanByKey.get(childKey) || (requiredSpanByKey.get(childKey) || 0.18);
+          const minSpan = Math.max(0.12, (requiredSpanByKey.get(childKey) || 0.18) * 0.72);
+          const reducible = Math.max(0, current - minSpan);
+          const cut = extraOverflow * (reducible / totalFlex);
+          spanByKey.set(childKey, Math.max(minSpan, current - cut));
+        });
+      }
+      allocatedSpan = children.reduce((sum, childKey) => sum + (spanByKey.get(childKey) || 0), 0) + gapCount * baseGap;
+    }
+    if (allocatedSpan < usableSpan) {
+      const spare = usableSpan - allocatedSpan;
+      const totalWeight = children.reduce((sum, childKey) => sum + Math.max(0.2, subtreeDemandByKey.get(childKey) || 1), 0);
+      children.forEach((childKey) => {
+        const current = spanByKey.get(childKey) || 0.18;
+        const add = spare * (Math.max(0.2, subtreeDemandByKey.get(childKey) || 1) / Math.max(0.0001, totalWeight));
+        spanByKey.set(childKey, current + add);
+      });
+      allocatedSpan = children.reduce((sum, childKey) => sum + (spanByKey.get(childKey) || 0), 0) + gapCount * baseGap;
+    }
+    const centeredSpan = Math.min(usableSpan, allocatedSpan);
+    let cursor = parentScope.centerAngle - centeredSpan * 0.5;
+    children.forEach((childKey) => {
+      const span = spanByKey.get(childKey) || Math.max(0.12, usableSpan / Math.max(1, children.length));
+      const centerAngle = cursor + span * 0.5;
+      const clusterRoot = clusterRootByKey.get(childKey) || childKey;
+      const wedge = sectorPlan?.wedgeByRoot?.get?.(clusterRoot);
+      const requestedRadius = requiredRadiusByKey.get(childKey) || 0;
+      const radialOffset = overflow > 0
+        ? Math.min(56, overflow * 54 + Math.max(0, requestedRadius - 84) * 0.08)
+        : 0;
+      const childScope = {
+        centerAngle: unwrapAngleNear(centerAngle, parentScope.centerAngle),
+        span,
+        clusterRoot,
+        sectorIndex: wedge?.sectorIndex ?? parentScope.sectorIndex ?? -1,
+        radialOffset
+      };
+      scopeByKey.set(childKey, childScope);
+      radialOffsetByKey.set(childKey, radialOffset);
+      assignChildren(childKey, childScope);
+      cursor += span + baseGap;
+    });
+  };
+
+  (childrenByParent.get(centerKey) || []).forEach((rootKey) => {
+    const wedge = sectorPlan?.wedgeByRoot?.get?.(rootKey);
+    const rootScope = {
+      centerAngle: wedge?.centerAngle ?? -Math.PI / 2,
+      span: Math.max(0.2, (wedge?.span || (TAU / Math.max(1, childrenByParent.get(centerKey)?.length || 1))) - (wedge?.padding || 0) * 2),
+      clusterRoot: rootKey,
+      sectorIndex: wedge?.sectorIndex ?? -1,
+      radialOffset: 0
+    };
+    scopeByKey.set(rootKey, rootScope);
+    radialOffsetByKey.set(rootKey, 0);
+    assignChildren(rootKey, rootScope);
+  });
+
+  return {
+    scopeByKey,
+    radialOffsetByKey,
+    siblingYieldByParent
+  };
+};
+
+const buildLayoutSprings = ({
+  graphMeta,
+  bodyByKey = new Map(),
+  center,
+  centerKey = '',
+  primaryParentByKey = new Map()
+}) => {
+  const springs = [];
+  graphMeta.adjacency.forEach((neighbors, key) => {
+    neighbors.forEach((neighborKey) => {
+      if (key >= neighborKey) return;
+      const fromBody = bodyByKey.get(key);
+      const toBody = bodyByKey.get(neighborKey);
+      const isHierarchyEdge = (
+        key === centerKey
+        || neighborKey === centerKey
+        || primaryParentByKey.get(key) === neighborKey
+        || primaryParentByKey.get(neighborKey) === key
+      );
+      springs.push({
+        fromKey: key,
+        toKey: neighborKey,
+        fromBody,
+        toBody,
+        isHierarchyEdge,
+        hierarchyWeight: isHierarchyEdge ? (key === centerKey || neighborKey === centerKey ? 3 : 2) : 1
+      });
+    });
+  });
+  return springs;
+};
+
+const collectSubtreeKeys = (rootKey, childrenByParent = new Map(), cache = new Map()) => {
+  if (cache.has(rootKey)) return cache.get(rootKey);
+  const keys = [rootKey];
+  (childrenByParent.get(rootKey) || []).forEach((childKey) => {
+    keys.push(...collectSubtreeKeys(childKey, childrenByParent, cache));
+  });
+  cache.set(rootKey, keys);
+  return keys;
+};
+
+const buildBodyFromPlacement = ({
+  node,
+  nodeKey,
+  center,
+  x,
+  y,
+  band,
+  scope,
+  clusterRoot,
+  clusterSize,
+  parentKey = '',
+  siblingIndex = 0,
+  siblingCount = 1,
+  seedMetrics = {},
+  labelMetrics = {}
+}) => ({
+  ...node,
+  key: nodeKey,
+  nodeKey,
+  clusterRoot,
+  clusterSignature: clusterRoot,
+  clusterSize,
+  sectorIndex: scope?.sectorIndex ?? -1,
+  x,
+  y,
+  vx: 0,
+  vy: 0,
+  seedX: x,
+  seedY: y,
+  targetDistance: Math.hypot(x - center.x, y - center.y),
+  radiusBias: Math.hypot(x - center.x, y - center.y) - (band?.ideal || 0),
+  radius: seedMetrics.radius || (Number(node?.radius) || 12),
+  collisionRadius: seedMetrics.collisionRadius || (seedMetrics.radius || (Number(node?.radius) || 12)),
+  labelWidthHint: labelMetrics.widthHint || seedMetrics.labelWidthHint || 112,
+  labelHeightHint: labelMetrics.heightHint || seedMetrics.labelHeightHint || 28,
+  labelOffsetY: node.labelOffsetY,
+  labelPlacement: node.labelPlacement,
+  labelMetrics,
+  band,
+  degree: seedMetrics.degree || 0,
+  childCount: seedMetrics.childCount || 0,
+  importance: seedMetrics.importance || 1,
+  siblingIndex,
+  siblingCount,
+  subRingIndex: 0,
+  primaryParentKey: parentKey,
+  safetyRadius: seedMetrics.safetyRadius || 28,
+  labelRect: buildLabelRect({
+    x,
+    y,
+    radius: seedMetrics.radius || (Number(node?.radius) || 12),
+    labelWidthHint: labelMetrics.widthHint || seedMetrics.labelWidthHint || 112,
+    labelHeightHint: labelMetrics.heightHint || seedMetrics.labelHeightHint || 28,
+    labelOffsetY: node.labelOffsetY,
+    labelPlacement: node.labelPlacement
+  })
+});
+
+const buildSegmentForBodies = (fromBody, toBody) => {
+  if (!fromBody || !toBody) return null;
+  return buildWorldSegment(fromBody, toBody, 2);
+};
+
+const evaluatePlacementCandidate = ({
+  candidateBody,
+  nodeKey = '',
+  parentKey = '',
+  parentBody = null,
+  center,
+  centerKey = '',
+  band,
+  scope,
+  placedBodies = new Map(),
+  segments = [],
+  graphMeta
+}) => {
+  const radialDistance = Math.hypot(candidateBody.x - center.x, candidateBody.y - center.y);
+  const angle = Math.atan2(candidateBody.y - center.y, candidateBody.x - center.x);
+  const angleOffset = angleDistance(angle, scope?.centerAngle ?? angle);
+  const centerLabel = buildLabelRect(center);
+  const centerDistance = Math.hypot(candidateBody.x - center.x, candidateBody.y - center.y);
+  const centerGap = center.radius + Math.max(candidateBody.radius, candidateBody.collisionRadius || 0) + 12;
+  let penalty = 0;
+
+  if (band) {
+    if (radialDistance < band.min) {
+      return Number.POSITIVE_INFINITY;
+    }
+    penalty += Math.abs(radialDistance - band.ideal) * 0.35;
+  }
+
+  if (scope) {
+    const maxAngleOffset = Math.max(0.12, scope.span * 0.5);
+    if (angleOffset > maxAngleOffset) {
+      return Number.POSITIVE_INFINITY;
+    }
+    penalty += angleOffset * 120;
+  }
+
+  if (centerDistance < centerGap) {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (circleHitsRect({
+    x: candidateBody.x,
+    y: candidateBody.y,
+    radius: Math.max(candidateBody.radius, candidateBody.collisionRadius || 0)
+  }, centerLabel, 12)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (rectsOverlap(candidateBody.labelRect, centerLabel)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  placedBodies.forEach((body, key) => {
+    if (!Number.isFinite(penalty)) return;
+    if (key === nodeKey) return;
+    const dx = candidateBody.x - body.x;
+    const dy = candidateBody.y - body.y;
+    const distance = Math.hypot(dx, dy) || 0.001;
+    const minGap = (candidateBody.collisionRadius || candidateBody.radius || 0)
+      + (body.collisionRadius || body.radius || 0)
+      + 8;
+    if (distance < minGap) {
+      penalty = Number.POSITIVE_INFINITY;
+      return;
+    }
+    if (rectsOverlap(candidateBody.labelRect, body.labelRect)) {
+      penalty = Number.POSITIVE_INFINITY;
+      return;
+    }
+    if (circleHitsRect({ x: candidateBody.x, y: candidateBody.y, radius: candidateBody.collisionRadius || candidateBody.radius || 0 }, body.labelRect, 10)) {
+      penalty = Number.POSITIVE_INFINITY;
+      return;
+    }
+    if (circleHitsRect({ x: body.x, y: body.y, radius: body.collisionRadius || body.radius || 0 }, candidateBody.labelRect, 10)) {
+      penalty = Number.POSITIVE_INFINITY;
+      return;
+    }
+  });
+  if (!Number.isFinite(penalty)) return Number.POSITIVE_INFINITY;
+
+  const incomingStart = parentBody || center;
+  const incomingSegment = buildSegmentForBodies(incomingStart, candidateBody);
+  if (incomingSegment) {
+    placedBodies.forEach((body, key) => {
+      if (!Number.isFinite(penalty)) return;
+      if (key === nodeKey || key === parentKey) return;
+      const bodyDistance = distancePointToSegment(body, incomingSegment.start, incomingSegment.end);
+      const nodeClearance = Math.max(18, (body.collisionRadius || body.radius || 0) + 10);
+      if (bodyDistance.projection > 0.06 && bodyDistance.projection < 0.94 && bodyDistance.distance < nodeClearance) {
+        penalty = Number.POSITIVE_INFINITY;
+        return;
+      }
+      const labelDistance = distanceSegmentToRect(incomingSegment.start, incomingSegment.end, body.labelRect);
+      const labelClearance = Math.max(10, (body.labelRect?.height || body.labelHeightHint || 24) * 0.32);
+      if (labelDistance.distance < labelClearance) {
+        penalty = Number.POSITIVE_INFINITY;
+        return;
+      }
+    });
+    if (!Number.isFinite(penalty)) return Number.POSITIVE_INFINITY;
+
+    segments.forEach((segmentMeta) => {
+      if (!Number.isFinite(penalty)) return;
+      if (
+        segmentMeta.fromKey === parentKey
+        || segmentMeta.toKey === parentKey
+        || segmentMeta.fromKey === nodeKey
+        || segmentMeta.toKey === nodeKey
+      ) {
+        return;
+      }
+      const intersection = computeSegmentIntersection(
+        incomingSegment,
+        { start: segmentMeta.start, end: segmentMeta.end }
+      );
+      if (intersection.intersects) {
+        penalty = Number.POSITIVE_INFINITY;
+      }
+    });
+  }
+  if (!Number.isFinite(penalty)) return Number.POSITIVE_INFINITY;
+
+  if (parentBody) {
+    const branchDistance = Math.hypot(candidateBody.x - parentBody.x, candidateBody.y - parentBody.y);
+    const idealBranchDistance = clamp(
+      parentBody.radius + candidateBody.radius + 22 + (parentBody.safetyRadius + candidateBody.safetyRadius) * 0.1,
+      54,
+      124
+    );
+    penalty += Math.abs(branchDistance - idealBranchDistance) * 2.2;
+  }
+
+  const adjacency = graphMeta.adjacency.get(nodeKey) || new Set();
+  adjacency.forEach((neighborKey) => {
+    if (!Number.isFinite(penalty)) return;
+    if (!placedBodies.has(neighborKey) || neighborKey === parentKey) return;
+    const neighborBody = placedBodies.get(neighborKey);
+    const segment = buildSegmentForBodies(candidateBody, neighborBody);
+    if (!segment) return;
+    penalty += Math.hypot(segment.end.x - segment.start.x, segment.end.y - segment.start.y) * 0.12;
+    placedBodies.forEach((body, key) => {
+      if (!Number.isFinite(penalty)) return;
+      if (key === nodeKey || key === neighborKey) return;
+      const bodyDistance = distancePointToSegment(body, segment.start, segment.end);
+      const nodeClearance = Math.max(18, (body.collisionRadius || body.radius || 0) + 10);
+      if (bodyDistance.projection > 0.06 && bodyDistance.projection < 0.94 && bodyDistance.distance < nodeClearance) {
+        penalty = Number.POSITIVE_INFINITY;
+        return;
+      }
+    });
+  });
+
+  return penalty;
+};
+
+const evaluateFallbackPlacementCandidate = ({
+  candidateBody,
+  nodeKey = '',
+  parentKey = '',
+  parentBody = null,
+  center,
+  band,
+  scope,
+  placedBodies = new Map(),
+  segments = [],
+  graphMeta
+}) => {
+  let penalty = 0;
+  const radialDistance = Math.hypot(candidateBody.x - center.x, candidateBody.y - center.y);
+  const angle = Math.atan2(candidateBody.y - center.y, candidateBody.x - center.x);
+
+  if (band) {
+    if (radialDistance < band.min) penalty += (band.min - radialDistance) * 640;
+    penalty += Math.abs(radialDistance - band.ideal) * 0.65;
+  }
+
+  if (scope) {
+    penalty += angleDistance(angle, scope.centerAngle ?? angle) * 140;
+  }
+
+  if (parentBody) {
+    penalty += Math.hypot(candidateBody.x - parentBody.x, candidateBody.y - parentBody.y) * 0.9;
+  }
+
+  placedBodies.forEach((body, key) => {
+    if (key === nodeKey) return;
+    const distance = Math.hypot(candidateBody.x - body.x, candidateBody.y - body.y) || 0.001;
+    const minGap = (candidateBody.collisionRadius || candidateBody.radius || 0)
+      + (body.collisionRadius || body.radius || 0)
+      + 8;
+    if (distance < minGap) {
+      penalty += 500000 + (minGap - distance) * 1800;
+    }
+    if (rectsOverlap(candidateBody.labelRect, body.labelRect)) {
+      const overlapX = Math.max(0, Math.min(candidateBody.labelRect.right, body.labelRect.right) - Math.max(candidateBody.labelRect.left, body.labelRect.left));
+      const overlapY = Math.max(0, Math.min(candidateBody.labelRect.bottom, body.labelRect.bottom) - Math.max(candidateBody.labelRect.top, body.labelRect.top));
+      penalty += 450000 + overlapX * overlapY * 32;
+    }
+    if (circleHitsRect({ x: candidateBody.x, y: candidateBody.y, radius: candidateBody.collisionRadius || candidateBody.radius || 0 }, body.labelRect, 10)) {
+      penalty += 320000;
+    }
+    if (circleHitsRect({ x: body.x, y: body.y, radius: body.collisionRadius || body.radius || 0 }, candidateBody.labelRect, 10)) {
+      penalty += 320000;
+    }
+  });
+
+  const incomingStart = parentBody || center;
+  const incomingSegment = buildSegmentForBodies(incomingStart, candidateBody);
+  if (incomingSegment) {
+    placedBodies.forEach((body, key) => {
+      if (key === nodeKey || key === parentKey) return;
+      const bodyDistance = distancePointToSegment(body, incomingSegment.start, incomingSegment.end);
+      const nodeClearance = Math.max(18, (body.collisionRadius || body.radius || 0) + 10);
+      if (bodyDistance.projection > 0.06 && bodyDistance.projection < 0.94 && bodyDistance.distance < nodeClearance) {
+        penalty += 420000 + (nodeClearance - bodyDistance.distance) * 1600;
+      }
+      const labelDistance = distanceSegmentToRect(incomingSegment.start, incomingSegment.end, body.labelRect);
+      const labelClearance = Math.max(10, (body.labelRect?.height || body.labelHeightHint || 24) * 0.32);
+      if (labelDistance.distance < labelClearance) {
+        penalty += 360000 + (labelClearance - labelDistance.distance) * 1200;
+      }
+    });
+
+    segments.forEach((segmentMeta) => {
+      if (
+        segmentMeta.fromKey === parentKey
+        || segmentMeta.toKey === parentKey
+        || segmentMeta.fromKey === nodeKey
+        || segmentMeta.toKey === nodeKey
+      ) {
+        return;
+      }
+      if (computeSegmentIntersection(incomingSegment, { start: segmentMeta.start, end: segmentMeta.end }).intersects) {
+        penalty += segmentMeta.isHierarchyEdge ? 380000 : 240000;
+      }
+    });
+  }
+
+  const adjacency = graphMeta.adjacency.get(nodeKey) || new Set();
+  adjacency.forEach((neighborKey) => {
+    if (!placedBodies.has(neighborKey) || neighborKey === parentKey) return;
+    const neighborBody = placedBodies.get(neighborKey);
+    const segment = buildSegmentForBodies(candidateBody, neighborBody);
+    if (!segment) return;
+    penalty += Math.hypot(segment.end.x - segment.start.x, segment.end.y - segment.start.y) * 0.18;
+  });
+
+  return penalty;
+};
+
+const buildPlacementCandidates = ({
+  center,
+  centerKey = '',
+  nodeKey = '',
+  parentKey = '',
+  parentBody = null,
+  band,
+  scope,
+  childPreferredAngle = null,
+  siblingIndex = 0,
+  siblingCount = 1,
+  seedMetrics = {}
+}) => {
+  const parentAngle = parentBody
+    ? Math.atan2(parentBody.y - center.y, parentBody.x - center.x)
+    : (scope?.centerAngle ?? -Math.PI / 2);
+  const idealAngle = averageAngles([
+    { angle: scope?.centerAngle ?? parentAngle, weight: 2.8 },
+    { angle: parentAngle, weight: parentKey === centerKey ? 1.1 : 1.8 },
+    ...(Number.isFinite(childPreferredAngle) ? [{ angle: childPreferredAngle, weight: 1.6 }] : [])
+  ], scope?.centerAngle ?? parentAngle);
+  const baseDistance = parentBody
+    ? clamp(
+      Math.max(
+        band?.min || 0,
+        Math.hypot(parentBody.x - center.x, parentBody.y - center.y) + (seedMetrics.radius || 16) * 0.5 + 24
+      ),
+      (band?.min || 0) + 2,
+      Math.max((band?.min || 0) + 2, (band?.ideal || 0) + 2400)
+    )
+    : clamp(
+      band?.ideal || 0,
+      (band?.min || 0) + 2,
+      Math.max((band?.min || 0) + 2, (band?.ideal || 0) + 2400)
+    );
+  const siblingBias = siblingCount > 1
+    ? (siblingIndex - (siblingCount - 1) * 0.5) / Math.max(1, siblingCount - 1)
+    : 0;
+  const angleWindow = clamp(
+    Math.max(0.12, (scope?.span || Math.PI / 8) * 0.46),
+    0.12,
+    0.88
+  );
+  const angleOffsets = parentBody
+    ? [
+      siblingBias * angleWindow * 0.72,
+      0,
+      -angleWindow * 0.18,
+      angleWindow * 0.18,
+      -angleWindow * 0.34,
+      angleWindow * 0.34,
+      -angleWindow * 0.52,
+      angleWindow * 0.52,
+      -angleWindow * 0.72,
+      angleWindow * 0.72
+    ]
+    : [
+      siblingBias * angleWindow * 0.42,
+      0,
+      -angleWindow * 0.26,
+      angleWindow * 0.26,
+      -angleWindow * 0.5,
+      angleWindow * 0.5,
+      -angleWindow * 0.74,
+      angleWindow * 0.74
+    ];
+  const distanceOffsets = parentBody
+    ? [0, 12, 24, 40, 60, 84, 120, 168, 228, 300, 384, 480, 588, 708, 840, 984]
+    : [0, 16, 30, 48, 72, 108, 156, 216, 288, 372, 468, 576, 696, 828, 972, 1128];
+  const candidates = [];
+
+  angleOffsets.forEach((angleOffset) => {
+    distanceOffsets.forEach((distanceOffset) => {
+      const angle = idealAngle + angleOffset;
+      if (parentBody) {
+        const branchDistance = clamp(
+          Math.max(
+            parentBody.radius + (seedMetrics.radius || 16) + 24,
+            (seedMetrics.safetyRadius || 28) * 0.55 + 34
+          ) + distanceOffset,
+          52,
+          2400
+        );
+        const x = parentBody.x + Math.cos(angle) * branchDistance;
+        const y = parentBody.y + Math.sin(angle) * branchDistance;
+        const radialDistance = Math.hypot(x - center.x, y - center.y);
+        if (band && radialDistance < band.min + 2) {
+          return;
+        }
+        candidates.push({
+          angle,
+          distance: radialDistance,
+          localDistance: branchDistance,
+          x,
+          y
+        });
+        return;
+      }
+      const distance = clamp(
+        baseDistance + distanceOffset,
+        (band?.min || 0) + 2,
+        Math.max((band?.min || 0) + 2, baseDistance + 2400)
+      );
+      candidates.push({
+        angle,
+        distance,
+        x: center.x + Math.cos(angle) * distance,
+        y: center.y + Math.sin(angle) * distance
+      });
+    });
+  });
+
+  return candidates;
+};
+
+const buildBodiesWithPrefixFreeze = ({
+  center,
+  centerKey = '',
+  levels = [],
+  nodesByLevel = new Map(),
+  graphMeta,
+  labelMetricsByKey = new Map(),
+  nodeSeedMetricsByKey = new Map(),
+  bandByLevel = new Map(),
+  primaryTreeMeta,
+  sectorPlan = null
+}) => {
+  const {
+    primaryParentByKey,
+    childrenByParent,
+    clusterRootByKey,
+    subtreeDemandByKey,
+    requiredSpanByKey,
+    requiredRadiusByKey,
+    clusters,
+    nodeByKey
+  } = primaryTreeMeta;
+  const { siblingOrderByParent, childPreferredAngleByKey } = buildSiblingOrderingByParent({
+    centerKey,
+    childrenByParent,
+    clusterRootByKey,
+    graphMeta,
+    sectorPlan,
+    subtreeDemandByKey
+  });
+  const {
+    scopeByKey,
+    radialOffsetByKey,
+    siblingYieldByParent
+  } = buildTreeNodeScopes({
+    centerKey,
+    childrenByParent,
+    siblingOrderByParent,
+    subtreeDemandByKey,
+    requiredSpanByKey,
+    requiredRadiusByKey,
+    clusterRootByKey,
+    sectorPlan
+  });
+
+  const placedBodies = new Map();
+  const bodies = [];
+  const segments = [];
+  const segmentKeySet = new Set();
+  const clusterSizeByRoot = new Map(clusters.map((cluster) => [cluster.rootKey, cluster.nodes.length]));
+  const orderedRootKeys = (childrenByParent.get(centerKey) || []).slice().sort((leftKey, rightKey) => {
+    const leftWedge = sectorPlan?.wedgeByRoot?.get?.(leftKey);
+    const rightWedge = sectorPlan?.wedgeByRoot?.get?.(rightKey);
+    return (
+      normalizePositiveAngle(leftWedge?.centerAngle ?? -Math.PI / 2)
+      - normalizePositiveAngle(rightWedge?.centerAngle ?? -Math.PI / 2)
+      || String(leftKey).localeCompare(String(rightKey))
+    );
+  });
+
+  const registerSegmentsForNode = (nodeKey, body) => {
+    const neighbors = graphMeta.adjacency.get(nodeKey) || new Set();
+    neighbors.forEach((neighborKey) => {
+      if (neighborKey !== centerKey && !placedBodies.has(neighborKey)) return;
+      const edgeKey = nodeKey < neighborKey ? `${nodeKey}|${neighborKey}` : `${neighborKey}|${nodeKey}`;
+      if (segmentKeySet.has(edgeKey)) return;
+      const startBody = nodeKey === centerKey ? center : body;
+      const endBody = neighborKey === centerKey ? center : placedBodies.get(neighborKey);
+      const segment = buildSegmentForBodies(startBody, endBody);
+      if (!segment) return;
+      segmentKeySet.add(edgeKey);
+      segments.push({
+        fromKey: nodeKey,
+        toKey: neighborKey,
+        start: segment.start,
+        end: segment.end,
+        isHierarchyEdge: primaryParentByKey.get(nodeKey) === neighborKey || primaryParentByKey.get(neighborKey) === nodeKey || nodeKey === centerKey || neighborKey === centerKey
+      });
+    });
+  };
+
+  const placeNode = (nodeKey) => {
+    const node = nodeByKey.get(nodeKey);
+    if (!node) return;
+    const parentKey = primaryParentByKey.get(nodeKey) || centerKey;
+    const parentBody = parentKey === centerKey ? null : placedBodies.get(parentKey);
+    const band = bandByLevel.get(Number(node.level || primaryTreeMeta.levelByKey.get(nodeKey) || 1));
+    const scope = scopeByKey.get(nodeKey) || {
+      centerAngle: sectorPlan?.wedgeByRoot?.get?.(clusterRootByKey.get(nodeKey) || nodeKey)?.centerAngle ?? -Math.PI / 2,
+      span: Math.PI / 8,
+      clusterRoot: clusterRootByKey.get(nodeKey) || nodeKey,
+      sectorIndex: sectorPlan?.wedgeByRoot?.get?.(clusterRootByKey.get(nodeKey) || nodeKey)?.sectorIndex ?? -1
+    };
+    const labelMetrics = labelMetricsByKey.get(nodeKey) || node.labelMetrics || estimateStarMapLabelMetrics(node.label);
+    const seedMetrics = nodeSeedMetricsByKey.get(nodeKey) || {};
+    const siblings = siblingOrderByParent.get(parentKey) || [];
+    const siblingIndex = Math.max(0, siblings.indexOf(nodeKey));
+    const siblingCount = Math.max(1, siblings.length);
+    const clusterRoot = clusterRootByKey.get(nodeKey) || nodeKey;
+    const clusterSize = clusterSizeByRoot.get(clusterRoot) || 1;
+    const radialOffset = radialOffsetByKey.get(nodeKey) || scope?.radialOffset || 0;
+    const candidates = buildPlacementCandidates({
+      center,
+      centerKey,
+      nodeKey,
+      parentKey,
+      parentBody,
+      band,
+      scope,
+      childPreferredAngle: childPreferredAngleByKey.get(nodeKey),
+      siblingIndex,
+      siblingCount,
+      seedMetrics
+    }).map((candidate) => {
+      if (!radialOffset) return candidate;
+      const direction = parentBody
+        ? normalize(candidate.x - parentBody.x, candidate.y - parentBody.y, {
+          x: Math.cos(candidate.angle),
+          y: Math.sin(candidate.angle)
+        })
+        : normalize(candidate.x - center.x, candidate.y - center.y, {
+          x: Math.cos(candidate.angle),
+          y: Math.sin(candidate.angle)
+        });
+      const nextX = (parentBody ? parentBody.x : center.x) + direction.x * ((parentBody ? Math.hypot(candidate.x - parentBody.x, candidate.y - parentBody.y) : candidate.distance) + radialOffset);
+      const nextY = (parentBody ? parentBody.y : center.y) + direction.y * ((parentBody ? Math.hypot(candidate.x - parentBody.x, candidate.y - parentBody.y) : candidate.distance) + radialOffset);
+      const nextDistance = Math.hypot(nextX - center.x, nextY - center.y);
+      if (band && nextDistance < band.min + 2) {
+        return candidate;
+      }
+      return {
+        ...candidate,
+        distance: nextDistance,
+        x: nextX,
+        y: nextY
+      };
+    });
+
+    let bestBody = null;
+    let bestPenalty = Number.POSITIVE_INFINITY;
+    candidates.forEach((candidate) => {
+      const body = buildBodyFromPlacement({
+        node,
+        nodeKey,
+        center,
+        x: candidate.x,
+        y: candidate.y,
+        band,
+        scope,
+        clusterRoot,
+        clusterSize,
+        parentKey,
+        siblingIndex,
+        siblingCount,
+        seedMetrics,
+        labelMetrics
+      });
+      const penalty = evaluatePlacementCandidate({
+        candidateBody: body,
+        nodeKey,
+        parentKey,
+        parentBody,
+        center,
+        centerKey,
+        band,
+        scope,
+        placedBodies,
+        segments,
+        graphMeta
+      });
+      if (penalty < bestPenalty) {
+        bestPenalty = penalty;
+        bestBody = body;
+      }
+    });
+
+    if (!bestBody) {
+      const relaxedBand = band
+        ? {
+          ...band,
+          min: Math.max(center.radius + 10, band.min - 28),
+          max: band.max + 92,
+          ideal: band.ideal + 26
+        }
+        : band;
+      const relaxedScope = scope
+        ? {
+          ...scope,
+          span: Math.min(Math.PI * 1.25, Math.max(scope.span * 1.9, scope.span + 0.42))
+        }
+        : scope;
+      const relaxedCandidates = buildPlacementCandidates({
+        center,
+        centerKey,
+        nodeKey,
+        parentKey,
+        parentBody,
+        band: relaxedBand,
+        scope: relaxedScope,
+        childPreferredAngle: childPreferredAngleByKey.get(nodeKey),
+        siblingIndex,
+        siblingCount,
+        seedMetrics
+      });
+      relaxedCandidates.forEach((candidate) => {
+        const body = buildBodyFromPlacement({
+          node,
+          nodeKey,
+          center,
+          x: candidate.x,
+          y: candidate.y,
+          band: relaxedBand || band,
+          scope: relaxedScope || scope,
+          clusterRoot,
+          clusterSize,
+          parentKey,
+          siblingIndex,
+          siblingCount,
+          seedMetrics,
+          labelMetrics
+        });
+        const penalty = evaluatePlacementCandidate({
+          candidateBody: body,
+          nodeKey,
+          parentKey,
+          parentBody,
+          center,
+          centerKey,
+          band: relaxedBand || band,
+          scope: relaxedScope || scope,
+          placedBodies,
+          segments,
+          graphMeta
+        });
+        if (penalty < bestPenalty) {
+          bestPenalty = penalty;
+          bestBody = body;
+        }
+      });
+    }
+
+    if (!bestBody) {
+      const fallbackScope = scope
+        ? {
+          ...scope,
+          span: Math.min(Math.PI * 1.4, Math.max(scope.span * 2.4, scope.span + 0.8))
+        }
+        : scope;
+      const fallbackBand = band
+        ? {
+          ...band,
+          min: Math.max(center.radius + 10, band.min - 42),
+          max: band.max + 140,
+          ideal: band.ideal + 42
+        }
+        : band;
+      const fallbackCandidates = buildPlacementCandidates({
+        center,
+        centerKey,
+        nodeKey,
+        parentKey,
+        parentBody,
+        band: fallbackBand,
+        scope: fallbackScope,
+        childPreferredAngle: childPreferredAngleByKey.get(nodeKey),
+        siblingIndex,
+        siblingCount,
+        seedMetrics
+      });
+      fallbackCandidates.forEach((candidate) => {
+        const body = buildBodyFromPlacement({
+          node,
+          nodeKey,
+          center,
+          x: candidate.x,
+          y: candidate.y,
+          band: fallbackBand || band,
+          scope: fallbackScope || scope,
+          clusterRoot,
+          clusterSize,
+          parentKey,
+          siblingIndex,
+          siblingCount,
+          seedMetrics,
+          labelMetrics
+        });
+        const penalty = evaluateFallbackPlacementCandidate({
+          candidateBody: body,
+          nodeKey,
+          parentKey,
+          parentBody,
+          center,
+          band: fallbackBand || band,
+          scope: fallbackScope || scope,
+          placedBodies,
+          segments,
+          graphMeta
+        });
+        if (penalty < bestPenalty) {
+          bestPenalty = penalty;
+          bestBody = body;
+        }
+      });
+    }
+
+    if (!bestBody) {
+      const emergencyAngle = (scope?.centerAngle ?? -Math.PI / 2) + (siblingIndex - (siblingCount - 1) * 0.5) * 0.18;
+      const emergencyDistance = parentBody
+        ? Math.max(
+          56,
+          Math.hypot(parentBody.x - center.x, parentBody.y - center.y) + parentBody.radius + (seedMetrics.radius || 16) + 28
+        )
+        : Math.max(center.radius + 44, band?.ideal || center.radius + 80);
+      const emergencyX = parentBody
+        ? parentBody.x + Math.cos(emergencyAngle) * Math.min(164, emergencyDistance * 0.34)
+        : center.x + Math.cos(emergencyAngle) * emergencyDistance;
+      const emergencyY = parentBody
+        ? parentBody.y + Math.sin(emergencyAngle) * Math.min(164, emergencyDistance * 0.34)
+        : center.y + Math.sin(emergencyAngle) * emergencyDistance;
+      bestBody = buildBodyFromPlacement({
+        node,
+        nodeKey,
+        center,
+        x: emergencyX,
+        y: emergencyY,
+        band,
+        scope,
+        clusterRoot,
+        clusterSize,
+        parentKey,
+        siblingIndex,
+        siblingCount,
+        seedMetrics,
+        labelMetrics
+      });
+    }
+
+    placedBodies.set(nodeKey, bestBody);
+    bodies.push(bestBody);
+    registerSegmentsForNode(nodeKey, bestBody);
+    const children = siblingOrderByParent.get(nodeKey) || childrenByParent.get(nodeKey) || [];
+    children.forEach((childKey) => {
+      placeNode(childKey);
+    });
+  };
+
+  orderedRootKeys.forEach((rootKey) => {
+    placeNode(rootKey);
+  });
+
+  return {
+    bodies,
+    bodyByKey: placedBodies,
+    scopeByKey,
+    radialOffsetByKey,
+    siblingYieldByParent,
+    siblingOrderByParent
+  };
+};
+
+const buildBadgeBodiesFromPlacedNodes = ({
+  center,
+  boundaryBadgeMeta = { badges: [], badgesBySourceKey: new Map() },
+  bodyByKey = new Map(),
+  clusterRootByKey = new Map()
+}) => {
+  const badgeBodies = [];
+  const badgeBodyByStubId = new Map();
+  const existingBodies = Array.from(bodyByKey.values());
+
+  boundaryBadgeMeta.badges.forEach((badgeMeta, index) => {
+    const sourceBody = bodyByKey.get(badgeMeta.sourceKey);
+    if (!sourceBody) return;
+    const baseAngle = Math.atan2(sourceBody.y - center.y, sourceBody.x - center.x);
+    const angleOffsets = [0, -0.22, 0.22, -0.4, 0.4, -0.62, 0.62, -0.86, 0.86];
+    const distanceOffsets = [0, 14, 28, 48, 72, 108, 156, 216, 288, 372];
+    let bestBody = null;
+    let bestPenalty = Number.POSITIVE_INFINITY;
+
+    angleOffsets.forEach((offset) => {
+      distanceOffsets.forEach((distanceOffset) => {
+        const angle = baseAngle + offset + (index % 2 === 0 ? 0 : 0.04);
+        const distance = sourceBody.targetDistance + sourceBody.radius + badgeMeta.radius + STAR_MAP_BADGE_LAYOUT.outwardGap + distanceOffset;
+        const x = center.x + Math.cos(angle) * distance;
+        const y = center.y + Math.sin(angle) * distance;
+        const candidate = {
+        key: badgeMeta.key,
+        label: badgeMeta.label,
+        level: badgeMeta.sourceLevel,
+        clusterRoot: clusterRootByKey.get(badgeMeta.sourceKey) || badgeMeta.sourceKey,
+        clusterSignature: clusterRootByKey.get(badgeMeta.sourceKey) || badgeMeta.sourceKey,
+        clusterSize: sourceBody.clusterSize || 1,
+        sectorIndex: sourceBody.sectorIndex,
+        x,
+        y,
+        vx: 0,
+        vy: 0,
+        seedX: x,
+        seedY: y,
+        targetDistance: distance,
+        radiusBias: distance - sourceBody.targetDistance,
+        radius: badgeMeta.radius,
+        collisionRadius: badgeMeta.radius + 4,
+        labelWidthHint: badgeMeta.width,
+        labelHeightHint: badgeMeta.height,
+        labelOffsetY: 0,
+        labelPlacement: 'center',
+        labelMetrics: {
+          widthHint: badgeMeta.width,
+          heightHint: badgeMeta.height
+        },
+        band: sourceBody.band,
+        degree: 0,
+        childCount: 0,
+        importance: 0.72,
+        siblingIndex: 0,
+        siblingCount: 1,
+        subRingIndex: 0,
+        primaryParentKey: badgeMeta.sourceKey,
+        safetyRadius: badgeMeta.radius + STAR_MAP_BADGE_LAYOUT.minSpacing,
+        isStubBadge: true,
+        stubId: badgeMeta.stubId,
+        sourceKey: badgeMeta.sourceKey,
+        labelRect: buildLabelRect({
+          x,
+          y,
+          radius: badgeMeta.radius,
+          labelWidthHint: badgeMeta.width,
+          labelHeightHint: badgeMeta.height,
+          labelOffsetY: 0,
+          labelPlacement: 'center'
+        })
+        };
+
+        let penalty = 0;
+        existingBodies.forEach((body) => {
+          const distanceToBody = Math.hypot(candidate.x - body.x, candidate.y - body.y);
+          const minGap = (candidate.collisionRadius || candidate.radius) + (body.collisionRadius || body.radius || 0) + 8;
+          if (distanceToBody < minGap) {
+            penalty += 180000 + (minGap - distanceToBody) * 900;
+          }
+          if (rectsOverlap(candidate.labelRect, body.labelRect)) {
+            penalty += 120000;
+          }
+        });
+
+        if (penalty < bestPenalty) {
+          bestPenalty = penalty;
+          bestBody = candidate;
+        }
+      });
+    });
+
+    if (!bestBody) {
+      const angle = baseAngle + (index % 2 === 0 ? 0.18 : -0.18);
+      const distance = sourceBody.targetDistance + sourceBody.radius + badgeMeta.radius + STAR_MAP_BADGE_LAYOUT.outwardGap + 420;
+      const x = center.x + Math.cos(angle) * distance;
+      const y = center.y + Math.sin(angle) * distance;
+      bestBody = {
+        key: badgeMeta.key,
+        label: badgeMeta.label,
+        level: badgeMeta.sourceLevel,
+        clusterRoot: clusterRootByKey.get(badgeMeta.sourceKey) || badgeMeta.sourceKey,
+        clusterSignature: clusterRootByKey.get(badgeMeta.sourceKey) || badgeMeta.sourceKey,
+        clusterSize: sourceBody.clusterSize || 1,
+        sectorIndex: sourceBody.sectorIndex,
+        x,
+        y,
+        vx: 0,
+        vy: 0,
+        seedX: x,
+        seedY: y,
+        targetDistance: distance,
+        radiusBias: distance - sourceBody.targetDistance,
+        radius: badgeMeta.radius,
+        collisionRadius: badgeMeta.radius + 4,
+        labelWidthHint: badgeMeta.width,
+        labelHeightHint: badgeMeta.height,
+        labelOffsetY: 0,
+        labelPlacement: 'center',
+        labelMetrics: {
+          widthHint: badgeMeta.width,
+          heightHint: badgeMeta.height
+        },
+        band: sourceBody.band,
+        degree: 0,
+        childCount: 0,
+        importance: 0.72,
+        siblingIndex: 0,
+        siblingCount: 1,
+        subRingIndex: 0,
+        primaryParentKey: badgeMeta.sourceKey,
+        safetyRadius: badgeMeta.radius + STAR_MAP_BADGE_LAYOUT.minSpacing,
+        isStubBadge: true,
+        stubId: badgeMeta.stubId,
+        sourceKey: badgeMeta.sourceKey,
+        labelRect: buildLabelRect({
+          x,
+          y,
+          radius: badgeMeta.radius,
+          labelWidthHint: badgeMeta.width,
+          labelHeightHint: badgeMeta.height,
+          labelOffsetY: 0,
+          labelPlacement: 'center'
+        })
+      };
+    }
+    badgeBodies.push(bestBody);
+    badgeBodyByStubId.set(bestBody.stubId, bestBody);
+    bodyByKey.set(bestBody.key, bestBody);
+    existingBodies.push(bestBody);
+  });
+
+  return {
+    badgeBodies,
+    badgeBodyByStubId
+  };
+};
+
+const runSubtreeRepairPasses = ({
+  center,
+  centerKey = '',
+  graphMeta,
+  primaryParentByKey = new Map(),
+  childrenByParent = new Map(),
+  scopeByKey = new Map(),
+  bodyByKey = new Map(),
+  bandByLevel = new Map(),
+  levelByKey = new Map(),
+  labelMetricsByKey = new Map()
+}) => {
+  const subtreeCache = new Map();
+  const movableKeys = Array.from(bodyByKey.values())
+    .filter((body) => !body.isStubBadge)
+    .sort((left, right) => (
+      (levelByKey.get(right.key) || right.level || 0) - (levelByKey.get(left.key) || left.level || 0)
+      || String(left.key).localeCompare(String(right.key))
+    ))
+    .map((body) => body.key);
+
+  const evaluateBodies = (candidateBodyByKey) => {
+    const candidateBodies = Array.from(candidateBodyByKey.values()).filter((body) => !body.isStubBadge);
+    const springs = buildLayoutSprings({
+      graphMeta,
+      bodyByKey: candidateBodyByKey,
+      center,
+      centerKey,
+      primaryParentByKey
+    });
+    return measureLayoutPenalty(center, candidateBodies, springs, centerKey);
+  };
+
+  let bestPenalty = evaluateBodies(bodyByKey);
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    // eslint-disable-next-line no-loop-func
+    movableKeys.forEach((nodeKey) => {
+      const parentKey = primaryParentByKey.get(nodeKey) || centerKey;
+      if (!parentKey) return;
+      const currentBody = bodyByKey.get(nodeKey);
+      if (!currentBody) return;
+      const scope = scopeByKey.get(nodeKey);
+      const band = bandByLevel.get(levelByKey.get(nodeKey) || currentBody.level || 1);
+      const subtreeKeys = collectSubtreeKeys(nodeKey, childrenByParent, subtreeCache);
+      const subtreeKeySet = new Set(subtreeKeys);
+      Array.from(bodyByKey.values()).forEach((body) => {
+        if (body.isStubBadge && subtreeKeySet.has(body.sourceKey)) {
+          subtreeKeySet.add(body.key);
+        }
+      });
+
+      const baseAngle = Math.atan2(currentBody.y - center.y, currentBody.x - center.x);
+      const baseDistance = Math.hypot(currentBody.x - center.x, currentBody.y - center.y);
+      const angleOffsets = [0, -0.08, 0.08, -0.16, 0.16];
+      const distanceOffsets = [0, 14, 28];
+
+      // eslint-disable-next-line no-loop-func
+      angleOffsets.forEach((angleOffset) => {
+        distanceOffsets.forEach((distanceOffset) => {
+          const nextAngle = baseAngle + angleOffset;
+          const nextDistance = clamp(
+            baseDistance + distanceOffset,
+            (band?.min || 0) + 2,
+            (band?.max || baseDistance + distanceOffset) - 2
+          );
+          if (scope && angleDistance(nextAngle, scope.centerAngle) > Math.max(0.14, scope.span * 0.52)) return;
+          const nextX = center.x + Math.cos(nextAngle) * nextDistance;
+          const nextY = center.y + Math.sin(nextAngle) * nextDistance;
+          const dx = nextX - currentBody.x;
+          const dy = nextY - currentBody.y;
+          if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return;
+
+          const candidateBodyByKey = new Map(bodyByKey);
+          let invalid = false;
+          subtreeKeySet.forEach((key) => {
+            const body = candidateBodyByKey.get(key);
+            if (!body) return;
+            const nextBody = {
+              ...body,
+              x: body.x + dx,
+              y: body.y + dy
+            };
+            nextBody.labelRect = buildLabelRect({
+              x: nextBody.x,
+              y: nextBody.y,
+              radius: nextBody.radius,
+              labelWidthHint: nextBody.labelWidthHint,
+              labelHeightHint: nextBody.labelHeightHint,
+              labelOffsetY: nextBody.labelOffsetY,
+              labelPlacement: nextBody.labelPlacement
+            });
+            if (!nextBody.isStubBadge) {
+              const nextBand = bandByLevel.get(levelByKey.get(nextBody.key) || nextBody.level || 1);
+              const radialDistance = Math.hypot(nextBody.x - center.x, nextBody.y - center.y);
+              if (nextBand && (radialDistance < nextBand.min - 6 || radialDistance > nextBand.max + 22)) {
+                invalid = true;
+              }
+            }
+            candidateBodyByKey.set(key, nextBody);
+          });
+          if (invalid) return;
+
+          const penalty = evaluateBodies(candidateBodyByKey);
+          if (penalty + 0.001 < bestPenalty) {
+            bestPenalty = penalty;
+            candidateBodyByKey.forEach((body, key) => {
+              bodyByKey.set(key, body);
+            });
+          }
+        });
+      });
+    });
+  }
+
+  return {
+    bodyByKey,
+    penalty: bestPenalty
+  };
+};
+
+// eslint-disable-next-line no-unused-vars
 const computeClusterCentroids = (bodies) => {
   const centroidByCluster = new Map();
   const countByCluster = new Map();
@@ -2105,508 +3680,116 @@ export const solveStarMapConstellationLayout = ({
   });
   const maxDegree = Math.max(1, ...degreeValues);
   const maxChildCount = Math.max(1, ...childValues);
-  const primaryParentByKey = new Map();
-  levels.forEach((level) => {
-    if (level <= 1) return;
-    const nodes = nodesByLevel.get(level) || [];
-    nodes.forEach((node) => {
-      const parents = Array.from(graphMeta.previousLevelNeighbors.get(node.key) || []);
-      if (parents.length < 1) return;
-      const bestParent = parents
-        .map((parentKey) => ({
-          parentKey,
-          childCount: graphMeta.nextLevelNeighbors.get(parentKey)?.size || 0,
-          degree: graphMeta.adjacency.get(parentKey)?.size || 0
-        }))
-        .sort((left, right) => (
-          right.childCount - left.childCount
-          || right.degree - left.degree
-          || String(left.parentKey).localeCompare(String(right.parentKey))
-        ))[0];
-      if (bestParent?.parentKey) {
-        primaryParentByKey.set(node.key, bestParent.parentKey);
-      }
-    });
+  const nodeSeedMetricsByKey = buildNodeSeedMetricsByKey({
+    layer,
+    levels,
+    nodesByLevel,
+    graphMeta,
+    labelMetricsByKey,
+    levelMax,
+    maxDegree,
+    maxChildCount
+  });
+  const primaryTreeMeta = buildPrimaryTreeMeta({
+    centerKey,
+    levels,
+    nodesByLevel,
+    graphMeta,
+    labelMetricsByKey,
+    nodeSeedMetricsByKey
+  });
+  const boundaryBadgeMeta = buildBoundaryBadgeMeta({
+    boundaryStubs,
+    layer
   });
 
-  const solveAttempt = (spreadFactor) => {
-    const { bodies, bandByLevel, sectorPlan, boundaryBadgeMeta } = buildSeedBodies({
+  const attempts = STAR_MAP_LAYOUT_SPREAD_ATTEMPTS;
+  let best = null;
+
+  attempts.forEach((spreadFactor) => {
+    const bandByLevel = buildBandByLevel({
+      levels,
+      nodesByLevel,
+      centerRadius: center.radius,
+      spreadFactor
+    });
+    const sectorPlan = buildClusterSectorPlan({
       center,
-      width,
-      height,
-      layer,
+      centerKey,
+      clusters: primaryTreeMeta.clusters,
       levels,
       nodesByLevel,
       graphMeta,
       labelMetricsByKey,
-      primaryParentByKey,
-      levelMax,
-      maxDegree,
-      maxChildCount,
-      spreadFactor,
+      primaryParentByKey: primaryTreeMeta.primaryParentByKey,
+      clusterRootByKey: primaryTreeMeta.clusterRootByKey,
+      boundaryBadgeMeta
+    });
+    const placed = buildBodiesWithPrefixFreeze({
+      center,
       centerKey,
-      boundaryStubs
+      levels,
+      nodesByLevel,
+      graphMeta,
+      labelMetricsByKey,
+      nodeSeedMetricsByKey,
+      bandByLevel,
+      primaryTreeMeta,
+      sectorPlan
     });
-    const bodyByKey = new Map(bodies.map((body) => [body.key, body]));
-    const centerLabel = buildLabelRect(center);
-    const centerCircle = {
-      x: center.x,
-      y: center.y,
-      radius: center.radius
-    };
-
-    const springs = [];
-    const badgeAttachments = [];
-    graphMeta.adjacency.forEach((neighbors, key) => {
-      neighbors.forEach((neighborKey) => {
-        if (key >= neighborKey) return;
-        const fromBody = bodyByKey.get(key);
-        const toBody = bodyByKey.get(neighborKey);
-        const isHierarchyEdge = (
-          key === centerKey
-          || neighborKey === centerKey
-          || primaryParentByKey.get(key) === neighborKey
-          || primaryParentByKey.get(neighborKey) === key
-        );
-        const hierarchyWeight = isHierarchyEdge ? (
-          key === centerKey || neighborKey === centerKey ? 3 : 2
-        ) : 1;
-        springs.push({
-          fromKey: key,
-          toKey: neighborKey,
-          fromBody,
-          toBody,
-          isHierarchyEdge,
-          hierarchyWeight
-        });
-      });
+    const { badgeBodyByStubId } = buildBadgeBodiesFromPlacedNodes({
+      center,
+      boundaryBadgeMeta,
+      bodyByKey: placed.bodyByKey,
+      clusterRootByKey: primaryTreeMeta.clusterRootByKey
     });
-    (boundaryBadgeMeta?.badges || []).forEach((badgeMeta) => {
-      const badgeBody = bodyByKey.get(badgeMeta.key);
-      const sourceBody = bodyByKey.get(badgeMeta.sourceKey);
-      if (!badgeBody || !sourceBody) return;
-      badgeAttachments.push({
-        badgeBody,
-        sourceBody,
-        idealDistance: Math.max(
-          28,
-          badgeBody.targetDistance - sourceBody.targetDistance
-        )
-      });
+    const repaired = runSubtreeRepairPasses({
+      center,
+      centerKey,
+      graphMeta,
+      primaryParentByKey: primaryTreeMeta.primaryParentByKey,
+      childrenByParent: primaryTreeMeta.childrenByParent,
+      scopeByKey: placed.scopeByKey,
+      bodyByKey: placed.bodyByKey,
+      bandByLevel,
+      levelByKey: primaryTreeMeta.levelByKey,
+      labelMetricsByKey
     });
-
-    const iterations = 128;
-
-    for (let iteration = 0; iteration < iterations; iteration += 1) {
-      const cooling = 1 - iteration / Math.max(1, iterations - 1);
-      const forces = new Map();
-      const clusterCentroids = computeClusterCentroids(bodies);
-
-      bodies.forEach((body) => {
-        const force = ensureForce(forces, body.key);
-        const deltaX = body.x - center.x;
-        const deltaY = body.y - center.y;
-        const distance = Math.hypot(deltaX, deltaY) || 0.001;
-        const outward = normalize(deltaX, deltaY, normalize(body.seedX - center.x, body.seedY - center.y));
-        const band = body.band || bandByLevel.get(body.level);
-
-        if (distance < band.min) {
-          const push = (band.min - distance) * 0.18;
-          force.x += outward.x * push;
-          force.y += outward.y * push;
-        } else if (distance > band.max) {
-          const pull = (distance - band.max) * 0.14;
-          force.x -= outward.x * pull;
-          force.y -= outward.y * pull;
-        } else {
-          const soft = (body.targetDistance - distance) * 0.024;
-          force.x += outward.x * soft;
-          force.y += outward.y * soft;
-        }
-
-        force.x += (body.seedX - body.x) * 0.018;
-        force.y += (body.seedY - body.y) * 0.018;
-
-        const clusterCentroid = clusterCentroids.get(body.clusterRoot);
-        if (clusterCentroid && body.clusterSize > 1) {
-          force.x += (clusterCentroid.x - body.x) * 0.014;
-          force.y += (clusterCentroid.y - body.y) * 0.014;
-        }
-
-        const centerDistance = Math.hypot(body.x - centerCircle.x, body.y - centerCircle.y) || 0.001;
-        const centerGap = centerCircle.radius + Math.max(body.radius, body.collisionRadius || 0) + 12;
-        if (centerDistance < centerGap) {
-          const dir = normalize(body.x - centerCircle.x, body.y - centerCircle.y, outward);
-          const push = (centerGap - centerDistance) * 0.24;
-          force.x += dir.x * push;
-          force.y += dir.y * push;
-        }
-
-        if (circleHitsRect({ x: body.x, y: body.y, radius: Math.max(body.radius, body.collisionRadius || 0) }, centerLabel, 10)) {
-          force.x += outward.x * 3.1;
-          force.y += outward.y * 3.8;
-        }
-
-        if (rectsOverlap(body.labelRect, centerLabel)) {
-          force.x += outward.x * 2.8;
-          force.y += outward.y * 3.2;
-        }
-      });
-
-      springs.forEach((spring) => {
-        const start = spring.fromBody || (spring.fromKey === centerKey ? center : null);
-        const end = spring.toBody || (spring.toKey === centerKey ? center : null);
-        if (!start || !end) return;
-
-        const dx = end.x - start.x;
-        const dy = end.y - start.y;
-        const distance = Math.hypot(dx, dy) || 0.001;
-        const unit = normalize(dx, dy, { x: 1, y: 0 });
-
-        const fromLevel = Number(spring.fromBody?.level || 0);
-        const toLevel = Number(spring.toBody?.level || 0);
-        const sameCluster = spring.fromBody && spring.toBody && spring.fromBody.clusterRoot === spring.toBody.clusterRoot;
-        const fromSafety = Number(spring.fromBody?.safetyRadius || 26);
-        const toSafety = Number(spring.toBody?.safetyRadius || 26);
-        const fromCollision = Number(spring.fromBody?.collisionRadius || spring.fromBody?.radius || 22);
-        const toCollision = Number(spring.toBody?.collisionRadius || spring.toBody?.radius || 22);
-        const safetySpacing = (fromSafety + toSafety) * 0.22;
-        const idealDistance = spring.fromKey === centerKey || spring.toKey === centerKey
-          ? 48 + Math.max(fromCollision, toCollision) * 1.08 + Math.max(fromLevel, toLevel) * 8 * spreadFactor
-          : sameCluster
-            ? 42 + fromCollision + toCollision + Math.abs(fromLevel - toLevel) * 8 * spreadFactor + safetySpacing
-            : 60 + fromCollision + toCollision + Math.abs(fromLevel - toLevel) * 14 * spreadFactor + safetySpacing * 0.88;
-        const tension = (distance - idealDistance) * (sameCluster ? 0.024 : 0.011);
-
-        if (spring.fromBody) {
-          const force = ensureForce(forces, spring.fromBody.key);
-          force.x += unit.x * tension;
-          force.y += unit.y * tension;
-        }
-        if (spring.toBody) {
-          const force = ensureForce(forces, spring.toBody.key);
-          force.x -= unit.x * tension;
-          force.y -= unit.y * tension;
-        }
-      });
-
-      badgeAttachments.forEach((attachment) => {
-        const { badgeBody, sourceBody, idealDistance } = attachment;
-        const dx = badgeBody.x - sourceBody.x;
-        const dy = badgeBody.y - sourceBody.y;
-        const distance = Math.hypot(dx, dy) || 0.001;
-        const unit = normalize(dx, dy, normalize(badgeBody.x - center.x, badgeBody.y - center.y));
-        const badgeForce = ensureForce(forces, badgeBody.key);
-        const sourceForce = ensureForce(forces, sourceBody.key);
-        const spring = (distance - idealDistance) * 0.042;
-        badgeForce.x -= unit.x * spring;
-        badgeForce.y -= unit.y * spring;
-        sourceForce.x += unit.x * spring * 0.2;
-        sourceForce.y += unit.y * spring * 0.2;
-
-        const outward = normalize(badgeBody.x - center.x, badgeBody.y - center.y, unit);
-        const desiredX = center.x + outward.x * badgeBody.targetDistance;
-        const desiredY = center.y + outward.y * badgeBody.targetDistance;
-        badgeForce.x += (desiredX - badgeBody.x) * 0.06;
-        badgeForce.y += (desiredY - badgeBody.y) * 0.06;
-      });
-
-      // 节点与“无关边”避让：
-      // 如果节点或它的标签占地压到别人的边上，就同时推开节点和边的端点，
-      // 尽量减少“节点坐在线上”的读图障碍。
-      springs.forEach((spring) => {
-        const start = spring.fromBody || (spring.fromKey === centerKey ? center : null);
-        const end = spring.toBody || (spring.toKey === centerKey ? center : null);
-        if (!start || !end) return;
-
-        const edgeDx = end.x - start.x;
-        const edgeDy = end.y - start.y;
-        const edgeLength = Math.hypot(edgeDx, edgeDy) || 0.001;
-        if (edgeLength < 22) return;
-
-        bodies.forEach((body) => {
-          if (body.key === spring.fromKey || body.key === spring.toKey) return;
-
-          const clearance = Math.max(
-            18,
-            (body.collisionRadius || body.radius || 18) + Math.min(18, (body.labelWidthHint || 96) * 0.05)
-          );
-          const segmentDistance = distancePointToSegment(body, start, end);
-          if (segmentDistance.projection <= 0.08 || segmentDistance.projection >= 0.92) return;
-          if (segmentDistance.distance >= clearance) return;
-
-          const awayX = body.x - segmentDistance.closestX;
-          const awayY = body.y - segmentDistance.closestY;
-          const normal = normalize(
-            awayX,
-            awayY,
-            stableUnit(`${body.key}|${spring.fromKey}|${spring.toKey}:edge`) > 0.5
-              ? { x: -edgeDy / edgeLength, y: edgeDx / edgeLength }
-              : { x: edgeDy / edgeLength, y: -edgeDx / edgeLength }
-          );
-          const overlap = clearance - segmentDistance.distance;
-          const push = overlap * 0.18;
-          const bodyForce = ensureForce(forces, body.key);
-          bodyForce.x += normal.x * push;
-          bodyForce.y += normal.y * push;
-
-          const labelDistance = distanceSegmentToRect(start, end, body.labelRect);
-          const labelClearance = Math.max(10, (body.labelRect?.height || body.labelHeightHint || 24) * 0.38);
-          if (labelDistance.distance < labelClearance) {
-            const labelAwayX = body.labelRect.centerX - labelDistance.closestX;
-            const labelAwayY = body.labelRect.centerY - labelDistance.closestY;
-            const labelNormal = normalize(
-              labelAwayX,
-              labelAwayY,
-              normal
-            );
-            const labelPush = (labelClearance - labelDistance.distance) * 0.22;
-            bodyForce.x += labelNormal.x * labelPush;
-            bodyForce.y += labelNormal.y * labelPush;
-          }
-
-          if (spring.fromBody) {
-            const fromForce = ensureForce(forces, spring.fromBody.key);
-            fromForce.x -= normal.x * push * 0.16 * (1 - segmentDistance.projection);
-            fromForce.y -= normal.y * push * 0.16 * (1 - segmentDistance.projection);
-          }
-          if (spring.toBody) {
-            const toForce = ensureForce(forces, spring.toBody.key);
-            toForce.x -= normal.x * push * 0.16 * segmentDistance.projection;
-            toForce.y -= normal.y * push * 0.16 * segmentDistance.projection;
-          }
-        });
-      });
-
-      // 边与边交叉避让：
-      // 把“显然可避免的交叉”当成独立惩罚，优先保护中心骨架和主父链，
-      // 让次级边更愿意绕开，而不是所有边都维持同样优先级。
-      for (let leftIndex = 0; leftIndex < springs.length; leftIndex += 1) {
-        const leftSpring = springs[leftIndex];
-        const leftStart = leftSpring.fromBody || (leftSpring.fromKey === centerKey ? center : null);
-        const leftEnd = leftSpring.toBody || (leftSpring.toKey === centerKey ? center : null);
-        if (!leftStart || !leftEnd) continue;
-
-        for (let rightIndex = leftIndex + 1; rightIndex < springs.length; rightIndex += 1) {
-          const rightSpring = springs[rightIndex];
-          if (
-            leftSpring.fromKey === rightSpring.fromKey
-            || leftSpring.fromKey === rightSpring.toKey
-            || leftSpring.toKey === rightSpring.fromKey
-            || leftSpring.toKey === rightSpring.toKey
-          ) {
-            continue;
-          }
-
-          const rightStart = rightSpring.fromBody || (rightSpring.fromKey === centerKey ? center : null);
-          const rightEnd = rightSpring.toBody || (rightSpring.toKey === centerKey ? center : null);
-          if (!rightStart || !rightEnd) continue;
-
-          const intersection = computeSegmentIntersection(
-            { start: leftStart, end: leftEnd },
-            { start: rightStart, end: rightEnd }
-          );
-          if (!intersection.intersects) continue;
-
-          const leftDx = leftEnd.x - leftStart.x;
-          const leftDy = leftEnd.y - leftStart.y;
-          const rightDx = rightEnd.x - rightStart.x;
-          const rightDy = rightEnd.y - rightStart.y;
-          const leftLength = Math.hypot(leftDx, leftDy) || 1;
-          const rightLength = Math.hypot(rightDx, rightDy) || 1;
-          const leftNormal = normalize(-leftDy, leftDx, { x: 0, y: -1 });
-          const rightNormal = normalize(-rightDy, rightDx, { x: 0, y: -1 });
-          const centerDeltaX = ((rightStart.x + rightEnd.x) - (leftStart.x + leftEnd.x)) * 0.5;
-          const centerDeltaY = ((rightStart.y + rightEnd.y) - (leftStart.y + leftEnd.y)) * 0.5;
-          const leftSign = Math.sign(centerDeltaX * leftNormal.x + centerDeltaY * leftNormal.y)
-            || (stableUnit(`${leftSpring.fromKey}|${leftSpring.toKey}|${rightSpring.fromKey}|${rightSpring.toKey}:left`) > 0.5 ? 1 : -1);
-          const rightSign = -(
-            Math.sign(centerDeltaX * rightNormal.x + centerDeltaY * rightNormal.y)
-            || (stableUnit(`${leftSpring.fromKey}|${leftSpring.toKey}|${rightSpring.fromKey}|${rightSpring.toKey}:right`) > 0.5 ? 1 : -1)
-          );
-          const leftPriority = Number(leftSpring.hierarchyWeight || 1);
-          const rightPriority = Number(rightSpring.hierarchyWeight || 1);
-          const leftMoveScale = leftPriority >= rightPriority ? 0.08 : 0.18;
-          const rightMoveScale = rightPriority >= leftPriority ? 0.08 : 0.18;
-          const pushStrength = (0.72 + cooling * 0.48) * Math.min(1.2, Math.max(0.7, Math.min(leftLength, rightLength) / 120));
-
-          if (leftSpring.fromBody) {
-            const force = ensureForce(forces, leftSpring.fromBody.key);
-            force.x += leftNormal.x * leftSign * pushStrength * leftMoveScale * (1 - intersection.t);
-            force.y += leftNormal.y * leftSign * pushStrength * leftMoveScale * (1 - intersection.t);
-          }
-          if (leftSpring.toBody) {
-            const force = ensureForce(forces, leftSpring.toBody.key);
-            force.x += leftNormal.x * leftSign * pushStrength * leftMoveScale * intersection.t;
-            force.y += leftNormal.y * leftSign * pushStrength * leftMoveScale * intersection.t;
-          }
-          if (rightSpring.fromBody) {
-            const force = ensureForce(forces, rightSpring.fromBody.key);
-            force.x += rightNormal.x * rightSign * pushStrength * rightMoveScale * (1 - intersection.u);
-            force.y += rightNormal.y * rightSign * pushStrength * rightMoveScale * (1 - intersection.u);
-          }
-          if (rightSpring.toBody) {
-            const force = ensureForce(forces, rightSpring.toBody.key);
-            force.x += rightNormal.x * rightSign * pushStrength * rightMoveScale * intersection.u;
-            force.y += rightNormal.y * rightSign * pushStrength * rightMoveScale * intersection.u;
-          }
-        }
-      }
-
-      const sectorMetrics = buildSectorOccupancyMetrics(center, bodies);
-      sectorMetrics.sectors.forEach((sector) => {
-        const combinedArea = sector.area + sector.labelArea;
-        const overload = Math.max(0, combinedArea - 28000);
-        if (overload <= 0 && sector.nodeCount <= 3) return;
-        const sectorAngle = sector.angle;
-        const sectorDirection = { x: Math.cos(sectorAngle), y: Math.sin(sectorAngle) };
-        bodies.forEach((body) => {
-          const bodyAngle = Math.atan2(body.y - center.y, body.x - center.x);
-          if (getSectorIndexForAngle(bodyAngle, sectorMetrics.sectors.length) !== sector.sectorIndex) return;
-          const force = ensureForce(forces, body.key);
-          const pushStrength = overload > 0 ? Math.min(3.2, overload * 0.00004) : 0.6;
-          force.x += sectorDirection.x * pushStrength;
-          force.y += sectorDirection.y * pushStrength;
-        });
-      });
-
-      const horizontalDelta = sectorMetrics.halfPlane.leftArea - sectorMetrics.halfPlane.rightArea;
-      const verticalDelta = sectorMetrics.halfPlane.topArea - sectorMetrics.halfPlane.bottomArea;
-      bodies.forEach((body) => {
-        const force = ensureForce(forces, body.key);
-        const horizontalBias = horizontalDelta * 0.0000045;
-        const verticalBias = verticalDelta * 0.0000026;
-        force.x += body.x < center.x ? -horizontalBias : horizontalBias;
-        force.y += body.y < center.y ? -verticalBias : verticalBias;
-      });
-
-      const centerCrossPenalty = measureCenterCrossingPenalty(center, springs, centerKey);
-      if (centerCrossPenalty.highRiskSegments.length > 0) {
-        centerCrossPenalty.highRiskSegments.forEach((segmentMeta) => {
-          const spring = springs.find((item) => item.fromKey === segmentMeta.fromKey && item.toKey === segmentMeta.toKey);
-          if (!spring) return;
-          const fromForce = spring.fromBody ? ensureForce(forces, spring.fromBody.key) : null;
-          const toForce = spring.toBody ? ensureForce(forces, spring.toBody.key) : null;
-          const start = spring.fromBody || (spring.fromKey === centerKey ? center : null);
-          const end = spring.toBody || (spring.toKey === centerKey ? center : null);
-          if (!start || !end) return;
-          const dx = end.x - start.x;
-          const dy = end.y - start.y;
-          const normal = normalize(-dy, dx, { x: 0, y: -1 });
-          const sign = stableUnit(`${spring.fromKey}|${spring.toKey}:center-cross`) > 0.5 ? 1 : -1;
-          const push = Math.max(0.5, (center.radius + 18 - segmentMeta.distance) * 0.09);
-          if (fromForce) {
-            fromForce.x += normal.x * sign * push * 0.9;
-            fromForce.y += normal.y * sign * push * 0.9;
-          }
-          if (toForce) {
-            toForce.x += normal.x * sign * push * 0.9;
-            toForce.y += normal.y * sign * push * 0.9;
-          }
-        });
-      }
-
-      for (let leftIndex = 0; leftIndex < bodies.length; leftIndex += 1) {
-        const left = bodies[leftIndex];
-        for (let rightIndex = leftIndex + 1; rightIndex < bodies.length; rightIndex += 1) {
-          const right = bodies[rightIndex];
-          const dx = right.x - left.x;
-          const dy = right.y - left.y;
-          const distance = Math.hypot(dx, dy) || 0.001;
-          const unit = normalize(dx, dy, { x: 1, y: 0 });
-          const leftForce = ensureForce(forces, left.key);
-          const rightForce = ensureForce(forces, right.key);
-
-          const nodeGap = (left.collisionRadius || left.radius) + (right.collisionRadius || right.radius) + Math.max(20, (left.safetyRadius + right.safetyRadius) * 0.46);
-          if (distance < nodeGap) {
-            const push = (nodeGap - distance) * 0.28;
-            leftForce.x -= unit.x * push;
-            leftForce.y -= unit.y * push;
-            rightForce.x += unit.x * push;
-            rightForce.y += unit.y * push;
-          } else {
-            const softField = 92 + (left.collisionRadius || left.radius) + (right.collisionRadius || right.radius) + (left.labelWidthHint + right.labelWidthHint) * 0.08 + (left.safetyRadius + right.safetyRadius) * 0.24;
-            if (distance < softField) {
-              const push = (softField - distance) * 0.02;
-              leftForce.x -= unit.x * push;
-              leftForce.y -= unit.y * push;
-              rightForce.x += unit.x * push;
-              rightForce.y += unit.y * push;
-            }
-          }
-
-          if (rectsOverlap(left.labelRect, right.labelRect)) {
-            const overlapX = Math.min(left.labelRect.right, right.labelRect.right) - Math.max(left.labelRect.left, right.labelRect.left);
-            const overlapY = Math.min(left.labelRect.bottom, right.labelRect.bottom) - Math.max(left.labelRect.top, right.labelRect.top);
-            const dirX = Math.abs(dx) > 0.001 ? Math.sign(dx) : (stableUnit(`${left.key}|${right.key}:x`) > 0.5 ? 1 : -1);
-            const dirY = Math.abs(dy) > 0.001 ? Math.sign(dy) : (stableUnit(`${left.key}|${right.key}:y`) > 0.5 ? 1 : -1);
-            leftForce.x -= dirX * overlapX * 0.38;
-            rightForce.x += dirX * overlapX * 0.38;
-            leftForce.y -= dirY * overlapY * 0.2;
-            rightForce.y += dirY * overlapY * 0.2;
-          }
-
-          if (circleHitsRect({ x: left.x, y: left.y, radius: Math.max(left.radius, left.collisionRadius || 0) + left.safetyRadius * 0.08 }, right.labelRect, 12)) {
-            leftForce.x -= unit.x * 2.2;
-            leftForce.y -= Math.max(0.8, Math.abs(unit.y)) * 2.8;
-            rightForce.x += unit.x * 1.5;
-            rightForce.y += Math.max(0.5, Math.abs(unit.y)) * 1.8;
-          }
-          if (circleHitsRect({ x: right.x, y: right.y, radius: Math.max(right.radius, right.collisionRadius || 0) + right.safetyRadius * 0.08 }, left.labelRect, 12)) {
-            leftForce.x -= unit.x * 1.5;
-            leftForce.y -= Math.max(0.5, Math.abs(unit.y)) * 1.8;
-            rightForce.x += unit.x * 2.2;
-            rightForce.y += Math.max(0.8, Math.abs(unit.y)) * 2.8;
-          }
-        }
-      }
-
-      bodies.forEach((body) => {
-        const force = ensureForce(forces, body.key);
-        const manyBodyX = body.x - center.x;
-        const manyBodyY = body.y - center.y;
-        const manyBodyDistance = Math.hypot(manyBodyX, manyBodyY) || 1;
-        const manyBodyUnit = normalize(manyBodyX, manyBodyY, { x: 0, y: -1 });
-        const spread = clamp((manyBodyDistance - body.band.min) * 0.012, -0.8, 2.2);
-        force.x += manyBodyUnit.x * spread;
-        force.y += manyBodyUnit.y * spread;
-
-        body.vx = (body.vx + force.x * 0.2) * 0.76;
-        body.vy = (body.vy + force.y * 0.2) * 0.76;
-        const stepLimit = 10 + cooling * 8;
-        body.vx = clamp(body.vx, -stepLimit, stepLimit);
-        body.vy = clamp(body.vy, -stepLimit, stepLimit);
-      body.x += body.vx;
-      body.y += body.vy;
-      body.labelRect = buildLabelRect(body);
+    const candidateBodies = Array.from(repaired.bodyByKey.values());
+    const springs = buildLayoutSprings({
+      graphMeta,
+      bodyByKey: repaired.bodyByKey,
+      center,
+      centerKey,
+      primaryParentByKey: primaryTreeMeta.primaryParentByKey
     });
-  }
-
-    bodies.forEach((body) => {
+    candidateBodies.forEach((body) => {
       body.labelRect = buildLabelRect(body);
       body.angle = Math.atan2(body.y - center.y, body.x - center.x);
       body.nodeKey = body.key;
-      body.primaryParentKey = primaryParentByKey.get(body.key) || '';
+      if (!body.isStubBadge) {
+        body.primaryParentKey = primaryTreeMeta.primaryParentByKey.get(body.key) || '';
+      }
     });
-
-    return {
-      bodies,
-      bounds: buildContentBounds(center, bodies),
-      penalty: measureLayoutPenalty(center, bodies, springs, centerKey),
+    const penalty = measureLayoutPenalty(
+      center,
+      candidateBodies.filter((body) => !body.isStubBadge),
+      springs,
+      centerKey
+    );
+    const result = {
+      bodies: candidateBodies,
+      badgeBodyByStubId,
+      bounds: buildContentBounds(center, candidateBodies),
+      penalty,
       sectorPlan
     };
-  };
-
-  const attempts = STAR_MAP_LAYOUT_SPREAD_ATTEMPTS;
-  let best = null;
-  attempts.forEach((spreadFactor) => {
-    const result = solveAttempt(spreadFactor);
     if (!best || result.penalty < best.penalty) {
       best = result;
     }
   });
 
-  const snappedBodies = snapshotBodies(best.bodies);
+  const snappedBodies = snapshotBodies(best?.bodies || []);
   const badgeBodyByStubId = new Map(
     snappedBodies
       .filter((body) => body.isStubBadge && body.stubId)

@@ -94,7 +94,7 @@ const KnowledgeViewRouter = ({
           node={knowledgeMainViewMode === 'starMap' ? (titleStarMapData?.centerNode || currentTitleDetail) : currentTitleDetail}
           detailViewMode="title"
           knowledgeMainViewMode={knowledgeMainViewMode}
-          starMapNodeCount={Math.max(0, (Number((knowledgeMainViewMode === 'starMap' ? titleStarMapData?.nodeCount : titleGraphData?.nodeCount) || 0) - 1))}
+          starMapNodeCount={Math.max(0, Number(titleStarMapData?.nodeCount) || 0)}
           starMapNodeLimit={currentStarMapLimit}
           isStarMapLoading={isStarMapLoading}
           titleRelatedDomainCount={Math.max(0, (Number((knowledgeMainViewMode === 'starMap' ? titleStarMapData?.nodeCount : titleGraphData?.nodeCount) || 0) - 1))}

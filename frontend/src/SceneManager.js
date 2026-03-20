@@ -18,6 +18,8 @@ class SceneManager {
     this.pendingStarMapMeasuredLabelPass = 0;
     this.activeStarMapMeasuredLabelKey = '';
     this.completedStarMapMeasuredLabelKeys = new Set();
+    this.layoutTransitionVersion = 0;
+    this.pendingTransitionTimeouts = new Set();
 
     // 回调函数
     this.onNodeClick = null;
@@ -84,6 +86,52 @@ class SceneManager {
       this.pendingStarMapMeasuredLabelPass = 0;
     }
     this.activeStarMapMeasuredLabelKey = '';
+  }
+
+  clearPendingTransitionTimeouts() {
+    if (this.pendingTransitionTimeouts.size < 1) return;
+    this.pendingTransitionTimeouts.forEach((timeoutId) => clearTimeout(timeoutId));
+    this.pendingTransitionTimeouts.clear();
+  }
+
+  scheduleTransitionTimeout(callback, delay = 0) {
+    const timeoutId = setTimeout(() => {
+      this.pendingTransitionTimeouts.delete(timeoutId);
+      callback();
+    }, delay);
+    this.pendingTransitionTimeouts.add(timeoutId);
+    return timeoutId;
+  }
+
+  beginLayoutTransition({ cancelAnimations = true, cancelMeasuredLabelPass = false, restoreStableLayout = false } = {}) {
+    const hadPendingVisualTransition = this.pendingTransitionTimeouts.size > 0
+      || this.renderer.animations.length > 0
+      || this.renderer.animating;
+    this.layoutTransitionVersion += 1;
+    this.clearPendingTransitionTimeouts();
+    if (cancelMeasuredLabelPass) {
+      this.cancelPendingStarMapMeasuredLabelPass();
+    }
+    if (cancelAnimations) {
+      this.renderer.cancelAllAnimations();
+    }
+    if (restoreStableLayout && hadPendingVisualTransition && this.currentLayout) {
+      this.setLayout(this.currentLayout);
+      if (this.currentLayout?.meta?.type === 'starMap') {
+        this.applyStarMapFraming(this.currentLayout);
+      } else {
+        this.resetCameraToLayoutCenter();
+      }
+    }
+    return {
+      version: this.layoutTransitionVersion,
+      hadPendingVisualTransition
+    };
+  }
+
+  isLayoutTransitionCurrent(transitionVersion) {
+    if (!Number.isFinite(Number(transitionVersion))) return true;
+    return this.layoutTransitionVersion === Number(transitionVersion);
   }
 
   scheduleStarMapMeasuredLabelPass(layout = this.currentLayout) {
@@ -270,6 +318,14 @@ class SceneManager {
 
   async showStarMap(scene, graph = {}, clickedNode = null) {
     if (scene !== 'titleDetail' && scene !== 'nodeDetail') return;
+    const {
+      version: transitionVersion,
+      hadPendingVisualTransition
+    } = this.beginLayoutTransition({
+      cancelAnimations: true,
+      cancelMeasuredLabelPass: true,
+      restoreStableLayout: true
+    });
 
     this.renderer.setSceneType(scene);
     this.renderer.setCameraPanEnabled(true);
@@ -286,6 +342,7 @@ class SceneManager {
     };
 
     if (this.currentLayout.nodes.length === 0 || this.currentScene === null) {
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
       this.setLayout(newLayout);
       this.currentScene = scene;
       this.applyStarMapFraming(newLayout);
@@ -296,14 +353,28 @@ class SceneManager {
       return;
     }
 
-    if (this.currentScene !== scene) {
-      await this.fadeTransition(newLayout);
-    } else if (clickedNode) {
-      await this.nodeToNodeTransition(clickedNode, newLayout, 560);
-    } else {
-      await this.transitionTo(newLayout, 560);
+    if (hadPendingVisualTransition) {
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
+      this.setLayout(newLayout);
+      this.currentScene = scene;
+      this.applyStarMapFraming(newLayout);
+      this.scheduleStarMapMeasuredLabelPass(newLayout);
+
+      if (this.onSceneChange) {
+        this.onSceneChange(scene, graph?.centerNode || null);
+      }
+      return;
     }
 
+    if (this.currentScene !== scene) {
+      await this.fadeTransition(newLayout, 400, transitionVersion);
+    } else if (clickedNode) {
+      await this.nodeToNodeTransition(clickedNode, newLayout, 560, transitionVersion);
+    } else {
+      await this.transitionTo(newLayout, 560, transitionVersion);
+    }
+
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     this.currentScene = scene;
     this.applyStarMapFraming(newLayout);
     this.scheduleStarMapMeasuredLabelPass(newLayout);
@@ -458,7 +529,8 @@ class SceneManager {
   /**
    * 标准过渡动画
    */
-  async transitionTo(newLayout, duration = 500) {
+  async transitionTo(newLayout, duration = 500, transitionVersion = null) {
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     const transitions = this.layout.calculateTransition(this.currentLayout, newLayout);
 
     // 阶段1: 退出的节点淡出
@@ -468,12 +540,14 @@ class SceneManager {
           this.renderer.animateNode(t.id, t.to, duration * 0.4, 'easeInCubic')
         )
       );
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
       // 移除已退出的节点
       transitions.exit.forEach(t => this.renderer.removeNode(t.id));
     }
 
     // 阶段2: 添加新节点 (初始状态)
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     for (const t of transitions.enter) {
       this.renderer.setNode(t.id, t.from);
     }
@@ -497,6 +571,7 @@ class SceneManager {
     });
 
     await Promise.all(animations);
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
     this.currentLayout = newLayout;
 
@@ -508,13 +583,15 @@ class SceneManager {
   /**
    * 淡入淡出过渡
    */
-  async fadeTransition(newLayout, duration = 400) {
+  async fadeTransition(newLayout, duration = 400, transitionVersion = null) {
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     // 淡出当前所有节点
     const fadeOutPromises = Array.from(this.renderer.nodes.values()).map(node =>
       this.renderer.animateNode(node.id, { opacity: 0, scale: node.scale * 0.82 }, duration * 0.45, 'easeInCubic')
     );
 
     await Promise.all(fadeOutPromises);
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
     // 清空并设置新布局
     this.setLayout(newLayout);
@@ -536,6 +613,7 @@ class SceneManager {
     });
 
     await Promise.all(fadeInPromises);
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
     // 所有动画完成后，强制重启渲染循环
     this.renderer.renderingLoop = false;
@@ -609,16 +687,17 @@ class SceneManager {
   /**
    * 节点详情之间的切换动画
    */
-  async nodeToNodeTransition(clickedNode, newLayout, duration = 700) {
+  async nodeToNodeTransition(clickedNode, newLayout, duration = 700, transitionVersion = null) {
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     if (!clickedNode) {
-      await this.transitionTo(newLayout, duration);
+      await this.transitionTo(newLayout, duration, transitionVersion);
       return;
     }
 
     // 找到被点击的节点（母域或子域）
     const sourceNode = this.renderer.nodes.get(clickedNode.id);
     if (!sourceNode) {
-      await this.transitionTo(newLayout, duration);
+      await this.transitionTo(newLayout, duration, transitionVersion);
       return;
     }
 
@@ -676,6 +755,7 @@ class SceneManager {
     }
 
     await Promise.all([...exitAnimations, specialAnimation]);
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
     // 移除退出的节点
     transitions.exit.forEach(t => this.renderer.removeNode(t.id));
@@ -699,6 +779,9 @@ class SceneManager {
     const newNodes = newLayout.nodes.filter(n => n.type !== 'center');
 
     const enterAnimations = newNodes.map((nodeConfig, index) => {
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) {
+        return Promise.resolve();
+      }
       // 从中心位置开始
       this.renderer.setNode(nodeConfig.id, {
         ...nodeConfig,
@@ -711,7 +794,11 @@ class SceneManager {
 
       // 延迟进入
       return new Promise(resolve => {
-        setTimeout(() => {
+        this.scheduleTransitionTimeout(() => {
+          if (!this.isLayoutTransitionCurrent(transitionVersion)) {
+            resolve();
+            return;
+          }
           this.renderer.animateNode(nodeConfig.id, {
             ...nodeConfig,
             rotation: 0
@@ -722,6 +809,7 @@ class SceneManager {
     });
 
     await Promise.all(enterAnimations);
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
     this.currentLayout = newLayout;
 

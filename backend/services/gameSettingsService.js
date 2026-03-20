@@ -31,7 +31,7 @@ const resolveConfiguredStarMapLimit = (settings = {}) => normalizeInteger(
 const resolveEffectiveStarMapLimit = async (requestedLimit) => {
   const settings = await getOrCreateSettings();
   const configuredLimit = resolveConfiguredStarMapLimit(settings);
-  const effectiveLimit = normalizeInteger(requestedLimit, configuredLimit, { min: 10, max: 150 });
+  const effectiveLimit = normalizeInteger(requestedLimit, configuredLimit, { min: 10, max: 200 });
   return {
     settings,
     configuredLimit,

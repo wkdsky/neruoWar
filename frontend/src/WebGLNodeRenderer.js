@@ -1335,6 +1335,29 @@ class WebGLNodeRenderer {
     this.render();
   }
 
+  cancelAllAnimations() {
+    if (this.animations.length > 0) {
+      const pendingAnimations = [...this.animations];
+      this.animations = [];
+      pendingAnimations.forEach((anim) => {
+        const animNode = this.nodes.get(anim.nodeId);
+        if (animNode) {
+          animNode.isAnimating = false;
+        }
+        if (typeof anim.onComplete === 'function') {
+          anim.onComplete();
+        }
+      });
+    }
+
+    this.animating = false;
+    if (this.renderLoopId) {
+      cancelAnimationFrame(this.renderLoopId);
+      this.renderLoopId = null;
+    }
+    this.renderingLoop = false;
+  }
+
   // 动画节点到新位置
   animateNode(id, target, duration = 600, easing = 'easeOutCubic') {
     const node = this.nodes.get(id);
