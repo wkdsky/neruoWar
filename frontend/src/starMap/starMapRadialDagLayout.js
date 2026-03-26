@@ -1,34 +1,24 @@
 const TAU = Math.PI * 2;
 const EPSILON = 0.0001;
-const RADIAL_DENSITY_K = 0.92;
-const RADIAL_MIN_RADIUS = 24;
-const RADIAL_SEGMENT_PADDING = 0.16;
-const SINGLE_ROTATION_SAMPLES = 8;
-const DUAL_ROTATION_SAMPLES = 10;
-const SINGLE_ROTATION_SAMPLES_COARSE = 4;
-const DUAL_ROTATION_SAMPLES_COARSE = 5;
-const INITIAL_SWEEP_ROUNDS = 3;
-const GEOMETRY_ASSIGNMENT_PASSES = 3;
-const OVERLAP_EXPANSION_PASSES = 5;
-const SWAP_ROUNDS = 2;
-const BLOCK_WINDOW_MIN = 3;
-const BLOCK_WINDOW_MAX = 4;
-const MAX_BLOCK_PATTERNS = 3;
-const BLOCK_WINDOW_LARGE_THRESHOLD = 12;
-const BLOCK_MOVE_SKIP_THRESHOLD = 18;
-const RING_ROTATION_STEPS = [-2, -1, 1, 2];
-const NODE_NUDGE_STEPS = [-2, -1, 1, 2];
-const ROTATION_DELTA_MIN = 0.04;
-const ROTATION_DELTA_MAX = 0.22;
-const NODE_NUDGE_MIN = 0.02;
-const NODE_NUDGE_MAX = 0.12;
-const RADIUS_ADJUST_FACTOR = 0.18;
-const HUB_MIN_GAP_FLOOR = 0.1;
-const HUB_MIN_GAP_CEIL = 1.35;
-const FINALIST_LIMIT = 3;
-const FINE_TUNE_LIMIT = 3;
-const PROXY_CANDIDATE_BUFFER = 2;
-const HIGH_DEGREE_NODE_THRESHOLD = 4;
+
+const GRID_CELL_SIZE = 108;
+const SEGMENT_GRID_SIZE = 160;
+const BASE_LAYER_GAP = 96;
+const BASE_NODE_GAP = 24;
+const STRESS_ROUNDS = 28;
+const STRESS_FINE_ROUNDS = 12;
+const HUB_SPREAD_ROUNDS = 5;
+const CROSSING_REFINEMENT_ROUNDS = 6;
+const OVERLAP_ROUNDS = 10;
+const COMPACTION_ROUNDS = 3;
+const CLEARANCE_ROUNDS = 12;
+const EDGE_SHORTEN_ROUNDS = 6;
+const COUPLED_REPAIR_MAX_ROUNDS = 8;
+const ADJACENT_SWAP_PASSES = 3;
+const PROXIMITY_NEIGHBOR_LIMIT = 5;
+const COARSE_NODE_LIMIT = 18;
+const MAX_COARSE_STEP = 22;
+const MAX_FINE_STEP = 12;
 
 const now = () => (
   typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -38,114 +28,171 @@ const now = () => (
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
-const normalizePositiveAngle = (angle = 0) => {
-  let value = Number(angle) || 0;
-  while (value < 0) value += TAU;
-  while (value >= TAU) value -= TAU;
-  return value;
-};
-
-const unwrapAngleNear = (angle = 0, reference = 0) => {
-  let value = Number(angle) || 0;
-  const target = Number(reference) || 0;
-  while ((value - target) > Math.PI) value -= TAU;
-  while ((value - target) < -Math.PI) value += TAU;
-  return value;
-};
-
 const stableTextCompare = (left = '', right = '') => (
   String(left || '').localeCompare(String(right || ''), 'zh-Hans-CN')
 );
-
-const averageAngles = (entries = [], fallback = -Math.PI / 2) => {
-  if (!Array.isArray(entries) || entries.length < 1) return fallback;
-  let sumX = 0;
-  let sumY = 0;
-  let totalWeight = 0;
-  entries.forEach((entry) => {
-    const angle = Number(entry?.angle);
-    const weight = Math.max(0.0001, Number(entry?.weight) || 1);
-    if (!Number.isFinite(angle)) return;
-    sumX += Math.cos(angle) * weight;
-    sumY += Math.sin(angle) * weight;
-    totalWeight += weight;
-  });
-  if (totalWeight <= 0.0001 || (Math.abs(sumX) <= 0.0001 && Math.abs(sumY) <= 0.0001)) {
-    return fallback;
-  }
-  return Math.atan2(sumY, sumX);
-};
-
-const resolveMedianAngle = (angles = [], fallback = -Math.PI / 2) => {
-  if (!Array.isArray(angles) || angles.length < 1) return fallback;
-  const anchor = averageAngles(angles.map((angle) => ({ angle, weight: 1 })), fallback);
-  const sorted = angles
-    .map((angle) => unwrapAngleNear(angle, anchor))
-    .sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) return sorted[middle];
-  return (sorted[middle - 1] + sorted[middle]) * 0.5;
-};
-
-const buildOrderIndex = (order = []) => new Map(order.map((key, index) => [key, index]));
-
-const buildPairKey = (left, right) => (
-  left < right ? `${left}:${right}` : `${right}:${left}`
-);
-
-const cloneOrderByRing = (orderByRing) => {
-  const next = new Map();
-  orderByRing.forEach((value, key) => {
-    next.set(key, value.slice());
-  });
-  return next;
-};
-
-const cloneNestedMap = (source) => {
-  const next = new Map();
-  source.forEach((value, key) => {
-    if (value instanceof Map) {
-      const inner = new Map();
-      value.forEach((innerValue, innerKey) => {
-        inner.set(innerKey, { ...innerValue });
-      });
-      next.set(key, inner);
-    } else {
-      next.set(key, value);
-    }
-  });
-  return next;
-};
 
 const distanceBetweenPoints = (left, right) => Math.hypot(
   (Number(left?.x) || 0) - (Number(right?.x) || 0),
   (Number(left?.y) || 0) - (Number(right?.y) || 0)
 );
 
-const pointFromPolar = (origin, angle, radius) => ({
-  x: Number(origin?.x || 0) + Math.cos(angle) * radius,
-  y: Number(origin?.y || 0) + Math.sin(angle) * radius
-});
-
-const chordToAngle = (distance = 0, radius = 1) => {
-  const safeRadius = Math.max(1, Number(radius) || 1);
-  const safeDistance = Math.max(0, Number(distance) || 0);
-  if (safeDistance <= EPSILON) return 0;
-  return 2 * Math.asin(clamp(safeDistance / (2 * safeRadius), 0, 1));
+const normalize = (x = 0, y = 0, fallback = { x: 1, y: 0 }) => {
+  const length = Math.hypot(x, y);
+  if (length <= EPSILON) return { x: fallback.x, y: fallback.y };
+  return { x: x / length, y: y / length };
 };
 
+const buildRectFromValues = ({
+  left = 0,
+  right = 0,
+  top = 0,
+  bottom = 0
+} = {}) => ({
+  left,
+  right,
+  top,
+  bottom,
+  width: right - left,
+  height: bottom - top,
+  centerX: (left + right) * 0.5,
+  centerY: (top + bottom) * 0.5
+});
+
+const expandRect = (rect, padding = 0) => buildRectFromValues({
+  left: rect.left - padding,
+  right: rect.right + padding,
+  top: rect.top - padding,
+  bottom: rect.bottom + padding
+});
+
 const buildLabelRect = (body) => {
-  const width = Number(body.labelWidthHint) || 112;
-  const height = Number(body.labelHeightHint) || 28;
-  return {
+  const width = Number(body.labelWidthHint || body.labelMetrics?.widthHint) || 112;
+  const height = Number(body.labelHeightHint || body.labelMetrics?.heightHint) || 28;
+  const offsetY = Number(body.labelOffsetY || 0);
+  return buildRectFromValues({
     left: body.x - width * 0.5,
     right: body.x + width * 0.5,
-    top: body.y - height * 0.5,
-    bottom: body.y + height * 0.5,
-    width,
-    height,
-    centerX: body.x,
-    centerY: body.y
+    top: body.y - height * 0.5 + offsetY,
+    bottom: body.y + height * 0.5 + offsetY
+  });
+};
+
+const buildNodeRect = (body, padding = 0) => buildRectFromValues({
+  left: body.x - (body.collisionRadius || body.radius || 0) - padding,
+  right: body.x + (body.collisionRadius || body.radius || 0) + padding,
+  top: body.y - (body.collisionRadius || body.radius || 0) - padding,
+  bottom: body.y + (body.collisionRadius || body.radius || 0) + padding
+});
+
+const buildBodyBoundsRect = (body, padding = 0) => {
+  const nodeRect = buildNodeRect(body, padding);
+  const labelRect = body.labelRect || buildLabelRect(body);
+  return buildRectFromValues({
+    left: Math.min(nodeRect.left, labelRect.left - padding),
+    right: Math.max(nodeRect.right, labelRect.right + padding),
+    top: Math.min(nodeRect.top, labelRect.top - padding),
+    bottom: Math.max(nodeRect.bottom, labelRect.bottom + padding)
+  });
+};
+
+const rectsOverlap = (left, right, padding = 0) => (
+  left.left < right.right + padding
+  && left.right > right.left - padding
+  && left.top < right.bottom + padding
+  && left.bottom > right.top - padding
+);
+
+const pointToRectDistance = (point, rect) => {
+  const dx = point.x < rect.left
+    ? rect.left - point.x
+    : point.x > rect.right
+      ? point.x - rect.right
+      : 0;
+  const dy = point.y < rect.top
+    ? rect.top - point.y
+    : point.y > rect.bottom
+      ? point.y - rect.bottom
+      : 0;
+  return Math.hypot(dx, dy);
+};
+
+const orientation = (a, b, c) => (
+  ((b.x - a.x) * (c.y - a.y)) - ((b.y - a.y) * (c.x - a.x))
+);
+
+const onSegment = (a, b, p) => (
+  p.x >= Math.min(a.x, b.x) - EPSILON
+  && p.x <= Math.max(a.x, b.x) + EPSILON
+  && p.y >= Math.min(a.y, b.y) - EPSILON
+  && p.y <= Math.max(a.y, b.y) + EPSILON
+);
+
+const segmentsIntersect = (a1, a2, b1, b2) => {
+  const o1 = orientation(a1, a2, b1);
+  const o2 = orientation(a1, a2, b2);
+  const o3 = orientation(b1, b2, a1);
+  const o4 = orientation(b1, b2, a2);
+
+  if ((((o1 > EPSILON) && (o2 < -EPSILON)) || ((o1 < -EPSILON) && (o2 > EPSILON)))
+    && (((o3 > EPSILON) && (o4 < -EPSILON)) || ((o3 < -EPSILON) && (o4 > EPSILON)))) {
+    return true;
+  }
+
+  if (Math.abs(o1) <= EPSILON && onSegment(a1, a2, b1)) return true;
+  if (Math.abs(o2) <= EPSILON && onSegment(a1, a2, b2)) return true;
+  if (Math.abs(o3) <= EPSILON && onSegment(b1, b2, a1)) return true;
+  if (Math.abs(o4) <= EPSILON && onSegment(b1, b2, a2)) return true;
+  return false;
+};
+
+const distancePointToSegment = (point, start, end) => {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq <= EPSILON) {
+    return {
+      distance: Math.hypot(point.x - start.x, point.y - start.y),
+      projection: 0
+    };
+  }
+  const projection = clamp(
+    (((point.x - start.x) * dx) + ((point.y - start.y) * dy)) / lengthSq,
+    0,
+    1
+  );
+  const projectedX = start.x + dx * projection;
+  const projectedY = start.y + dy * projection;
+  return {
+    distance: Math.hypot(point.x - projectedX, point.y - projectedY),
+    projection,
+    projectedX,
+    projectedY
+  };
+};
+
+const distanceSegmentToRect = (start, end, rect) => {
+  if (
+    pointToRectDistance(start, rect) <= EPSILON
+    || pointToRectDistance(end, rect) <= EPSILON
+    || segmentsIntersect(start, end, { x: rect.left, y: rect.top }, { x: rect.right, y: rect.top })
+    || segmentsIntersect(start, end, { x: rect.right, y: rect.top }, { x: rect.right, y: rect.bottom })
+    || segmentsIntersect(start, end, { x: rect.right, y: rect.bottom }, { x: rect.left, y: rect.bottom })
+    || segmentsIntersect(start, end, { x: rect.left, y: rect.bottom }, { x: rect.left, y: rect.top })
+  ) {
+    return { distance: 0 };
+  }
+
+  const cornerDistances = [
+    distancePointToSegment({ x: rect.left, y: rect.top }, start, end).distance,
+    distancePointToSegment({ x: rect.right, y: rect.top }, start, end).distance,
+    distancePointToSegment({ x: rect.right, y: rect.bottom }, start, end).distance,
+    distancePointToSegment({ x: rect.left, y: rect.bottom }, start, end).distance,
+    pointToRectDistance(start, rect),
+    pointToRectDistance(end, rect)
+  ];
+  return {
+    distance: Math.min(...cornerDistances)
   };
 };
 
@@ -167,22 +214,24 @@ const buildContentBounds = (bodies = []) => {
   let bottom = Number.NEGATIVE_INFINITY;
 
   bodies.forEach((body) => {
-    const rect = body.labelRect || buildLabelRect(body);
-    left = Math.min(left, body.x - body.radius, rect.left);
-    right = Math.max(right, body.x + body.radius, rect.right);
-    top = Math.min(top, body.y - body.radius, rect.top);
-    bottom = Math.max(bottom, body.y + body.radius, rect.bottom);
+    const rect = buildBodyBoundsRect(body);
+    left = Math.min(left, rect.left);
+    right = Math.max(right, rect.right);
+    top = Math.min(top, rect.top);
+    bottom = Math.max(bottom, rect.bottom);
   });
 
-  return {
-    left,
-    right,
-    top,
-    bottom,
-    width: right - left,
-    height: bottom - top
-  };
+  return buildRectFromValues({ left, right, top, bottom });
 };
+
+const buildEdgeKeys = (edge = {}, layer = 'title') => ({
+  fromKey: layer === 'sense'
+    ? String(edge?.fromVertexKey || '')
+    : String(edge?.nodeAId || ''),
+  toKey: layer === 'sense'
+    ? String(edge?.toVertexKey || '')
+    : String(edge?.nodeBId || '')
+});
 
 const buildStableNodeSort = (nodeByKey) => (leftKey, rightKey) => {
   const leftNode = nodeByKey.get(leftKey) || {};
@@ -202,31 +251,37 @@ const buildNodeMeta = ({
   labelMetricsByKey
 }) => {
   const nodeByKey = new Map();
-
-  levels.forEach((level) => {
+  (Array.isArray(levels) ? levels : []).forEach((level) => {
     (nodesByLevel.get(level) || []).forEach((node) => {
       const labelMetrics = labelMetricsByKey.get(node.key) || node.labelMetrics || {};
       const radius = Number(node.radius || 0);
-      const boxWidth = Math.max(radius * 2, Number(labelMetrics.widthHint || 0) || 94);
-      const boxHeight = Math.max(radius * 2, Number(labelMetrics.heightHint || 0) || 28);
-      const effectiveSize = Math.max(radius * 2, Math.hypot(boxWidth, boxHeight));
+      const labelWidthHint = Number(labelMetrics.widthHint || node.labelWidthHint) || 94;
+      const labelHeightHint = Number(labelMetrics.heightHint || node.labelHeightHint) || 28;
+      const boxWidth = Math.max(radius * 2, labelWidthHint);
+      const boxHeight = Math.max(radius * 2, labelHeightHint);
+      const collisionRadius = Math.max(
+        radius,
+        Math.hypot(boxWidth * 0.5, boxHeight * 0.5) * 0.88
+      );
       nodeByKey.set(node.key, {
         ...node,
+        key: node.key,
+        level: Number.isFinite(Number(node.level)) ? Number(node.level) : Number(level),
+        rawNode: node.rawNode || graphMeta.nodeByKey.get(node.key) || null,
         labelMetrics,
+        labelWidthHint,
+        labelHeightHint,
         radius,
         boxWidth,
         boxHeight,
-        effectiveSize,
-        collisionRadius: effectiveSize * 0.5,
+        collisionRadius,
         degree: graphMeta.adjacency.get(node.key)?.size || 0,
-        parentKeys: [],
-        childKeys: [],
-        sameLayerKeys: [],
+        importance: 1,
         primaryParentKey: '',
         clusterSignature: '',
-        segmentKey: 'main',
-        preferredCenterKey: '',
-        importance: 1,
+        childCount: 0,
+        siblingIndex: 0,
+        siblingCount: 1,
         subtreeWeight: 1
       });
     });
@@ -235,2919 +290,2203 @@ const buildNodeMeta = ({
   if (centerKey && !nodeByKey.has(centerKey)) {
     const labelMetrics = labelMetricsByKey.get(centerKey) || center?.labelMetrics || {};
     const radius = Number(center?.radius || 0);
-    const boxWidth = Math.max(radius * 2, Number(labelMetrics.widthHint || center?.labelWidthHint || 0) || 94);
-    const boxHeight = Math.max(radius * 2, Number(labelMetrics.heightHint || center?.labelHeightHint || 0) || 28);
-    const effectiveSize = Math.max(radius * 2, Math.hypot(boxWidth, boxHeight));
+    const labelWidthHint = Number(labelMetrics.widthHint || center?.labelWidthHint) || 94;
+    const labelHeightHint = Number(labelMetrics.heightHint || center?.labelHeightHint) || 28;
     nodeByKey.set(centerKey, {
       key: centerKey,
       level: 0,
       rawNode: center?.rawNode || graphMeta.nodeByKey.get(centerKey) || null,
       labelMetrics,
+      labelWidthHint,
+      labelHeightHint,
       radius,
-      boxWidth,
-      boxHeight,
-      effectiveSize,
-      collisionRadius: effectiveSize * 0.5,
+      boxWidth: Math.max(radius * 2, labelWidthHint),
+      boxHeight: Math.max(radius * 2, labelHeightHint),
+      collisionRadius: Math.max(radius, Math.hypot(labelWidthHint * 0.5, labelHeightHint * 0.5) * 0.88),
+      degree: graphMeta.adjacency.get(centerKey)?.size || 0,
       labelOffsetY: 0,
       labelPlacement: 'center',
       nodeType: 'center',
-      degree: graphMeta.adjacency.get(centerKey)?.size || 0,
-      parentKeys: [],
-      childKeys: [],
-      sameLayerKeys: [],
+      importance: 1.42,
       primaryParentKey: '',
       clusterSignature: centerKey,
-      segmentKey: 'main',
-      preferredCenterKey: '',
-      importance: 1.18,
+      childCount: 0,
+      siblingIndex: 0,
+      siblingCount: 1,
       subtreeWeight: 1
     });
   }
 
-  const stableSort = buildStableNodeSort(nodeByKey);
-  Array.from(nodeByKey.keys()).sort(stableSort).forEach((key) => {
-    const node = nodeByKey.get(key);
-    node.degree = graphMeta.adjacency.get(key)?.size || 0;
-    node.importance = 1
-      + node.degree * 0.08
-      + (graphMeta.boundaryCountByKey.get(key) || 0) * 0.05
-      + (key === centerKey ? 0.18 : 0);
+  const maxDegree = Math.max(1, ...Array.from(nodeByKey.values()).map((node) => node.degree || 0));
+  const maxBoundary = Math.max(1, ...Array.from(nodeByKey.keys()).map((key) => graphMeta.boundaryCountByKey.get(key) || 0));
+  const maxLevel = Math.max(1, ...Array.from(nodeByKey.values()).map((node) => Number(node.level) || 0));
+
+  nodeByKey.forEach((node) => {
+    const levelNorm = 1 - (Math.min(maxLevel, Math.max(0, Number(node.level) || 0)) / Math.max(1, maxLevel));
+    const degreeNorm = (node.degree || 0) / maxDegree;
+    const boundaryNorm = (graphMeta.boundaryCountByKey.get(node.key) || 0) / maxBoundary;
+    node.importance = clamp(
+      0.92
+      + degreeNorm * 0.48
+      + levelNorm * 0.24
+      + boundaryNorm * 0.18
+      + (node.key === centerKey ? 0.26 : 0),
+      0.92,
+      1.88
+    );
   });
 
   return {
     nodeByKey,
-    stableSort
+    stableSort: buildStableNodeSort(nodeByKey)
   };
 };
 
-const buildStaticLayoutData = ({
-  nodeByKey,
-  graphMeta,
-  graphEdges,
+const buildInputLevelByKey = ({
+  centerKey,
+  levels,
+  nodesByLevel
+}) => {
+  const levelByKey = {};
+  if (centerKey) levelByKey[centerKey] = 0;
+  (Array.isArray(levels) ? levels : []).forEach((level) => {
+    (nodesByLevel.get(level) || []).forEach((node) => {
+      if (!node?.key) return;
+      levelByKey[node.key] = Number.isFinite(Number(node.level)) ? Number(node.level) : Number(level);
+    });
+  });
+  return levelByKey;
+};
+
+const buildUniqueGraphEdges = ({
+  graphEdges = [],
   layer,
+  nodeByKey,
   stableSort
 }) => {
-  const sortedKeys = Array.from(nodeByKey.keys()).sort(stableSort);
-  const nodeKeySet = new Set(sortedKeys);
-  const nodeIndexByKey = new Map(sortedKeys.map((key, index) => [key, index]));
-  const sortedNeighborsByKey = new Map();
-  const incidentEdgeIndexesByKey = new Map(sortedKeys.map((key) => [key, []]));
+  const edgeKeySet = new Set();
   const edgeList = [];
 
-  sortedKeys.forEach((key) => {
-    const neighbors = Array.from(graphMeta.adjacency.get(key) || [])
-      .filter((neighborKey) => nodeKeySet.has(neighborKey))
-      .sort(stableSort);
-    sortedNeighborsByKey.set(key, neighbors);
-  });
-
-  graphEdges.forEach((edge, rawIndex) => {
-    const fromKey = layer === 'sense'
-      ? String(edge?.fromVertexKey || '')
-      : String(edge?.nodeAId || '');
-    const toKey = layer === 'sense'
-      ? String(edge?.toVertexKey || '')
-      : String(edge?.nodeBId || '');
+  (Array.isArray(graphEdges) ? graphEdges : []).forEach((edge) => {
+    const { fromKey, toKey } = buildEdgeKeys(edge, layer);
     if (!fromKey || !toKey || fromKey === toKey) return;
-    if (!nodeKeySet.has(fromKey) || !nodeKeySet.has(toKey)) return;
-    const index = edgeList.length;
+    if (!nodeByKey.has(fromKey) || !nodeByKey.has(toKey)) return;
+    const left = stableSort(fromKey, toKey) <= 0 ? fromKey : toKey;
+    const right = left === fromKey ? toKey : fromKey;
+    const pairKey = `${left}|${right}`;
+    if (edgeKeySet.has(pairKey)) return;
+    edgeKeySet.add(pairKey);
     edgeList.push({
-      index,
-      rawIndex,
-      fromKey,
-      toKey,
-      pairKey: buildPairKey(fromKey, toKey)
+      pairKey,
+      fromKey: left,
+      toKey: right
     });
-    incidentEdgeIndexesByKey.get(fromKey)?.push(index);
-    incidentEdgeIndexesByKey.get(toKey)?.push(index);
   });
 
-  return {
-    sortedKeys,
-    nodeKeySet,
-    nodeIndexByKey,
-    sortedNeighborsByKey,
-    incidentEdgeIndexesByKey,
-    edgeList
-  };
+  return edgeList;
 };
 
-const buildGraphDistances = ({
-  nodeByKey,
-  sortedKeys,
-  sortedNeighborsByKey
-}) => {
-  const distancesBySource = new Map();
-  const eccentricityByKey = new Map();
-  let diameter = 0;
-
-  sortedKeys.forEach((sourceKey) => {
-    const queue = [sourceKey];
-    const distanceByKey = new Map([[sourceKey, 0]]);
-    for (let head = 0; head < queue.length; head += 1) {
-      const currentKey = queue[head];
-      const currentDistance = Number(distanceByKey.get(currentKey) || 0);
-      const neighbors = sortedNeighborsByKey.get(currentKey) || [];
-      neighbors.forEach((neighborKey) => {
-        if (distanceByKey.has(neighborKey)) return;
-        distanceByKey.set(neighborKey, currentDistance + 1);
-        queue.push(neighborKey);
-      });
-    }
-    distancesBySource.set(sourceKey, distanceByKey);
-    let eccentricity = 0;
-    distanceByKey.forEach((distance) => {
-      eccentricity = Math.max(eccentricity, Number(distance) || 0);
-    });
-    eccentricityByKey.set(sourceKey, eccentricity);
-    diameter = Math.max(diameter, eccentricity);
-  });
-
-  return {
-    distancesBySource,
-    eccentricityByKey,
-    diameter
-  };
-};
-
-const computePairStats = ({
-  leftKey,
-  rightKey,
-  keys,
-  distancesBySource,
-  nodeByKey
-}) => {
-  const leftDistances = distancesBySource.get(leftKey) || new Map();
-  const rightDistances = distancesBySource.get(rightKey) || new Map();
-  let pairRadius = 0;
-  let leftCount = 0;
-  let rightCount = 0;
-
-  keys.forEach((key) => {
-    const d1 = Number.isFinite(leftDistances.get(key)) ? Number(leftDistances.get(key)) : Number.POSITIVE_INFINITY;
-    const d2 = Number.isFinite(rightDistances.get(key)) ? Number(rightDistances.get(key)) : Number.POSITIVE_INFINITY;
-    pairRadius = Math.max(pairRadius, Math.min(d1, d2));
-    if (d1 <= d2) leftCount += 1;
-    else rightCount += 1;
-  });
-
-  const balanceSkew = Math.abs(leftCount - rightCount) / Math.max(1, keys.length);
-  return {
-    pairRadius,
-    farDistance: Number(leftDistances.get(rightKey) || 0),
-    balanceSkew,
-    combinedDegree: (nodeByKey.get(leftKey)?.degree || 0) + (nodeByKey.get(rightKey)?.degree || 0)
-  };
-};
-
-const generateCenterSchemes = ({
+const buildDirectedSkeleton = ({
   centerKey,
   nodeByKey,
-  stableSort,
-  distancesBySource,
-  eccentricityByKey,
-  diameter
-}) => {
-  const keys = Array.from(nodeByKey.keys()).sort(stableSort);
-  const distanceToSelected = distancesBySource.get(centerKey) || new Map();
-  const rankedSingles = keys
-    .slice()
-    .sort((leftKey, rightKey) => (
-      (eccentricityByKey.get(leftKey) || Number.POSITIVE_INFINITY) - (eccentricityByKey.get(rightKey) || Number.POSITIVE_INFINITY)
-      || (nodeByKey.get(rightKey)?.degree || 0) - (nodeByKey.get(leftKey)?.degree || 0)
-      || (distanceToSelected.get(leftKey) || Number.POSITIVE_INFINITY) - (distanceToSelected.get(rightKey) || Number.POSITIVE_INFINITY)
-      || stableSort(leftKey, rightKey)
-    ));
-
-  const bestSingle = rankedSingles[0] || centerKey;
-  const bestSingleRadius = eccentricityByKey.get(bestSingle) || 0;
-  const schemes = [];
-  const pushScheme = (scheme) => {
-    if (!scheme?.c1) return;
-    const signature = scheme.useDualCenter ? `${scheme.c1}|${scheme.c2}` : scheme.c1;
-    if (schemes.some((item) => item.signature === signature)) return;
-    schemes.push({
-      ...scheme,
-      signature
-    });
-  };
-
-  pushScheme({
-    useDualCenter: false,
-    c1: bestSingle,
-    c2: '',
-    rationale: 'single-graph-center'
-  });
-
-  if (centerKey && nodeByKey.has(centerKey) && centerKey !== bestSingle) {
-    const bestEccentricity = eccentricityByKey.get(bestSingle) || Number.POSITIVE_INFINITY;
-    const selectedEccentricity = eccentricityByKey.get(centerKey) || Number.POSITIVE_INFINITY;
-    if (selectedEccentricity <= bestEccentricity + 1) {
-      pushScheme({
-        useDualCenter: false,
-        c1: centerKey,
-        c2: '',
-        rationale: 'single-selected-center'
-      });
-    }
-  }
-
-  const pairCandidates = rankedSingles
-    .slice(0, Math.min(6, rankedSingles.length))
-    .flatMap((leftKey, leftIndex) => rankedSingles
-      .slice(leftIndex + 1, Math.min(8, rankedSingles.length))
-      .map((rightKey) => {
-        const stats = computePairStats({
-          leftKey,
-          rightKey,
-          keys,
-          distancesBySource,
-          nodeByKey
-        });
-        return {
-          c1: leftKey,
-          c2: rightKey,
-          ...stats
-        };
-      })
-    )
-    .sort((left, right) => (
-      left.pairRadius - right.pairRadius
-      || left.balanceSkew - right.balanceSkew
-      || right.farDistance - left.farDistance
-      || right.combinedDegree - left.combinedDegree
-      || stableSort(left.c1, right.c1)
-      || stableSort(left.c2, right.c2)
-    ));
-
-  const elongated = diameter >= 5 && bestSingleRadius >= 3;
-  pairCandidates.forEach((pairCandidate) => {
-    if (schemes.filter((item) => item.useDualCenter).length >= 2) return;
-    const relief = pairCandidate.pairRadius <= bestSingleRadius - 1;
-    const balanced = pairCandidate.balanceSkew <= 0.36 && pairCandidate.farDistance >= 2;
-    const strongElongation = elongated && pairCandidate.balanceSkew <= 0.5 && pairCandidate.farDistance >= 2;
-    if (!relief && !balanced && !strongElongation) return;
-    pushScheme({
-      useDualCenter: true,
-      c1: pairCandidate.c1,
-      c2: pairCandidate.c2,
-      pairRadius: pairCandidate.pairRadius,
-      balanceSkew: pairCandidate.balanceSkew,
-      rationale: 'dual-center'
-    });
-  });
-
-  return schemes;
-};
-
-const buildRingAssignments = ({
-  nodeByKey,
-  sortedKeys,
-  sortedNeighborsByKey,
-  distancesBySource,
-  centers
-}) => {
-  const centerKeys = centers.filter(Boolean);
-  const centerKeySet = new Set(centerKeys);
-  const c1 = centerKeys[0] || '';
-  const c2 = centerKeys[1] || '';
-  const c1Distances = distancesBySource.get(c1) || new Map();
-  const c2Distances = c2 ? (distancesBySource.get(c2) || new Map()) : new Map();
-  const logicalRingByKey = new Map();
-  const preferredCenterByKey = new Map();
-  let maxRing = 0;
-
-  sortedKeys.forEach((key) => {
-    if (centerKeySet.has(key)) {
-      logicalRingByKey.set(key, 0);
-      preferredCenterByKey.set(key, key);
-      return;
-    }
-    const d1 = Number.isFinite(c1Distances.get(key)) ? Number(c1Distances.get(key)) : Number.POSITIVE_INFINITY;
-    const d2 = c2
-      ? (Number.isFinite(c2Distances.get(key)) ? Number(c2Distances.get(key)) : Number.POSITIVE_INFINITY)
-      : Number.POSITIVE_INFINITY;
-    const ring = Math.max(1, Math.min(d1, d2));
-    logicalRingByKey.set(key, ring);
-    maxRing = Math.max(maxRing, ring);
-
-    let preferredCenterKey = c1;
-    if (c2) {
-      if (d2 < d1) {
-        preferredCenterKey = c2;
-      } else if (d1 === d2) {
-        const neighbors = sortedNeighborsByKey.get(key) || [];
-        const affinityDelta = neighbors.reduce((sum, neighborKey) => {
-          const neighborD1 = Number.isFinite(c1Distances.get(neighborKey)) ? Number(c1Distances.get(neighborKey)) : Number.POSITIVE_INFINITY;
-          const neighborD2 = Number.isFinite(c2Distances.get(neighborKey)) ? Number(c2Distances.get(neighborKey)) : Number.POSITIVE_INFINITY;
-          if (neighborD1 < neighborD2) return sum + 1;
-          if (neighborD2 < neighborD1) return sum - 1;
-          return sum;
-        }, 0);
-        if (affinityDelta < 0) preferredCenterKey = c2;
-      }
-    }
-    preferredCenterByKey.set(key, preferredCenterKey || c1);
-  });
-
-  return {
-    logicalRingByKey,
-    preferredCenterByKey,
-    maxRing
-  };
-};
-
-const buildRingRelationships = ({
-  centerKey,
-  nodeByKey,
-  graphMeta,
-  sortedKeys,
-  nodeIndexByKey,
-  sortedNeighborsByKey,
-  ringByKey,
-  preferredCenterByKey,
-  centers
-}) => {
-  const primaryCenterKey = centers[0] || centerKey;
-  const maxRing = sortedKeys.reduce((max, key) => Math.max(max, Number(ringByKey.get(key) || 0)), 0);
-
-  sortedKeys.forEach((key) => {
-    const node = nodeByKey.get(key);
-    const ring = Number(ringByKey.get(key) || 0);
-    const neighbors = sortedNeighborsByKey.get(key) || [];
-    node.parentKeys = neighbors.filter((neighborKey) => Number(ringByKey.get(neighborKey) || 0) < ring);
-    node.childKeys = neighbors.filter((neighborKey) => Number(ringByKey.get(neighborKey) || 0) > ring);
-    node.sameLayerKeys = neighbors.filter((neighborKey) => Number(ringByKey.get(neighborKey) || 0) === ring);
-    node.preferredCenterKey = preferredCenterByKey.get(key) || primaryCenterKey;
-    node.segmentKey = centers.length > 1
-      ? (node.preferredCenterKey === centers[1] ? centers[1] : centers[0])
-      : 'main';
-    node.primaryParentKey = node.parentKeys
-      .slice()
-      .sort((leftKey, rightKey) => (
-        (Number(ringByKey.get(leftKey) || 0) - Number(ringByKey.get(rightKey) || 0))
-        || (nodeByKey.get(rightKey)?.degree || 0) - (nodeByKey.get(leftKey)?.degree || 0)
-        || (nodeIndexByKey.get(leftKey) || 0) - (nodeIndexByKey.get(rightKey) || 0)
-      ))[0] || '';
-    node.clusterSignature = ring === 0
-      ? key
-      : (node.preferredCenterKey || node.primaryParentKey || primaryCenterKey);
-    node.importance = 1
-      + node.degree * 0.08
-      + node.childKeys.length * 0.1
-      + (graphMeta.boundaryCountByKey.get(key) || 0) * 0.05
-      + (key === centerKey ? 0.18 : 0);
-  });
-
-  for (let ring = maxRing; ring >= 0; ring -= 1) {
-    sortedKeys.forEach((key) => {
-      const node = nodeByKey.get(key);
-      if (Number(ringByKey.get(key) || 0) !== ring) return;
-      const childWeight = node.childKeys.reduce((sum, childKey) => (
-        sum + (nodeByKey.get(childKey)?.subtreeWeight || 1)
-      ), 0);
-      const labelWeight = Number(node.labelMetrics?.angularWeight || 1);
-      const boundaryWeight = Number(graphMeta.boundaryCountByKey.get(key) || 0) * 0.22;
-      node.subtreeWeight = 1 + labelWeight * 0.24 + childWeight * 0.34 + boundaryWeight;
-    });
-  }
-};
-
-const buildRingMeta = ({
-  rings,
-  nodeByKey,
-  stableSort,
-  ringByKey,
-  useDualCenter,
-  c1,
-  c2
-}) => {
-  const ringMetaByRing = new Map();
-  rings.forEach((ring) => {
-    const membersBySegment = new Map();
-    if (useDualCenter) {
-      membersBySegment.set(c1, []);
-      membersBySegment.set(c2, []);
-    } else {
-      membersBySegment.set('main', []);
-    }
-    ringMetaByRing.set(ring, {
-      segmentOrder: useDualCenter ? [c1, c2] : ['main'],
-      membersBySegment
-    });
-  });
-
-  Array.from(nodeByKey.keys())
-    .sort(stableSort)
-    .forEach((key) => {
-      const ring = Number(ringByKey.get(key) || 0);
-      if (ring < 1) return;
-      const meta = ringMetaByRing.get(ring);
-      if (!meta) return;
-      const node = nodeByKey.get(key);
-      const segmentKey = useDualCenter
-        ? (node.segmentKey === c2 ? c2 : c1)
-        : 'main';
-      const members = meta.membersBySegment.get(segmentKey) || [];
-      members.push(key);
-      meta.membersBySegment.set(segmentKey, members);
-    });
-
-  return ringMetaByRing;
-};
-
-const arcFootprint = (node) => Math.max(0, Number(node?.effectiveSize || 0));
-
-const targetGap = (leftNode, rightNode) => RADIAL_DENSITY_K * 0.5 * (arcFootprint(leftNode) + arcFootprint(rightNode));
-
-const requiredCenterDistance = (leftNode, rightNode) => (
-  arcFootprint(leftNode) * 0.5
-  + arcFootprint(rightNode) * 0.5
-  + targetGap(leftNode, rightNode)
-);
-
-const leadingEdgeDistance = (node) => arcFootprint(node) * (0.5 + RADIAL_DENSITY_K * 0.5);
-
-const trailingEdgeDistance = (node) => arcFootprint(node) * (0.5 + RADIAL_DENSITY_K * 0.5);
-
-const computeSegmentWeight = (keys = [], nodeByKey) => keys.reduce((sum, key) => {
-  const node = nodeByKey.get(key);
-  return sum + 1 + (node?.subtreeWeight || 1) * 0.55 + (arcFootprint(node) || 0) * 0.02;
-}, 0);
-
-const buildOrientationCandidates = ({
-  useDualCenter,
-  sampleCount = useDualCenter ? DUAL_ROTATION_SAMPLES : SINGLE_ROTATION_SAMPLES,
-  anchorAngle = null,
-  offsets = null
-}) => {
-  if (Number.isFinite(anchorAngle) && Array.isArray(offsets) && offsets.length > 0) {
-    return offsets.map((offset) => {
-      const angle = normalizePositiveAngle(Number(anchorAngle || 0) + Number(offset || 0));
-      return {
-        rotation: angle,
-        axisAngle: angle
-      };
-    });
-  }
-  return Array.from({ length: sampleCount }, (_, index) => {
-    const angle = (TAU * index) / sampleCount;
-    return {
-      rotation: angle,
-      axisAngle: angle
-    };
-  });
-};
-
-const buildFineOrientationCandidates = ({ useDualCenter, orientation }) => {
-  const coarseCount = useDualCenter ? DUAL_ROTATION_SAMPLES_COARSE : SINGLE_ROTATION_SAMPLES_COARSE;
-  const fineStep = TAU / (coarseCount * 8);
-  return buildOrientationCandidates({
-    useDualCenter,
-    anchorAngle: Number(orientation?.rotation || 0),
-    offsets: [-2, -1, 0, 1, 2].map((factor) => factor * fineStep)
-  });
-};
-
-const buildCoreBodies = ({
-  center,
-  nodeByKey,
-  scheme,
-  orientation
-}) => {
-  const centerX = Number(center?.x || 0);
-  const centerY = Number(center?.y || 0);
-  const coreBodyByKey = new Map();
-
-  if (!scheme.useDualCenter) {
-    const node = nodeByKey.get(scheme.c1);
-    coreBodyByKey.set(scheme.c1, { x: centerX, y: centerY });
-    return {
-      coreBodyByKey,
-      coreEnvelope: node?.collisionRadius || 0,
-      coreMaxSize: arcFootprint(node),
-      coreAverageSize: arcFootprint(node)
-    };
-  }
-
-  const axisAngle = Number(orientation?.axisAngle || 0);
-  const c1Node = nodeByKey.get(scheme.c1);
-  const c2Node = nodeByKey.get(scheme.c2);
-  const separation = requiredCenterDistance(c1Node, c2Node);
-  const half = separation * 0.5;
-  const c2Body = pointFromPolar({ x: centerX, y: centerY }, axisAngle, half);
-  const c1Body = pointFromPolar({ x: centerX, y: centerY }, axisAngle + Math.PI, half);
-  coreBodyByKey.set(scheme.c1, c1Body);
-  coreBodyByKey.set(scheme.c2, c2Body);
-
-  const sizes = [arcFootprint(c1Node), arcFootprint(c2Node)].filter((value) => value > 0);
-  return {
-    coreBodyByKey,
-    coreEnvelope: Math.max(
-      half + (c1Node?.collisionRadius || 0),
-      half + (c2Node?.collisionRadius || 0)
-    ),
-    coreMaxSize: Math.max(...sizes, 0),
-    coreAverageSize: sizes.length > 0 ? sizes.reduce((sum, value) => sum + value, 0) / sizes.length : 0
-  };
-};
-
-const buildCenterAngleByKey = ({ scheme, orientation }) => {
-  if (!scheme.useDualCenter) {
-    return new Map([[scheme.c1, Number(orientation?.rotation || 0)]]);
-  }
-  const axisAngle = Number(orientation?.axisAngle || 0);
-  return new Map([
-    [scheme.c1, axisAngle + Math.PI],
-    [scheme.c2, axisAngle]
-  ]);
-};
-
-const buildSegmentDefinitionsByRing = ({
-  rings,
-  ringMetaByRing,
-  nodeByKey,
-  scheme,
-  orientation
-}) => {
-  const defsByRing = new Map();
-  const rotation = Number(orientation?.rotation || 0);
-  const axisAngle = Number(orientation?.axisAngle || rotation);
-
-  rings.forEach((ring) => {
-    const meta = ringMetaByRing.get(ring);
-    if (!meta) return;
-    if (!scheme.useDualCenter) {
-      defsByRing.set(ring, new Map([
-        ['main', {
-          key: 'main',
-          centerAngle: rotation,
-          start: rotation - Math.PI + RADIAL_SEGMENT_PADDING,
-          end: rotation + Math.PI - RADIAL_SEGMENT_PADDING,
-          span: TAU - RADIAL_SEGMENT_PADDING * 2,
-          fallbackAngle: rotation
-        }]
-      ]));
-      return;
-    }
-
-    const c1Keys = meta.membersBySegment.get(scheme.c1) || [];
-    const c2Keys = meta.membersBySegment.get(scheme.c2) || [];
-    const c1Weight = computeSegmentWeight(c1Keys, nodeByKey);
-    const c2Weight = computeSegmentWeight(c2Keys, nodeByKey);
-    const totalWeight = Math.max(1, c1Weight + c2Weight);
-    const minSpan = 0.5;
-    const maxShare = 0.78;
-    const available = TAU - RADIAL_SEGMENT_PADDING * 6;
-    const rawC2Share = c2Weight / totalWeight;
-    const c2Share = clamp(rawC2Share, 1 - maxShare, maxShare);
-    const c2Span = clamp(available * c2Share, minSpan, available - minSpan);
-    const c1Span = clamp(available - c2Span, minSpan, available - minSpan);
-    const c2Center = axisAngle;
-    const c1Center = axisAngle + Math.PI;
-    defsByRing.set(ring, new Map([
-      [scheme.c1, {
-        key: scheme.c1,
-        centerAngle: c1Center,
-        start: c1Center - c1Span * 0.5,
-        end: c1Center + c1Span * 0.5,
-        span: c1Span,
-        fallbackAngle: c1Center
-      }],
-      [scheme.c2, {
-        key: scheme.c2,
-        centerAngle: c2Center,
-        start: c2Center - c2Span * 0.5,
-        end: c2Center + c2Span * 0.5,
-        span: c2Span,
-        fallbackAngle: c2Center
-      }]
-    ]));
-  });
-
-  return defsByRing;
-};
-
-const collectReferenceAngles = ({
-  node,
-  angleByKey,
-  direction
-}) => {
-  if (!node) return [];
-  const forward = direction === 'forward';
-  const heavyKeys = forward ? node.parentKeys : node.childKeys;
-  const lightKeys = forward ? node.childKeys : node.parentKeys;
-  const entries = [];
-
-  heavyKeys.forEach((key) => {
-    const angle = angleByKey.get(key);
-    if (Number.isFinite(angle)) entries.push({ angle, weight: 2.2 });
-  });
-  node.sameLayerKeys.forEach((key) => {
-    const angle = angleByKey.get(key);
-    if (Number.isFinite(angle)) entries.push({ angle, weight: 0.7 });
-  });
-  lightKeys.forEach((key) => {
-    const angle = angleByKey.get(key);
-    if (Number.isFinite(angle)) entries.push({ angle, weight: 0.9 });
-  });
-  return entries;
-};
-
-const computePreferredAngleForNode = ({
-  key,
-  nodeByKey,
-  angleByKey,
-  segmentDef,
-  direction = 'forward',
-  includeCurrent = true
-}) => {
-  const node = nodeByKey.get(key);
-  const fallbackAngle = segmentDef?.fallbackAngle ?? segmentDef?.centerAngle ?? 0;
-  if (!node) return fallbackAngle;
-
-  const entries = collectReferenceAngles({
-    node,
-    angleByKey,
-    direction
-  });
-
-  if (node.primaryParentKey && Number.isFinite(angleByKey.get(node.primaryParentKey))) {
-    entries.push({ angle: angleByKey.get(node.primaryParentKey), weight: 1.3 });
-  }
-  if (includeCurrent && Number.isFinite(angleByKey.get(key))) {
-    entries.push({ angle: angleByKey.get(key), weight: 0.3 });
-  }
-  if (Number.isFinite(segmentDef?.centerAngle)) {
-    entries.push({
-      angle: segmentDef.centerAngle,
-      weight: 0.8 + Math.min(0.8, (node.degree || 0) * 0.05)
-    });
-  }
-
-  if (entries.length < 1) return fallbackAngle;
-  return averageAngles(entries, fallbackAngle);
-};
-
-const reorderRingSegment = ({
-  orderedKeys,
-  nodeByKey,
-  angleByKey,
-  direction,
-  rule,
-  stableSort,
-  segmentDef
-}) => {
-  if (!Array.isArray(orderedKeys) || orderedKeys.length < 2) return orderedKeys;
-  const indexByKey = buildOrderIndex(orderedKeys);
-  return orderedKeys
-    .slice()
-    .map((key) => {
-      const references = collectReferenceAngles({
-        node: nodeByKey.get(key),
-        angleByKey,
-        direction
-      }).map((entry) => entry.angle);
-      const currentAngle = Number(angleByKey.get(key) || segmentDef?.centerAngle || 0);
-      let targetAngle = currentAngle;
-      if (references.length > 0) {
-        targetAngle = rule === 'median'
-          ? resolveMedianAngle(references, currentAngle)
-          : averageAngles(references.map((angle) => ({ angle, weight: 1 })), currentAngle);
-      } else {
-        targetAngle = computePreferredAngleForNode({
-          key,
-          nodeByKey,
-          angleByKey,
-          segmentDef,
-          direction
-        });
-      }
-      return {
-        key,
-        targetAngle: unwrapAngleNear(targetAngle, segmentDef?.centerAngle ?? currentAngle),
-        stableIndex: indexByKey.get(key) || 0
-      };
-    })
-    .sort((left, right) => (
-      left.targetAngle - right.targetAngle
-      || left.stableIndex - right.stableIndex
-      || stableSort(left.key, right.key)
-    ))
-    .map((entry) => entry.key);
-};
-
-const reorderRing = ({
-  ring,
-  orderByRing,
-  ringMetaByRing,
-  nodeByKey,
-  angleByKey,
-  segmentDefsByRing,
-  direction,
-  rule,
+  edgeList,
+  inputLevelByKey,
   stableSort
 }) => {
-  const meta = ringMetaByRing.get(ring);
-  const currentOrder = orderByRing.get(ring) || [];
-  if (!meta || currentOrder.length < 2) return;
-  const nextOrder = [];
-  meta.segmentOrder.forEach((segmentKey) => {
-    const segmentDef = segmentDefsByRing.get(ring)?.get(segmentKey);
-    const segmentKeys = currentOrder.filter((key) => (nodeByKey.get(key)?.segmentKey || 'main') === segmentKey);
-    const reordered = reorderRingSegment({
-      orderedKeys: segmentKeys,
-      nodeByKey,
-      angleByKey,
-      direction,
-      rule,
-      stableSort,
-      segmentDef
-    });
-    nextOrder.push(...reordered);
-  });
-  orderByRing.set(ring, nextOrder);
-};
+  const edgeKeySet = new Set();
+  const directedEdges = [];
+  const outgoing = new Map();
+  const incoming = new Map();
 
-const computeSegmentDemandAngle = ({
-  orderedKeys,
-  radius,
-  nodeByKey
-}) => {
-  if (!Array.isArray(orderedKeys) || orderedKeys.length < 1) return 0;
-  const firstNode = nodeByKey.get(orderedKeys[0]);
-  const lastNode = nodeByKey.get(orderedKeys[orderedKeys.length - 1]);
-  let total = chordToAngle(leadingEdgeDistance(firstNode), radius) + chordToAngle(trailingEdgeDistance(lastNode), radius);
-  for (let index = 1; index < orderedKeys.length; index += 1) {
-    const leftNode = nodeByKey.get(orderedKeys[index - 1]);
-    const rightNode = nodeByKey.get(orderedKeys[index]);
-    total += chordToAngle(requiredCenterDistance(leftNode, rightNode), radius);
-  }
-  return total;
-};
-
-const solveMinRadiusForSegment = ({
-  orderedKeys,
-  availableSpan,
-  nodeByKey
-}) => {
-  if (!Array.isArray(orderedKeys) || orderedKeys.length < 1) return 0;
-  let low = Math.max(
-    RADIAL_MIN_RADIUS,
-    ...orderedKeys.map((key) => arcFootprint(nodeByKey.get(key)) * 0.5)
-  );
-  let high = Math.max(low, 96);
-  while (computeSegmentDemandAngle({ orderedKeys, radius: high, nodeByKey }) > availableSpan && high < 100000) {
-    high *= 1.35;
-  }
-  for (let index = 0; index < 26; index += 1) {
-    const middle = (low + high) * 0.5;
-    if (computeSegmentDemandAngle({ orderedKeys, radius: middle, nodeByKey }) <= availableSpan) high = middle;
-    else low = middle;
-  }
-  return high;
-};
-
-const buildRingStats = ({
-  orderByRing,
-  rings,
-  nodeByKey
-}) => {
-  const statsByRing = new Map();
-  rings.forEach((ring) => {
-    const order = orderByRing.get(ring) || [];
-    const sizes = order.map((key) => arcFootprint(nodeByKey.get(key))).filter((value) => value > 0);
-    statsByRing.set(ring, {
-      maxSize: Math.max(...sizes, 0),
-      averageSize: sizes.length > 0 ? sizes.reduce((sum, value) => sum + value, 0) / sizes.length : 0
-    });
-  });
-  return statsByRing;
-};
-
-const buildMinimumRadii = ({
-  rings,
-  orderByRing,
-  ringMetaByRing,
-  segmentDefsByRing,
-  nodeByKey,
-  coreEnvelope,
-  coreAverageSize
-}) => {
-  const statsByRing = buildRingStats({ orderByRing, rings, nodeByKey });
-  const minimumRadiusByRing = new Map();
-  const minCapacityRadiusByRing = new Map();
-  let previousOuterBoundary = coreEnvelope;
-  let previousAverageSize = coreAverageSize;
-
-  rings.forEach((ring) => {
-    const ringStats = statsByRing.get(ring) || { maxSize: 0, averageSize: 0 };
-    const radialPadding = RADIAL_DENSITY_K * 0.5 * (
-      Math.max(previousAverageSize, ringStats.averageSize)
-      + Math.min(previousAverageSize || ringStats.averageSize, ringStats.averageSize || previousAverageSize)
-    );
-    const minRadiusByGap = previousOuterBoundary + ringStats.maxSize * 0.5 + radialPadding;
-    let minRadiusByCapacity = 0;
-    const meta = ringMetaByRing.get(ring);
-    (meta?.segmentOrder || []).forEach((segmentKey) => {
-      const orderedKeys = (orderByRing.get(ring) || []).filter((key) => (nodeByKey.get(key)?.segmentKey || 'main') === segmentKey);
-      const segmentDef = segmentDefsByRing.get(ring)?.get(segmentKey);
-      minRadiusByCapacity = Math.max(
-        minRadiusByCapacity,
-        solveMinRadiusForSegment({
-          orderedKeys,
-          availableSpan: segmentDef?.span || (TAU - RADIAL_SEGMENT_PADDING * 2),
-          nodeByKey
-        })
-      );
-    });
-    minCapacityRadiusByRing.set(ring, minRadiusByCapacity);
-
-    const radius = Math.max(RADIAL_MIN_RADIUS, minRadiusByGap, minRadiusByCapacity);
-    minimumRadiusByRing.set(ring, radius);
-    previousOuterBoundary = radius + ringStats.maxSize * 0.5;
-    previousAverageSize = ringStats.averageSize;
-  });
-
-  return {
-    minimumRadiusByRing,
-    minCapacityRadiusByRing,
-    statsByRing
+  const ensureSet = (map, key) => {
+    let bucket = map.get(key);
+    if (!bucket) {
+      bucket = new Set();
+      map.set(key, bucket);
+    }
+    return bucket;
   };
-};
-
-const assignAnglesInSegment = ({
-  orderedKeys,
-  radius,
-  segmentDef,
-  nodeByKey,
-  angleByKey,
-  direction
-}) => {
-  if (!Array.isArray(orderedKeys) || orderedKeys.length < 1) return;
-  const centerAngle = Number(segmentDef?.centerAngle || 0);
-  const firstNode = nodeByKey.get(orderedKeys[0]);
-  const lastNode = nodeByKey.get(orderedKeys[orderedKeys.length - 1]);
-  const leadAngle = chordToAngle(leadingEdgeDistance(firstNode), radius);
-  const trailAngle = chordToAngle(trailingEdgeDistance(lastNode), radius);
-  const gapAngles = [];
-  for (let index = 1; index < orderedKeys.length; index += 1) {
-    const leftNode = nodeByKey.get(orderedKeys[index - 1]);
-    const rightNode = nodeByKey.get(orderedKeys[index]);
-    gapAngles.push(chordToAngle(requiredCenterDistance(leftNode, rightNode), radius));
-  }
-
-  const startLimit = Number(segmentDef?.start ?? (centerAngle - Math.PI)) + leadAngle;
-  const endLimit = Number(segmentDef?.end ?? (centerAngle + Math.PI)) - trailAngle;
-  const targets = orderedKeys.map((key) => unwrapAngleNear(computePreferredAngleForNode({
-    key,
-    nodeByKey,
-    angleByKey,
-    segmentDef,
-    direction
-  }), centerAngle));
-
-  if (orderedKeys.length === 1) {
-    angleByKey.set(orderedKeys[0], clamp(targets[0], startLimit, endLimit));
-    return;
-  }
-
-  const assigned = targets.map((value) => clamp(value, startLimit, endLimit));
-
-  for (let pass = 0; pass < 2; pass += 1) {
-    for (let index = 1; index < assigned.length; index += 1) {
-      assigned[index] = Math.max(assigned[index], assigned[index - 1] + gapAngles[index - 1]);
-    }
-    for (let index = assigned.length - 2; index >= 0; index -= 1) {
-      assigned[index] = Math.min(assigned[index], assigned[index + 1] - gapAngles[index]);
-    }
-    const lowerShift = startLimit - assigned[0];
-    const upperShift = endLimit - assigned[assigned.length - 1];
-    const desiredShift = targets.reduce((sum, value, index) => sum + (value - assigned[index]), 0) / assigned.length;
-    const shift = clamp(desiredShift, lowerShift, upperShift);
-    for (let index = 0; index < assigned.length; index += 1) {
-      assigned[index] += shift;
-    }
-  }
-
-  orderedKeys.forEach((key, index) => {
-    angleByKey.set(key, assigned[index]);
-  });
-};
-
-const assignAllAngles = ({
-  rings,
-  orderByRing,
-  ringMetaByRing,
-  radiusByRing,
-  nodeByKey,
-  angleByKey,
-  segmentDefsByRing,
-  passes = GEOMETRY_ASSIGNMENT_PASSES
-}) => {
-  for (let pass = 0; pass < passes; pass += 1) {
-    rings.forEach((ring) => {
-      const meta = ringMetaByRing.get(ring);
-      const radius = radiusByRing.get(ring) || 1;
-      const order = orderByRing.get(ring) || [];
-      (meta?.segmentOrder || []).forEach((segmentKey) => {
-        const segmentDef = segmentDefsByRing.get(ring)?.get(segmentKey);
-        const orderedKeys = order.filter((key) => (nodeByKey.get(key)?.segmentKey || 'main') === segmentKey);
-        assignAnglesInSegment({
-          orderedKeys,
-          radius,
-          segmentDef,
-          nodeByKey,
-          angleByKey,
-          direction: 'forward'
-        });
-      });
-    });
-
-    rings.slice().reverse().forEach((ring) => {
-      const meta = ringMetaByRing.get(ring);
-      const radius = radiusByRing.get(ring) || 1;
-      const order = orderByRing.get(ring) || [];
-      (meta?.segmentOrder || []).forEach((segmentKey) => {
-        const segmentDef = segmentDefsByRing.get(ring)?.get(segmentKey);
-        const orderedKeys = order.filter((key) => (nodeByKey.get(key)?.segmentKey || 'main') === segmentKey);
-        assignAnglesInSegment({
-          orderedKeys,
-          radius,
-          segmentDef,
-          nodeByKey,
-          angleByKey,
-          direction: 'backward'
-        });
-      });
-    });
-  }
-};
-
-const buildBaseOrders = ({
-  rings,
-  ringMetaByRing,
-  nodeByKey,
-  stableSort,
-  centerAngleByKey,
-  segmentDefsByRing
-}) => {
-  const orderByRing = new Map();
-  const angleByKey = new Map(centerAngleByKey);
-
-  rings.forEach((ring) => {
-    const meta = ringMetaByRing.get(ring);
-    if (!meta) return;
-    const order = [];
-    meta.segmentOrder.forEach((segmentKey) => {
-      const segmentDef = segmentDefsByRing.get(ring)?.get(segmentKey);
-      const members = (meta.membersBySegment.get(segmentKey) || [])
-        .slice()
-        .sort((leftKey, rightKey) => {
-          const leftTarget = unwrapAngleNear(computePreferredAngleForNode({
-            key: leftKey,
-            nodeByKey,
-            angleByKey,
-            segmentDef,
-            direction: 'forward',
-            includeCurrent: false
-          }), segmentDef?.centerAngle || 0);
-          const rightTarget = unwrapAngleNear(computePreferredAngleForNode({
-            key: rightKey,
-            nodeByKey,
-            angleByKey,
-            segmentDef,
-            direction: 'forward',
-            includeCurrent: false
-          }), segmentDef?.centerAngle || 0);
-          return leftTarget - rightTarget || stableSort(leftKey, rightKey);
-        });
-      order.push(...members);
-      members.forEach((key, index) => {
-        const ratio = members.length > 1 ? index / (members.length - 1) : 0.5;
-        angleByKey.set(
-          key,
-          (segmentDef?.start || 0) + (segmentDef?.span || 0) * ratio
-        );
-      });
-    });
-    orderByRing.set(ring, order);
-  });
-
-  for (let round = 0; round < INITIAL_SWEEP_ROUNDS; round += 1) {
-    rings.forEach((ring) => {
-      reorderRing({
-        ring,
-        orderByRing,
-        ringMetaByRing,
-        nodeByKey,
-        angleByKey,
-        segmentDefsByRing,
-        direction: 'forward',
-        rule: round % 2 === 0 ? 'barycenter' : 'median',
-        stableSort
-      });
-    });
-    rings.slice().reverse().forEach((ring) => {
-      reorderRing({
-        ring,
-        orderByRing,
-        ringMetaByRing,
-        nodeByKey,
-        angleByKey,
-        segmentDefsByRing,
-        direction: 'backward',
-        rule: round % 2 === 0 ? 'median' : 'barycenter',
-        stableSort
-      });
-    });
-  }
-
-  return {
-    orderByRing,
-    angleByKey
-  };
-};
-
-const buildNodeBodies = ({
-  center,
-  centerKey,
-  scheme,
-  rings,
-  orderByRing,
-  radiusByRing,
-  angleByKey,
-  nodeByKey,
-  coreBodyByKey,
-  centerAngleByKey
-}) => {
-  const bodies = [];
-  const bodyByKey = new Map();
-  const centers = scheme.useDualCenter ? [scheme.c1, scheme.c2] : [scheme.c1];
-
-  centers.forEach((key, index) => {
-    const node = nodeByKey.get(key);
-    const coreBody = coreBodyByKey.get(key);
-    if (!node || !coreBody) return;
-    const body = {
-      key,
-      nodeKey: key,
-      x: coreBody.x,
-      y: coreBody.y,
-      radius: Number(node.radius || 0),
-      collisionRadius: node.collisionRadius,
-      labelWidthHint: Number(node.labelMetrics?.widthHint || node.boxWidth),
-      labelHeightHint: Number(node.labelMetrics?.heightHint || node.boxHeight),
-      labelOffsetY: 0,
-      labelPlacement: 'center',
-      labelMetrics: node.labelMetrics,
-      level: 0,
-      angle: normalizePositiveAngle(centerAngleByKey.get(key) || (index === 0 ? Math.PI : 0)),
-      rawNode: node.rawNode,
-      nodeType: key === centerKey ? 'center' : node.nodeType,
-      clusterSignature: node.clusterSignature,
-      primaryParentKey: node.primaryParentKey,
-      childCount: node.childKeys.length,
-      degree: node.degree,
-      importance: node.importance,
-      subtreeWeight: node.subtreeWeight,
-      siblingIndex: index,
-      siblingCount: centers.length
-    };
-    body.labelRect = buildLabelRect(body);
-    bodies.push(body);
-    bodyByKey.set(key, body);
-  });
-
-  rings.forEach((ring) => {
-    const order = orderByRing.get(ring) || [];
-    const radius = radiusByRing.get(ring) || 0;
-    order.forEach((key, index) => {
-      if (bodyByKey.has(key)) return;
-      const node = nodeByKey.get(key);
-      if (!node) return;
-      const rawAngle = Number(angleByKey.get(key) || 0);
-      const body = {
-        key,
-        nodeKey: key,
-        x: Number(center?.x || 0) + Math.cos(rawAngle) * radius,
-        y: Number(center?.y || 0) + Math.sin(rawAngle) * radius,
-        radius: Number(node.radius || 0),
-        collisionRadius: node.collisionRadius,
-        labelWidthHint: Number(node.labelMetrics?.widthHint || node.boxWidth),
-        labelHeightHint: Number(node.labelMetrics?.heightHint || node.boxHeight),
-        labelOffsetY: 0,
-        labelPlacement: 'center',
-        labelMetrics: node.labelMetrics,
-        level: ring,
-        angle: normalizePositiveAngle(rawAngle),
-        rawNode: node.rawNode,
-        nodeType: key === centerKey ? 'center' : node.nodeType,
-        clusterSignature: node.clusterSignature,
-        primaryParentKey: node.primaryParentKey,
-        childCount: node.childKeys.length,
-        degree: node.degree,
-        importance: node.importance,
-        subtreeWeight: node.subtreeWeight,
-        siblingIndex: index,
-        siblingCount: order.length
-      };
-      body.labelRect = buildLabelRect(body);
-      bodies.push(body);
-      bodyByKey.set(key, body);
-    });
-  });
-
-  return {
-    bodies,
-    bodyByKey
-  };
-};
-
-const segmentIntersection = (startA, endA, startB, endB) => {
-  const sharedEndpoint = (
-    distanceBetweenPoints(startA, startB) <= EPSILON
-    || distanceBetweenPoints(startA, endB) <= EPSILON
-    || distanceBetweenPoints(endA, startB) <= EPSILON
-    || distanceBetweenPoints(endA, endB) <= EPSILON
-  );
-  if (sharedEndpoint) return false;
-
-  const cross = (a, b, c) => (
-    ((Number(b?.x) || 0) - (Number(a?.x) || 0)) * ((Number(c?.y) || 0) - (Number(a?.y) || 0))
-    - ((Number(b?.y) || 0) - (Number(a?.y) || 0)) * ((Number(c?.x) || 0) - (Number(a?.x) || 0))
-  );
-
-  const onSegment = (a, b, c) => {
-    const minX = Math.min(Number(a?.x) || 0, Number(b?.x) || 0) - EPSILON;
-    const maxX = Math.max(Number(a?.x) || 0, Number(b?.x) || 0) + EPSILON;
-    const minY = Math.min(Number(a?.y) || 0, Number(b?.y) || 0) - EPSILON;
-    const maxY = Math.max(Number(a?.y) || 0, Number(b?.y) || 0) + EPSILON;
-    return (
-      (Number(c?.x) || 0) >= minX
-      && (Number(c?.x) || 0) <= maxX
-      && (Number(c?.y) || 0) >= minY
-      && (Number(c?.y) || 0) <= maxY
-    );
-  };
-
-  const d1 = cross(startA, endA, startB);
-  const d2 = cross(startA, endA, endB);
-  const d3 = cross(startB, endB, startA);
-  const d4 = cross(startB, endB, endA);
-
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
-    return true;
-  }
-  if (Math.abs(d1) <= EPSILON && onSegment(startA, endA, startB)) return true;
-  if (Math.abs(d2) <= EPSILON && onSegment(startA, endA, endB)) return true;
-  if (Math.abs(d3) <= EPSILON && onSegment(startB, endB, startA)) return true;
-  if (Math.abs(d4) <= EPSILON && onSegment(startB, endB, endA)) return true;
-  return false;
-};
-
-const buildEdgeSegments = ({
-  edgeList = null,
-  graphEdges = null,
-  layer = 'title',
-  bodyByKey
-}) => {
-  const segments = [];
-  const sourceEdges = Array.isArray(edgeList)
-    ? edgeList
-    : (Array.isArray(graphEdges)
-      ? graphEdges.map((edge, index) => ({
-        index,
-        fromKey: layer === 'sense'
-          ? String(edge?.fromVertexKey || '')
-          : String(edge?.nodeAId || ''),
-        toKey: layer === 'sense'
-          ? String(edge?.toVertexKey || '')
-          : String(edge?.nodeBId || '')
-      }))
-      : []);
-  sourceEdges.forEach((edge) => {
-    const { fromKey, toKey, index } = edge;
-    const start = bodyByKey.get(fromKey);
-    const end = bodyByKey.get(toKey);
-    if (!start || !end) return;
-    segments.push({
-      index,
-      fromKey,
-      toKey,
-      start: { x: start.x, y: start.y },
-      end: { x: end.x, y: end.y }
-    });
-  });
-  return segments;
-};
-
-const distancePointToSegment = (point, start, end) => {
-  const dx = (Number(end?.x) || 0) - (Number(start?.x) || 0);
-  const dy = (Number(end?.y) || 0) - (Number(start?.y) || 0);
-  if (Math.abs(dx) <= EPSILON && Math.abs(dy) <= EPSILON) return distanceBetweenPoints(point, start);
-  const t = clamp(
-    (((Number(point?.x) || 0) - (Number(start?.x) || 0)) * dx + ((Number(point?.y) || 0) - (Number(start?.y) || 0)) * dy)
-      / (dx * dx + dy * dy),
-    0,
-    1
-  );
-  const projection = {
-    x: (Number(start?.x) || 0) + dx * t,
-    y: (Number(start?.y) || 0) + dy * t
-  };
-  return distanceBetweenPoints(point, projection);
-};
-
-const segmentIntersectsRect = (start, end, rect) => {
-  const corners = [
-    { x: rect.left, y: rect.top },
-    { x: rect.right, y: rect.top },
-    { x: rect.right, y: rect.bottom },
-    { x: rect.left, y: rect.bottom }
-  ];
-  const within = (point) => (
-    point.x >= rect.left - EPSILON
-    && point.x <= rect.right + EPSILON
-    && point.y >= rect.top - EPSILON
-    && point.y <= rect.bottom + EPSILON
-  );
-  if (within(start) || within(end)) return true;
-  for (let index = 0; index < corners.length; index += 1) {
-    const nextIndex = (index + 1) % corners.length;
-    if (segmentIntersection(start, end, corners[index], corners[nextIndex])) return true;
-  }
-  return false;
-};
-
-const computeMinIncidentGapAngle = ({
-  node,
-  neighborA,
-  neighborB,
-  body,
-  bodyA,
-  bodyB
-}) => {
-  const degreeFactor = 1 + Math.max(0, (node?.degree || 0) - 2) * 0.06;
-  const sizeDemand = (
-    (arcFootprint(node) || 0) * 0.42
-    + (arcFootprint(neighborA) || 0) * 0.18
-    + (arcFootprint(neighborB) || 0) * 0.18
-  ) * degreeFactor;
-  const distanceScale = Math.max(
-    12,
-    Math.min(distanceBetweenPoints(body, bodyA), distanceBetweenPoints(body, bodyB))
-  );
-  return clamp(sizeDemand / distanceScale, HUB_MIN_GAP_FLOOR, HUB_MIN_GAP_CEIL);
-};
-
-const compareScores = (left, right) => {
-  if (!right) return -1;
-  const fields = [
-    'nodeOverlapCount',
-    'nodeOverlapPenalty',
-    'edgeCrossings',
-    'hubViolationCount',
-    'hubPenalty',
-    'edgeNodeHits',
-    'edgeNodePenalty',
-    'compactness'
-  ];
-  for (let index = 0; index < fields.length; index += 1) {
-    const field = fields[index];
-    const leftValue = Number(left?.[field] || 0);
-    const rightValue = Number(right?.[field] || 0);
-    if (Math.abs(leftValue - rightValue) <= (field.includes('Penalty') || field === 'compactness' ? 0.001 : 0)) {
-      continue;
-    }
-    return leftValue < rightValue ? -1 : 1;
-  }
-  return 0;
-};
-
-const evaluateLayoutScore = ({
-  bodyByKey,
-  nodeByKey,
-  graphEdges,
-  layer,
-  radiusByRing
-}) => {
-  const bodies = Array.from(bodyByKey.values());
-  let nodeOverlapCount = 0;
-  let nodeOverlapPenalty = 0;
-  for (let leftIndex = 0; leftIndex < bodies.length; leftIndex += 1) {
-    const left = bodies[leftIndex];
-    for (let rightIndex = leftIndex + 1; rightIndex < bodies.length; rightIndex += 1) {
-      const right = bodies[rightIndex];
-      const overlap = (Number(left.collisionRadius || 0) + Number(right.collisionRadius || 0)) - distanceBetweenPoints(left, right);
-      if (overlap > EPSILON) {
-        nodeOverlapCount += 1;
-        nodeOverlapPenalty += overlap;
-      }
-    }
-  }
-
-  const segments = buildEdgeSegments({
-    graphEdges,
-    layer,
-    bodyByKey
-  });
-
-  let edgeCrossings = 0;
-  for (let leftIndex = 0; leftIndex < segments.length; leftIndex += 1) {
-    const left = segments[leftIndex];
-    for (let rightIndex = leftIndex + 1; rightIndex < segments.length; rightIndex += 1) {
-      const right = segments[rightIndex];
-      if (
-        left.fromKey === right.fromKey
-        || left.fromKey === right.toKey
-        || left.toKey === right.fromKey
-        || left.toKey === right.toKey
-      ) {
-        continue;
-      }
-      if (segmentIntersection(left.start, left.end, right.start, right.end)) edgeCrossings += 1;
-    }
-  }
-
-  const incidentByKey = new Map();
-  segments.forEach((segment) => {
-    const start = bodyByKey.get(segment.fromKey);
-    const end = bodyByKey.get(segment.toKey);
-    if (!start || !end) return;
-    const startEntry = incidentByKey.get(segment.fromKey) || [];
-    startEntry.push({
-      neighborKey: segment.toKey,
-      angle: Math.atan2(end.y - start.y, end.x - start.x)
-    });
-    incidentByKey.set(segment.fromKey, startEntry);
-
-    const endEntry = incidentByKey.get(segment.toKey) || [];
-    endEntry.push({
-      neighborKey: segment.fromKey,
-      angle: Math.atan2(start.y - end.y, start.x - end.x)
-    });
-    incidentByKey.set(segment.toKey, endEntry);
-  });
-
-  let hubViolationCount = 0;
-  let hubPenalty = 0;
-  incidentByKey.forEach((entries, key) => {
-    if (!Array.isArray(entries) || entries.length < 2) return;
-    const node = nodeByKey.get(key);
-    const body = bodyByKey.get(key);
-    if (!node || !body) return;
-    const sorted = entries
-      .slice()
-      .sort((left, right) => normalizePositiveAngle(left.angle) - normalizePositiveAngle(right.angle));
-    for (let index = 0; index < sorted.length; index += 1) {
-      const current = sorted[index];
-      const next = sorted[(index + 1) % sorted.length];
-      const bodyA = bodyByKey.get(current.neighborKey);
-      const bodyB = bodyByKey.get(next.neighborKey);
-      const nodeA = nodeByKey.get(current.neighborKey);
-      const nodeB = nodeByKey.get(next.neighborKey);
-      if (!bodyA || !bodyB || !nodeA || !nodeB) continue;
-      const gap = normalizePositiveAngle(next.angle - current.angle || 0);
-      const minGap = computeMinIncidentGapAngle({
-        node,
-        neighborA: nodeA,
-        neighborB: nodeB,
-        body,
-        bodyA,
-        bodyB
-      });
-      if (gap + EPSILON >= minGap) continue;
-      const deficit = minGap - gap;
-      hubViolationCount += 1;
-      hubPenalty += deficit * deficit * 100;
-    }
-  });
-
-  let edgeNodeHits = 0;
-  let edgeNodePenalty = 0;
-  segments.forEach((segment) => {
-    bodies.forEach((body) => {
-      if (body.key === segment.fromKey || body.key === segment.toKey) return;
-      const rect = body.labelRect || buildLabelRect(body);
-      const throughRect = segmentIntersectsRect(segment.start, segment.end, rect);
-      const pointDistance = distancePointToSegment(body, segment.start, segment.end);
-      if (!throughRect && pointDistance >= (Number(body.collisionRadius || 0) - 1)) return;
-      edgeNodeHits += 1;
-      edgeNodePenalty += throughRect ? 3 : Math.max(0.5, Number(body.collisionRadius || 0) - pointDistance);
-    });
-  });
-
-  const outerRadius = Array.from(radiusByRing.values()).reduce((max, radius) => Math.max(max, Number(radius) || 0), 0);
-  const radiusSum = Array.from(radiusByRing.values()).reduce((sum, radius) => sum + (Number(radius) || 0), 0);
-  const bounds = buildContentBounds(bodies);
-  const compactness = outerRadius * 4 + radiusSum + bounds.width * 0.02 + bounds.height * 0.02;
-
-  return {
-    nodeOverlapCount,
-    nodeOverlapPenalty,
-    edgeCrossings,
-    hubViolationCount,
-    hubPenalty,
-    edgeNodeHits,
-    edgeNodePenalty,
-    compactness
-  };
-};
-
-const countLayerPairCrossings = (innerEdges = [], outerOrder = new Map(), innerOrder = new Map()) => {
-  let crossings = 0;
-  for (let leftIndex = 0; leftIndex < innerEdges.length; leftIndex += 1) {
-    const left = innerEdges[leftIndex];
-    for (let rightIndex = leftIndex + 1; rightIndex < innerEdges.length; rightIndex += 1) {
-      const right = innerEdges[rightIndex];
-      const leftInner = innerOrder.get(left.fromKey);
-      const rightInner = innerOrder.get(right.fromKey);
-      const leftOuter = outerOrder.get(left.toKey);
-      const rightOuter = outerOrder.get(right.toKey);
-      if (!Number.isFinite(leftInner) || !Number.isFinite(rightInner) || !Number.isFinite(leftOuter) || !Number.isFinite(rightOuter)) {
-        continue;
-      }
-      if ((leftInner - rightInner) * (leftOuter - rightOuter) < 0) crossings += 1;
-    }
-  }
-  return crossings;
-};
-
-const countSameLayerCrossings = (layerEdges = [], order = new Map()) => {
-  let crossings = 0;
-  for (let leftIndex = 0; leftIndex < layerEdges.length; leftIndex += 1) {
-    const left = layerEdges[leftIndex];
-    const a = order.get(left.leftKey);
-    const b = order.get(left.rightKey);
-    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-    const minLeft = Math.min(a, b);
-    const maxLeft = Math.max(a, b);
-    for (let rightIndex = leftIndex + 1; rightIndex < layerEdges.length; rightIndex += 1) {
-      const right = layerEdges[rightIndex];
-      const c = order.get(right.leftKey);
-      const d = order.get(right.rightKey);
-      if (!Number.isFinite(c) || !Number.isFinite(d)) continue;
-      const minRight = Math.min(c, d);
-      const maxRight = Math.max(c, d);
-      const interleave = (
-        (minLeft < minRight && minRight < maxLeft && maxLeft < maxRight)
-        || (minRight < minLeft && minLeft < maxRight && maxRight < maxLeft)
-      );
-      if (interleave) crossings += 1;
-    }
-  }
-  return crossings;
-};
-
-const buildEdgeBuckets = ({
-  edgeList = [],
-  ringByKey = new Map(),
-  nodeKeySet = new Set()
-}) => {
-  const betweenLevels = new Map();
-  const sameLevel = new Map();
 
   edgeList.forEach((edge) => {
-    const { fromKey, toKey } = edge;
-    if (!fromKey || !toKey || fromKey === toKey) return;
-    if (!nodeKeySet.has(fromKey) || !nodeKeySet.has(toKey)) return;
-    const fromRing = Number(ringByKey.get(fromKey));
-    const toRing = Number(ringByKey.get(toKey));
-    if (!Number.isFinite(fromRing) || !Number.isFinite(toRing)) return;
-    if (fromRing === toRing) {
-      const bucket = sameLevel.get(fromRing) || [];
-      bucket.push({ leftKey: fromKey, rightKey: toKey });
-      sameLevel.set(fromRing, bucket);
+    const a = edge.fromKey;
+    const b = edge.toKey;
+    const levelA = Number(inputLevelByKey[a] || nodeByKey.get(a)?.level || 0);
+    const levelB = Number(inputLevelByKey[b] || nodeByKey.get(b)?.level || 0);
+    const importanceA = Number(nodeByKey.get(a)?.importance || 1);
+    const importanceB = Number(nodeByKey.get(b)?.importance || 1);
+
+    let source = a;
+    let target = b;
+
+    if (a === centerKey || b === centerKey) {
+      source = a === centerKey ? a : b;
+      target = source === a ? b : a;
+    } else if (levelA !== levelB) {
+      source = levelA < levelB ? a : b;
+      target = source === a ? b : a;
+    } else if (Math.abs(importanceA - importanceB) > 0.001) {
+      source = importanceA >= importanceB ? a : b;
+      target = source === a ? b : a;
+    } else {
+      source = stableSort(a, b) <= 0 ? a : b;
+      target = source === a ? b : a;
+    }
+
+    const key = `${source}->${target}`;
+    if (edgeKeySet.has(key)) return;
+    edgeKeySet.add(key);
+    directedEdges.push({ fromKey: source, toKey: target });
+    ensureSet(outgoing, source).add(target);
+    ensureSet(incoming, target).add(source);
+  });
+
+  nodeByKey.forEach((_, key) => {
+    ensureSet(outgoing, key);
+    ensureSet(incoming, key);
+  });
+
+  return {
+    directedEdges,
+    outgoing,
+    incoming
+  };
+};
+
+const buildSccMeta = ({
+  nodeByKey,
+  outgoing,
+  stableSort
+}) => {
+  let nextIndex = 0;
+  const indexByKey = new Map();
+  const lowByKey = new Map();
+  const stack = [];
+  const onStack = new Set();
+  const componentIdByKey = new Map();
+  const components = [];
+
+  const strongConnect = (key) => {
+    indexByKey.set(key, nextIndex);
+    lowByKey.set(key, nextIndex);
+    nextIndex += 1;
+    stack.push(key);
+    onStack.add(key);
+
+    Array.from(outgoing.get(key) || []).sort(stableSort).forEach((neighborKey) => {
+      if (!indexByKey.has(neighborKey)) {
+        strongConnect(neighborKey);
+        lowByKey.set(key, Math.min(lowByKey.get(key), lowByKey.get(neighborKey)));
+      } else if (onStack.has(neighborKey)) {
+        lowByKey.set(key, Math.min(lowByKey.get(key), indexByKey.get(neighborKey)));
+      }
+    });
+
+    if (lowByKey.get(key) !== indexByKey.get(key)) return;
+
+    const members = [];
+    while (stack.length > 0) {
+      const memberKey = stack.pop();
+      onStack.delete(memberKey);
+      componentIdByKey.set(memberKey, components.length);
+      members.push(memberKey);
+      if (memberKey === key) break;
+    }
+    components.push(members.sort(stableSort));
+  };
+
+  Array.from(nodeByKey.keys()).sort(stableSort).forEach((key) => {
+    if (!indexByKey.has(key)) strongConnect(key);
+  });
+
+  return {
+    componentIdByKey,
+    components
+  };
+};
+
+const assignDenseDagLayers = ({
+  centerKey,
+  nodeByKey,
+  stableSort,
+  directedEdges,
+  inputLevelByKey,
+  componentIdByKey,
+  components
+}) => {
+  const compNodeSet = new Map();
+  const compPreferred = new Map();
+  const compOutgoing = new Map();
+  const compIncomingCount = new Map();
+
+  const ensureSet = (map, key) => {
+    let bucket = map.get(key);
+    if (!bucket) {
+      bucket = new Set();
+      map.set(key, bucket);
+    }
+    return bucket;
+  };
+
+  components.forEach((members, componentId) => {
+    compNodeSet.set(componentId, members);
+    compPreferred.set(componentId, members.reduce((best, key) => {
+      const level = key === centerKey ? 0 : Number(inputLevelByKey[key] || nodeByKey.get(key)?.level || 1);
+      return Math.min(best, level);
+    }, Number.POSITIVE_INFINITY));
+    compIncomingCount.set(componentId, 0);
+  });
+
+  directedEdges.forEach((edge) => {
+    const fromComp = componentIdByKey.get(edge.fromKey);
+    const toComp = componentIdByKey.get(edge.toKey);
+    if (fromComp === toComp) return;
+    const bucket = ensureSet(compOutgoing, fromComp);
+    if (bucket.has(toComp)) return;
+    bucket.add(toComp);
+    compIncomingCount.set(toComp, (compIncomingCount.get(toComp) || 0) + 1);
+  });
+
+  const queue = Array.from(compIncomingCount.entries())
+    .filter(([, count]) => count === 0)
+    .map(([componentId]) => componentId)
+    .sort((left, right) => (
+      (compPreferred.get(left) || 0) - (compPreferred.get(right) || 0)
+      || stableSort(compNodeSet.get(left)?.[0] || '', compNodeSet.get(right)?.[0] || '')
+    ));
+  const topo = [];
+  while (queue.length > 0) {
+    const componentId = queue.shift();
+    topo.push(componentId);
+    Array.from(compOutgoing.get(componentId) || []).sort((left, right) => (
+      (compPreferred.get(left) || 0) - (compPreferred.get(right) || 0)
+      || stableSort(compNodeSet.get(left)?.[0] || '', compNodeSet.get(right)?.[0] || '')
+    )).forEach((neighborId) => {
+      const nextCount = (compIncomingCount.get(neighborId) || 0) - 1;
+      compIncomingCount.set(neighborId, nextCount);
+      if (nextCount === 0) {
+        queue.push(neighborId);
+        queue.sort((left, right) => (
+          (compPreferred.get(left) || 0) - (compPreferred.get(right) || 0)
+          || stableSort(compNodeSet.get(left)?.[0] || '', compNodeSet.get(right)?.[0] || '')
+        ));
+      }
+    });
+  }
+
+  const requiredLayerByComp = new Map();
+  const compLayerById = new Map();
+  topo.forEach((componentId) => {
+    const members = compNodeSet.get(componentId) || [];
+    const preferredLayer = componentId === componentIdByKey.get(centerKey)
+      ? 0
+      : Math.max(1, Number(compPreferred.get(componentId) || 1));
+    const layer = Math.max(preferredLayer, Number(requiredLayerByComp.get(componentId) || 0));
+    compLayerById.set(componentId, layer);
+    Array.from(compOutgoing.get(componentId) || []).forEach((neighborId) => {
+      const current = Number(requiredLayerByComp.get(neighborId) || 0);
+      const fromPreferred = Number(compPreferred.get(componentId) || 0);
+      const toPreferred = Number(compPreferred.get(neighborId) || 0);
+      const delta = toPreferred > fromPreferred ? 1 : 0;
+      requiredLayerByComp.set(neighborId, Math.max(current, layer + delta));
+    });
+    members.forEach((key) => {
+      if (!requiredLayerByComp.has(componentId) && key === centerKey) {
+        requiredLayerByComp.set(componentId, 0);
+      }
+    });
+  });
+
+  const provisionalLevelByKey = {};
+  nodeByKey.forEach((node, key) => {
+    const componentId = componentIdByKey.get(key);
+    const compLayer = Number(compLayerById.get(componentId) || 0);
+    const inputLevel = key === centerKey ? 0 : Math.max(1, Number(inputLevelByKey[key] || node.level || 1));
+    provisionalLevelByKey[key] = key === centerKey
+      ? 0
+      : Math.max(compLayer, inputLevel);
+  });
+
+  const normalizedLevels = Array.from(new Set(Object.values(provisionalLevelByKey).map((value) => Number(value) || 0)))
+    .sort((left, right) => left - right);
+  const normalizedIndexByValue = new Map(normalizedLevels.map((value, index) => [value, index]));
+
+  const levelByKey = {};
+  Object.entries(provisionalLevelByKey).forEach(([key, rawLevel]) => {
+    levelByKey[key] = normalizedIndexByValue.get(rawLevel) || 0;
+  });
+
+  return {
+    levelByKey,
+    componentIdByKey
+  };
+};
+
+const buildLayerOrdering = ({
+  centerKey,
+  nodeByKey,
+  stableSort,
+  directedEdges,
+  levelByKey
+}) => {
+  const layerKeys = new Map();
+  const predecessors = new Map();
+  const successors = new Map();
+
+  const ensureArray = (map, key) => {
+    let bucket = map.get(key);
+    if (!bucket) {
+      bucket = [];
+      map.set(key, bucket);
+    }
+    return bucket;
+  };
+
+  const sortedKeys = Array.from(nodeByKey.keys()).sort(stableSort);
+  sortedKeys.forEach((key) => {
+    const level = Number(levelByKey[key] || 0);
+    ensureArray(layerKeys, level).push(key);
+    ensureArray(predecessors, key);
+    ensureArray(successors, key);
+  });
+
+  directedEdges.forEach((edge) => {
+    const fromLevel = Number(levelByKey[edge.fromKey] || 0);
+    const toLevel = Number(levelByKey[edge.toKey] || 0);
+    if (toLevel < fromLevel) return;
+    predecessors.get(edge.toKey)?.push(edge.fromKey);
+    successors.get(edge.fromKey)?.push(edge.toKey);
+  });
+
+  layerKeys.forEach((keys, level) => {
+    keys.sort((left, right) => {
+      const leftNode = nodeByKey.get(left);
+      const rightNode = nodeByKey.get(right);
+      return (
+        Number(rightNode?.importance || 0) - Number(leftNode?.importance || 0)
+        || Number(rightNode?.degree || 0) - Number(leftNode?.degree || 0)
+        || stableSort(left, right)
+      );
+    });
+    if (level === 0 && centerKey && keys.includes(centerKey)) {
+      keys.sort((left, right) => (
+        left === centerKey ? -1 : right === centerKey ? 1 : stableSort(left, right)
+      ));
+    }
+  });
+
+  const buildOrderIndex = () => {
+    const indexByKey = new Map();
+    layerKeys.forEach((keys) => {
+      keys.forEach((key, index) => {
+        indexByKey.set(key, index);
+      });
+    });
+    return indexByKey;
+  };
+
+  const computeReference = (key, refKeys, indexByKey) => {
+    const references = (refKeys || []).map((refKey) => indexByKey.get(refKey)).filter(Number.isFinite);
+    if (references.length < 1) return null;
+    return references.reduce((sum, value) => sum + value, 0) / references.length;
+  };
+
+  for (let round = 0; round < 4; round += 1) {
+    let indexByKey = buildOrderIndex();
+    Array.from(layerKeys.keys()).sort((left, right) => left - right).forEach((level) => {
+      if (level === 0) return;
+      const keys = (layerKeys.get(level) || []).slice();
+      keys.sort((left, right) => {
+        const leftRef = computeReference(left, predecessors.get(left), indexByKey);
+        const rightRef = computeReference(right, predecessors.get(right), indexByKey);
+        return (
+          (leftRef ?? Number(indexByKey.get(left) || 0)) - (rightRef ?? Number(indexByKey.get(right) || 0))
+          || Number(nodeByKey.get(right)?.importance || 0) - Number(nodeByKey.get(left)?.importance || 0)
+          || stableSort(left, right)
+        );
+      });
+      layerKeys.set(level, keys);
+    });
+
+    indexByKey = buildOrderIndex();
+    Array.from(layerKeys.keys()).sort((left, right) => right - left).forEach((level) => {
+      if (level === 0) return;
+      const keys = (layerKeys.get(level) || []).slice();
+      keys.sort((left, right) => {
+        const leftRef = computeReference(left, successors.get(left), indexByKey);
+        const rightRef = computeReference(right, successors.get(right), indexByKey);
+        return (
+          (leftRef ?? Number(indexByKey.get(left) || 0)) - (rightRef ?? Number(indexByKey.get(right) || 0))
+          || Number(nodeByKey.get(right)?.importance || 0) - Number(nodeByKey.get(left)?.importance || 0)
+          || stableSort(left, right)
+        );
+      });
+      layerKeys.set(level, keys);
+    });
+  }
+
+  const orderIndexByKey = new Map();
+  layerKeys.forEach((keys) => {
+    keys.forEach((key, index) => {
+      orderIndexByKey.set(key, index);
+    });
+  });
+
+  return {
+    layerKeys,
+    orderIndexByKey,
+    predecessors,
+    successors
+  };
+};
+
+const buildPrimaryTreeMeta = ({
+  centerKey,
+  nodeByKey,
+  stableSort,
+  levelByKey,
+  orderIndexByKey,
+  predecessors,
+  componentIdByKey
+}) => {
+  const childrenByParent = new Map();
+  const primaryParentByKey = new Map();
+
+  const ensureArray = (map, key) => {
+    let bucket = map.get(key);
+    if (!bucket) {
+      bucket = [];
+      map.set(key, bucket);
+    }
+    return bucket;
+  };
+
+  const sortedKeys = Array.from(nodeByKey.keys()).sort((left, right) => (
+    Number(levelByKey[left] || 0) - Number(levelByKey[right] || 0)
+    || Number(orderIndexByKey.get(left) || 0) - Number(orderIndexByKey.get(right) || 0)
+    || stableSort(left, right)
+  ));
+
+  sortedKeys.forEach((key) => {
+    if (key === centerKey) {
+      primaryParentByKey.set(key, '');
       return;
     }
-    const innerRing = Math.min(fromRing, toRing);
-    const outerRing = Math.max(fromRing, toRing);
-    const bucketKey = `${innerRing}:${outerRing}`;
-    const bucket = betweenLevels.get(bucketKey) || [];
-    bucket.push({
-      fromKey: fromRing <= toRing ? fromKey : toKey,
-      toKey: fromRing <= toRing ? toKey : fromKey
-    });
-    betweenLevels.set(bucketKey, bucket);
+
+    const level = Number(levelByKey[key] || 0);
+    const candidateParents = (predecessors.get(key) || [])
+      .filter((parentKey) => Number(levelByKey[parentKey] || 0) <= level)
+      .slice()
+      .sort((left, right) => {
+        const leftLevel = Number(levelByKey[left] || 0);
+        const rightLevel = Number(levelByKey[right] || 0);
+        const leftGap = Math.abs(level - leftLevel);
+        const rightGap = Math.abs(level - rightLevel);
+        const leftOrderGap = Math.abs((orderIndexByKey.get(key) || 0) - (orderIndexByKey.get(left) || 0));
+        const rightOrderGap = Math.abs((orderIndexByKey.get(key) || 0) - (orderIndexByKey.get(right) || 0));
+        return (
+          leftGap - rightGap
+          || leftOrderGap - rightOrderGap
+          || Number(nodeByKey.get(right)?.importance || 0) - Number(nodeByKey.get(left)?.importance || 0)
+          || stableSort(left, right)
+        );
+      });
+
+    const primaryParentKey = candidateParents[0] || '';
+    primaryParentByKey.set(key, primaryParentKey);
+    if (primaryParentKey) ensureArray(childrenByParent, primaryParentKey).push(key);
   });
 
-  return { betweenLevels, sameLevel };
-};
+  const siblingOrderByParent = new Map();
+  childrenByParent.forEach((children, parentKey) => {
+    const ordered = children.slice().sort((left, right) => (
+      Number(levelByKey[left] || 0) - Number(levelByKey[right] || 0)
+      || Number(orderIndexByKey.get(left) || 0) - Number(orderIndexByKey.get(right) || 0)
+      || stableSort(left, right)
+    ));
+    siblingOrderByParent.set(parentKey, ordered);
+  });
 
-const compareProxyScores = (left, right) => {
-  if (!right) return -1;
-  const fields = [
-    'proxyCrossings',
-    'hubGapDeficit',
-    'localOverlapCount',
-    'localOverlapPenalty',
-    'compactness'
-  ];
-  for (let index = 0; index < fields.length; index += 1) {
-    const field = fields[index];
-    const leftValue = Number(left?.[field] || 0);
-    const rightValue = Number(right?.[field] || 0);
-    if (Math.abs(leftValue - rightValue) <= (field.includes('Penalty') || field.includes('compactness') || field.includes('Deficit') ? 0.001 : 0)) {
-      continue;
+  const rootByKey = new Map();
+  const resolveRoot = (key) => {
+    if (rootByKey.has(key)) return rootByKey.get(key);
+    const parentKey = primaryParentByKey.get(key);
+    if (!parentKey || parentKey === centerKey || key === centerKey) {
+      const root = key === centerKey ? centerKey : (parentKey || key);
+      rootByKey.set(key, root);
+      return root;
     }
-    return leftValue < rightValue ? -1 : 1;
-  }
-  return 0;
-};
-
-const cloneBodyEntry = (body) => ({
-  ...body,
-  labelRect: body?.labelRect ? { ...body.labelRect } : undefined
-});
-
-const collectKeysForRings = (state, rings = []) => {
-  const keySet = new Set();
-  rings.forEach((ring) => {
-    (state.orderByRing.get(ring) || []).forEach((key) => keySet.add(key));
-  });
-  return keySet;
-};
-
-const expandRingsWithNeighbors = (rings = [], state) => {
-  const set = new Set();
-  rings.forEach((ring) => {
-    if (!Number.isFinite(ring)) return;
-    set.add(ring);
-    if (state.ringMetaByRing.has(ring - 1)) set.add(ring - 1);
-    if (state.ringMetaByRing.has(ring + 1)) set.add(ring + 1);
-  });
-  return Array.from(set).sort((left, right) => left - right);
-};
-
-const createLocalTransaction = (state, {
-  orderRings = [],
-  angleKeys = [],
-  radiusRings = [],
-  bodyKeys = []
-} = {}) => {
-  const transaction = {
-    orderByRing: new Map(),
-    angleByKey: new Map(),
-    radiusByRing: new Map(),
-    bodyByKey: new Map(),
-    bounds: state.bounds ? { ...state.bounds } : null
+    const root = resolveRoot(parentKey);
+    rootByKey.set(key, root);
+    return root;
   };
 
-  orderRings.forEach((ring) => {
-    if (transaction.orderByRing.has(ring)) return;
-    transaction.orderByRing.set(ring, (state.orderByRing.get(ring) || []).slice());
+  sortedKeys.forEach((key) => {
+    resolveRoot(key);
   });
-  angleKeys.forEach((key) => {
-    if (transaction.angleByKey.has(key)) return;
-    transaction.angleByKey.set(key, state.angleByKey.get(key));
+
+  const reversedKeys = sortedKeys.slice().sort((left, right) => (
+    Number(levelByKey[right] || 0) - Number(levelByKey[left] || 0)
+    || stableSort(left, right)
+  ));
+  const subtreeWeightByKey = new Map();
+  reversedKeys.forEach((key) => {
+    const children = childrenByParent.get(key) || [];
+    const subtotal = children.reduce((sum, childKey) => sum + (subtreeWeightByKey.get(childKey) || 1), 0);
+    subtreeWeightByKey.set(key, 1 + subtotal);
   });
-  radiusRings.forEach((ring) => {
-    if (transaction.radiusByRing.has(ring)) return;
-    transaction.radiusByRing.set(ring, state.radiusByRing.get(ring));
+
+  nodeByKey.forEach((node, key) => {
+    node.primaryParentKey = primaryParentByKey.get(key) || '';
+    node.clusterSignature = key === centerKey
+      ? centerKey
+      : (rootByKey.get(key) || componentIdByKey.get(key) || key).toString();
+    node.childCount = (childrenByParent.get(key) || []).length;
+    node.subtreeWeight = subtreeWeightByKey.get(key) || 1;
   });
-  bodyKeys.forEach((key) => {
-    if (transaction.bodyByKey.has(key)) return;
-    const body = state.bodyByKey.get(key);
-    transaction.bodyByKey.set(key, body ? cloneBodyEntry(body) : null);
+
+  siblingOrderByParent.forEach((children) => {
+    children.forEach((key, index) => {
+      const node = nodeByKey.get(key);
+      if (!node) return;
+      node.siblingIndex = index;
+      node.siblingCount = children.length;
+    });
   });
-  return transaction;
+
+  return {
+    primaryParentByKey,
+    childrenByParent,
+    siblingOrderByParent,
+    subtreeWeightByKey
+  };
 };
 
-const rollbackLocalTransaction = (state, transaction) => {
-  transaction.orderByRing.forEach((order, ring) => {
-    state.orderByRing.set(ring, order);
-  });
-  transaction.angleByKey.forEach((angle, key) => {
-    if (Number.isFinite(angle)) state.angleByKey.set(key, angle);
-    else state.angleByKey.delete(key);
-  });
-  transaction.radiusByRing.forEach((radius, ring) => {
-    if (Number.isFinite(radius)) state.radiusByRing.set(ring, radius);
-    else state.radiusByRing.delete(ring);
-  });
-  transaction.bodyByKey.forEach((body, key) => {
-    if (body) state.bodyByKey.set(key, body);
-    else state.bodyByKey.delete(key);
-  });
-  state.bounds = transaction.bounds ? { ...transaction.bounds } : null;
-  rebuildEdgeSegments(state);
-};
-
-const buildOverlapPairs = (bodyByKey) => {
-  const bodies = Array.from(bodyByKey.values());
-  const overlaps = [];
-  for (let leftIndex = 0; leftIndex < bodies.length; leftIndex += 1) {
-    const left = bodies[leftIndex];
-    for (let rightIndex = leftIndex + 1; rightIndex < bodies.length; rightIndex += 1) {
-      const right = bodies[rightIndex];
-      const overlap = (Number(left.collisionRadius || 0) + Number(right.collisionRadius || 0)) - distanceBetweenPoints(left, right);
-      if (overlap > EPSILON) {
-        overlaps.push({
-          leftKey: left.key,
-          rightKey: right.key,
-          overlap
-        });
-      }
-    }
-  }
-  return overlaps;
-};
-
-const buildBodyForKey = (state, key) => {
-  const node = state.nodeByKey.get(key);
-  if (!node) return null;
-  const coreBody = state.coreBodyByKey.get(key);
-  if (coreBody) {
-    const body = {
-      key,
-      nodeKey: key,
-      x: coreBody.x,
-      y: coreBody.y,
-      radius: Number(node.radius || 0),
-      collisionRadius: node.collisionRadius,
-      labelWidthHint: Number(node.labelMetrics?.widthHint || node.boxWidth),
-      labelHeightHint: Number(node.labelMetrics?.heightHint || node.boxHeight),
-      labelOffsetY: 0,
-      labelPlacement: 'center',
-      labelMetrics: node.labelMetrics,
-      level: 0,
-      angle: normalizePositiveAngle(state.centerAngleByKey.get(key) || 0),
-      rawNode: node.rawNode,
-      nodeType: key === state.centerKey ? 'center' : node.nodeType,
-      clusterSignature: node.clusterSignature,
-      primaryParentKey: node.primaryParentKey,
-      childCount: node.childKeys.length,
-      degree: node.degree,
-      importance: node.importance,
-      subtreeWeight: node.subtreeWeight,
-      siblingIndex: 0,
-      siblingCount: state.scheme.useDualCenter ? 2 : 1
-    };
-    body.labelRect = buildLabelRect(body);
-    return body;
-  }
-
-  const ring = Number(state.ringByKey.get(key) || 0);
-  const order = state.orderByRing.get(ring) || [];
-  const angle = Number(state.angleByKey.get(key) || 0);
-  const radius = Number(state.radiusByRing.get(ring) || 0);
+const buildLayoutBody = ({
+  node,
+  x,
+  y,
+  center
+}) => {
   const body = {
-    key,
-    nodeKey: key,
-    x: Number(state.center?.x || 0) + Math.cos(angle) * radius,
-    y: Number(state.center?.y || 0) + Math.sin(angle) * radius,
+    key: node.key,
+    nodeKey: node.key,
+    level: Number(node.level || 0),
+    x,
+    y,
+    seedX: x,
+    seedY: y,
     radius: Number(node.radius || 0),
-    collisionRadius: node.collisionRadius,
-    labelWidthHint: Number(node.labelMetrics?.widthHint || node.boxWidth),
-    labelHeightHint: Number(node.labelMetrics?.heightHint || node.boxHeight),
-    labelOffsetY: 0,
-    labelPlacement: 'center',
-    labelMetrics: node.labelMetrics,
-    level: ring,
-    angle: normalizePositiveAngle(angle),
-    rawNode: node.rawNode,
-    nodeType: key === state.centerKey ? 'center' : node.nodeType,
-    clusterSignature: node.clusterSignature,
-    primaryParentKey: node.primaryParentKey,
-    childCount: node.childKeys.length,
-    degree: node.degree,
-    importance: node.importance,
-    subtreeWeight: node.subtreeWeight,
-    siblingIndex: Math.max(0, order.indexOf(key)),
-    siblingCount: order.length
+    collisionRadius: Number(node.collisionRadius || node.radius || 0),
+    labelWidthHint: Number(node.labelWidthHint || node.labelMetrics?.widthHint || 94),
+    labelHeightHint: Number(node.labelHeightHint || node.labelMetrics?.heightHint || 28),
+    labelOffsetY: Number(node.labelOffsetY || 0),
+    labelPlacement: node.labelPlacement || 'center',
+    labelMetrics: node.labelMetrics || {},
+    degree: node.degree || 0,
+    childCount: node.childCount || 0,
+    importance: node.importance || 1,
+    siblingIndex: node.siblingIndex || 0,
+    siblingCount: node.siblingCount || 1,
+    clusterSignature: node.clusterSignature || node.key,
+    primaryParentKey: node.primaryParentKey || '',
+    subtreeWeight: node.subtreeWeight || 1
   };
   body.labelRect = buildLabelRect(body);
+  body.angle = Math.atan2(body.y - center.y, body.x - center.x);
+  body.stubAngle = body.angle;
   return body;
 };
 
-const rebuildBodiesForKeys = (state, keys = []) => {
-  keys.forEach((key) => {
-    const body = buildBodyForKey(state, key);
-    if (body) state.bodyByKey.set(key, body);
+const cloneLayoutBody = ({
+  node,
+  body,
+  center
+}) => {
+  const cloned = buildLayoutBody({
+    node,
+    x: Number(body?.x || 0),
+    y: Number(body?.y || 0),
+    center
   });
+  cloned.seedX = Number(body?.seedX ?? cloned.x);
+  cloned.seedY = Number(body?.seedY ?? cloned.y);
+  return cloned;
 };
 
-const rebuildEdgeSegments = (state) => {
-  state.edgeSegments = buildEdgeSegments({
-    edgeList: state.edgeList,
-    bodyByKey: state.bodyByKey
+const buildNodeSpacingHint = (node = {}) => ({
+  x: clamp(
+    Math.max(
+      (Number(node.collisionRadius || node.radius || 0) * 2.2) + 16,
+      (Number(node.labelWidthHint || 94) * 0.92)
+    ),
+    44,
+    148
+  ),
+  y: clamp(
+    Math.max(
+      (Number(node.collisionRadius || node.radius || 0) * 1.8) + 14,
+      (Number(node.labelHeightHint || 28) * 1.4) + 12
+    ),
+    32,
+    82
+  )
+});
+
+const buildLayerKeysForNodeSet = ({
+  nodeKeys,
+  levelByKey,
+  orderIndexByKey,
+  stableSort
+}) => {
+  const layerKeys = new Map();
+  (Array.isArray(nodeKeys) ? nodeKeys : []).forEach((key) => {
+    const level = Number(levelByKey[key] || 0);
+    const bucket = layerKeys.get(level) || [];
+    bucket.push(key);
+    layerKeys.set(level, bucket);
   });
+  layerKeys.forEach((keys, level) => {
+    keys.sort((left, right) => (
+      Number(orderIndexByKey.get(left) || 0) - Number(orderIndexByKey.get(right) || 0)
+      || stableSort(left, right)
+    ));
+    layerKeys.set(level, keys);
+  });
+  return layerKeys;
 };
 
-const updateEdgeSegmentsForKeys = (state, keys = []) => {
-  const affectedEdgeIndexes = new Set();
-  keys.forEach((key) => {
-    (state.incidentEdgeIndexesByKey.get(key) || []).forEach((edgeIndex) => affectedEdgeIndexes.add(edgeIndex));
+const buildBaseYByLevel = ({
+  center,
+  layerKeys,
+  nodeByKey
+}) => {
+  const levels = Array.from(layerKeys.keys()).sort((left, right) => left - right);
+  const baseYByLevel = new Map([[0, Number(center?.y || 0)]]);
+  let cursor = Number(center?.y || 0);
+  for (let index = 1; index < levels.length; index += 1) {
+    const level = levels[index];
+    const keys = layerKeys.get(level) || [];
+    const averageHeight = keys.reduce((sum, key) => {
+      const node = nodeByKey.get(key);
+      return sum + buildNodeSpacingHint(node).y;
+    }, 0) / Math.max(1, keys.length);
+    cursor += clamp((averageHeight * 1.1) + 28, 68, BASE_LAYER_GAP + 16);
+    baseYByLevel.set(level, cursor);
+  }
+  return baseYByLevel;
+};
+
+const buildCompactCandidateOffsets = (rings = 8, xBias = 0) => {
+  const offsets = [{ x: 0, y: 0 }];
+  for (let ring = 1; ring <= rings; ring += 1) {
+    const band = [];
+    for (let dx = -ring; dx <= ring; dx += 1) {
+      const dy = ring - Math.abs(dx);
+      band.push({ x: dx, y: dy });
+      if (dy > 0) band.push({ x: dx, y: -dy });
+    }
+    band.sort((left, right) => (
+      Math.abs(left.y) - Math.abs(right.y)
+      || (xBias >= 0 ? right.x - left.x : left.x - right.x)
+      || left.y - right.y
+    ));
+    offsets.push(...band);
+  }
+  return offsets;
+};
+
+const buildSpatialIndex = ({
+  items = [],
+  getId = (_item, index) => index,
+  getRect,
+  cellSize = GRID_CELL_SIZE
+}) => {
+  const index = {
+    cellSize,
+    cells: new Map(),
+    itemById: new Map(),
+    rectById: new Map()
+  };
+
+  const insert = (item, id, rect) => {
+    index.itemById.set(id, item);
+    index.rectById.set(id, rect);
+    const minX = Math.floor(rect.left / cellSize);
+    const maxX = Math.floor(rect.right / cellSize);
+    const minY = Math.floor(rect.top / cellSize);
+    const maxY = Math.floor(rect.bottom / cellSize);
+    for (let x = minX; x <= maxX; x += 1) {
+      for (let y = minY; y <= maxY; y += 1) {
+        const cellKey = `${x}:${y}`;
+        const bucket = index.cells.get(cellKey) || [];
+        bucket.push(id);
+        index.cells.set(cellKey, bucket);
+      }
+    }
+  };
+
+  items.forEach((item, indexValue) => {
+    insert(item, getId(item, indexValue), getRect(item));
   });
-  affectedEdgeIndexes.forEach((edgeIndex) => {
-    const edge = state.edgeList[edgeIndex];
-    if (!edge) return;
-    const start = state.bodyByKey.get(edge.fromKey);
-    const end = state.bodyByKey.get(edge.toKey);
-    if (!start || !end) {
-      state.edgeSegments[edgeIndex] = null;
+
+  return {
+    ...index,
+    insert
+  };
+};
+
+const querySpatialIndex = (index, rect) => {
+  const results = [];
+  const seen = new Set();
+  const minX = Math.floor(rect.left / index.cellSize);
+  const maxX = Math.floor(rect.right / index.cellSize);
+  const minY = Math.floor(rect.top / index.cellSize);
+  const maxY = Math.floor(rect.bottom / index.cellSize);
+  for (let x = minX; x <= maxX; x += 1) {
+    for (let y = minY; y <= maxY; y += 1) {
+      const bucket = index.cells.get(`${x}:${y}`) || [];
+      bucket.forEach((id) => {
+        if (seen.has(id)) return;
+        seen.add(id);
+        const item = index.itemById.get(id);
+        if (item) results.push(item);
+      });
+    }
+  }
+  return results;
+};
+
+const buildSpatialHashPairs = ({
+  items = [],
+  getRect,
+  cellSize = GRID_CELL_SIZE
+}) => {
+  const cells = new Map();
+  const pairs = [];
+  const seen = new Set();
+
+  items.forEach((item, index) => {
+    const rect = getRect(item);
+    const minX = Math.floor(rect.left / cellSize);
+    const maxX = Math.floor(rect.right / cellSize);
+    const minY = Math.floor(rect.top / cellSize);
+    const maxY = Math.floor(rect.bottom / cellSize);
+    const touched = new Set();
+    for (let x = minX; x <= maxX; x += 1) {
+      for (let y = minY; y <= maxY; y += 1) {
+        const cellKey = `${x}:${y}`;
+        const bucket = cells.get(cellKey) || [];
+        bucket.forEach((otherIndex) => {
+          const leftIndex = Math.min(index, otherIndex);
+          const rightIndex = Math.max(index, otherIndex);
+          const pairKey = `${leftIndex}:${rightIndex}`;
+          if (seen.has(pairKey)) return;
+          seen.add(pairKey);
+          pairs.push([items[leftIndex], items[rightIndex]]);
+        });
+        if (!touched.has(cellKey)) {
+          bucket.push(index);
+          cells.set(cellKey, bucket);
+          touched.add(cellKey);
+        }
+      }
+    }
+  });
+
+  return pairs;
+};
+
+const buildSpatialJoinPairs = ({
+  leftItems = [],
+  rightItems = [],
+  getLeftId,
+  getRightId,
+  getLeftRect,
+  getRightRect,
+  cellSize = GRID_CELL_SIZE
+}) => {
+  const index = buildSpatialIndex({
+    items: leftItems,
+    getId: getLeftId,
+    getRect: getLeftRect,
+    cellSize
+  });
+  const pairs = [];
+  const seen = new Set();
+  rightItems.forEach((rightItem, indexValue) => {
+    const rightId = getRightId(rightItem, indexValue);
+    querySpatialIndex(index, getRightRect(rightItem)).forEach((leftItem) => {
+      const leftId = getLeftId(leftItem);
+      const pairKey = `${leftId}:${rightId}`;
+      if (seen.has(pairKey)) return;
+      seen.add(pairKey);
+      pairs.push([leftItem, rightItem]);
+    });
+  });
+  return pairs;
+};
+
+const buildBodyOverlapSeparation = (left, right, padding = 8) => {
+  const leftRect = buildBodyBoundsRect(left, padding);
+  const rightRect = buildBodyBoundsRect(right, padding);
+  if (!rectsOverlap(leftRect, rightRect)) return null;
+
+  const overlapX = Math.min(leftRect.right, rightRect.right) - Math.max(leftRect.left, rightRect.left);
+  const overlapY = Math.min(leftRect.bottom, rightRect.bottom) - Math.max(leftRect.top, rightRect.top);
+  if (overlapX <= EPSILON || overlapY <= EPSILON) return null;
+
+  const direction = normalize(right.x - left.x, right.y - left.y, {
+    x: overlapX <= overlapY ? 1 : 0,
+    y: overlapY < overlapX ? 1 : 0
+  });
+  const magnitude = Math.max(overlapX, overlapY) + 2;
+  return {
+    x: direction.x * magnitude,
+    y: direction.y * magnitude
+  };
+};
+
+const applyImpulse = (deltaByKey, key, dx, dy) => {
+  const current = deltaByKey.get(key) || { x: 0, y: 0 };
+  current.x += dx;
+  current.y += dy;
+  deltaByKey.set(key, current);
+};
+
+const applyBodyDeltas = ({
+  bodyByKey,
+  deltaByKey,
+  lockedKeys,
+  centerKey,
+  maxStep
+}) => {
+  bodyByKey.forEach((body, key) => {
+    if (lockedKeys.has(key) || key === centerKey) {
+      if (key === centerKey) {
+        body.x = Number(body.seedX || body.x);
+        body.y = Number(body.seedY || body.y);
+      }
       return;
     }
-    state.edgeSegments[edgeIndex] = {
-      index: edgeIndex,
-      fromKey: edge.fromKey,
-      toKey: edge.toKey,
-      start: { x: start.x, y: start.y },
-      end: { x: end.x, y: end.y }
-    };
+    const delta = deltaByKey.get(key);
+    if (!delta) return;
+    body.x += clamp(delta.x, -maxStep, maxStep);
+    body.y += clamp(delta.y, -maxStep, maxStep);
   });
-  return affectedEdgeIndexes;
 };
 
-const updateBounds = (state) => {
-  state.bounds = buildContentBounds(Array.from(state.bodyByKey.values()));
-  return state.bounds;
-};
-
-const buildProxyCrossingBreakdown = (state) => {
-  const orderIndexByRing = new Map();
-  state.rings.forEach((ring) => {
-    orderIndexByRing.set(ring, buildOrderIndex(state.orderByRing.get(ring) || []));
-  });
-
-  let total = 0;
-  const crossingsByRing = new Map();
-  state.edgeBuckets.betweenLevels.forEach((edges, bucketKey) => {
-    const [innerRingText, outerRingText] = bucketKey.split(':');
-    const innerRing = Number(innerRingText);
-    const outerRing = Number(outerRingText);
-    const count = countLayerPairCrossings(
-      edges,
-      orderIndexByRing.get(outerRing) || new Map(),
-      orderIndexByRing.get(innerRing) || new Map()
-    );
-    total += count;
-    crossingsByRing.set(innerRing, (crossingsByRing.get(innerRing) || 0) + count);
-    crossingsByRing.set(outerRing, (crossingsByRing.get(outerRing) || 0) + count);
-  });
-  state.edgeBuckets.sameLevel.forEach((edges, ringText) => {
-    const ring = Number(ringText);
-    const count = countSameLayerCrossings(edges, orderIndexByRing.get(ring) || new Map());
-    total += count;
-    crossingsByRing.set(ring, (crossingsByRing.get(ring) || 0) + count);
-  });
-
-  return {
-    proxyCrossings: total,
-    crossingsByRing
-  };
-};
-
-const evaluateProxyScore = (state) => {
-  const crossingBreakdown = buildProxyCrossingBreakdown(state);
-  const overlapByRing = new Map();
-  let localOverlapCount = 0;
-  let localOverlapPenalty = 0;
-  const bodies = Array.from(state.bodyByKey.values());
-
-  for (let leftIndex = 0; leftIndex < bodies.length; leftIndex += 1) {
-    const left = bodies[leftIndex];
-    const leftRing = Number(state.ringByKey.get(left.key) || 0);
-    for (let rightIndex = leftIndex + 1; rightIndex < bodies.length; rightIndex += 1) {
-      const right = bodies[rightIndex];
-      const overlap = (Number(left.collisionRadius || 0) + Number(right.collisionRadius || 0)) - distanceBetweenPoints(left, right);
-      if (overlap <= EPSILON) continue;
-      const rightRing = Number(state.ringByKey.get(right.key) || 0);
-      const targetRing = Math.max(leftRing, rightRing);
-      localOverlapCount += 1;
-      localOverlapPenalty += overlap;
-      const ringEntry = overlapByRing.get(targetRing) || { count: 0, penalty: 0 };
-      ringEntry.count += 1;
-      ringEntry.penalty += overlap;
-      overlapByRing.set(targetRing, ringEntry);
-    }
-  }
-
-  const incidentByKey = new Map();
-  state.edgeSegments.forEach((segment) => {
-    if (!segment) return;
-    const start = state.bodyByKey.get(segment.fromKey);
-    const end = state.bodyByKey.get(segment.toKey);
-    if (!start || !end) return;
-    const startEntry = incidentByKey.get(segment.fromKey) || [];
-    startEntry.push({
-      neighborKey: segment.toKey,
-      angle: Math.atan2(end.y - start.y, end.x - start.x)
-    });
-    incidentByKey.set(segment.fromKey, startEntry);
-
-    const endEntry = incidentByKey.get(segment.toKey) || [];
-    endEntry.push({
-      neighborKey: segment.fromKey,
-      angle: Math.atan2(start.y - end.y, start.x - end.x)
-    });
-    incidentByKey.set(segment.toKey, endEntry);
-  });
-
-  const hubGapByRing = new Map();
-  let hubGapDeficit = 0;
-  incidentByKey.forEach((entries, key) => {
-    if (!Array.isArray(entries) || entries.length < 2) return;
-    const node = state.nodeByKey.get(key);
-    const body = state.bodyByKey.get(key);
-    if (!node || !body) return;
-    const sorted = entries
-      .slice()
-      .sort((left, right) => normalizePositiveAngle(left.angle) - normalizePositiveAngle(right.angle));
-    let ringDeficit = 0;
-    for (let index = 0; index < sorted.length; index += 1) {
-      const current = sorted[index];
-      const next = sorted[(index + 1) % sorted.length];
-      const bodyA = state.bodyByKey.get(current.neighborKey);
-      const bodyB = state.bodyByKey.get(next.neighborKey);
-      const nodeA = state.nodeByKey.get(current.neighborKey);
-      const nodeB = state.nodeByKey.get(next.neighborKey);
-      if (!bodyA || !bodyB || !nodeA || !nodeB) continue;
-      const gap = normalizePositiveAngle(next.angle - current.angle || 0);
-      const minGap = computeMinIncidentGapAngle({
-        node,
-        neighborA: nodeA,
-        neighborB: nodeB,
-        body,
-        bodyA,
-        bodyB
-      });
-      if (gap + EPSILON >= minGap) continue;
-      ringDeficit += minGap - gap;
-    }
-    if (ringDeficit <= EPSILON) return;
-    const ring = Number(state.ringByKey.get(key) || 0);
-    hubGapByRing.set(ring, (hubGapByRing.get(ring) || 0) + ringDeficit);
-    hubGapDeficit += ringDeficit;
-  });
-
-  const outerRadius = Array.from(state.radiusByRing.values()).reduce((max, radius) => Math.max(max, Number(radius) || 0), 0);
-  const radiusSum = Array.from(state.radiusByRing.values()).reduce((sum, radius) => sum + (Number(radius) || 0), 0);
-  const bounds = state.bounds || buildContentBounds(bodies);
-  const compactness = outerRadius * 4 + radiusSum + bounds.width * 0.02 + bounds.height * 0.02;
-
-  return {
-    score: {
-      proxyCrossings: crossingBreakdown.proxyCrossings,
-      hubGapDeficit,
-      localOverlapCount,
-      localOverlapPenalty,
-      compactness
-    },
-    metrics: {
-      crossingsByRing: crossingBreakdown.crossingsByRing,
-      hubGapByRing,
-      overlapByRing
-    }
-  };
-};
-
-const computeNodeOverlapContribution = (state, leftKey, rightKey) => {
-  const left = state.bodyByKey.get(leftKey);
-  const right = state.bodyByKey.get(rightKey);
-  if (!left || !right) return { count: 0, penalty: 0 };
-  const overlap = (Number(left.collisionRadius || 0) + Number(right.collisionRadius || 0)) - distanceBetweenPoints(left, right);
-  if (overlap <= EPSILON) return { count: 0, penalty: 0 };
-  return { count: 1, penalty: overlap };
-};
-
-const computeEdgeCrossingContribution = (state, leftIndex, rightIndex) => {
-  const left = state.edgeSegments[leftIndex];
-  const right = state.edgeSegments[rightIndex];
-  if (!left || !right) return { count: 0 };
-  if (
-    left.fromKey === right.fromKey
-    || left.fromKey === right.toKey
-    || left.toKey === right.fromKey
-    || left.toKey === right.toKey
-  ) {
-    return { count: 0 };
-  }
-  return {
-    count: segmentIntersection(left.start, left.end, right.start, right.end) ? 1 : 0
-  };
-};
-
-const computeHubContributionForKey = (state, key) => {
-  const incidentIndexes = state.incidentEdgeIndexesByKey.get(key) || [];
-  if (incidentIndexes.length < 2) return { count: 0, penalty: 0 };
-  const body = state.bodyByKey.get(key);
-  const node = state.nodeByKey.get(key);
-  if (!body || !node) return { count: 0, penalty: 0 };
-  const entries = [];
-  incidentIndexes.forEach((edgeIndex) => {
-    const edge = state.edgeList[edgeIndex];
-    const segment = state.edgeSegments[edgeIndex];
-    if (!edge || !segment) return;
-    const neighborKey = edge.fromKey === key ? edge.toKey : edge.fromKey;
-    const neighborBody = state.bodyByKey.get(neighborKey);
-    if (!neighborBody) return;
-    entries.push({
-      neighborKey,
-      angle: Math.atan2(neighborBody.y - body.y, neighborBody.x - body.x)
-    });
-  });
-  if (entries.length < 2) return { count: 0, penalty: 0 };
-  const sorted = entries.slice().sort((left, right) => normalizePositiveAngle(left.angle) - normalizePositiveAngle(right.angle));
-  let count = 0;
-  let penalty = 0;
-  for (let index = 0; index < sorted.length; index += 1) {
-    const current = sorted[index];
-    const next = sorted[(index + 1) % sorted.length];
-    const bodyA = state.bodyByKey.get(current.neighborKey);
-    const bodyB = state.bodyByKey.get(next.neighborKey);
-    const nodeA = state.nodeByKey.get(current.neighborKey);
-    const nodeB = state.nodeByKey.get(next.neighborKey);
-    if (!bodyA || !bodyB || !nodeA || !nodeB) continue;
-    const gap = normalizePositiveAngle(next.angle - current.angle || 0);
-    const minGap = computeMinIncidentGapAngle({
-      node,
-      neighborA: nodeA,
-      neighborB: nodeB,
-      body,
-      bodyA,
-      bodyB
-    });
-    if (gap + EPSILON >= minGap) continue;
-    const deficit = minGap - gap;
-    count += 1;
-    penalty += deficit * deficit * 100;
-  }
-  return { count, penalty };
-};
-
-const computeEdgeNodeContribution = (state, edgeIndex, nodeKey) => {
-  const segment = state.edgeSegments[edgeIndex];
-  const edge = state.edgeList[edgeIndex];
-  const body = state.bodyByKey.get(nodeKey);
-  if (!segment || !edge || !body) return { nodeKey, count: 0, penalty: 0 };
-  if (nodeKey === edge.fromKey || nodeKey === edge.toKey) return { nodeKey, count: 0, penalty: 0 };
-  const rect = body.labelRect || buildLabelRect(body);
-  const throughRect = segmentIntersectsRect(segment.start, segment.end, rect);
-  const pointDistance = distancePointToSegment(body, segment.start, segment.end);
-  if (!throughRect && pointDistance >= (Number(body.collisionRadius || 0) - 1)) {
-    return { nodeKey, count: 0, penalty: 0 };
-  }
-  return {
-    nodeKey,
-    count: 1,
-    penalty: throughRect ? 3 : Math.max(0.5, Number(body.collisionRadius || 0) - pointDistance)
-  };
-};
-
-const buildFullExactCache = (state) => {
-  const overlapByPair = new Map();
-  const crossingByPair = new Map();
-  const hubByKey = new Map();
-  const edgeNodeByPair = new Map();
-  const edgeNodeByKey = new Map(state.sortedKeys.map((key) => [key, { count: 0, penalty: 0 }]));
-  const score = {
-    nodeOverlapCount: 0,
-    nodeOverlapPenalty: 0,
-    edgeCrossings: 0,
-    hubViolationCount: 0,
-    hubPenalty: 0,
-    edgeNodeHits: 0,
-    edgeNodePenalty: 0,
-    compactness: 0
-  };
-
-  for (let leftIndex = 0; leftIndex < state.sortedKeys.length; leftIndex += 1) {
-    const leftKey = state.sortedKeys[leftIndex];
-    for (let rightIndex = leftIndex + 1; rightIndex < state.sortedKeys.length; rightIndex += 1) {
-      const rightKey = state.sortedKeys[rightIndex];
-      const contribution = computeNodeOverlapContribution(state, leftKey, rightKey);
-      if (contribution.count > 0) {
-        overlapByPair.set(`${leftIndex}:${rightIndex}`, contribution);
-        score.nodeOverlapCount += contribution.count;
-        score.nodeOverlapPenalty += contribution.penalty;
-      }
-    }
-  }
-
-  for (let leftIndex = 0; leftIndex < state.edgeList.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < state.edgeList.length; rightIndex += 1) {
-      const contribution = computeEdgeCrossingContribution(state, leftIndex, rightIndex);
-      if (contribution.count > 0) {
-        crossingByPair.set(`${leftIndex}:${rightIndex}`, contribution);
-        score.edgeCrossings += contribution.count;
-      }
-    }
-  }
-
-  state.sortedKeys.forEach((key) => {
-    const contribution = computeHubContributionForKey(state, key);
-    hubByKey.set(key, contribution);
-    score.hubViolationCount += contribution.count;
-    score.hubPenalty += contribution.penalty;
-  });
-
-  for (let edgeIndex = 0; edgeIndex < state.edgeList.length; edgeIndex += 1) {
-    state.sortedKeys.forEach((key) => {
-      const contribution = computeEdgeNodeContribution(state, edgeIndex, key);
-      if (contribution.count > 0) {
-        edgeNodeByPair.set(`${edgeIndex}:${state.nodeIndexByKey.get(key)}`, contribution);
-        score.edgeNodeHits += contribution.count;
-        score.edgeNodePenalty += contribution.penalty;
-        const current = edgeNodeByKey.get(key) || { count: 0, penalty: 0 };
-        current.count += contribution.count;
-        current.penalty += contribution.penalty;
-        edgeNodeByKey.set(key, current);
-      }
-    });
-  }
-
-  const outerRadius = Array.from(state.radiusByRing.values()).reduce((max, radius) => Math.max(max, Number(radius) || 0), 0);
-  const radiusSum = Array.from(state.radiusByRing.values()).reduce((sum, radius) => sum + (Number(radius) || 0), 0);
-  const bounds = state.bounds || buildContentBounds(Array.from(state.bodyByKey.values()));
-  score.compactness = outerRadius * 4 + radiusSum + bounds.width * 0.02 + bounds.height * 0.02;
-
-  return {
-    score,
-    overlapByPair,
-    crossingByPair,
-    hubByKey,
-    edgeNodeByPair,
-    edgeNodeByKey
-  };
-};
-
-const evaluateExactScore = (state, affected = null) => {
-  const startedAt = now();
-  if (!state.exactCache || affected?.full) {
-    const cache = buildFullExactCache(state);
-    state.timing.exactScoringStage += now() - startedAt;
-    return cache;
-  }
-
-  const nextCache = {
-    score: { ...state.exactCache.score },
-    overlapByPair: new Map(state.exactCache.overlapByPair),
-    crossingByPair: new Map(state.exactCache.crossingByPair),
-    hubByKey: new Map(state.exactCache.hubByKey),
-    edgeNodeByPair: new Map(state.exactCache.edgeNodeByPair),
-    edgeNodeByKey: new Map(Array.from(state.exactCache.edgeNodeByKey.entries()).map(([key, value]) => [key, { ...value }]))
-  };
-
-  const affectedKeys = Array.from(affected?.affectedKeys || []);
-  const affectedEdges = Array.from(affected?.affectedEdges || []);
-
-  affectedKeys.forEach((key) => {
-    const leftIndex = state.nodeIndexByKey.get(key);
-    state.sortedKeys.forEach((otherKey) => {
-      if (key === otherKey) return;
-      const rightIndex = state.nodeIndexByKey.get(otherKey);
-      const pairKey = leftIndex < rightIndex ? `${leftIndex}:${rightIndex}` : `${rightIndex}:${leftIndex}`;
-      const previous = nextCache.overlapByPair.get(pairKey) || { count: 0, penalty: 0 };
-      const next = computeNodeOverlapContribution(state, key, otherKey);
-      nextCache.score.nodeOverlapCount += next.count - previous.count;
-      nextCache.score.nodeOverlapPenalty += next.penalty - previous.penalty;
-      if (next.count > 0) nextCache.overlapByPair.set(pairKey, next);
-      else nextCache.overlapByPair.delete(pairKey);
-    });
-  });
-
-  affectedEdges.forEach((edgeIndex) => {
-    for (let otherIndex = 0; otherIndex < state.edgeList.length; otherIndex += 1) {
-      if (otherIndex === edgeIndex) continue;
-      const pairKey = edgeIndex < otherIndex ? `${edgeIndex}:${otherIndex}` : `${otherIndex}:${edgeIndex}`;
-      const previous = nextCache.crossingByPair.get(pairKey) || { count: 0 };
-      const next = computeEdgeCrossingContribution(state, edgeIndex, otherIndex);
-      nextCache.score.edgeCrossings += next.count - previous.count;
-      if (next.count > 0) nextCache.crossingByPair.set(pairKey, next);
-      else nextCache.crossingByPair.delete(pairKey);
+const updateBodyGeometry = ({
+  bodyByKey,
+  center,
+  graphMeta
+}) => {
+  bodyByKey.forEach((body) => {
+    body.labelRect = buildLabelRect(body);
+    body.angle = Math.atan2(body.y - center.y, body.x - center.x);
+    const neighbors = Array.from(graphMeta.adjacency.get(body.key) || []);
+    const vector = neighbors.reduce((accumulator, neighborKey) => {
+      const neighbor = bodyByKey.get(neighborKey);
+      if (!neighbor) return accumulator;
+      accumulator.x += body.x - neighbor.x;
+      accumulator.y += body.y - neighbor.y;
+      return accumulator;
+    }, { x: 0, y: 0 });
+    if (Math.hypot(vector.x, vector.y) > EPSILON) {
+      body.stubAngle = Math.atan2(vector.y, vector.x);
+    } else {
+      body.stubAngle = body.angle;
     }
   });
-
-  const affectedHubKeys = new Set(affectedKeys);
-  affectedKeys.forEach((key) => {
-    (state.sortedNeighborsByKey.get(key) || []).forEach((neighborKey) => affectedHubKeys.add(neighborKey));
-  });
-  affectedHubKeys.forEach((key) => {
-    const previous = nextCache.hubByKey.get(key) || { count: 0, penalty: 0 };
-    const next = computeHubContributionForKey(state, key);
-    nextCache.score.hubViolationCount += next.count - previous.count;
-    nextCache.score.hubPenalty += next.penalty - previous.penalty;
-    nextCache.hubByKey.set(key, next);
-  });
-
-  const touchedEdgeNodePairs = new Set();
-  affectedEdges.forEach((edgeIndex) => {
-    state.sortedKeys.forEach((key) => {
-      touchedEdgeNodePairs.add(`${edgeIndex}:${state.nodeIndexByKey.get(key)}`);
-    });
-  });
-  affectedKeys.forEach((key) => {
-    const nodeIndex = state.nodeIndexByKey.get(key);
-    for (let edgeIndex = 0; edgeIndex < state.edgeList.length; edgeIndex += 1) {
-      touchedEdgeNodePairs.add(`${edgeIndex}:${nodeIndex}`);
-    }
-  });
-  touchedEdgeNodePairs.forEach((pairKey) => {
-    const [edgeIndexText, nodeIndexText] = pairKey.split(':');
-    const edgeIndex = Number(edgeIndexText);
-    const nodeIndex = Number(nodeIndexText);
-    const nodeKey = state.sortedKeys[nodeIndex];
-    const previous = nextCache.edgeNodeByPair.get(pairKey) || { nodeKey, count: 0, penalty: 0 };
-    const next = computeEdgeNodeContribution(state, edgeIndex, nodeKey);
-    const nodeSummary = nextCache.edgeNodeByKey.get(nodeKey) || { count: 0, penalty: 0 };
-    nodeSummary.count += next.count - previous.count;
-    nodeSummary.penalty += next.penalty - previous.penalty;
-    nextCache.edgeNodeByKey.set(nodeKey, nodeSummary);
-    nextCache.score.edgeNodeHits += next.count - previous.count;
-    nextCache.score.edgeNodePenalty += next.penalty - previous.penalty;
-    if (next.count > 0) nextCache.edgeNodeByPair.set(pairKey, next);
-    else nextCache.edgeNodeByPair.delete(pairKey);
-  });
-
-  const outerRadius = Array.from(state.radiusByRing.values()).reduce((max, radius) => Math.max(max, Number(radius) || 0), 0);
-  const radiusSum = Array.from(state.radiusByRing.values()).reduce((sum, radius) => sum + (Number(radius) || 0), 0);
-  const bounds = state.bounds || buildContentBounds(Array.from(state.bodyByKey.values()));
-  nextCache.score.compactness = outerRadius * 4 + radiusSum + bounds.width * 0.02 + bounds.height * 0.02;
-  state.timing.exactScoringStage += now() - startedAt;
-  return nextCache;
 };
 
-const syncProxyEvaluation = (state) => {
-  const proxy = evaluateProxyScore(state);
-  state.proxyScore = proxy.score;
-  state.proxyMetrics = proxy.metrics;
-  state.proxyCrossings = Number(proxy.score.proxyCrossings || 0);
-  return proxy.score;
-};
-
-const syncExactEvaluation = (state, affected = { full: true }) => {
-  const cache = evaluateExactScore(state, affected);
-  state.exactCache = cache;
-  state.score = cache.score;
-  return cache.score;
-};
-
-const recomputeMinimumRadiiFrom = (state, startRing) => {
-  let previousOuterBoundary = state.coreEnvelope;
-  let previousAverageSize = state.coreAverageSize;
-  const startIndex = state.rings.indexOf(startRing);
-  if (startIndex > 0) {
-    for (let index = 0; index < startIndex; index += 1) {
-      const ring = state.rings[index];
-      const ringStats = state.statsByRing.get(ring) || { maxSize: 0, averageSize: 0 };
-      previousOuterBoundary = (state.radiusByRing.get(ring) || 0) + ringStats.maxSize * 0.5;
-      previousAverageSize = ringStats.averageSize;
-    }
-  }
-  for (let index = Math.max(0, startIndex); index < state.rings.length; index += 1) {
-    const ring = state.rings[index];
-    const ringStats = state.statsByRing.get(ring) || { maxSize: 0, averageSize: 0 };
-    const padding = RADIAL_DENSITY_K * 0.5 * (
-      Math.max(previousAverageSize, ringStats.averageSize)
-      + Math.min(previousAverageSize || ringStats.averageSize, ringStats.averageSize || previousAverageSize)
-    );
-    const minRadiusByGap = previousOuterBoundary + ringStats.maxSize * 0.5 + padding;
-    const minRadius = Math.max(
-      RADIAL_MIN_RADIUS,
-      minRadiusByGap,
-      state.minCapacityRadiusByRing.get(ring) || 0
-    );
-    state.minimumRadiusByRing.set(ring, minRadius);
-    state.radiusByRing.set(ring, Math.max(state.radiusByRing.get(ring) || 0, minRadius));
-    previousOuterBoundary = (state.radiusByRing.get(ring) || 0) + ringStats.maxSize * 0.5;
-    previousAverageSize = ringStats.averageSize;
-  }
-};
-
-const assignAnglesForRings = (state, rings, passes = 2) => {
-  const targetRings = Array.from(new Set(rings)).sort((left, right) => left - right);
-  for (let pass = 0; pass < passes; pass += 1) {
-    targetRings.forEach((ring) => {
-      const meta = state.ringMetaByRing.get(ring);
-      const radius = state.radiusByRing.get(ring) || 1;
-      const order = state.orderByRing.get(ring) || [];
-      (meta?.segmentOrder || []).forEach((segmentKey) => {
-        const segmentDef = state.segmentDefsByRing.get(ring)?.get(segmentKey);
-        const orderedKeys = order.filter((key) => (state.nodeByKey.get(key)?.segmentKey || 'main') === segmentKey);
-        assignAnglesInSegment({
-          orderedKeys,
-          radius,
-          segmentDef,
-          nodeByKey: state.nodeByKey,
-          angleByKey: state.angleByKey,
-          direction: 'forward'
-        });
-      });
-    });
-    targetRings.slice().reverse().forEach((ring) => {
-      const meta = state.ringMetaByRing.get(ring);
-      const radius = state.radiusByRing.get(ring) || 1;
-      const order = state.orderByRing.get(ring) || [];
-      (meta?.segmentOrder || []).forEach((segmentKey) => {
-        const segmentDef = state.segmentDefsByRing.get(ring)?.get(segmentKey);
-        const orderedKeys = order.filter((key) => (state.nodeByKey.get(key)?.segmentKey || 'main') === segmentKey);
-        assignAnglesInSegment({
-          orderedKeys,
-          radius,
-          segmentDef,
-          nodeByKey: state.nodeByKey,
-          angleByKey: state.angleByKey,
-          direction: 'backward'
-        });
-      });
-    });
-  }
-};
-
-const refreshGeometryLocal = (state, options = {}) => {
-  const {
-    kind = 'segmentOrder',
-    rings = [],
-    keys = [],
-    startRing = null
-  } = options;
-
-  if (kind === 'segmentOrder') {
-    const affectedRings = expandRingsWithNeighbors(rings, state);
-    assignAnglesForRings(state, affectedRings, 2);
-    const affectedKeys = collectKeysForRings(state, affectedRings);
-    rebuildBodiesForKeys(state, Array.from(affectedKeys));
-    const affectedEdges = updateEdgeSegmentsForKeys(state, Array.from(affectedKeys));
-    updateBounds(state);
-    return { affectedRings, affectedKeys, affectedEdges };
-  }
-
-  if (kind === 'nodeNudge') {
-    rebuildBodiesForKeys(state, keys);
-    const affectedEdges = updateEdgeSegmentsForKeys(state, keys);
-    updateBounds(state);
-    return { affectedRings: new Set(rings), affectedKeys: new Set(keys), affectedEdges };
-  }
-
-  if (kind === 'ringRotation') {
-    const affectedKeys = collectKeysForRings(state, rings);
-    rebuildBodiesForKeys(state, Array.from(affectedKeys));
-    const affectedEdges = updateEdgeSegmentsForKeys(state, Array.from(affectedKeys));
-    updateBounds(state);
-    return { affectedRings: new Set(rings), affectedKeys, affectedEdges };
-  }
-
-  if (kind === 'radiusAdjust') {
-    recomputeMinimumRadiiFrom(state, startRing);
-    const affectedRings = state.rings.filter((ring) => ring >= startRing);
-    const affectedKeys = collectKeysForRings(state, affectedRings);
-    rebuildBodiesForKeys(state, Array.from(affectedKeys));
-    const affectedEdges = updateEdgeSegmentsForKeys(state, Array.from(affectedKeys));
-    updateBounds(state);
-    return { affectedRings: new Set(affectedRings), affectedKeys, affectedEdges };
-  }
-
-  const affectedKeys = new Set(keys);
-  rebuildBodiesForKeys(state, Array.from(affectedKeys));
-  const affectedEdges = updateEdgeSegmentsForKeys(state, Array.from(affectedKeys));
-  updateBounds(state);
-  return { affectedRings: new Set(rings), affectedKeys, affectedEdges };
-};
-
-const refreshGeometry = (state, {
-  mode = 'rebuild',
-  scoreMode = 'exact',
-  includeOverlapExpansion = scoreMode === 'exact'
-} = {}) => {
-  const core = buildCoreBodies({
-    center: state.center,
-    nodeByKey: state.nodeByKey,
-    scheme: state.scheme,
-    orientation: state.orientation
-  });
-  state.coreBodyByKey = core.coreBodyByKey;
-  state.coreEnvelope = core.coreEnvelope;
-  state.coreMaxSize = core.coreMaxSize;
-  state.coreAverageSize = core.coreAverageSize;
-  state.centerAngleByKey = buildCenterAngleByKey({
-    scheme: state.scheme,
-    orientation: state.orientation
-  });
-  state.centerAngleByKey.forEach((angle, key) => {
-    state.angleByKey.set(key, angle);
-  });
-
-  state.segmentDefsByRing = buildSegmentDefinitionsByRing({
-    rings: state.rings,
-    ringMetaByRing: state.ringMetaByRing,
-    nodeByKey: state.nodeByKey,
-    scheme: state.scheme,
-    orientation: state.orientation
-  });
-
-  const {
-    minimumRadiusByRing,
-    minCapacityRadiusByRing,
-    statsByRing
-  } = buildMinimumRadii({
-    rings: state.rings,
-    orderByRing: state.orderByRing,
-    ringMetaByRing: state.ringMetaByRing,
-    segmentDefsByRing: state.segmentDefsByRing,
-    nodeByKey: state.nodeByKey,
-    coreEnvelope: state.coreEnvelope,
-    coreAverageSize: state.coreAverageSize
-  });
-
-  state.statsByRing = statsByRing;
-  state.minimumRadiusByRing = new Map(minimumRadiusByRing);
-  state.minCapacityRadiusByRing = new Map(minCapacityRadiusByRing);
-  if (mode === 'rebuild' || state.radiusByRing.size < state.rings.length) {
-    state.radiusByRing = new Map(minimumRadiusByRing);
-  } else {
-    state.rings.forEach((ring) => {
-      state.radiusByRing.set(ring, Math.max(
-        state.radiusByRing.get(ring) || 0,
-        minimumRadiusByRing.get(ring) || 0
-      ));
-    });
-  }
-  recomputeMinimumRadiiFrom(state, state.rings[0] || 1);
-
-  assignAllAngles({
-    rings: state.rings,
-    orderByRing: state.orderByRing,
-    ringMetaByRing: state.ringMetaByRing,
-    radiusByRing: state.radiusByRing,
-    nodeByKey: state.nodeByKey,
-    angleByKey: state.angleByKey,
-    segmentDefsByRing: state.segmentDefsByRing
-  });
-
-  const builtBodies = buildNodeBodies({
-    center: state.center,
-    centerKey: state.centerKey,
-    scheme: state.scheme,
-    rings: state.rings,
-    orderByRing: state.orderByRing,
-    radiusByRing: state.radiusByRing,
-    angleByKey: state.angleByKey,
-    nodeByKey: state.nodeByKey,
-    coreBodyByKey: state.coreBodyByKey,
-    centerAngleByKey: state.centerAngleByKey
-  });
-  state.bodyByKey = builtBodies.bodyByKey;
-  state.bounds = buildContentBounds(builtBodies.bodies);
-  rebuildEdgeSegments(state);
-  syncProxyEvaluation(state);
-
-  if (includeOverlapExpansion) {
-    for (let passIndex = 0; passIndex < OVERLAP_EXPANSION_PASSES; passIndex += 1) {
-      const overlaps = buildOverlapPairs(state.bodyByKey);
-      if (overlaps.length < 1) break;
-      overlaps.forEach((entry) => {
-        const leftRing = Number(state.ringByKey.get(entry.leftKey) || 0);
-        const rightRing = Number(state.ringByKey.get(entry.rightKey) || 0);
-        const targetRing = Math.max(leftRing, rightRing);
-        if (targetRing < 1) return;
-        state.radiusByRing.set(
-          targetRing,
-          (state.radiusByRing.get(targetRing) || 0) + entry.overlap + 2
-        );
-      });
-      recomputeMinimumRadiiFrom(state, 1);
-      assignAllAngles({
-        rings: state.rings,
-        orderByRing: state.orderByRing,
-        ringMetaByRing: state.ringMetaByRing,
-        radiusByRing: state.radiusByRing,
-        nodeByKey: state.nodeByKey,
-        angleByKey: state.angleByKey,
-        segmentDefsByRing: state.segmentDefsByRing,
-        passes: 2
-      });
-      const refreshedBodies = buildNodeBodies({
-        center: state.center,
-        centerKey: state.centerKey,
-        scheme: state.scheme,
-        rings: state.rings,
-        orderByRing: state.orderByRing,
-        radiusByRing: state.radiusByRing,
-        angleByKey: state.angleByKey,
-        nodeByKey: state.nodeByKey,
-        coreBodyByKey: state.coreBodyByKey,
-        centerAngleByKey: state.centerAngleByKey
-      });
-      state.bodyByKey = refreshedBodies.bodyByKey;
-      state.bounds = buildContentBounds(refreshedBodies.bodies);
-      rebuildEdgeSegments(state);
-      syncProxyEvaluation(state);
-    }
-  }
-
-  if (scoreMode === 'exact') {
-    syncExactEvaluation(state, { full: true });
-  } else {
-    state.score = null;
-    state.exactCache = null;
-  }
-  return state;
-};
-
-const createInitialState = ({
+const buildWeakAnchorPoint = ({
+  key,
   center,
   centerKey,
-  layer,
-  graphEdges,
-  graphMeta,
   nodeByKey,
-  stableSort,
-  sortedKeys,
-  sortedNeighborsByKey,
-  nodeIndexByKey,
-  edgeBuckets,
-  edgeList,
-  incidentEdgeIndexesByKey,
-  scheme,
-  orientation,
-  ringByKey,
-  ringMetaByRing,
-  rings
+  bodyByKey,
+  layerKeys,
+  levelByKey,
+  orderIndexByKey,
+  primaryParentByKey,
+  ownerAnchorByKey,
+  baseYByLevel
 }) => {
-  const centerAngleByKey = buildCenterAngleByKey({ scheme, orientation });
-  const segmentDefsByRing = buildSegmentDefinitionsByRing({
-    rings,
-    ringMetaByRing,
-    nodeByKey,
-    scheme,
-    orientation
-  });
-  const { orderByRing, angleByKey } = buildBaseOrders({
-    rings,
-    ringMetaByRing,
-    nodeByKey,
-    stableSort,
-    centerAngleByKey,
-    segmentDefsByRing
-  });
+  if (key === centerKey) {
+    return {
+      x: Number(center?.x || 0),
+      y: Number(center?.y || 0)
+    };
+  }
 
-  const state = {
-    center,
-    centerKey,
-    layer,
-    graphEdges,
-    graphMeta,
-    nodeByKey,
-    stableSort,
-    sortedKeys,
-    sortedNeighborsByKey,
-    nodeIndexByKey,
-    edgeBuckets,
-    edgeList,
-    incidentEdgeIndexesByKey,
-    scheme,
-    orientation,
-    ringByKey,
-    ringMetaByRing,
-    rings,
-    centerAngleByKey,
-    segmentDefsByRing,
-    orderByRing,
-    angleByKey,
-    radiusByRing: new Map(),
-    statsByRing: new Map(),
-    coreBodyByKey: new Map(),
-    coreEnvelope: 0,
-    coreMaxSize: 0,
-    coreAverageSize: 0,
-    bodyByKey: new Map(),
-    edgeSegments: [],
-    score: null,
-    exactCache: null,
-    proxyScore: null,
-    proxyMetrics: null,
-    proxyCrossings: 0,
-    bounds: null,
-    initialScore: null,
-    minimumRadiusByRing: new Map(),
-    minCapacityRadiusByRing: new Map(),
-    timing: {
-      exactScoringStage: 0
-    }
-  };
-
-  refreshGeometry(state, {
-    mode: 'rebuild',
-    scoreMode: 'proxy',
-    includeOverlapExpansion: false
-  });
-  return state;
-};
-
-const rotateArrayLeft = (values = [], offset = 0) => {
-  if (!Array.isArray(values) || values.length < 2) return values.slice();
-  const normalized = ((offset % values.length) + values.length) % values.length;
-  if (normalized === 0) return values.slice();
-  return values.slice(normalized).concat(values.slice(0, normalized));
-};
-
-const replaceRingSegmentOrder = ({
-  state,
-  ring,
-  segmentKey,
-  nextSegmentOrder
-}) => {
-  const meta = state.ringMetaByRing.get(ring);
-  const currentOrder = state.orderByRing.get(ring) || [];
-  if (!meta) return;
-  const nextOrder = [];
-  meta.segmentOrder.forEach((candidateSegmentKey) => {
-    if (candidateSegmentKey === segmentKey) {
-      nextOrder.push(...nextSegmentOrder);
-      return;
-    }
-    nextOrder.push(
-      ...currentOrder.filter((key) => (state.nodeByKey.get(key)?.segmentKey || 'main') === candidateSegmentKey)
+  const node = nodeByKey.get(key);
+  const level = Number(levelByKey[key] || node?.level || 0);
+  const levelKeys = layerKeys.get(level) || [];
+  const midOrder = (levelKeys.length - 1) * 0.5;
+  const orderIndex = Number(orderIndexByKey.get(key) || 0);
+  const orderCentered = orderIndex - midOrder;
+  const parentKey = primaryParentByKey.get(key) || '';
+  const ownerKey = ownerAnchorByKey.get(key) || parentKey || centerKey;
+  const parentBody = parentKey ? bodyByKey.get(parentKey) : null;
+  const ownerBody = ownerKey ? bodyByKey.get(ownerKey) : null;
+  const spacing = buildNodeSpacingHint(node);
+  const orderX = Number(center?.x || 0) + orderCentered * spacing.x * 0.78;
+  const inheritedX = parentBody ? parentBody.x : ownerBody ? ownerBody.x : orderX;
+  const siblingCentered = Number(node?.siblingIndex || 0) - (((Number(node?.siblingCount || 1) - 1) * 0.5));
+  let anchorY = Number(baseYByLevel.get(level) || center?.y || 0) + siblingCentered * Math.min(18, spacing.y * 0.28);
+  if (parentBody) {
+    anchorY = Math.max(
+      anchorY,
+      parentBody.y + clamp((parentBody.collisionRadius + (node?.collisionRadius || 0)) * 0.72 + 14, 22, 72)
     );
-  });
-  state.orderByRing.set(ring, nextOrder);
+  }
+  if (ownerBody && ownerBody !== parentBody) {
+    anchorY = anchorY * 0.86 + (ownerBody.y + Math.max(14, spacing.y * 0.24)) * 0.14;
+  }
+  const importancePull = 1 - Math.min(0.22, Math.max(0, Number(node?.importance || 1) - 1) * 0.18);
+  return {
+    x: Number(center?.x || 0) + (((orderX * 0.54) + (inheritedX * 0.46)) - Number(center?.x || 0)) * importancePull,
+    y: anchorY
+  };
 };
 
-const isProxyWorthExact = (candidateProxy, baselineProxy) => (
-  compareProxyScores(candidateProxy, baselineProxy) < 0
-  || (
-    Number(candidateProxy?.proxyCrossings || 0) <= Number(baselineProxy?.proxyCrossings || 0) + PROXY_CANDIDATE_BUFFER
-    && Number(candidateProxy?.hubGapDeficit || 0) <= Number(baselineProxy?.hubGapDeficit || 0) * 1.15 + 0.2
-    && Number(candidateProxy?.localOverlapPenalty || 0) <= Number(baselineProxy?.localOverlapPenalty || 0) * 1.15 + 0.5
-  )
-);
-
-const tryLocalMove = (state, {
-  transaction,
-  mutate,
-  refresh
+const buildCompactSeedBodies = ({
+  center,
+  centerKey,
+  nodeByKey,
+  layerKeys,
+  levelByKey,
+  orderIndexByKey,
+  primaryParentByKey,
+  ownerAnchorByKey = new Map(),
+  existingBodyByKey = new Map(),
+  stableSort,
+  graphMeta
 }) => {
-  const baselineScore = state.score ? { ...state.score } : null;
-  const baselineProxy = state.proxyScore ? { ...state.proxyScore } : null;
-  mutate();
-  const affected = refreshGeometryLocal(state, refresh);
-  const proxy = evaluateProxyScore(state);
-  if (!isProxyWorthExact(proxy.score, baselineProxy)) {
-    rollbackLocalTransaction(state, transaction);
-    return false;
+  const bodyByKey = new Map();
+  const baseYByLevel = buildBaseYByLevel({
+    center,
+    layerKeys,
+    nodeByKey
+  });
+  const lockedExistingKeys = new Set(existingBodyByKey.keys());
+
+  const spatialIndex = buildSpatialIndex({
+    items: [],
+    getId: (body) => body.key,
+    getRect: (body) => buildBodyBoundsRect(body, 8),
+    cellSize: GRID_CELL_SIZE
+  });
+
+  existingBodyByKey.forEach((body, key) => {
+    const node = nodeByKey.get(key);
+    if (!node) return;
+    const cloned = cloneLayoutBody({
+      node,
+      body,
+      center
+    });
+    bodyByKey.set(key, cloned);
+    spatialIndex.insert(cloned, cloned.key, buildBodyBoundsRect(cloned, 8));
+  });
+
+  if (!bodyByKey.has(centerKey) && nodeByKey.has(centerKey)) {
+    const centerBody = buildLayoutBody({
+      node: nodeByKey.get(centerKey),
+      x: Number(center?.x || 0),
+      y: Number(center?.y || 0),
+      center
+    });
+    bodyByKey.set(centerKey, centerBody);
+    spatialIndex.insert(centerBody, centerBody.key, buildBodyBoundsRect(centerBody, 8));
   }
-  const exact = evaluateExactScore(state, affected);
-  if (!baselineScore || compareScores(exact.score, baselineScore) < 0) {
-    state.proxyScore = proxy.score;
-    state.proxyMetrics = proxy.metrics;
-    state.proxyCrossings = Number(proxy.score.proxyCrossings || 0);
-    state.exactCache = exact;
-    state.score = exact.score;
-    return true;
-  }
-  rollbackLocalTransaction(state, transaction);
-  return false;
-};
 
-const getDirtyRings = (state) => {
-  const dirty = new Set();
-  state.proxyMetrics?.crossingsByRing?.forEach((count, ring) => {
-    if (count > 0) dirty.add(Number(ring));
-  });
-  state.proxyMetrics?.hubGapByRing?.forEach((value, ring) => {
-    if (value > EPSILON) dirty.add(Number(ring));
-  });
-  state.proxyMetrics?.overlapByRing?.forEach((entry, ring) => {
-    if ((entry?.count || 0) > 0 || (entry?.penalty || 0) > EPSILON) dirty.add(Number(ring));
-  });
-  state.exactCache?.hubByKey?.forEach((entry, key) => {
-    if ((entry?.count || 0) < 1 && (entry?.penalty || 0) <= EPSILON) return;
-    dirty.add(Number(state.ringByKey.get(key) || 0));
-  });
-  state.exactCache?.edgeNodeByKey?.forEach((entry, key) => {
-    if ((entry?.count || 0) < 1 && (entry?.penalty || 0) <= EPSILON) return;
-    dirty.add(Number(state.ringByKey.get(key) || 0));
-  });
-  return state.rings.filter((ring) => dirty.has(ring));
-};
+  const placementKeys = Array.from(nodeByKey.keys())
+    .filter((key) => !bodyByKey.has(key))
+    .sort((left, right) => (
+      Number(levelByKey[left] || 0) - Number(levelByKey[right] || 0)
+      || Number(nodeByKey.get(right)?.importance || 0) - Number(nodeByKey.get(left)?.importance || 0)
+      || Number(orderIndexByKey.get(left) || 0) - Number(orderIndexByKey.get(right) || 0)
+      || stableSort(left, right)
+    ));
 
-const getBadNodes = (state) => {
-  const bad = new Set();
-  state.exactCache?.hubByKey?.forEach((entry, key) => {
-    if ((entry?.count || 0) > 0 || (entry?.penalty || 0) > EPSILON) bad.add(key);
-  });
-  state.exactCache?.edgeNodeByKey?.forEach((entry, key) => {
-    if ((entry?.count || 0) > 0 || (entry?.penalty || 0) > EPSILON) bad.add(key);
-  });
-  state.sortedKeys.forEach((key) => {
-    const node = state.nodeByKey.get(key);
-    if ((node?.degree || 0) >= HIGH_DEGREE_NODE_THRESHOLD) bad.add(key);
-  });
-  return bad;
-};
+  placementKeys.forEach((key) => {
+    const node = nodeByKey.get(key);
+    if (!node) return;
+    const anchor = buildWeakAnchorPoint({
+      key,
+      center,
+      centerKey,
+      nodeByKey,
+      bodyByKey,
+      layerKeys,
+      levelByKey,
+      orderIndexByKey,
+      primaryParentByKey,
+      ownerAnchorByKey,
+      baseYByLevel
+    });
+    const spacing = buildNodeSpacingHint(node);
+    const xBias = Number(orderIndexByKey.get(key) || 0) - (((layerKeys.get(Number(levelByKey[key] || 0)) || []).length - 1) * 0.5);
+    const offsets = buildCompactCandidateOffsets(8 + Math.min(6, Number(levelByKey[key] || 0)), xBias);
+    const parentKey = primaryParentByKey.get(key) || '';
+    const parentBody = parentKey ? bodyByKey.get(parentKey) : null;
+    const ownerKey = ownerAnchorByKey.get(key) || parentKey || centerKey;
+    const ownerBody = ownerKey ? bodyByKey.get(ownerKey) : null;
+    const neighborKeys = Array.from(graphMeta.adjacency.get(key) || []).filter((neighborKey) => bodyByKey.has(neighborKey));
 
-const optimizeAdjacentSwaps = (state) => {
-  for (let round = 0; round < SWAP_ROUNDS; round += 1) {
-    let improved = false;
-    state.rings.forEach((ring) => {
-      const meta = state.ringMetaByRing.get(ring);
-      (meta?.segmentOrder || []).forEach((segmentKey) => {
-        const segmentKeys = (state.orderByRing.get(ring) || []).filter((key) => (state.nodeByKey.get(key)?.segmentKey || 'main') === segmentKey);
-        for (let index = 0; index < segmentKeys.length - 1; index += 1) {
-          const nextSegmentOrder = segmentKeys.slice();
-          [nextSegmentOrder[index], nextSegmentOrder[index + 1]] = [nextSegmentOrder[index + 1], nextSegmentOrder[index]];
-          const affectedRings = expandRingsWithNeighbors([ring], state);
-          const angleKeys = Array.from(collectKeysForRings(state, affectedRings));
-          const transaction = createLocalTransaction(state, {
-            orderRings: [ring],
-            angleKeys,
-            bodyKeys: angleKeys
-          });
-          const accepted = tryLocalMove(state, {
-            transaction,
-            mutate: () => {
-              replaceRingSegmentOrder({
-                state,
-                ring,
-                segmentKey,
-                nextSegmentOrder
-              });
-            },
-            refresh: {
-              kind: 'segmentOrder',
-              rings: [ring]
-            }
-          });
-          if (accepted) improved = true;
+    let bestBody = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    offsets.forEach((offset, offsetIndex) => {
+      const candidateX = anchor.x + offset.x * spacing.x * 0.82;
+      const candidateY = anchor.y + offset.y * spacing.y * 0.76;
+      const candidate = buildLayoutBody({
+        node,
+        x: candidateX,
+        y: candidateY,
+        center
+      });
+      const candidateRect = buildBodyBoundsRect(candidate, 8);
+      const nearbyBodies = querySpatialIndex(spatialIndex, candidateRect);
+      let overlapPenalty = 0;
+      let proximityPenalty = 0;
+
+      nearbyBodies.forEach((otherBody) => {
+        if (otherBody.key === candidate.key) return;
+        const separation = buildBodyOverlapSeparation(candidate, otherBody, 4);
+        if (separation) {
+          overlapPenalty += Math.hypot(separation.x, separation.y);
+        } else {
+          proximityPenalty += Math.max(0, 18 - pointToRectDistance(candidate, buildBodyBoundsRect(otherBody, 6))) * 0.8;
         }
       });
+
+      const edgeStretchPenalty = neighborKeys.reduce((sum, neighborKey) => {
+        const neighborBody = bodyByKey.get(neighborKey);
+        if (!neighborBody) return sum;
+        return sum + distanceBetweenPoints(candidate, neighborBody);
+      }, 0) * 0.09;
+
+      // Penalize placement that sits on existing edges between already-placed nodes
+      let edgeClearancePenalty = 0;
+      nearbyBodies.forEach((otherBody) => {
+        if (otherBody.key === candidate.key) return;
+        const otherNeighborKeys = Array.from(graphMeta.adjacency.get(otherBody.key) || []);
+        otherNeighborKeys.forEach((neighborKey) => {
+          if (neighborKey === key) return;
+          const neighborBody = bodyByKey.get(neighborKey);
+          if (!neighborBody) return;
+          const d = distancePointToSegment(candidate, otherBody, neighborBody);
+          if (d.projection > 0.05 && d.projection < 0.95 && d.distance < 30) {
+            edgeClearancePenalty += Math.max(0, 30 - d.distance) * 6;
+          }
+        });
+      });
+
+      const parentPenalty = parentBody && candidateY < parentBody.y + 10
+        ? (parentBody.y + 10 - candidateY) * 16
+        : 0;
+      const ownerPenalty = ownerBody
+        ? distanceBetweenPoints(candidate, ownerBody) * 0.04
+        : 0;
+      const anchorPenalty = Math.abs(candidateX - anchor.x) + Math.abs(candidateY - anchor.y);
+      const lockedPenalty = lockedExistingKeys.has(ownerKey) ? 0 : 1;
+      const score = overlapPenalty * 1600
+        + proximityPenalty * 22
+        + edgeStretchPenalty
+        + edgeClearancePenalty
+        + parentPenalty
+        + ownerPenalty
+        + anchorPenalty
+        + offsetIndex * 0.01
+        + lockedPenalty;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestBody = candidate;
+      }
     });
-    if (!improved) break;
-  }
+
+    if (!bestBody) {
+      bestBody = buildLayoutBody({
+        node,
+        x: anchor.x,
+        y: anchor.y,
+        center
+      });
+    }
+    bodyByKey.set(key, bestBody);
+    spatialIndex.insert(bestBody, bestBody.key, buildBodyBoundsRect(bestBody, 8));
+  });
+
+  return bodyByKey;
 };
 
-const buildBlockPatterns = (block = []) => {
-  const patterns = [];
-  if (block.length >= 3) {
-    patterns.push(rotateArrayLeft(block, 1));
-    patterns.push(rotateArrayLeft(block, -1));
-    patterns.push(block.slice().reverse());
-  }
-  return patterns
-    .slice(0, MAX_BLOCK_PATTERNS)
-    .filter((pattern, index, array) => array.findIndex((candidate) => candidate.join('|') === pattern.join('|')) === index);
+const buildChildrenByParent = ({
+  nodeKeys,
+  primaryParentByKey,
+  orderIndexByKey,
+  stableSort
+}) => {
+  const childrenByParent = new Map();
+  (Array.isArray(nodeKeys) ? nodeKeys : []).forEach((key) => {
+    const parentKey = primaryParentByKey.get(key) || '';
+    if (!parentKey) return;
+    const bucket = childrenByParent.get(parentKey) || [];
+    bucket.push(key);
+    childrenByParent.set(parentKey, bucket);
+  });
+  childrenByParent.forEach((children, parentKey) => {
+    children.sort((left, right) => (
+      Number(orderIndexByKey.get(left) || 0) - Number(orderIndexByKey.get(right) || 0)
+      || stableSort(left, right)
+    ));
+    childrenByParent.set(parentKey, children);
+  });
+  return childrenByParent;
 };
 
-const optimizeBlockMoves = (state) => {
-  let improved = false;
-  const dirtyRings = getDirtyRings(state);
-  dirtyRings.forEach((ring) => {
-    const meta = state.ringMetaByRing.get(ring);
-    (meta?.segmentOrder || []).forEach((segmentKey) => {
-      const segmentKeys = (state.orderByRing.get(ring) || []).filter((key) => (state.nodeByKey.get(key)?.segmentKey || 'main') === segmentKey);
-      if (segmentKeys.length > BLOCK_MOVE_SKIP_THRESHOLD) return;
-      const maxWindow = segmentKeys.length > BLOCK_WINDOW_LARGE_THRESHOLD ? 3 : Math.min(BLOCK_WINDOW_MAX, segmentKeys.length);
-      for (let windowSize = BLOCK_WINDOW_MIN; windowSize <= maxWindow; windowSize += 1) {
-        for (let start = 0; start + windowSize <= segmentKeys.length; start += 1) {
-          const block = segmentKeys.slice(start, start + windowSize);
-          const patterns = buildBlockPatterns(block);
-          for (let patternIndex = 0; patternIndex < patterns.length; patternIndex += 1) {
-            const pattern = patterns[patternIndex];
-            const nextSegmentOrder = segmentKeys.slice();
-            nextSegmentOrder.splice(start, windowSize, ...pattern);
-            const affectedRings = expandRingsWithNeighbors([ring], state);
-            const angleKeys = Array.from(collectKeysForRings(state, affectedRings));
-            const transaction = createLocalTransaction(state, {
-              orderRings: [ring],
-              angleKeys,
-              bodyKeys: angleKeys
-            });
-            const accepted = tryLocalMove(state, {
-              transaction,
-              mutate: () => {
-                replaceRingSegmentOrder({
-                  state,
-                  ring,
-                  segmentKey,
-                  nextSegmentOrder
-                });
-              },
-              refresh: {
-                kind: 'segmentOrder',
-                rings: [ring]
-              }
-            });
-            if (accepted) improved = true;
+const buildSparseLocalPairs = ({
+  layerKeys,
+  childrenByParent,
+  nodeByKey,
+  orderIndexByKey,
+  stableSort
+}) => {
+  const pairs = [];
+  const seen = new Set();
+  const addPair = (leftKey, rightKey, type, weight = 1) => {
+    if (!leftKey || !rightKey || leftKey === rightKey) return;
+    const pairKey = stableSort(leftKey, rightKey) <= 0
+      ? `${leftKey}|${rightKey}|${type}`
+      : `${rightKey}|${leftKey}|${type}`;
+    if (seen.has(pairKey)) return;
+    seen.add(pairKey);
+    const leftNode = nodeByKey.get(leftKey);
+    const rightNode = nodeByKey.get(rightKey);
+    pairs.push({
+      leftKey,
+      rightKey,
+      type,
+      weight,
+      orderSign: Number(orderIndexByKey.get(rightKey) || 0) >= Number(orderIndexByKey.get(leftKey) || 0) ? 1 : -1,
+      idealDistance: Math.max(
+        (leftNode?.collisionRadius || 0) + (rightNode?.collisionRadius || 0) + (type === 'layer' ? 14 : 10),
+        ((leftNode?.labelWidthHint || 0) + (rightNode?.labelWidthHint || 0)) * (type === 'layer' ? 0.34 : 0.28)
+      )
+    });
+  };
+
+  layerKeys.forEach((keys) => {
+    for (let index = 1; index < keys.length; index += 1) {
+      addPair(keys[index - 1], keys[index], 'layer', 1);
+    }
+    for (let index = 2; index < keys.length; index += 1) {
+      addPair(keys[index - 2], keys[index], 'layer-skip', 0.42);
+    }
+  });
+
+  childrenByParent.forEach((children) => {
+    for (let index = 1; index < children.length; index += 1) {
+      addPair(children[index - 1], children[index], 'siblings', 0.86);
+    }
+  });
+
+  return pairs;
+};
+
+const buildCollapsedEdgeList = ({
+  edges,
+  ownerByKey,
+  stableSort,
+  directed = false
+}) => {
+  const edgeByKey = new Map();
+  (Array.isArray(edges) ? edges : []).forEach((edge) => {
+    const rawFrom = directed ? edge.fromKey : edge.fromKey;
+    const rawTo = directed ? edge.toKey : edge.toKey;
+    const fromKey = ownerByKey.get(rawFrom) || rawFrom;
+    const toKey = ownerByKey.get(rawTo) || rawTo;
+    if (!fromKey || !toKey || fromKey === toKey) return;
+    const key = directed
+      ? `${fromKey}->${toKey}`
+      : (stableSort(fromKey, toKey) <= 0 ? `${fromKey}|${toKey}` : `${toKey}|${fromKey}`);
+    if (!edgeByKey.has(key)) {
+      edgeByKey.set(key, {
+        pairKey: directed ? key : key,
+        fromKey: directed ? fromKey : (stableSort(fromKey, toKey) <= 0 ? fromKey : toKey),
+        toKey: directed ? toKey : (stableSort(fromKey, toKey) <= 0 ? toKey : fromKey),
+        weight: 0
+      });
+    }
+    edgeByKey.get(key).weight += Number(edge.weight || 1);
+  });
+  return Array.from(edgeByKey.values());
+};
+
+const buildCoarseNodeMeta = ({
+  centerKey,
+  nodeByKey,
+  primaryParentByKey,
+  levelByKey,
+  orderIndexByKey,
+  stableSort
+}) => {
+  const desiredSupportCount = Math.max(8, Math.min(COARSE_NODE_LIMIT, Math.round(Math.sqrt(nodeByKey.size) * 2.6)));
+  const supportKeys = new Set(centerKey ? [centerKey] : []);
+  const sortedKeys = Array.from(nodeByKey.keys()).sort((left, right) => (
+    Number(levelByKey[left] || 0) - Number(levelByKey[right] || 0)
+    || Number(nodeByKey.get(right)?.importance || 0) - Number(nodeByKey.get(left)?.importance || 0)
+    || stableSort(left, right)
+  ));
+
+  sortedKeys.forEach((key) => {
+    if (key === centerKey) return;
+    const node = nodeByKey.get(key);
+    const level = Number(levelByKey[key] || 0);
+    if (
+      level <= 1
+      || Number(node?.degree || 0) >= 4
+      || Number(node?.childCount || 0) > 0
+      || Number(node?.importance || 1) >= 1.44
+    ) {
+      supportKeys.add(key);
+    }
+  });
+
+  const clusterSeen = new Set(Array.from(supportKeys).map((key) => `${nodeByKey.get(key)?.clusterSignature || key}|${levelByKey[key] || 0}`));
+  sortedKeys.forEach((key) => {
+    if (supportKeys.size >= desiredSupportCount) return;
+    const clusterKey = `${nodeByKey.get(key)?.clusterSignature || key}|${levelByKey[key] || 0}`;
+    if (clusterSeen.has(clusterKey)) return;
+    clusterSeen.add(clusterKey);
+    supportKeys.add(key);
+  });
+
+  const ownerSupportByKey = new Map();
+  const supportList = Array.from(supportKeys);
+  const resolveOwner = (key) => {
+    if (ownerSupportByKey.has(key)) return ownerSupportByKey.get(key);
+    if (supportKeys.has(key)) {
+      ownerSupportByKey.set(key, key);
+      return key;
+    }
+    const parentKey = primaryParentByKey.get(key) || '';
+    if (parentKey) {
+      const owner = resolveOwner(parentKey);
+      ownerSupportByKey.set(key, owner);
+      return owner;
+    }
+    let bestKey = centerKey || supportList[0] || key;
+    let bestScore = Number.POSITIVE_INFINITY;
+    supportList.forEach((candidateKey) => {
+      const candidateNode = nodeByKey.get(candidateKey);
+      const score = (
+        Math.abs(Number(levelByKey[candidateKey] || 0) - Number(levelByKey[key] || 0)) * 100
+        + Math.abs(Number(orderIndexByKey.get(candidateKey) || 0) - Number(orderIndexByKey.get(key) || 0)) * 4
+        - Number(candidateNode?.importance || 1) * 6
+      );
+      if (score < bestScore) {
+        bestScore = score;
+        bestKey = candidateKey;
+      }
+    });
+    ownerSupportByKey.set(key, bestKey);
+    return bestKey;
+  };
+
+  sortedKeys.forEach((key) => {
+    resolveOwner(key);
+  });
+
+  const membersBySupportKey = new Map();
+  ownerSupportByKey.forEach((supportKey, key) => {
+    const bucket = membersBySupportKey.get(supportKey) || [];
+    bucket.push(key);
+    membersBySupportKey.set(supportKey, bucket);
+  });
+
+  const coarseNodeByKey = new Map();
+  supportList.forEach((supportKey) => {
+    const baseNode = nodeByKey.get(supportKey);
+    const members = membersBySupportKey.get(supportKey) || [supportKey];
+    const maxCollisionRadius = members.reduce((best, memberKey) => Math.max(best, Number(nodeByKey.get(memberKey)?.collisionRadius || 0)), 0);
+    coarseNodeByKey.set(supportKey, {
+      ...baseNode,
+      collisionRadius: Math.max(Number(baseNode?.collisionRadius || 0), maxCollisionRadius * 0.78),
+      importance: Math.min(2.24, Number(baseNode?.importance || 1) + Math.min(0.22, members.length * 0.03)),
+      coarseWeight: members.length
+    });
+  });
+
+  const coarsePrimaryParentByKey = new Map();
+  supportList.forEach((supportKey) => {
+    let cursor = primaryParentByKey.get(supportKey) || '';
+    while (cursor && !supportKeys.has(cursor)) {
+      cursor = primaryParentByKey.get(cursor) || '';
+    }
+    coarsePrimaryParentByKey.set(supportKey, cursor || '');
+  });
+
+  const coarseLevelByKey = {};
+  supportList.forEach((supportKey) => {
+    coarseLevelByKey[supportKey] = Number(levelByKey[supportKey] || 0);
+  });
+  const coarseOrderIndexByKey = new Map();
+  supportList.forEach((supportKey) => {
+    const members = membersBySupportKey.get(supportKey) || [supportKey];
+    const averageOrder = members.reduce((sum, memberKey) => sum + Number(orderIndexByKey.get(memberKey) || 0), 0) / Math.max(1, members.length);
+    coarseOrderIndexByKey.set(supportKey, averageOrder);
+  });
+
+  return {
+    supportKeys: supportList,
+    ownerSupportByKey,
+    membersBySupportKey,
+    coarseNodeByKey,
+    coarsePrimaryParentByKey,
+    coarseLevelByKey,
+    coarseOrderIndexByKey
+  };
+};
+
+const buildSegmentEntries = ({
+  edgeList,
+  bodyByKey
+}) => edgeList
+  .map((edge, index) => {
+    const fromBody = bodyByKey.get(edge.fromKey);
+    const toBody = bodyByKey.get(edge.toKey);
+    if (!fromBody || !toBody) return null;
+    const dx = toBody.x - fromBody.x;
+    const dy = toBody.y - fromBody.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= EPSILON) return null;
+    const dirX = dx / distance;
+    const dirY = dy / distance;
+    const startInset = Math.min(distance * 0.4, Math.max(2, (fromBody.collisionRadius || fromBody.radius || 0) - 2));
+    const endInset = Math.min(distance * 0.4, Math.max(2, (toBody.collisionRadius || toBody.radius || 0) - 2));
+    const start = {
+      x: fromBody.x + dirX * startInset,
+      y: fromBody.y + dirY * startInset
+    };
+    const end = {
+      x: toBody.x - dirX * endInset,
+      y: toBody.y - dirY * endInset
+    };
+    return {
+      id: `${edge.pairKey}:${index}`,
+      fromKey: edge.fromKey,
+      toKey: edge.toKey,
+      start,
+      end,
+      bbox: buildRectFromValues({
+        left: Math.min(start.x, end.x),
+        right: Math.max(start.x, end.x),
+        top: Math.min(start.y, end.y),
+        bottom: Math.max(start.y, end.y)
+      })
+    };
+  })
+  .filter(Boolean);
+
+const buildEdgeIdealDistance = ({
+  fromBody,
+  toBody,
+  layerDelta = 0
+}) => Math.max(
+  (fromBody.collisionRadius || 0) + (toBody.collisionRadius || 0) + BASE_NODE_GAP + 8,
+  ((fromBody.labelWidthHint || 0) + (toBody.labelWidthHint || 0)) * 0.52,
+  ((fromBody.labelHeightHint || 0) + (toBody.labelHeightHint || 0)) * 0.6,
+  56 + layerDelta * 22
+);
+
+const buildEdgeWeightByPairKey = (edgeList = []) => new Map(
+  edgeList.map((edge) => [edge.pairKey, Number(edge.weight || 1)])
+);
+
+const runConstrainedStressStage = ({
+  center,
+  centerKey,
+  bodyByKey,
+  edgeList,
+  directedEdges,
+  sparsePairs,
+  levelByKey,
+  orderIndexByKey,
+  graphMeta,
+  rounds,
+  maxStep,
+  edgeWeightByPairKey,
+  lockedKeys
+}) => {
+  for (let round = 0; round < rounds; round += 1) {
+    const cooling = 1 - (round / Math.max(1, rounds));
+    const deltaByKey = new Map();
+
+    edgeList.forEach((edge) => {
+      const fromBody = bodyByKey.get(edge.fromKey);
+      const toBody = bodyByKey.get(edge.toKey);
+      if (!fromBody || !toBody) return;
+      const direction = normalize(toBody.x - fromBody.x, toBody.y - fromBody.y, { x: 1, y: 0 });
+      const distance = Math.max(EPSILON, distanceBetweenPoints(fromBody, toBody));
+      const ideal = buildEdgeIdealDistance({
+        fromBody,
+        toBody,
+        layerDelta: Math.abs(Number(levelByKey[edge.fromKey] || 0) - Number(levelByKey[edge.toKey] || 0))
+      });
+      const weight = clamp(0.82 + Math.min(1.4, (edgeWeightByPairKey.get(edge.pairKey) || 1) * 0.16), 0.82, 2.22);
+      const force = (distance - ideal) * 0.11 * weight * (0.72 + cooling * 0.55);
+      applyImpulse(deltaByKey, edge.fromKey, direction.x * force * 0.5, direction.y * force * 0.5);
+      applyImpulse(deltaByKey, edge.toKey, -direction.x * force * 0.5, -direction.y * force * 0.5);
+    });
+
+    sparsePairs.forEach((pair) => {
+      const leftBody = bodyByKey.get(pair.leftKey);
+      const rightBody = bodyByKey.get(pair.rightKey);
+      if (!leftBody || !rightBody) return;
+      const direction = normalize(rightBody.x - leftBody.x, rightBody.y - leftBody.y, { x: 1, y: 0 });
+      const distance = Math.max(EPSILON, distanceBetweenPoints(leftBody, rightBody));
+      const force = (distance - pair.idealDistance) * 0.06 * Number(pair.weight || 1) * (0.7 + cooling * 0.4);
+      applyImpulse(deltaByKey, pair.leftKey, direction.x * force * 0.5, direction.y * force * 0.5);
+      applyImpulse(deltaByKey, pair.rightKey, -direction.x * force * 0.5, -direction.y * force * 0.5);
+
+      const desiredXGap = Math.max(12, pair.idealDistance * 0.42);
+      const actualGap = pair.orderSign >= 0
+        ? rightBody.x - leftBody.x
+        : leftBody.x - rightBody.x;
+      const shortage = desiredXGap - actualGap;
+      if (shortage > 0) {
+        const push = shortage * 0.08 * Number(pair.weight || 1);
+        if (pair.orderSign >= 0) {
+          applyImpulse(deltaByKey, pair.leftKey, -push, 0);
+          applyImpulse(deltaByKey, pair.rightKey, push, 0);
+        } else {
+          applyImpulse(deltaByKey, pair.leftKey, push, 0);
+          applyImpulse(deltaByKey, pair.rightKey, -push, 0);
+        }
+      }
+    });
+
+    directedEdges.forEach((edge) => {
+      const fromBody = bodyByKey.get(edge.fromKey);
+      const toBody = bodyByKey.get(edge.toKey);
+      if (!fromBody || !toBody) return;
+      const fromLevel = Number(levelByKey[edge.fromKey] || 0);
+      const toLevel = Number(levelByKey[edge.toKey] || 0);
+      const levelDelta = Math.max(0, toLevel - fromLevel);
+      const desiredDy = Math.max(8, 10 + levelDelta * 16);
+      const dyShortage = desiredDy - (toBody.y - fromBody.y);
+      if (dyShortage > 0) {
+        applyImpulse(deltaByKey, edge.fromKey, 0, -dyShortage * 0.11 * cooling);
+        applyImpulse(deltaByKey, edge.toKey, 0, dyShortage * 0.11 * cooling);
+      }
+      if (fromLevel === toLevel) {
+        const orderGap = Number(orderIndexByKey.get(edge.toKey) || 0) - Number(orderIndexByKey.get(edge.fromKey) || 0);
+        if (Math.abs(orderGap) > EPSILON) {
+          const expectedSign = orderGap >= 0 ? 1 : -1;
+          const actual = expectedSign >= 0 ? toBody.x - fromBody.x : fromBody.x - toBody.x;
+          const shortage = Math.max(0, 10 - actual);
+          if (shortage > 0) {
+            const push = shortage * 0.08;
+            applyImpulse(deltaByKey, edge.fromKey, -expectedSign * push, 0);
+            applyImpulse(deltaByKey, edge.toKey, expectedSign * push, 0);
           }
         }
       }
     });
-  });
-  return improved;
+
+    bodyByKey.forEach((body, key) => {
+      if (lockedKeys.has(key) || key === centerKey) return;
+      const pull = clamp(0.025 + Math.max(0, Number(body.importance || 1) - 1) * 0.02, 0.025, 0.06);
+      applyImpulse(
+        deltaByKey,
+        key,
+        (Number(body.seedX || body.x) - body.x) * pull,
+        (Number(body.seedY || body.y) - body.y) * (pull + 0.008)
+      );
+
+      const neighbors = Array.from(graphMeta.adjacency.get(key) || [])
+        .map((neighborKey) => bodyByKey.get(neighborKey))
+        .filter(Boolean);
+      if (neighbors.length > 0) {
+        const barycenter = neighbors.reduce((accumulator, neighborBody) => {
+          accumulator.x += neighborBody.x;
+          accumulator.y += neighborBody.y;
+          return accumulator;
+        }, { x: 0, y: 0 });
+        barycenter.x /= neighbors.length;
+        barycenter.y /= neighbors.length;
+        applyImpulse(
+          deltaByKey,
+          key,
+          (barycenter.x - body.x) * 0.035,
+          (barycenter.y - body.y) * 0.028
+        );
+      } else {
+        applyImpulse(
+          deltaByKey,
+          key,
+          (Number(center?.x || 0) - body.x) * 0.012,
+          (Number(center?.y || 0) - body.y) * 0.01
+        );
+      }
+    });
+
+    buildSpatialHashPairs({
+      items: Array.from(bodyByKey.values()),
+      cellSize: GRID_CELL_SIZE,
+      getRect: (body) => buildBodyBoundsRect(body, 10)
+    }).forEach(([leftBody, rightBody]) => {
+      const separation = buildBodyOverlapSeparation(leftBody, rightBody, 6);
+      if (!separation) return;
+      const leftWeight = leftBody.key === centerKey ? 0.14 : 1 / Math.max(0.9, Number(leftBody.importance || 1));
+      const rightWeight = rightBody.key === centerKey ? 0.14 : 1 / Math.max(0.9, Number(rightBody.importance || 1));
+      const totalWeight = leftWeight + rightWeight;
+      applyImpulse(deltaByKey, leftBody.key, -separation.x * (leftWeight / totalWeight) * 0.72, -separation.y * (leftWeight / totalWeight) * 0.72);
+      applyImpulse(deltaByKey, rightBody.key, separation.x * (rightWeight / totalWeight) * 0.72, separation.y * (rightWeight / totalWeight) * 0.72);
+    });
+
+    applyBodyDeltas({
+      bodyByKey,
+      deltaByKey,
+      lockedKeys,
+      centerKey,
+      maxStep
+    });
+    updateBodyGeometry({ bodyByKey, center, graphMeta });
+  }
 };
 
-const shiftAnglesForKeys = ({
-  state,
-  ring,
-  keys,
-  segmentDef,
-  delta
+const buildProximityPairs = ({
+  bodyByKey
 }) => {
-  if (!Array.isArray(keys) || keys.length < 1) return false;
-  const radius = state.radiusByRing.get(ring) || 1;
-  const firstKey = keys[0];
-  const lastKey = keys[keys.length - 1];
-  const firstNode = state.nodeByKey.get(firstKey);
-  const lastNode = state.nodeByKey.get(lastKey);
-  const lowerBound = Number(segmentDef?.start || 0) + chordToAngle(leadingEdgeDistance(firstNode), radius);
-  const upperBound = Number(segmentDef?.end || 0) - chordToAngle(trailingEdgeDistance(lastNode), radius);
-  const currentMin = Number(state.angleByKey.get(firstKey) || lowerBound);
-  const currentMax = Number(state.angleByKey.get(lastKey) || upperBound);
-  const actualDelta = clamp(delta, lowerBound - currentMin, upperBound - currentMax);
-  if (Math.abs(actualDelta) <= EPSILON) return false;
-  keys.forEach((key) => {
-    state.angleByKey.set(key, Number(state.angleByKey.get(key) || 0) + actualDelta);
+  const candidatePairs = buildSpatialHashPairs({
+    items: Array.from(bodyByKey.values()),
+    cellSize: GRID_CELL_SIZE,
+    getRect: (body) => expandRect(buildBodyBoundsRect(body), 72)
   });
-  return true;
+  const neighborEntriesByKey = new Map();
+  candidatePairs.forEach(([leftBody, rightBody]) => {
+    const distance = distanceBetweenPoints(leftBody, rightBody);
+    const pushEntry = (sourceKey, targetBody) => {
+      const bucket = neighborEntriesByKey.get(sourceKey) || [];
+      bucket.push({
+        targetKey: targetBody.key,
+        distance
+      });
+      neighborEntriesByKey.set(sourceKey, bucket);
+    };
+    pushEntry(leftBody.key, rightBody);
+    pushEntry(rightBody.key, leftBody);
+  });
+
+  const pairs = [];
+  const seen = new Set();
+  neighborEntriesByKey.forEach((entries, key) => {
+    entries
+      .sort((left, right) => left.distance - right.distance || stableTextCompare(left.targetKey, right.targetKey))
+      .slice(0, PROXIMITY_NEIGHBOR_LIMIT)
+      .forEach((entry) => {
+        const pairKey = stableTextCompare(key, entry.targetKey) <= 0
+          ? `${key}|${entry.targetKey}`
+          : `${entry.targetKey}|${key}`;
+        if (seen.has(pairKey)) return;
+        seen.add(pairKey);
+        pairs.push([key, entry.targetKey]);
+      });
+  });
+  return pairs;
 };
 
-const optimizeRingRotations = (state) => {
-  let improved = false;
-  getDirtyRings(state).forEach((ring) => {
-    const radius = state.radiusByRing.get(ring) || 1;
-    const deltaUnit = clamp(24 / Math.max(24, radius), ROTATION_DELTA_MIN, ROTATION_DELTA_MAX);
-    const meta = state.ringMetaByRing.get(ring);
-    const ringKeys = state.orderByRing.get(ring) || [];
-    const firstSegmentDef = meta?.segmentOrder?.[0]
-      ? state.segmentDefsByRing.get(ring)?.get(meta.segmentOrder[0])
-      : null;
-    RING_ROTATION_STEPS.forEach((step) => {
-      const transaction = createLocalTransaction(state, {
-        angleKeys: ringKeys,
-        bodyKeys: ringKeys
-      });
-      const accepted = tryLocalMove(state, {
-        transaction,
-        mutate: () => {
-          shiftAnglesForKeys({
-            state,
-            ring,
-            keys: ringKeys,
-            segmentDef: {
-              start: Math.min(...(meta.segmentOrder || []).map((segmentKey) => state.segmentDefsByRing.get(ring)?.get(segmentKey)?.start || 0)),
-              end: Math.max(...(meta.segmentOrder || []).map((segmentKey) => state.segmentDefsByRing.get(ring)?.get(segmentKey)?.end || 0))
-            },
-            delta: deltaUnit * step
-          });
-        },
-        refresh: {
-          kind: 'ringRotation',
-          rings: [ring]
+const runPrismOverlapRemoval = ({
+  center,
+  centerKey,
+  bodyByKey,
+  graphMeta,
+  lockedKeys,
+  anchorByKey
+}) => {
+  let overlapHits = 0;
+
+  for (let round = 0; round < OVERLAP_ROUNDS + 6; round += 1) {
+    const cooling = 1 - (Math.min(round, OVERLAP_ROUNDS) / Math.max(1, OVERLAP_ROUNDS));
+    const deltaByKey = new Map();
+    let roundOverlapHits = 0;
+
+    buildProximityPairs({ bodyByKey }).forEach(([leftKey, rightKey]) => {
+      const leftBody = bodyByKey.get(leftKey);
+      const rightBody = bodyByKey.get(rightKey);
+      const leftAnchor = anchorByKey.get(leftKey);
+      const rightAnchor = anchorByKey.get(rightKey);
+      if (!leftBody || !rightBody || !leftAnchor || !rightAnchor) return;
+      const currentDx = rightBody.x - leftBody.x;
+      const currentDy = rightBody.y - leftBody.y;
+      const anchorDx = rightAnchor.x - leftAnchor.x;
+      const anchorDy = rightAnchor.y - leftAnchor.y;
+      applyImpulse(deltaByKey, leftKey, (anchorDx - currentDx) * 0.026, (anchorDy - currentDy) * 0.026);
+      applyImpulse(deltaByKey, rightKey, (currentDx - anchorDx) * 0.026, (currentDy - anchorDy) * 0.026);
+    });
+
+    buildSpatialHashPairs({
+      items: Array.from(bodyByKey.values()),
+      cellSize: GRID_CELL_SIZE,
+      getRect: (body) => buildBodyBoundsRect(body, 6)
+    }).forEach(([leftBody, rightBody]) => {
+      const separation = buildBodyOverlapSeparation(leftBody, rightBody, 2);
+      if (!separation) return;
+      overlapHits += 1;
+      roundOverlapHits += 1;
+      const leftWeight = leftBody.key === centerKey ? 0.18 : 1 / Math.max(0.9, Number(leftBody.importance || 1));
+      const rightWeight = rightBody.key === centerKey ? 0.18 : 1 / Math.max(0.9, Number(rightBody.importance || 1));
+      const totalWeight = leftWeight + rightWeight;
+      const pushFactor = 0.78 + cooling * 0.22;
+      applyImpulse(deltaByKey, leftBody.key, -separation.x * pushFactor * (leftWeight / totalWeight), -separation.y * pushFactor * (leftWeight / totalWeight));
+      applyImpulse(deltaByKey, rightBody.key, separation.x * pushFactor * (rightWeight / totalWeight), separation.y * pushFactor * (rightWeight / totalWeight));
+    });
+
+    bodyByKey.forEach((body, key) => {
+      if (key === centerKey || lockedKeys.has(key)) return;
+      const anchor = anchorByKey.get(key);
+      if (!anchor) return;
+      applyImpulse(deltaByKey, key, (anchor.x - body.x) * 0.04, (anchor.y - body.y) * 0.04);
+      applyImpulse(
+        deltaByKey,
+        key,
+        (Number(center?.x || 0) - body.x) * 0.01,
+        (Number(center?.y || 0) - body.y) * 0.008
+      );
+    });
+
+    applyBodyDeltas({
+      bodyByKey,
+      deltaByKey,
+      lockedKeys,
+      centerKey,
+      maxStep: clamp(10 * cooling + 4, 4, 10)
+    });
+    updateBodyGeometry({ bodyByKey, center, graphMeta });
+    if (round >= 2 && roundOverlapHits < 1) break;
+  }
+
+  return overlapHits;
+};
+
+const runHardOverlapClearance = ({
+  center,
+  centerKey,
+  bodyByKey,
+  graphMeta,
+  lockedKeys,
+  anchorByKey
+}) => {
+  let overlapHits = 0;
+
+  for (let round = 0; round < CLEARANCE_ROUNDS + 4; round += 1) {
+    const deltaByKey = new Map();
+    let roundHits = 0;
+
+    buildSpatialHashPairs({
+      items: Array.from(bodyByKey.values()),
+      cellSize: GRID_CELL_SIZE,
+      getRect: (body) => buildBodyBoundsRect(body, 2)
+    }).forEach(([leftBody, rightBody]) => {
+      const separation = buildBodyOverlapSeparation(leftBody, rightBody, 0);
+      if (!separation) return;
+      roundHits += 1;
+      overlapHits += 1;
+      const leftWeight = leftBody.key === centerKey ? 0.14 : 1 / Math.max(0.9, Number(leftBody.importance || 1));
+      const rightWeight = rightBody.key === centerKey ? 0.14 : 1 / Math.max(0.9, Number(rightBody.importance || 1));
+      const totalWeight = leftWeight + rightWeight;
+      applyImpulse(deltaByKey, leftBody.key, -separation.x * 0.92 * (leftWeight / totalWeight), -separation.y * 0.92 * (leftWeight / totalWeight));
+      applyImpulse(deltaByKey, rightBody.key, separation.x * 0.92 * (rightWeight / totalWeight), separation.y * 0.92 * (rightWeight / totalWeight));
+    });
+
+    if (roundHits < 1) break;
+
+    bodyByKey.forEach((body, key) => {
+      if (key === centerKey || lockedKeys.has(key)) return;
+      const anchor = anchorByKey.get(key);
+      if (!anchor) return;
+      applyImpulse(deltaByKey, key, (anchor.x - body.x) * 0.018, (anchor.y - body.y) * 0.018);
+      applyImpulse(deltaByKey, key, (Number(center?.x || 0) - body.x) * 0.008, (Number(center?.y || 0) - body.y) * 0.006);
+    });
+
+    applyBodyDeltas({
+      bodyByKey,
+      deltaByKey,
+      lockedKeys,
+      centerKey,
+      maxStep: 14
+    });
+    updateBodyGeometry({ bodyByKey, center, graphMeta });
+  }
+
+  return overlapHits;
+};
+
+const buildNodeEdgeCandidatePairs = ({
+  segments,
+  bodies
+}) => buildSpatialJoinPairs({
+  leftItems: segments,
+  rightItems: bodies,
+  getLeftId: (segment) => segment.id,
+  getRightId: (body) => body.key,
+  getLeftRect: (segment) => expandRect(segment.bbox, 18),
+  getRightRect: (body) => expandRect(buildBodyBoundsRect(body), 8),
+  cellSize: SEGMENT_GRID_SIZE
+});
+
+const runHubAngleSpreading = ({
+  center,
+  centerKey,
+  graphMeta,
+  bodyByKey,
+  lockedKeys
+}) => {
+  for (let round = 0; round < HUB_SPREAD_ROUNDS; round += 1) {
+    const deltaByKey = new Map();
+    bodyByKey.forEach((body, key) => {
+      const neighborKeys = Array.from(graphMeta.adjacency.get(key) || []);
+      if (neighborKeys.length < 2) return;
+      const entries = neighborKeys
+        .map((neighborKey) => {
+          const neighborBody = bodyByKey.get(neighborKey);
+          if (!neighborBody) return null;
+          return {
+            neighborKey,
+            angle: Math.atan2(neighborBody.y - body.y, neighborBody.x - body.x),
+            distance: distanceBetweenPoints(body, neighborBody)
+          };
+        })
+        .filter(Boolean)
+        .sort((left, right) => left.angle - right.angle);
+
+      const minGap = clamp(TAU / Math.max(8, entries.length * 3.2), 0.16, 0.42);
+      for (let index = 0; index < entries.length; index += 1) {
+        const current = entries[index];
+        const next = entries[(index + 1) % entries.length];
+        let gap = next.angle - current.angle;
+        if (index === entries.length - 1) gap += TAU;
+        if (gap >= minGap) continue;
+        const deficit = minGap - gap;
+        const currentNeighbor = bodyByKey.get(current.neighborKey);
+        const nextNeighbor = bodyByKey.get(next.neighborKey);
+        if (!currentNeighbor || !nextNeighbor) continue;
+        const currentDir = normalize(currentNeighbor.x - body.x, currentNeighbor.y - body.y, { x: 1, y: 0 });
+        const nextDir = normalize(nextNeighbor.x - body.x, nextNeighbor.y - body.y, { x: 1, y: 0 });
+        const tangentMagnitude = deficit * Math.min(14, Math.max(4, Math.min(current.distance, next.distance) * 0.1));
+        applyImpulse(deltaByKey, current.neighborKey, currentDir.y * tangentMagnitude * 0.5, -currentDir.x * tangentMagnitude * 0.5);
+        applyImpulse(deltaByKey, next.neighborKey, -nextDir.y * tangentMagnitude * 0.5, nextDir.x * tangentMagnitude * 0.5);
+        if (key !== centerKey) {
+          applyImpulse(deltaByKey, key, ((-currentDir.y + nextDir.y) * tangentMagnitude) * 0.12, ((currentDir.x - nextDir.x) * tangentMagnitude) * 0.12);
         }
-      });
-      if (accepted) improved = true;
+      }
     });
 
-    (meta?.segmentOrder || []).forEach((segmentKey) => {
-      const segmentKeys = ringKeys.filter((key) => (state.nodeByKey.get(key)?.segmentKey || 'main') === segmentKey);
-      const segmentDef = state.segmentDefsByRing.get(ring)?.get(segmentKey) || firstSegmentDef;
-      RING_ROTATION_STEPS.forEach((step) => {
-        const transaction = createLocalTransaction(state, {
-          angleKeys: segmentKeys,
-          bodyKeys: segmentKeys
-        });
-        const accepted = tryLocalMove(state, {
-          transaction,
-          mutate: () => {
-            shiftAnglesForKeys({
-              state,
-              ring,
-              keys: segmentKeys,
-              segmentDef,
-              delta: deltaUnit * step
-            });
-          },
-          refresh: {
-            kind: 'ringRotation',
-            rings: [ring]
-          }
-        });
-        if (accepted) improved = true;
-      });
+    bodyByKey.forEach((body, key) => {
+      if (key === centerKey || lockedKeys.has(key)) return;
+      applyImpulse(deltaByKey, key, (Number(body.seedX || body.x) - body.x) * 0.025, (Number(body.seedY || body.y) - body.y) * 0.025);
     });
-  });
-  return improved;
+
+    applyBodyDeltas({
+      bodyByKey,
+      deltaByKey,
+      lockedKeys,
+      centerKey,
+      maxStep: 8
+    });
+    updateBodyGeometry({ bodyByKey, center, graphMeta });
+  }
 };
 
-const computeNodeAngleBounds = ({
-  state,
-  ring,
-  key
+const runCrossingRefinement = ({
+  center,
+  centerKey,
+  bodyByKey,
+  edgeList,
+  graphMeta,
+  lockedKeys
 }) => {
-  const order = state.orderByRing.get(ring) || [];
-  const index = order.indexOf(key);
-  const node = state.nodeByKey.get(key);
-  const segmentKey = node?.segmentKey || 'main';
-  const segmentDef = state.segmentDefsByRing.get(ring)?.get(segmentKey);
-  const segmentKeys = order.filter((candidateKey) => (state.nodeByKey.get(candidateKey)?.segmentKey || 'main') === segmentKey);
-  const localIndex = segmentKeys.indexOf(key);
-  const previousKey = localIndex > 0 ? segmentKeys[localIndex - 1] : '';
-  const nextKey = localIndex < segmentKeys.length - 1 ? segmentKeys[localIndex + 1] : '';
-  const radius = state.radiusByRing.get(ring) || 1;
-  const lowerBound = previousKey
-    ? Number(state.angleByKey.get(previousKey) || 0) + chordToAngle(requiredCenterDistance(state.nodeByKey.get(previousKey), node), radius)
-    : Number(segmentDef?.start || 0) + chordToAngle(leadingEdgeDistance(node), radius);
-  const upperBound = nextKey
-    ? Number(state.angleByKey.get(nextKey) || 0) - chordToAngle(requiredCenterDistance(node, state.nodeByKey.get(nextKey)), radius)
-    : Number(segmentDef?.end || 0) - chordToAngle(trailingEdgeDistance(node), radius);
-  return {
-    lowerBound,
-    upperBound,
-    segmentDef,
-    index
-  };
-};
+  let crossings = 0;
 
-const optimizeNodeNudges = (state) => {
-  let improved = false;
-  const badNodes = getBadNodes(state);
-  state.rings.forEach((ring) => {
-    const radius = state.radiusByRing.get(ring) || 1;
-    const deltaUnit = clamp(16 / Math.max(24, radius), NODE_NUDGE_MIN, NODE_NUDGE_MAX);
-    (state.orderByRing.get(ring) || []).forEach((key) => {
-      if (!badNodes.has(key)) return;
-      NODE_NUDGE_STEPS.forEach((step) => {
-        const transaction = createLocalTransaction(state, {
-          angleKeys: [key],
-          bodyKeys: [key]
-        });
-        const accepted = tryLocalMove(state, {
-          transaction,
-          mutate: () => {
-          const { lowerBound, upperBound } = computeNodeAngleBounds({ state, ring, key });
-          const current = Number(state.angleByKey.get(key) || 0);
-          const candidate = clamp(current + deltaUnit * step, lowerBound, upperBound);
-          if (Math.abs(candidate - current) <= EPSILON) return;
-          state.angleByKey.set(key, candidate);
-          },
-          refresh: {
-            kind: 'nodeNudge',
-            rings: [ring],
-            keys: [key]
-          }
-        });
-        if (accepted) improved = true;
-      });
+  for (let round = 0; round < CROSSING_REFINEMENT_ROUNDS; round += 1) {
+    const segments = buildSegmentEntries({ edgeList, bodyByKey });
+    const segmentPairs = buildSpatialHashPairs({
+      items: segments,
+      cellSize: SEGMENT_GRID_SIZE,
+      getRect: (segment) => expandRect(segment.bbox, 10)
     });
-  });
-  return improved;
-};
+    const deltaByKey = new Map();
+    let roundCrossings = 0;
 
-const optimizeRingRadii = (state) => {
-  let improved = false;
-  getDirtyRings(state).forEach((ring) => {
-    const stats = state.statsByRing.get(ring) || { averageSize: 0 };
-    const delta = Math.max(4, stats.averageSize * RADIUS_ADJUST_FACTOR);
-    [-delta, delta].forEach((radiusDelta) => {
-      const affectedRings = state.rings.filter((candidateRing) => candidateRing >= ring);
-      const bodyKeys = Array.from(collectKeysForRings(state, affectedRings));
-      const transaction = createLocalTransaction(state, {
-        radiusRings: affectedRings,
-        bodyKeys
-      });
-      const accepted = tryLocalMove(state, {
-        transaction,
-        mutate: () => {
-          state.radiusByRing.set(
-            ring,
-            Math.max(
-              state.minimumRadiusByRing.get(ring) || RADIAL_MIN_RADIUS,
-              (state.radiusByRing.get(ring) || 0) + radiusDelta
-            )
+    segmentPairs.forEach(([firstSegment, secondSegment]) => {
+      if (
+        firstSegment.fromKey === secondSegment.fromKey
+        || firstSegment.fromKey === secondSegment.toKey
+        || firstSegment.toKey === secondSegment.fromKey
+        || firstSegment.toKey === secondSegment.toKey
+      ) {
+        return;
+      }
+      if (!segmentsIntersect(firstSegment.start, firstSegment.end, secondSegment.start, secondSegment.end)) return;
+      roundCrossings += 1;
+
+      [
+        { moveKey: firstSegment.fromKey, anchorStart: secondSegment.start, anchorEnd: secondSegment.end },
+        { moveKey: firstSegment.toKey, anchorStart: secondSegment.start, anchorEnd: secondSegment.end },
+        { moveKey: secondSegment.fromKey, anchorStart: firstSegment.start, anchorEnd: firstSegment.end },
+        { moveKey: secondSegment.toKey, anchorStart: firstSegment.start, anchorEnd: firstSegment.end }
+      ]
+        .sort((left, right) => (
+          Number(bodyByKey.get(left.moveKey)?.importance || 1) - Number(bodyByKey.get(right.moveKey)?.importance || 1)
+          || stableTextCompare(left.moveKey, right.moveKey)
+        ))
+        .slice(0, 2)
+        .forEach(({ moveKey, anchorStart, anchorEnd }) => {
+          if (moveKey === centerKey || lockedKeys.has(moveKey)) return;
+          const body = bodyByKey.get(moveKey);
+          if (!body) return;
+          const closest = distancePointToSegment(body, anchorStart, anchorEnd);
+          const direction = normalize(
+            body.x - closest.projectedX,
+            body.y - closest.projectedY,
+            {
+              x: anchorStart.y - anchorEnd.y,
+              y: anchorEnd.x - anchorStart.x
+            }
           );
-        },
-        refresh: {
-          kind: 'radiusAdjust',
-          startRing: ring
-        }
-      });
-      if (accepted) improved = true;
+          const magnitude = Math.max(5, Math.min(12, 6 + (1.8 - Math.min(1.8, Number(body.importance || 1))) * 4));
+          applyImpulse(deltaByKey, moveKey, direction.x * magnitude, direction.y * magnitude);
+        });
     });
-  });
-  return improved;
+
+    crossings += roundCrossings;
+    if (roundCrossings < 1) break;
+
+    applyBodyDeltas({
+      bodyByKey,
+      deltaByKey,
+      lockedKeys,
+      centerKey,
+      maxStep: 9
+    });
+    updateBodyGeometry({ bodyByKey, center, graphMeta });
+  }
+
+  return crossings;
 };
 
-const optimizeCandidateState = (state) => {
-  refreshGeometry(state, {
-    mode: 'rebuild',
-    scoreMode: 'exact',
-    includeOverlapExpansion: true
-  });
-  state.initialScore = state.score ? { ...state.score } : null;
-  syncProxyEvaluation(state);
-  const confirmStartedAt = now();
-  state.score = evaluateLayoutScore({
-    bodyByKey: state.bodyByKey,
-    nodeByKey: state.nodeByKey,
-    graphEdges: state.graphEdges,
-    layer: state.layer,
-    radiusByRing: state.radiusByRing
-  });
-  state.timing.exactScoringStage += now() - confirmStartedAt;
-  if (state.exactCache) state.exactCache.score = { ...state.score };
-  return state;
+const runEdgeShorteningRefinement = ({
+  center,
+  centerKey,
+  bodyByKey,
+  edgeList,
+  levelByKey,
+  graphMeta,
+  lockedKeys
+}) => {
+  for (let round = 0; round < EDGE_SHORTEN_ROUNDS; round += 1) {
+    const deltaByKey = new Map();
+    let actions = 0;
+
+    edgeList
+      .map((edge) => {
+        const fromBody = bodyByKey.get(edge.fromKey);
+        const toBody = bodyByKey.get(edge.toKey);
+        if (!fromBody || !toBody) return null;
+        const distance = distanceBetweenPoints(fromBody, toBody);
+        const ideal = buildEdgeIdealDistance({
+          fromBody,
+          toBody,
+          layerDelta: Math.abs(Number(levelByKey[edge.fromKey] || 0) - Number(levelByKey[edge.toKey] || 0))
+        });
+        return {
+          edge,
+          distance,
+          ideal,
+          excess: distance - ideal
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.excess - left.excess)
+      .slice(0, Math.max(6, Math.ceil(edgeList.length * 0.5)))
+      .forEach(({ edge, excess }) => {
+        if (excess < 6) return;
+        const fromBody = bodyByKey.get(edge.fromKey);
+        const toBody = bodyByKey.get(edge.toKey);
+        if (!fromBody || !toBody) return;
+        const direction = normalize(toBody.x - fromBody.x, toBody.y - fromBody.y, { x: 1, y: 0 });
+        const moveMagnitude = Math.min(14, excess * 0.18);
+        const fromLocked = edge.fromKey === centerKey || lockedKeys.has(edge.fromKey);
+        const toLocked = edge.toKey === centerKey || lockedKeys.has(edge.toKey);
+        const fromLevel = Number(levelByKey[edge.fromKey] || 0);
+        const toLevel = Number(levelByKey[edge.toKey] || 0);
+        const desiredDy = Math.max(6, 8 + Math.max(0, toLevel - fromLevel) * 14);
+
+        if (!fromLocked) {
+          let dx = direction.x * moveMagnitude * 0.5;
+          let dy = direction.y * moveMagnitude * 0.5;
+          if (toBody.y - (fromBody.y + dy) < desiredDy) {
+            dy = Math.max(0, (toBody.y - fromBody.y - desiredDy) * 0.45);
+          }
+          applyImpulse(deltaByKey, edge.fromKey, dx, dy);
+        }
+        if (!toLocked) {
+          let dx = -direction.x * moveMagnitude * 0.5;
+          let dy = -direction.y * moveMagnitude * 0.5;
+          if ((toBody.y + dy) - fromBody.y < desiredDy) {
+            dy = Math.min(0, (fromBody.y + desiredDy - toBody.y) * 0.45);
+          }
+          applyImpulse(deltaByKey, edge.toKey, dx, dy);
+        }
+        actions += 1;
+      });
+
+    if (actions < 1) break;
+
+    applyBodyDeltas({
+      bodyByKey,
+      deltaByKey,
+      lockedKeys,
+      centerKey,
+      maxStep: 8
+    });
+    updateBodyGeometry({ bodyByKey, center, graphMeta });
+  }
+};
+
+const runNodeEdgeClearance = ({
+  center,
+  centerKey,
+  bodyByKey,
+  edgeList,
+  graphMeta,
+  lockedKeys
+}) => {
+  let clearanceHits = 0;
+
+  for (let round = 0; round < CLEARANCE_ROUNDS; round += 1) {
+    const segments = buildSegmentEntries({ edgeList, bodyByKey });
+    const deltaByKey = new Map();
+    let roundHits = 0;
+
+    buildNodeEdgeCandidatePairs({
+      segments,
+      bodies: Array.from(bodyByKey.values())
+    }).forEach(([segment, body]) => {
+      if (
+        body.key === segment.fromKey
+        || body.key === segment.toKey
+      ) {
+        return;
+      }
+
+      const nodeRect = expandRect(buildNodeRect(body), Math.max(16, body.collisionRadius * 0.3));
+      const labelRect = expandRect(body.labelRect || buildLabelRect(body), 10);
+      const nodeDistance = distanceSegmentToRect(segment.start, segment.end, nodeRect).distance;
+      const labelDistance = distanceSegmentToRect(segment.start, segment.end, labelRect).distance;
+      const nodeViolation = Math.max(0, Math.max(16, body.collisionRadius * 0.3) - nodeDistance);
+      const labelViolation = Math.max(0, 10 - labelDistance);
+      if (nodeViolation <= EPSILON && labelViolation <= EPSILON) return;
+
+      roundHits += 1;
+      const focusPoint = nodeViolation >= labelViolation
+        ? { x: body.x, y: body.y }
+        : { x: labelRect.centerX, y: labelRect.centerY };
+      const closest = distancePointToSegment(focusPoint, segment.start, segment.end);
+      const direction = normalize(
+        focusPoint.x - closest.projectedX,
+        focusPoint.y - closest.projectedY,
+        {
+          x: segment.start.y - segment.end.y,
+          y: segment.end.x - segment.start.x
+        }
+      );
+      const magnitude = Math.max(nodeViolation, labelViolation) * 1.2 + 2.5;
+      applyImpulse(deltaByKey, body.key, direction.x * magnitude, direction.y * magnitude);
+    });
+
+    clearanceHits += roundHits;
+    if (roundHits < 1) break;
+
+    applyBodyDeltas({
+      bodyByKey,
+      deltaByKey,
+      lockedKeys,
+      centerKey,
+      maxStep: 14
+    });
+    updateBodyGeometry({ bodyByKey, center, graphMeta });
+  }
+
+  return clearanceHits;
+};
+
+const runCompactPacking = ({
+  center,
+  centerKey,
+  bodyByKey,
+  graphMeta,
+  lockedKeys
+}) => {
+  for (let round = 0; round < COMPACTION_ROUNDS; round += 1) {
+    const deltaByKey = new Map();
+    bodyByKey.forEach((body, key) => {
+      if (key === centerKey || lockedKeys.has(key)) return;
+      const neighborBodies = Array.from(graphMeta.adjacency.get(key) || [])
+        .map((neighborKey) => bodyByKey.get(neighborKey))
+        .filter(Boolean);
+      if (neighborBodies.length > 0) {
+        const anchor = neighborBodies.reduce((accumulator, neighborBody) => {
+          accumulator.x += neighborBody.x;
+          accumulator.y += neighborBody.y;
+          return accumulator;
+        }, { x: 0, y: 0 });
+        anchor.x /= neighborBodies.length;
+        anchor.y /= neighborBodies.length;
+        applyImpulse(deltaByKey, key, (anchor.x - body.x) * 0.11, (anchor.y - body.y) * 0.08);
+      }
+      applyImpulse(deltaByKey, key, (Number(center?.x || 0) - body.x) * 0.018, (Number(center?.y || 0) - body.y) * 0.012);
+    });
+    applyBodyDeltas({
+      bodyByKey,
+      deltaByKey,
+      lockedKeys,
+      centerKey,
+      maxStep: 6
+    });
+    updateBodyGeometry({ bodyByKey, center, graphMeta });
+  }
+};
+
+const runAdjacentSwapCrossingReduction = ({
+  center,
+  centerKey,
+  bodyByKey,
+  edgeList,
+  layerKeys,
+  graphMeta,
+  lockedKeys
+}) => {
+  let totalSwaps = 0;
+
+  const countLocalCrossings = (keySet) => {
+    const segments = buildSegmentEntries({ edgeList, bodyByKey });
+    const relevantSegments = segments.filter((seg) =>
+      keySet.has(seg.fromKey) || keySet.has(seg.toKey)
+    );
+    let count = 0;
+    relevantSegments.forEach((seg) => {
+      segments.forEach((other) => {
+        if (seg === other) return;
+        if (
+          seg.fromKey === other.fromKey || seg.fromKey === other.toKey
+          || seg.toKey === other.fromKey || seg.toKey === other.toKey
+        ) return;
+        if (segmentsIntersect(seg.start, seg.end, other.start, other.end)) count += 1;
+      });
+    });
+    return count;
+  };
+
+  for (let pass = 0; pass < ADJACENT_SWAP_PASSES; pass += 1) {
+    let passSwaps = 0;
+    const sortedLevels = Array.from(layerKeys.keys()).sort((left, right) => left - right);
+    sortedLevels.forEach((level) => {
+      const keys = layerKeys.get(level);
+      if (!keys || keys.length < 2) return;
+      for (let index = 0; index < keys.length - 1; index += 1) {
+        const leftKey = keys[index];
+        const rightKey = keys[index + 1];
+        if (leftKey === centerKey || rightKey === centerKey) continue;
+        if (lockedKeys.has(leftKey) || lockedKeys.has(rightKey)) continue;
+        const leftBody = bodyByKey.get(leftKey);
+        const rightBody = bodyByKey.get(rightKey);
+        if (!leftBody || !rightBody) continue;
+        const swapSet = new Set([leftKey, rightKey]);
+        const beforeCrossings = countLocalCrossings(swapSet);
+        const leftX = leftBody.x;
+        const leftY = leftBody.y;
+        const rightX = rightBody.x;
+        const rightY = rightBody.y;
+        leftBody.x = rightX;
+        leftBody.y = rightY;
+        rightBody.x = leftX;
+        rightBody.y = leftY;
+        leftBody.labelRect = buildLabelRect(leftBody);
+        rightBody.labelRect = buildLabelRect(rightBody);
+        const afterCrossings = countLocalCrossings(swapSet);
+        if (afterCrossings < beforeCrossings) {
+          keys[index] = rightKey;
+          keys[index + 1] = leftKey;
+          passSwaps += 1;
+        } else {
+          leftBody.x = leftX;
+          leftBody.y = leftY;
+          rightBody.x = rightX;
+          rightBody.y = rightY;
+          leftBody.labelRect = buildLabelRect(leftBody);
+          rightBody.labelRect = buildLabelRect(rightBody);
+        }
+      }
+    });
+    totalSwaps += passSwaps;
+    if (passSwaps < 1) break;
+    updateBodyGeometry({ bodyByKey, center, graphMeta });
+  }
+  return totalSwaps;
+};
+
+const runCoupledConstraintRepair = ({
+  center,
+  centerKey,
+  bodyByKey,
+  edgeList,
+  graphMeta,
+  lockedKeys,
+  anchorByKey
+}) => {
+  let prevTotal = Number.POSITIVE_INFINITY;
+  for (let round = 0; round < COUPLED_REPAIR_MAX_ROUNDS; round += 1) {
+    const clearanceHits = runNodeEdgeClearance({
+      center,
+      centerKey,
+      bodyByKey,
+      edgeList,
+      graphMeta,
+      lockedKeys
+    });
+    const overlapHits = runHardOverlapClearance({
+      center,
+      centerKey,
+      bodyByKey,
+      graphMeta,
+      lockedKeys,
+      anchorByKey
+    });
+    const total = clearanceHits + overlapHits;
+    if (total < 1) break;
+    if (round >= 4 && total >= prevTotal) {
+      // Stalled — run one more aggressive overlap pass with extra padding
+      buildSpatialHashPairs({
+        items: Array.from(bodyByKey.values()),
+        cellSize: GRID_CELL_SIZE,
+        getRect: (body) => buildBodyBoundsRect(body, 4)
+      }).forEach(([leftBody, rightBody]) => {
+        const separation = buildBodyOverlapSeparation(leftBody, rightBody, 4);
+        if (!separation) return;
+        const deltaByKey = new Map();
+        applyImpulse(deltaByKey, leftBody.key, -separation.x * 0.6, -separation.y * 0.6);
+        applyImpulse(deltaByKey, rightBody.key, separation.x * 0.6, separation.y * 0.6);
+        applyBodyDeltas({ bodyByKey, deltaByKey, lockedKeys, centerKey, maxStep: 18 });
+      });
+      updateBodyGeometry({ bodyByKey, center, graphMeta });
+    }
+    prevTotal = total;
+  }
 };
 
 const buildBadgeBodies = ({
@@ -3169,8 +2508,8 @@ const buildBadgeBodies = ({
     const labelWidthHint = clamp(22 + label.length * 7, 22, 54);
     const labelHeightHint = 18;
     const radius = Math.max(8, Math.hypot(labelWidthHint * 0.5, labelHeightHint * 0.5) * 0.42);
-    const distance = sourceBody.radius + sourceBody.collisionRadius + radius + 10;
-    const angle = Number(sourceBody.angle || 0);
+    const distance = sourceBody.radius + sourceBody.collisionRadius + radius + 12;
+    const angle = Number((sourceBody.stubAngle ?? sourceBody.angle) || 0);
     badgeBodyByStubId.set(stubId, {
       stubId,
       isStubBadge: true,
@@ -3186,54 +2525,64 @@ const buildBadgeBodies = ({
   return badgeBodyByStubId;
 };
 
-const collectBodies = (bodyByKey) => Array.from(bodyByKey.values()).map((body) => ({
-  ...body,
-  labelRect: body.labelRect || buildLabelRect(body)
-}));
-
-const buildInputLevelByKey = ({
-  centerKey,
-  levels,
-  nodesByLevel
+const countRealEdgeCrossings = ({
+  edgeList,
+  bodyByKey
 }) => {
-  const levelByKey = {};
-  if (centerKey) levelByKey[centerKey] = 0;
-  (Array.isArray(levels) ? levels : []).forEach((level) => {
-    (nodesByLevel.get(level) || []).forEach((node) => {
-      if (!node?.key) return;
-      levelByKey[node.key] = Number.isFinite(Number(node.level)) ? Number(node.level) : Number(level);
-    });
+  const segments = buildSegmentEntries({ edgeList, bodyByKey });
+  let count = 0;
+  buildSpatialHashPairs({
+    items: segments,
+    cellSize: SEGMENT_GRID_SIZE,
+    getRect: (segment) => segment.bbox
+  }).forEach(([leftSegment, rightSegment]) => {
+    if (
+      leftSegment.fromKey === rightSegment.fromKey
+      || leftSegment.fromKey === rightSegment.toKey
+      || leftSegment.toKey === rightSegment.fromKey
+      || leftSegment.toKey === rightSegment.toKey
+    ) {
+      return;
+    }
+    if (segmentsIntersect(leftSegment.start, leftSegment.end, rightSegment.start, rightSegment.end)) count += 1;
   });
-  return levelByKey;
+  return count;
 };
 
-const isSameOrientation = (left, right) => (
-  Math.abs(Number(left?.rotation || 0) - Number(right?.rotation || 0)) <= EPSILON
-  && Math.abs(Number(left?.axisAngle || 0) - Number(right?.axisAngle || 0)) <= EPSILON
-);
+const countBodyOverlaps = (bodyByKey) => {
+  let count = 0;
+  buildSpatialHashPairs({
+    items: Array.from(bodyByKey.values()),
+    cellSize: GRID_CELL_SIZE,
+    getRect: (body) => buildBodyBoundsRect(body, 4)
+  }).forEach(([leftBody, rightBody]) => {
+    if (buildBodyOverlapSeparation(leftBody, rightBody, 0)) count += 1;
+  });
+  return count;
+};
 
-const cloneBestState = (state) => ({
-  ...state,
-  orderByRing: cloneOrderByRing(state.orderByRing),
-  angleByKey: new Map(state.angleByKey),
-  radiusByRing: new Map(state.radiusByRing),
-  statsByRing: new Map(state.statsByRing),
-  minimumRadiusByRing: new Map(state.minimumRadiusByRing),
-  minCapacityRadiusByRing: new Map(state.minCapacityRadiusByRing),
-  segmentDefsByRing: cloneNestedMap(state.segmentDefsByRing),
-  coreBodyByKey: new Map(state.coreBodyByKey),
-  centerAngleByKey: new Map(state.centerAngleByKey),
-  bodyByKey: new Map(Array.from(state.bodyByKey.entries()).map(([key, body]) => [key, cloneBodyEntry(body)])),
-  score: state.score ? { ...state.score } : null,
-  proxyScore: state.proxyScore ? { ...state.proxyScore } : null,
-  initialScore: state.initialScore ? { ...state.initialScore } : null,
-  bounds: state.bounds ? { ...state.bounds } : null,
-  ringByKey: new Map(state.ringByKey),
-  rings: state.rings.slice(),
-  scheme: { ...state.scheme },
-  orientation: { ...state.orientation },
-  timing: state.timing ? { ...state.timing } : { exactScoringStage: 0 }
-});
+const countNodeEdgeViolations = ({
+  edgeList,
+  bodyByKey
+}) => {
+  const segments = buildSegmentEntries({ edgeList, bodyByKey });
+  let count = 0;
+  buildNodeEdgeCandidatePairs({
+    segments,
+    bodies: Array.from(bodyByKey.values())
+  }).forEach(([segment, body]) => {
+    if (body.key === segment.fromKey || body.key === segment.toKey) return;
+    const nodeRect = expandRect(buildNodeRect(body), Math.max(16, body.collisionRadius * 0.3));
+    const labelRect = expandRect(body.labelRect || buildLabelRect(body), 10);
+    if (
+      distanceSegmentToRect(segment.start, segment.end, nodeRect).distance < Math.max(16, body.collisionRadius * 0.3) - EPSILON
+      || distanceSegmentToRect(segment.start, segment.end, labelRect).distance < 10 - EPSILON
+    ) {
+      count += 1;
+    }
+  });
+  return count;
+};
 
 export const radialDagLayout = ({
   width,
@@ -3248,6 +2597,7 @@ export const radialDagLayout = ({
   labelMetricsByKey,
   boundaryStubs = []
 }) => {
+  const startedAt = now();
   const {
     nodeByKey,
     stableSort
@@ -3260,194 +2610,20 @@ export const radialDagLayout = ({
     labelMetricsByKey
   });
 
-  const staticData = buildStaticLayoutData({
-    nodeByKey,
-    graphMeta,
-    graphEdges,
-    layer,
-    stableSort
-  });
-
   const inputLevelByKey = buildInputLevelByKey({
     centerKey,
     levels,
     nodesByLevel
   });
 
-  const {
-    distancesBySource,
-    eccentricityByKey,
-    diameter
-  } = buildGraphDistances({
+  const edgeList = buildUniqueGraphEdges({
+    graphEdges,
+    layer,
     nodeByKey,
-    sortedKeys: staticData.sortedKeys,
-    sortedNeighborsByKey: staticData.sortedNeighborsByKey
+    stableSort
   });
 
-  const layoutTiming = {
-    candidateGeneration: 0,
-    proxyStage: 0,
-    finalOptimizationStage: 0,
-    exactScoringStage: 0
-  };
-
-  const centerSchemes = centerKey && nodeByKey.has(centerKey)
-    ? [{
-      useDualCenter: false,
-      c1: centerKey,
-      c2: '',
-      rationale: 'single-selected-center',
-      signature: centerKey
-    }]
-    : generateCenterSchemes({
-      centerKey,
-      nodeByKey,
-      stableSort,
-      distancesBySource,
-      eccentricityByKey,
-      diameter
-    });
-
-  const coarseCandidates = [];
-  let bestState = null;
-  centerSchemes.forEach((scheme) => {
-    const generationStartedAt = now();
-    const centers = scheme.useDualCenter ? [scheme.c1, scheme.c2] : [scheme.c1];
-    const {
-      logicalRingByKey,
-      preferredCenterByKey,
-      maxRing
-    } = buildRingAssignments({
-      nodeByKey,
-      sortedKeys: staticData.sortedKeys,
-      sortedNeighborsByKey: staticData.sortedNeighborsByKey,
-      distancesBySource,
-      centers
-    });
-
-    buildRingRelationships({
-      centerKey,
-      nodeByKey,
-      graphMeta,
-      sortedKeys: staticData.sortedKeys,
-      nodeIndexByKey: staticData.nodeIndexByKey,
-      sortedNeighborsByKey: staticData.sortedNeighborsByKey,
-      ringByKey: logicalRingByKey,
-      preferredCenterByKey,
-      centers
-    });
-
-    const rings = Array.from({ length: maxRing }, (_, index) => index + 1);
-    const ringMetaByRing = buildRingMeta({
-      rings,
-      nodeByKey,
-      stableSort,
-      ringByKey: logicalRingByKey,
-      useDualCenter: scheme.useDualCenter,
-      c1: scheme.c1,
-      c2: scheme.c2
-    });
-    const edgeBuckets = buildEdgeBuckets({
-      edgeList: staticData.edgeList,
-      ringByKey: logicalRingByKey,
-      nodeKeySet: staticData.nodeKeySet
-    });
-    layoutTiming.candidateGeneration += now() - generationStartedAt;
-
-    const coarseOrientations = buildOrientationCandidates({
-      useDualCenter: scheme.useDualCenter,
-      sampleCount: scheme.useDualCenter ? DUAL_ROTATION_SAMPLES_COARSE : SINGLE_ROTATION_SAMPLES_COARSE
-    });
-    coarseOrientations.forEach((orientation) => {
-      const proxyStartedAt = now();
-      const state = createInitialState({
-        center,
-        centerKey,
-        layer,
-        graphEdges,
-        graphMeta,
-        nodeByKey,
-        stableSort,
-        sortedKeys: staticData.sortedKeys,
-        sortedNeighborsByKey: staticData.sortedNeighborsByKey,
-        nodeIndexByKey: staticData.nodeIndexByKey,
-        edgeBuckets,
-        edgeList: staticData.edgeList,
-        incidentEdgeIndexesByKey: staticData.incidentEdgeIndexesByKey,
-        scheme,
-        orientation,
-        ringByKey: logicalRingByKey,
-        ringMetaByRing,
-        rings
-      });
-      layoutTiming.proxyStage += now() - proxyStartedAt;
-      coarseCandidates.push({
-        state,
-        scheme,
-        orientation,
-        ringByKey: logicalRingByKey,
-        ringMetaByRing,
-        rings,
-        edgeBuckets
-      });
-    });
-  });
-
-  const finalistCount = coarseCandidates.length <= 1
-    ? coarseCandidates.length
-    : Math.min(FINALIST_LIMIT, Math.max(2, coarseCandidates.length));
-  const finalists = coarseCandidates
-    .slice()
-    .sort((left, right) => (
-      compareProxyScores(left.state.proxyScore, right.state.proxyScore)
-      || stableSort(left.scheme.c1, right.scheme.c1)
-    ))
-    .slice(0, finalistCount);
-
-  finalists.forEach((seed) => {
-    const fineOrientationCandidates = buildFineOrientationCandidates({
-      useDualCenter: seed.scheme.useDualCenter,
-      orientation: seed.orientation
-    }).slice(0, FINE_TUNE_LIMIT);
-    const testedOrientations = [];
-    fineOrientationCandidates.forEach((orientation) => {
-      if (testedOrientations.some((candidate) => isSameOrientation(candidate, orientation))) return;
-      testedOrientations.push(orientation);
-      const state = isSameOrientation(seed.orientation, orientation)
-        ? seed.state
-        : createInitialState({
-          center,
-          centerKey,
-          layer,
-          graphEdges,
-          graphMeta,
-          nodeByKey,
-          stableSort,
-          sortedKeys: staticData.sortedKeys,
-          sortedNeighborsByKey: staticData.sortedNeighborsByKey,
-          nodeIndexByKey: staticData.nodeIndexByKey,
-          edgeBuckets: seed.edgeBuckets,
-          edgeList: staticData.edgeList,
-          incidentEdgeIndexesByKey: staticData.incidentEdgeIndexesByKey,
-          scheme: seed.scheme,
-          orientation,
-          ringByKey: seed.ringByKey,
-          ringMetaByRing: seed.ringMetaByRing,
-          rings: seed.rings
-        });
-
-      const optimizationStartedAt = now();
-      optimizeCandidateState(state);
-      layoutTiming.finalOptimizationStage += now() - optimizationStartedAt;
-      layoutTiming.exactScoringStage += Number(state.timing?.exactScoringStage || 0);
-
-      if (!bestState || compareScores(state.score, bestState.score) < 0) {
-        bestState = cloneBestState(state);
-      }
-    });
-  });
-
-  if (!bestState) {
+  if (nodeByKey.size < 1) {
     return {
       levelByKey: {},
       bodyByKey: new Map(),
@@ -3459,61 +2635,350 @@ export const radialDagLayout = ({
       },
       debug: {
         sectorPlan: {
-          kind: 'radial-dag',
+          kind: 'constrained-dag-pack',
           mode: 'empty'
         }
       }
     };
   }
 
-  const bodies = collectBodies(bestState.bodyByKey);
+  const skeletonStartedAt = now();
+  const {
+    directedEdges,
+    outgoing
+  } = buildDirectedSkeleton({
+    centerKey,
+    nodeByKey,
+    edgeList,
+    inputLevelByKey,
+    stableSort
+  });
+  const {
+    componentIdByKey,
+    components
+  } = buildSccMeta({
+    nodeByKey,
+    outgoing,
+    stableSort
+  });
+  const {
+    levelByKey
+  } = assignDenseDagLayers({
+    centerKey,
+    nodeByKey,
+    stableSort,
+    directedEdges,
+    inputLevelByKey,
+    componentIdByKey,
+    components
+  });
+  nodeByKey.forEach((node, key) => {
+    node.level = Number(levelByKey[key] || 0);
+  });
+  const {
+    layerKeys,
+    orderIndexByKey,
+    predecessors
+  } = buildLayerOrdering({
+    centerKey,
+    nodeByKey,
+    stableSort,
+    directedEdges,
+    levelByKey
+  });
+  const primaryTreeMeta = buildPrimaryTreeMeta({
+    centerKey,
+    nodeByKey,
+    stableSort,
+    levelByKey,
+    orderIndexByKey,
+    predecessors,
+    componentIdByKey
+  });
+  const normalizedLevels = Array.from(layerKeys.keys()).sort((left, right) => left - right);
+  const skeletonTiming = now() - skeletonStartedAt;
+
+  const coarseMetaStartedAt = now();
+  const coarseMeta = buildCoarseNodeMeta({
+    centerKey,
+    nodeByKey,
+    primaryParentByKey: primaryTreeMeta.primaryParentByKey,
+    levelByKey,
+    orderIndexByKey,
+    stableSort
+  });
+  const coarseEdgeList = buildCollapsedEdgeList({
+    edges: edgeList,
+    ownerByKey: coarseMeta.ownerSupportByKey,
+    stableSort
+  });
+  const coarseDirectedEdges = buildCollapsedEdgeList({
+    edges: directedEdges,
+    ownerByKey: coarseMeta.ownerSupportByKey,
+    stableSort,
+    directed: true
+  });
+  const coarseLayerKeys = buildLayerKeysForNodeSet({
+    nodeKeys: coarseMeta.supportKeys,
+    levelByKey: coarseMeta.coarseLevelByKey,
+    orderIndexByKey: coarseMeta.coarseOrderIndexByKey,
+    stableSort
+  });
+  const coarseChildrenByParent = buildChildrenByParent({
+    nodeKeys: coarseMeta.supportKeys,
+    primaryParentByKey: coarseMeta.coarsePrimaryParentByKey,
+    orderIndexByKey: coarseMeta.coarseOrderIndexByKey,
+    stableSort
+  });
+  const coarseSparsePairs = buildSparseLocalPairs({
+    layerKeys: coarseLayerKeys,
+    childrenByParent: coarseChildrenByParent,
+    nodeByKey: coarseMeta.coarseNodeByKey,
+    orderIndexByKey: coarseMeta.coarseOrderIndexByKey,
+    stableSort
+  });
+  const hierarchyTiming = now() - coarseMetaStartedAt;
+
+  const seedStartedAt = now();
+  const coarseBodyByKey = buildCompactSeedBodies({
+    center,
+    centerKey,
+    nodeByKey: coarseMeta.coarseNodeByKey,
+    layerKeys: coarseLayerKeys,
+    levelByKey: coarseMeta.coarseLevelByKey,
+    orderIndexByKey: coarseMeta.coarseOrderIndexByKey,
+    primaryParentByKey: coarseMeta.coarsePrimaryParentByKey,
+    stableSort,
+    graphMeta
+  });
+  updateBodyGeometry({
+    bodyByKey: coarseBodyByKey,
+    center,
+    graphMeta
+  });
+  const seedTiming = now() - seedStartedAt;
+
+  const lockedKeys = new Set(centerKey ? [centerKey] : []);
+  const coarseStartedAt = now();
+  runConstrainedStressStage({
+    center,
+    centerKey,
+    bodyByKey: coarseBodyByKey,
+    edgeList: coarseEdgeList,
+    directedEdges: coarseDirectedEdges,
+    sparsePairs: coarseSparsePairs,
+    levelByKey: coarseMeta.coarseLevelByKey,
+    orderIndexByKey: coarseMeta.coarseOrderIndexByKey,
+    graphMeta,
+    rounds: STRESS_ROUNDS,
+    maxStep: MAX_COARSE_STEP,
+    edgeWeightByPairKey: buildEdgeWeightByPairKey(coarseEdgeList),
+    lockedKeys
+  });
+  const coarseTiming = now() - coarseStartedAt;
+
+  const projectStartedAt = now();
+  const fineBodyByKey = buildCompactSeedBodies({
+    center,
+    centerKey,
+    nodeByKey,
+    layerKeys,
+    levelByKey,
+    orderIndexByKey,
+    primaryParentByKey: primaryTreeMeta.primaryParentByKey,
+    ownerAnchorByKey: coarseMeta.ownerSupportByKey,
+    existingBodyByKey: coarseBodyByKey,
+    stableSort,
+    graphMeta
+  });
+  updateBodyGeometry({
+    bodyByKey: fineBodyByKey,
+    center,
+    graphMeta
+  });
+  const projectTiming = now() - projectStartedAt;
+
+  const fineChildrenByParent = buildChildrenByParent({
+    nodeKeys: Array.from(nodeByKey.keys()),
+    primaryParentByKey: primaryTreeMeta.primaryParentByKey,
+    orderIndexByKey,
+    stableSort
+  });
+  const fineSparsePairs = buildSparseLocalPairs({
+    layerKeys,
+    childrenByParent: fineChildrenByParent,
+    nodeByKey,
+    orderIndexByKey,
+    stableSort
+  });
+
+  const refineStartedAt = now();
+  runConstrainedStressStage({
+    center,
+    centerKey,
+    bodyByKey: fineBodyByKey,
+    edgeList,
+    directedEdges,
+    sparsePairs: fineSparsePairs,
+    levelByKey,
+    orderIndexByKey,
+    graphMeta,
+    rounds: STRESS_FINE_ROUNDS,
+    maxStep: MAX_FINE_STEP,
+    edgeWeightByPairKey: buildEdgeWeightByPairKey(edgeList),
+    lockedKeys
+  });
+  runHubAngleSpreading({
+    center,
+    centerKey,
+    graphMeta,
+    bodyByKey: fineBodyByKey,
+    lockedKeys
+  });
+  // Phase A: Edge shortening BEFORE crossing refinement so shorter edges
+  // produce fewer crossing opportunities.
+  runEdgeShorteningRefinement({
+    center,
+    centerKey,
+    bodyByKey: fineBodyByKey,
+    edgeList,
+    levelByKey,
+    graphMeta,
+    lockedKeys
+  });
+  // Phase B: Crossing refinement (local nudges).
+  const crossingCount = runCrossingRefinement({
+    center,
+    centerKey,
+    bodyByKey: fineBodyByKey,
+    edgeList,
+    graphMeta,
+    lockedKeys
+  });
+  // Phase C: Global crossing reduction via adjacent swap heuristic.
+  runAdjacentSwapCrossingReduction({
+    center,
+    centerKey,
+    bodyByKey: fineBodyByKey,
+    edgeList,
+    layerKeys,
+    levelByKey,
+    graphMeta,
+    lockedKeys
+  });
+  // Phase D: Compact packing BEFORE clearance/overlap passes so it doesn't
+  // undo the hard constraint fixes.
+  runCompactPacking({
+    center,
+    centerKey,
+    bodyByKey: fineBodyByKey,
+    graphMeta,
+    lockedKeys
+  });
+  // Phase E: Initial clearance + overlap removal.
+  const clearancePassHits = runNodeEdgeClearance({
+    center,
+    centerKey,
+    bodyByKey: fineBodyByKey,
+    edgeList,
+    graphMeta,
+    lockedKeys
+  });
+  const overlapAnchorByKey = new Map(Array.from(fineBodyByKey.entries()).map(([key, body]) => [key, { x: body.x, y: body.y }]));
+  const overlapPassHits = runPrismOverlapRemoval({
+    center,
+    centerKey,
+    bodyByKey: fineBodyByKey,
+    graphMeta,
+    lockedKeys,
+    anchorByKey: overlapAnchorByKey
+  });
+  runHardOverlapClearance({
+    center,
+    centerKey,
+    bodyByKey: fineBodyByKey,
+    graphMeta,
+    lockedKeys,
+    anchorByKey: overlapAnchorByKey
+  });
+  // Phase F: Coupled constraint repair loop — alternate clearance and overlap
+  // removal until both report zero violations, enforcing both hard constraints.
+  runCoupledConstraintRepair({
+    center,
+    centerKey,
+    bodyByKey: fineBodyByKey,
+    edgeList,
+    graphMeta,
+    lockedKeys,
+    anchorByKey: overlapAnchorByKey
+  });
+  updateBodyGeometry({
+    bodyByKey: fineBodyByKey,
+    center,
+    graphMeta
+  });
+  const refineTiming = now() - refineStartedAt;
+
+  const bounds = buildContentBounds(Array.from(fineBodyByKey.values()));
   const badgeBodyByStubId = buildBadgeBodies({
-    bodyByKey: bestState.bodyByKey,
+    bodyByKey: fineBodyByKey,
     boundaryStubs,
     layer
   });
+  const actualCrossings = countRealEdgeCrossings({
+    edgeList,
+    bodyByKey: fineBodyByKey
+  });
+  const remainingOverlaps = countBodyOverlaps(fineBodyByKey);
+  const nodeEdgeViolations = countNodeEdgeViolations({
+    edgeList,
+    bodyByKey: fineBodyByKey
+  });
+  const finishedAt = now();
 
   return {
-    levelByKey: inputLevelByKey,
-    bodyByKey: bestState.bodyByKey,
+    levelByKey,
+    bodyByKey: fineBodyByKey,
     badgeBodyByStubId,
-    bounds: bestState.bounds || buildContentBounds(bodies),
+    bounds,
     geometryCenter: {
       x: Number(center?.x || 0),
       y: Number(center?.y || 0)
     },
     debug: {
       sectorPlan: {
-        kind: 'radial-dag',
-        mode: bestState.scheme.useDualCenter ? 'dual-center' : 'single-center',
-        c1: bestState.scheme.c1,
-        c2: bestState.scheme.c2,
-        selectedCenterKey: centerKey,
-        rationale: bestState.scheme.rationale,
-        rotation: Number(bestState.orientation.rotation || 0),
-        axisAngle: Number(bestState.orientation.axisAngle || 0),
-        proxyCrossings: Number(bestState.proxyCrossings || 0),
-        proxyScore: bestState.proxyScore,
-        initialScore: bestState.initialScore,
-        finalScore: bestState.score,
-        timing: {
-          candidateGeneration: layoutTiming.candidateGeneration,
-          proxyStage: layoutTiming.proxyStage,
-          finalOptimizationStage: layoutTiming.finalOptimizationStage,
-          exactScoringStage: layoutTiming.exactScoringStage
-        },
-        densityK: RADIAL_DENSITY_K,
+        kind: 'constrained-dag-pack',
+        mode: 'weak-layered-constrained-dag-packing',
         canvas: {
           width: Number(width || 0),
           height: Number(height || 0)
         },
-        levels: [0, ...bestState.rings].map((ring) => ({
-          level: ring,
-          count: ring === 0
-            ? (bestState.scheme.useDualCenter ? 2 : 1)
-            : (bestState.orderByRing.get(ring) || []).length,
-          radius: ring === 0 ? 0 : (bestState.radiusByRing.get(ring) || 0)
-        }))
+        centerKey,
+        metrics: {
+          nodeCount: nodeByKey.size,
+          edgeCount: edgeList.length,
+          sccCount: components.length,
+          coarseNodeCount: coarseMeta.supportKeys.length,
+          levels: normalizedLevels.map((level) => ({
+            level,
+            count: (layerKeys.get(level) || []).length
+          })),
+          localCrossingNudges: crossingCount,
+          realEdgeCrossings: actualCrossings,
+          overlapPassHits,
+          clearancePassHits,
+          remainingOverlaps,
+          nodeEdgeViolations
+        },
+        timing: {
+          skeletonStage: skeletonTiming,
+          hierarchyStage: hierarchyTiming,
+          seedStage: seedTiming,
+          coarseStage: coarseTiming,
+          projectStage: projectTiming,
+          refineStage: refineTiming,
+          total: finishedAt - startedAt
+        }
       }
     }
   };
