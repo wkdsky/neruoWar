@@ -898,6 +898,13 @@
     flex-direction: column;
     align-items: center;
     gap: 0.18rem;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: center;
+    cursor: pointer;
 }
 
 .domain-manager-avatar-item.master {
@@ -926,6 +933,11 @@
     font-size: 11px;
     line-height: 1.25;
     word-break: break-all;
+}
+
+.domain-manager-avatar-item:hover .domain-manager-avatar-img {
+    transform: translateY(-1px);
+    border-color: rgba(96, 165, 250, 0.92);
 }
 
 .domain-defense-card {

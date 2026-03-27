@@ -1,5 +1,7 @@
 import React from 'react';
 import { ArrowRight, Clock3, Compass, MapPin, Navigation, X } from 'lucide-react';
+import { resolveAvatarSrc } from '../../app/appShared';
+import { useUserCard } from '../social/UserCardContext';
 import './AnnouncementPanel.css';
 import './CurrentDomainPanel.css';
 
@@ -30,6 +32,8 @@ const CurrentDomainPanel = ({
   onStopTravel,
   isStoppingTravel = false
 }) => {
+  const { openUserCard } = useUserCard();
+
   if (isTraveling) {
     const remainingDistanceText = travelStatus?.remainingDistanceUnits?.toFixed?.(2) ?? travelStatus?.remainingDistanceUnits ?? '--';
     const remainingTimeText = typeof formatTravelSeconds === 'function'
@@ -233,13 +237,24 @@ const CurrentDomainPanel = ({
           <div className="current-domain-panel__section-title">域主与域相</div>
           <div className="current-domain-panel__leaders">
             {leaders.map((leader) => (
-              <div key={`${leader.role}-${leader.name}`} className="current-domain-panel__leader-card">
-                {leader.avatar ? <img src={leader.avatar} alt={leader.name} className="current-domain-panel__leader-avatar" /> : null}
+              <button
+                type="button"
+                key={`${leader.role}-${leader.name}`}
+                className={`current-domain-panel__leader-card${leader.user ? ' is-clickable' : ''}`}
+                onClick={leader.user ? (event) => openUserCard(leader.user, event) : undefined}
+              >
+                {(leader.user || leader.avatar) ? (
+                  <img
+                    src={resolveAvatarSrc(leader.user?.avatar || leader.avatar)}
+                    alt={leader.name}
+                    className="current-domain-panel__leader-avatar"
+                  />
+                ) : null}
                 <div className="current-domain-panel__leader-meta">
                   <span>{leader.role}</span>
                   <strong>{leader.name}</strong>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>

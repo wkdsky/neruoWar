@@ -179,7 +179,9 @@ const createSocialService = ({
         requesterId: getIdString(friendship.requesterId),
         addresseeId: getIdString(friendship.addresseeId),
         createdAt: friendship.createdAt
-      }
+      },
+      requester: serializeUserSummary(requester),
+      addressee: serializeUserSummary(targetUser)
     };
   };
 
@@ -302,10 +304,14 @@ const createSocialService = ({
     return {
       friendship: {
         friendshipId: getIdString(friendship._id),
+        requesterId: getIdString(friendship.requesterId),
+        addresseeId: getIdString(friendship.addresseeId),
         status: friendship.status,
         respondedAt: friendship.respondedAt,
         acceptedAt: friendship.acceptedAt
-      }
+      },
+      requester: serializeUserSummary(requester),
+      addressee: serializeUserSummary(addressee)
     };
   };
 

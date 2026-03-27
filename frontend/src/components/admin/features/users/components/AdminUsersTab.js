@@ -1,4 +1,5 @@
 import React from 'react';
+import { PRESET_AVATAR_OPTIONS, resolveAvatarSrc } from '../../../../../app/appShared';
 
 const AdminUsersTab = ({
     adminUserPagination,
@@ -21,6 +22,7 @@ const AdminUsersTab = ({
     onSaveUserEdit,
     onStartEditUser,
     onDeleteUser,
+    onOpenUserCard,
     onPrevPage,
     onNextPage
 }) => (
@@ -54,7 +56,7 @@ const AdminUsersTab = ({
                                     onAdminUserSearchSubmit();
                                 }
                             }}
-                            placeholder="搜索用户名/职业（回车确认）"
+                            placeholder="搜索用户名/职业/公开ID（回车确认）"
                             className="admin-search-input"
                         />
                         {adminUserSearchKeyword && (
@@ -103,6 +105,7 @@ const AdminUsersTab = ({
             <table className="users-table">
                 <thead>
                     <tr>
+                        <th>头像 + ID</th>
                         <th>用户名</th>
                         <th>密码（明文）</th>
                         <th>等级</th>
@@ -115,7 +118,59 @@ const AdminUsersTab = ({
                 </thead>
                 <tbody>
                     {allUsers.map((user) => (
-                        <tr key={user._id}>
+                        <tr
+                            key={user._id}
+                            className={editingUser === user._id ? '' : 'is-clickable'}
+                            onClick={editingUser === user._id ? undefined : (event) => onOpenUserCard?.(user, event)}
+                        >
+                            <td>
+                                {editingUser === user._id ? (
+                                    <div className="admin-user-id-editor" onClick={(event) => event.stopPropagation()}>
+                                        <div className="admin-user-id-editor__avatar-row">
+                                            <img
+                                                src={resolveAvatarSrc(editForm.avatar)}
+                                                alt={editForm.username || '用户头像'}
+                                                className="admin-user-id-cell__avatar"
+                                            />
+                                            <select
+                                                value={editForm.avatar}
+                                                onChange={(e) => setEditForm({
+                                                    ...editForm,
+                                                    avatar: e.target.value
+                                                })}
+                                                className="edit-input"
+                                            >
+                                                {PRESET_AVATAR_OPTIONS.map((option) => (
+                                                    <option key={option.id} value={option.id}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <input
+                                            type="text"
+                                            value={editForm.publicId}
+                                            onChange={(e) => setEditForm({
+                                                ...editForm,
+                                                publicId: e.target.value
+                                            })}
+                                            placeholder="公开ID，留空则显示系统ID"
+                                            className="edit-input"
+                                        />
+                                        <span className="admin-user-id-cell__hint">{user._id}</span>
+                                    </div>
+                                ) : (
+                                    <div className="admin-user-id-cell">
+                                        <img
+                                            src={resolveAvatarSrc(user.avatar)}
+                                            alt={user.username || '用户头像'}
+                                            className="admin-user-id-cell__avatar"
+                                        />
+                                        <div className="admin-user-id-cell__meta">
+                                            <span className="admin-user-id-cell__value">{user.publicId || user._id}</span>
+                                            <span className="admin-user-id-cell__hint">{user._id}</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </td>
                             <td>
                                 {editingUser === user._id ? (
                                     <input
@@ -126,6 +181,7 @@ const AdminUsersTab = ({
                                             username: e.target.value
                                         })}
                                         className="edit-input"
+                                        onClick={(event) => event.stopPropagation()}
                                     />
                                 ) : (
                                     <span className="username-cell">
@@ -145,6 +201,7 @@ const AdminUsersTab = ({
                                         })}
                                         placeholder="留空表示不修改密码"
                                         className="edit-input"
+                                        onClick={(event) => event.stopPropagation()}
                                     />
                                 ) : (
                                     <span className="password-cell">{user.password || '未保存'}</span>
@@ -160,6 +217,7 @@ const AdminUsersTab = ({
                                             level: parseInt(e.target.value, 10)
                                         })}
                                         className="edit-input-small"
+                                        onClick={(event) => event.stopPropagation()}
                                     />
                                 ) : (
                                     user.level
@@ -175,6 +233,7 @@ const AdminUsersTab = ({
                                             experience: parseInt(e.target.value, 10)
                                         })}
                                         className="edit-input-small"
+                                        onClick={(event) => event.stopPropagation()}
                                     />
                                 ) : (
                                     user.experience
@@ -192,6 +251,7 @@ const AdminUsersTab = ({
                                             knowledgeBalance: e.target.value
                                         })}
                                         className="edit-input-small"
+                                        onClick={(event) => event.stopPropagation()}
                                     />
                                 ) : (
                                     Number.isFinite(Number(user.knowledgeBalance))
@@ -205,13 +265,21 @@ const AdminUsersTab = ({
                                 {editingUser === user._id ? (
                                     <>
                                         <button
-                                            onClick={() => onSaveUserEdit(user._id)}
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                onSaveUserEdit(user._id);
+                                            }}
                                             className="btn-action btn-save"
                                         >
                                             保存
                                         </button>
                                         <button
-                                            onClick={() => setEditingUser(null)}
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setEditingUser(null);
+                                            }}
                                             className="btn-action btn-cancel"
                                         >
                                             取消
@@ -220,13 +288,21 @@ const AdminUsersTab = ({
                                 ) : (
                                     <>
                                         <button
-                                            onClick={() => onStartEditUser(user)}
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                onStartEditUser(user);
+                                            }}
                                             className="btn-action btn-edit"
                                         >
                                             编辑
                                         </button>
                                         <button
-                                            onClick={() => onDeleteUser(user._id, user.username)}
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                onDeleteUser(user._id, user.username);
+                                            }}
                                             className="btn-action btn-delete"
                                         >
                                             删除

@@ -30,6 +30,18 @@ const buildUserPairKey = (userIdA, userIdB) => (
     .join(':')
 );
 
+const deriveFriendStatus = (friendship = null, currentUserId = '') => {
+  if (!friendship) return 'none';
+  if (friendship?.status === 'accepted') return 'friend';
+  if (friendship?.status === 'blocked') return 'blocked';
+  if (friendship?.status === 'pending') {
+    return getIdString(friendship?.requesterId) === getIdString(currentUserId)
+      ? 'pending_sent'
+      : 'pending_received';
+  }
+  return 'none';
+};
+
 const truncateMessagePreview = (value = '', maxLength = 120) => {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -77,14 +89,25 @@ const sendNotificationToUser = async (userId, payload = {}) => {
   return notification;
 };
 
-const serializeUserSummary = (user = {}, extras = {}) => ({
-  _id: getIdString(user?._id),
-  username: user?.username || '',
-  avatar: user?.avatar || 'default_male_1',
-  profession: user?.profession || '',
-  allianceId: getIdString(user?.allianceId),
-  ...extras
-});
+const serializeUserSummary = (user = {}, extras = {}) => {
+  const summary = {
+    _id: getIdString(user?._id),
+    username: user?.username || '',
+    avatar: user?.avatar || 'default_male_1',
+    profession: user?.profession || '',
+    allianceId: getIdString(user?.allianceId),
+    ...extras
+  };
+
+  if (typeof extras?.allianceName !== 'string' && typeof user?.allianceName === 'string') {
+    summary.allianceName = user.allianceName;
+  }
+  if (typeof extras?.friendStatus !== 'string' && typeof user?.friendStatus === 'string') {
+    summary.friendStatus = user.friendStatus;
+  }
+
+  return summary;
+};
 
 const serializeFriendItem = ({
   friendship = {},
@@ -152,6 +175,7 @@ const serializeConversationItem = ({
 
 module.exports = {
   buildUserPairKey,
+  deriveFriendStatus,
   getIdString,
   isValidObjectId,
   pushNotificationToUser,

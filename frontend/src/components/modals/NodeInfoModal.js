@@ -1,22 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { X, Compass } from 'lucide-react';
 import './NodeInfoModal.css';
-import defaultMale1 from '../../assets/avatars/default_male_1.svg';
-import defaultMale2 from '../../assets/avatars/default_male_2.svg';
-import defaultMale3 from '../../assets/avatars/default_male_3.svg';
-import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
-import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
-import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
+import { resolveAvatarSrc } from '../../app/appShared';
+import { useUserCard } from '../social/UserCardContext';
 import { SENSE_ARTICLE_ENTRY_LABEL } from '../senseArticle/senseArticleUi';
-
-const avatarMap = {
-    default_male_1: defaultMale1,
-    default_male_2: defaultMale2,
-    default_male_3: defaultMale3,
-    default_female_1: defaultFemale1,
-    default_female_2: defaultFemale2,
-    default_female_3: defaultFemale3
-};
 
 const getUserId = (user) => {
     if (!user) return '';
@@ -69,18 +56,20 @@ const getNodeSenseSummary = (node) => {
     return '';
 };
 
-const UserAvatar = ({ user, isMaster = false, fallbackKey = '' }) => {
+const UserAvatar = ({ user, isMaster = false, fallbackKey = '', onOpenUserCard }) => {
     const username = user?.username || '未知用户';
     const alliance = getUserAlliance(user);
     const tooltip = alliance?.name ? `【${alliance.name}】${username}` : username;
     return (
-        <div
+        <button
+            type="button"
             key={getUserId(user) || fallbackKey}
             className={`user-avatar-item ${isMaster ? 'is-master' : ''}`}
             title={tooltip}
+            onClick={(event) => onOpenUserCard?.(user, event)}
         >
             <img
-                src={avatarMap[user.avatar] || defaultMale1}
+                src={resolveAvatarSrc(user?.avatar)}
                 alt={tooltip}
                 className="user-avatar-img"
             />
@@ -92,7 +81,7 @@ const UserAvatar = ({ user, isMaster = false, fallbackKey = '' }) => {
                 />
             )}
             <span className="user-avatar-tooltip">{tooltip}</span>
-        </div>
+        </button>
     );
 };
 
@@ -109,6 +98,7 @@ const NodeInfoModal = ({
 }) => {
     const [showApplyForm, setShowApplyForm] = useState(false);
     const [applyReason, setApplyReason] = useState('');
+    const { openUserCard } = useUserCard();
 
     useEffect(() => {
         if (!isOpen) {
@@ -218,7 +208,7 @@ const NodeInfoModal = ({
                             <div className="creator-row">
                                 {creator ? (
                                     <div className="user-avatar-list">
-                                        <UserAvatar user={creator} fallbackKey="creator" />
+                                        <UserAvatar user={creator} fallbackKey="creator" onOpenUserCard={openUserCard} />
                                     </div>
                                 ) : (
                                     <div className="user-group-empty">暂无</div>
@@ -235,13 +225,19 @@ const NodeInfoModal = ({
                             {domainMaster.length > 0 || admins.length > 0 ? (
                                 <div className="user-avatar-list manager-avatar-list">
                                     {domainMaster.length > 0 && (
-                                        <UserAvatar user={domainMaster[0]} isMaster fallbackKey="domain-master" />
+                                        <UserAvatar
+                                            user={domainMaster[0]}
+                                            isMaster
+                                            fallbackKey="domain-master"
+                                            onOpenUserCard={openUserCard}
+                                        />
                                     )}
                                     {admins.map((admin, index) => (
                                         <UserAvatar
                                             key={getUserId(admin) || `admin-${index}`}
                                             user={admin}
                                             fallbackKey={`admin-${index}`}
+                                            onOpenUserCard={openUserCard}
                                         />
                                     ))}
                                 </div>

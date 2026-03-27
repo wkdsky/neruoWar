@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   Loader2,
@@ -11,6 +11,12 @@ import {
   X
 } from 'lucide-react';
 import { resolveAvatarSrc } from '../../app/appShared';
+import { useUserCard } from '../social/UserCardContext';
+import {
+  getUserId,
+  renderUserMetaText,
+  resolveUserFriendStatus
+} from '../social/userCardUtils';
 import './ChatDockPanel.css';
 
 const formatRelativeDateTime = (value) => {
@@ -33,11 +39,6 @@ const formatRelativeDateTime = (value) => {
     hour: '2-digit',
     minute: '2-digit'
   });
-};
-
-const renderMetaText = (user = {}) => {
-  const parts = [user?.profession, user?.allianceName].filter(Boolean);
-  return parts.join(' · ');
 };
 
 const SidebarTabButton = ({
@@ -100,10 +101,18 @@ const ChatDockPanel = ({
   setActiveSidebarTab
 }) => {
   const [draftMessage, setDraftMessage] = useState('');
+  const [showNewMessageHint, setShowNewMessageHint] = useState(false);
+  const messagesViewportRef = useRef(null);
+  const previousConversationIdRef = useRef('');
+  const previousLastMessageKeyRef = useRef('');
+  const { openUserCard } = useUserCard();
 
   const receivedRequests = Array.isArray(friendRequests.received) ? friendRequests.received : [];
   const sentRequests = Array.isArray(friendRequests.sent) ? friendRequests.sent : [];
-  const selectedMessages = Array.isArray(selectedMessagesEntry?.rows) ? selectedMessagesEntry.rows : [];
+  const selectedMessages = useMemo(
+    () => (Array.isArray(selectedMessagesEntry?.rows) ? selectedMessagesEntry.rows : []),
+    [selectedMessagesEntry?.rows]
+  );
 
   const conversationPlaceholder = useMemo(() => {
     if (conversations.length > 0) {
@@ -111,6 +120,17 @@ const ChatDockPanel = ({
     }
     return '当前没有可见私聊。你可以先从好友列表打开聊天窗口。';
   }, [conversations.length]);
+
+  const selectedConversationFriendStatus = useMemo(() => (
+    selectedConversation?.directUser
+      ? resolveUserFriendStatus({
+        user: selectedConversation.directUser,
+        currentUserId,
+        friends,
+        friendRequests
+      })
+      : 'none'
+  ), [currentUserId, friendRequests, friends, selectedConversation?.directUser]);
 
   const handleSubmitMessage = async () => {
     if (!selectedConversation?.conversationId) return;
@@ -121,6 +141,79 @@ const ChatDockPanel = ({
     if (sent) {
       setDraftMessage('');
     }
+  };
+
+  const scrollMessagesToBottom = (behavior = 'auto') => {
+    const viewport = messagesViewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTo({
+      top: viewport.scrollHeight,
+      behavior
+    });
+    setShowNewMessageHint(false);
+  };
+
+  useEffect(() => {
+    const currentConversationId = selectedConversation?.conversationId || '';
+    const lastMessage = selectedMessages[selectedMessages.length - 1] || null;
+    const lastMessageKey = lastMessage?._id || (
+      lastMessage?.conversationId
+        ? `${lastMessage.conversationId}:${lastMessage?.seq || 0}`
+        : ''
+    );
+    const viewport = messagesViewportRef.current;
+    const conversationChanged = previousConversationIdRef.current !== currentConversationId;
+    const messageAdvanced = Boolean(lastMessageKey) && previousLastMessageKeyRef.current !== lastMessageKey;
+
+    if (viewport && currentConversationId) {
+      const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+      const isNearBottom = distanceToBottom <= 64;
+      const lastMessageIsSelf = String(lastMessage?.senderId || '') === String(currentUserId || '');
+
+      if (conversationChanged) {
+        window.requestAnimationFrame(() => scrollMessagesToBottom('auto'));
+      } else if (messageAdvanced) {
+        if (lastMessageIsSelf || isNearBottom) {
+          window.requestAnimationFrame(() => scrollMessagesToBottom(lastMessageIsSelf ? 'smooth' : 'auto'));
+        } else {
+          setShowNewMessageHint(true);
+        }
+      }
+    } else {
+      setShowNewMessageHint(false);
+    }
+
+    previousConversationIdRef.current = currentConversationId;
+    previousLastMessageKeyRef.current = lastMessageKey;
+  }, [currentUserId, selectedConversation?.conversationId, selectedMessages]);
+
+  const renderAvatarTrigger = (user, size = 40, options = {}) => {
+    const targetUserId = getUserId(user);
+    const disabled = !targetUserId || targetUserId === String(currentUserId || '');
+    const className = `chat-dock-avatar-trigger${options.compact ? ' is-compact' : ''}${disabled ? ' is-disabled' : ''}`;
+
+    return (
+      <span
+        className={className}
+        role={disabled ? undefined : 'button'}
+        tabIndex={disabled ? -1 : 0}
+        onClick={(event) => {
+          if (disabled) return;
+          event.stopPropagation();
+          openUserCard(user, event);
+        }}
+        onKeyDown={(event) => {
+          if (disabled) return;
+          event.stopPropagation();
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openUserCard(user, event);
+          }
+        }}
+      >
+        <UserAvatar user={user} size={size} />
+      </span>
+    );
   };
 
   return (
@@ -181,7 +274,7 @@ const ChatDockPanel = ({
                     className={`chat-dock-list-item${isActive ? ' is-active' : ''}`}
                     onClick={() => onOpenConversation(item?.conversationId)}
                   >
-                    <UserAvatar user={item?.directUser || { avatar: item?.avatar, username: item?.title }} size={42} />
+                    {renderAvatarTrigger(item?.directUser || { avatar: item?.avatar, username: item?.title }, 42)}
                     <span className="chat-dock-list-item__content">
                       <span className="chat-dock-list-item__top">
                         <span className="chat-dock-list-item__title">{item?.title || '未命名会话'}</span>
@@ -261,10 +354,10 @@ const ChatDockPanel = ({
                     const isPendingReceived = item?.friendStatus === 'pending_received';
                     return (
                       <div key={item?._id} className="chat-dock-user-row">
-                        <UserAvatar user={item} size={36} />
+                        {renderAvatarTrigger(item, 36)}
                         <div className="chat-dock-user-row__content">
                           <div className="chat-dock-user-row__title">{item?.username || '未命名用户'}</div>
-                          <div className="chat-dock-user-row__meta">{renderMetaText(item) || '可发起好友申请'}</div>
+                          <div className="chat-dock-user-row__meta">{renderUserMetaText(item) || '可发起好友申请'}</div>
                         </div>
                         {isFriend ? (
                           <button type="button" className="btn btn-primary btn-small" onClick={() => onOpenDirectConversation(item?._id)}>
@@ -301,11 +394,11 @@ const ChatDockPanel = ({
                   <div className="chat-dock-empty">还没有好友，先搜索用户发起申请。</div>
                 ) : friends.map((item) => (
                   <div key={item?.friendshipId} className="chat-dock-user-row">
-                    <UserAvatar user={item?.user} size={38} />
+                    {renderAvatarTrigger(item?.user, 38)}
                     <div className="chat-dock-user-row__content">
                       <div className="chat-dock-user-row__title">{item?.user?.username || '未命名好友'}</div>
                       <div className="chat-dock-user-row__meta">
-                        {renderMetaText(item?.user) || '已建立好友关系'}
+                        {renderUserMetaText(item?.user) || '已建立好友关系'}
                       </div>
                       {item?.hasConversation ? (
                         <div className="chat-dock-user-row__hint">
@@ -344,10 +437,10 @@ const ChatDockPanel = ({
                   return (
                     <div key={item?.friendshipId} className="chat-dock-request-card">
                       <div className="chat-dock-request-card__main">
-                        <UserAvatar user={item?.user} size={38} />
+                        {renderAvatarTrigger(item?.user, 38)}
                         <div className="chat-dock-request-card__content">
                           <div className="chat-dock-user-row__title">{item?.user?.username || '未命名用户'}</div>
-                          <div className="chat-dock-user-row__meta">{renderMetaText(item?.user) || '发来了好友申请'}</div>
+                          <div className="chat-dock-user-row__meta">{renderUserMetaText(item?.user) || '发来了好友申请'}</div>
                           <div className="chat-dock-request-card__message">
                             {item?.requestMessage || '对方未填写附言'}
                           </div>
@@ -385,7 +478,7 @@ const ChatDockPanel = ({
                   <div className="chat-dock-empty">当前没有发出的待处理申请。</div>
                 ) : sentRequests.map((item) => (
                   <div key={item?.friendshipId} className="chat-dock-user-row">
-                    <UserAvatar user={item?.user} size={36} />
+                    {renderAvatarTrigger(item?.user, 36)}
                     <div className="chat-dock-user-row__content">
                       <div className="chat-dock-user-row__title">{item?.user?.username || '未命名用户'}</div>
                       <div className="chat-dock-user-row__meta">
@@ -405,11 +498,11 @@ const ChatDockPanel = ({
             {selectedConversation ? (
               <>
                 <div className="chat-dock-main__identity">
-                  <UserAvatar user={selectedConversation?.directUser || { avatar: selectedConversation?.avatar, username: selectedConversation?.title }} size={44} />
+                  {renderAvatarTrigger(selectedConversation?.directUser || { avatar: selectedConversation?.avatar, username: selectedConversation?.title }, 44)}
                   <div>
                     <div className="chat-dock-main__title">{selectedConversation?.title || '私聊'}</div>
                     <div className="chat-dock-main__subtitle">
-                      {renderMetaText(selectedConversation?.directUser) || '好友私聊'}
+                      {renderUserMetaText(selectedConversation?.directUser) || '好友私聊'}
                       {selectedConversation?.clearedBeforeSeq > 0 ? ' · 旧记录已按你的删除边界隐藏' : ''}
                     </div>
                   </div>
@@ -434,7 +527,51 @@ const ChatDockPanel = ({
 
           {selectedConversation ? (
             <>
-              <div className="chat-dock-messages">
+              {selectedConversation?.directUser && selectedConversationFriendStatus !== 'friend' ? (
+                <div className="chat-dock-relationship-banner">
+                  <div className="chat-dock-relationship-banner__text">
+                    {selectedConversationFriendStatus === 'pending_sent'
+                      ? `你已经向 ${selectedConversation?.title || '对方'} 发送了好友申请，当前仍可继续私聊。`
+                      : selectedConversationFriendStatus === 'pending_received'
+                        ? `${selectedConversation?.title || '对方'} 已向你发送好友申请，当前仍可继续私聊。`
+                        : `你和 ${selectedConversation?.title || '对方'} 还不是好友，当前仍可直接私聊。`}
+                  </div>
+                  <div className="chat-dock-relationship-banner__actions">
+                    {selectedConversationFriendStatus === 'pending_received' ? (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={() => setActiveSidebarTab('requests')}
+                      >
+                        去处理申请
+                      </button>
+                    ) : selectedConversationFriendStatus === 'none' ? (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        disabled={friendActionId === `request:${selectedConversation?.directUser?._id}`}
+                        onClick={() => onSendFriendRequest(selectedConversation?.directUser?._id)}
+                      >
+                        {friendActionId === `request:${selectedConversation?.directUser?._id}` ? '发送中...' : '加好友'}
+                      </button>
+                    ) : (
+                      <span className="chat-user-card__tag">申请中</span>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
+              <div
+                ref={messagesViewportRef}
+                className="chat-dock-messages"
+                onScroll={(event) => {
+                  const viewport = event.currentTarget;
+                  const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+                  if (distanceToBottom <= 64) {
+                    setShowNewMessageHint(false);
+                  }
+                }}
+              >
                 {selectedMessagesEntry?.nextBeforeSeq > 0 ? (
                   <button
                     type="button"
@@ -468,6 +605,18 @@ const ChatDockPanel = ({
                   );
                 })}
               </div>
+
+              {showNewMessageHint ? (
+                <div className="chat-dock-new-message-bar">
+                  <button
+                    type="button"
+                    className="chat-dock-new-message-btn"
+                    onClick={() => scrollMessagesToBottom('smooth')}
+                  >
+                    有新消息，跳到底部
+                  </button>
+                </div>
+              ) : null}
 
               <div className="chat-dock-composer">
                 <textarea
@@ -505,6 +654,7 @@ const ChatDockPanel = ({
           )}
         </div>
       </div>
+
     </div>
   );
 };

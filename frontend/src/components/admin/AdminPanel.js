@@ -23,12 +23,14 @@ import {
     ASSOC_STEPS,
     ASSOC_RELATION_TYPES
 } from '../shared/associationFlowShared';
+import { useUserCard } from '../social/UserCardContext';
 import './Admin.css';
 const ADMIN_USER_PAGE_SIZE_OPTIONS = [10, 20, 30, 50];
 const ADMIN_DOMAIN_PAGE_SIZE_OPTIONS = [5, 10, 15, 20, 30];
 
 const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreateNode }) => {
     const [adminTab, setAdminTab] = useState(initialTab);
+    const { openUserCard } = useUserCard();
     
     const {
         allUsers,
@@ -486,6 +488,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
 
             <AdminUsersFeature
                 isActive={adminTab === 'users'}
+                onOpenUserCard={openUserCard}
                 adminUserPagination={adminUserPagination}
                 adminUserPageSize={adminUserPageSize}
                 pageSizeOptions={ADMIN_USER_PAGE_SIZE_OPTIONS}

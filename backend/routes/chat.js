@@ -39,7 +39,7 @@ router.get('/conversations', authenticateToken, async (req, res) => {
 
 router.post('/conversations/direct/:targetUserId', authenticateToken, async (req, res) => {
   try {
-    const result = await chatService.ensureDirectConversationForFriends({
+    const result = await chatService.ensureDirectConversationByUsers({
       requestUserId: req?.user?.userId,
       targetUserId: req.params?.targetUserId
     });

@@ -256,19 +256,17 @@ test('好友申请通过后仅更新 Friendship，不自动创建 direct convers
 });
 
 test('主动打开私聊会懒创建 direct conversation，并保证 directKey 幂等', async () => {
-  const { state, socialService, chatService } = createHarness();
+  const { state, chatService } = createHarness();
   const aliceId = state.users[0]._id;
   const bobId = state.users[1]._id;
 
-  const request = await socialService.requestFriendship({ requesterId: aliceId, targetUserId: bobId, message: '' });
-  await socialService.respondToFriendRequest({ userId: bobId, friendshipId: request.friendship.friendshipId, action: 'accept' });
-
-  const first = await chatService.ensureDirectConversationForFriends({ requestUserId: aliceId, targetUserId: bobId });
-  const second = await chatService.ensureDirectConversationForFriends({ requestUserId: aliceId, targetUserId: bobId });
+  const first = await chatService.ensureDirectConversationByUsers({ requestUserId: aliceId, targetUserId: bobId });
+  const second = await chatService.ensureDirectConversationByUsers({ requestUserId: aliceId, targetUserId: bobId });
 
   assert.equal(state.conversations.length, 1);
   assert.equal(first.conversation.conversationId, second.conversation.conversationId);
   assert.equal(state.conversations[0].directKey, buildUserPairKey(aliceId, bobId));
+  assert.equal(first.conversation.directUser.friendStatus, 'none');
 });
 
 test('发送消息会推进 seq、更新摘要，并增加接收方未读', async () => {
@@ -294,6 +292,29 @@ test('发送消息会推进 seq、更新摘要，并增加接收方未读', asyn
   assert.equal(conversation.lastMessagePreview, 'first message');
   assert.equal(bobMember.unreadCount, 1);
   assert.equal(bobMember.isVisible, true);
+});
+
+test('未加好友时也可以发送私聊消息，私聊与好友状态彻底解耦', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const bobId = state.users[1]._id;
+
+  const direct = await chatService.ensureDirectConversationByUsers({
+    requestUserId: aliceId,
+    targetUserId: bobId
+  });
+  const result = await chatService.sendMessage({
+    userId: aliceId,
+    conversationId: direct.conversation.conversationId,
+    type: 'text',
+    content: 'hello stranger',
+    clientMessageId: 'm-free-1'
+  });
+
+  assert.equal(state.friendships.length, 0);
+  assert.equal(state.messages.length, 1);
+  assert.equal(result.message.content, 'hello stranger');
+  assert.equal(direct.conversation.directUser.friendStatus, 'none');
 });
 
 test('单边删除会话只影响当前用户视图，不影响 Friendship/Conversation/Message/对方视图', async () => {

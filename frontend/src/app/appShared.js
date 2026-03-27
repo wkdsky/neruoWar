@@ -20,6 +20,15 @@ export const avatarMap = {
     female3: defaultFemale3
 };
 
+export const PRESET_AVATAR_OPTIONS = [
+    { id: 'default_male_1', src: defaultMale1, label: '方块战士' },
+    { id: 'default_male_2', src: defaultMale2, label: '森林守护' },
+    { id: 'default_male_3', src: defaultMale3, label: '暗夜魔法' },
+    { id: 'default_female_1', src: defaultFemale1, label: '粉色幻梦' },
+    { id: 'default_female_2', src: defaultFemale2, label: '阳光少女' },
+    { id: 'default_female_3', src: defaultFemale3, label: '海洋之心' }
+];
+
 export const resolveAvatarSrc = (avatarKey = '') => {
     const key = typeof avatarKey === 'string' ? avatarKey.trim() : '';
     if (!key) return avatarMap.default_male_1;

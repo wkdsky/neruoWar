@@ -1,0 +1,91 @@
+.global-user-card-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+}
+
+.global-user-card {
+  position: fixed;
+  width: 288px;
+  padding: 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(109, 140, 173, 0.3);
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 42%),
+    linear-gradient(180deg, rgba(10, 18, 28, 0.98), rgba(8, 13, 21, 0.96));
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  color: #ecf5ff;
+}
+
+.global-user-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.global-user-card__avatar {
+  border-radius: 999px;
+  object-fit: cover;
+  border: 1px solid rgba(173, 197, 219, 0.28);
+  background: rgba(15, 23, 42, 0.9);
+  flex-shrink: 0;
+}
+
+.global-user-card__identity {
+  min-width: 0;
+}
+
+.global-user-card__title {
+  color: #f8fbff;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.global-user-card__subline,
+.global-user-card__meta,
+.global-user-card__status {
+  color: rgba(186, 205, 222, 0.78);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.global-user-card__subline {
+  margin-top: 0.14rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.global-user-card__meta {
+  margin-top: 0.18rem;
+}
+
+.global-user-card__status {
+  margin-top: 0.9rem;
+  padding: 0.68rem 0.78rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.global-user-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.9rem;
+}
+
+.global-user-card__actions .btn {
+  flex: 1 1 0;
+}
+
+.global-user-card__tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0.42rem 0.72rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(202, 218, 233, 0.88);
+  font-size: 0.78rem;
+}

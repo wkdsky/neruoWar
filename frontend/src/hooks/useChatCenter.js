@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE } from '../runtimeConfig';
 
 const DEFAULT_MESSAGE_PAGE_SIZE = 30;
@@ -76,8 +76,56 @@ const useChatCenter = ({
   const [conversationActionId, setConversationActionId] = useState('');
   const [friendActionId, setFriendActionId] = useState('');
   const [requestActionId, setRequestActionId] = useState('');
+  const [chatToasts, setChatToasts] = useState([]);
+  const toastTimersRef = useRef(new Map());
+
+  const clearToastTimer = useCallback((toastId) => {
+    const activeTimer = toastTimersRef.current.get(toastId);
+    if (activeTimer) {
+      window.clearTimeout(activeTimer);
+      toastTimersRef.current.delete(toastId);
+    }
+  }, []);
+
+  const dismissChatToast = useCallback((toastId) => {
+    if (!toastId) return;
+    clearToastTimer(toastId);
+    setChatToasts((prev) => prev.filter((item) => item?.id !== toastId));
+  }, [clearToastTimer]);
+
+  const pushChatToast = useCallback((toast = {}) => {
+    const nextId = String(
+      toast?.id
+      || `${toast?.kind || 'notice'}:${toast?.conversationId || toast?.friendshipId || Date.now()}`
+    );
+    const nextToast = {
+      id: nextId,
+      kind: toast?.kind || 'notice',
+      tone: toast?.tone || 'info',
+      title: toast?.title || '提示',
+      message: toast?.message || '',
+      conversationId: toast?.conversationId || '',
+      friendshipId: toast?.friendshipId || ''
+    };
+
+    clearToastTimer(nextId);
+    setChatToasts((prev) => [
+      nextToast,
+      ...prev.filter((item) => item?.id !== nextId)
+    ].slice(0, 3));
+
+    const nextTimer = window.setTimeout(() => {
+      toastTimersRef.current.delete(nextId);
+      setChatToasts((prev) => prev.filter((item) => item?.id !== nextId));
+    }, 4200);
+    toastTimersRef.current.set(nextId, nextTimer);
+
+    return nextId;
+  }, [clearToastTimer]);
 
   const resetChatCenter = useCallback(() => {
+    toastTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    toastTimersRef.current.clear();
     setIsChatDockExpanded(false);
     setActiveSidebarTab('conversations');
     setConversations([]);
@@ -95,6 +143,7 @@ const useChatCenter = ({
     setConversationActionId('');
     setFriendActionId('');
     setRequestActionId('');
+    setChatToasts([]);
   }, []);
 
   const getToken = useCallback(() => {
@@ -275,6 +324,19 @@ const useChatCenter = ({
       }
     }
   }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
+
+  const syncSocialSidebarData = useCallback(async () => {
+    await Promise.all([
+      fetchFriendRequests(true),
+      fetchFriends(true),
+      friendSearchQuery ? searchUsers(friendSearchQuery, { silent: true }) : Promise.resolve([])
+    ]);
+  }, [
+    fetchFriendRequests,
+    fetchFriends,
+    friendSearchQuery,
+    searchUsers
+  ]);
 
   const markConversationRead = useCallback(async (conversationId, lastReadSeq = 0) => {
     const headers = buildAuthHeaders({ json: true });
@@ -641,11 +703,12 @@ const useChatCenter = ({
   useEffect(() => {
     if (authenticated) {
       fetchConversations(true);
+      fetchFriends(true);
       fetchFriendRequests(true);
       return;
     }
     resetChatCenter();
-  }, [authenticated, fetchConversations, fetchFriendRequests, resetChatCenter]);
+  }, [authenticated, fetchConversations, fetchFriendRequests, fetchFriends, resetChatCenter]);
 
   useEffect(() => {
     if (!authenticated || !isChatDockExpanded) return;
@@ -661,6 +724,7 @@ const useChatCenter = ({
       const conversation = payload?.conversation || null;
       const message = payload?.message || null;
       const conversationId = conversation?.conversationId || message?.conversationId || '';
+      const isOwnMessage = String(message?.senderId || '') === String(currentUserId || '');
 
       if (conversation?.conversationId) {
         setConversations((prev) => upsertConversationRow(prev, conversation));
@@ -674,11 +738,24 @@ const useChatCenter = ({
         }));
       }
 
+      if (!isOwnMessage && conversationId && (!isChatDockExpanded || selectedConversationId !== conversationId)) {
+        const conversationTitle = conversation?.title || message?.sender?.username || '私聊';
+        const contentPreview = String(message?.content || '').trim();
+        pushChatToast({
+          id: `message:${conversationId}`,
+          kind: 'conversation',
+          tone: 'info',
+          title: conversationTitle,
+          message: contentPreview ? `${conversationTitle}: ${contentPreview}` : `${conversationTitle} 发来了一条新消息`,
+          conversationId
+        });
+      }
+
       if (
         conversationId
         && selectedConversationId === conversationId
         && message?._id
-        && String(message?.senderId || '') !== String(currentUserId || '')
+        && !isOwnMessage
       ) {
         await markConversationRead(conversationId, Number(message?.seq) || 0);
       }
@@ -713,23 +790,87 @@ const useChatCenter = ({
       }));
     };
 
+    const handleFriendRequestCreated = async (payload = {}) => {
+      await syncSocialSidebarData();
+
+      if (String(payload?.requester?._id || '') === String(currentUserId || '')) {
+        return;
+      }
+
+      const requesterName = payload?.requester?.username || '有玩家';
+      pushChatToast({
+        id: `friend-request:${payload?.friendship?.friendshipId || requesterName}`,
+        kind: 'friend-request',
+        tone: 'success',
+        title: '新的好友申请',
+        message: `${requesterName} 向你发送了好友申请`,
+        friendshipId: payload?.friendship?.friendshipId || ''
+      });
+    };
+
+    const handleFriendRequestResponded = async (payload = {}) => {
+      await syncSocialSidebarData();
+
+      const friendshipStatus = String(payload?.friendship?.status || '').trim();
+      const requesterId = String(payload?.requester?._id || '');
+      const addresseeName = payload?.addressee?.username || '对方';
+      const requesterName = payload?.requester?.username || '对方';
+
+      if (requesterId === String(currentUserId || '')) {
+        pushChatToast({
+          id: `friend-response:${payload?.friendship?.friendshipId || friendshipStatus}`,
+          kind: 'friend-response',
+          tone: friendshipStatus === 'accepted' ? 'success' : 'muted',
+          title: friendshipStatus === 'accepted' ? '好友申请已通过' : '好友申请被拒绝',
+          message: friendshipStatus === 'accepted'
+            ? `${addresseeName} 已同意你的好友申请`
+            : `${addresseeName} 已拒绝你的好友申请`,
+          friendshipId: payload?.friendship?.friendshipId || ''
+        });
+        return;
+      }
+
+      if (friendshipStatus === 'accepted') {
+        pushChatToast({
+          id: `friend-response:${payload?.friendship?.friendshipId || friendshipStatus}`,
+          kind: 'friend-response',
+          tone: 'success',
+          title: '好友已添加',
+          message: `你已和 ${requesterName} 成为好友`,
+          friendshipId: payload?.friendship?.friendshipId || ''
+        });
+      }
+    };
+
     socket.on('chat:message', handleIncomingMessage);
     socket.on('chat:conversation-read', handleConversationRead);
     socket.on('chat:conversation-hidden', handleConversationHidden);
+    socket.on('social:friend-request-created', handleFriendRequestCreated);
+    socket.on('social:friend-request-responded', handleFriendRequestResponded);
 
     return () => {
       socket.off('chat:message', handleIncomingMessage);
       socket.off('chat:conversation-read', handleConversationRead);
       socket.off('chat:conversation-hidden', handleConversationHidden);
+      socket.off('social:friend-request-created', handleFriendRequestCreated);
+      socket.off('social:friend-request-responded', handleFriendRequestResponded);
     };
   }, [
     authenticated,
     currentUserId,
+    isChatDockExpanded,
     markConversationRead,
+    pushChatToast,
     selectedConversationId,
+    syncSocialSidebarData,
     socket,
     updateConversationMessagesEntry
   ]);
+
+  useEffect(() => () => {
+    toastTimersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    toastTimersRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!authenticated) return undefined;
@@ -738,7 +879,7 @@ const useChatCenter = ({
       await Promise.all([
         fetchConversations(true),
         fetchFriendRequests(true),
-        isChatDockExpanded ? fetchFriends(true) : Promise.resolve(null)
+        fetchFriends(true)
       ]);
 
       if (isChatDockExpanded && selectedConversationId) {
@@ -787,8 +928,10 @@ const useChatCenter = ({
   return {
     activeSidebarTab,
     chatBadgeCount,
+    chatToasts,
     conversationActionId,
     conversationListLoading,
+    dismissChatToast,
     conversations,
     currentUserId,
     fetchConversations,

@@ -32,6 +32,14 @@ const ROLE_TAG_SET = new Set(['近战', '远程']);
 const RPS_TYPE_SET = new Set(['mobility', 'ranged', 'defense']);
 const RARITY_SET = new Set(['common', 'rare', 'epic', 'legend']);
 const COMPONENT_KIND_SET = new Set(['body', 'weapon', 'vehicle', 'ability', 'behaviorProfile', 'stabilityProfile', 'staggerReaction', 'interactionRule']);
+const VALID_USER_AVATARS = new Set([
+  'default_male_1',
+  'default_male_2',
+  'default_male_3',
+  'default_female_1',
+  'default_female_2',
+  'default_female_3'
+]);
 
 const parseNumberField = ({ body, key, required = false, integer = false, min = null }) => {
   if (!Object.prototype.hasOwnProperty.call(body, key)) {
@@ -575,7 +583,8 @@ router.get('/users', authenticateToken, isAdmin, async (req, res) => {
       const keywordRegex = new RegExp(escapeRegex(keyword), 'i');
       query.$or = [
         { username: keywordRegex },
-        { profession: keywordRegex }
+        { profession: keywordRegex },
+        { publicId: keywordRegex }
       ];
     }
 
@@ -594,6 +603,7 @@ router.get('/users', authenticateToken, isAdmin, async (req, res) => {
       const plainPassword = typeof user.plainPassword === 'string' ? user.plainPassword : '';
       return {
         _id: user._id,
+        publicId: user.publicId || '',
         username: user.username,
         password: plainPassword,  // 明文密码（可能为空）
         passwordSaved: plainPassword.length > 0,
@@ -602,6 +612,7 @@ router.get('/users', authenticateToken, isAdmin, async (req, res) => {
         knowledgeBalance: Number.isFinite(Number(user.knowledgeBalance)) ? Number(user.knowledgeBalance) : 0,
         experience: user.experience,
         profession: user.profession,
+        avatar: user.avatar || 'default_male_1',
         ownedNodes: user.ownedNodes,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
@@ -637,7 +648,7 @@ router.get('/users', authenticateToken, isAdmin, async (req, res) => {
 router.put('/users/:userId', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { userId } = req.params;
-    const { username, password, level, experience, knowledgeBalance } = req.body;
+    const { username, password, level, experience, knowledgeBalance, publicId, avatar } = req.body;
 
     const user = await User.findById(userId);
     if (!user) {
@@ -646,15 +657,49 @@ router.put('/users/:userId', authenticateToken, isAdmin, async (req, res) => {
 
     // 更新字段
     if (username !== undefined) {
+      const normalizedUsername = typeof username === 'string' ? username.trim() : '';
+      if (!normalizedUsername) {
+        return res.status(400).json({ error: '用户名不能为空' });
+      }
       // 检查用户名是否已被其他用户使用
       const existingUser = await User.findOne({ 
-        username, 
+        username: normalizedUsername, 
         _id: { $ne: userId } 
       });
       if (existingUser) {
         return res.status(400).json({ error: '用户名已被使用' });
       }
-      user.username = username;
+      user.username = normalizedUsername;
+    }
+
+    if (publicId !== undefined) {
+      const normalizedPublicId = typeof publicId === 'string' ? publicId.trim() : '';
+      if (normalizedPublicId.length > 32) {
+        return res.status(400).json({ error: '公开ID长度不能超过32个字符' });
+      }
+      if (normalizedPublicId && !/^[a-zA-Z0-9_-]+$/.test(normalizedPublicId)) {
+        return res.status(400).json({ error: '公开ID仅支持字母、数字、下划线和中划线' });
+      }
+      if (normalizedPublicId) {
+        const existingPublicIdUser = await User.findOne({
+          publicId: normalizedPublicId,
+          _id: { $ne: userId }
+        }).select('_id');
+        if (existingPublicIdUser) {
+          return res.status(400).json({ error: '公开ID已被使用' });
+        }
+        user.publicId = normalizedPublicId;
+      } else {
+        user.publicId = undefined;
+      }
+    }
+
+    if (avatar !== undefined) {
+      const normalizedAvatar = typeof avatar === 'string' ? avatar.trim() : '';
+      if (!VALID_USER_AVATARS.has(normalizedAvatar)) {
+        return res.status(400).json({ error: '无效的头像选择' });
+      }
+      user.avatar = normalizedAvatar;
     }
 
     if (password !== undefined && password !== null) {
@@ -710,11 +755,13 @@ router.put('/users/:userId', authenticateToken, isAdmin, async (req, res) => {
       message: '用户信息已更新',
       user: {
         _id: user._id,
+        publicId: user.publicId || '',
         username: user.username,
         password: user.plainPassword,
         level: user.level,
         experience: user.experience,
         knowledgeBalance: Number.isFinite(Number(user.knowledgeBalance)) ? Number(user.knowledgeBalance) : 0,
+        avatar: user.avatar || 'default_male_1',
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
       }

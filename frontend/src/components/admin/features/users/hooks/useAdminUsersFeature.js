@@ -4,7 +4,9 @@ import { API_BASE } from '../../../../../runtimeConfig';
 const ADMIN_USER_PAGE_SIZE = 50;
 
 const createEmptyUserEditForm = () => ({
+    publicId: '',
     username: '',
+    avatar: 'default_male_1',
     password: '',
     level: 0,
     experience: 0,
@@ -122,7 +124,9 @@ const useAdminUsersFeature = () => {
     const startEditUser = useCallback((user) => {
         setEditingUser(user._id);
         setEditForm({
+            publicId: user.publicId || '',
             username: user.username,
+            avatar: user.avatar || 'default_male_1',
             password: '',
             level: user.level,
             experience: user.experience,
@@ -153,7 +157,9 @@ const useAdminUsersFeature = () => {
         }
 
         const payload = {
+            publicId: editForm.publicId,
             username: editForm.username,
+            avatar: editForm.avatar,
             level: parsedLevel,
             experience: parsedExperience,
             knowledgeBalance: Number(parsedKnowledgeBalance.toFixed(2))

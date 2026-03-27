@@ -3,6 +3,7 @@ const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const SocialChatError = require('../services/socialChatError');
 const { socialService } = require('../services/socialService');
+const { emitToUser } = require('../services/socketGateway');
 
 const router = express.Router();
 
@@ -45,6 +46,21 @@ router.post('/friends/request', authenticateToken, async (req, res) => {
       targetUserId: req.body?.targetUserId,
       message: req.body?.message
     });
+
+    const emittedAt = new Date().toISOString();
+    emitToUser(result?.addressee?._id, 'social:friend-request-created', {
+      friendship: result.friendship,
+      requester: result.requester,
+      addressee: result.addressee,
+      emittedAt
+    });
+    emitToUser(result?.requester?._id, 'social:friend-request-created', {
+      friendship: result.friendship,
+      requester: result.requester,
+      addressee: result.addressee,
+      emittedAt
+    });
+
     return res.json({
       success: true,
       ...result
@@ -75,6 +91,21 @@ router.post('/friends/:friendshipId/respond', authenticateToken, async (req, res
       friendshipId: req.params?.friendshipId,
       action: req.body?.action
     });
+
+    const emittedAt = new Date().toISOString();
+    emitToUser(result?.requester?._id, 'social:friend-request-responded', {
+      friendship: result.friendship,
+      requester: result.requester,
+      addressee: result.addressee,
+      emittedAt
+    });
+    emitToUser(result?.addressee?._id, 'social:friend-request-responded', {
+      friendship: result.friendship,
+      requester: result.requester,
+      addressee: result.addressee,
+      emittedAt
+    });
+
     return res.json({
       success: true,
       ...result

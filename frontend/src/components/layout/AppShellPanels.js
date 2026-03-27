@@ -19,6 +19,7 @@ import AnnouncementPanel from '../game/AnnouncementPanel';
 import ChatDockPanel from '../chat/ChatDockPanel';
 import CurrentDomainPanel from '../game/CurrentDomainPanel';
 import RightUtilityDock from '../game/RightUtilityDock';
+import { useUserCard } from '../social/UserCardContext';
 
 export const GameHeader = ({
     headerRef,
@@ -440,12 +441,12 @@ export const UnifiedRightDock = ({
         locationDisplayMaster ? {
             role: '域主',
             name: locationDisplayMaster.username || '未设置域主',
-            avatar: resolveAvatarSrc(locationDisplayMaster.avatar)
+            user: locationDisplayMaster
         } : null,
         ...locationDomainAdmins.map((admin) => ({
             role: '域相',
             name: admin?.username || '未命名',
-            avatar: resolveAvatarSrc(admin?.avatar)
+            user: admin
         }))
     ].filter(Boolean);
 
@@ -1260,6 +1261,8 @@ export const SenseSelectorPanel = ({
     handleSwitchSenseView,
     openSenseArticleFromNode
 }) => {
+    const { openUserCard } = useUserCard();
+
     if (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail') return null;
 
     const selectorNode = (() => {
@@ -1429,9 +1432,11 @@ export const SenseSelectorPanel = ({
                         <span className="sense-selector-overview-label">域主</span>
                         <div className="sense-selector-overview-people-list">
                             {domainMaster ? (
-                                <div
+                                <button
+                                    type="button"
                                     className="sense-selector-manager-chip master"
                                     title={`域主：${domainMaster.username || '未命名用户'}`}
+                                    onClick={(event) => openUserCard(domainMaster, event)}
                                 >
                                     <img
                                         src={resolveAvatarSrc(domainMaster.avatar)}
@@ -1439,7 +1444,7 @@ export const SenseSelectorPanel = ({
                                         className="sense-selector-manager-avatar"
                                     />
                                     <span className="sense-selector-manager-name">{domainMaster.username || '未设置域主'}</span>
-                                </div>
+                                </button>
                             ) : null}
                         </div>
                     </div>
@@ -1448,10 +1453,12 @@ export const SenseSelectorPanel = ({
                         <div className="sense-selector-overview-people-list">
                             {domainAdmins.length > 0 ? (
                                 domainAdmins.map((admin, index) => (
-                                    <div
+                                    <button
+                                        type="button"
                                         key={managerIdOf(admin) || `sense-selector-admin-${index}`}
                                         className="sense-selector-manager-chip"
                                         title={`域相：${admin?.username || '未命名用户'}`}
+                                        onClick={(event) => openUserCard(admin, event)}
                                     >
                                         <img
                                             src={resolveAvatarSrc(admin?.avatar)}
@@ -1459,7 +1466,7 @@ export const SenseSelectorPanel = ({
                                             className="sense-selector-manager-avatar"
                                         />
                                         <span className="sense-selector-manager-name">{admin?.username || '未命名'}</span>
-                                    </div>
+                                    </button>
                                 ))
                             ) : null}
                         </div>

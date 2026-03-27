@@ -232,6 +232,10 @@
     background: rgba(239, 68, 68, 0.1);
 }
 
+.users-table tbody tr.is-clickable {
+    cursor: pointer;
+}
+
 .users-table td {
     padding: 1rem;
     color: #d1d5db;
@@ -248,6 +252,55 @@
 .username-cell {
     color: white;
     font-weight: 600;
+}
+
+.admin-user-id-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 220px;
+}
+
+.admin-user-id-cell__avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    object-fit: cover;
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    background: rgba(15, 23, 42, 0.8);
+    flex-shrink: 0;
+}
+
+.admin-user-id-cell__meta {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.admin-user-id-cell__value {
+    color: #f8fafc;
+    font-weight: 700;
+    word-break: break-all;
+}
+
+.admin-user-id-cell__hint {
+    color: #94a3b8;
+    font-size: 0.74rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all;
+}
+
+.admin-user-id-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    min-width: 240px;
+}
+
+.admin-user-id-editor__avatar-row {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
 }
 
 .password-cell {

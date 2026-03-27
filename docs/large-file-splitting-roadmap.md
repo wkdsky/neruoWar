@@ -42,7 +42,7 @@
 ### P0：第一批必须拆
 
 1. `backend/routes/nodes.js` `10888` 行
-2. `frontend/src/components/admin/AdminPanel.js` `8160` 行
+2. `frontend/src/components/admin/AdminPanel.js` `8160` 行 800√
 3. `frontend/src/App.js` `4751` 行
 4. `frontend/src/components/game/BattlefieldPreviewModal.js` `5939` 行
 5. `frontend/src/components/game/KnowledgeDomainScene.js` `5312` 行

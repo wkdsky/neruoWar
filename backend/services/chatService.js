@@ -4,6 +4,7 @@ const { MAX_DIRECT_MESSAGE_LENGTH } = require('../constants/socialChat');
 const SocialChatError = require('./socialChatError');
 const {
   buildUserPairKey,
+  deriveFriendStatus,
   getIdString,
   isValidObjectId,
   serializeConversationItem,
@@ -27,17 +28,34 @@ const createChatService = ({
     return safeUserId;
   };
 
-  const assertFriendshipForDirectConversation = async (userIdA, userIdB) => {
-    const friendship = await socialRepo.findAcceptedFriendshipByParticipantsKey(
-      buildUserPairKey(userIdA, userIdB)
-    );
-    if (!friendship) {
-      throw new SocialChatError('当前仅支持好友之间发起私聊', {
-        status: 403,
-        code: 'DIRECT_CHAT_REQUIRES_FRIENDSHIP'
+  const buildDirectUserSummary = async ({
+    currentUserId,
+    peerUserId
+  }) => {
+    const safeCurrentUserId = assertValidUserId(currentUserId);
+    const safePeerUserId = getIdString(peerUserId);
+    if (!isValidObjectId(safePeerUserId)) {
+      throw new SocialChatError('无效的目标用户', {
+        status: 400,
+        code: 'INVALID_TARGET_USER_ID'
       });
     }
-    return friendship;
+
+    const [peerUser, friendship] = await Promise.all([
+      socialRepo.findUserById(safePeerUserId, '_id username avatar profession allianceId'),
+      socialRepo.findFriendshipByParticipantsKey(buildUserPairKey(safeCurrentUserId, safePeerUserId))
+    ]);
+
+    if (!peerUser) {
+      throw new SocialChatError('目标用户不存在', {
+        status: 404,
+        code: 'TARGET_USER_NOT_FOUND'
+      });
+    }
+
+    return serializeUserSummary(peerUser, {
+      friendStatus: deriveFriendStatus(friendship, safeCurrentUserId)
+    });
   };
 
   const createDirectConversation = async ({ userIdA, userIdB, openerUserId }) => {
@@ -91,7 +109,7 @@ const createChatService = ({
     return conversation;
   };
 
-  const ensureDirectConversationForFriends = async ({
+  const ensureDirectConversationByUsers = async ({
     requestUserId,
     targetUserId
   }) => {
@@ -110,7 +128,6 @@ const createChatService = ({
       });
     }
 
-    await assertFriendshipForDirectConversation(safeRequestUserId, safeTargetUserId);
     const directKey = buildUserPairKey(safeRequestUserId, safeTargetUserId);
     let conversation = await chatRepo.findDirectConversationByKey(directKey);
     if (!conversation) {
@@ -149,7 +166,10 @@ const createChatService = ({
           isVisible: false
         }
       }),
-      socialRepo.findUserById(safeTargetUserId, '_id username avatar profession allianceId')
+      buildDirectUserSummary({
+        currentUserId: safeRequestUserId,
+        peerUserId: safeTargetUserId
+      })
     ]);
 
     const latestVisibleMessage = await chatRepo.findLatestVisibleMessage({
@@ -161,7 +181,7 @@ const createChatService = ({
       conversation: serializeConversationItem({
         conversation,
         member: requestMember,
-        directUser: targetUser ? serializeUserSummary(targetUser) : null,
+        directUser: targetUser || null,
         latestVisibleMessage
       }),
       restoredVisibility: existingRequestMember ? !existingRequestMember.isVisible : false,
@@ -189,8 +209,21 @@ const createChatService = ({
     });
     const directUsers = await socialRepo.findUsersByIds(directOtherMembers.map((item) => item?.userId));
     const directUserMap = new Map(directUsers.map((item) => [getIdString(item?._id), item]));
+    const friendshipRows = await socialRepo.listFriendshipsByParticipantsKeys(
+      directOtherMembers.map((item) => buildUserPairKey(safeUserId, item?.userId))
+    );
+    const friendshipMap = new Map(friendshipRows.map((item) => [item.participantsKey, item]));
     const directConversationUserMap = new Map(
-      directOtherMembers.map((item) => [getIdString(item?.conversationId), directUserMap.get(getIdString(item?.userId)) || null])
+      directOtherMembers.map((item) => {
+        const otherUser = directUserMap.get(getIdString(item?.userId));
+        const friendship = friendshipMap.get(buildUserPairKey(safeUserId, item?.userId)) || null;
+        return [
+          getIdString(item?.conversationId),
+          otherUser ? serializeUserSummary(otherUser, {
+            friendStatus: deriveFriendStatus(friendship, safeUserId)
+          }) : null
+        ];
+      })
     );
 
     const rows = [];
@@ -233,8 +266,10 @@ const createChatService = ({
         isActive: true
       });
       if (otherMember?.userId) {
-        const otherUser = await socialRepo.findUserById(otherMember.userId, '_id username avatar profession allianceId');
-        directUser = otherUser ? serializeUserSummary(otherUser) : null;
+        directUser = await buildDirectUserSummary({
+          currentUserId: safeUserId,
+          peerUserId: otherMember.userId
+        });
       }
     }
 
@@ -402,8 +437,6 @@ const createChatService = ({
           code: 'INVALID_DIRECT_CONVERSATION_MEMBERS'
         });
       }
-      const peerUserId = directUserIds.find((item) => item !== safeUserId);
-      await assertFriendshipForDirectConversation(safeUserId, peerUserId);
     }
 
     if (normalizedClientMessageId) {
@@ -555,7 +588,8 @@ const createChatService = ({
 
   return {
     createDirectConversation,
-    ensureDirectConversationForFriends,
+    ensureDirectConversationByUsers,
+    ensureDirectConversationForFriends: ensureDirectConversationByUsers,
     getConversationAccessContext,
     hideConversationForUser,
     listConversationParticipantUserIds,

@@ -64,6 +64,7 @@ import {
 import useNotificationCenter from './hooks/useNotificationCenter';
 import useAppShellState from './hooks/useAppShellState';
 import useChatCenter from './hooks/useChatCenter';
+import { UserCardProvider } from './components/social/UserCardContext';
 import {
     DEFAULT_STAR_MAP_LIMIT,
     KNOWLEDGE_MAIN_VIEW_MODE,
@@ -1372,10 +1373,12 @@ const App = () => {
   const {
     activeSidebarTab,
     chatBadgeCount,
+    chatToasts,
     conversationActionId,
     conversationListLoading,
     conversations,
     currentUserId: chatCurrentUserId,
+    dismissChatToast,
     friendActionId,
     friendListLoading,
     friendRequests,
@@ -1409,6 +1412,47 @@ const App = () => {
     parseApiResponse,
     getApiErrorMessage
   });
+
+  const handleChatToastAction = useCallback(async (toast) => {
+    if (!toast) return;
+
+    setIsAnnouncementDockExpanded(false);
+    setIsLocationDockExpanded(false);
+    setIsChatDockExpanded(true);
+
+    if (toast.kind === 'conversation' && toast.conversationId) {
+      setActiveSidebarTab('conversations');
+      await openConversation(toast.conversationId);
+    } else {
+      setActiveSidebarTab('requests');
+    }
+
+    dismissChatToast(toast.id);
+  }, [
+    dismissChatToast,
+    openConversation,
+    setActiveSidebarTab,
+    setIsAnnouncementDockExpanded,
+    setIsChatDockExpanded,
+    setIsLocationDockExpanded
+  ]);
+
+  const handleOpenDirectConversationFromUserCard = useCallback(async (targetUserId) => {
+    if (!targetUserId) return null;
+    setIsChatDockExpanded(true);
+    return openDirectConversation(targetUserId);
+  }, [openDirectConversation, setIsChatDockExpanded]);
+
+  const handleSendFriendRequestFromUserCard = useCallback(async (targetUserId) => {
+    if (!targetUserId) return null;
+    setIsChatDockExpanded(true);
+    return requestFriendship({ targetUserId });
+  }, [requestFriendship, setIsChatDockExpanded]);
+
+  const handleOpenFriendRequestsFromUserCard = useCallback(() => {
+    setIsChatDockExpanded(true);
+    setActiveSidebarTab('requests');
+  }, [setActiveSidebarTab, setIsChatDockExpanded]);
 
   function resetAppNavigationStateToHome(options = {}) {
     const clearHomeCollections = options?.clearHomeCollections === true;
@@ -4479,6 +4523,16 @@ const App = () => {
       : 0;
 
     return (
+        <UserCardProvider
+            currentUserId={chatCurrentUserId}
+            friends={friends}
+            friendRequests={friendRequests}
+            conversationActionId={conversationActionId}
+            friendActionId={friendActionId}
+            onOpenDirectConversation={handleOpenDirectConversationFromUserCard}
+            onSendFriendRequest={handleSendFriendRequestFromUserCard}
+            onOpenRequestsTab={handleOpenFriendRequestsFromUserCard}
+        >
         <div
             className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''} ${view === 'home' ? 'home-view-active' : ''} ${(view === 'titleDetail' || view === 'nodeDetail') ? 'knowledge-mainview-active' : ''} ${isSenseArticleSubView(view) ? 'sense-article-shell-active' : ''} ${isSenseArticleHeaderPinned ? 'sense-article-shell-pinned' : ''}`}
             style={{
@@ -4631,6 +4685,34 @@ const App = () => {
                     joinDistributionFromPanel={joinDistributionFromPanel}
                     exitDistributionFromPanel={exitDistributionFromPanel}
                 />
+
+                {chatToasts.length > 0 ? (
+                    <div className="chat-toast-stack" role="status" aria-live="polite">
+                        {chatToasts.map((toast) => (
+                            <div
+                                key={toast.id}
+                                className={`chat-toast chat-toast--${toast.tone || 'info'}`}
+                            >
+                                <button
+                                    type="button"
+                                    className="chat-toast__body"
+                                    onClick={() => handleChatToastAction(toast)}
+                                >
+                                    <span className="chat-toast__title">{toast.title || '提示'}</span>
+                                    <span className="chat-toast__message">{toast.message || ''}</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    className="chat-toast__close"
+                                    aria-label="关闭提示"
+                                    onClick={() => dismissChatToast(toast.id)}
+                                >
+                                    ×
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                ) : null}
 
                 <KnowledgeViewRouter
                     view={view}
@@ -4850,6 +4932,7 @@ const App = () => {
                 />
             </div>
         </div>
+        </UserCardProvider>
     );
 };
 

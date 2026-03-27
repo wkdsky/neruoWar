@@ -122,7 +122,9 @@
     border-radius: 9999px;
     border: 2px solid rgba(56, 189, 248, 0.42);
     overflow: visible;
-    cursor: default;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
 }
 
 .user-avatar-item.is-master {

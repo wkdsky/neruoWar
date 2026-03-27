@@ -306,6 +306,11 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: '求知'  // 默认职业为"求知"
   },
+  publicId: {
+    type: String,
+    default: undefined,
+    trim: true
+  },
   avatar: {
     type: String,
     default: 'default_male_1'  // 默认头像
@@ -419,5 +424,6 @@ userSchema.index({ allianceId: 1, createdAt: -1 });
 userSchema.index({ role: 1, location: 1, _id: 1 });
 userSchema.index({ role: 1, 'travelState.targetNodeId': 1, 'travelState.status': 1 });
 userSchema.index({ role: 1, 'travelState.stoppingNearestNodeId': 1, 'travelState.status': 1 });
+userSchema.index({ publicId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('User', userSchema);

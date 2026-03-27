@@ -6,24 +6,11 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Info, ChevronLeft, ChevronRight, ArrowLeft } from 'lucide-react';
-import defaultMale1 from '../../assets/avatars/default_male_1.svg';
-import defaultMale2 from '../../assets/avatars/default_male_2.svg';
-import defaultMale3 from '../../assets/avatars/default_male_3.svg';
-import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
-import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
-import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
 import BattlefieldPreviewModal from './BattlefieldPreviewModal';
 import './KnowledgeDomainScene.css';
 import { API_BASE } from '../../runtimeConfig';
-
-const avatarMap = {
-  male1: defaultMale1,
-  male2: defaultMale2,
-  male3: defaultMale3,
-  female1: defaultFemale1,
-  female2: defaultFemale2,
-  female3: defaultFemale3
-};
+import { resolveAvatarSrc } from '../../app/appShared';
+import { useUserCard } from '../social/UserCardContext';
 
 const getNodePrimarySense = (node) => {
   const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
@@ -912,6 +899,8 @@ const KnowledgeDomainScene = ({
   mode = 'normal',
   onIntelSnapshotCaptured
 }) => {
+  const { openUserCard } = useUserCard();
+
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
   const containerRef = useRef(null);
@@ -4120,14 +4109,19 @@ const KnowledgeDomainScene = ({
                 <div className="domain-admins-subtitle">域主</div>
                 <div className="domain-manager-avatar-row">
                   {displayMaster ? (
-                    <div className="domain-manager-avatar-item master" title={`域主：${displayMaster.username || '未命名用户'}`}>
+                    <button
+                      type="button"
+                      className="domain-manager-avatar-item master"
+                      title={`域主：${displayMaster.username || '未命名用户'}`}
+                      onClick={(event) => openUserCard(displayMaster, event)}
+                    >
                       <img
-                        src={avatarMap[displayMaster.avatar] || defaultMale1}
+                        src={resolveAvatarSrc(displayMaster.avatar)}
                         alt={displayMaster.username || '域主'}
                         className="domain-manager-avatar-img"
                       />
                       <span className="domain-manager-name">{displayMaster.username || '未设置域主'}</span>
-                    </div>
+                    </button>
                   ) : (
                     <div className="domain-manage-tip">暂无域主信息</div>
                   )}
@@ -4137,14 +4131,20 @@ const KnowledgeDomainScene = ({
                 <div className="domain-admins-subtitle">域相</div>
                 <div className="domain-manager-avatar-row admins">
                   {displayAdmins.length > 0 ? displayAdmins.map((adminUser) => (
-                    <div key={adminUser._id} className="domain-manager-avatar-item" title={`域相：${adminUser.username || '未命名用户'}`}>
+                    <button
+                      type="button"
+                      key={adminUser._id}
+                      className="domain-manager-avatar-item"
+                      title={`域相：${adminUser.username || '未命名用户'}`}
+                      onClick={(event) => openUserCard(adminUser, event)}
+                    >
                       <img
-                        src={avatarMap[adminUser.avatar] || defaultMale1}
+                        src={resolveAvatarSrc(adminUser.avatar)}
                         alt={adminUser.username || '域相'}
                         className="domain-manager-avatar-img"
                       />
                       <span className="domain-manager-name">{adminUser.username || '未命名'}</span>
-                    </div>
+                    </button>
                   )) : (
                     <div className="domain-manage-tip">暂无域相</div>
                   )}

@@ -172,7 +172,22 @@
   gap: 0.62rem;
   padding: 0.62rem 0.68rem;
   border-radius: 14px;
+  border: none;
   background: rgba(255, 255, 255, 0.04);
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.current-domain-panel__leader-card.is-clickable {
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.current-domain-panel__leader-card.is-clickable:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .current-domain-panel__leader-avatar {
