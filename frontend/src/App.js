@@ -63,6 +63,7 @@ import {
 } from './app/appShared';
 import useNotificationCenter from './hooks/useNotificationCenter';
 import useAppShellState from './hooks/useAppShellState';
+import useChatCenter from './hooks/useChatCenter';
 import {
     DEFAULT_STAR_MAP_LIMIT,
     KNOWLEDGE_MAIN_VIEW_MODE,
@@ -1265,6 +1266,29 @@ const App = () => {
     return `${fallbackText}（HTTP ${response.status}）`;
   }, []);
 
+  const closeSystemConfirm = useCallback(() => {
+    setSystemConfirmState({
+      open: false,
+      title: '',
+      message: '',
+      confirmText: '确认',
+      confirmTone: 'danger',
+      onConfirm: null
+    });
+  }, []);
+
+  const openSystemConfirm = useCallback((payload = {}) => {
+    setSystemConfirmState({
+      open: true,
+      title: '',
+      message: '',
+      confirmText: '确认',
+      confirmTone: 'danger',
+      onConfirm: null,
+      ...payload
+    });
+  }, []);
+
   const {
     notifications,
     notificationUnreadCount,
@@ -1343,6 +1367,47 @@ const App = () => {
     userLocation,
     travelStatus,
     fetchLocationNodeDetail
+  });
+
+  const {
+    activeSidebarTab,
+    chatBadgeCount,
+    conversationActionId,
+    conversationListLoading,
+    conversations,
+    currentUserId: chatCurrentUserId,
+    friendActionId,
+    friendListLoading,
+    friendRequests,
+    friendSearchLoading,
+    friendSearchQuery,
+    friendSearchResults,
+    friends,
+    hideConversation,
+    isChatDockExpanded,
+    loadOlderMessages,
+    openConversation,
+    openDirectConversation,
+    panelNotice,
+    requestActionId,
+    requestFriendship,
+    requestListLoading,
+    resetChatCenter,
+    respondToFriendRequest,
+    searchUsers,
+    selectedConversation,
+    selectedMessagesEntry,
+    sendMessage,
+    setActiveSidebarTab,
+    setFriendSearchQuery,
+    setIsChatDockExpanded,
+    setPanelNotice
+  } = useChatCenter({
+    authenticated,
+    currentUserId: userId,
+    socket,
+    parseApiResponse,
+    getApiErrorMessage
   });
 
   function resetAppNavigationStateToHome(options = {}) {
@@ -2142,6 +2207,7 @@ const App = () => {
         applyTravelStatus({ isTraveling: false });
         setIsStoppingTravel(false);
         resetNotificationCenter();
+        resetChatCenter();
         resetAppShellState();
         setIsApplyingDomainMaster(false);
         setCurrentLocationNodeDetail(null);
@@ -2476,14 +2542,13 @@ const App = () => {
 
     const handleHeaderHomeNavigation = async () => {
         if (view === 'senseArticleEditor') {
-            setSystemConfirmState({
-                open: true,
+            openSystemConfirm({
                 title: '确认返回首页',
                 message: '当前位于百科编辑页，返回首页将直接丢失本次未保存内容，是否继续返回首页？',
                 confirmText: '直接返回首页',
                 confirmTone: 'danger',
                 onConfirm: async () => {
-                    setSystemConfirmState((prev) => ({ ...prev, open: false }));
+                    closeSystemConfirm();
                     await navigateToHomeWithDockCollapse();
                 }
             });
@@ -4494,6 +4559,53 @@ const App = () => {
                     setIsAnnouncementDockExpanded={setIsAnnouncementDockExpanded}
                     announcementDockTab={announcementDockTab}
                     setAnnouncementDockTab={setAnnouncementDockTab}
+                    isChatDockExpanded={isChatDockExpanded}
+                    setIsChatDockExpanded={setIsChatDockExpanded}
+                    chatBadgeCount={chatBadgeCount}
+                    chatPanelProps={{
+                      activeSidebarTab,
+                      conversationActionId,
+                      conversationListLoading,
+                      conversations,
+                      currentUserId: chatCurrentUserId,
+                      friendActionId,
+                      friendListLoading,
+                      friendRequests,
+                      friendSearchLoading,
+                      friendSearchQuery,
+                      friendSearchResults,
+                      friends,
+                      loadOlderMessages,
+                      onDeleteConversation: (conversation) => {
+                        if (!conversation?.conversationId) return;
+                        openSystemConfirm({
+                          title: '确认删除聊天',
+                          message: `这会只清空你与「${conversation?.title || '该好友'}」当前私聊窗口的本地视图，不会删除好友关系，也不会影响对方记录。对方之后再发新消息时，会话会重新出现。`,
+                          confirmText: '删除并清空我的记录',
+                          confirmTone: 'danger',
+                          onConfirm: async () => {
+                            closeSystemConfirm();
+                            await hideConversation(conversation.conversationId);
+                          }
+                        });
+                      },
+                      onFriendSearchQueryChange: (value) => {
+                        setFriendSearchQuery(value);
+                        setPanelNotice('');
+                      },
+                      onOpenConversation: openConversation,
+                      onOpenDirectConversation: openDirectConversation,
+                      onRespondFriendRequest: respondToFriendRequest,
+                      onSearchUsers: searchUsers,
+                      onSendFriendRequest: (targetUserId) => requestFriendship({ targetUserId }),
+                      onSendMessage: sendMessage,
+                      panelNotice,
+                      requestActionId,
+                      requestListLoading,
+                      selectedConversation,
+                      selectedMessagesEntry,
+                      setActiveSidebarTab
+                    }}
                     isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
                     announcementUnreadCount={announcementUnreadCount}
                     markAnnouncementNotificationsRead={markAnnouncementNotificationsRead}
@@ -4733,14 +4845,7 @@ const App = () => {
                     message={systemConfirmState.message}
                     confirmText={systemConfirmState.confirmText}
                     confirmTone={systemConfirmState.confirmTone}
-                    onClose={() => setSystemConfirmState({
-                        open: false,
-                        title: '',
-                        message: '',
-                        confirmText: '确认',
-                        confirmTone: 'danger',
-                        onConfirm: null
-                    })}
+                    onClose={closeSystemConfirm}
                     onConfirm={() => systemConfirmState.onConfirm && systemConfirmState.onConfirm()}
                 />
             </div>

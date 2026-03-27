@@ -6,6 +6,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 
 const connectDB = require('./config/database');
+const { connectChatDB } = require('./config/chatDatabase');
 const authRoutes = require('./routes/auth');
 const User = require('./models/User');
 const Node = require('./models/Node');
@@ -22,6 +23,9 @@ const armyRoutes = require('./routes/army');
 const senseRoutes = require('./routes/senses');
 const senseArticleRoutes = require('./routes/senseArticles');
 const usersRoutes = require('./routes/users');
+const socialRoutes = require('./routes/social');
+const chatRoutes = require('./routes/chat');
+const { getUserSocketRoom, setSocketServer } = require('./services/socketGateway');
 // 初始化Express
 const app = express();
 const server = http.createServer(app);
@@ -158,6 +162,7 @@ const io = socketIo(server, {
   pingTimeout: 60000, // 添加这行
   pingInterval: 25000 // 添加这行
 });
+setSocketServer(io);
 
 // 中间件
 app.use(cors({
@@ -176,6 +181,8 @@ app.use('/api/army', armyRoutes);
 app.use('/api/senses', senseRoutes);
 app.use('/api/sense-articles', senseArticleRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/social', socialRoutes);
+app.use('/api/chat', chatRoutes);
 
 // 错误处理中间件 - 必须放在所有路由之后
 app.use((err, req, res, next) => {
@@ -197,9 +204,6 @@ app.use((err, req, res, next) => {
   // 其他错误继续传递
   next(err);
 });
-
-// 连接数据库
-connectDB();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 const ENABLE_LEGACY_SOCKET_HANDLERS = process.env.ENABLE_LEGACY_SOCKET_HANDLERS === 'true';
@@ -277,13 +281,6 @@ app.get('/health', (req, res) => {
 // WebSocket连接处理
 io.on('connection', (socket) => {
   console.log('新用户连接:', socket.id);
-
-  if (!ENABLE_LEGACY_SOCKET_HANDLERS) {
-    socket.emit('server-mode', {
-      legacySocketHandlers: false
-    });
-    return;
-  }
   
   socket.on('disconnect', (reason) => {
     console.log('用户断开连接:', socket.id, '原因:', reason);
@@ -300,6 +297,7 @@ io.on('connection', (socket) => {
       socket.userId = decoded.userId;
       const user = await User.findById(decoded.userId).select('role');
       socket.userRole = user?.role || 'common';
+      socket.join(getUserSocketRoom(decoded.userId));
 
       if (socket.userRole === 'admin') {
         socket.join('admin-room');
@@ -319,6 +317,13 @@ io.on('connection', (socket) => {
       console.error('认证错误:', error.message);
     }
   });
+
+  if (!ENABLE_LEGACY_SOCKET_HANDLERS) {
+    socket.emit('server-mode', {
+      legacySocketHandlers: false
+    });
+    return;
+  }
 
   // 创建节点
   socket.on('createNode', async (data) => {
@@ -583,11 +588,22 @@ const handleServerStart = () => {
   console.log(`========================================`);
 };
 
-if (SERVER_BIND_HOST) {
-  server.listen(PORT, SERVER_BIND_HOST, handleServerStart);
-} else {
-  server.listen(PORT, handleServerStart);
-}
+const startServer = async () => {
+  try {
+    await connectDB();
+    await connectChatDB();
+    if (SERVER_BIND_HOST) {
+      server.listen(PORT, SERVER_BIND_HOST, handleServerStart);
+    } else {
+      server.listen(PORT, handleServerStart);
+    }
+  } catch (error) {
+    console.error('服务启动失败:', error?.stack || error?.message || error);
+    process.exit(1);
+  }
+};
+
+startServer();
 
 // 优雅关闭
 process.on('SIGTERM', () => {

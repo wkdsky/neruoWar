@@ -1,11 +1,42 @@
-import React from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import './RightUtilityDock.css';
 
 const RightUtilityDock = ({
   sections = []
 }) => {
-  const visibleSections = sections.filter((section) => section && !section.hidden);
+  const visibleSections = useMemo(
+    () => sections.filter((section) => section && !section.hidden),
+    [sections]
+  );
+  const rowRefs = useRef({});
+  const [panelTopOffsets, setPanelTopOffsets] = useState({});
+
+  useLayoutEffect(() => {
+    const measureOffsets = () => {
+      const nextOffsets = {};
+      visibleSections.forEach((section) => {
+        const rowNode = rowRefs.current[section.id];
+        if (!rowNode) return;
+        nextOffsets[section.id] = rowNode.offsetTop || 0;
+      });
+      setPanelTopOffsets((prev) => {
+        const prevKeys = Object.keys(prev);
+        const nextKeys = Object.keys(nextOffsets);
+        if (
+          prevKeys.length === nextKeys.length
+          && nextKeys.every((key) => prev[key] === nextOffsets[key])
+        ) {
+          return prev;
+        }
+        return nextOffsets;
+      });
+    };
+
+    measureOffsets();
+    window.addEventListener('resize', measureOffsets);
+    return () => window.removeEventListener('resize', measureOffsets);
+  }, [visibleSections]);
 
   if (visibleSections.length < 1) return null;
 
@@ -16,13 +47,22 @@ const RightUtilityDock = ({
         return (
           <div
             key={section.id}
+            ref={(node) => {
+              if (node) {
+                rowRefs.current[section.id] = node;
+                return;
+              }
+              delete rowRefs.current[section.id];
+            }}
             className={`utility-dock-row${section.active ? ' is-active' : ''}${index === 0 ? ' is-first' : ''}${index === visibleSections.length - 1 ? ' is-last' : ''}`}
             style={section.panelWidth ? { '--utility-panel-width': `${section.panelWidth}px` } : undefined}
           >
-            {/* panel 改成绝对定位到按钮列左侧，避免展开时把按钮之间“撑开”。 */}
             <div
               className={`utility-dock-panel-slot${section.active ? ' is-open' : ''}`}
               aria-hidden={!section.active}
+              style={{
+                top: `${0 - (panelTopOffsets[section.id] || 0)}px`
+              }}
             >
               <div className={`utility-dock-panel-shell${section.active ? ' is-open' : ''}`}>
                 {section.panel}

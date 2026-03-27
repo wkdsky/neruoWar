@@ -31,8 +31,10 @@
         "audit:case-paths": "node scripts/checkCaseSafety.js",
         "sync-user-intel-snapshots": "node scripts/syncUserIntelSnapshots.js",
         "init-user-levels": "node scripts/initUserLevels.js",
+        "migrate-social-chat": "node scripts/migrateSocialChatSemantics.js",
         "test": "echo \"Error: no test specified\" && exit 1",
-        "test:sense-articles": "node --test tests/senseArticle*.test.js"
+        "test:sense-articles": "node --test tests/senseArticle*.test.js",
+        "test:social-chat": "node --test tests/socialChat*.test.js"
     },
     "keywords": [
         "game",

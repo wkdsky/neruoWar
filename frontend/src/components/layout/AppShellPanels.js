@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, Home, Layers, MapPin, Shield, Star, Users } from 'lucide-react';
+import { Bell, Home, Layers, MapPin, MessagesSquare, Shield, Star, Users } from 'lucide-react';
 import {
     avatarMap,
     formatCountdownText,
@@ -16,6 +16,7 @@ import {
     getSenseArticleEntryActionLabel
 } from '../senseArticle/senseArticleUi';
 import AnnouncementPanel from '../game/AnnouncementPanel';
+import ChatDockPanel from '../chat/ChatDockPanel';
 import CurrentDomainPanel from '../game/CurrentDomainPanel';
 import RightUtilityDock from '../game/RightUtilityDock';
 
@@ -292,6 +293,10 @@ export const UnifiedRightDock = ({
     setIsAnnouncementDockExpanded,
     announcementDockTab,
     setAnnouncementDockTab,
+    isChatDockExpanded,
+    setIsChatDockExpanded,
+    chatBadgeCount,
+    chatPanelProps,
     isMarkingAnnouncementsRead,
     announcementUnreadCount,
     markAnnouncementNotificationsRead,
@@ -317,7 +322,36 @@ export const UnifiedRightDock = ({
     const shouldHideDock = view === 'senseArticleEditor';
     if (shouldHideDock) return null;
 
+    const closeAllDockPanels = () => {
+        setIsAnnouncementDockExpanded(false);
+        setIsChatDockExpanded(false);
+        setIsLocationDockExpanded(false);
+    };
+
     const shouldRenderLocationDock = !isKnowledgeDomainActive;
+
+    const activeDockSectionId = isAnnouncementDockExpanded
+        ? 'announcement'
+        : isChatDockExpanded
+            ? 'chat'
+            : (shouldRenderLocationDock && isLocationDockExpanded ? 'domain' : '');
+
+    const toggleExclusiveDock = (target) => {
+        const isCurrentlyActive = activeDockSectionId === target;
+        const nextAnnouncementOpen = target === 'announcement' && !isCurrentlyActive;
+        const nextChatOpen = target === 'chat' && !isCurrentlyActive;
+        const nextLocationOpen = target === 'domain' && !isCurrentlyActive;
+
+        closeAllDockPanels();
+        setIsAnnouncementDockExpanded(nextAnnouncementOpen);
+        setIsChatDockExpanded(nextChatOpen);
+        setIsLocationDockExpanded(nextLocationOpen);
+
+        if (nextAnnouncementOpen) {
+            markAnnouncementNotificationsRead();
+        }
+    };
+
     const canJumpToLocationView = Boolean(
         !travelStatus.isTraveling &&
         currentLocationNodeDetail &&
@@ -422,17 +456,8 @@ export const UnifiedRightDock = ({
             label: '公告',
             icon: Bell,
             badge: announcementUnreadCount > 0 ? 'dot' : null,
-            active: isAnnouncementDockExpanded,
-            onToggle: () => {
-                setIsAnnouncementDockExpanded((prev) => {
-                    const next = !prev;
-                    if (next) {
-                        setIsLocationDockExpanded(false);
-                        markAnnouncementNotificationsRead();
-                    }
-                    return next;
-                });
-            },
+            active: activeDockSectionId === 'announcement',
+            onToggle: () => toggleExclusiveDock('announcement'),
             panel: (
                 <AnnouncementPanel
                     activeTab={announcementDockTab}
@@ -451,20 +476,27 @@ export const UnifiedRightDock = ({
             )
         },
         {
+            id: 'chat',
+            label: '社交',
+            icon: MessagesSquare,
+            badge: chatBadgeCount > 0 ? (chatBadgeCount > 99 ? '99+' : String(chatBadgeCount)) : null,
+            active: activeDockSectionId === 'chat',
+            panelWidth: 520,
+            onToggle: () => toggleExclusiveDock('chat'),
+            panel: (
+                <ChatDockPanel
+                    {...chatPanelProps}
+                    onClose={() => setIsChatDockExpanded(false)}
+                />
+            )
+        },
+        {
             id: 'domain',
             label: travelStatus?.isTraveling ? '移动中' : '知识域',
             icon: MapPin,
-            active: shouldRenderLocationDock && isLocationDockExpanded,
+            active: activeDockSectionId === 'domain',
             hidden: !shouldRenderLocationDock,
-            onToggle: () => {
-                setIsLocationDockExpanded((prev) => {
-                    const next = !prev;
-                    if (next) {
-                        setIsAnnouncementDockExpanded(false);
-                    }
-                    return next;
-                });
-            },
+            onToggle: () => toggleExclusiveDock('domain'),
             panel: (
                 <CurrentDomainPanel
                     isTraveling={Boolean(travelStatus?.isTraveling)}
@@ -705,6 +737,10 @@ export const AppShellChrome = ({
     setIsAnnouncementDockExpanded,
     announcementDockTab,
     setAnnouncementDockTab,
+    isChatDockExpanded,
+    setIsChatDockExpanded,
+    chatBadgeCount,
+    chatPanelProps,
     isMarkingAnnouncementsRead,
     announcementUnreadCount,
     markAnnouncementNotificationsRead,
@@ -842,6 +878,10 @@ export const AppShellChrome = ({
             setIsAnnouncementDockExpanded={setIsAnnouncementDockExpanded}
             announcementDockTab={announcementDockTab}
             setAnnouncementDockTab={setAnnouncementDockTab}
+            isChatDockExpanded={isChatDockExpanded}
+            setIsChatDockExpanded={setIsChatDockExpanded}
+            chatBadgeCount={chatBadgeCount}
+            chatPanelProps={chatPanelProps}
             isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
             announcementUnreadCount={announcementUnreadCount}
             markAnnouncementNotificationsRead={markAnnouncementNotificationsRead}
