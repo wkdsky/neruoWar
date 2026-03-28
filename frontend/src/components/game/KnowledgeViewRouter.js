@@ -24,6 +24,7 @@ const KnowledgeViewRouter = ({
   onSearchChange,
   onSearchFocus,
   onSearchClear,
+  onSearchResultsClose,
   searchResults,
   showSearchResults,
   isSearching,
@@ -62,6 +63,7 @@ const KnowledgeViewRouter = ({
         onSearchChange={onSearchChange}
         onSearchFocus={onSearchFocus}
         onSearchClear={onSearchClear}
+        onSearchResultsClose={onSearchResultsClose}
         searchResults={searchResults}
         showSearchResults={showSearchResults}
         isSearching={isSearching}
@@ -103,6 +105,7 @@ const KnowledgeViewRouter = ({
           onSearchChange={onSearchChange}
           onSearchFocus={onSearchFocus}
           onSearchClear={onSearchClear}
+          onSearchResultsClose={onSearchResultsClose}
           searchResults={searchResults}
           showSearchResults={showSearchResults}
           isSearching={isSearching}
@@ -140,6 +143,7 @@ const KnowledgeViewRouter = ({
           onSearchChange={onSearchChange}
           onSearchFocus={onSearchFocus}
           onSearchClear={onSearchClear}
+          onSearchResultsClose={onSearchResultsClose}
           searchResults={searchResults}
           showSearchResults={showSearchResults}
           isSearching={isSearching}

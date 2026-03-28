@@ -1,0 +1,52 @@
+.admin-settings-container {
+    margin-top: 1.5rem;
+    display: flex;
+    justify-content: center;
+}
+
+.admin-settings-card {
+    width: 100%;
+    max-width: 560px;
+    padding: 1.5rem;
+    border-radius: 12px;
+    background: rgba(51, 65, 85, 0.8);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+}
+
+.admin-settings-card h3 {
+    color: #e2e8f0;
+    margin: 0 0 0.5rem;
+}
+
+.admin-settings-desc {
+    margin: 0 0 1.25rem;
+    color: #94a3b8;
+    line-height: 1.5;
+}
+
+.admin-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.admin-settings-row label {
+    color: #cbd5e1;
+    min-width: 180px;
+}
+
+.admin-settings-current {
+    margin-top: 0.85rem;
+    color: #cbd5e1;
+}
+
+.admin-settings-current strong {
+    color: #60a5fa;
+}
+
+.admin-settings-actions {
+    margin-top: 1.2rem;
+    display: flex;
+    gap: 0.75rem;
+}

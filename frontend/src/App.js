@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import io from 'socket.io-client';
 import './App.css';
 import Login from './components/auth/Login';
 import AdminPanel from './components/admin/AdminPanel';
@@ -22,24 +21,30 @@ import {
     SenseSelectorPanel
 } from './components/layout/AppShellPanels';
 import SystemConfirmDialog from './components/common/SystemConfirmDialog';
+import useLocationTravel from './hooks/app/useLocationTravel';
+import useAppSession from './hooks/app/useAppSession';
+import useAppPageState from './hooks/app/useAppPageState';
+import useAppRuntimeStatus from './hooks/app/useAppRuntimeStatus';
+import useBattleStatusPolling from './hooks/app/useBattleStatusPolling';
+import useHomeDetailTransition from './hooks/app/useHomeDetailTransition';
+import useKnowledgeDomainTransition from './hooks/app/useKnowledgeDomainTransition';
+import useKnowledgeEntryActions from './hooks/app/useKnowledgeEntryActions';
+import useKnowledgeNavigation from './hooks/app/useKnowledgeNavigation';
+import useKnowledgeSearch from './hooks/app/useKnowledgeSearch';
+import useSenseSelector from './hooks/app/useSenseSelector';
+import useStarMapNavigation from './hooks/app/useStarMapNavigation';
+import useAppSocket from './hooks/app/useAppSocket';
 import {
     buildSenseArticleSubViewContext,
     createSenseArticleContext,
     areSenseArticleContextsEqual
 } from './components/senseArticle/senseArticleNavigation';
-import { senseArticleApi } from './utils/senseArticleApi';
-import { API_BASE, SOCKET_ENDPOINT } from './runtimeConfig';
+import { API_BASE } from './runtimeConfig';
 import { isSenseEditorDebugEnabled } from './components/senseArticle/editor/editorDebug';
 import {
     CITY_GATE_LABEL_MAP,
-    LOCAL_DEVELOPMENT_HOSTS,
-    LOCALHOST_STORAGE_RESET_KEY,
-    LOCALHOST_STORAGE_RESET_VERSION,
     PAGE_STATE_STORAGE_KEY,
     SENSE_EDITOR_PREVIEW_RESIZE_CLASS,
-    buildNavigationTrailItem,
-    clearStoredAuthState,
-    clearStoredLocalhostRuntimeState,
     createDefaultHeaderUserStats,
     createEmptyIntelHeistStatus,
     createEmptyNodeDistributionStatus,
@@ -50,17 +55,12 @@ import {
     getElapsedMinutesText,
     getIntelSnapshotAgeMinutesText,
     getNavigationRelationFromSceneNode,
-    isDevEnvironment,
     isKnowledgeDetailView,
     isMapDebugEnabled,
     isSenseArticleSubView,
     isTitleBattleView,
-    isValidObjectId,
-    normalizeNavigationRelation,
     normalizeObjectId,
-    normalizeSiegeUnitEntries,
-    readSavedPageState
-} from './app/appShared';
+    } from './app/appShared';
 import useNotificationCenter from './hooks/useNotificationCenter';
 import useAppShellState from './hooks/useAppShellState';
 import useChatCenter from './hooks/useChatCenter';
@@ -69,14 +69,12 @@ import {
     DEFAULT_STAR_MAP_LIMIT,
     KNOWLEDGE_MAIN_VIEW_MODE,
     STAR_MAP_LAYER,
-    areStarMapCentersEqual,
     getSenseNodeKey,
     toSenseVertexKey
 } from './starMap/starMapHelpers';
 
 const PRIMARY_NAVIGATION_TIMEOUT_MS = 10000;
 const PRIMARY_NAVIGATION_RETRY_DELAYS_MS = [250, 700];
-const clampRevealProgress = (value) => Math.max(0.04, Math.min(1, Number(value) || 0));
 const createDefaultStarMapZoomState = () => ({
     min: 0.22,
     max: 1.12,
@@ -96,28 +94,7 @@ const normalizeStarMapZoomState = (state = {}) => {
         value: Math.max(min, Math.min(safeMax, value))
     };
 };
-const createIdleHomeTransition = () => ({
-    runId: 0,
-    sourceRect: null,
-    sourceCenter: null,
-    sourceSize: null,
-    sourceTitle: '',
-    sourceSenseTitle: '',
-    sourceSummary: '',
-    sourceVariant: 'root',
-    sourceNodeId: '',
-    targetMode: '',
-    targetNodeId: '',
-    targetSenseId: '',
-    targetCenter: null,
-    targetSize: 0,
-    targetLayoutNodeId: '',
-    status: 'idle',
-    triggeredAt: 0
-});
-
 const App = () => {
-    const [socket, setSocket] = useState(null);
     const [authenticated, setAuthenticated] = useState(false);
     const [userId, setUserId] = useState('');
     const [username, setUsername] = useState('');
@@ -135,123 +112,16 @@ const App = () => {
         confirmTone: 'danger',
         onConfirm: null
     });
-    const socketRef = useRef(null);
     const isRestoringPageRef = useRef(false);
     const hasRestoredPageRef = useRef(false);
     const travelStatusRef = useRef({ isTraveling: false, isStopping: false });
     const [isAdmin, setIsAdmin] = useState(false);
     const [adminEntryTab, setAdminEntryTab] = useState('users');
-
-
-    // 修改检查登录状态的useEffect
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    useEffect(() => {
-        const token = localStorage.getItem('token');
-        const storedUserId = normalizeObjectId(localStorage.getItem('userId'));
-        const storedUsername = localStorage.getItem('username');
-        const storedLocation = localStorage.getItem('userLocation');
-        const storedProfession = localStorage.getItem('profession');
-        const storedAvatar = localStorage.getItem('userAvatar');
-        const storedUserRole = localStorage.getItem('userRole');
-
-        if (token && storedUsername) {
-            const resolvedUserId = storedUserId || decodeUserIdFromToken(token);
-            setAuthenticated(true);
-            setUserId(resolvedUserId);
-            setUsername(storedUsername);
-            setProfession(storedProfession || '');
-            setUserLocation(storedLocation || '');
-            setUserAvatar(storedAvatar || 'default_male_1');
-            setIsAdmin(storedUserRole === 'admin');
-            if (resolvedUserId) {
-                localStorage.setItem('userId', resolvedUserId);
-            }
-
-            // 如果location为空，需要显示位置选择弹窗
-            if (!storedLocation || storedLocation === '') {
-                // 先获取热门节点，然后显示弹窗
-                fetchFeaturedNodes();
-                setShowLocationModal(true);
-            } else {
-                setView('home');
-            }
-
-            // 如果socket已连接，重新认证
-            if (socket && socket.connected) {
-                socket.emit('authenticate', token);
-                setTimeout(() => {
-                    socket.emit('getGameState');
-                }, 200);
-            }
-
-            // 仅在已知管理员会话下校验管理员状态，避免普通用户刷新时触发 403 探测请求
-            if (storedUserRole === 'admin') {
-                checkAdminStatus();
-            }
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []); // 只在组件挂载时执行一次
-
-    useEffect(() => {
-        if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
-        const currentHostname = String(window.location.hostname || '').trim().toLowerCase();
-        if (!LOCAL_DEVELOPMENT_HOSTS.has(currentHostname)) return;
-
-        const currentVersion = localStorage.getItem(LOCALHOST_STORAGE_RESET_KEY);
-        if (currentVersion === LOCALHOST_STORAGE_RESET_VERSION) {
-            return;
-        }
-
-        clearStoredLocalhostRuntimeState();
-        localStorage.setItem(LOCALHOST_STORAGE_RESET_KEY, LOCALHOST_STORAGE_RESET_VERSION);
-    }, []);
-
-    useEffect(() => {
-        const token = localStorage.getItem('token');
-        const storedUsername = localStorage.getItem('username');
-        if (!token || !storedUsername) return undefined;
-
-        let cancelled = false;
-        const validateStoredSession = async () => {
-            try {
-                const response = await fetch(`${API_BASE}/profile`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                if (cancelled) return;
-                if (response.status !== 401 && response.status !== 403) return;
-                if (localStorage.getItem('token') !== token || localStorage.getItem('username') !== storedUsername) {
-                    return;
-                }
-
-                clearStoredAuthState();
-                hasRestoredPageRef.current = false;
-                isRestoringPageRef.current = false;
-                setAuthenticated(false);
-                setUserId('');
-                setUsername('');
-                setProfession('');
-                setUserLocation('');
-                setUserAvatar('default_male_1');
-                setIsAdmin(false);
-                setShowLocationModal(false);
-                setView('login');
-            } catch (_error) {
-                // 启动校验失败时不阻塞现有流程，避免临时网络波动把用户踢回登录页
-            }
-        };
-
-        validateStoredSession();
-        return () => {
-            cancelled = true;
-        };
-    }, []);
-
-    useEffect(() => {
-        if (!authenticated) {
-            hasRestoredPageRef.current = false;
-            isRestoringPageRef.current = false;
-        }
-    }, [authenticated]);
+    const { socket, initializeSocket, cleanupSocket } = useAppSocket({
+        setAuthenticated,
+        setNodes,
+        setTechnologies
+    });
 
     // 新节点创建状态
     const [showCreateNodeModal, setShowCreateNodeModal] = useState(false);
@@ -279,10 +149,6 @@ const App = () => {
     // 首页相关状态
     const [rootNodes, setRootNodes] = useState([]);
     const [featuredNodes, setFeaturedNodes] = useState([]);
-    const [homeSearchQuery, setHomeSearchQuery] = useState('');
-    const [homeSearchResults, setHomeSearchResults] = useState([]);
-    const [isSearching, setIsSearching] = useState(false);
-    const [showSearchResults, setShowSearchResults] = useState(false); // 控制搜索结果的显示/隐藏，默认隐藏
 
     // 节点详情页面相关状态
     const [currentNodeDetail, setCurrentNodeDetail] = useState(null);
@@ -339,20 +205,13 @@ const App = () => {
     const sceneManagerRef = useRef(null);
     const [isWebGLReady, setIsWebGLReady] = useState(false);
     const [clickedNodeForTransition, setClickedNodeForTransition] = useState(null);
-    const [homeDetailTransition, setHomeDetailTransition] = useState(createIdleHomeTransition);
-    const homeDetailTransitionRef = useRef(createIdleHomeTransition());
-    const homeDetailTransitionRunIdRef = useRef(0);
 
-    // 搜索栏相关引用
-    const searchBarRef = useRef(null);
     const headerRef = useRef(null);
     const notificationsWrapperRef = useRef(null);
     const relatedDomainsWrapperRef = useRef(null);
     const militaryMenuWrapperRef = useRef(null);
     const senseSelectorPanelRef = useRef(null);
-    const senseSelectorAnchorRef = useRef({ x: 0, y: 0, visible: false });
     const knowledgeDomainReturnContextRef = useRef(null);
-    const senseArticleEntryStatusMapRef = useRef({});
     const primaryNavigationRequestRef = useRef({
         seq: 0,
         controller: null,
@@ -394,9 +253,24 @@ const App = () => {
     const [knowledgeHeaderOffset, setKnowledgeHeaderOffset] = useState(92);
     const [isSenseArticleHeaderPinned, setIsSenseArticleHeaderPinned] = useState(false);
 
-    useEffect(() => {
-        homeDetailTransitionRef.current = homeDetailTransition;
-    }, [homeDetailTransition]);
+    const {
+        homeDetailTransition,
+        clearHomeDetailTransition,
+        armHomeDetailTransition,
+        prepareHomeDetailTransitionTarget,
+        handleGhostStatusChange,
+        handleGhostSettleProgress,
+        handleGhostSettleComplete
+    } = useHomeDetailTransition({
+        featuredNodes,
+        isWebGLReady,
+        sceneManagerRef,
+        webglCanvasRef,
+        view,
+        currentTitleDetail,
+        currentNodeDetail,
+        isSenseSelectorVisible
+    });
 
     const delay = useCallback((ms) => new Promise((resolve) => {
         window.setTimeout(resolve, Math.max(0, Number(ms) || 0));
@@ -424,106 +298,6 @@ const App = () => {
         primarySignal.addEventListener('abort', forwardAbort(primarySignal), { once: true });
         secondarySignal.addEventListener('abort', forwardAbort(secondarySignal), { once: true });
         return controller.signal;
-    }, []);
-
-    const clearHomeDetailTransition = useCallback((options = {}) => {
-        const immediate = options?.immediate === true;
-        const current = homeDetailTransitionRef.current;
-        if (sceneManagerRef.current?.renderer && current?.targetLayoutNodeId) {
-            sceneManagerRef.current.renderer.setNodeRevealProgress('', 1);
-        }
-        if (immediate) {
-            setHomeDetailTransition(createIdleHomeTransition());
-            return;
-        }
-        setHomeDetailTransition((prev) => {
-            if (!prev || prev.status === 'idle') return createIdleHomeTransition();
-            return {
-                ...prev,
-                status: 'done'
-            };
-        });
-        window.setTimeout(() => {
-            if (homeDetailTransitionRef.current?.status === 'done') {
-                setHomeDetailTransition(createIdleHomeTransition());
-            }
-        }, 150);
-    }, []);
-
-    const resolveHomeNodeVariant = useCallback((nodeId) => {
-        const normalized = normalizeObjectId(nodeId);
-        if (!normalized) return 'root';
-        if (featuredNodes.some((item) => normalizeObjectId(item?._id) === normalized)) return 'featured';
-        return 'root';
-    }, [featuredNodes]);
-
-    const armHomeDetailTransition = useCallback((node, anchorElement = null) => {
-        const rect = anchorElement?.getBoundingClientRect?.();
-        const nodeId = normalizeObjectId(node?._id);
-        if (!rect || !nodeId) {
-            clearHomeDetailTransition({ immediate: true });
-            return;
-        }
-        homeDetailTransitionRunIdRef.current += 1;
-        setHomeDetailTransition({
-            runId: homeDetailTransitionRunIdRef.current,
-            sourceRect: {
-                left: rect.left,
-                top: rect.top,
-                width: rect.width,
-                height: rect.height
-            },
-            sourceCenter: {
-                x: rect.left + rect.width * 0.5,
-                y: rect.top + rect.height * 0.5
-            },
-            sourceSize: {
-                width: rect.width,
-                height: rect.height
-            },
-            sourceTitle: typeof node?.name === 'string' ? node.name.trim() : '',
-            sourceSenseTitle: typeof node?.activeSenseTitle === 'string' ? node.activeSenseTitle.trim() : '',
-            sourceSummary: typeof node?.description === 'string' ? node.description.trim() : '',
-            sourceVariant: resolveHomeNodeVariant(nodeId),
-            sourceNodeId: nodeId,
-            targetMode: '',
-            targetNodeId: '',
-            targetSenseId: '',
-            targetCenter: null,
-            targetSize: 0,
-            targetLayoutNodeId: '',
-            status: 'armed',
-            triggeredAt: Date.now()
-        });
-    }, [clearHomeDetailTransition, resolveHomeNodeVariant]);
-
-    const prepareHomeDetailTransitionTarget = useCallback(({ mode = '', nodeId = '', senseId = '' } = {}) => {
-        const normalizedNodeId = normalizeObjectId(nodeId);
-        if (!normalizedNodeId) return;
-        setHomeDetailTransition((prev) => {
-            if (!prev || prev.status === 'idle' || !prev.sourceRect) return prev;
-            return {
-                ...prev,
-                targetMode: mode === 'titleDetail' ? 'titleDetail' : 'nodeDetail',
-                targetNodeId: normalizedNodeId,
-                targetSenseId: typeof senseId === 'string' ? senseId.trim() : '',
-                targetCenter: null,
-                targetSize: 0,
-                targetLayoutNodeId: '',
-                status: 'navigating'
-            };
-        });
-    }, []);
-
-    const updateHomeTransitionReveal = useCallback((runId, progress = 1) => {
-        const current = homeDetailTransitionRef.current;
-        if (!current || current.runId !== runId) return;
-        if (!current.targetLayoutNodeId) return;
-        if (!sceneManagerRef.current?.renderer) return;
-        sceneManagerRef.current.renderer.setNodeRevealProgress(
-            current.targetLayoutNodeId,
-            clampRevealProgress(progress)
-        );
     }, []);
 
     const isAbortError = useCallback((error) => (
@@ -784,10 +558,6 @@ const App = () => {
         });
     }, [senseArticleContext, view]);
 
-    useEffect(() => {
-        senseArticleEntryStatusMapRef.current = senseArticleEntryStatusMap;
-    }, [senseArticleEntryStatusMap]);
-
     // 初始化WebGL场景
     // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
@@ -983,261 +753,6 @@ const App = () => {
         sceneManagerRef.current.setUserState(userLocation, travelStatus);
     }, [isWebGLReady, userLocation, travelStatus]);
 
-    useEffect(() => {
-        // 只在没有socket时初始化
-        if (!socketRef.current) {
-            initializeSocket();
-        }
-    
-        const newSocket = io(SOCKET_ENDPOINT, {
-            transports: ['websocket', 'polling'],
-            reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            reconnectionAttempts: 5,
-            timeout: 20000,
-            autoConnect: true
-        });
-        
-        newSocket.on('connect', () => {
-            console.log('WebSocket 连接成功:', newSocket.id);
-            // 如果用户已经登录，自动认证
-            const token = localStorage.getItem('token');
-            if (token) {
-                newSocket.emit('authenticate', token);
-            }
-        });
-    
-        newSocket.on('connect_error', (error) => {
-            console.error('WebSocket 连接错误:', error);
-        });
-    
-        newSocket.on('disconnect', (reason) => {
-            console.log('WebSocket 断开连接:', reason);
-        });
-    
-        socketRef.current = newSocket;
-        setSocket(newSocket);
-
-        return () => {
-            if (socketRef.current) {
-                socketRef.current.removeAllListeners();
-                socketRef.current.close();
-                socketRef.current = null;
-            }
-        };
-    }, []);
-
-
-  const handleLoginSuccess = async (data) => {
-    resetAppNavigationStateToHome({ clearHomeCollections: true });
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('userId', normalizeObjectId(data.userId));
-    localStorage.setItem('username', data.username);
-    localStorage.setItem('userLocation', data.location || '');
-    localStorage.setItem('profession', data.profession || '求知');
-    localStorage.setItem('userAvatar', data.avatar || 'default_male_1');
-    localStorage.setItem('userRole', data.role || '');
-    setAuthenticated(true);
-    setUserId(normalizeObjectId(data.userId));
-    setUsername(data.username);
-    setProfession(data.profession || '求知');
-    setUserLocation(data.location || '');
-    setUserAvatar(data.avatar || 'default_male_1');
-    setIsAdmin(data.role === 'admin');
-    const needsLocationSelection = data.role !== 'admin' && (!data.location || data.location === '');
-    if (needsLocationSelection) {
-      // 先打开降临弹窗，避免出现首页闪一下再弹窗
-      setShowLocationModal(true);
-    } else {
-      setShowLocationModal(false);
-    }
-    // 重新初始化socket连接（连接事件中会处理认证）
-    initializeSocket(data.token);
-
-    if (data.role === 'admin') {
-      await checkAdminStatus();
-    }
-    if (data.role !== 'admin') {
-      fetchTravelStatus(true);
-    } else {
-      applyTravelStatus({ isTraveling: false });
-    }
-
-    // 检查location字段，如果为空且不是管理员，显示位置选择弹窗
-    if (!data.location || data.location === '') {
-      if (data.role === 'admin') {
-        // 管理员自动设置location为"任意"
-        await updateUserLocation('任意');
-        setUserLocation('任意');
-        localStorage.setItem('userLocation', '任意');
-        resetAppNavigationStateToHome();
-      }
-    } else {
-      resetAppNavigationStateToHome();
-    }
-  };
-
-  // 更新用户location
-  const updateUserLocation = async (location) => {
-    const token = localStorage.getItem('token');
-    try {
-      console.log('正在更新location:', location);
-      const response = await fetch(`${API_BASE}/location`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ location })
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        console.log('location更新成功:', data.location);
-        return data.location;
-      } else {
-        console.error('location更新失败:', data);
-        window.alert(`设置降临位置失败: ${data.error || '未知错误'}`);
-        return null;
-      }
-    } catch (error) {
-      console.error('更新location失败:', error);
-      window.alert(`网络错误: ${error.message}`);
-      return null;
-    }
-  };
-
-  // 处理位置选择确认
-  const handleLocationConfirm = async (selectedNode) => {
-    console.log('用户选择的节点:', selectedNode);
-
-    if (!selectedNode || !selectedNode.name) {
-      window.alert('选择的节点无效，请重新选择');
-      return;
-    }
-
-    const locationName = selectedNode.name;
-    const updatedLocation = await updateUserLocation(locationName);
-
-    if (updatedLocation) {
-      const selectedNodeId = normalizeObjectId(selectedNode._id || selectedNode.nodeId);
-      setUserLocation(updatedLocation);
-      setSelectedLocationNode(selectedNode);
-      setCurrentLocationNodeDetail(selectedNode);
-      localStorage.setItem('userLocation', updatedLocation);
-
-      // 关闭modal并优先进入当前降临知识域的主视角
-      setShowLocationModal(false);
-      const resolvedLocationDetail = await fetchLocationNodeDetail(updatedLocation, { silent: true });
-      const targetNodeId = normalizeObjectId(
-        resolvedLocationDetail?._id
-        || resolvedLocationDetail?.nodeId
-        || selectedNodeId
-      );
-
-      if (targetNodeId) {
-        const opened = await fetchTitleDetail(targetNodeId, null, {
-          resetTrail: true,
-          relationHint: 'jump'
-        });
-        if (opened) {
-          return;
-        }
-      }
-
-      // 回退到首页，避免在极端情况下卡在空白状态
-      setView('home');
-      fetchRootNodes();
-      fetchFeaturedNodes();
-    }
-    // 如果失败，updateUserLocation已经显示了错误消息，保持弹窗打开
-  };
-
-  // 根据location名称获取节点详细信息
-  const fetchLocationNodeDetail = async (locationName, options = {}) => {
-    const silent = options?.silent === true;
-    const normalizedLocationName = typeof locationName === 'string' ? locationName.trim() : '';
-    if (!normalizedLocationName || normalizedLocationName === '任意') {
-      setCurrentLocationNodeDetail(null);
-      return null;
-    }
-
-    if (!silent) {
-      setIsRefreshingLocationDetail(true);
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/nodes/public/search?query=${encodeURIComponent(normalizedLocationName)}`);
-      const parsedSearch = await parseApiResponse(response);
-      if (!response.ok || !parsedSearch?.data) {
-        if (!silent) {
-          window.alert(getApiErrorMessage(parsedSearch, '读取当前位置知识域失败'));
-        }
-        return null;
-      }
-
-      const data = parsedSearch.data;
-      const results = Array.isArray(data?.results) ? data.results : [];
-      // 精确匹配节点名称，并优先选择带有效 ObjectId 的结果，避免落入字段不完整的搜索条目
-      const exactCandidates = results.filter((item) => (
-        (typeof item?.domainName === 'string' && item.domainName.trim() === normalizedLocationName)
-        || (typeof item?.name === 'string' && item.name.trim() === normalizedLocationName)
-      ));
-      const exactMatch = exactCandidates.find((item) => isValidObjectId(item?.nodeId || item?._id)) || null;
-      const localNodeMatch = (Array.isArray(nodes) ? nodes : []).find((item) => (
-        typeof item?.name === 'string'
-        && item.name.trim() === normalizedLocationName
-        && isValidObjectId(item?._id)
-      ));
-      const detailNodeId = normalizeObjectId(
-        exactMatch?.nodeId
-        || exactMatch?._id
-        || localNodeMatch?._id
-      );
-      if (isValidObjectId(detailNodeId)) {
-        const detailResponse = await fetch(`${API_BASE}/nodes/public/node-detail/${detailNodeId}?includeFavoriteCount=1`);
-        const parsedDetail = await parseApiResponse(detailResponse);
-        if (!detailResponse.ok || !parsedDetail?.data?.node) {
-          if (!silent) {
-            window.alert(getApiErrorMessage(parsedDetail, '读取当前位置知识域详情失败'));
-          }
-          return null;
-        }
-        setCurrentLocationNodeDetail(parsedDetail.data.node);
-        return parsedDetail.data.node;
-      }
-
-      return null;
-    } catch (error) {
-      console.error('获取位置节点详情失败:', error);
-      if (!silent) {
-        window.alert(`读取当前位置知识域失败: ${error.message}`);
-      }
-      return null;
-    } finally {
-      if (!silent) {
-        setIsRefreshingLocationDetail(false);
-      }
-    }
-  };
-
-  const syncUserLocation = (location) => {
-    const nextLocation = location || '';
-    const prevLocation = userLocation || '';
-    if (nextLocation !== prevLocation) {
-      setCurrentLocationNodeDetail(null);
-    }
-    if (!location || location === '任意') {
-      setUserLocation(location || '');
-      localStorage.setItem('userLocation', location || '');
-      return;
-    }
-    setUserLocation(location);
-    localStorage.setItem('userLocation', location);
-  };
-
   const parseApiResponse = useCallback(async (response) => {
     const rawText = await response.text();
     let data = null;
@@ -1317,6 +832,40 @@ const App = () => {
     isAdmin,
     parseApiResponse,
     getApiErrorMessage
+  });
+
+  const {
+    updateUserLocation,
+    fetchLocationNodeDetail,
+    syncUserLocation,
+    estimateTravelToNode,
+    startTravelToNode,
+    stopTravel
+  } = useLocationTravel({
+    userLocation,
+    isStoppingTravel,
+    nodes,
+    parseApiResponse,
+    getApiErrorMessage,
+    applyTravelStatus,
+    setUserLocation,
+    setCurrentLocationNodeDetail,
+    setIsRefreshingLocationDetail,
+    setIsStoppingTravel
+  });
+
+  const {
+    searchQuery: homeSearchQuery,
+    searchResults: homeSearchResults,
+    isSearching,
+    showSearchResults,
+    handleKnowledgeSearchChange,
+    handleKnowledgeSearchFocus,
+    handleKnowledgeSearchClear,
+    closeKnowledgeSearchResults,
+    resetKnowledgeSearch
+  } = useKnowledgeSearch({
+    view
   });
 
   const {
@@ -1490,10 +1039,8 @@ const App = () => {
     setSenseSelectorOverviewNode(null);
     setSenseSelectorOverviewLoading(false);
     setSenseSelectorOverviewError('');
-    setHomeSearchQuery('');
-    setHomeSearchResults([]);
-    setShowSearchResults(false);
-    setHomeDetailTransition(createIdleHomeTransition());
+    resetKnowledgeSearch();
+    clearHomeDetailTransition({ immediate: true });
     closeHeaderPanels();
     resetDistributionState();
     setIsLocationDockExpanded(false);
@@ -1504,93 +1051,28 @@ const App = () => {
     }
   }
 
-  const fetchHeaderUserStats = useCallback(async ({ silent = true } = {}) => {
-    const token = localStorage.getItem('token');
-    if (!token || !authenticated) return null;
+  const {
+    fetchTravelStatus,
+    fetchSiegeSupportStatuses
+  } = useAppRuntimeStatus({
+    authenticated,
+    isAdmin,
+    socket,
+    parseApiResponse,
+    getApiErrorMessage,
+    syncUserLocation,
+    applyTravelStatus,
+    fetchLocationNodeDetail,
+    isLocationDockExpandedRef,
+    travelStatusRef,
+    fetchNotifications,
+    fetchAdminPendingNodeReminders,
+    setHeaderUserStats,
+    setTravelStatus,
+    setSiegeSupportStatuses
+  });
 
-    if (!silent) {
-      setHeaderUserStats((prev) => ({ ...prev, loading: true }));
-    }
-
-    try {
-      const [profileResponse, armyResponse] = await Promise.all([
-        fetch(`${API_BASE}/profile`, {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        fetch(`${API_BASE}/army/me`, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-      ]);
-      const [profileParsed, armyParsed] = await Promise.all([
-        parseApiResponse(profileResponse),
-        parseApiResponse(armyResponse)
-      ]);
-
-      const profileData = profileParsed.data && profileResponse.ok ? profileParsed.data : null;
-      const armyData = armyParsed.data && armyResponse.ok ? armyParsed.data : null;
-
-      const levelValue = Number(profileData?.level);
-      const experienceValue = Number(profileData?.experience);
-      const knowledgeBalanceValue = Number(
-        Number.isFinite(Number(profileData?.knowledgeBalance))
-          ? profileData.knowledgeBalance
-          : armyData?.knowledgeBalance
-      );
-      const armyCountValue = (Array.isArray(armyData?.roster) ? armyData.roster : []).reduce((sum, entry) => (
-        sum + Math.max(0, Math.floor(Number(entry?.count) || 0))
-      ), 0);
-
-      const nextStats = {
-        loading: false,
-        level: Number.isFinite(levelValue) ? Math.max(0, Math.floor(levelValue)) : 0,
-        experience: Number.isFinite(experienceValue) ? Math.max(0, Math.floor(experienceValue)) : 0,
-        knowledgeBalance: Number.isFinite(knowledgeBalanceValue) ? Math.max(0, knowledgeBalanceValue) : 0,
-        armyCount: Number.isFinite(armyCountValue) ? Math.max(0, Math.floor(armyCountValue)) : 0
-      };
-      setHeaderUserStats(nextStats);
-      return nextStats;
-    } catch (error) {
-      setHeaderUserStats((prev) => ({ ...prev, loading: false }));
-      return null;
-    }
-  }, [authenticated, parseApiResponse]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!authenticated) {
-      setHeaderUserStats(createDefaultHeaderUserStats());
-      return undefined;
-    }
-
-    fetchHeaderUserStats({ silent: true });
-    const timerId = setInterval(() => {
-      fetchHeaderUserStats({ silent: true });
-    }, 30000);
-
-    return () => {
-      clearInterval(timerId);
-    };
-  }, [authenticated, fetchHeaderUserStats]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!authenticated) return undefined;
-
-    const refreshOnFocus = () => {
-      if (document.visibilityState === 'visible') {
-        fetchHeaderUserStats({ silent: true });
-      }
-    };
-    window.addEventListener('focus', refreshOnFocus);
-    document.addEventListener('visibilitychange', refreshOnFocus);
-
-    return () => {
-      window.removeEventListener('focus', refreshOnFocus);
-      document.removeEventListener('visibilitychange', refreshOnFocus);
-    };
-  }, [authenticated, fetchHeaderUserStats]);
-
-  const trackRecentDomain = async (nodeOrId, options = {}) => {
+  const trackRecentDomain = useCallback(async (nodeOrId, options = {}) => {
     const token = localStorage.getItem('token');
     const domainId = normalizeObjectId(nodeOrId?._id || nodeOrId);
     if (!token || !domainId) return;
@@ -1614,7 +1096,7 @@ const App = () => {
     } catch (error) {
       // 最近访问记录失败不影响主流程
     }
-  };
+  }, []);
 
   const formatDomainKnowledgePoint = (node) => {
     const value = Number(node?.knowledgePoint?.value);
@@ -1677,53 +1159,6 @@ const App = () => {
     setView('admin');
   };
 
-  const fetchSiegeSupportStatuses = async (silent = true) => {
-    const token = localStorage.getItem('token');
-    if (!token || !authenticated || isAdmin) {
-      if (!silent) {
-        setSiegeSupportStatuses([]);
-      }
-      return null;
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/nodes/me/siege-supports`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const parsed = await parseApiResponse(response);
-      if (!response.ok || !parsed.data) {
-        if (!silent) {
-          window.alert(getApiErrorMessage(parsed, '获取围城支援状态失败'));
-        }
-        return null;
-      }
-      const supports = Array.isArray(parsed.data.supports)
-        ? parsed.data.supports.map((item) => ({
-          nodeId: normalizeObjectId(item?.nodeId),
-          nodeName: typeof item?.nodeName === 'string' ? item.nodeName : '',
-          gateKey: typeof item?.gateKey === 'string' ? item.gateKey : '',
-          gateLabel: typeof item?.gateLabel === 'string' ? item.gateLabel : '',
-          status: typeof item?.status === 'string' ? item.status : '',
-          statusLabel: typeof item?.statusLabel === 'string' ? item.statusLabel : '',
-          totalCount: Math.max(0, Math.floor(Number(item?.totalCount) || 0)),
-          remainingSeconds: Math.max(0, Math.floor(Number(item?.remainingSeconds) || 0)),
-          fromNodeName: typeof item?.fromNodeName === 'string' ? item.fromNodeName : '',
-          autoRetreatPercent: Math.max(1, Math.min(99, Math.floor(Number(item?.autoRetreatPercent) || 40))),
-          units: normalizeSiegeUnitEntries(item?.units),
-          requestedAt: item?.requestedAt || null,
-          arriveAt: item?.arriveAt || null
-        }))
-        : [];
-      setSiegeSupportStatuses(supports);
-      return supports;
-    } catch (error) {
-      if (!silent) {
-        window.alert(`获取围城支援状态失败: ${error.message}`);
-      }
-      return null;
-    }
-  };
-
   const {
     intelHeistStatus,
     intelHeistDialog,
@@ -1763,169 +1198,9 @@ const App = () => {
     fetchSiegeSupportStatuses
   });
 
-  const fetchTravelStatus = async (silent = true) => {
-    const token = localStorage.getItem('token');
-    if (!token) return null;
-
-    try {
-      const response = await fetch(`${API_BASE}/travel/status`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-
-      if (!response.ok) {
-        if (!silent) {
-          window.alert(getApiErrorMessage(parsed, '获取移动状态失败'));
-        }
-        return null;
-      }
-
-      if (!data) {
-        if (!silent) {
-          window.alert('获取移动状态失败：返回数据不是 JSON');
-        }
-        return null;
-      }
-
-      const currentStoredLocation = localStorage.getItem('userLocation') || '';
-      if (typeof data.location === 'string' && data.location !== currentStoredLocation) {
-        syncUserLocation(data.location);
-      }
-
-      const nextTravel = data.travel || { isTraveling: false };
-      const prevTravel = travelStatusRef.current || { isTraveling: false, isStopping: false };
-      applyTravelStatus(nextTravel);
-      const justArrivedAtDestination = !!prevTravel.isTraveling && !prevTravel.isStopping && !nextTravel.isTraveling;
-      if (justArrivedAtDestination && isLocationDockExpandedRef.current && !isAdmin) {
-        const storedLocation = localStorage.getItem('userLocation') || '';
-        const locationName = storedLocation.trim();
-        if (locationName && locationName !== '任意') {
-          fetchLocationNodeDetail(locationName, { silent: false });
-        }
-      }
-      return data;
-    } catch (error) {
-      if (!silent) {
-        window.alert(`获取移动状态失败: ${error.message}`);
-      }
-      return null;
-    }
-  };
-
-  const estimateTravelToNode = async (targetNodeId) => {
-    const token = localStorage.getItem('token');
-    if (!token) return null;
-
-    try {
-      const response = await fetch(`${API_BASE}/travel/estimate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ targetNodeId })
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-      if (!response.ok || !data) {
-        return {
-          error: getApiErrorMessage(parsed, '获取移动预估失败')
-        };
-      }
-      return data;
-    } catch (error) {
-      return { error: `获取移动预估失败: ${error.message}` };
-    }
-  };
-
-  const startTravelToNode = async (targetNodeId) => {
-    const token = localStorage.getItem('token');
-    if (!token) return 'failed';
-
-    try {
-      const response = await fetch(`${API_BASE}/travel/start`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ targetNodeId })
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-
-      if (!response.ok) {
-        window.alert(getApiErrorMessage(parsed, '开始移动失败'));
-        return 'failed';
-      }
-
-      if (!data) {
-        window.alert('开始移动失败：返回数据不是 JSON');
-        return 'failed';
-      }
-
-      applyTravelStatus(data.travel || { isTraveling: false });
-      const currentStoredLocation = localStorage.getItem('userLocation') || '';
-      if (typeof data.location === 'string' && data.location !== currentStoredLocation) {
-        syncUserLocation(data.location);
-      }
-
-      if (data.travel?.isStopping) {
-        if (data.message) {
-          window.alert(data.message);
-        }
-        return 'queued';
-      }
-
-      return 'started';
-    } catch (error) {
-      window.alert(`开始移动失败: ${error.message}`);
-      return 'failed';
-    }
-  };
-
-  const stopTravel = async () => {
-    if (isStoppingTravel) return;
-    setIsStoppingTravel(true);
-    const token = localStorage.getItem('token');
-
-    try {
-      const response = await fetch(`${API_BASE}/travel/stop`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const parsed = await parseApiResponse(response);
-      const data = parsed.data;
-
-      if (!response.ok) {
-        window.alert(getApiErrorMessage(parsed, '停止移动失败'));
-        return;
-      }
-
-      if (!data) {
-        window.alert('停止移动失败：返回数据不是 JSON');
-        return;
-      }
-
-      applyTravelStatus(data.travel || { isTraveling: false });
-      if (typeof data.location === 'string') {
-        syncUserLocation(data.location);
-      }
-    } catch (error) {
-      window.alert(`停止移动失败: ${error.message}`);
-    } finally {
-      setIsStoppingTravel(false);
-    }
-  };
-
-  const handleMoveToNode = async (targetNode, options = {}) => {
+  const handleMoveToNode = useCallback(async (targetNode, options = {}) => {
     if (!targetNode || !targetNode._id) return;
     const promptMode = options?.promptMode === 'distribution' ? 'distribution' : 'default';
-    // 触发移动前先收起顶部弹层，避免“我的知识域”面板遮挡移动状态反馈。
     closeHeaderPanels();
 
     if (isAdmin) {
@@ -1976,7 +1251,6 @@ const App = () => {
 
     const startResult = await startTravelToNode(targetNode._id);
     if (startResult === 'started' || startResult === 'queued') {
-      // 移动发起成功后，默认展开右侧驻留栏以显示“移动状态”。
       setIsAnnouncementDockExpanded(false);
       setIsLocationDockExpanded(true);
     }
@@ -1984,7 +1258,16 @@ const App = () => {
       return true;
     }
     return startResult === 'queued';
-  };
+  }, [
+    closeHeaderPanels,
+    estimateTravelToNode,
+    isAdmin,
+    setIsAnnouncementDockExpanded,
+    setIsLocationDockExpanded,
+    startTravelToNode,
+    travelStatus,
+    userLocation
+  ]);
 
   const {
     nodeDistributionStatus,
@@ -2005,414 +1288,24 @@ const App = () => {
     handleMoveToNode
   });
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!authenticated || isAdmin) {
-      setTravelStatus({ isTraveling: false });
-      travelStatusRef.current = { isTraveling: false, isStopping: false };
-      return;
-    }
-
-    fetchTravelStatus(true);
-    const timer = setInterval(() => {
-      fetchTravelStatus(true);
-    }, 1000);
-
-    return () => clearInterval(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated, isAdmin]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!authenticated || isAdmin) {
-      setSiegeSupportStatuses([]);
-      return;
-    }
-
-    fetchSiegeSupportStatuses(true);
-    const timer = setInterval(() => {
-      fetchSiegeSupportStatuses(true);
-    }, 3000);
-    return () => clearInterval(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated, isAdmin]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
-    if (!authenticated || isAdmin || !isTitleBattleView(view) || !targetNodeId) {
-      resetDistributionState();
-      return undefined;
-    }
-
-    fetchDistributionParticipationStatus(targetNodeId, true);
-    const timer = setInterval(() => {
-      fetchDistributionParticipationStatus(targetNodeId, true);
-    }, 4000);
-
-    return () => clearInterval(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated, isAdmin, view, currentTitleDetail?._id, userLocation, travelStatus.isTraveling]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!showDistributionPanel) return undefined;
-    const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
-    if (!targetNodeId || !isTitleBattleView(view)) {
-      closeDistributionPanel();
-      return undefined;
-    }
-    fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
-    const timer = setInterval(() => {
-      fetchDistributionParticipationStatus(targetNodeId, true, { updatePanel: true });
-    }, 1000);
-    return () => clearInterval(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDistributionPanel, view, currentTitleDetail?._id]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-    useEffect(() => {
-        const targetNodeId = normalizeObjectId(currentTitleDetail?._id);
-        if (!authenticated || isAdmin || !isTitleBattleView(view) || !targetNodeId) {
-      clearSiegeStatus();
-      return undefined;
-    }
-
-    fetchSiegeStatus(targetNodeId, { silent: true, preserveIntelView: siegeDialog.open });
-    const timer = setInterval(() => {
-      fetchSiegeStatus(targetNodeId, { silent: true, preserveIntelView: siegeDialog.open });
-    }, siegeDialog.open ? 2000 : 4000);
-    return () => clearInterval(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated, isAdmin, view, currentTitleDetail?._id, userLocation, travelStatus.isTraveling, siegeDialog.open]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleAdminSyncPending = async () => {
-      if (!authenticated || !isAdmin) return;
-      await fetchNotifications(true);
-      await fetchAdminPendingNodeReminders(true);
-    };
-
-    socket.on('admin-sync-pending', handleAdminSyncPending);
-    return () => {
-      socket.off('admin-sync-pending', handleAdminSyncPending);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket, authenticated, isAdmin]);
-
-  useEffect(() => {
-    if (!authenticated || showLocationModal || hasRestoredPageRef.current) return;
-
-    const saved = readSavedPageState();
-    if (!saved?.view || saved.view === 'home') {
-      hasRestoredPageRef.current = true;
-      return;
-    }
-
-    if (saved.view === 'trainingGround') {
-      localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
-      setView('home');
-      hasRestoredPageRef.current = true;
-      return;
-    }
-
-    isRestoringPageRef.current = true;
-
-    const restorePage = async () => {
-      const targetView = saved.view;
-      const targetNodeId = normalizeObjectId(saved.nodeId);
-
-      if ((targetView === 'nodeDetail' || targetView === 'knowledgeDomain' || targetView === 'titleDetail') && targetNodeId) {
-        const restoredNode = targetView === 'titleDetail'
-          ? await fetchTitleDetail(targetNodeId, null, { silent: true })
-          : await fetchNodeDetail(targetNodeId, null, { silent: true });
-        if (!restoredNode) {
-          localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
-          setView('home');
-          return;
-        }
-
-        if (targetView === 'knowledgeDomain') {
-          setKnowledgeDomainNode(restoredNode);
-          setShowKnowledgeDomain(true);
-          setIsTransitioningToDomain(false);
-          setDomainTransitionProgress(1);
-        }
-        return;
-      }
-
-      if (targetView === 'alliance' || targetView === 'profile' || targetView === 'home') {
-        setView(targetView);
-        return;
-      }
-
-      if ((targetView === 'army' || targetView === 'equipment' || targetView === 'trainingGround') && !isAdmin) {
-        setView(targetView);
-        return;
-      }
-
-      if (targetView === 'admin' && isAdmin) {
-        setView('admin');
-        return;
-      }
-
-      setView('home');
-    };
-
-    restorePage()
-      .finally(() => {
-        hasRestoredPageRef.current = true;
-        isRestoringPageRef.current = false;
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated, showLocationModal, isAdmin]);
-
-  useEffect(() => {
-    if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
-
-    const currentView = (showKnowledgeDomain || isTransitioningToDomain) ? 'knowledgeDomain' : view;
-    if (currentView === 'trainingGround' || String(currentView).startsWith('senseArticle')) {
-      localStorage.removeItem(PAGE_STATE_STORAGE_KEY);
-      return;
-    }
-    const nodeId = normalizeObjectId(
-      currentView === 'knowledgeDomain'
-        ? (knowledgeDomainNode?._id || currentTitleDetail?._id || currentNodeDetail?._id)
-        : (
-            currentView === 'titleDetail'
-              ? currentTitleDetail?._id
-              : (currentView === 'nodeDetail' ? currentNodeDetail?._id : '')
-          )
-    );
-
-    localStorage.setItem(PAGE_STATE_STORAGE_KEY, JSON.stringify({
-      view: currentView,
-      nodeId,
-      updatedAt: Date.now()
-    }));
-  }, [
+  useBattleStatusPolling({
     authenticated,
-    showLocationModal,
+    isAdmin,
     view,
-    showKnowledgeDomain,
-    isTransitioningToDomain,
-    currentNodeDetail,
     currentTitleDetail,
-    knowledgeDomainNode
-  ]);
-
-  useEffect(() => {
-    if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
-    if (view === 'login') return;
-
-    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround'].includes(view)
-      || isSenseArticleSubView(view);
-    if (!isKnownView) {
-      if (isDevEnvironment) {
-        console.debug('[view-guard] fallback to home: unknown view', { view, reason: 'unknown_view' });
-      }
-      setView('home');
-      return;
-    }
-
-    if (view === 'admin' && !isAdmin) {
-      setView('home');
-      return;
-    }
-
-    if ((view === 'army' || view === 'equipment' || view === 'trainingGround') && isAdmin) {
-      setView('home');
-      return;
-    }
-
-    if (view === 'nodeDetail' && !currentNodeDetail && hasRestoredPageRef.current) {
-      setView('home');
-    }
-    if (view === 'titleDetail' && !currentTitleDetail && hasRestoredPageRef.current) {
-      setView('home');
-    }
-  }, [authenticated, showLocationModal, view, isAdmin, currentNodeDetail, currentTitleDetail]);
-
-    const handleLogout = () => {
-        clearStoredAuthState();
-        hasRestoredPageRef.current = false;
-        isRestoringPageRef.current = false;
-        setAuthenticated(false);
-        setUserId('');
-        setUsername('');
-        setProfession('');
-        setView('login');
-        setIsAdmin(false);
-        setAdminEntryTab('users');
-        setUserLocation('');
-        applyTravelStatus({ isTraveling: false });
-        setIsStoppingTravel(false);
-        resetNotificationCenter();
-        resetChatCenter();
-        resetAppShellState();
-        setIsApplyingDomainMaster(false);
-        setCurrentLocationNodeDetail(null);
-        setUserAvatar('default_male_1');
-        setSelectedLocationNode(null);
-        setShowLocationModal(false);
-        resetDistributionState();
-        resetDomainConflictState();
-        setSiegeSupportStatuses([]);
-        
-        // 清理socket连接和引用
-        if (socket) {
-            socket.disconnect();
-        }
-        if (socketRef.current) {
-            socketRef.current.removeAllListeners();
-            socketRef.current.close();
-            socketRef.current = null; // 关键：清空引用
-        }
-        setSocket(null); // 清空state
-        
-        // 清理节点数据
-        setNodes([]);
-    };
-
-    // 将socket初始化逻辑提取为独立函数
-    const initializeSocket = (token = null) => {
-        // 如果已存在socket，先清理
-        if (socketRef.current) {
-            socketRef.current.removeAllListeners();
-            socketRef.current.close();
-            socketRef.current = null;
-        }
-    
-        const newSocket = io(SOCKET_ENDPOINT, {
-            transports: ['websocket', 'polling'],
-            reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            reconnectionAttempts: 5,
-            timeout: 20000,
-            autoConnect: true
-        });
-        
-        newSocket.on('connect', () => {
-            console.log('WebSocket 连接成功:', newSocket.id);
-            const authToken = token || localStorage.getItem('token');
-            if (authToken) {
-                newSocket.emit('authenticate', authToken);
-                // 认证后立即请求游戏状态
-                setTimeout(() => {
-                    newSocket.emit('getGameState');
-                }, 200);
-            }
-            
-            // 如果是登录操作，立即获取游戏状态
-            if (token) {
-                setTimeout(() => {
-                    newSocket.emit('getGameState');
-                }, 300);
-            }
-        });
-    
-        newSocket.on('connect_error', (error) => {
-            console.error('WebSocket 连接错误:', error);
-        });
-    
-        newSocket.on('disconnect', (reason) => {
-            console.log('WebSocket 断开连接:', reason);
-        });
-    
-        newSocket.on('authenticated', (data) => {
-            console.log('认证成功');
-            setAuthenticated(true);
-            newSocket.emit('getGameState');
-        });
-    
-        newSocket.on('gameState', (data) => {
-            console.log('收到游戏状态:', data);
-            const approvedNodes = (data.nodes || []).filter(node => node.status === 'approved');
-            setNodes(approvedNodes);
-        });
-
-    newSocket.on('nodeCreated', (node) => {
-            if (node.status === 'approved') {
-                setNodes(prev => [...prev, node]);
-            }
-        });
-
-        newSocket.on('techUpgraded', (tech) => {
-            setTechnologies(prev => {
-                const existing = prev.find(t => t.techId === tech.techId);
-                if (existing) {
-                    return prev.map(t => t.techId === tech.techId ? tech : t);
-                }
-                return [...prev, tech];
-            });
-        });
-    
-        newSocket.on('resourcesUpdated', () => {
-            newSocket.emit('getGameState');
-        });
-    
-        // 【关键修改】添加知识点更新监听器
-        newSocket.on('knowledgePointUpdated', (updatedNodes) => {
-            setNodes(prevNodes => {
-                const updatedNodeMap = new Map();
-                updatedNodes.forEach(node => updatedNodeMap.set(node._id, node));
-                
-                // 更新现有节点状态 - 创建全新节点对象
-                const newNodes = prevNodes.map(node => {
-                    const updatedNode = updatedNodeMap.get(node._id);
-                    if (updatedNode) {
-                        // 创建全新的节点对象
-                        return {
-                            ...node,
-                            knowledgePoint: updatedNode.knowledgePoint
-                        };
-                    }
-                    return node;
-                });
-                
-                return newNodes;
-            });
-        });
-
-        socketRef.current = newSocket;
-        setSocket(newSocket);
-        
-        return newSocket;
-    };
-
-	    const checkAdminStatus = async () => {
-        const token = localStorage.getItem('token');
-        const storedUserRole = localStorage.getItem('userRole');
-        if (!token) return;
-        if (storedUserRole && storedUserRole !== 'admin') {
-            setIsAdmin(false);
-            return;
-        }
-    
-        try {
-            const response = await fetch(`${API_BASE}/admin/users`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-    
-            if (response.ok) {
-                setIsAdmin(true);
-            } else {
-                setIsAdmin(false);
-            }
-        } catch (error) {
-            console.log('非管理员用户');
-            setIsAdmin(false);
-        }
-    };
+    userLocation,
+    travelStatus,
+    showDistributionPanel,
+    siegeDialog,
+    fetchDistributionParticipationStatus,
+    resetDistributionState,
+    closeDistributionPanel,
+    fetchSiegeStatus,
+    clearSiegeStatus
+  });
 
     // 获取根节点
-    const fetchRootNodes = async () => {
+    const fetchRootNodes = useCallback(async () => {
         try {
             const response = await fetch(`${API_BASE}/nodes/public/root-nodes`);
             const parsed = await parseApiResponse(response);
@@ -2426,10 +1319,10 @@ const App = () => {
             console.error('获取根节点失败:', error);
             window.alert(`读取首页根知识域失败: ${error.message}`);
         }
-    };
+    }, [getApiErrorMessage, parseApiResponse]);
 
     // 获取热门节点
-    const fetchFeaturedNodes = async () => {
+    const fetchFeaturedNodes = useCallback(async () => {
         try {
             const response = await fetch(`${API_BASE}/nodes/public/featured-nodes`);
             const parsed = await parseApiResponse(response);
@@ -2443,82 +1336,41 @@ const App = () => {
             console.error('获取热门节点失败:', error);
             window.alert(`读取热门知识域失败: ${error.message}`);
         }
-    };
+    }, [getApiErrorMessage, parseApiResponse]);
 
-    const resolveNavigationRelationAgainstCurrent = (targetNodeId, currentNode, relationHint) => {
-        const normalizedHint = normalizeNavigationRelation(relationHint);
-        if (normalizedHint !== 'jump') return normalizedHint;
-
-        const normalizedTargetId = normalizeObjectId(targetNodeId);
-        if (!normalizedTargetId || !currentNode) return 'jump';
-
-        const isParentNode = Array.isArray(currentNode?.parentNodesInfo)
-            && currentNode.parentNodesInfo.some((item) => normalizeObjectId(item?._id) === normalizedTargetId);
-        if (isParentNode) return 'parent';
-
-        const isChildNode = Array.isArray(currentNode?.childNodesInfo)
-            && currentNode.childNodesInfo.some((item) => normalizeObjectId(item?._id) === normalizedTargetId);
-        if (isChildNode) return 'child';
-
-        return 'jump';
-    };
-
-    const appendNavigationTrailItem = (node, relation = 'jump', options = {}) => {
-        const mode = options?.mode === 'title' ? 'title' : 'sense';
-        setNavigationPath((prevPath) => {
-            const safePath = Array.isArray(prevPath) && prevPath.length > 0
-                ? prevPath
-                : createHomeNavigationPath();
-            const targetNavItem = buildNavigationTrailItem(node, relation, { mode });
-            if (!targetNavItem) return safePath;
-
-            const duplicateIndex = safePath.findIndex((item, index) => (
-                index > 0
-                && item?.type === 'node'
-                && normalizeObjectId(item?.nodeId) === targetNavItem.nodeId
-            ));
-            if (duplicateIndex >= 0) {
-                return [
-                    ...safePath.slice(0, duplicateIndex),
-                    targetNavItem
-                ];
-            }
-
-            return [...safePath, targetNavItem];
-        });
-    };
-
-    const replaceNavigationPathAtHistoryIndex = (historyIndex, node, options = {}) => {
-        const mode = options?.mode === 'title' ? 'title' : 'sense';
-        setNavigationPath((prevPath) => {
-            const safePath = Array.isArray(prevPath) && prevPath.length > 0
-                ? prevPath
-                : createHomeNavigationPath();
-            const boundedIndex = Number.isInteger(historyIndex)
-                ? Math.max(0, Math.min(historyIndex, safePath.length - 1))
-                : -1;
-            if (boundedIndex < 0) return safePath;
-
-            const nextPath = safePath.slice(0, boundedIndex + 1);
-            const lastHistory = nextPath[nextPath.length - 1];
-            if (lastHistory?.type !== 'node') {
-                return nextPath;
-            }
-
-            const nextItem = buildNavigationTrailItem(node, lastHistory.relation, { mode });
-            return [
-                ...nextPath.slice(0, -1),
-                {
-                    ...lastHistory,
-                    mode,
-                    senseId: mode === 'sense'
-                        ? (typeof node?.activeSenseId === 'string' ? node.activeSenseId : (lastHistory.senseId || ''))
-                        : '',
-                    label: nextItem?.label || lastHistory.label
-                }
-            ];
-        });
-    };
+    const { handleLoginSuccess, handleLogout } = useAppSession({
+        authenticated,
+        hasRestoredPageRef,
+        isRestoringPageRef,
+        initializeSocket,
+        cleanupSocket,
+        resetAppNavigationStateToHome,
+        applyTravelStatus,
+        fetchTravelStatus,
+        fetchFeaturedNodes,
+        updateUserLocation,
+        resetNotificationCenter,
+        resetChatCenter,
+        resetAppShellState,
+        resetDistributionState,
+        resetDomainConflictState,
+        setAuthenticated,
+        setUserId,
+        setUsername,
+        setProfession,
+        setUserLocation,
+        setUserAvatar,
+        setIsAdmin,
+        setView,
+        setShowLocationModal,
+        setAdminEntryTab,
+        setIsStoppingTravel,
+        setIsApplyingDomainMaster,
+        setCurrentLocationNodeDetail,
+        setSelectedLocationNode,
+        setSiegeSupportStatuses,
+        setNodes
+    });
 
     const formatTravelSeconds = (seconds) => {
         if (!Number.isFinite(seconds) || seconds <= 0) return '0 秒';
@@ -2527,24 +1379,6 @@ const App = () => {
         const remain = rounded % 60;
         if (mins <= 0) return `${remain} 秒`;
         return `${mins} 分 ${remain} 秒`;
-    };
-
-    const closeKnowledgeDomainBeforeNavigation = () => {
-        if (showKnowledgeDomain || isTransitioningToDomain || knowledgeDomainNode) {
-            setShowKnowledgeDomain(false);
-            setIsTransitioningToDomain(false);
-            setDomainTransitionProgress(0);
-            setKnowledgeDomainNode(null);
-            setKnowledgeDomainMode('normal');
-            setClickedNodeForTransition(null);
-            knowledgeDomainReturnContextRef.current = null;
-        }
-        if (showDistributionPanel) {
-            closeDistributionPanel();
-        }
-        if (siegeDialog.open) {
-            resetSiegeDialog();
-        }
     };
 
     const clearStarMapState = useCallback((options = {}) => {
@@ -2563,43 +1397,6 @@ const App = () => {
             setKnowledgeMainViewMode(KNOWLEDGE_MAIN_VIEW_MODE.MAIN);
         }
     }, []);
-
-    const prepareForPrimaryNavigation = async () => {
-        closeKnowledgeDomainBeforeNavigation();
-        setTitleRelationInfo(null);
-        setIsSenseSelectorVisible(false);
-        await collapseRightDocksBeforeNavigation();
-    };
-
-    const navigateToHomeWithDockCollapse = async () => {
-        await prepareForPrimaryNavigation();
-        clearStarMapState();
-        setView('home');
-        setCurrentTitleDetail(null);
-        setTitleGraphData(null);
-        setTitleRelationInfo(null);
-        setNodeInfoModalTarget(null);
-        setIsSenseSelectorVisible(false);
-        setSenseSelectorSourceNode(null);
-        setNavigationPath(createHomeNavigationPath());
-    };
-
-    const handleHeaderHomeNavigation = async () => {
-        if (view === 'senseArticleEditor') {
-            openSystemConfirm({
-                title: '确认返回首页',
-                message: '当前位于百科编辑页，返回首页将直接丢失本次未保存内容，是否继续返回首页？',
-                confirmText: '直接返回首页',
-                confirmTone: 'danger',
-                onConfirm: async () => {
-                    closeSystemConfirm();
-                    await navigateToHomeWithDockCollapse();
-                }
-            });
-            return;
-        }
-        await navigateToHomeWithDockCollapse();
-    };
 
     const startIntelHeistMiniGame = (targetNode) => {
         if (!targetNode?._id) return;
@@ -2659,454 +1456,213 @@ const App = () => {
         }));
     };
 
-    // 获取标题主视角详情
-    const fetchTitleDetail = async (nodeId, clickedNode = null, navOptions = {}) => {
-        const shouldAlert = navOptions?.silent !== true;
-        const normalizedNodeId = normalizeObjectId(nodeId);
-        if (!isValidObjectId(normalizedNodeId)) {
-            if (shouldAlert) {
-                alert('无效的节点ID');
-            }
-            return null;
-        }
-        const request = beginPrimaryNavigationRequest(
-            `title:${normalizedNodeId}`,
-            typeof navOptions?.requestSource === 'string' ? navOptions.requestSource : 'title-detail'
-        );
-        try {
-            await prepareForPrimaryNavigation();
-            if (!isPrimaryNavigationRequestCurrent(request)) {
-                return null;
-            }
-
-            const response = await fetchPrimaryNavigationResponse(
-                `${API_BASE}/nodes/public/title-detail/${normalizedNodeId}?depth=1`,
-                request
-            );
-            if (!response) {
-                return null;
-            }
-            if (!response.ok) {
-                if (shouldAlert) {
-                    const parsed = await parseApiResponse(response);
-                    alert(getApiErrorMessage(parsed, '获取标题主视角失败'));
-                }
-                return null;
-            }
-
-            const data = await response.json();
-            const graph = data?.graph || {};
-            const centerNode = graph?.centerNode || null;
-            const targetNodeId = normalizeObjectId(centerNode?._id);
-            if (!isPrimaryNavigationRequestCurrent(request)) {
-                return null;
-            }
-            if (!targetNodeId || !centerNode) {
-                if (shouldAlert) {
-                    alert('标题主视角数据无效');
-                }
-                return null;
-            }
-
-            const shouldResetTrail = navOptions?.resetTrail === true || !isKnowledgeDetailView(view);
-            const relation = normalizeNavigationRelation(navOptions?.relationHint);
-            if (navOptions?.keepStarMapState !== true) {
-                clearStarMapState();
-            }
-            trackRecentDomain(centerNode, { mode: 'title' });
-            setCurrentTitleDetail(centerNode);
-            setTitleGraphData(graph);
-            setCurrentNodeDetail(null);
-            setNodeInfoModalTarget(null);
-            setTitleRelationInfo(null);
-            setView('titleDetail');
-            setIsSenseSelectorVisible(false);
-            setSenseSelectorSourceNode(centerNode);
-            refreshDomainConflictForNode(targetNodeId);
-
-            if (clickedNode) {
-                setClickedNodeForTransition(clickedNode);
-            } else {
-                setClickedNodeForTransition(null);
-            }
-
-            setNavigationPath((prevPath) => {
-                const safePath = Array.isArray(prevPath) && prevPath.length > 0
-                    ? prevPath
-                    : createHomeNavigationPath();
-                const historyIndex = Number.isInteger(navOptions?.historyIndex)
-                    ? Math.max(0, Math.min(navOptions.historyIndex, safePath.length - 1))
-                    : -1;
-                if (historyIndex >= 0) {
-                    const nextPath = safePath.slice(0, historyIndex + 1);
-                    const lastHistory = nextPath[nextPath.length - 1];
-                    if (lastHistory?.type === 'node') {
-                        const nextItem = buildNavigationTrailItem(centerNode, lastHistory.relation, { mode: 'title' });
-                        return [...nextPath.slice(0, -1), {
-                            ...lastHistory,
-                            mode: 'title',
-                            senseId: '',
-                            label: nextItem?.label || lastHistory.label
-                        }];
-                    }
-                    return nextPath;
-                }
-
-                const targetNavItem = buildNavigationTrailItem(centerNode, relation, { mode: 'title' });
-                if (!targetNavItem) return safePath;
-
-                if (shouldResetTrail) {
-                    return [...createHomeNavigationPath(), targetNavItem];
-                }
-
-                const duplicateIndex = safePath.findIndex((item, index) => (
-                    index > 0
-                    && item?.type === 'node'
-                    && normalizeObjectId(item?.nodeId) === targetNavItem.nodeId
-                ));
-                if (duplicateIndex >= 0) {
-                    return [
-                        ...safePath.slice(0, duplicateIndex),
-                        targetNavItem
-                    ];
-                }
-
-                return [...safePath, targetNavItem];
-            });
-
-            return centerNode;
-        } catch (error) {
-            if (!isPrimaryNavigationRequestCurrent(request) || isAbortError(error)) {
-                return null;
-            }
-            console.error('获取标题主视角失败:', error);
-            if (shouldAlert) {
-                alert(`获取标题主视角失败: ${error.message}`);
-            }
-            return null;
-        } finally {
-            finishPrimaryNavigationRequest(request);
-        }
-    };
-
-    // 获取释义主视角详情
-    const fetchNodeDetail = async (nodeId, clickedNode = null, navOptions = {}) => {
-        const shouldAlert = navOptions?.silent !== true;
-        const normalizedNodeId = normalizeObjectId(nodeId);
-        if (!isValidObjectId(normalizedNodeId)) {
-            if (shouldAlert) {
-                alert('无效的节点ID');
-            }
-            return null;
-        }
-        const requestedSenseId = typeof navOptions?.activeSenseId === 'string' ? navOptions.activeSenseId.trim() : '';
-        const request = beginPrimaryNavigationRequest(
-            `sense:${normalizedNodeId}:${requestedSenseId}`,
-            typeof navOptions?.requestSource === 'string' ? navOptions.requestSource : 'node-detail'
-        );
-        try {
-            await prepareForPrimaryNavigation();
-            if (!isPrimaryNavigationRequestCurrent(request)) {
-                return null;
-            }
-            const detailUrl = requestedSenseId
-                ? `${API_BASE}/nodes/public/node-detail/${normalizedNodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
-                : `${API_BASE}/nodes/public/node-detail/${normalizedNodeId}`;
-            const response = await fetchPrimaryNavigationResponse(detailUrl, request);
-            if (!response) {
-                return null;
-            }
-            if (response.ok) {
-                const data = await response.json();
-                const targetNodeId = normalizeObjectId(data?.node?._id);
-                if (!isPrimaryNavigationRequestCurrent(request)) {
-                    return null;
-                }
-                const currentNodeBeforeNavigate = currentNodeDetail;
-                const shouldResetTrail = navOptions?.resetTrail === true || !isKnowledgeDetailView(view);
-                const relation = resolveNavigationRelationAgainstCurrent(
-                    targetNodeId,
-                    currentNodeBeforeNavigate,
-                    navOptions?.relationHint
-                );
-                const previousNodeId = normalizeObjectId(currentNodeBeforeNavigate?._id);
-                const isSenseOnlySwitch = !!requestedSenseId && !!targetNodeId && targetNodeId === previousNodeId;
-                if (navOptions?.keepStarMapState !== true) {
-                    clearStarMapState();
-                }
-                if (!isSenseOnlySwitch) {
-                    setIsSenseSelectorVisible(false);
-                }
-                trackRecentDomain(data.node, {
-                    mode: 'sense',
-                    senseId: typeof data?.node?.activeSenseId === 'string' ? data.node.activeSenseId : ''
-                });
-                setCurrentNodeDetail(data.node);
-                setCurrentTitleDetail(null);
-                setTitleGraphData(null);
-                setTitleRelationInfo(null);
-                setView('nodeDetail');
-                refreshDomainConflictForNode(targetNodeId);
-
-                // 保存被点击的节点，用于WebGL过渡动画
-                if (clickedNode) {
-                    setClickedNodeForTransition(clickedNode);
-                } else {
-                    setClickedNodeForTransition(null);
-                }
-
-                setNavigationPath((prevPath) => {
-                    const safePath = Array.isArray(prevPath) && prevPath.length > 0
-                        ? prevPath
-                        : createHomeNavigationPath();
-                    const historyIndex = Number.isInteger(navOptions?.historyIndex)
-                        ? Math.max(0, Math.min(navOptions.historyIndex, safePath.length - 1))
-                        : -1;
-                    if (historyIndex >= 0) {
-                        const nextPath = safePath.slice(0, historyIndex + 1);
-                        const lastHistory = nextPath[nextPath.length - 1];
-                        if (lastHistory?.type === 'node') {
-                            const nextItem = buildNavigationTrailItem(
-                                data?.node || {},
-                                lastHistory.relation,
-                                { mode: 'sense' }
-                            );
-                            return [
-                                ...nextPath.slice(0, -1),
-                                {
-                                    ...lastHistory,
-                                    mode: 'sense',
-                                    senseId: typeof data?.node?.activeSenseId === 'string' ? data.node.activeSenseId : (lastHistory.senseId || ''),
-                                    label: nextItem?.label || lastHistory.label
-                                }
-                            ];
-                        }
-                        return nextPath;
-                    }
-
-                    const targetNavItem = buildNavigationTrailItem(data.node, relation, { mode: 'sense' });
-                    if (!targetNavItem) return safePath;
-
-                    if (shouldResetTrail) {
-                        return [...createHomeNavigationPath(), targetNavItem];
-                    }
-
-                    const duplicateIndex = safePath.findIndex((item, index) => (
-                        index > 0
-                        && item?.type === 'node'
-                        && normalizeObjectId(item?.nodeId) === targetNavItem.nodeId
-                    ));
-                    if (duplicateIndex >= 0) {
-                        return [
-                            ...safePath.slice(0, duplicateIndex),
-                            targetNavItem
-                        ];
-                    }
-
-                    return [...safePath, targetNavItem];
-                });
-                // WebGL场景更新由useEffect自动处理
-                return data.node;
-            } else {
-                if (shouldAlert) {
-                    const parsed = await parseApiResponse(response);
-                    alert(getApiErrorMessage(parsed, '获取节点详情失败'));
-                }
-                return null;
-            }
-        } catch (error) {
-            if (!isPrimaryNavigationRequestCurrent(request) || isAbortError(error)) {
-                return null;
-            }
-            console.error('获取节点详情失败:', error);
-            if (shouldAlert) {
-                alert(`获取节点详情失败: ${error.message}`);
-            }
-            return null;
-        } finally {
-            finishPrimaryNavigationRequest(request);
-        }
-    };
-
-    const buildStarMapCenterState = useCallback((layer, nodeLike = {}) => {
-        const nodeId = normalizeObjectId(nodeLike?._id);
-        if (!nodeId) return null;
-        return {
-            layer: layer === STAR_MAP_LAYER.SENSE ? STAR_MAP_LAYER.SENSE : STAR_MAP_LAYER.TITLE,
-            nodeId,
-            senseId: layer === STAR_MAP_LAYER.SENSE
-                ? (typeof nodeLike?.activeSenseId === 'string' ? nodeLike.activeSenseId.trim() : '')
-                : '',
-            label: typeof nodeLike?.displayName === 'string' && nodeLike.displayName.trim()
-                ? nodeLike.displayName.trim()
-                : (typeof nodeLike?.name === 'string' ? nodeLike.name.trim() : '')
-        };
-    }, []);
-
-    const fetchTitleStarMap = useCallback(async (nodeId, options = {}) => {
-        const normalizedNodeId = normalizeObjectId(nodeId);
-        if (!isValidObjectId(normalizedNodeId)) return null;
-
-        const request = beginStarMapRequest(`title:${normalizedNodeId}`);
-        const requestedLimit = Number.isFinite(Number(options?.limit))
-            ? Math.max(10, Math.min(200, Number(options.limit)))
-            : null;
-        const query = requestedLimit ? `?limit=${requestedLimit}` : '';
-        setIsStarMapLoading(true);
-
-        try {
-            const response = await fetch(`${API_BASE}/nodes/public/title-star-map/${normalizedNodeId}${query}`, {
-                signal: request.controller.signal
-            });
-            if (!isStarMapRequestCurrent(request)) return null;
-            if (!response.ok) {
-                const parsed = await parseApiResponse(response);
-                if (options?.silent !== true) {
-                    alert(getApiErrorMessage(parsed, '获取标题星盘失败'));
-                }
-                return null;
-            }
-
-            const data = await response.json();
-            if (!isStarMapRequestCurrent(request)) return null;
-            const graph = data?.graph || null;
-            const centerNode = graph?.centerNode || null;
-            const centerState = buildStarMapCenterState(STAR_MAP_LAYER.TITLE, centerNode);
-            if (!graph || !centerState) {
-                if (options?.silent !== true) {
-                    alert('标题星盘数据无效');
-                }
-                return null;
-            }
-
-            setTitleRelationInfo(null);
-            setIsSenseSelectorVisible(false);
-            if (options?.syncDetailState) {
-                setCurrentTitleDetail(centerNode);
-                setCurrentNodeDetail(null);
-                setTitleGraphData(null);
-                setNodeInfoModalTarget(null);
-                setView('titleDetail');
-                refreshDomainConflictForNode(normalizedNodeId);
-            }
-            setTitleStarMapData(graph);
-            setNodeStarMapData(null);
-            setCurrentStarMapCenter(centerState);
-            setCurrentStarMapLayer(STAR_MAP_LAYER.TITLE);
-            setCurrentStarMapLimit(Math.max(10, Number(graph?.effectiveLimit) || DEFAULT_STAR_MAP_LIMIT));
-            setKnowledgeMainViewMode(KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP);
-            setClickedNodeForTransition(options?.clickedNode || null);
-            return graph;
-        } catch (error) {
-            if (!isStarMapRequestCurrent(request) || isAbortError(error)) {
-                return null;
-            }
-            console.error('获取标题星盘失败:', error);
-            if (options?.silent !== true) {
-                alert(`获取标题星盘失败: ${error.message}`);
-            }
-            return null;
-        } finally {
-            if (isStarMapRequestCurrent(request)) {
-                setIsStarMapLoading(false);
-            }
-            finishStarMapRequest(request);
-        }
-    }, [
-        beginStarMapRequest,
-        buildStarMapCenterState,
-        finishStarMapRequest,
-        getApiErrorMessage,
+    const {
+        resolveNavigationRelationAgainstCurrent,
+        appendNavigationTrailItem,
+        replaceNavigationPathAtHistoryIndex,
+        prepareForPrimaryNavigation,
+        navigateToHomeWithDockCollapse,
+        handleHeaderHomeNavigation,
+        fetchTitleDetail,
+        fetchNodeDetail
+    } = useKnowledgeNavigation({
+        view,
+        currentNodeDetail,
+        showKnowledgeDomain,
+        isTransitioningToDomain,
+        knowledgeDomainNode,
+        showDistributionPanel,
+        siegeDialog,
+        openSystemConfirm,
+        closeSystemConfirm,
+        collapseRightDocksBeforeNavigation,
+        clearStarMapState,
+        trackRecentDomain,
+        refreshDomainConflictForNode,
+        beginPrimaryNavigationRequest,
+        isPrimaryNavigationRequestCurrent,
+        finishPrimaryNavigationRequest,
+        fetchPrimaryNavigationResponse,
         isAbortError,
-        isStarMapRequestCurrent,
         parseApiResponse,
-        refreshDomainConflictForNode
-    ]);
-
-    const fetchSenseStarMap = useCallback(async (nodeId, senseId = '', options = {}) => {
-        const normalizedNodeId = normalizeObjectId(nodeId);
-        if (!isValidObjectId(normalizedNodeId)) return null;
-
-        const request = beginStarMapRequest(`sense:${normalizedNodeId}:${String(senseId || '').trim()}`);
-        const requestedLimit = Number.isFinite(Number(options?.limit))
-            ? Math.max(10, Math.min(200, Number(options.limit)))
-            : null;
-        const senseQuery = typeof senseId === 'string' && senseId.trim()
-            ? `senseId=${encodeURIComponent(senseId.trim())}`
-            : '';
-        const limitQuery = requestedLimit ? `limit=${requestedLimit}` : '';
-        const query = [senseQuery, limitQuery].filter(Boolean).join('&');
-        setIsStarMapLoading(true);
-
-        try {
-            const response = await fetch(
-                `${API_BASE}/nodes/public/sense-star-map/${normalizedNodeId}${query ? `?${query}` : ''}`,
-                { signal: request.controller.signal }
-            );
-            if (!isStarMapRequestCurrent(request)) return null;
-            if (!response.ok) {
-                const parsed = await parseApiResponse(response);
-                if (options?.silent !== true) {
-                    alert(getApiErrorMessage(parsed, '获取释义星盘失败'));
-                }
-                return null;
-            }
-
-            const data = await response.json();
-            if (!isStarMapRequestCurrent(request)) return null;
-            const graph = data?.graph || null;
-            const centerNode = graph?.centerNode || null;
-            const centerState = buildStarMapCenterState(STAR_MAP_LAYER.SENSE, centerNode);
-            if (!graph || !centerState) {
-                if (options?.silent !== true) {
-                    alert('释义星盘数据无效');
-                }
-                return null;
-            }
-
-            setTitleRelationInfo(null);
-            setIsSenseSelectorVisible(false);
-            if (options?.syncDetailState) {
-                setCurrentNodeDetail(centerNode);
-                setCurrentTitleDetail(null);
-                setTitleGraphData(null);
-                setNodeInfoModalTarget(null);
-                setView('nodeDetail');
-                refreshDomainConflictForNode(normalizedNodeId);
-            }
-            setNodeStarMapData(graph);
-            setTitleStarMapData(null);
-            setCurrentStarMapCenter(centerState);
-            setCurrentStarMapLayer(STAR_MAP_LAYER.SENSE);
-            setCurrentStarMapLimit(Math.max(10, Number(graph?.effectiveLimit) || DEFAULT_STAR_MAP_LIMIT));
-            setKnowledgeMainViewMode(KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP);
-            setClickedNodeForTransition(options?.clickedNode || null);
-            return graph;
-        } catch (error) {
-            if (!isStarMapRequestCurrent(request) || isAbortError(error)) {
-                return null;
-            }
-            console.error('获取释义星盘失败:', error);
-            if (options?.silent !== true) {
-                alert(`获取释义星盘失败: ${error.message}`);
-            }
-            return null;
-        } finally {
-            if (isStarMapRequestCurrent(request)) {
-                setIsStarMapLoading(false);
-            }
-            finishStarMapRequest(request);
-        }
-    }, [
-        beginStarMapRequest,
-        buildStarMapCenterState,
-        finishStarMapRequest,
         getApiErrorMessage,
-        isAbortError,
+        closeDistributionPanel,
+        resetSiegeDialog,
+        knowledgeDomainReturnContextRef,
+        setShowKnowledgeDomain,
+        setIsTransitioningToDomain,
+        setDomainTransitionProgress,
+        setKnowledgeDomainNode,
+        setKnowledgeDomainMode,
+        setClickedNodeForTransition,
+        setTitleRelationInfo,
+        setIsSenseSelectorVisible,
+        setSenseSelectorSourceNode,
+        setCurrentTitleDetail,
+        setTitleGraphData,
+        setCurrentNodeDetail,
+        setNodeInfoModalTarget,
+        setView,
+        setNavigationPath
+    });
+
+    const {
+        fetchTitleStarMap,
+        fetchSenseStarMap,
+        recenterStarMapFromNode
+    } = useStarMapNavigation({
+        view,
+        currentNodeDetail,
+        currentStarMapCenter,
+        beginStarMapRequest,
         isStarMapRequestCurrent,
+        finishStarMapRequest,
         parseApiResponse,
-        refreshDomainConflictForNode
-    ]);
+        getApiErrorMessage,
+        refreshDomainConflictForNode,
+        isAbortError,
+        resolveNavigationRelationAgainstCurrent,
+        appendNavigationTrailItem,
+        setCurrentStarMapCenter,
+        setCurrentStarMapLayer,
+        setCurrentStarMapLimit,
+        setIsStarMapLoading,
+        setKnowledgeMainViewMode,
+        setTitleStarMapData,
+        setNodeStarMapData,
+        setClickedNodeForTransition,
+        setCurrentTitleDetail,
+        setCurrentNodeDetail,
+        setTitleGraphData,
+        setNodeInfoModalTarget,
+        setView,
+        setTitleRelationInfo,
+        setIsSenseSelectorVisible
+    });
+
+    const {
+        handleEnterKnowledgeDomain,
+        handleExitKnowledgeDomain
+    } = useKnowledgeDomainTransition({
+        view,
+        currentNodeDetail,
+        currentTitleDetail,
+        trackRecentDomain,
+        knowledgeDomainReturnContextRef,
+        sceneManagerRef,
+        setKnowledgeDomainMode,
+        setKnowledgeDomainNode,
+        setIsTransitioningToDomain,
+        setShowNodeInfoModal,
+        setTitleRelationInfo,
+        setIsSenseSelectorVisible,
+        setShowKnowledgeDomain,
+        setDomainTransitionProgress,
+        fetchTitleDetail,
+        fetchNodeDetail
+    });
+
+    const {
+        updateSenseSelectorAnchorBySceneNode,
+        handleHomeDomainActivate
+    } = useSenseSelector({
+        view,
+        isWebGLReady,
+        webglCanvasRef,
+        sceneManagerRef,
+        senseSelectorPanelRef,
+        currentNodeDetail,
+        currentTitleDetail,
+        senseSelectorSourceNode,
+        senseSelectorSourceSceneNodeId,
+        isSenseSelectorVisible,
+        senseSelectorOverviewNode,
+        senseArticleEntryStatusMap,
+        armHomeDetailTransition,
+        setTitleRelationInfo,
+        setSenseSelectorSourceNode,
+        setSenseSelectorSourceSceneNodeId,
+        setSenseSelectorAnchor,
+        setIsSenseSelectorVisible,
+        setSenseSelectorOverviewNode,
+        setSenseSelectorOverviewLoading,
+        setSenseSelectorOverviewError,
+        setSenseArticleEntryStatusMap
+    });
+
+    useAppPageState({
+        authenticated,
+        showLocationModal,
+        isAdmin,
+        view,
+        showKnowledgeDomain,
+        isTransitioningToDomain,
+        knowledgeDomainNode,
+        currentNodeDetail,
+        currentTitleDetail,
+        hasRestoredPageRef,
+        isRestoringPageRef,
+        fetchTitleDetail,
+        fetchNodeDetail,
+        setView,
+        setKnowledgeDomainNode,
+        setShowKnowledgeDomain,
+        setIsTransitioningToDomain,
+        setDomainTransitionProgress
+    });
+
+  const handleLocationConfirm = useCallback(async (selectedNode) => {
+    console.log('用户选择的节点:', selectedNode);
+
+    if (!selectedNode || !selectedNode.name) {
+      window.alert('选择的节点无效，请重新选择');
+      return;
+    }
+
+    const locationName = selectedNode.name;
+    const updatedLocation = await updateUserLocation(locationName);
+
+    if (updatedLocation) {
+      const selectedNodeId = normalizeObjectId(selectedNode._id || selectedNode.nodeId);
+      setUserLocation(updatedLocation);
+      setSelectedLocationNode(selectedNode);
+      setCurrentLocationNodeDetail(selectedNode);
+      localStorage.setItem('userLocation', updatedLocation);
+
+      setShowLocationModal(false);
+      const resolvedLocationDetail = await fetchLocationNodeDetail(updatedLocation, { silent: true });
+      const targetNodeId = normalizeObjectId(
+        resolvedLocationDetail?._id
+        || resolvedLocationDetail?.nodeId
+        || selectedNodeId
+      );
+
+      if (targetNodeId) {
+        const opened = await fetchTitleDetail(targetNodeId, null, {
+          resetTrail: true,
+          relationHint: 'jump'
+        });
+        if (opened) {
+          return;
+        }
+      }
+
+      setView('home');
+      fetchRootNodes();
+      fetchFeaturedNodes();
+    }
+  }, [
+    fetchFeaturedNodes,
+    fetchLocationNodeDetail,
+    fetchRootNodes,
+    fetchTitleDetail,
+    setCurrentLocationNodeDetail,
+    setSelectedLocationNode,
+    setShowLocationModal,
+    setUserLocation,
+    setView,
+    updateUserLocation
+  ]);
 
     const buildClickedNodeFromScene = useCallback((targetNodeId, options = {}) => {
         const sceneNodes = sceneManagerRef.current?.currentLayout?.nodes || [];
@@ -3124,171 +1680,28 @@ const App = () => {
         };
     }, []);
 
-    const updateSenseSelectorAnchorBySceneNode = (sceneNode) => {
-        const renderer = sceneManagerRef.current?.renderer;
-        const canvas = webglCanvasRef.current;
-        if (!renderer || !canvas || !sceneNode) return;
-        const rect = canvas.getBoundingClientRect();
-        const screenPos = renderer.worldToScreen(sceneNode.x, sceneNode.y);
-        const next = {
-            x: Math.round(rect.left + screenPos.x),
-            y: Math.round(rect.top + screenPos.y),
-            visible: true
-        };
-        senseSelectorAnchorRef.current = next;
-        setSenseSelectorAnchor(next);
-    };
-
-    const recenterStarMapFromNode = async (node) => {
-        if (!node?.data?._id) return;
-        const relationHint = getNavigationRelationFromSceneNode(node);
-
-        if (view === 'titleDetail') {
-            const nextCenter = buildStarMapCenterState(STAR_MAP_LAYER.TITLE, node.data);
-            if (areStarMapCentersEqual(currentStarMapCenter, nextCenter)) return;
-            const graph = await fetchTitleStarMap(node.data._id, {
-                silent: false,
-                clickedNode: node
-            });
-            if (graph?.centerNode) {
-                appendNavigationTrailItem(
-                    graph.centerNode,
-                    normalizeNavigationRelation(relationHint),
-                    { mode: 'title' }
-                );
-            }
-            return;
-        }
-
-        if (view === 'nodeDetail') {
-            const nextCenter = buildStarMapCenterState(STAR_MAP_LAYER.SENSE, node.data);
-            if (areStarMapCentersEqual(currentStarMapCenter, nextCenter)) return;
-            const graph = await fetchSenseStarMap(node.data._id, node?.data?.activeSenseId || '', {
-                silent: false,
-                clickedNode: node
-            });
-            if (graph?.centerNode) {
-                appendNavigationTrailItem(
-                    graph.centerNode,
-                    resolveNavigationRelationAgainstCurrent(graph.centerNode?._id, currentNodeDetail, relationHint),
-                    { mode: 'sense' }
-                );
-            }
-        }
-    };
-
-    const updateSenseSelectorAnchorByElement = (element) => {
-        const rect = element?.getBoundingClientRect?.();
-        if (!rect) return;
-        const next = {
-            x: Math.round(rect.left + rect.width / 2),
-            y: Math.round(rect.top + rect.height / 2),
-            visible: true
-        };
-        senseSelectorAnchorRef.current = next;
-        setSenseSelectorAnchor(next);
-    };
-
-    const handleHomeDomainActivate = useCallback((node, anchorElement = null) => {
-        if (!node?._id) return;
-        setTitleRelationInfo(null);
-        setSenseSelectorSourceNode(node);
-        setSenseSelectorSourceSceneNodeId('');
-        armHomeDetailTransition(node, anchorElement);
-        if (anchorElement) {
-            updateSenseSelectorAnchorByElement(anchorElement);
-        }
-        setIsSenseSelectorVisible(true);
-    }, [armHomeDetailTransition]);
-
-    const handleGhostStatusChange = useCallback((runId, status) => {
-        setHomeDetailTransition((prev) => {
-            if (!prev || prev.runId !== runId || prev.status === 'idle') return prev;
-            if (prev.status === status) return prev;
-            return {
-                ...prev,
-                status
-            };
-        });
-    }, []);
-
-    const handleGhostSettleProgress = useCallback((runId, progress) => {
-        const current = homeDetailTransitionRef.current;
-        if (!current || current.runId !== runId) return;
-        updateHomeTransitionReveal(runId, progress);
-    }, [updateHomeTransitionReveal]);
-
-    const handleGhostSettleComplete = useCallback((runId) => {
-        const current = homeDetailTransitionRef.current;
-        if (!current || current.runId !== runId) return;
-        if (current.targetLayoutNodeId && sceneManagerRef.current?.renderer) {
-            sceneManagerRef.current.renderer.setNodeRevealProgress(current.targetLayoutNodeId, 1);
-        }
-        clearHomeDetailTransition();
-    }, [clearHomeDetailTransition]);
-
-    const handleJumpToCurrentLocationView = async () => {
-        if (!currentLocationNodeDetail?._id) {
-            return;
-        }
-
-        const activeDetailNode = isTitleBattleView(view) ? currentTitleDetail : currentNodeDetail;
-        if (isKnowledgeDetailView(view) && activeDetailNode?.name === userLocation) {
-            return;
-        }
-
-        const clickedNode = buildClickedNodeFromScene(currentLocationNodeDetail._id);
-        await fetchTitleDetail(currentLocationNodeDetail._id, clickedNode);
-    };
-
-    const handleDistributionAnnouncementClick = async (notification) => {
-        if (!notification) return;
-
-        if (!notification.read && notification._id) {
-            await markNotificationRead(notification._id);
-        }
-
-        let targetNodeId = normalizeObjectId(notification.nodeId);
-        if (!targetNodeId && typeof notification.nodeName === 'string' && notification.nodeName.trim()) {
-            try {
-                const response = await fetch(`${API_BASE}/nodes/public/search?query=${encodeURIComponent(notification.nodeName.trim())}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    const exactMatch = Array.isArray(data?.results)
-                        ? data.results.find((item) => (
-                            item?.domainName === notification.nodeName.trim()
-                            || item?.name === notification.nodeName.trim()
-                        ))
-                        : null;
-                    targetNodeId = normalizeObjectId(exactMatch?.nodeId || exactMatch?._id);
-                }
-            } catch (error) {
-                targetNodeId = '';
-            }
-        }
-        if (!targetNodeId) return;
-
-        const clickedNode = buildClickedNodeFromScene(targetNodeId);
-        await fetchTitleDetail(targetNodeId, clickedNode);
-        setShowSearchResults(false);
-    };
-
-    const handleArrivalNotificationClick = async (notification) => {
-        if (!notification) return;
-        await handleDistributionAnnouncementClick(notification);
-    };
-
-    const handleHomeAnnouncementClick = async (notification) => {
-        if (!notification) return;
-        if (notification.type === 'domain_distribution_announcement') {
-            await handleDistributionAnnouncementClick(notification);
-            return;
-        }
-
-        if (!notification.read && notification._id) {
-            await markNotificationRead(notification._id);
-        }
-    };
+    const {
+        handleJumpToCurrentLocationView,
+        handleDistributionAnnouncementClick,
+        handleArrivalNotificationClick,
+        handleHomeAnnouncementClick,
+        handleOpenRelatedDomain,
+        handleOpenTravelNode,
+        handleHomeKnowledgeSearchResultClick,
+        handleDetailKnowledgeSearchResultClick
+    } = useKnowledgeEntryActions({
+        view,
+        currentNodeDetail,
+        currentTitleDetail,
+        currentLocationNodeDetail,
+        userLocation,
+        markNotificationRead,
+        closeHeaderPanels,
+        buildClickedNodeFromScene,
+        fetchTitleDetail,
+        fetchNodeDetail,
+        closeKnowledgeSearchResults
+    });
 
     const currentNodeMasterId = normalizeObjectId(nodeInfoModalTarget?.domainMaster);
     const currentNodeOwnerRole = nodeInfoModalTarget?.owner?.role || '';
@@ -3337,71 +1750,6 @@ const App = () => {
         && !!siegePreferredBattleGate
         && siegeStatus.compare?.defender?.source === 'intel'
     );
-
-    const handleOpenRelatedDomain = async (node, sectionType = 'default') => {
-        const nodeId = normalizeObjectId(node?._id);
-        if (!nodeId) return;
-        closeHeaderPanels();
-        const clickedNode = buildClickedNodeFromScene(nodeId);
-        if (sectionType === 'recent' && node?.recentVisitMode === 'sense') {
-            await fetchNodeDetail(nodeId, clickedNode, {
-                relationHint: 'jump',
-                activeSenseId: typeof node?.recentVisitSenseId === 'string' ? node.recentVisitSenseId.trim() : ''
-            });
-            return;
-        }
-        await fetchTitleDetail(nodeId, clickedNode, { relationHint: 'jump' });
-    };
-
-    const handleOpenTravelNode = async (travelNode) => {
-        const nodeId = normalizeObjectId(travelNode?.nodeId);
-        if (!nodeId) return;
-        const clickedNode = buildClickedNodeFromScene(nodeId);
-        await fetchTitleDetail(nodeId, clickedNode);
-    };
-
-    const handleKnowledgeSearchChange = (event) => {
-        setHomeSearchQuery(event.target.value);
-    };
-
-    const handleKnowledgeSearchFocus = () => {
-        setShowSearchResults(true);
-    };
-
-    const handleKnowledgeSearchClear = () => {
-        setHomeSearchQuery('');
-        setHomeSearchResults([]);
-        setShowSearchResults(true);
-    };
-
-    const handleHomeKnowledgeSearchResultClick = (node) => {
-        const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
-        if (!targetNodeId) return;
-        fetchNodeDetail(targetNodeId, {
-            id: `search-${targetNodeId || node?._id}`,
-            data: node,
-            type: 'search'
-        }, {
-            resetTrail: true,
-            relationHint: 'jump',
-            activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
-        });
-        setShowSearchResults(false);
-    };
-
-    const handleDetailKnowledgeSearchResultClick = (node) => {
-        const targetNodeId = normalizeObjectId(node?.nodeId || node?._id);
-        if (!targetNodeId) return;
-        fetchNodeDetail(targetNodeId, {
-            id: `search-${targetNodeId || node?._id}`,
-            data: node,
-            type: 'search'
-        }, {
-            relationHint: 'jump',
-            activeSenseId: typeof node?.senseId === 'string' ? node.senseId : ''
-        });
-        setShowSearchResults(false);
-    };
 
     const handleKnowledgeNavigateHistory = (item, index) => {
         if (!item?.nodeId) return;
@@ -3631,67 +1979,6 @@ const App = () => {
 	    // eslint-disable-next-line react-hooks/exhaustive-deps
 	    }, [view, currentNodeDetail, currentTitleDetail, knowledgeMainViewMode, recenterStarMapFromNode]);
 
-    // 实时搜索
-    const performHomeSearch = async (query) => {
-        if (!query || query.trim() === '') {
-            setHomeSearchResults([]);
-            setIsSearching(false);
-            return;
-        }
-
-        setIsSearching(true);
-        try {
-            const response = await fetch(`${API_BASE}/nodes/public/search?query=${encodeURIComponent(query)}`);
-            if (response.ok) {
-                const data = await response.json();
-                setHomeSearchResults(data.results);
-            }
-        } catch (error) {
-            console.error('搜索失败:', error);
-        } finally {
-            setIsSearching(false);
-        }
-    };
-
-    // 监听搜索输入变化
-	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    useEffect(() => {
-        const timeoutId = setTimeout(() => {
-            if (view === 'home' || view === 'nodeDetail' || view === 'titleDetail') {
-                performHomeSearch(homeSearchQuery);
-                // 只有在用户主动输入时才显示搜索结果，而不是在view变化时
-                if (homeSearchQuery.trim() !== '') {
-                    setShowSearchResults(true);
-                }
-            }
-        }, 300); // 防抖：300ms后执行搜索
-
-        return () => clearTimeout(timeoutId);
-	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    }, [homeSearchQuery]); // 移除view依赖，只在搜索词变化时触发
-
-    // 全局点击事件监听器 - 用于控制搜索结果显示/隐藏
-	    useEffect(() => {
-        const handleClickOutside = (event) => {
-            // 只在首页和节点详情页监听点击事件
-            if (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail') return;
-
-            // 检查点击是否在搜索栏区域内
-            if (searchBarRef.current && !searchBarRef.current.contains(event.target)) {
-                // 点击在搜索栏外部，隐藏搜索结果
-                setShowSearchResults(false);
-            }
-        };
-
-        // 添加全局点击事件监听器
-        document.addEventListener('mousedown', handleClickOutside);
-
-        // 清理函数：移除事件监听器
-        return () => {
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
-    }, [view]); // 依赖view状态，当view变化时重新绑定事件
-
     // 初始化首页数据
     useEffect(() => {
         if (authenticated && view === 'home') {
@@ -3909,108 +2196,6 @@ const App = () => {
     ]);
 
     useEffect(() => {
-        const transition = homeDetailTransitionRef.current;
-        if (!transition || transition.status !== 'navigating') return undefined;
-        if (!isWebGLReady || !sceneManagerRef.current || !webglCanvasRef.current) return undefined;
-        if (!isKnowledgeDetailView(view)) return undefined;
-        if (transition.targetMode && transition.targetMode !== view) return undefined;
-
-        const targetNodeId = normalizeObjectId(transition.targetNodeId);
-        const activeNodeId = view === 'titleDetail'
-            ? normalizeObjectId(currentTitleDetail?._id)
-            : normalizeObjectId(currentNodeDetail?._id);
-        if (!targetNodeId || !activeNodeId || targetNodeId !== activeNodeId) return undefined;
-
-        let rafId = 0;
-        let attempts = 0;
-        let cancelled = false;
-        const locateTarget = () => {
-            if (cancelled) return;
-            const sceneManager = sceneManagerRef.current;
-            const renderer = sceneManager?.renderer;
-            const canvas = webglCanvasRef.current;
-            const centerNode = Array.isArray(sceneManager?.currentLayout?.nodes)
-                ? sceneManager.currentLayout.nodes.find((item) => (
-                    item?.type === 'center'
-                    && normalizeObjectId(item?.data?._id) === targetNodeId
-                ))
-                : null;
-
-            if (!renderer || !canvas || !centerNode) {
-                attempts += 1;
-                if (attempts < 36) {
-                    rafId = requestAnimationFrame(locateTarget);
-                } else {
-                    clearHomeDetailTransition({ immediate: true });
-                }
-                return;
-            }
-
-            const rect = canvas.getBoundingClientRect();
-            const screenPos = renderer.worldToScreen(centerNode.x, centerNode.y);
-            const radius = typeof renderer.getNodeScreenRadius === 'function'
-                ? renderer.getNodeScreenRadius(centerNode)
-                : Math.max(48, Number(centerNode.radius) || 80);
-            renderer.setNodeRevealProgress(centerNode.id, 0.04);
-            setHomeDetailTransition((prev) => {
-                if (!prev || prev.runId !== transition.runId) return prev;
-                return {
-                    ...prev,
-                    targetCenter: {
-                        x: Math.round(rect.left + screenPos.x),
-                        y: Math.round(rect.top + screenPos.y)
-                    },
-                    targetSize: Math.max(112, radius * 2.32),
-                    targetLayoutNodeId: centerNode.id,
-                    status: 'target-ready'
-                };
-            });
-        };
-
-        rafId = requestAnimationFrame(locateTarget);
-        return () => {
-            cancelled = true;
-            if (rafId) {
-                cancelAnimationFrame(rafId);
-            }
-        };
-    }, [
-        clearHomeDetailTransition,
-        currentNodeDetail?._id,
-        currentTitleDetail?._id,
-        isWebGLReady,
-        view
-    ]);
-
-    useEffect(() => {
-        const status = homeDetailTransition.status;
-        if (view === 'home' && !isSenseSelectorVisible && status === 'armed') {
-            clearHomeDetailTransition({ immediate: true });
-            return;
-        }
-        if (status === 'idle' || status === 'done') return;
-        if (view !== 'home' && !isKnowledgeDetailView(view)) {
-            clearHomeDetailTransition({ immediate: true });
-        }
-    }, [clearHomeDetailTransition, homeDetailTransition.status, isSenseSelectorVisible, view]);
-
-    useEffect(() => {
-        const status = homeDetailTransition.status;
-        if (status === 'idle' || status === 'done') return undefined;
-        const handleResize = () => {
-            const current = homeDetailTransitionRef.current;
-            if (current?.targetLayoutNodeId && sceneManagerRef.current?.renderer) {
-                sceneManagerRef.current.renderer.setNodeRevealProgress(current.targetLayoutNodeId, 1);
-            }
-            clearHomeDetailTransition({ immediate: true });
-        };
-        window.addEventListener('resize', handleResize);
-        return () => {
-            window.removeEventListener('resize', handleResize);
-        };
-    }, [clearHomeDetailTransition, homeDetailTransition.status]);
-
-    useEffect(() => {
         if (!sceneManagerRef.current) return;
         if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
             sceneManagerRef.current.clearNodeButtons();
@@ -4032,285 +2217,6 @@ const App = () => {
         }
 	    // eslint-disable-next-line react-hooks/exhaustive-deps
 	    }, [view, currentNodeDetail, currentTitleDetail, knowledgeMainViewMode, isAdmin, userId, username, userLocation, travelStatus.isTraveling, travelStatus.isStopping, relatedDomainsData.favoriteDomains, nodeDistributionStatus, intelHeistStatus, siegeStatus]);
-
-    useEffect(() => {
-        if (!isWebGLReady) {
-            setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
-            senseSelectorAnchorRef.current = { x: 0, y: 0, visible: false };
-            setSenseSelectorSourceSceneNodeId('');
-            setIsSenseSelectorVisible(false);
-            return undefined;
-        }
-        if (!isKnowledgeDetailView(view) && view !== 'home') {
-            setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
-            senseSelectorAnchorRef.current = { x: 0, y: 0, visible: false };
-            setSenseSelectorSourceSceneNodeId('');
-            setIsSenseSelectorVisible(false);
-            return undefined;
-        }
-        if (view === 'home' && !isSenseSelectorVisible) return undefined;
-
-        const updateAnchor = () => {
-            const sceneManager = sceneManagerRef.current;
-            const renderer = sceneManager?.renderer;
-            const sceneNodes = Array.isArray(sceneManager?.currentLayout?.nodes)
-                ? sceneManager.currentLayout.nodes
-                : [];
-            const targetNode = view === 'home'
-                ? (
-                    sceneNodes.find((item) => (
-                        String(item?.id || '') === String(senseSelectorSourceSceneNodeId || '')
-                    ))
-                    || sceneNodes.find((item) => (
-                        normalizeObjectId(item?.data?._id) === normalizeObjectId(senseSelectorSourceNode?._id)
-                    ))
-                )
-                : sceneNodes.find((item) => item?.type === 'center');
-            const canvas = webglCanvasRef.current;
-            if (renderer && targetNode && canvas) {
-                const screenPos = renderer.worldToScreen(targetNode.x, targetNode.y);
-                const rect = canvas.getBoundingClientRect();
-                const next = {
-                    x: Math.round(rect.left + screenPos.x),
-                    y: Math.round(rect.top + screenPos.y),
-                    visible: true
-                };
-                const prev = senseSelectorAnchorRef.current || { x: 0, y: 0, visible: false };
-                const moved = Math.abs(prev.x - next.x) > 1 || Math.abs(prev.y - next.y) > 1 || prev.visible !== next.visible;
-                if (moved) {
-                    senseSelectorAnchorRef.current = next;
-                    setSenseSelectorAnchor(next);
-                }
-            }
-        };
-
-        updateAnchor();
-        window.addEventListener('resize', updateAnchor);
-        return () => {
-            window.removeEventListener('resize', updateAnchor);
-        };
-    }, [
-        view,
-        currentNodeDetail?._id,
-        currentNodeDetail?.activeSenseId,
-        currentTitleDetail?._id,
-        senseSelectorSourceNode?._id,
-        senseSelectorSourceSceneNodeId,
-        isSenseSelectorVisible,
-        isWebGLReady
-    ]);
-
-    useEffect(() => {
-        if (!isSenseSelectorVisible) return undefined;
-        if (view !== 'nodeDetail' && view !== 'titleDetail' && view !== 'home') return undefined;
-        const canvas = webglCanvasRef.current;
-        const renderer = sceneManagerRef.current?.renderer;
-        if (!canvas || !renderer) return undefined;
-
-        const handleMapClick = (event) => {
-            const pos = renderer.getCanvasPositionFromEvent(event);
-            const clickedNode = renderer.hitTest(pos.x, pos.y);
-            if (view === 'home') {
-                const anyNode = renderer.hitTest(pos.x, pos.y);
-                if (!anyNode) setIsSenseSelectorVisible(false);
-                return;
-            }
-            if (!clickedNode || clickedNode.type !== 'center') {
-                setIsSenseSelectorVisible(false);
-            }
-        };
-
-        canvas.addEventListener('click', handleMapClick);
-        return () => {
-            canvas.removeEventListener('click', handleMapClick);
-        };
-    }, [isSenseSelectorVisible, view, currentNodeDetail?._id, currentTitleDetail?._id]);
-
-    useEffect(() => {
-        if (view !== 'home' || !isSenseSelectorVisible) return undefined;
-
-        const handleDocumentPointerDown = (event) => {
-            if (senseSelectorPanelRef.current?.contains(event.target)) {
-                return;
-            }
-            setIsSenseSelectorVisible(false);
-        };
-
-        document.addEventListener('pointerdown', handleDocumentPointerDown);
-        return () => {
-            document.removeEventListener('pointerdown', handleDocumentPointerDown);
-        };
-    }, [isSenseSelectorVisible, view]);
-
-    useEffect(() => {
-        if (!isSenseSelectorVisible || (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail')) {
-            setSenseSelectorOverviewLoading(false);
-            setSenseSelectorOverviewError('');
-            return undefined;
-        }
-
-        const selectorNode = (
-            (view === 'titleDetail' && currentTitleDetail)
-            || (view === 'nodeDetail' && currentNodeDetail)
-            || senseSelectorSourceNode
-            || null
-        );
-        const nodeId = normalizeObjectId(selectorNode?._id);
-        if (!nodeId) {
-            setSenseSelectorOverviewNode(null);
-            setSenseSelectorOverviewLoading(false);
-            setSenseSelectorOverviewError('');
-            return undefined;
-        }
-
-        const detailNodeId = normalizeObjectId(currentNodeDetail?._id);
-        const requestedSenseId = (
-            view === 'nodeDetail'
-            && detailNodeId
-            && detailNodeId === nodeId
-            && typeof currentNodeDetail?.activeSenseId === 'string'
-        )
-            ? currentNodeDetail.activeSenseId.trim()
-            : (typeof selectorNode?.activeSenseId === 'string' ? selectorNode.activeSenseId.trim() : '');
-        if (
-            view === 'nodeDetail'
-            && detailNodeId
-            && detailNodeId === nodeId
-            && currentNodeDetail
-        ) {
-            setSenseSelectorOverviewNode(currentNodeDetail);
-            setSenseSelectorOverviewLoading(false);
-            setSenseSelectorOverviewError('');
-            return undefined;
-        }
-
-        setSenseSelectorOverviewNode((prev) => (
-            normalizeObjectId(prev?._id) === nodeId
-                ? prev
-                : selectorNode
-        ));
-        setSenseSelectorOverviewLoading(true);
-        setSenseSelectorOverviewError('');
-
-        let cancelled = false;
-        (async () => {
-            try {
-                const detailUrl = requestedSenseId
-                    ? `${API_BASE}/nodes/public/node-detail/${nodeId}?senseId=${encodeURIComponent(requestedSenseId)}`
-                    : `${API_BASE}/nodes/public/node-detail/${nodeId}`;
-                const response = await fetch(detailUrl);
-                const rawText = await response.text();
-                let data = null;
-                try {
-                    data = rawText ? JSON.parse(rawText) : null;
-                } catch (error) {
-                    data = null;
-                }
-                if (cancelled) return;
-                if (!response.ok || !data?.node) {
-                    const fallback = `读取标题总览失败（HTTP ${response.status}）`;
-                    setSenseSelectorOverviewError(data?.error || data?.message || fallback);
-                    setSenseSelectorOverviewLoading(false);
-                    return;
-                }
-                setSenseSelectorOverviewNode(data.node);
-                setSenseSelectorOverviewLoading(false);
-                setSenseSelectorOverviewError('');
-            } catch (error) {
-                if (cancelled) return;
-                setSenseSelectorOverviewLoading(false);
-                setSenseSelectorOverviewError(error?.message ? `读取标题总览失败: ${error.message}` : '读取标题总览失败');
-            }
-        })();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [
-        isSenseSelectorVisible,
-        view,
-        currentNodeDetail,
-        currentTitleDetail,
-        senseSelectorSourceNode
-    ]);
-
-    useEffect(() => {
-        if (!isSenseSelectorVisible) return undefined;
-        const overviewNode = senseSelectorOverviewNode || currentNodeDetail || currentTitleDetail || senseSelectorSourceNode || null;
-        const nodeId = normalizeObjectId(overviewNode?._id || overviewNode?.nodeId);
-        if (!nodeId) return undefined;
-
-        const senses = Array.isArray(overviewNode?.synonymSenses) && overviewNode.synonymSenses.length > 0
-            ? overviewNode.synonymSenses
-            : [{ senseId: overviewNode?.activeSenseId || 'sense_1' }];
-        const pendingTargets = senses
-            .map((sense) => {
-                const senseId = typeof sense?.senseId === 'string' ? sense.senseId.trim() : '';
-                if (!senseId) return null;
-                const key = `${nodeId}:${senseId}`;
-                const cached = senseArticleEntryStatusMapRef.current[key];
-                if (cached?.resolved || cached?.loading) return null;
-                return { key, nodeId, senseId };
-            })
-            .filter(Boolean);
-        if (pendingTargets.length === 0) return undefined;
-
-        setSenseArticleEntryStatusMap((prev) => {
-            let hasChanges = false;
-            const next = { ...prev };
-            pendingTargets.forEach(({ key }) => {
-                const previous = prev[key] || {};
-                if (previous.loading && !previous.resolved) {
-                    return;
-                }
-                next[key] = { ...previous, loading: true, resolved: false, hasPublishedRevision: false };
-                hasChanges = true;
-            });
-            return hasChanges ? next : prev;
-        });
-
-        (async () => {
-            const results = await Promise.all(pendingTargets.map(async ({ key, nodeId: targetNodeId, senseId }) => {
-                try {
-                    const data = await senseArticleApi.getOverview(targetNodeId, senseId);
-                    return {
-                        key,
-                        hasPublishedRevision: !!data?.currentRevision?._id,
-                        articleId: data?.article?._id || '',
-                        currentRevisionId: data?.article?.currentRevisionId || data?.currentRevision?._id || ''
-                    };
-                } catch (_error) {
-                    return {
-                        key,
-                        hasPublishedRevision: false,
-                        articleId: '',
-                        currentRevisionId: ''
-                    };
-                }
-            }));
-            setSenseArticleEntryStatusMap((prev) => {
-                const next = { ...prev };
-                results.forEach((item) => {
-                    next[item.key] = {
-                        loading: false,
-                        resolved: true,
-                        hasPublishedRevision: !!item.hasPublishedRevision,
-                        articleId: item.articleId || '',
-                        currentRevisionId: item.currentRevisionId || ''
-                    };
-                });
-                return next;
-            });
-        })();
-        return undefined;
-	    }, [
-	        currentNodeDetail,
-	        currentTitleDetail,
-	        isSenseSelectorVisible,
-	        senseSelectorOverviewNode,
-	        senseSelectorSourceNode
-	    ]);
-
 
     // 新节点创建相关函数
     const openCreateNodeModal = () => {
@@ -4334,134 +2240,6 @@ const App = () => {
         if (newNode) {
             setNodes((prev) => [...prev, newNode]);
         }
-    };
-
-    // 进入知识域
-    const handleEnterKnowledgeDomain = (node, options = {}) => {
-        if (!sceneManagerRef.current || !node) return;
-        const mode = options?.mode === 'intelHeist' ? 'intelHeist' : 'normal';
-
-        const recentVisitMode = options?.recentVisitMode === 'title' || options?.recentVisitMode === 'sense'
-            ? options.recentVisitMode
-            : (isTitleBattleView(view) ? 'title' : 'sense');
-        const recentVisitSenseId = recentVisitMode === 'sense'
-            ? (typeof options?.recentVisitSenseId === 'string'
-                ? options.recentVisitSenseId.trim()
-                : (typeof node?.activeSenseId === 'string' ? node.activeSenseId : ''))
-            : '';
-        trackRecentDomain(node, {
-            mode: recentVisitMode,
-            senseId: recentVisitSenseId
-        });
-        knowledgeDomainReturnContextRef.current = (() => {
-            const currentNodeId = normalizeObjectId(currentNodeDetail?._id);
-            const currentTitleId = normalizeObjectId(currentTitleDetail?._id);
-            const targetNodeId = normalizeObjectId(node?._id);
-            if (view === 'nodeDetail' && currentNodeId) {
-                return {
-                    view: 'nodeDetail',
-                    nodeId: currentNodeId,
-                    senseId: typeof currentNodeDetail?.activeSenseId === 'string' ? currentNodeDetail.activeSenseId : ''
-                };
-            }
-            if (view === 'titleDetail' && currentTitleId) {
-                return {
-                    view: 'titleDetail',
-                    nodeId: currentTitleId,
-                    senseId: ''
-                };
-            }
-            if (!targetNodeId) return null;
-            return {
-                view: 'nodeDetail',
-                nodeId: targetNodeId,
-                senseId: typeof node?.activeSenseId === 'string' ? node.activeSenseId : ''
-            };
-        })();
-        setKnowledgeDomainMode(mode);
-        setKnowledgeDomainNode(node);
-        setIsTransitioningToDomain(true);
-        setShowNodeInfoModal(false); // 关闭节点信息弹窗
-        setTitleRelationInfo(null);
-        setIsSenseSelectorVisible(false);
-
-        // 开始过渡动画
-        sceneManagerRef.current.enterKnowledgeDomain(
-            () => {
-                // 动画完成，显示知识域场景
-                setShowKnowledgeDomain(true);
-                setIsTransitioningToDomain(false);
-                setDomainTransitionProgress(1);
-            },
-            (progress) => {
-                // 更新过渡进度
-                setDomainTransitionProgress(progress);
-            }
-        );
-    };
-
-    // 退出知识域
-    const handleExitKnowledgeDomain = (options = {}) => {
-        const exitReason = options?.reason || '';
-        const exitMessage = typeof options?.message === 'string' ? options.message : '';
-        const returnContext = knowledgeDomainReturnContextRef.current;
-        const restoreKnowledgeDomainView = async () => {
-            if (!returnContext?.nodeId) return;
-            if (returnContext.view === 'titleDetail') {
-                await fetchTitleDetail(returnContext.nodeId, null, {
-                    silent: true,
-                    requestSource: 'knowledge-domain-restore:title'
-                });
-                return;
-            }
-            await fetchNodeDetail(returnContext.nodeId, null, {
-                silent: true,
-                activeSenseId: typeof returnContext.senseId === 'string' ? returnContext.senseId : '',
-                requestSource: 'knowledge-domain-restore:sense'
-            });
-        };
-        if (!sceneManagerRef.current) {
-            setShowKnowledgeDomain(false);
-            setDomainTransitionProgress(0);
-            setKnowledgeDomainNode(null);
-            setKnowledgeDomainMode('normal');
-            knowledgeDomainReturnContextRef.current = null;
-            restoreKnowledgeDomainView();
-            if (exitMessage) {
-                window.alert(exitMessage);
-            } else if (exitReason === 'intel-timeout') {
-                window.alert('情报窃取时间耗尽');
-            }
-            return;
-        }
-
-        setIsTransitioningToDomain(true);
-
-        // 开始反向过渡动画
-        sceneManagerRef.current.exitKnowledgeDomain(
-            () => {
-                // 开始恢复场景，知识域开始淡出
-                setShowKnowledgeDomain(false);
-            },
-            (progress) => {
-                // 更新过渡进度（从1到0）
-                setDomainTransitionProgress(progress);
-            },
-            () => {
-                // 动画完成
-                setIsTransitioningToDomain(false);
-                setDomainTransitionProgress(0);
-                setKnowledgeDomainNode(null);
-                setKnowledgeDomainMode('normal');
-                knowledgeDomainReturnContextRef.current = null;
-                restoreKnowledgeDomainView();
-                if (exitMessage) {
-                    window.alert(exitMessage);
-                } else if (exitReason === 'intel-timeout') {
-                    window.alert('情报窃取时间耗尽');
-                }
-            }
-        );
     };
 
     const {
@@ -4734,6 +2512,7 @@ const App = () => {
                     onSearchChange={handleKnowledgeSearchChange}
                     onSearchFocus={handleKnowledgeSearchFocus}
                     onSearchClear={handleKnowledgeSearchClear}
+                    onSearchResultsClose={closeKnowledgeSearchResults}
                     searchResults={homeSearchResults}
                     showSearchResults={showSearchResults}
                     isSearching={isSearching}

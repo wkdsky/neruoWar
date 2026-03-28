@@ -1,0 +1,204 @@
+@media (max-width: 1440px) {
+  .sense-article-layout {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+  .sense-article-sidebar.right {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1080px) {
+  .sense-article-layout,
+  .sense-editor-layout,
+  .sense-review-layout,
+  .sense-review-stage-card,
+  .sense-article-topbar {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+  .sense-article-main {
+    padding: 22px;
+  }
+
+  .sense-article-topbar.page-senseArticle {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .sense-article-topbar.page-senseArticle .sense-article-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .sense-article-topbar.page-senseArticle .sense-article-meta-row {
+    flex-wrap: wrap;
+  }
+
+  .sense-editor-layout.resizable {
+    grid-template-columns: 1fr;
+  }
+
+  .sense-editor-toolbar.productized {
+    top: 8px;
+  }
+
+  .sense-editor-insert-menu {
+    max-width: min(240px, calc(100vw - 64px));
+  }
+
+  .sense-my-edits-panel {
+    left: 16px !important;
+    right: 16px;
+    top: calc(var(--knowledge-header-offset, 92px) + 18px) !important;
+    width: auto !important;
+    max-width: none;
+  }
+}
+
+@media (max-width: 1080px) {
+  .sense-compare-preview-grid,
+  .sense-compare-block-preview-grid,
+  .sense-dashboard-grid,
+  .sense-editor-helper-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sense-editor-layout.resizable,
+  .sense-editor-layout-wysiwyg,
+  .sense-editor-layout.resizable.toc-collapsed,
+  .sense-editor-layout.resizable.preview-collapsed,
+  .sense-editor-layout.resizable.preview-resizing {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .sense-editor-divider {
+    min-height: auto;
+    justify-content: flex-start;
+  }
+
+  .sense-editor-divider::before {
+    display: none;
+  }
+
+  .sense-editor-resize-handle {
+    display: none;
+  }
+
+  .sense-editor-pane.legacy-readonly {
+    padding: 0;
+  }
+
+  .sense-editor-outline-pane {
+    order: -1;
+    position: static;
+    top: auto;
+    max-height: none;
+  }
+
+  .sense-editor-legacy-renderer {
+    padding: 18px 16px 56px;
+  }
+}
+
+@media (max-width: 980px) {
+  .sense-table-context-band {
+    padding: 7px 8px;
+  }
+
+  .sense-table-context-band-row {
+    gap: 5px;
+  }
+
+  .sense-rich-table-popover,
+  .sense-rich-table-dropdown {
+    max-width: none;
+    min-width: 0;
+    width: auto;
+  }
+
+  .sense-rich-table-dropdown-portal {
+    left: 12px !important;
+    right: 12px !important;
+    top: 72px !important;
+  }
+}
+
+@media (max-width: 980px) {
+  .sense-formula-mode-shell {
+    margin-left: 0;
+  }
+
+  .sense-formula-editor-panels {
+    grid-template-columns: 1fr;
+  }
+
+  .sense-formula-preview-card {
+    min-height: 220px;
+    max-height: 320px;
+  }
+
+  .sense-formula-symbol-grid {
+    grid-template-columns: repeat(3, minmax(76px, 1fr));
+  }
+
+  .sense-formula-symbol-grid.compact {
+    grid-template-columns: repeat(6, minmax(42px, 1fr));
+  }
+
+  .sense-formula-symbol-grid.templates {
+    grid-template-columns: repeat(3, minmax(92px, 1fr));
+  }
+}
+
+@media (max-width: 1080px) {
+  .sense-rich-toolbar-shell {
+    top: var(--sense-editor-sticky-offset);
+  }
+
+  .sense-rich-editor-commandbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .sense-rich-editor-commandbar-actions-extra {
+    margin-left: 0;
+  }
+
+  .editor-mode .sense-article-topbar.page-senseArticleEditor {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .sense-rich-toolbar {
+    gap: 6px;
+  }
+
+  .sense-editor-metadata-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sense-editor-status-grid,
+  .sense-editor-help-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sense-rich-editor-surface {
+    padding: 18px 16px 56px;
+    min-height: 420px;
+  }
+
+  .sense-rich-dialog-backdrop {
+    padding: 12px;
+  }
+
+  .sense-rich-dialog,
+  .sense-rich-dialog.wide {
+    width: min(100vw - 24px, 100%);
+    max-height: min(86vh, 100%);
+  }
+
+  .sense-rich-quick-size-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

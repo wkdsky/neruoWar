@@ -1,0 +1,19 @@
+@media (max-width: 960px) {
+    .admin-delete-sense-decision-workspace {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 980px) {
+    .admin-domain-title-row {
+        grid-template-columns: 1fr;
+    }
+
+    .admin-domain-sense-list {
+        grid-template-columns: 1fr;
+    }
+
+    .admin-delete-domain-before-after-grid {
+        grid-template-columns: 1fr;
+    }
+}

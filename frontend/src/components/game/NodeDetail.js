@@ -22,6 +22,7 @@ const NodeDetail = ({
     searchQuery,
     onSearchChange,
     onSearchClear,
+    onSearchResultsClose,
     searchResults,
     showSearchResults,
     isSearching,
@@ -31,7 +32,6 @@ const NodeDetail = ({
     webglCanvasRef
 }) => {
     const detailCanvasRef = useRef(null);
-    const searchBarRef = useRef(null);
     const currentNodeId = String(node?._id || '');
     const isStarMapMode = knowledgeMainViewMode === 'starMap';
     const starMapZoomValue = Math.max(
@@ -337,11 +337,11 @@ const NodeDetail = ({
                     eyebrow="Knowledge Domain Main View"
                     title={panelTitle}
                     stats={summaryStats}
-                    searchBarRef={searchBarRef}
                     searchQuery={searchQuery}
                     onSearchChange={onSearchChange}
                     onSearchFocus={onSearchFocus}
                     onSearchClear={onSearchClear}
+                    onSearchResultsClose={onSearchResultsClose}
                     searchResults={searchResults}
                     showSearchResults={showSearchResults}
                     isSearching={isSearching}

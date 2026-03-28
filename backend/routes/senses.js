@@ -14,7 +14,7 @@ const {
   resolveNodeSensesForNode,
   saveNodeSenses
 } = require('../services/nodeSenseStore');
-const { bootstrapArticleFromNodeSense } = require('../services/senseArticleService');
+const { bootstrapArticleFromNodeSense } = require('../services/senseArticle/composeService');
 
 const router = express.Router();
 const ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS = process.env.ENABLE_LEGACY_SENSES_MUTATION_ENDPOINTS === 'true';

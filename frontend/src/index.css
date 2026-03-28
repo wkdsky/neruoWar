@@ -1,9 +1,64 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
+:root {
+    --app-scrollbar-track: rgba(15, 23, 42, 0.58);
+    --app-scrollbar-thumb: rgba(56, 189, 248, 0.5);
+    --app-scrollbar-thumb-hover: rgba(103, 232, 249, 0.82);
+    --app-shell-inline-gap: 24px;
+    --app-shell-overlay-top-gap: 18px;
+    --app-shell-right-safe-area: 108px;
+    --app-shell-z-subheader: 36700;
+    --app-shell-z-dock: 36800;
+    --app-shell-z-topbar: 37000;
+    --app-shell-z-topbar-panel: 37100;
+    --topbar-shell: rgba(6, 11, 20, 0.82);
+    --topbar-surface: rgba(15, 23, 42, 0.88);
+    --topbar-surface-strong: rgba(20, 30, 48, 0.96);
+    --topbar-border: rgba(148, 163, 184, 0.18);
+    --topbar-border-strong: rgba(103, 232, 249, 0.28);
+    --topbar-accent: #67e8f9;
+    --topbar-accent-strong: #38bdf8;
+    --topbar-highlight: rgba(148, 163, 184, 0.22);
+    --topbar-shadow: 0 18px 42px rgba(2, 6, 23, 0.42);
+    --topbar-shadow-soft: 0 10px 24px rgba(2, 6, 23, 0.28);
+}
+
 * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+    scrollbar-width: thin;
+    scrollbar-color: var(--app-scrollbar-thumb) var(--app-scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+    background: var(--app-scrollbar-track) !important;
+    border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: var(--app-scrollbar-thumb) !important;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: var(--app-scrollbar-thumb-hover) !important;
+    background-clip: content-box;
+}
+
+.subtle-keyword-highlight {
+    background: rgba(148, 163, 184, 0.18);
+    color: inherit;
+    border-radius: 4px;
+    padding: 0 0.08rem;
+    font-weight: 500;
 }
 
 body {
@@ -12,10 +67,170 @@ body {
         'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    color: #e2e8f0;
 }
 
 code {
     font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
+
+.btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.btn:active {
+    transform: scale(0.95);
+}
+
+.btn-success {
+    background: #10b981;
+    color: white;
+}
+
+.btn-success:hover {
+    background: #059669;
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+}
+
+.btn-danger {
+    background: #ef4444;
+    color: white;
+    font-size: 0.875rem;
+}
+
+.btn-danger:hover {
+    background: #dc2626;
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+}
+
+.btn-danger:disabled {
+    background: #475569;
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.btn-green {
+    background: #10b981;
+    color: white;
+    width: 100%;
+    justify-content: center;
+}
+
+.btn-green:hover {
+    background: #059669;
+}
+
+.btn-orange {
+    background: #f97316;
+    color: white;
+    width: 100%;
+    justify-content: center;
+}
+
+.btn-orange:hover {
+    background: #ea580c;
+}
+
+.btn-red {
+    background: #ef4444;
+    color: white;
+    width: 100%;
+    justify-content: center;
+}
+
+.btn-red:hover {
+    background: #dc2626;
+}
+
+.btn-blue {
+    background: #3b82f6;
+    color: white;
+    width: 100%;
+    justify-content: center;
+}
+
+.btn-blue:hover {
+    background: #2563eb;
+}
+
+.btn-primary {
+    background: #0f766e;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #155e75;
+    box-shadow: 0 0 20px rgba(8, 145, 178, 0.38);
+}
+
+.btn-secondary {
+    background: #3b82f6;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #2563eb;
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+}
+
+.btn-logout {
+    background: #ef4444;
+    color: white;
+}
+
+.btn-logout:hover {
+    background: #dc2626;
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.5);
+}
+
+.btn-warning {
+    background: #f59e0b;
+    color: white;
+}
+
+.btn-warning:hover {
+    background: #d97706;
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.5);
+}
+
+.btn-disabled {
+    background: #475569 !important;
+    color: #9ca3af !important;
+    cursor: not-allowed !important;
+    opacity: 0.6 !important;
+}
+
+.btn-disabled:hover {
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.icon {
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+.icon-small {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.icon-yellow {
+    color: #fbbf24;
+}
+
+.icon-red {
+    color: #ef4444;
 }
 
 #root {

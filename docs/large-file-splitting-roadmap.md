@@ -41,15 +41,15 @@
 
 ### P0：第一批必须拆
 
-1. `backend/routes/nodes.js` `10888` 行
+1. `backend/routes/nodes.js` `10888` 行  500+√
 2. `frontend/src/components/admin/AdminPanel.js` `8160` 行 800√
-3. `frontend/src/App.js` `4751` 行
-4. `frontend/src/components/game/BattlefieldPreviewModal.js` `5939` 行
-5. `frontend/src/components/game/KnowledgeDomainScene.js` `5312` 行
-6. `backend/services/senseArticleService.js` `2677` 行
-7. `frontend/src/App.css` `5405` 行
-8. `frontend/src/components/senseArticle/SenseArticle.css` `5394` 行
-9. `frontend/src/components/admin/Admin.css` `3105` 行
+3. `frontend/src/App.js` `4751` 行   2000+✓
+4. `frontend/src/components/game/BattlefieldPreviewModal.js` `5939` 行 673✓
+5. `frontend/src/components/game/KnowledgeDomainScene.js` `5312` 行  1000✓
+6. `backend/services/senseArticleService.js` `2677` 行   删掉了
+7. `frontend/src/App.css` `5405` 行    5✓
+8. `frontend/src/components/senseArticle/SenseArticle.css` `5394` 行   644√
+9. `frontend/src/components/admin/Admin.css` `3105` 行   9√
 
 ### P1：第二批建议拆
 

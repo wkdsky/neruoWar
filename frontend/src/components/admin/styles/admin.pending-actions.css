@@ -1,0 +1,77 @@
+.node-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #475569;
+}
+
+.pending-master-approve-btn {
+    flex: 1;
+    justify-content: center;
+    color: #fff;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+}
+
+.pending-master-approve-btn:hover {
+    background: linear-gradient(135deg, #1d4ed8, #1e40af);
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.45);
+}
+
+.pending-master-reject-btn {
+    flex: 1;
+    justify-content: center;
+    color: #fff;
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+}
+
+.pending-master-reject-btn:hover {
+    background: linear-gradient(135deg, #b91c1c, #991b1b);
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.35);
+}
+
+.btn-approve {
+    background: #10b981;
+    color: white;
+    flex: 1;
+    justify-content: center;
+}
+
+.btn-approve:hover {
+    background: #059669;
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+}
+
+.btn-reject {
+    background: #ef4444;
+    color: white;
+    flex: 1;
+    justify-content: center;
+}
+
+.btn-reject:hover {
+    background: #dc2626;
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.5);
+}
+
+.no-pending-nodes {
+    text-align: center;
+    padding: 3rem;
+    color: #9ca3af;
+}
+
+.no-pending-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    opacity: 0.5;
+}
+
+.no-pending-text {
+    font-size: 1.125rem;
+    margin-bottom: 0.5rem;
+}
+
+.no-pending-subtext {
+    font-size: 0.875rem;
+}
+

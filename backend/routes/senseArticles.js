@@ -32,7 +32,7 @@ const {
   updateAnnotation,
   updateDraftRevision,
   updateSenseMetadata
-} = require('../services/senseArticleService');
+} = require('../services/senseArticle/composeService');
 const { ensureMediaStorageDir } = require('../services/senseArticleMediaService');
 
 const router = express.Router();

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Search, Plus, X } from 'lucide-react';
 import { getNodeDisplayName } from './hexUtils';
 import './KnowledgeTopPanel.css';
@@ -31,11 +31,11 @@ const KnowledgeTopPanel = ({
   eyebrow = 'Knowledge Domain Atlas',
   title = '知识域总览',
   stats = [],
-  searchBarRef = null,
   searchQuery = '',
   onSearchChange,
   onSearchFocus,
   onSearchClear,
+  onSearchResultsClose,
   searchResults = [],
   showSearchResults = false,
   isSearching = false,
@@ -49,6 +49,25 @@ const KnowledgeTopPanel = ({
   const visibleStats = Array.isArray(stats) ? stats.filter((item) => item && item.label) : [];
   const visibleResults = Array.isArray(searchResults) ? searchResults : [];
   const shouldShowCreateButton = showCreateButton && typeof onCreateNode === 'function';
+  const searchBarRef = useRef(null);
+
+  useEffect(() => {
+    if (!showSearchResults) return undefined;
+
+    const handlePointerDownOutside = (event) => {
+      if (searchBarRef.current?.contains(event.target)) {
+        return;
+      }
+      if (typeof onSearchResultsClose === 'function') {
+        onSearchResultsClose();
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDownOutside);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDownOutside);
+    };
+  }, [onSearchResultsClose, showSearchResults]);
 
   return (
     <div className={rootClassName}>

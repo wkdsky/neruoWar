@@ -1,5 +1,6 @@
 import React from 'react';
 import { Bell, Home, Layers, MapPin, MessagesSquare, Shield, Star, Users } from 'lucide-react';
+import './AppShell.css';
 import {
     avatarMap,
     formatCountdownText,

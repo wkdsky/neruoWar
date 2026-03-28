@@ -1929,13 +1929,15 @@ const runPrismOverlapRemoval = ({
       applyImpulse(deltaByKey, rightKey, (currentDx - anchorDx) * 0.026, (currentDy - anchorDy) * 0.026);
     });
 
-    buildSpatialHashPairs({
+    const overlapPairs = buildSpatialHashPairs({
       items: Array.from(bodyByKey.values()),
       cellSize: GRID_CELL_SIZE,
       getRect: (body) => buildBodyBoundsRect(body, 6)
-    }).forEach(([leftBody, rightBody]) => {
+    });
+
+    for (const [leftBody, rightBody] of overlapPairs) {
       const separation = buildBodyOverlapSeparation(leftBody, rightBody, 2);
-      if (!separation) return;
+      if (!separation) continue;
       overlapHits += 1;
       roundOverlapHits += 1;
       const leftWeight = leftBody.key === centerKey ? 0.18 : 1 / Math.max(0.9, Number(leftBody.importance || 1));
@@ -1944,7 +1946,7 @@ const runPrismOverlapRemoval = ({
       const pushFactor = 0.78 + cooling * 0.22;
       applyImpulse(deltaByKey, leftBody.key, -separation.x * pushFactor * (leftWeight / totalWeight), -separation.y * pushFactor * (leftWeight / totalWeight));
       applyImpulse(deltaByKey, rightBody.key, separation.x * pushFactor * (rightWeight / totalWeight), separation.y * pushFactor * (rightWeight / totalWeight));
-    });
+    }
 
     bodyByKey.forEach((body, key) => {
       if (key === centerKey || lockedKeys.has(key)) return;
@@ -1987,13 +1989,15 @@ const runHardOverlapClearance = ({
     const deltaByKey = new Map();
     let roundHits = 0;
 
-    buildSpatialHashPairs({
+    const overlapPairs = buildSpatialHashPairs({
       items: Array.from(bodyByKey.values()),
       cellSize: GRID_CELL_SIZE,
       getRect: (body) => buildBodyBoundsRect(body, 2)
-    }).forEach(([leftBody, rightBody]) => {
+    });
+
+    for (const [leftBody, rightBody] of overlapPairs) {
       const separation = buildBodyOverlapSeparation(leftBody, rightBody, 0);
-      if (!separation) return;
+      if (!separation) continue;
       roundHits += 1;
       overlapHits += 1;
       const leftWeight = leftBody.key === centerKey ? 0.14 : 1 / Math.max(0.9, Number(leftBody.importance || 1));
@@ -2001,7 +2005,7 @@ const runHardOverlapClearance = ({
       const totalWeight = leftWeight + rightWeight;
       applyImpulse(deltaByKey, leftBody.key, -separation.x * 0.92 * (leftWeight / totalWeight), -separation.y * 0.92 * (leftWeight / totalWeight));
       applyImpulse(deltaByKey, rightBody.key, separation.x * 0.92 * (rightWeight / totalWeight), separation.y * 0.92 * (rightWeight / totalWeight));
-    });
+    }
 
     if (roundHits < 1) break;
 

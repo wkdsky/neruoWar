@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import HexDomainGrid from './HexDomainGrid';
 import KnowledgeTopPanel from './KnowledgeTopPanel';
 import {
@@ -17,6 +17,7 @@ const Home = ({
   onSearchChange,
   onSearchFocus,
   onSearchClear,
+  onSearchResultsClose,
   searchResults,
   showSearchResults,
   isSearching,
@@ -34,7 +35,6 @@ const Home = ({
   onHomeDomainActivate,
   activeHomeNodeId = ''
 }) => {
-  const searchBarRef = useRef(null);
   const [viewport, setViewport] = useState(readViewport);
 
   useEffect(() => {
@@ -84,11 +84,11 @@ const Home = ({
               className="home-knowledge-top-panel"
               title="知识域总览"
               stats={summaryStats}
-              searchBarRef={searchBarRef}
               searchQuery={searchQuery}
               onSearchChange={onSearchChange}
               onSearchFocus={onSearchFocus}
               onSearchClear={onSearchClear}
+              onSearchResultsClose={onSearchResultsClose}
               searchResults={searchResults}
               showSearchResults={showSearchResults}
               isSearching={isSearching}
