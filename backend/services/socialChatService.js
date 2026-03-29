@@ -156,6 +156,8 @@ const serializeConversationItem = ({
   title: conversation?.type === 'direct'
     ? (directUser?.username || conversation?.title || '私聊')
     : (conversation?.title || '群聊'),
+  ownerId: getIdString(conversation?.ownerId),
+  announcement: conversation?.type === 'group' ? (conversation?.announcement || '') : '',
   avatar: conversation?.type === 'direct'
     ? (directUser?.avatar || 'default_male_1')
     : (conversation?.avatar || ''),
@@ -170,7 +172,20 @@ const serializeConversationItem = ({
   mute: !!member?.mute,
   isVisible: !!member?.isVisible,
   clearedBeforeSeq: Number(member?.clearedBeforeSeq) || 0,
+  currentUserRole: member?.role || 'member',
   directUser: directUser ? serializeUserSummary(directUser) : null
+});
+
+const serializeGroupMemberItem = ({
+  member = {},
+  user = null
+} = {}) => ({
+  userId: getIdString(member?.userId || user?._id),
+  role: member?.role || 'member',
+  nicknameInGroup: member?.nicknameInGroup || '',
+  joinedAt: member?.joinedAt || null,
+  isActive: member?.isActive !== false,
+  user: user ? serializeUserSummary(user) : null
 });
 
 module.exports = {
@@ -181,6 +196,7 @@ module.exports = {
   pushNotificationToUser,
   sendNotificationToUser,
   serializeConversationItem,
+  serializeGroupMemberItem,
   serializeFriendItem,
   serializeMessageForUserView,
   serializeUserSummary,

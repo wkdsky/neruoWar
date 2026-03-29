@@ -13,6 +13,19 @@ const ConversationSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  announcement: {
+    type: String,
+    default: ''
+  },
+  announcementUpdatedAt: {
+    type: Date,
+    default: null
+  },
+  announcementUpdatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   avatar: {
     type: String,
     default: ''

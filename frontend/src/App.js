@@ -926,6 +926,7 @@ const App = () => {
     conversationActionId,
     conversationListLoading,
     conversations,
+    createGroupConversation,
     currentUserId: chatCurrentUserId,
     dismissChatToast,
     friendActionId,
@@ -935,25 +936,39 @@ const App = () => {
     friendSearchQuery,
     friendSearchResults,
     friends,
+    groupActionId,
+    groupDetailLoading,
+    groups,
     hideConversation,
     isChatDockExpanded,
+    isRequestsModalOpen,
+    leaveGroupConversation,
     loadOlderMessages,
+    openGroupDetail,
     openConversation,
     openDirectConversation,
+    addGroupMembers,
     panelNotice,
     requestActionId,
     requestFriendship,
     requestListLoading,
+    removeGroupMember,
     resetChatCenter,
     respondToFriendRequest,
     searchUsers,
     selectedConversation,
+    selectedGroupDetail,
+    selectedGroupId,
     selectedMessagesEntry,
     sendMessage,
     setActiveSidebarTab,
     setFriendSearchQuery,
     setIsChatDockExpanded,
-    setPanelNotice
+    setIsRequestsModalOpen,
+    setPanelNotice,
+    setSelectedGroupId,
+    transferGroupOwnership,
+    updateGroupConversation
   } = useChatCenter({
     authenticated,
     currentUserId: userId,
@@ -973,7 +988,8 @@ const App = () => {
       setActiveSidebarTab('conversations');
       await openConversation(toast.conversationId);
     } else {
-      setActiveSidebarTab('requests');
+      setActiveSidebarTab('friends');
+      setIsRequestsModalOpen(true);
     }
 
     dismissChatToast(toast.id);
@@ -983,6 +999,7 @@ const App = () => {
     setActiveSidebarTab,
     setIsAnnouncementDockExpanded,
     setIsChatDockExpanded,
+    setIsRequestsModalOpen,
     setIsLocationDockExpanded
   ]);
 
@@ -1000,8 +1017,15 @@ const App = () => {
 
   const handleOpenFriendRequestsFromUserCard = useCallback(() => {
     setIsChatDockExpanded(true);
-    setActiveSidebarTab('requests');
-  }, [setActiveSidebarTab, setIsChatDockExpanded]);
+    setActiveSidebarTab('friends');
+    setIsRequestsModalOpen(true);
+  }, [setActiveSidebarTab, setIsChatDockExpanded, setIsRequestsModalOpen]);
+
+  useEffect(() => {
+    if (!isChatDockExpanded && isRequestsModalOpen) {
+      setIsRequestsModalOpen(false);
+    }
+  }, [isChatDockExpanded, isRequestsModalOpen, setIsRequestsModalOpen]);
 
   function resetAppNavigationStateToHome(options = {}) {
     const clearHomeCollections = options?.clearHomeCollections === true;
@@ -2399,6 +2423,7 @@ const App = () => {
                       conversationActionId,
                       conversationListLoading,
                       conversations,
+                      createGroupConversation,
                       currentUserId: chatCurrentUserId,
                       friendActionId,
                       friendListLoading,
@@ -2407,6 +2432,9 @@ const App = () => {
                       friendSearchQuery,
                       friendSearchResults,
                       friends,
+                      groupActionId,
+                      groupDetailLoading,
+                      groups,
                       loadOlderMessages,
                       onDeleteConversation: (conversation) => {
                         if (!conversation?.conversationId) return;
@@ -2425,18 +2453,30 @@ const App = () => {
                         setFriendSearchQuery(value);
                         setPanelNotice('');
                       },
+                      onAddGroupMembers: addGroupMembers,
+                      onCreateGroupConversation: createGroupConversation,
+                      onLeaveGroupConversation: leaveGroupConversation,
                       onOpenConversation: openConversation,
                       onOpenDirectConversation: openDirectConversation,
+                      onOpenGroupDetail: openGroupDetail,
+                      onRemoveGroupMember: removeGroupMember,
                       onRespondFriendRequest: respondToFriendRequest,
                       onSearchUsers: searchUsers,
                       onSendFriendRequest: (targetUserId) => requestFriendship({ targetUserId }),
                       onSendMessage: sendMessage,
+                      onTransferGroupOwnership: transferGroupOwnership,
+                      onUpdateGroupConversation: updateGroupConversation,
                       panelNotice,
+                      isRequestsModalOpen,
                       requestActionId,
                       requestListLoading,
                       selectedConversation,
+                      selectedGroupDetail,
+                      selectedGroupId,
                       selectedMessagesEntry,
-                      setActiveSidebarTab
+                      setActiveSidebarTab,
+                      setSelectedGroupId,
+                      setIsRequestsModalOpen
                     }}
                     isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
                     announcementUnreadCount={announcementUnreadCount}

@@ -23,6 +23,14 @@ const listDirectConversationsByKeys = async (directKeys = []) => {
 
 const createConversation = async (doc) => Conversation.create(doc);
 
+const updateConversation = async ({
+  conversationId,
+  update
+}) => Conversation.updateOne(
+  { _id: toObjectId(conversationId) },
+  update
+);
+
 const findConversationById = async (conversationId, select = null) => {
   const safeId = getIdString(conversationId);
   if (!isValidObjectId(safeId)) return null;
@@ -235,6 +243,7 @@ module.exports = {
   listConversationsByIds,
   listDirectConversationsByKeys,
   listMessagesForConversationView,
+  updateConversation,
   updateConversationLastMessage,
   updateConversationMember,
   updateConversationMemberCount,

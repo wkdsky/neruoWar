@@ -23,6 +23,35 @@ const handleRouteError = (res, error, context = '聊天接口错误') => {
   });
 };
 
+const emitConversationUpserts = async (userIds = [], conversationId) => {
+  const entries = await Promise.all(
+    (Array.isArray(userIds) ? userIds : []).map(async (participantUserId) => {
+      try {
+        const conversation = await chatService.serializeConversationForUserView({
+          userId: participantUserId,
+          conversationId
+        });
+        return [participantUserId, conversation];
+      } catch (_error) {
+        return null;
+      }
+    })
+  );
+
+  const conversationEntryMap = new Map(entries.filter(Boolean));
+  emitToUsers(Array.from(conversationEntryMap.keys()), 'chat:conversation-upsert', (participantUserId) => ({
+    conversation: conversationEntryMap.get(participantUserId) || null,
+    emittedAt: new Date().toISOString()
+  }));
+};
+
+const emitGroupUpdated = (userIds = [], conversationId) => {
+  emitToUsers(userIds, 'chat:group-updated', {
+    conversationId,
+    emittedAt: new Date().toISOString()
+  });
+};
+
 router.get('/conversations', authenticateToken, async (req, res) => {
   try {
     const result = await chatService.listVisibleConversationsForUser({
@@ -49,6 +78,175 @@ router.post('/conversations/direct/:targetUserId', authenticateToken, async (req
     });
   } catch (error) {
     return handleRouteError(res, error, '获取或创建私聊会话错误:');
+  }
+});
+
+router.get('/groups', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.listGroupsForUser({
+      userId: req?.user?.userId
+    });
+    return res.json({
+      success: true,
+      rows: result.rows
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '获取群聊列表错误:');
+  }
+});
+
+router.post('/groups', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.createGroupConversation({
+      ownerUserId: req?.user?.userId,
+      title: req.body?.title,
+      announcement: req.body?.announcement,
+      memberUserIds: req.body?.memberUserIds
+    });
+
+    await emitConversationUpserts(result.participantUserIds, result.group.conversationId);
+    emitGroupUpdated(result.participantUserIds, result.group.conversationId);
+
+    return res.json({
+      success: true,
+      conversation: result.conversation,
+      group: result.group
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '创建群聊错误:');
+  }
+});
+
+router.get('/groups/:conversationId', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.getGroupDetailForUser({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId
+    });
+    return res.json({
+      success: true,
+      conversation: result.conversation,
+      group: result.group
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '获取群聊详情错误:');
+  }
+});
+
+router.patch('/groups/:conversationId', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.updateGroupConversation({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId,
+      title: req.body?.title,
+      announcement: req.body?.announcement
+    });
+
+    await emitConversationUpserts(result.participantUserIds, result.group.conversationId);
+    emitGroupUpdated(result.participantUserIds, result.group.conversationId);
+
+    return res.json({
+      success: true,
+      conversation: result.conversation,
+      group: result.group
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '更新群聊错误:');
+  }
+});
+
+router.post('/groups/:conversationId/members', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.addGroupMembers({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId,
+      memberUserIds: req.body?.memberUserIds
+    });
+
+    await emitConversationUpserts(result.participantUserIds, result.group.conversationId);
+    emitGroupUpdated(result.participantUserIds, result.group.conversationId);
+
+    return res.json({
+      success: true,
+      conversation: result.conversation,
+      group: result.group,
+      addedUserIds: result.addedUserIds
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '添加群成员错误:');
+  }
+});
+
+router.delete('/groups/:conversationId/members/:targetUserId', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.removeGroupMember({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId,
+      targetUserId: req.params?.targetUserId
+    });
+
+    await emitConversationUpserts(result.participantUserIds, result.group.conversationId);
+    emitGroupUpdated(result.participantUserIds, result.group.conversationId);
+    emitToUser(result.removedUserId, 'chat:conversation-hidden', {
+      conversationId: result.group.conversationId,
+      conversationHiddenForCurrentUser: true,
+      emittedAt: new Date().toISOString()
+    });
+
+    return res.json({
+      success: true,
+      conversation: result.conversation,
+      group: result.group,
+      removedUserId: result.removedUserId
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '移除群成员错误:');
+  }
+});
+
+router.post('/groups/:conversationId/transfer', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.transferGroupOwnership({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId,
+      targetUserId: req.body?.targetUserId
+    });
+
+    await emitConversationUpserts(result.participantUserIds, result.group.conversationId);
+    emitGroupUpdated(result.participantUserIds, result.group.conversationId);
+
+    return res.json({
+      success: true,
+      conversation: result.conversation,
+      group: result.group,
+      newOwnerUserId: result.newOwnerUserId
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '转让群主错误:');
+  }
+});
+
+router.post('/groups/:conversationId/leave', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.leaveGroupConversation({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId
+    });
+
+    await emitConversationUpserts(result.participantUserIds, result.conversationId);
+    emitGroupUpdated(result.participantUserIds, result.conversationId);
+    emitToUser(result.leftUserId, 'chat:conversation-hidden', {
+      conversationId: result.conversationId,
+      conversationHiddenForCurrentUser: true,
+      emittedAt: new Date().toISOString()
+    });
+
+    return res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '退出群聊错误:');
   }
 });
 

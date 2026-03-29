@@ -114,6 +114,12 @@ const createHarness = () => {
       conversation.memberCount = memberCount;
       return { acknowledged: true };
     },
+    updateConversation: async ({ conversationId, update }) => {
+      const conversation = state.conversations.find((item) => item._id === conversationId);
+      if (!conversation) return { matchedCount: 0 };
+      if (update.$set) Object.assign(conversation, update.$set);
+      return { matchedCount: 1 };
+    },
     ensureConversationMember: async ({ conversationId, userId, set = {}, setOnInsert = {} }) => {
       let member = state.members.find((item) => item.conversationId === conversationId && item.userId === userId);
       if (!member) {
@@ -407,4 +413,90 @@ test('好友列表不强依赖 conversationId，没有现成会话时也能正�
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].hasConversation, false);
   assert.equal(result.rows[0].conversationId, null);
+});
+
+test('可以创建群聊并查看群详情', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const bobId = state.users[1]._id;
+
+  const created = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: '作战讨论组',
+    announcement: '先集合再推进',
+    memberUserIds: [bobId]
+  });
+
+  assert.equal(state.conversations.length, 1);
+  assert.equal(state.conversations[0].type, 'group');
+  assert.equal(created.group.title, '作战讨论组');
+  assert.equal(created.group.announcement, '先集合再推进');
+  assert.equal(created.group.members.length, 2);
+  assert.equal(created.group.currentUserRole, 'owner');
+});
+
+test('群主可以更新群资料、添加成员并转让群主', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const bobId = state.users[1]._id;
+  const carolId = state.users[2]._id;
+
+  const created = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: '初始群',
+    memberUserIds: [bobId]
+  });
+
+  const updated = await chatService.updateGroupConversation({
+    userId: aliceId,
+    conversationId: created.group.conversationId,
+    title: '重命名后的群',
+    announcement: '新的群公告'
+  });
+  await chatService.addGroupMembers({
+    userId: aliceId,
+    conversationId: created.group.conversationId,
+    memberUserIds: [carolId]
+  });
+  const transferred = await chatService.transferGroupOwnership({
+    userId: aliceId,
+    conversationId: created.group.conversationId,
+    targetUserId: bobId
+  });
+
+  assert.equal(updated.group.title, '重命名后的群');
+  assert.equal(state.conversations[0].announcement, '新的群公告');
+  assert.equal(state.conversations[0].memberCount, 3);
+  assert.equal(transferred.group.ownerId, bobId);
+  assert.equal(state.members.find((item) => item.userId === aliceId).role, 'member');
+  assert.equal(state.members.find((item) => item.userId === bobId).role, 'owner');
+});
+
+test('普通群成员可以退群，群主不能直接退群', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const bobId = state.users[1]._id;
+
+  const created = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: '退群测试',
+    memberUserIds: [bobId]
+  });
+
+  await assert.rejects(
+    () => chatService.leaveGroupConversation({
+      userId: aliceId,
+      conversationId: created.group.conversationId
+    }),
+    /群主退出前请先转让群主身份/
+  );
+
+  const leaveResult = await chatService.leaveGroupConversation({
+    userId: bobId,
+    conversationId: created.group.conversationId
+  });
+
+  assert.equal(leaveResult.conversationHiddenForCurrentUser, true);
+  assert.equal(state.members.find((item) => item.userId === bobId).isActive, false);
+  assert.equal(state.conversations[0].memberCount, 1);
 });
