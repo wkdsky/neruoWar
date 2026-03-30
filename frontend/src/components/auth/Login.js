@@ -1,6 +1,29 @@
-import React, { useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import './Login.css';
 import { API_BASE } from '../../runtimeConfig';
+
+const createClosedNoticeState = () => ({
+    open: false,
+    title: '提示',
+    message: '',
+    buttonText: '确定',
+    onClose: null
+});
+
+const createUsernameCheckState = () => ({
+    status: 'idle',
+    message: '',
+    available: null
+});
+
+const renderInlineHint = (hint) => (
+    <div
+        className={`login-inline-hint-slot${hint ? ` login-inline-hint-slot--${hint.tone}` : ''}`}
+        aria-live="polite"
+    >
+        {hint ? hint.message : '\u00A0'}
+    </div>
+);
 
 const Login = ({ onLogin }) => {
     const [username, setUsername] = useState('');
@@ -17,6 +40,120 @@ const Login = ({ onLogin }) => {
     const [showOldPassword, setShowOldPassword] = useState(false);
     const [showNewPassword, setShowNewPassword] = useState(false);
     const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
+    const [noticeState, setNoticeState] = useState(createClosedNoticeState);
+    const [usernameCheckState, setUsernameCheckState] = useState(createUsernameCheckState);
+    const [registerConfirmTouched, setRegisterConfirmTouched] = useState(false);
+    const [resetConfirmTouched, setResetConfirmTouched] = useState(false);
+    const usernameCheckRequestIdRef = useRef(0);
+
+    const closeNotice = useCallback(() => {
+        setNoticeState((current) => {
+            if (typeof current.onClose === 'function') {
+                current.onClose();
+            }
+            return createClosedNoticeState();
+        });
+    }, []);
+
+    const openNotice = useCallback((message, options = {}) => {
+        setNoticeState({
+            open: true,
+            title: options.title || '提示',
+            message,
+            buttonText: options.buttonText || '确定',
+            onClose: typeof options.onClose === 'function' ? options.onClose : null
+        });
+    }, []);
+
+    const normalizedUsername = username.trim();
+    const registerPasswordMismatch = (
+        mode === 'register' &&
+        registerConfirmTouched &&
+        confirmPassword.length > 0 &&
+        password !== confirmPassword
+    );
+    const resetPasswordMismatch = (
+        mode === 'reset' &&
+        resetConfirmTouched &&
+        confirmNewPassword.length > 0 &&
+        newPassword !== confirmNewPassword
+    );
+
+    const usernameHint = useMemo(() => {
+        if (mode !== 'register') return null;
+        if (!username) return null;
+        if (normalizedUsername.length < 3) {
+            return {
+                tone: 'error',
+                message: '用户名至少3个字符'
+            };
+        }
+        if (usernameCheckState.status === 'available') {
+            return {
+                tone: 'success',
+                message: '用户名可用'
+            };
+        }
+        if (usernameCheckState.status === 'taken' || usernameCheckState.status === 'error') {
+            return {
+                tone: 'error',
+                message: usernameCheckState.message
+            };
+        }
+        return null;
+    }, [mode, normalizedUsername.length, username, usernameCheckState]);
+
+    const runUsernameAvailabilityCheck = useCallback(async () => {
+        if (mode !== 'register') return;
+
+        if (!username) {
+            setUsernameCheckState(createUsernameCheckState());
+            return;
+        }
+
+        if (normalizedUsername.length < 3) {
+            setUsernameCheckState({
+                status: 'too_short',
+                message: '用户名至少3个字符',
+                available: null
+            });
+            return;
+        }
+
+        const requestId = usernameCheckRequestIdRef.current + 1;
+        usernameCheckRequestIdRef.current = requestId;
+        setUsernameCheckState({
+            status: 'checking',
+            message: '正在检查用户名...',
+            available: null
+        });
+
+        try {
+            const response = await fetch(`${API_BASE}/username-availability?username=${encodeURIComponent(normalizedUsername)}`);
+            const data = await response.json();
+            if (usernameCheckRequestIdRef.current !== requestId) return;
+            if (!response.ok) {
+                setUsernameCheckState({
+                    status: 'error',
+                    message: data.error || '用户名检查失败',
+                    available: null
+                });
+                return;
+            }
+            setUsernameCheckState({
+                status: data.available ? 'available' : 'taken',
+                message: data.available ? '用户名可用' : '用户名已存在',
+                available: Boolean(data.available)
+            });
+        } catch (_error) {
+            if (usernameCheckRequestIdRef.current !== requestId) return;
+            setUsernameCheckState({
+                status: 'error',
+                message: '用户名检查失败',
+                available: null
+            });
+        }
+    }, [mode, normalizedUsername, username]);
 
     const handleLogin = async () => {
         try {
@@ -30,25 +167,29 @@ const Login = ({ onLogin }) => {
             if (response.ok) {
                 onLogin(data);
             } else {
-                window.alert(data.error);
+                openNotice(data.error || '登录失败');
             }
         } catch (error) {
-            window.alert('连接失败: ' + error.message);
+            openNotice('连接失败: ' + error.message, { title: '登录失败' });
         }
     };
 
     const handleRegister = async () => {
         // 验证两次密码是否一致
         if (password !== confirmPassword) {
-            window.alert('两次输入的密码不一致');
             return;
         }
         if (!password || password.length < 6) {
-            window.alert('密码至少需要6个字符');
+            openNotice('密码至少需要6个字符', { title: '注册失败' });
             return;
         }
-        if (!username || username.length < 3) {
-            window.alert('用户名至少需要3个字符');
+        if (!normalizedUsername || normalizedUsername.length < 3) {
+            return;
+        }
+        if (usernameCheckState.status === 'checking') {
+            return;
+        }
+        if (usernameCheckState.available === false) {
             return;
         }
 
@@ -56,35 +197,45 @@ const Login = ({ onLogin }) => {
             const response = await fetch(`${API_BASE}/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
+                body: JSON.stringify({ username: normalizedUsername, password })
             });
 
             const data = await response.json();
             if (response.ok) {
-                window.alert('注册成功！请登录');
-                // 清空确认密码，切换回登录模式
-                setConfirmPassword('');
-                setMode('login');
+                openNotice('注册成功！请登录', {
+                    title: '注册成功',
+                    onClose: () => {
+                        setConfirmPassword('');
+                        setMode('login');
+                    }
+                });
             } else {
-                window.alert(data.error);
+                if (data.error === '用户名已存在') {
+                    setUsernameCheckState({
+                        status: 'taken',
+                        message: '用户名已存在',
+                        available: false
+                    });
+                    return;
+                }
+                openNotice(data.error || '注册失败', { title: '注册失败' });
             }
         } catch (error) {
-            window.alert('连接失败: ' + error.message);
+            openNotice('连接失败: ' + error.message, { title: '注册失败' });
         }
     };
 
     const handleResetPassword = async () => {
         // 验证新密码
         if (newPassword !== confirmNewPassword) {
-            window.alert('两次输入的新密码不一致');
             return;
         }
         if (!newPassword || newPassword.length < 6) {
-            window.alert('新密码至少需要6个字符');
+            openNotice('新密码至少需要6个字符', { title: '修改失败' });
             return;
         }
         if (!username || !oldPassword) {
-            window.alert('请输入用户名和原密码');
+            openNotice('请输入用户名和原密码', { title: '修改失败' });
             return;
         }
 
@@ -101,16 +252,20 @@ const Login = ({ onLogin }) => {
 
             const data = await response.json();
             if (response.ok) {
-                window.alert('密码修改成功！请使用新密码登录');
-                setMode('login');
-                setOldPassword('');
-                setNewPassword('');
-                setConfirmNewPassword('');
+                openNotice('密码修改成功！请使用新密码登录', {
+                    title: '修改成功',
+                    onClose: () => {
+                        setMode('login');
+                        setOldPassword('');
+                        setNewPassword('');
+                        setConfirmNewPassword('');
+                    }
+                });
             } else {
-                window.alert(data.error);
+                openNotice(data.error || '密码修改失败', { title: '修改失败' });
             }
         } catch (error) {
-            window.alert('连接失败: ' + error.message);
+            openNotice('连接失败: ' + error.message, { title: '修改失败' });
         }
     };
 
@@ -213,9 +368,14 @@ const Login = ({ onLogin }) => {
                             type="text"
                             placeholder="用户名（至少3个字符，需唯一）"
                             value={username}
-                            onChange={(e) => setUsername(e.target.value)}
+                            onChange={(e) => {
+                                setUsername(e.target.value);
+                                setUsernameCheckState(createUsernameCheckState());
+                            }}
+                            onBlur={runUsernameAvailabilityCheck}
                             className="login-input"
                         />
+                        {renderInlineHint(usernameHint)}
                         <div style={{position: 'relative'}}>
                             <input
                                 type={showPassword ? "text" : "password"}
@@ -261,6 +421,7 @@ const Login = ({ onLogin }) => {
                                 placeholder="确认密码"
                                 value={confirmPassword}
                                 onChange={(e) => setConfirmPassword(e.target.value)}
+                                onBlur={() => setRegisterConfirmTouched(true)}
                                 className="login-input"
                                 onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
                                 style={{paddingRight: '45px'}}
@@ -295,6 +456,11 @@ const Login = ({ onLogin }) => {
                                 )}
                             </button>
                         </div>
+                        {renderInlineHint(
+                            registerPasswordMismatch
+                                ? { tone: 'error', message: '两次输入的密码不一致' }
+                                : null
+                        )}
                         <div className="login-buttons">
                             <button
                                 onClick={() => setMode('login')}
@@ -408,6 +574,7 @@ const Login = ({ onLogin }) => {
                                 placeholder="确认新密码"
                                 value={confirmNewPassword}
                                 onChange={(e) => setConfirmNewPassword(e.target.value)}
+                                onBlur={() => setResetConfirmTouched(true)}
                                 className="login-input"
                                 onKeyDown={(e) => e.key === 'Enter' && handleResetPassword()}
                                 style={{paddingRight: '45px'}}
@@ -442,6 +609,11 @@ const Login = ({ onLogin }) => {
                                 )}
                             </button>
                         </div>
+                        {renderInlineHint(
+                            resetPasswordMismatch
+                                ? { tone: 'error', message: '两次输入的新密码不一致' }
+                                : null
+                        )}
                         <div className="login-buttons">
                             <button
                                 onClick={() => setMode('login')}
@@ -461,6 +633,30 @@ const Login = ({ onLogin }) => {
                     </div>
                 )}
             </div>
+            {noticeState.open && (
+                <div className="auth-notice-backdrop" onClick={closeNotice}>
+                    <div
+                        className="auth-notice-modal"
+                        role="alertdialog"
+                        aria-modal="true"
+                        aria-labelledby="auth-notice-title"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="auth-notice-accent" aria-hidden="true" />
+                        <div className="auth-notice-header">
+                            <h3 id="auth-notice-title">{noticeState.title}</h3>
+                        </div>
+                        <div className="auth-notice-body">
+                            <p className="auth-notice-message">{noticeState.message}</p>
+                        </div>
+                        <div className="auth-notice-actions">
+                            <button type="button" className="btn btn-secondary auth-notice-button" onClick={closeNotice}>
+                                {noticeState.buttonText}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

@@ -618,6 +618,7 @@ export const buildStarMapLineVisual = ({
   const sameCluster = fromNode?.clusterSignature && fromNode?.clusterSignature === toNode?.clusterSignature;
   const parentNode = fromLevel <= toLevel ? fromNode : toNode;
   const childNode = fromLevel <= toLevel ? toNode : fromNode;
+  const minLevel = Math.min(fromLevel, toLevel);
   const touchesCenter = Math.min(fromLevel, toLevel) === 0;
   const isPrimaryHierarchyEdge = levelDelta === 1
     && String(childNode?.primaryParentKey || '') === String(parentNode?.nodeKey || '');
@@ -626,6 +627,12 @@ export const buildStarMapLineVisual = ({
   const isSenseTrunk = layer === STAR_MAP_LAYER.SENSE && (touchesCenter || (isPrimarySenseBranch && Math.min(fromLevel, toLevel) <= 1));
   const isSenseBranch = layer === STAR_MAP_LAYER.SENSE && isPrimarySenseBranch && !isSenseTrunk;
   const isSenseCross = layer === STAR_MAP_LAYER.SENSE && !isPrimarySenseBranch;
+  const isTitleTrunk = layer === STAR_MAP_LAYER.TITLE && isPrimaryHierarchyEdge && minLevel <= 1;
+  const isTitleBranch = layer === STAR_MAP_LAYER.TITLE && isPrimaryHierarchyEdge && !isTitleTrunk;
+  const isTrunk = isSenseTrunk || isTitleTrunk;
+  const isBranch = isSenseBranch || isTitleBranch;
+  const isCrossCluster = layer === STAR_MAP_LAYER.TITLE && sameBand && !sameCluster;
+  const isBridge = (!sameBand && !isTrunk && !isBranch) || isSenseCross || isCrossCluster;
   const dx = Number(toNode?.x || 0) - Number(fromNode?.x || 0);
   const dy = Number(toNode?.y || 0) - Number(fromNode?.y || 0);
   const distance = Math.hypot(dx, dy) || 1;
@@ -652,10 +659,14 @@ export const buildStarMapLineVisual = ({
     Number(childNode?.degree || 0) * 0.4
   );
   let curveStrength = 0;
-  if (isSenseTrunk) {
-    curveStrength = clamp(1.2 + Math.abs(siblingSide) * 2.1 + angleDelta * 1.8 + trunkBias * 0.05, 0.8, 5.2);
-  } else if (isSenseBranch) {
-    curveStrength = clamp(3.8 + Math.abs(siblingSide) * 2.8 + distance * 0.012 + trunkBias * 0.04, 3.8, 9.6);
+  if (isTrunk) {
+    curveStrength = clamp(
+      0.82 + Math.abs(siblingSide) * 1.55 + angleDelta * 1.24 + trunkBias * 0.035,
+      0.6,
+      layer === STAR_MAP_LAYER.SENSE ? 4.4 : 4.9
+    );
+  } else if (isBranch) {
+    curveStrength = clamp(2.8 + Math.abs(siblingSide) * 2.4 + distance * 0.01 + trunkBias * 0.034, 2.4, 8.8);
   } else if (isPrimaryHierarchyEdge) {
     curveStrength = clamp(3.2 + Math.abs(siblingSide) * 2.2 + distance * 0.01, 2.8, 8.4);
   } else if (touchesCenter) {
@@ -676,55 +687,83 @@ export const buildStarMapLineVisual = ({
         : touchesCenter
           ? 0.28
           : 0.18)
+      + (isTitleTrunk ? 0.11 : 0)
+      + (isTitleBranch ? 0.05 : 0)
       + pairWeight * 0.028
       - level * 0.016
       + (sameCluster ? 0.03 : -0.01)
-      - (isSenseCross ? 0.05 : 0),
+      - ((isSenseCross || isCrossCluster) ? 0.05 : 0),
     0.08,
-    0.42
+    0.5
   );
   const glowAlpha = clamp(opacity * 0.55, 0.08, 0.2);
   const lineWidth = clamp(
-    (isSenseTrunk
+    (isTrunk
       ? 1.95
-      : isSenseBranch
+      : isBranch
         ? 1.34
         : touchesCenter
           ? 1.26
           : 0.94)
+      + (isTitleTrunk ? 0.22 : 0)
+      + (isTitleBranch ? 0.1 : 0)
       + pairWeight * 0.05
       + (sameCluster ? 0.05 : -0.04)
-      + (isSenseCross ? -0.12 : 0)
+      + ((isSenseCross || isCrossCluster) ? -0.12 : 0)
       - level * 0.03,
     0.72,
-    2.1
+    2.36
   );
   const glowWidth = clamp(
-    lineWidth * (isSenseTrunk ? 3.2 : 2.6) + (sameBand ? 0.5 : 0),
+    lineWidth * (isTrunk ? 3.5 : isBranch ? 2.95 : 2.5) + (sameBand ? 0.5 : 0),
     2.2,
-    6.8
+    7.8
   );
   const drawOrder = (
-    isSenseTrunk
+    isTrunk
       ? 228
-      : isSenseBranch
+      : isBranch
         ? 184
         : touchesCenter
           ? 148
           : 108
   ) + level * 14 + (sameCluster ? 4 : -6);
+  const curveBias = isTrunk
+    ? 0.72
+    : isBranch
+      ? 0.64
+      : sameBand
+        ? 0.5
+        : 0.57;
+  const dashPattern = isSenseCross
+    ? [4.5, 8]
+    : ((isCrossCluster || isBridge) ? [7, 7] : null);
+  const innerGlowOpacity = clamp(
+    glowAlpha * (isTrunk ? 0.94 : isBranch ? 0.68 : 0.42),
+    0.04,
+    0.24
+  );
+  const capStrength = clamp(isTrunk ? 1.2 : isBranch ? 1.02 : 0.82, 0.76, 1.24);
 
   return {
     curveOffset: curveStrength * baseCurveSign,
+    curveBias,
     lineOpacity: opacity,
     glowOpacity: glowAlpha,
+    innerGlowOpacity,
     lineWidth,
     glowWidth,
     drawOrder,
+    dashPattern,
+    capStrength,
     lineVariant: isSenseTrunk
       ? 'sense-trunk'
       : isSenseBranch
         ? 'sense-branch'
+        : isTitleTrunk
+          ? 'title-trunk'
+          : isTitleBranch
+            ? 'title-branch'
         : isSenseCross
           ? 'sense-cross'
           : sameBand

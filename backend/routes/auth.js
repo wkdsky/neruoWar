@@ -1043,6 +1043,29 @@ const settleTravelState = async (user) => {
 };
 
 // 注册
+router.get('/username-availability', async (req, res) => {
+  try {
+    const username = typeof req.query.username === 'string' ? req.query.username.trim() : '';
+
+    if (!username) {
+      return res.status(400).json({ error: '用户名不能为空' });
+    }
+
+    if (username.length < 3) {
+      return res.status(400).json({ error: '用户名至少3个字符' });
+    }
+
+    const existingUser = await User.exists({ username });
+    return res.json({
+      available: !existingUser,
+      exists: Boolean(existingUser)
+    });
+  } catch (error) {
+    console.error('检查用户名可用性错误:', error);
+    return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
 router.post('/register', async (req, res) => {
   try {
     const { username, password } = req.body;

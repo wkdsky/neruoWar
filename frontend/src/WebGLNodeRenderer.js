@@ -331,6 +331,8 @@ const applyRoleAccent = (style, type = '') => {
   };
 };
 
+const clampNumber = (value, min, max) => Math.max(min, Math.min(max, value));
+
 const readMapDebugFlag = () => {
   if (typeof window === 'undefined') return false;
   const value = new URLSearchParams(window.location.search).get('mapDebug');
@@ -1081,6 +1083,30 @@ class WebGLNodeRenderer {
       });
   }
 
+  getLineVariantProfile(line = {}, fromNode = null, toNode = null) {
+    const variant = String(line?.lineVariant || '');
+    const isTrunk = variant === 'sense-trunk' || variant === 'title-trunk';
+    const isBranch = variant === 'sense-branch' || variant === 'title-branch';
+    const isCross = variant === 'sense-cross' || variant === 'cross-cluster';
+    const isBridge = variant === 'title-bridge' || variant === 'sense-bridge';
+    const fromLevel = Number(fromNode?.data?.starMapLevel || 0);
+    const toLevel = Number(toNode?.data?.starMapLevel || 0);
+    const parentAtStart = fromLevel <= toLevel;
+
+    return {
+      variant,
+      isTrunk,
+      isBranch,
+      isCross,
+      isBridge,
+      isHierarchy: isTrunk || isBranch,
+      parentAtStart,
+      dashPattern: Array.isArray(line?.dashPattern) && line.dashPattern.length > 0
+        ? line.dashPattern
+        : (isCross ? [5, 8] : (isBridge ? [7, 7] : []))
+    };
+  }
+
   getCurvedLineGeometry(segment, line = {}) {
     if (!segment) return null;
 
@@ -1089,14 +1115,15 @@ class WebGLNodeRenderer {
     const length = Math.hypot(dx, dy);
     if (!Number.isFinite(length) || length <= 0.001) return null;
 
-    const midX = (segment.start.x + segment.end.x) * 0.5;
-    const midY = (segment.start.y + segment.end.y) * 0.5;
     const normalX = -dy / length;
     const normalY = dx / length;
     const maxOffset = Math.max(0, length * 0.22);
     const curveOffset = Math.max(-maxOffset, Math.min(maxOffset, Number(line?.curveOffset) || 0));
-    const controlX = midX + normalX * curveOffset;
-    const controlY = midY + normalY * curveOffset;
+    const controlT = clampNumber(Number(line?.curveBias) || 0.5, 0.18, 0.82);
+    const anchorX = segment.start.x + dx * controlT;
+    const anchorY = segment.start.y + dy * controlT;
+    const controlX = anchorX + normalX * curveOffset;
+    const controlY = anchorY + normalY * curveOffset;
 
     return {
       start: segment.start,
@@ -1106,16 +1133,25 @@ class WebGLNodeRenderer {
     };
   }
 
-  buildLineGradient(ctx, geometry, color, alpha) {
+  buildLineGradient(ctx, geometry, color, alpha, options = {}) {
+    const startAlphaScale = Number.isFinite(Number(options?.startAlphaScale))
+      ? Number(options.startAlphaScale)
+      : 0.54;
+    const midAlphaScale = Number.isFinite(Number(options?.midAlphaScale))
+      ? Number(options.midAlphaScale)
+      : 1;
+    const endAlphaScale = Number.isFinite(Number(options?.endAlphaScale))
+      ? Number(options.endAlphaScale)
+      : 0.54;
     const gradient = ctx.createLinearGradient(
       geometry.start.x,
       geometry.start.y,
       geometry.end.x,
       geometry.end.y
     );
-    gradient.addColorStop(0, this.toCssRgba(color, alpha * 0.54));
-    gradient.addColorStop(0.5, this.toCssRgba(color, alpha));
-    gradient.addColorStop(1, this.toCssRgba(color, alpha * 0.54));
+    gradient.addColorStop(0, this.toCssRgba(color, alpha * startAlphaScale));
+    gradient.addColorStop(0.5, this.toCssRgba(color, alpha * midAlphaScale));
+    gradient.addColorStop(1, this.toCssRgba(color, alpha * endAlphaScale));
     return gradient;
   }
 
@@ -1648,15 +1684,22 @@ class WebGLNodeRenderer {
         this.getRevealProgressForNode(toNode.id)
       );
       const lineHoverState = this.getLineHoverState(line);
+      const lineProfile = this.getLineVariantProfile(line, fromNode, toNode);
       const hoverBoost = lineHoverState === 'focus'
         ? 1.72
         : (lineHoverState === 'hovered' ? 1.18 : (lineHoverState === 'dim' ? 0.22 : 1));
+      const baseOpacityScale = lineProfile.isTrunk
+        ? 0.34
+        : lineProfile.isBranch
+          ? 0.28
+          : (lineProfile.isCross || lineProfile.isBridge ? 0.18 : 0.22);
       gl.uniform4fv(this.lineLocations.color, color);
       gl.uniform1f(
         this.lineLocations.opacity,
         Math.min(fromNode.opacity, toNode.opacity)
           * Math.max(0.12, revealProgress)
           * (Number(line?.lineOpacity) || 0.22)
+          * baseOpacityScale
           * hoverBoost
       );
 
@@ -2476,50 +2519,87 @@ class WebGLNodeRenderer {
       const isDimmed = lineHoverState === 'dim';
       const geometry = this.getCurvedLineGeometry(segment, line);
       if (!geometry) continue;
-      const lineVariant = String(line?.lineVariant || '');
-      const isSenseTrunk = lineVariant === 'sense-trunk';
-      const isSenseCross = lineVariant === 'sense-cross';
-      const isDashedBridge = isSenseCross || lineVariant === 'cross-cluster' || lineVariant === 'title-bridge';
+      const lineProfile = this.getLineVariantProfile(line, fromNode, toNode);
+      const startAlphaScale = lineProfile.isHierarchy
+        ? (lineProfile.parentAtStart ? 1.12 : 0.68)
+        : 0.54;
+      const endAlphaScale = lineProfile.isHierarchy
+        ? (lineProfile.parentAtStart ? 0.7 : 1.12)
+        : 0.54;
       const alphaScale = Math.min(fromNode.opacity, toNode.opacity)
         * (Number(line?.glowOpacity) || ((isFocused || isHovered) ? 0.34 : 0.22))
         * revealProgress
         * (isFocused ? 1.72 : (isHovered ? 1.18 : (isDimmed ? 0.12 : 1)))
-        * (isSenseTrunk ? 1.2 : isSenseCross ? 0.82 : 1);
-      const glowStroke = this.buildLineGradient(ctx, geometry, baseColor, alphaScale);
-      const glowWidth = (Number(line?.glowWidth) || 6) * (isFocused ? 1.22 : (isHovered ? 1.14 : 1)) * (isSenseTrunk ? 1.12 : isSenseCross ? 0.88 : 1);
-      const coreWidth = Math.max(0.8, (Number(line?.lineWidth) || 1.5) * (isFocused ? 1.2 : (isHovered ? 1.12 : 1)) * (isSenseTrunk ? 1.12 : isSenseCross ? 0.86 : 1));
+        * (lineProfile.isTrunk ? 1.26 : lineProfile.isBranch ? 1.08 : (lineProfile.isCross ? 0.78 : 1));
+      const glowStroke = this.buildLineGradient(ctx, geometry, baseColor, alphaScale, {
+        startAlphaScale,
+        midAlphaScale: lineProfile.isTrunk ? 1.08 : (lineProfile.isBranch ? 1 : 0.92),
+        endAlphaScale
+      });
+      const glowWidth = (Number(line?.glowWidth) || 6)
+        * (isFocused ? 1.22 : (isHovered ? 1.14 : 1))
+        * (lineProfile.isTrunk ? 1.2 : lineProfile.isBranch ? 1.04 : (lineProfile.isCross ? 0.86 : 1));
+      const coreWidth = Math.max(
+        0.8,
+        (Number(line?.lineWidth) || 1.5)
+          * (isFocused ? 1.2 : (isHovered ? 1.12 : 1))
+          * (lineProfile.isTrunk ? 1.14 : lineProfile.isBranch ? 1.02 : (lineProfile.isCross ? 0.84 : 1))
+      );
+      const coreStroke = this.buildLineGradient(
+        ctx,
+        geometry,
+        baseColor,
+        (Number(line?.lineOpacity) || 0.28)
+          * revealProgress
+          * (isFocused ? 1.72 : (isHovered ? 1.18 : (isDimmed ? 0.12 : 1)))
+          * (lineProfile.isTrunk ? 1.12 : lineProfile.isBranch ? 1 : (lineProfile.isCross ? 0.72 : 1)),
+        {
+          startAlphaScale: lineProfile.isHierarchy ? (lineProfile.parentAtStart ? 1.08 : 0.82) : 0.72,
+          midAlphaScale: lineProfile.isTrunk ? 1.16 : 1,
+          endAlphaScale: lineProfile.isHierarchy ? (lineProfile.parentAtStart ? 0.78 : 1.08) : 0.72
+        }
+      );
 
       ctx.save();
-      ctx.setLineDash(isDashedBridge ? (isSenseCross ? [5, 8] : [7, 6]) : []);
+      ctx.setLineDash(lineProfile.dashPattern);
       ctx.strokeStyle = glowStroke;
       ctx.lineWidth = glowWidth;
       ctx.lineCap = 'round';
-      ctx.shadowBlur = glowWidth * (isSenseTrunk ? 2.35 : 2.1);
-      ctx.shadowColor = this.toCssRgba(baseColor, alphaScale * (isSenseTrunk ? 0.98 : 0.86));
+      ctx.lineJoin = 'round';
+      ctx.shadowBlur = glowWidth * (lineProfile.isTrunk ? 2.55 : lineProfile.isBranch ? 2.25 : 2.05);
+      ctx.shadowColor = this.toCssRgba(baseColor, alphaScale * (lineProfile.isTrunk ? 1 : 0.86));
       this.traceCurvedLine(ctx, geometry);
       ctx.stroke();
 
       ctx.shadowBlur = 0;
       ctx.lineWidth = coreWidth;
-      ctx.strokeStyle = this.toCssRgba(
-        baseColor,
-        (Number(line?.lineOpacity) || 0.28)
-          * revealProgress
-          * (isFocused ? 1.72 : (isHovered ? 1.18 : (isDimmed ? 0.12 : 1)))
-          * (isSenseTrunk ? 1.08 : isSenseCross ? 0.78 : 1)
-      );
+      ctx.strokeStyle = coreStroke;
       this.traceCurvedLine(ctx, geometry);
       ctx.stroke();
 
       ctx.setLineDash([]);
-      ctx.lineWidth = Math.max(0.7, coreWidth * (isSenseTrunk ? 0.46 : 0.38));
-      ctx.strokeStyle = this.toCssRgba([1, 1, 1, 1], alphaScale * (isSenseTrunk ? 0.32 : 0.2));
+      ctx.lineWidth = Math.max(0.7, coreWidth * (lineProfile.isTrunk ? 0.48 : lineProfile.isBranch ? 0.4 : 0.34));
+      ctx.strokeStyle = this.buildLineGradient(
+        ctx,
+        geometry,
+        [1, 1, 1, 1],
+        Number(line?.innerGlowOpacity) || (alphaScale * (lineProfile.isTrunk ? 0.56 : lineProfile.isBranch ? 0.4 : 0.24)),
+        {
+          startAlphaScale: lineProfile.isHierarchy ? (lineProfile.parentAtStart ? 0.74 : 0.38) : 0.32,
+          midAlphaScale: lineProfile.isTrunk ? 0.92 : 0.68,
+          endAlphaScale: lineProfile.isHierarchy ? (lineProfile.parentAtStart ? 0.34 : 0.74) : 0.32
+        }
+      );
       this.traceCurvedLine(ctx, geometry);
       ctx.stroke();
 
-      if (isSenseTrunk) {
-        ctx.lineWidth = Math.max(0.8, coreWidth * 0.26);
-        ctx.strokeStyle = this.toCssRgba([0.98, 0.99, 1, 1], alphaScale * 0.5);
+      if (lineProfile.isTrunk) {
+        ctx.lineWidth = Math.max(0.8, coreWidth * 0.24);
+        ctx.strokeStyle = this.buildLineGradient(ctx, geometry, [0.98, 0.99, 1, 1], alphaScale * 0.42, {
+          startAlphaScale: lineProfile.parentAtStart ? 0.9 : 0.42,
+          midAlphaScale: 0.82,
+          endAlphaScale: lineProfile.parentAtStart ? 0.42 : 0.9
+        });
         this.traceCurvedLine(ctx, geometry);
         ctx.stroke();
       }
@@ -2671,30 +2751,31 @@ class WebGLNodeRenderer {
       const isFocused = lineHoverState === 'focus';
       const isHovered = lineHoverState === 'hovered';
       const isDimmed = lineHoverState === 'dim';
-      const lineVariant = String(line?.lineVariant || '');
-      const isSenseTrunk = lineVariant === 'sense-trunk';
+      const lineProfile = this.getLineVariantProfile(line, fromNode, toNode);
       const capRadius = Math.max(2, Math.min(5.5, Math.min(
         this.getNodeScreenRadius(fromNode),
         this.getNodeScreenRadius(toNode)
-      ) * (isFocused ? 0.128 : (isHovered ? 0.12 : isSenseTrunk ? 0.115 : 0.1))));
+      ) * (isFocused ? 0.128 : (isHovered ? 0.12 : lineProfile.isTrunk ? 0.122 : lineProfile.isBranch ? 0.108 : 0.1))));
 
-      const drawCap = (point) => {
-        const glow = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, capRadius * 2.6);
-        glow.addColorStop(0, this.toCssRgba(color, minOpacity * (isFocused ? 1.12 : (isHovered ? 0.96 : (isDimmed ? 0.16 : 0.78)))));
+      const drawCap = (point, emphasis = 1) => {
+        const glow = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, capRadius * 2.6 * emphasis);
+        glow.addColorStop(0, this.toCssRgba(color, minOpacity * emphasis * (isFocused ? 1.12 : (isHovered ? 0.96 : (isDimmed ? 0.16 : 0.78)))));
         glow.addColorStop(1, this.toCssRgba(color, 0));
         ctx.fillStyle = glow;
         ctx.beginPath();
-        ctx.arc(point.x, point.y, capRadius * 2.6, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, capRadius * 2.6 * emphasis, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = this.toCssRgba([1, 1, 1, 1], minOpacity * (isDimmed ? 0.08 : 0.28));
+        ctx.fillStyle = this.toCssRgba([1, 1, 1, 1], minOpacity * emphasis * (isDimmed ? 0.08 : 0.28));
         ctx.beginPath();
-        ctx.arc(point.x, point.y, capRadius * 0.55, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, capRadius * 0.55 * emphasis, 0, Math.PI * 2);
         ctx.fill();
       };
 
-      drawCap(segment.start);
-      drawCap(segment.end);
+      const parentEmphasis = Number(line?.capStrength) || (lineProfile.isTrunk ? 1.18 : lineProfile.isBranch ? 1.02 : 0.82);
+      const childEmphasis = lineProfile.isTrunk ? 0.72 : (lineProfile.isBranch ? 0.8 : 0.94);
+      drawCap(segment.start, lineProfile.isHierarchy ? (lineProfile.parentAtStart ? parentEmphasis : childEmphasis) : 1);
+      drawCap(segment.end, lineProfile.isHierarchy ? (lineProfile.parentAtStart ? childEmphasis : parentEmphasis) : 1);
       capCount += 2;
     }
   }
