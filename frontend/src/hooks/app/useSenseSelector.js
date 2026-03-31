@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef } from 'react';
 import { API_BASE } from '../../runtimeConfig';
 import {
   isKnowledgeDetailView,
+  readIsMobileViewport,
   normalizeObjectId
 } from '../../app/appShared';
 import { senseArticleApi } from '../../utils/senseArticleApi';
 
 const HIDDEN_ANCHOR = { x: 0, y: 0, visible: false };
+const readIsMobileSenseSelector = () => readIsMobileViewport();
 
 const useSenseSelector = ({
   view,
@@ -34,10 +36,47 @@ const useSenseSelector = ({
 }) => {
   const senseSelectorAnchorRef = useRef(HIDDEN_ANCHOR);
   const senseArticleEntryStatusMapRef = useRef({});
+  const senseSelectorOpenedAtRef = useRef(0);
+  const isMobileSenseSelectorRef = useRef(readIsMobileSenseSelector());
+
+  useEffect(() => {
+    const syncMobileFlag = () => {
+      isMobileSenseSelectorRef.current = readIsMobileSenseSelector();
+    };
+    syncMobileFlag();
+    window.addEventListener('resize', syncMobileFlag);
+    window.visualViewport?.addEventListener('resize', syncMobileFlag);
+    window.visualViewport?.addEventListener('scroll', syncMobileFlag);
+    return () => {
+      window.removeEventListener('resize', syncMobileFlag);
+      window.visualViewport?.removeEventListener('resize', syncMobileFlag);
+      window.visualViewport?.removeEventListener('scroll', syncMobileFlag);
+    };
+  }, []);
 
   useEffect(() => {
     senseArticleEntryStatusMapRef.current = senseArticleEntryStatusMap;
   }, [senseArticleEntryStatusMap]);
+
+  useEffect(() => {
+    if (isSenseSelectorVisible) {
+      senseSelectorOpenedAtRef.current = Date.now();
+    }
+  }, [isSenseSelectorVisible]);
+
+  useEffect(() => {
+    if (!isSenseSelectorVisible || !isMobileSenseSelectorRef.current) return undefined;
+    const bodyStyle = document.body.style;
+    const htmlStyle = document.documentElement.style;
+    const previousBodyOverflow = bodyStyle.overflow;
+    const previousHtmlOverflow = htmlStyle.overflow;
+    bodyStyle.overflow = 'hidden';
+    htmlStyle.overflow = 'hidden';
+    return () => {
+      bodyStyle.overflow = previousBodyOverflow;
+      htmlStyle.overflow = previousHtmlOverflow;
+    };
+  }, [isSenseSelectorVisible]);
 
   const resetSenseSelectorAnchor = useCallback(() => {
     const next = { ...HIDDEN_ANCHOR };
@@ -81,7 +120,14 @@ const useSenseSelector = ({
     if (anchorElement) {
       updateSenseSelectorAnchorByElement(anchorElement);
     }
-    setIsSenseSelectorVisible(true);
+    senseSelectorOpenedAtRef.current = Date.now();
+    if (isMobileSenseSelectorRef.current) {
+      window.requestAnimationFrame(() => {
+        setIsSenseSelectorVisible(true);
+      });
+    } else {
+      setIsSenseSelectorVisible(true);
+    }
   }, [
     armHomeDetailTransition,
     setIsSenseSelectorVisible,
@@ -92,18 +138,32 @@ const useSenseSelector = ({
   ]);
 
   useEffect(() => {
-    if (!isWebGLReady) {
-      resetSenseSelectorAnchor();
-      setSenseSelectorSourceSceneNodeId('');
-      setIsSenseSelectorVisible(false);
+    if (!isSenseSelectorVisible) return undefined;
+    if (isKnowledgeDetailView(view) || view === 'home') {
       return undefined;
     }
+    resetSenseSelectorAnchor();
+    setSenseSelectorSourceSceneNodeId('');
+    setIsSenseSelectorVisible(false);
+    return undefined;
+  }, [
+    isSenseSelectorVisible,
+    isWebGLReady,
+    resetSenseSelectorAnchor,
+    setIsSenseSelectorVisible,
+    setSenseSelectorSourceSceneNodeId,
+    view
+  ]);
+
+  useEffect(() => {
+    if (isMobileSenseSelectorRef.current) return undefined;
     if (!isKnowledgeDetailView(view) && view !== 'home') {
       resetSenseSelectorAnchor();
       setSenseSelectorSourceSceneNodeId('');
       setIsSenseSelectorVisible(false);
       return undefined;
     }
+    if (!isWebGLReady) return undefined;
     if (view === 'home' && !isSenseSelectorVisible) return undefined;
 
     const updateAnchor = () => {
@@ -161,55 +221,6 @@ const useSenseSelector = ({
     view,
     webglCanvasRef
   ]);
-
-  useEffect(() => {
-    if (!isSenseSelectorVisible) return undefined;
-    if (view !== 'nodeDetail' && view !== 'titleDetail' && view !== 'home') return undefined;
-    const canvas = webglCanvasRef.current;
-    const renderer = sceneManagerRef.current?.renderer;
-    if (!canvas || !renderer) return undefined;
-
-    const handleMapClick = (event) => {
-      const pos = renderer.getCanvasPositionFromEvent(event);
-      const clickedNode = renderer.hitTest(pos.x, pos.y);
-      if (view === 'home') {
-        if (!clickedNode) setIsSenseSelectorVisible(false);
-        return;
-      }
-      if (!clickedNode || clickedNode.type !== 'center') {
-        setIsSenseSelectorVisible(false);
-      }
-    };
-
-    canvas.addEventListener('click', handleMapClick);
-    return () => {
-      canvas.removeEventListener('click', handleMapClick);
-    };
-  }, [
-    currentNodeDetail?._id,
-    currentTitleDetail?._id,
-    isSenseSelectorVisible,
-    sceneManagerRef,
-    setIsSenseSelectorVisible,
-    view,
-    webglCanvasRef
-  ]);
-
-  useEffect(() => {
-    if (view !== 'home' || !isSenseSelectorVisible) return undefined;
-
-    const handleDocumentPointerDown = (event) => {
-      if (senseSelectorPanelRef.current?.contains(event.target)) {
-        return;
-      }
-      setIsSenseSelectorVisible(false);
-    };
-
-    document.addEventListener('pointerdown', handleDocumentPointerDown);
-    return () => {
-      document.removeEventListener('pointerdown', handleDocumentPointerDown);
-    };
-  }, [isSenseSelectorVisible, senseSelectorPanelRef, setIsSenseSelectorVisible, view]);
 
   useEffect(() => {
     if (!isSenseSelectorVisible || (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail')) {

@@ -129,16 +129,16 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
             });
             const data = await response.json();
             if (response.ok) {
-                alert('熵盟创建成功！');
                 setShowCreateAllianceModal(false);
-                fetchAlliances({ page: alliancesPage });
-                fetchUserAlliance();
+                await fetchAlliances({ page: alliancesPage });
+                await fetchUserAlliance();
+                return { ok: true, data };
             } else {
-                alert(data.error || '创建失败');
+                return { ok: false, error: data.error || '创建失败' };
             }
         } catch (error) {
             console.error('创建熵盟失败:', error);
-            alert('创建失败');
+            return { ok: false, error: '创建失败' };
         }
     };
 
@@ -360,6 +360,7 @@ const AlliancePanel = ({ username, token, isAdmin }) => {
                 isOpen={showCreateAllianceModal}
                 onClose={() => setShowCreateAllianceModal(false)}
                 onCreate={createAlliance}
+                existingAllianceNames={alliances.map((item) => item?.name || '')}
             />
         </div>
     );

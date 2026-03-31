@@ -25,6 +25,7 @@ class SceneManager {
     this.onNodeClick = null;
     this.onNodeDoubleClick = null;
     this.onSceneChange = null;
+    this.onBlankClick = null;
     this.onButtonClick = null; // 按钮点击回调
     this.onLineClick = null; // 连线点击回调
     this.onStarMapViewportChange = null;
@@ -45,6 +46,11 @@ class SceneManager {
     this.renderer.onDoubleClick = (node) => {
       if (this.onNodeDoubleClick) {
         this.onNodeDoubleClick(node);
+      }
+    };
+    this.renderer.onBlankClick = () => {
+      if (this.onBlankClick) {
+        this.onBlankClick();
       }
     };
 

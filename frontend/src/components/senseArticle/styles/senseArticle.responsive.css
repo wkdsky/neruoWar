@@ -202,3 +202,176 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+@media (max-width: 720px) {
+  .sense-article-page {
+    padding: 10px;
+  }
+
+  .sense-article-topbar,
+  .sense-review-stage-card,
+  .sense-editor-toolbar,
+  .sense-side-card,
+  .sense-history-card,
+  .sense-review-pane,
+  .sense-editor-pane {
+    border-radius: 14px;
+  }
+
+  .sense-article-topbar {
+    padding: 14px;
+    margin-bottom: 14px;
+    gap: 10px;
+  }
+
+  .sense-article-topbar.page-senseArticle {
+    padding: 10px 12px;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .sense-article-topbar.page-senseArticle .sense-article-title-group h1 {
+    font-size: 1.18rem;
+    white-space: normal;
+  }
+
+  .sense-article-topbar.page-senseArticle .sense-article-meta-row {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .sense-article-topbar.page-senseArticle .sense-article-actions {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+
+  .sense-article-topbar.page-senseArticle .sense-article-actions > * {
+    flex: 1 1 calc(50% - 6px);
+  }
+
+  .sense-article-layout,
+  .sense-editor-layout,
+  .sense-review-layout {
+    gap: 12px;
+  }
+
+  .sense-article-sidebar {
+    order: 2;
+  }
+
+  .sense-article-main {
+    padding: 16px 14px 22px;
+    border-radius: 16px;
+    min-height: 0;
+  }
+
+  .sense-side-card,
+  .sense-review-pane,
+  .sense-editor-pane,
+  .sense-history-card,
+  .sense-review-stage-card {
+    padding: 12px;
+  }
+
+  .sense-editor-header-input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .sense-rich-toolbar-shell {
+    border-radius: 14px;
+  }
+
+  .sense-rich-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .sense-rich-toolbar-group {
+    flex: 0 0 auto;
+  }
+
+  .sense-rich-toolbar-button,
+  .sense-rich-toolbar-select,
+  .sense-rich-toolbar-fontsize {
+    min-height: 36px;
+  }
+
+  .sense-selection-toolbar {
+    width: min(100vw - 24px, 320px);
+    left: 12px !important;
+    right: 12px !important;
+    transform: none;
+  }
+
+  .sense-formula-block,
+  .sense-formula-block-node,
+  .sense-formula-preview[data-formula-display="block"] {
+    min-height: 60px;
+    padding: 12px 10px;
+  }
+
+  .sense-code-block {
+    padding: 12px;
+    border-radius: 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  .sense-article-topbar.page-senseArticle .btn,
+  .sense-article-shell-pinned .sense-article-topbar .btn,
+  .sense-article-shell-pinned .sense-article-topbar .btn.btn-small {
+    min-height: 30px;
+    padding: 0.3rem 0.54rem;
+    font-size: 0.74rem;
+  }
+
+  .sense-article-kicker {
+    font-size: 11px;
+  }
+
+  .sense-article-meta-row {
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .sense-article-topbar.page-senseArticle .sense-article-actions > * {
+    flex: 1 1 100%;
+  }
+
+  .sense-article-main {
+    padding: 14px 12px 18px;
+  }
+
+  .sense-reading-meta-avatar {
+    width: 20px;
+    height: 20px;
+  }
+
+  .sense-history-actions,
+  .sense-review-actions {
+    width: 100%;
+  }
+
+  .sense-history-actions .btn,
+  .sense-review-actions .btn {
+    width: 100%;
+  }
+
+  .sense-rich-toolbar-button,
+  .sense-rich-toolbar-select,
+  .sense-rich-toolbar-fontsize {
+    min-height: 34px;
+    font-size: 12px;
+  }
+
+  .sense-formula-symbol-grid {
+    grid-template-columns: repeat(2, minmax(70px, 1fr));
+  }
+
+  .sense-formula-symbol-grid.compact {
+    grid-template-columns: repeat(4, minmax(38px, 1fr));
+  }
+}

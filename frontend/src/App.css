@@ -3,3 +3,14 @@
 @import './styles/app-immersive.css';
 @import './styles/app-location.css';
 @import './styles/app-system.css';
+
+html[data-viewport-mode="mobile"],
+html[data-viewport-mode="mobile"] body,
+html[data-viewport-mode="mobile"] #root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+html[data-viewport-mode="mobile"] body {
+  min-height: var(--app-effective-vh, 100vh);
+}

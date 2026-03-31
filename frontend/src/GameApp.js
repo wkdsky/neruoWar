@@ -44,6 +44,8 @@ import {
     getNavigationRelationFromSceneNode,
     isKnowledgeDetailView,
     isMapDebugEnabled,
+    readIsMobileViewport,
+    readResponsiveViewportMetrics,
     isSenseArticleSubView,
     isTitleBattleView,
     normalizeObjectId,
@@ -117,6 +119,36 @@ const App = () => {
     const travelStatusRef = useRef({ isTraveling: false, isStopping: false });
     const [isAdmin, setIsAdmin] = useState(false);
     const [adminEntryTab, setAdminEntryTab] = useState('users');
+    const senseSelectorCloseGuardUntilRef = useRef(0);
+    const [isSenseSelectorVisible, setIsSenseSelectorVisibleState] = useState(false);
+    const forceCloseSenseSelector = useCallback(() => {
+        senseSelectorCloseGuardUntilRef.current = 0;
+        setIsSenseSelectorVisibleState(false);
+    }, []);
+    const setIsSenseSelectorVisible = useCallback((nextValue) => {
+        setIsSenseSelectorVisibleState((prev) => {
+            const resolved = typeof nextValue === 'function' ? nextValue(prev) : nextValue;
+            const nextVisible = !!resolved;
+            if (!nextVisible && prev && Date.now() < senseSelectorCloseGuardUntilRef.current) {
+                return prev;
+            }
+            if (nextVisible) {
+                senseSelectorCloseGuardUntilRef.current = Date.now() + 900;
+            } else {
+                senseSelectorCloseGuardUntilRef.current = 0;
+            }
+            return nextVisible;
+        });
+    }, []);
+    const openSenseSelectorNextFrame = useCallback(() => {
+        if (readIsMobileViewport()) {
+            window.requestAnimationFrame(() => {
+                setIsSenseSelectorVisible(true);
+            });
+            return;
+        }
+        setIsSenseSelectorVisible(true);
+    }, [setIsSenseSelectorVisible]);
     const { socket, initializeSocket, cleanupSocket } = useAppSocket({
         setAuthenticated,
         setNodes,
@@ -167,7 +199,11 @@ const App = () => {
     const [senseSelectorSourceNode, setSenseSelectorSourceNode] = useState(null);
     const [senseSelectorSourceSceneNodeId, setSenseSelectorSourceSceneNodeId] = useState('');
     const [senseSelectorAnchor, setSenseSelectorAnchor] = useState({ x: 0, y: 0, visible: false });
-    const [isSenseSelectorVisible, setIsSenseSelectorVisible] = useState(false);
+    const dismissSenseSelector = useCallback(() => {
+        setSenseSelectorSourceSceneNodeId('');
+        setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
+        forceCloseSenseSelector();
+    }, [forceCloseSenseSelector]);
     const [senseSelectorOverviewNode, setSenseSelectorOverviewNode] = useState(null);
     const [senseSelectorOverviewLoading, setSenseSelectorOverviewLoading] = useState(false);
     const [senseSelectorOverviewError, setSenseSelectorOverviewError] = useState('');
@@ -207,7 +243,6 @@ const App = () => {
     const [clickedNodeForTransition, setClickedNodeForTransition] = useState(null);
 
     const headerRef = useRef(null);
-    const notificationsWrapperRef = useRef(null);
     const relatedDomainsWrapperRef = useRef(null);
     const militaryMenuWrapperRef = useRef(null);
     const senseSelectorPanelRef = useRef(null);
@@ -503,6 +538,77 @@ const App = () => {
     }, [showKnowledgeDomain, isTransitioningToDomain, view]);
 
     useEffect(() => {
+        if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
+
+        const VIEWPORT_RECOVERY_ATTEMPT_KEY = 'app:viewportRecoveryAttempted';
+        let recoveryTimerId = null;
+        let frameId = null;
+
+        const syncResponsiveViewport = () => {
+            const metrics = readResponsiveViewportMetrics();
+            const root = document.documentElement;
+            root.dataset.viewportMode = metrics.isMobile ? 'mobile' : 'desktop';
+            root.style.setProperty('--app-effective-vw', `${metrics.effectiveWidth}px`);
+            root.style.setProperty('--app-effective-vh', `${metrics.effectiveHeight}px`);
+
+            const viewportMeta = document.querySelector('meta[name="viewport"]');
+            const nextViewportContent = 'width=device-width, initial-scale=1, viewport-fit=cover';
+            if (viewportMeta?.getAttribute('content') !== nextViewportContent) {
+                viewportMeta?.setAttribute('content', nextViewportContent);
+            }
+
+            if (!metrics.hasDesktopLikeLayoutOnMobile) {
+                sessionStorage.removeItem(VIEWPORT_RECOVERY_ATTEMPT_KEY);
+                root.classList.remove('viewport-layout-desynced');
+                return;
+            }
+
+            root.classList.add('viewport-layout-desynced');
+            if (sessionStorage.getItem(VIEWPORT_RECOVERY_ATTEMPT_KEY) === '1') {
+                return;
+            }
+
+            sessionStorage.setItem(VIEWPORT_RECOVERY_ATTEMPT_KEY, '1');
+            recoveryTimerId = window.setTimeout(() => {
+                window.location.reload();
+            }, 90);
+        };
+
+        const scheduleViewportSync = () => {
+            if (frameId !== null) {
+                window.cancelAnimationFrame(frameId);
+            }
+            frameId = window.requestAnimationFrame(() => {
+                frameId = null;
+                syncResponsiveViewport();
+            });
+        };
+
+        scheduleViewportSync();
+        window.addEventListener('resize', scheduleViewportSync);
+        window.addEventListener('orientationchange', scheduleViewportSync);
+        window.addEventListener('pageshow', scheduleViewportSync);
+        document.addEventListener('visibilitychange', scheduleViewportSync);
+        window.visualViewport?.addEventListener('resize', scheduleViewportSync);
+        window.visualViewport?.addEventListener('scroll', scheduleViewportSync);
+
+        return () => {
+            if (frameId !== null) {
+                window.cancelAnimationFrame(frameId);
+            }
+            if (recoveryTimerId !== null) {
+                window.clearTimeout(recoveryTimerId);
+            }
+            window.removeEventListener('resize', scheduleViewportSync);
+            window.removeEventListener('orientationchange', scheduleViewportSync);
+            window.removeEventListener('pageshow', scheduleViewportSync);
+            document.removeEventListener('visibilitychange', scheduleViewportSync);
+            window.visualViewport?.removeEventListener('resize', scheduleViewportSync);
+            window.visualViewport?.removeEventListener('scroll', scheduleViewportSync);
+        };
+    }, []);
+
+    useEffect(() => {
         if (!isSenseArticleSubView(view)) {
             setIsSenseArticleHeaderPinned(false);
             return undefined;
@@ -629,7 +735,7 @@ const App = () => {
                     setSenseSelectorSourceNode(node.data);
                     setSenseSelectorSourceSceneNodeId(String(node?.id || ''));
                     updateSenseSelectorAnchorBySceneNode(node);
-                    setIsSenseSelectorVisible(true);
+                    openSenseSelectorNextFrame();
                     return;
                 }
 
@@ -643,7 +749,11 @@ const App = () => {
                         setSenseSelectorSourceNode(currentTitleDetail || node.data);
                         setSenseSelectorSourceSceneNodeId('');
                         updateSenseSelectorAnchorBySceneNode(node);
-                        setIsSenseSelectorVisible((prev) => !prev);
+                        if (readIsMobileViewport()) {
+                            openSenseSelectorNextFrame();
+                        } else {
+                            setIsSenseSelectorVisible(true);
+                        }
                         return;
                     }
                     fetchTitleDetail(node.data._id, node, {
@@ -662,7 +772,11 @@ const App = () => {
                         setSenseSelectorSourceNode(currentNodeDetail || node.data);
                         setSenseSelectorSourceSceneNodeId('');
                         updateSenseSelectorAnchorBySceneNode(node);
-                        setIsSenseSelectorVisible((prev) => !prev);
+                        if (readIsMobileViewport()) {
+                            openSenseSelectorNextFrame();
+                        } else {
+                            setIsSenseSelectorVisible(true);
+                        }
                         return;
                     }
                     fetchNodeDetail(node.data._id, node, {
@@ -851,11 +965,9 @@ const App = () => {
     isMarkingAnnouncementsRead,
     notificationActionId,
     adminPendingNodes,
-    pendingMasterApplyCount,
     systemAnnouncements,
     allianceAnnouncements,
     announcementUnreadCount,
-    notificationBadgeCount,
     fetchNotifications,
     fetchAdminPendingNodeReminders,
     markNotificationRead,
@@ -906,12 +1018,11 @@ const App = () => {
   });
 
   const {
-    showNotificationsPanel,
     showRelatedDomainsPanel,
     showMilitaryMenu,
     isLocationDockExpanded,
     isAnnouncementDockExpanded,
-    announcementDockTab,
+    messageDockTab,
     relatedDomainsData,
     favoriteActionDomainId,
     domainMasterDomains,
@@ -922,14 +1033,12 @@ const App = () => {
     relatedDomainCount,
     announcementGroups,
     isLocationDockExpandedRef,
-    setShowNotificationsPanel,
     setShowMilitaryMenu,
     setIsLocationDockExpanded,
     setIsAnnouncementDockExpanded,
-    setAnnouncementDockTab,
+    setMessageDockTab,
     fetchRelatedDomains,
     toggleFavoriteDomain,
-    toggleNotificationsPanel,
     toggleRelatedDomainsPanel,
     toggleMilitaryMenu,
     closeHeaderPanels,
@@ -941,11 +1050,8 @@ const App = () => {
     isAdmin,
     parseApiResponse,
     getApiErrorMessage,
-    notificationsWrapperRef,
     relatedDomainsWrapperRef,
     militaryMenuWrapperRef,
-    fetchNotifications,
-    fetchAdminPendingNodeReminders,
     systemAnnouncements,
     allianceAnnouncements,
     view,
@@ -1205,13 +1311,6 @@ const App = () => {
     } finally {
       setIsApplyingDomainMaster(false);
     }
-  };
-
-  const formatNotificationTime = (time) => {
-    if (!time) return '';
-    const date = new Date(time);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleString('zh-CN', { hour12: false });
   };
 
   const openAdminPanel = async (tab = 'users') => {
@@ -1995,7 +2094,7 @@ const App = () => {
                 setSenseSelectorSourceNode(node.data);
                 setSenseSelectorSourceSceneNodeId(String(node?.id || ''));
                 updateSenseSelectorAnchorBySceneNode(node);
-                setIsSenseSelectorVisible(true);
+                openSenseSelectorNextFrame();
                 return;
             }
 
@@ -2009,7 +2108,11 @@ const App = () => {
                     setSenseSelectorSourceNode(currentTitleDetail || node.data);
                     setSenseSelectorSourceSceneNodeId('');
                     updateSenseSelectorAnchorBySceneNode(node);
-                    setIsSenseSelectorVisible((prev) => !prev);
+                    if (readIsMobileViewport()) {
+                        openSenseSelectorNextFrame();
+                    } else {
+                        setIsSenseSelectorVisible(true);
+                    }
                     return;
                 }
                 fetchTitleDetail(node.data._id, node, {
@@ -2028,7 +2131,11 @@ const App = () => {
                     setSenseSelectorSourceNode(currentNodeDetail || node.data);
                     setSenseSelectorSourceSceneNodeId('');
                     updateSenseSelectorAnchorBySceneNode(node);
-                    setIsSenseSelectorVisible((prev) => !prev);
+                    if (readIsMobileViewport()) {
+                        openSenseSelectorNextFrame();
+                    } else {
+                        setIsSenseSelectorVisible(true);
+                    }
                     return;
                 }
                 fetchNodeDetail(node.data._id, node, {
@@ -2038,7 +2145,22 @@ const App = () => {
             }
         };
 	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    }, [view, currentNodeDetail, currentTitleDetail, knowledgeMainViewMode, recenterStarMapFromNode]);
+	    }, [view, currentNodeDetail, currentTitleDetail, knowledgeMainViewMode, openSenseSelectorNextFrame, recenterStarMapFromNode]);
+
+    useEffect(() => {
+        if (!sceneManagerRef.current) return;
+
+        sceneManagerRef.current.onBlankClick = () => {
+            if (view !== 'home' && view !== 'titleDetail' && view !== 'nodeDetail') return;
+            if (titleRelationInfo) {
+                setTitleRelationInfo(null);
+                return;
+            }
+            if (isSenseSelectorVisible) {
+                dismissSenseSelector();
+            }
+        };
+    }, [dismissSenseSelector, isSenseSelectorVisible, titleRelationInfo, view]);
 
     // 初始化首页数据
     useEffect(() => {
@@ -2396,15 +2518,10 @@ const App = () => {
                     headerArmyCount={headerArmyCount}
                     headerKnowledgeBalance={headerKnowledgeBalance}
                     handleLogout={handleLogout}
-                    notificationsWrapperRef={notificationsWrapperRef}
-                    toggleNotificationsPanel={toggleNotificationsPanel}
-                    notificationBadgeCount={notificationBadgeCount}
-                    showNotificationsPanel={showNotificationsPanel}
                     fetchNotifications={fetchNotifications}
                     isAdmin={isAdmin}
                     fetchAdminPendingNodeReminders={fetchAdminPendingNodeReminders}
                     adminPendingNodes={adminPendingNodes}
-                    pendingMasterApplyCount={pendingMasterApplyCount}
                     notifications={notifications}
                     markAllNotificationsRead={markAllNotificationsRead}
                     isNotificationsLoading={isNotificationsLoading}
@@ -2412,8 +2529,6 @@ const App = () => {
                     notificationUnreadCount={notificationUnreadCount}
                     clearNotifications={clearNotifications}
                     isClearingNotifications={isClearingNotifications}
-                    formatNotificationTime={formatNotificationTime}
-                    setShowNotificationsPanel={setShowNotificationsPanel}
                     openAdminPanel={openAdminPanel}
                     notificationActionId={notificationActionId}
                     handleDistributionAnnouncementClick={handleDistributionAnnouncementClick}
@@ -2437,7 +2552,6 @@ const App = () => {
                     toggleFavoriteDomain={toggleFavoriteDomain}
                     formatDomainKnowledgePoint={formatDomainKnowledgePoint}
                     closeHeaderPanels={closeHeaderPanels}
-                    navigateToHomeWithDockCollapse={navigateToHomeWithDockCollapse}
                     handleHeaderHomeNavigation={handleHeaderHomeNavigation}
                     prepareForPrimaryNavigation={prepareForPrimaryNavigation}
                     setView={setView}
@@ -2452,8 +2566,8 @@ const App = () => {
                     currentNodeDetail={currentNodeDetail}
                     isAnnouncementDockExpanded={isAnnouncementDockExpanded}
                     setIsAnnouncementDockExpanded={setIsAnnouncementDockExpanded}
-                    announcementDockTab={announcementDockTab}
-                    setAnnouncementDockTab={setAnnouncementDockTab}
+                    messageDockTab={messageDockTab}
+                    setMessageDockTab={setMessageDockTab}
                     isChatDockExpanded={isChatDockExpanded}
                     setIsChatDockExpanded={setIsChatDockExpanded}
                     chatBadgeCount={chatBadgeCount}
@@ -2658,6 +2772,7 @@ const App = () => {
                     handleSwitchTitleView={handleSwitchTitleView}
                     handleSwitchSenseView={handleSwitchSenseView}
                     openSenseArticleFromNode={openSenseArticleFromNode}
+                    onClose={dismissSenseSelector}
                 />
                 <Suspense fallback={null}>
                     <TransitionGhostLayer
@@ -2694,6 +2809,7 @@ const App = () => {
                                 setUserAvatar(newAvatar);
                                 localStorage.setItem('userAvatar', newAvatar);
                             }}
+                            onLogout={handleLogout}
                         />
                     </Suspense>
                 )}

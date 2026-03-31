@@ -1,5 +1,6 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { readResponsiveViewportWidth } from '../../app/appShared';
 import './RightUtilityDock.css';
 
 const RightUtilityDock = ({
@@ -36,6 +37,49 @@ const RightUtilityDock = ({
     measureOffsets();
     window.addEventListener('resize', measureOffsets);
     return () => window.removeEventListener('resize', measureOffsets);
+  }, [visibleSections]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const hasOpenPanel = visibleSections.some((section) => section?.active);
+    const isMobileDock = readResponsiveViewportWidth() <= 920;
+    if (!hasOpenPanel || !isMobileDock) {
+      return undefined;
+    }
+
+    const { body } = document;
+    const scrollY = window.scrollY || window.pageYOffset || 0;
+    const previous = {
+      overflow: body.style.overflow,
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      touchAction: body.style.touchAction
+    };
+
+    body.style.overflow = 'hidden';
+    body.style.position = 'fixed';
+    body.style.top = `-${scrollY}px`;
+    body.style.left = '0';
+    body.style.right = '0';
+    body.style.width = '100%';
+    body.style.touchAction = 'none';
+
+    return () => {
+      body.style.overflow = previous.overflow;
+      body.style.position = previous.position;
+      body.style.top = previous.top;
+      body.style.left = previous.left;
+      body.style.right = previous.right;
+      body.style.width = previous.width;
+      body.style.touchAction = previous.touchAction;
+      window.scrollTo(0, scrollY);
+    };
   }, [visibleSections]);
 
   if (visibleSections.length < 1) return null;

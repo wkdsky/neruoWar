@@ -1874,34 +1874,103 @@
 
 /* 响应式调整 */
 @media (max-width: 768px) {
-    .domain-info-panel {
-        width: calc(100% - 40px);
-        max-height: calc(100% - 40px);
+    .city-build-palette {
+        left: 12px;
+        right: 12px;
         top: auto;
-        bottom: 20px;
-        right: 20px;
-        left: 20px;
+        bottom: 84px;
+        width: auto;
+        max-height: min(40dvh, 320px);
+        border-radius: 18px;
+        padding: 0.6rem;
+    }
+
+    .city-build-palette-list {
+        gap: 0.35rem;
+    }
+
+    .city-build-palette-card {
+        padding: 0.48rem 0.52rem;
+    }
+
+    .city-gate-trigger {
+        width: 132px;
+        height: 56px;
+        border-radius: 14px;
+    }
+
+    .city-gate-name {
+        font-size: 0.8rem;
+    }
+
+    .city-gate-total {
+        font-size: 0.72rem;
+    }
+
+    .gate-deploy-panel {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        width: auto;
+        max-height: 52dvh;
+        border-radius: 20px 20px 14px 14px;
+        padding: 0.65rem;
+    }
+
+    .gate-deploy-overview-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .gate-deploy-header,
+    .gate-deploy-actions,
+    .gate-deploy-current-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .domain-info-panel {
+        width: auto;
+        max-height: min(78dvh, calc(100% - 28px));
+        top: auto;
+        bottom: 12px;
+        right: 12px;
+        left: 12px;
+        padding: 1rem;
+        border-radius: 22px 22px 16px 16px;
     }
 
     .domain-right-dock-toggle {
         top: auto;
-        bottom: 20px;
-        right: 20px;
+        bottom: 12px;
+        right: 12px;
+        padding: 0.44rem 0.72rem;
     }
 
     .domain-return-top-btn {
-        top: 20px;
-        right: 20px;
-        font-size: 0.76rem;
+        top: 12px;
+        right: 12px;
+        font-size: 0.72rem;
+        padding: 0.34rem 0.6rem;
     }
 
     .domain-right-dock.collapsed .domain-info-panel {
         transform: translateY(calc(100% + 20px));
     }
 
+    .distribution-rule-modal-overlay {
+        align-items: flex-end;
+        padding: 0;
+    }
+
     .distribution-rule-modal {
-        width: calc(100vw - 24px);
-        max-height: calc(100vh - 24px);
+        width: 100vw;
+        max-height: 90dvh;
+        border-radius: 24px 24px 0 0;
+    }
+
+    .distribution-rule-modal-header {
+        padding: 0.75rem 0.85rem;
+        flex-wrap: wrap;
     }
 
     .distribution-rule-modal-body {
@@ -1957,8 +2026,8 @@
     }
 
     .intel-heist-hud {
-        width: calc(100vw - 20px);
-        top: 10px;
+        width: calc(100vw - 16px);
+        top: 12px;
         padding: 0.6rem 0.65rem 0.7rem;
     }
 
@@ -2012,6 +2081,42 @@
     .manage-edge-panel {
         margin-left: 0;
         border-radius: 10px;
+    }
+}
+
+@media (max-width: 480px) {
+    .city-build-palette {
+        bottom: 76px;
+        max-height: 36dvh;
+    }
+
+    .city-gate-trigger {
+        width: 114px;
+        height: 48px;
+    }
+
+    .gate-deploy-overview-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .domain-right-dock-label {
+        font-size: 0.74rem;
+    }
+
+    .domain-info-panel {
+        padding: 0.82rem;
+    }
+
+    .distribution-rule-modal-body {
+        gap: 0.65rem;
+        padding: 0.65rem;
+    }
+
+    .distribution-light-toast {
+        top: 52px;
+        left: 10px;
+        right: 10px;
+        font-size: 0.76rem;
     }
 }
 

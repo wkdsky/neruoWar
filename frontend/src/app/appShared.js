@@ -152,6 +152,86 @@ export const isMapDebugEnabled = () => {
     return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 };
 
+export const readResponsiveViewportMetrics = () => {
+    if (typeof window === 'undefined') {
+        return {
+            layoutWidth: 1440,
+            layoutHeight: 900,
+            visualWidth: 1440,
+            visualHeight: 900,
+            effectiveWidth: 1440,
+            effectiveHeight: 900,
+            isMobile: false,
+            hasDesktopLikeLayoutOnMobile: false
+        };
+    }
+
+    const docEl = document.documentElement;
+    const visualViewport = window.visualViewport || null;
+    const layoutWidth = Math.max(
+        1,
+        Math.round(Number(window.innerWidth) || Number(docEl?.clientWidth) || 0)
+    );
+    const layoutHeight = Math.max(
+        1,
+        Math.round(Number(window.innerHeight) || Number(docEl?.clientHeight) || 0)
+    );
+    const visualWidth = Math.max(
+        0,
+        Math.round(Number(visualViewport?.width) || 0)
+    );
+    const visualHeight = Math.max(
+        0,
+        Math.round(Number(visualViewport?.height) || 0)
+    );
+    const widthCandidates = [
+        layoutWidth,
+        Math.round(Number(docEl?.clientWidth) || 0),
+        visualWidth
+    ].filter((value) => Number.isFinite(value) && value > 0);
+    const heightCandidates = [
+        layoutHeight,
+        Math.round(Number(docEl?.clientHeight) || 0),
+        visualHeight
+    ].filter((value) => Number.isFinite(value) && value > 0);
+    const effectiveWidth = widthCandidates.length > 0 ? Math.min(...widthCandidates) : layoutWidth;
+    const effectiveHeight = heightCandidates.length > 0 ? Math.min(...heightCandidates) : layoutHeight;
+    const coarsePointer = typeof window.matchMedia === 'function'
+        ? window.matchMedia('(pointer: coarse)').matches
+        : false;
+    const maxTouchPoints = Number(window.navigator?.maxTouchPoints) || 0;
+    const screenShortSide = Math.min(
+        Math.max(1, Number(window.screen?.width) || 0),
+        Math.max(1, Number(window.screen?.height) || 0)
+    );
+    const isPortableTouchDevice = (coarsePointer || maxTouchPoints > 0) && screenShortSide > 0 && screenShortSide <= 1024;
+    const isMobile = effectiveWidth <= 768 || (isPortableTouchDevice && effectiveWidth <= 1024);
+    const hasDesktopLikeLayoutOnMobile = (
+        (visualWidth > 0 ? visualWidth : screenShortSide) > 0
+        && (visualWidth > 0 ? visualWidth : screenShortSide) <= 768
+        && layoutWidth >= 900
+        && (layoutWidth / Math.max(1, visualWidth > 0 ? visualWidth : screenShortSide)) >= 1.18
+    );
+
+    return {
+        layoutWidth,
+        layoutHeight,
+        visualWidth,
+        visualHeight,
+        effectiveWidth,
+        effectiveHeight,
+        isPortableTouchDevice,
+        isMobile,
+        hasDesktopLikeLayoutOnMobile
+    };
+};
+
+export const readResponsiveViewportWidth = () => readResponsiveViewportMetrics().effectiveWidth;
+export const readResponsiveViewportHeight = () => readResponsiveViewportMetrics().effectiveHeight;
+export const readIsMobileViewport = (breakpoint = 768) => (
+    readResponsiveViewportWidth() <= Math.max(0, Number(breakpoint) || 768)
+);
+
 export const buildNavigationTrailItem = (node, relation = 'jump', options = {}) => {
     const nodeId = normalizeObjectId(node?._id);
     if (!nodeId) return null;

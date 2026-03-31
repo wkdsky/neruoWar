@@ -42,7 +42,9 @@ export const buildHomeSafeAreaInsets = (viewportWidth, viewportHeight) => {
     left: width >= 1480 ? 190 : (width >= 1180 ? 166 : (width >= 920 ? 138 : (width >= 720 ? 118 : 20))),
     right: width >= 1520 ? 392 : (width >= 1240 ? 348 : (width >= 980 ? 292 : 24)),
     top: width >= 1180 ? 194 : (width >= 920 ? 186 : 152),
-    bottom: height >= 860 ? 72 : 42
+    bottom: width >= 720
+      ? (height >= 860 ? 72 : 42)
+      : (height >= 860 ? 124 : 108)
   };
 };
 

@@ -334,6 +334,7 @@ const NodeDetail = ({
                  {/* Search Bar */}
                  <KnowledgeTopPanel
                     className="node-detail-top-panel"
+                    mobileTopbarMode
                     eyebrow="Knowledge Domain Main View"
                     title={panelTitle}
                     stats={summaryStats}

@@ -915,7 +915,21 @@
   }
 }
 
+@media (max-width: 920px) {
+  .chat-dock-panel {
+    height: min(calc(100dvh - 11rem), 680px);
+    min-height: 0;
+    max-height: 100%;
+    border-radius: 24px;
+  }
+}
+
 @media (max-width: 720px) {
+  .chat-dock-panel {
+    height: min(calc(100dvh - 10rem), 640px);
+    border-radius: 22px;
+  }
+
   .chat-dock-search-box,
   .chat-dock-composer {
     grid-template-columns: 1fr;

@@ -369,6 +369,7 @@ class WebGLNodeRenderer {
     this.selectedNode = null;
     this.onClick = null;
     this.onDoubleClick = null;
+    this.onBlankClick = null;
     this.onButtonClick = null; // 按钮点击回调
     this.onLineClick = null; // 连线点击回调
     this.hoveredLine = null;
@@ -898,6 +899,11 @@ class WebGLNodeRenderer {
       const clickedLine = this.hitTestLine(pos.x, pos.y);
       if (clickedLine && this.onLineClick) {
         this.onLineClick(clickedLine);
+        return;
+      }
+
+      if (this.onBlankClick) {
+        this.onBlankClick();
       }
     });
 

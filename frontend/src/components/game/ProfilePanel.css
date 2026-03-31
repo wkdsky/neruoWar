@@ -67,6 +67,25 @@
     font-weight: 500;
 }
 
+.profile-logout-btn {
+    margin-left: auto;
+    padding: 0.75rem 1rem;
+    border: 1px solid rgba(248, 113, 113, 0.28);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(69, 10, 10, 0.92) 0%, rgba(45, 11, 11, 0.96) 100%);
+    color: #fee2e2;
+    font-size: 0.92rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.profile-logout-btn:hover {
+    background: linear-gradient(180deg, rgba(127, 29, 29, 0.92) 0%, rgba(69, 10, 10, 0.96) 100%);
+    box-shadow: 0 12px 24px rgba(69, 10, 10, 0.28);
+    transform: translateY(-1px);
+}
+
 /* 标签页 */
 .profile-tabs {
     display: flex;
@@ -362,6 +381,12 @@
         text-align: center;
     }
 
+    .profile-logout-btn {
+        margin-left: 0;
+        width: 100%;
+        min-height: 44px;
+    }
+
     .profile-avatar-large {
         width: 80px;
         height: 80px;
@@ -399,5 +424,101 @@
 
     .info-grid {
         grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 480px) {
+    .profile-panel {
+        padding: 0.8rem;
+        margin: 0;
+        border-radius: 14px;
+    }
+
+    .profile-loading {
+        padding: 2.4rem 1rem;
+        font-size: 1rem;
+    }
+
+    .profile-header {
+        gap: 0.9rem;
+        padding-bottom: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .profile-avatar-large {
+        width: 72px;
+        height: 72px;
+        border-radius: 14px;
+    }
+
+    .profile-username {
+        font-size: 1.26rem;
+    }
+
+    .profile-role,
+    .profile-profession {
+        font-size: 0.82rem;
+    }
+
+    .profile-tabs {
+        gap: 0.35rem;
+    }
+
+    .profile-tab {
+        min-width: 0;
+        gap: 6px;
+        padding: 9px 10px;
+        font-size: 0.82rem;
+    }
+
+    .profile-content {
+        min-height: 0;
+    }
+
+    .info-grid {
+        gap: 0.8rem;
+    }
+
+    .info-item {
+        padding: 0.8rem;
+        border-radius: 10px;
+    }
+
+    .info-value {
+        font-size: 1rem;
+    }
+
+    .avatar-preview {
+        margin-bottom: 1.25rem;
+        padding: 1rem;
+        border-radius: 14px;
+    }
+
+    .avatar-preview-img {
+        width: 92px;
+        height: 92px;
+    }
+
+    .avatar-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.65rem;
+    }
+
+    .avatar-option img {
+        width: 54px;
+        height: 54px;
+    }
+
+    .profile-password-section {
+        max-width: none;
+    }
+
+    .password-form {
+        gap: 1rem;
+    }
+
+    .form-input {
+        padding: 10px 12px;
+        font-size: 0.92rem;
     }
 }

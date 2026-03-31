@@ -20,11 +20,8 @@ const useAppShellState = ({
   isAdmin,
   parseApiResponse,
   getApiErrorMessage,
-  notificationsWrapperRef,
   relatedDomainsWrapperRef,
   militaryMenuWrapperRef,
-  fetchNotifications,
-  fetchAdminPendingNodeReminders,
   systemAnnouncements,
   allianceAnnouncements,
   view,
@@ -35,17 +32,15 @@ const useAppShellState = ({
   fetchLocationNodeDetail,
 }) => {
   const isLocationDockExpandedRef = useRef(false);
-  const [showNotificationsPanel, setShowNotificationsPanel] = useState(false);
   const [isLocationDockExpanded, setIsLocationDockExpanded] = useState(false);
   const [isAnnouncementDockExpanded, setIsAnnouncementDockExpanded] = useState(false);
-  const [announcementDockTab, setAnnouncementDockTab] = useState('system');
+  const [messageDockTab, setMessageDockTab] = useState('announcement');
   const [showRelatedDomainsPanel, setShowRelatedDomainsPanel] = useState(false);
   const [showMilitaryMenu, setShowMilitaryMenu] = useState(false);
   const [relatedDomainsData, setRelatedDomainsData] = useState(createEmptyRelatedDomainsData);
   const [favoriteActionDomainId, setFavoriteActionDomainId] = useState('');
 
   const closeHeaderPanels = useCallback(() => {
-    setShowNotificationsPanel(false);
     setShowRelatedDomainsPanel(false);
     setShowMilitaryMenu(false);
   }, []);
@@ -58,7 +53,7 @@ const useAppShellState = ({
   const resetAppShellState = useCallback(() => {
     closeHeaderPanels();
     collapseRightDocks();
-    setAnnouncementDockTab('system');
+    setMessageDockTab('announcement');
     setRelatedDomainsData(createEmptyRelatedDomainsData());
     setFavoriteActionDomainId('');
   }, [closeHeaderPanels, collapseRightDocks]);
@@ -132,34 +127,14 @@ const useAppShellState = ({
     }
   }, [fetchRelatedDomains, getApiErrorMessage, parseApiResponse]);
 
-  const toggleNotificationsPanel = useCallback(async () => {
-    const nextVisible = !showNotificationsPanel;
-    setShowNotificationsPanel(nextVisible);
-    setShowRelatedDomainsPanel(false);
-    setShowMilitaryMenu(false);
-    if (nextVisible) {
-      await fetchNotifications(false);
-      if (isAdmin) {
-        await fetchAdminPendingNodeReminders(false);
-      }
-    }
-  }, [
-    fetchAdminPendingNodeReminders,
-    fetchNotifications,
-    isAdmin,
-    showNotificationsPanel
-  ]);
-
   const toggleRelatedDomainsPanel = useCallback(() => {
     const nextVisible = !showRelatedDomainsPanel;
-    setShowNotificationsPanel(false);
     setShowRelatedDomainsPanel(nextVisible);
     setShowMilitaryMenu(false);
   }, [showRelatedDomainsPanel]);
 
   const toggleMilitaryMenu = useCallback(() => {
     const nextVisible = !showMilitaryMenu;
-    setShowNotificationsPanel(false);
     setShowRelatedDomainsPanel(false);
     setShowMilitaryMenu(nextVisible);
   }, [showMilitaryMenu]);
@@ -178,12 +153,6 @@ const useAppShellState = ({
     if (!userLocation || userLocation === '任意') return;
     await fetchLocationNodeDetail(userLocation, { silent: false });
   }, [fetchLocationNodeDetail, userLocation]);
-
-  useClickOutside({
-    enabled: showNotificationsPanel,
-    ref: notificationsWrapperRef,
-    onOutsideClick: () => setShowNotificationsPanel(false)
-  });
 
   useClickOutside({
     enabled: showRelatedDomainsPanel,
@@ -221,14 +190,6 @@ const useAppShellState = ({
     if (!showRelatedDomainsPanel || !authenticated || isAdmin) return;
     fetchRelatedDomains(false);
   }, [authenticated, fetchRelatedDomains, isAdmin, showRelatedDomainsPanel]);
-
-  useEffect(() => {
-    if (announcementDockTab === 'system' && systemAnnouncements.length === 0 && allianceAnnouncements.length > 0) {
-      setAnnouncementDockTab('alliance');
-    } else if (announcementDockTab === 'alliance' && allianceAnnouncements.length === 0 && systemAnnouncements.length > 0) {
-      setAnnouncementDockTab('system');
-    }
-  }, [allianceAnnouncements.length, announcementDockTab, systemAnnouncements.length]);
 
   useEffect(() => {
     const canRenderDock = !isAdmin && (
@@ -276,12 +237,11 @@ const useAppShellState = ({
   }), [allianceAnnouncements, systemAnnouncements]);
 
   return {
-    showNotificationsPanel,
     showRelatedDomainsPanel,
     showMilitaryMenu,
     isLocationDockExpanded,
     isAnnouncementDockExpanded,
-    announcementDockTab,
+    messageDockTab,
     relatedDomainsData,
     favoriteActionDomainId,
     domainMasterDomains,
@@ -292,14 +252,12 @@ const useAppShellState = ({
     relatedDomainCount,
     announcementGroups,
     isLocationDockExpandedRef,
-    setShowNotificationsPanel,
     setShowMilitaryMenu,
     setIsLocationDockExpanded,
     setIsAnnouncementDockExpanded,
-    setAnnouncementDockTab,
+    setMessageDockTab,
     fetchRelatedDomains,
     toggleFavoriteDomain,
-    toggleNotificationsPanel,
     toggleRelatedDomainsPanel,
     toggleMilitaryMenu,
     closeHeaderPanels,

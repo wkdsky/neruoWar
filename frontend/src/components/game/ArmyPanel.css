@@ -909,3 +909,238 @@
     grid-template-columns: 1fr;
   }
 }
+
+@media (max-width: 920px) {
+  .army-panel {
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .army-panel-header h2 {
+    font-size: 1.08rem;
+  }
+
+  .army-library-tabs {
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .army-library-tab {
+    flex: 0 0 auto;
+  }
+
+  .army-unit-card,
+  .army-preview-card,
+  .army-roster-card,
+  .army-template-card,
+  .army-equipment-section {
+    border-radius: 12px;
+  }
+
+  .army-unit-head h3,
+  .army-equipment-card-head h4 {
+    font-size: 0.9rem;
+  }
+
+  .army-unit-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .army-unit-actions input,
+  .army-unit-actions .btn {
+    width: 100%;
+  }
+
+  .army-template-actions,
+  .army-item-style-modal-head,
+  .army-template-editor-actions {
+    flex-wrap: wrap;
+  }
+
+  .army-unit-detail-modal,
+  .army-template-editor-modal,
+  .army-item-style-modal {
+    width: min(100%, calc(100vw - 16px));
+  }
+}
+
+@media (max-width: 640px) {
+  .army-panel {
+    padding: 10px;
+  }
+
+  .army-panel-header {
+    align-items: stretch;
+  }
+
+  .army-panel-header h2 {
+    font-size: 1rem;
+  }
+
+  .army-balance,
+  .army-message,
+  .army-equipment-desc,
+  .army-preview-summary,
+  .army-roster-row,
+  .army-template-meta span {
+    font-size: 0.82rem;
+  }
+
+  .army-equipment-grid,
+  .army-unit-grid,
+  .army-unit-grid-library {
+    gap: 8px;
+  }
+
+  .army-unit-card,
+  .army-equipment-card,
+  .army-preview-card,
+  .army-roster-card,
+  .army-template-card {
+    padding: 10px;
+  }
+
+  .army-unit-head,
+  .army-equipment-head,
+  .army-template-card-head,
+  .army-item-style-modal-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .army-unit-stats,
+  .army-equipment-stats,
+  .army-unit-detail-stats {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .army-step-group {
+    width: 100%;
+  }
+
+  .army-step-row {
+    justify-content: space-between;
+  }
+
+  .army-preview-row,
+  .army-roster-row,
+  .army-template-row,
+  .army-item-style-row,
+  .army-template-editor-row {
+    flex-wrap: wrap;
+  }
+
+  .army-unit-detail-modal,
+  .army-template-editor-modal,
+  .army-item-style-modal {
+    width: calc(100vw - 12px);
+    max-height: 88dvh;
+    padding: 10px;
+  }
+
+  .army-unit-detail-visual-stage {
+    min-height: 180px;
+  }
+
+  .army-template-editor-col {
+    min-height: 160px;
+  }
+}
+
+@media (max-width: 480px) {
+  .army-panel-header {
+    gap: 6px;
+  }
+
+  .army-panel-header h2 {
+    font-size: 0.94rem;
+  }
+
+  .army-library-tabs {
+    gap: 4px;
+    padding: 3px;
+  }
+
+  .army-library-tab {
+    padding: 6px 10px;
+    font-size: 0.78rem;
+  }
+
+  .army-content {
+    gap: 10px;
+  }
+
+  .army-equipment-head span,
+  .army-preview-empty {
+    font-size: 0.78rem;
+  }
+
+  .army-equipment-card-head h4,
+  .army-preview-card h3,
+  .army-roster-card h3,
+  .army-template-card h3 {
+    font-size: 0.88rem;
+  }
+
+  .army-preview-row {
+    grid-template-columns: minmax(0, 1fr) 62px 76px 48px;
+    font-size: 0.76rem;
+  }
+
+  .army-preview-row input {
+    min-width: 0;
+    padding: 3px 5px;
+  }
+
+  .army-unit-foot {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    font-size: 0.78rem;
+  }
+
+  .army-unit-detail-overlay,
+  .army-template-editor-overlay {
+    padding: 6px;
+  }
+
+  .army-unit-detail-modal,
+  .army-template-editor-modal,
+  .army-item-style-modal {
+    width: calc(100vw - 8px);
+    padding: 8px;
+    border-radius: 14px;
+  }
+
+  .army-unit-detail-head,
+  .army-unit-visual-card header,
+  .army-template-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .army-unit-visual-stage,
+  .army-unit-visual-stage.is-battle {
+    min-height: 160px;
+  }
+
+  .army-unit-turntable {
+    width: min(82%, 220px);
+  }
+
+  .army-template-editor-col {
+    min-height: 140px;
+    max-height: 36dvh;
+  }
+
+  .army-template-editor-row-actions,
+  .army-template-editor-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}

@@ -1,5 +1,5 @@
-import React from 'react';
-import { Bell, Home, Layers, MapPin, MessagesSquare, Shield, Star, Users } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Bell, ChevronLeft, Home, Layers, MapPin, MessagesSquare, Shield, Star, User, Users, X } from 'lucide-react';
 import './AppShell.css';
 import {
     avatarMap,
@@ -7,8 +7,8 @@ import {
     getNodeDisplayName,
     hexToRgba,
     isKnowledgeDetailView,
-    isSenseArticleNotification,
     isTitleBattleView,
+    readIsMobileViewport,
     normalizeObjectId,
     resolveAvatarSrc
 } from '../../app/appShared';
@@ -16,16 +16,27 @@ import {
     SENSE_ARTICLE_ENTRY_SHORT_LABEL,
     getSenseArticleEntryActionLabel
 } from '../senseArticle/senseArticleUi';
-import AnnouncementPanel from '../game/AnnouncementPanel';
 import ChatDockPanel from '../chat/ChatDockPanel';
 import CurrentDomainPanel from '../game/CurrentDomainPanel';
+import MessageDockPanel from '../game/MessageDockPanel';
 import RightUtilityDock from '../game/RightUtilityDock';
 import { useUserCard } from '../social/UserCardContext';
+
+const readIsMobileShell = () => readIsMobileViewport();
+const SENSE_SELECTOR_EDGE_MARGIN = 24;
+const SENSE_SELECTOR_DESKTOP_GAP = 28;
+const DEFAULT_DESKTOP_PANEL_SIZE = { width: 680, height: 560 };
+const readViewportSize = () => ({
+    width: Math.max(320, Math.round(window.visualViewport?.width || window.innerWidth || 1280)),
+    height: Math.max(320, Math.round(window.visualViewport?.height || window.innerHeight || 720))
+});
 
 export const GameHeader = ({
     headerRef,
     isKnowledgeDomainActive,
     isCompact,
+    isMobileLayout,
+    isMobileSuppressed,
     profession,
     username,
     userAvatar,
@@ -37,10 +48,6 @@ export const GameHeader = ({
     headerKnowledgeBalance,
     onProfileClick,
     onLogout,
-    notificationsWrapperRef,
-    onToggleNotifications,
-    notificationBadgeCount,
-    notificationsPanel,
     relatedDomainsWrapperRef,
     onToggleRelatedDomains,
     relatedDomainCount,
@@ -56,7 +63,10 @@ export const GameHeader = ({
     onOpenEquipment,
     onOpenAdmin
 }) => (
-    <div ref={headerRef} className={`header ${isKnowledgeDomainActive ? 'header-knowledge-domain-active' : ''} ${isCompact ? 'header-compact' : ''}`.trim()}>
+    <div
+        ref={headerRef}
+        className={`header ${isKnowledgeDomainActive ? 'header-knowledge-domain-active' : ''} ${isCompact ? 'header-compact' : ''} ${isMobileLayout ? 'header-mobile' : ''} ${isMobileSuppressed ? 'header-mobile-suppressed' : ''}`.trim()}
+    >
         <div className="header-content">
             <button
                 type="button"
@@ -68,6 +78,7 @@ export const GameHeader = ({
                 <Home className="icon" />
                 多节点策略系统
             </button>
+            {!isMobileLayout ? (
             <div className="header-right">
                 <div className="header-buttons">
                     <div className="header-action-shell">
@@ -105,24 +116,6 @@ export const GameHeader = ({
                             <button type="button" onClick={onLogout} className="btn btn-logout">
                                 退出
                             </button>
-                        </div>
-                    </div>
-                    <div className="header-action-shell">
-                        <div className="notifications-wrapper" ref={notificationsWrapperRef}>
-                            <button
-                                type="button"
-                                className="btn btn-secondary notification-trigger-btn"
-                                onClick={onToggleNotifications}
-                            >
-                                <Bell size={18} />
-                                通知
-                                {notificationBadgeCount > 0 && (
-                                    <span className="notification-badge">
-                                        {notificationBadgeCount > 99 ? '99+' : notificationBadgeCount}
-                                    </span>
-                                )}
-                            </button>
-                            {notificationsPanel}
                         </div>
                     </div>
                     <div className="header-action-shell">
@@ -185,6 +178,84 @@ export const GameHeader = ({
                     )}
                 </div>
             </div>
+            ) : null}
+        </div>
+    </div>
+);
+
+const MobileBottomBar = ({
+    relatedDomainsWrapperRef,
+    militaryMenuWrapperRef,
+    relatedDomainCount,
+    relatedDomainsPanel,
+    showMilitaryMenu,
+    militaryMenuPanel,
+    isAdmin,
+    activeView,
+    onHomeClick,
+    onToggleRelatedDomains,
+    onAllianceClick,
+    onToggleMilitaryMenu,
+    onOpenAdmin,
+    onProfileClick
+}) => (
+    <div className="mobile-bottom-bar" aria-label="移动端主导航">
+        <div className="mobile-bottom-bar__shell">
+            <button
+                type="button"
+                className={`mobile-bottom-bar__btn${activeView === 'home' ? ' is-active' : ''}`}
+                onClick={onHomeClick}
+            >
+                <span className="mobile-bottom-bar__icon"><Home size={17} /></span>
+                <span className="mobile-bottom-bar__label">首页</span>
+            </button>
+
+            <div className="mobile-bottom-bar__slot" ref={relatedDomainsWrapperRef}>
+                <button
+                    type="button"
+                    className={`mobile-bottom-bar__btn${activeView === 'related' ? ' is-active' : ''}`}
+                    onClick={onToggleRelatedDomains}
+                >
+                    <span className="mobile-bottom-bar__icon"><Layers size={17} /></span>
+                    <span className="mobile-bottom-bar__label">我的域</span>
+                    {relatedDomainCount > 0 ? (
+                        <span className="mobile-bottom-bar__badge">
+                            {relatedDomainCount > 99 ? '99+' : relatedDomainCount}
+                        </span>
+                    ) : null}
+                </button>
+                {relatedDomainsPanel}
+            </div>
+
+            <button
+                type="button"
+                className={`mobile-bottom-bar__btn${activeView === 'alliance' ? ' is-active' : ''}`}
+                onClick={onAllianceClick}
+            >
+                <span className="mobile-bottom-bar__icon"><Shield size={17} /></span>
+                <span className="mobile-bottom-bar__label">熵盟</span>
+            </button>
+
+            <div className="mobile-bottom-bar__slot" ref={militaryMenuWrapperRef}>
+                <button
+                    type="button"
+                    className={`mobile-bottom-bar__btn${(isAdmin ? activeView === 'admin' : activeView === 'military') ? ' is-active' : ''}`}
+                    onClick={isAdmin ? onOpenAdmin : onToggleMilitaryMenu}
+                >
+                    <span className="mobile-bottom-bar__icon"><Users size={17} /></span>
+                    <span className="mobile-bottom-bar__label">{isAdmin ? '管理' : '军事'}</span>
+                </button>
+                {!isAdmin && showMilitaryMenu ? militaryMenuPanel : null}
+            </div>
+
+            <button
+                type="button"
+                className={`mobile-bottom-bar__btn${activeView === 'profile' ? ' is-active' : ''}`}
+                onClick={onProfileClick}
+            >
+                <span className="mobile-bottom-bar__icon"><User size={17} /></span>
+                <span className="mobile-bottom-bar__label">我的</span>
+            </button>
         </div>
     </div>
 );
@@ -286,6 +357,7 @@ export const RelatedDomainsPanel = ({
 };
 
 export const UnifiedRightDock = ({
+    isAdmin,
     showKnowledgeDomain,
     isTransitioningToDomain,
     view,
@@ -293,8 +365,25 @@ export const UnifiedRightDock = ({
     currentNodeDetail,
     isAnnouncementDockExpanded,
     setIsAnnouncementDockExpanded,
-    announcementDockTab,
-    setAnnouncementDockTab,
+    messageDockTab,
+    setMessageDockTab,
+    notifications,
+    notificationUnreadCount,
+    isNotificationsLoading,
+    isMarkingAllRead,
+    clearNotifications,
+    isClearingNotifications,
+    notificationActionId,
+    adminPendingNodes,
+    fetchNotifications,
+    fetchAdminPendingNodeReminders,
+    markNotificationRead,
+    markAllNotificationsRead,
+    respondDomainAdminInvite,
+    handleDistributionAnnouncementClick,
+    handleArrivalNotificationClick,
+    handleSenseArticleNotificationClick,
+    openAdminPanel,
     isChatDockExpanded,
     setIsChatDockExpanded,
     chatBadgeCount,
@@ -333,14 +422,14 @@ export const UnifiedRightDock = ({
     const shouldRenderLocationDock = !isKnowledgeDomainActive;
 
     const activeDockSectionId = isAnnouncementDockExpanded
-        ? 'announcement'
+        ? 'message'
         : isChatDockExpanded
             ? 'chat'
             : (shouldRenderLocationDock && isLocationDockExpanded ? 'domain' : '');
 
     const toggleExclusiveDock = (target) => {
         const isCurrentlyActive = activeDockSectionId === target;
-        const nextAnnouncementOpen = target === 'announcement' && !isCurrentlyActive;
+        const nextAnnouncementOpen = target === 'message' && !isCurrentlyActive;
         const nextChatOpen = target === 'chat' && !isCurrentlyActive;
         const nextLocationOpen = target === 'domain' && !isCurrentlyActive;
 
@@ -348,10 +437,6 @@ export const UnifiedRightDock = ({
         setIsAnnouncementDockExpanded(nextAnnouncementOpen);
         setIsChatDockExpanded(nextChatOpen);
         setIsLocationDockExpanded(nextLocationOpen);
-
-        if (nextAnnouncementOpen) {
-            markAnnouncementNotificationsRead();
-        }
     };
 
     const canJumpToLocationView = Boolean(
@@ -360,9 +445,6 @@ export const UnifiedRightDock = ({
         userLocation &&
         !(isKnowledgeDetailView(view) && activeDetailNode?.name === userLocation)
     );
-    const activeAnnouncements = announcementDockTab === 'alliance'
-        ? allianceAnnouncements
-        : systemAnnouncements;
     const locationParentLabels = (() => {
         const parentNodes = Array.isArray(currentLocationNodeDetail?.parentNodesInfo)
             ? currentLocationNodeDetail.parentNodesInfo
@@ -454,26 +536,48 @@ export const UnifiedRightDock = ({
     // 首页与知识域详情共用同一套 utility dock 壳层，业务状态仍留在 AppShell 中管理。
     const dockSections = [
         {
-            id: 'announcement',
-            label: '公告',
+            id: 'message',
+            label: '消息',
             icon: Bell,
-            badge: announcementUnreadCount > 0 ? 'dot' : null,
-            active: activeDockSectionId === 'announcement',
-            onToggle: () => toggleExclusiveDock('announcement'),
+            badge: (notificationUnreadCount > 0 || (isAdmin && adminPendingNodes.length > 0))
+                ? String(Math.min(99, notificationUnreadCount + (isAdmin ? adminPendingNodes.length : 0)))
+                : null,
+            active: activeDockSectionId === 'message',
+            panelWidth: 520,
+            onToggle: () => toggleExclusiveDock('message'),
             panel: (
-                <AnnouncementPanel
-                    activeTab={announcementDockTab}
-                    tabs={[
-                        { id: 'system', label: '系统公告' },
-                        { id: 'alliance', label: '频道公告' }
-                    ]}
-                    announcements={activeAnnouncements}
-                    onTabChange={setAnnouncementDockTab}
-                    onReadAll={() => markAnnouncementNotificationsRead()}
+                <MessageDockPanel
+                    activeTab={messageDockTab}
+                    onTabChange={setMessageDockTab}
                     onClose={() => setIsAnnouncementDockExpanded(false)}
-                    onItemClick={handleHomeAnnouncementClick}
-                    readAllDisabled={isMarkingAnnouncementsRead || announcementUnreadCount <= 0}
-                    isReadAllLoading={isMarkingAnnouncementsRead}
+                    isAdmin={isAdmin}
+                    notifications={notifications}
+                    systemAnnouncements={systemAnnouncements}
+                    allianceAnnouncements={allianceAnnouncements}
+                    adminPendingNodes={adminPendingNodes}
+                    notificationUnreadCount={notificationUnreadCount}
+                    announcementUnreadCount={announcementUnreadCount}
+                    isNotificationsLoading={isNotificationsLoading}
+                    isMarkingAllRead={isMarkingAllRead}
+                    isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
+                    isClearingNotifications={isClearingNotifications}
+                    notificationActionId={notificationActionId}
+                    onRefresh={async () => {
+                        await fetchNotifications(false);
+                        if (isAdmin) {
+                            await fetchAdminPendingNodeReminders(false);
+                        }
+                    }}
+                    onMarkAllNotificationsRead={markAllNotificationsRead}
+                    onMarkAnnouncementNotificationsRead={markAnnouncementNotificationsRead}
+                    onClearNotifications={clearNotifications}
+                    onOpenAdminPending={() => openAdminPanel('pending')}
+                    onMarkNotificationRead={markNotificationRead}
+                    onRespondNotification={respondDomainAdminInvite}
+                    onOpenDistributionNotification={handleDistributionAnnouncementClick}
+                    onOpenArrivalNotification={handleArrivalNotificationClick}
+                    onOpenSenseArticleNotification={handleSenseArticleNotificationClick}
+                    onOpenAnnouncement={handleHomeAnnouncementClick}
                 />
             )
         },
@@ -681,31 +785,10 @@ export const AppShellChrome = ({
     headerArmyCount,
     headerKnowledgeBalance,
     handleLogout,
-    notificationsWrapperRef,
-    toggleNotificationsPanel,
-    notificationBadgeCount,
-    showNotificationsPanel,
     fetchNotifications,
     isAdmin,
     fetchAdminPendingNodeReminders,
-    adminPendingNodes,
-    pendingMasterApplyCount,
-    notifications,
-    markAllNotificationsRead,
-    isNotificationsLoading,
-    isMarkingAllRead,
-    notificationUnreadCount,
-    clearNotifications,
-    isClearingNotifications,
-    formatNotificationTime,
-    setShowNotificationsPanel,
     openAdminPanel,
-    notificationActionId,
-    handleDistributionAnnouncementClick,
-    handleArrivalNotificationClick,
-    handleSenseArticleNotificationClick,
-    markNotificationRead,
-    respondDomainAdminInvite,
     relatedDomainsWrapperRef,
     toggleRelatedDomainsPanel,
     relatedDomainCount,
@@ -722,7 +805,6 @@ export const AppShellChrome = ({
     toggleFavoriteDomain,
     formatDomainKnowledgePoint,
     closeHeaderPanels,
-    navigateToHomeWithDockCollapse,
     handleHeaderHomeNavigation,
     prepareForPrimaryNavigation,
     setView,
@@ -737,8 +819,22 @@ export const AppShellChrome = ({
     currentNodeDetail,
     isAnnouncementDockExpanded,
     setIsAnnouncementDockExpanded,
-    announcementDockTab,
-    setAnnouncementDockTab,
+    messageDockTab,
+    setMessageDockTab,
+    notifications,
+    adminPendingNodes,
+    notificationUnreadCount,
+    isNotificationsLoading,
+    isMarkingAllRead,
+    clearNotifications,
+    isClearingNotifications,
+    notificationActionId,
+    handleDistributionAnnouncementClick,
+    handleArrivalNotificationClick,
+    handleSenseArticleNotificationClick,
+    markNotificationRead,
+    markAllNotificationsRead,
+    respondDomainAdminInvite,
     isChatDockExpanded,
     setIsChatDockExpanded,
     chatBadgeCount,
@@ -767,12 +863,86 @@ export const AppShellChrome = ({
     closeDistributionPanel,
     joinDistributionFromPanel,
     exitDistributionFromPanel
-}) => (
+}) => {
+    const [isMobileLayout, setIsMobileLayout] = useState(readIsMobileShell);
+    const shouldPromoteSceneTopPanel = isMobileLayout && (view === 'home' || view === 'nodeDetail' || view === 'titleDetail');
+
+    useEffect(() => {
+        const handleResize = () => setIsMobileLayout(readIsMobileShell());
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
+    const relatedDomainsPanelNode = (
+        <RelatedDomainsPanel
+            showRelatedDomainsPanel={showRelatedDomainsPanel}
+            relatedDomainsData={relatedDomainsData}
+            domainMasterDomains={domainMasterDomains}
+            domainAdminDomains={domainAdminDomains}
+            favoriteDomains={favoriteDomains}
+            recentDomains={recentDomains}
+            favoriteDomainSet={favoriteDomainSet}
+            favoriteActionDomainId={favoriteActionDomainId}
+            onRefresh={() => fetchRelatedDomains(false)}
+            onOpenDomain={handleOpenRelatedDomain}
+            onToggleFavorite={toggleFavoriteDomain}
+            formatDomainKnowledgePoint={formatDomainKnowledgePoint}
+        />
+    );
+
+    const onOpenArmy = async () => {
+        setShowMilitaryMenu(false);
+        await prepareForPrimaryNavigation();
+        setView('army');
+    };
+
+    const onOpenTrainingGround = async () => {
+        setShowMilitaryMenu(false);
+        await prepareForPrimaryNavigation();
+        setView('trainingGround');
+    };
+
+    const onOpenEquipment = async () => {
+        setShowMilitaryMenu(false);
+        await prepareForPrimaryNavigation();
+        setView('equipment');
+    };
+
+    const onOpenAdmin = () => {
+        setShowMilitaryMenu(false);
+        openAdminPanel('users');
+    };
+
+    const militaryMenuPanelNode = (
+        <div className="military-menu-panel">
+            {!isAdmin ? (
+                <>
+                    <button type="button" className="military-menu-item" onClick={onOpenArmy}>
+                        兵营
+                    </button>
+                    <button type="button" className="military-menu-item" onClick={onOpenTrainingGround}>
+                        训练场
+                    </button>
+                    <button type="button" className="military-menu-item" onClick={onOpenEquipment}>
+                        装备库
+                    </button>
+                </>
+            ) : (
+                <button type="button" className="military-menu-item" onClick={onOpenAdmin}>
+                    管理员面板
+                </button>
+            )}
+        </div>
+    );
+
+    return (
     <>
         <GameHeader
             headerRef={headerRef}
             isKnowledgeDomainActive={isKnowledgeDomainActive}
             isCompact={isCompact}
+            isMobileLayout={isMobileLayout}
+            isMobileSuppressed={shouldPromoteSceneTopPanel}
             profession={profession}
             username={username}
             userAvatar={userAvatar}
@@ -787,54 +957,10 @@ export const AppShellChrome = ({
                 setView('profile');
             }}
             onLogout={handleLogout}
-            notificationsWrapperRef={notificationsWrapperRef}
-            onToggleNotifications={toggleNotificationsPanel}
-            notificationBadgeCount={notificationBadgeCount}
-            notificationsPanel={(
-                <NotificationsPanel
-                    showNotificationsPanel={showNotificationsPanel}
-                    fetchNotifications={fetchNotifications}
-                    isAdmin={isAdmin}
-                    fetchAdminPendingNodeReminders={fetchAdminPendingNodeReminders}
-                    adminPendingNodes={adminPendingNodes}
-                    pendingMasterApplyCount={pendingMasterApplyCount}
-                    notifications={notifications}
-                    markAllNotificationsRead={markAllNotificationsRead}
-                    isNotificationsLoading={isNotificationsLoading}
-                    isMarkingAllRead={isMarkingAllRead}
-                    notificationUnreadCount={notificationUnreadCount}
-                    clearNotifications={clearNotifications}
-                    isClearingNotifications={isClearingNotifications}
-                    formatNotificationTime={formatNotificationTime}
-                    setShowNotificationsPanel={setShowNotificationsPanel}
-                    openAdminPanel={openAdminPanel}
-                    notificationActionId={notificationActionId}
-                    handleDistributionAnnouncementClick={handleDistributionAnnouncementClick}
-                    handleArrivalNotificationClick={handleArrivalNotificationClick}
-                    handleSenseArticleNotificationClick={handleSenseArticleNotificationClick}
-                    markNotificationRead={markNotificationRead}
-                    respondDomainAdminInvite={respondDomainAdminInvite}
-                />
-            )}
             relatedDomainsWrapperRef={relatedDomainsWrapperRef}
             onToggleRelatedDomains={toggleRelatedDomainsPanel}
             relatedDomainCount={relatedDomainCount}
-            relatedDomainsPanel={(
-                <RelatedDomainsPanel
-                    showRelatedDomainsPanel={showRelatedDomainsPanel}
-                    relatedDomainsData={relatedDomainsData}
-                    domainMasterDomains={domainMasterDomains}
-                    domainAdminDomains={domainAdminDomains}
-                    favoriteDomains={favoriteDomains}
-                    recentDomains={recentDomains}
-                    favoriteDomainSet={favoriteDomainSet}
-                    favoriteActionDomainId={favoriteActionDomainId}
-                    onRefresh={() => fetchRelatedDomains(false)}
-                    onOpenDomain={handleOpenRelatedDomain}
-                    onToggleFavorite={toggleFavoriteDomain}
-                    formatDomainKnowledgePoint={formatDomainKnowledgePoint}
-                />
-            )}
+            relatedDomainsPanel={isMobileLayout ? null : relatedDomainsPanelNode}
             onHomeClick={async () => {
                 closeHeaderPanels();
                 await handleHeaderHomeNavigation();
@@ -848,26 +974,49 @@ export const AppShellChrome = ({
             militaryMenuWrapperRef={militaryMenuWrapperRef}
             onToggleMilitaryMenu={toggleMilitaryMenu}
             showMilitaryMenu={showMilitaryMenu}
-            onOpenArmy={async () => {
-                setShowMilitaryMenu(false);
-                await prepareForPrimaryNavigation();
-                setView('army');
-            }}
-            onOpenTrainingGround={async () => {
-                setShowMilitaryMenu(false);
-                await prepareForPrimaryNavigation();
-                setView('trainingGround');
-            }}
-            onOpenEquipment={async () => {
-                setShowMilitaryMenu(false);
-                await prepareForPrimaryNavigation();
-                setView('equipment');
-            }}
-            onOpenAdmin={() => {
-                setShowMilitaryMenu(false);
-                openAdminPanel('users');
-            }}
+            onOpenArmy={onOpenArmy}
+            onOpenTrainingGround={onOpenTrainingGround}
+            onOpenEquipment={onOpenEquipment}
+            onOpenAdmin={onOpenAdmin}
         />
+
+        {isMobileLayout ? (
+            <MobileBottomBar
+                relatedDomainsWrapperRef={relatedDomainsWrapperRef}
+                militaryMenuWrapperRef={militaryMenuWrapperRef}
+                relatedDomainCount={relatedDomainCount}
+                relatedDomainsPanel={relatedDomainsPanelNode}
+                showMilitaryMenu={showMilitaryMenu}
+                militaryMenuPanel={militaryMenuPanelNode}
+                isAdmin={isAdmin}
+                activeView={
+                    showRelatedDomainsPanel
+                        ? 'related'
+                        : view === 'admin'
+                            ? 'admin'
+                            : showMilitaryMenu
+                            ? 'military'
+                            : view
+                }
+                onHomeClick={async () => {
+                    closeHeaderPanels();
+                    await handleHeaderHomeNavigation();
+                }}
+                onToggleRelatedDomains={toggleRelatedDomainsPanel}
+                onAllianceClick={async () => {
+                    closeHeaderPanels();
+                    await prepareForPrimaryNavigation();
+                    setView('alliance');
+                }}
+                onToggleMilitaryMenu={toggleMilitaryMenu}
+                onOpenAdmin={onOpenAdmin}
+                onProfileClick={async () => {
+                    closeHeaderPanels();
+                    await prepareForPrimaryNavigation();
+                    setView('profile');
+                }}
+            />
+        ) : null}
 
         <UnifiedRightDock
             isAdmin={isAdmin}
@@ -878,8 +1027,25 @@ export const AppShellChrome = ({
             currentNodeDetail={currentNodeDetail}
             isAnnouncementDockExpanded={isAnnouncementDockExpanded}
             setIsAnnouncementDockExpanded={setIsAnnouncementDockExpanded}
-            announcementDockTab={announcementDockTab}
-            setAnnouncementDockTab={setAnnouncementDockTab}
+            messageDockTab={messageDockTab}
+            setMessageDockTab={setMessageDockTab}
+            notifications={notifications}
+            adminPendingNodes={adminPendingNodes}
+            fetchNotifications={fetchNotifications}
+            fetchAdminPendingNodeReminders={fetchAdminPendingNodeReminders}
+            notificationUnreadCount={notificationUnreadCount}
+            isNotificationsLoading={isNotificationsLoading}
+            isMarkingAllRead={isMarkingAllRead}
+            clearNotifications={clearNotifications}
+            isClearingNotifications={isClearingNotifications}
+            notificationActionId={notificationActionId}
+            handleDistributionAnnouncementClick={handleDistributionAnnouncementClick}
+            handleArrivalNotificationClick={handleArrivalNotificationClick}
+            handleSenseArticleNotificationClick={handleSenseArticleNotificationClick}
+            markNotificationRead={markNotificationRead}
+            markAllNotificationsRead={markAllNotificationsRead}
+            respondDomainAdminInvite={respondDomainAdminInvite}
+            openAdminPanel={openAdminPanel}
             isChatDockExpanded={isChatDockExpanded}
             setIsChatDockExpanded={setIsChatDockExpanded}
             chatBadgeCount={chatBadgeCount}
@@ -916,333 +1082,6 @@ export const AppShellChrome = ({
             exitDistributionFromPanel={exitDistributionFromPanel}
         />
     </>
-);
-
-export const NotificationsPanel = ({
-    showNotificationsPanel,
-    fetchNotifications,
-    isAdmin,
-    fetchAdminPendingNodeReminders,
-    adminPendingNodes,
-    pendingMasterApplyCount,
-    notifications,
-    markAllNotificationsRead,
-    isNotificationsLoading,
-    isMarkingAllRead,
-    notificationUnreadCount,
-    clearNotifications,
-    isClearingNotifications,
-    formatNotificationTime,
-    setShowNotificationsPanel,
-    openAdminPanel,
-    notificationActionId,
-    handleDistributionAnnouncementClick,
-    handleArrivalNotificationClick,
-    handleSenseArticleNotificationClick,
-    markNotificationRead,
-    respondDomainAdminInvite
-}) => {
-    if (!showNotificationsPanel) return null;
-
-    const refreshNotifications = async () => {
-        await fetchNotifications(false);
-        if (isAdmin) {
-            await fetchAdminPendingNodeReminders(false);
-        }
-    };
-
-    if (isAdmin) {
-        const latestPendingNode = [...adminPendingNodes]
-            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] || null;
-        const adminReminders = [];
-
-        if (pendingMasterApplyCount > 0) {
-            adminReminders.push({
-                key: 'pending-master-apply',
-                title: '有用户申请域主',
-                message: `当前有 ${pendingMasterApplyCount} 条域主申请待处理。`,
-                createdAt: notifications.find((item) => (
-                    item.type === 'domain_master_apply' && item.status === 'pending'
-                ))?.createdAt || null
-            });
-        }
-
-        if (adminPendingNodes.length > 0) {
-            adminReminders.push({
-                key: 'pending-node-create',
-                title: (adminPendingNodes.length === 1 && latestPendingNode?.name)
-                    ? `有用户提交了「${latestPendingNode.name}」新知识域创建申请`
-                    : '有用户提交了创建新知识域申请',
-                message: `当前有 ${adminPendingNodes.length} 条创建新知识域申请待审批。`,
-                createdAt: latestPendingNode?.createdAt || null
-            });
-        }
-
-        return (
-            <div className="notifications-panel">
-                <div className="notifications-header">
-                    <h3>通知中心</h3>
-                    <button
-                        type="button"
-                        className="btn btn-small btn-blue"
-                        onClick={markAllNotificationsRead}
-                        disabled={isNotificationsLoading || isMarkingAllRead || notificationUnreadCount === 0}
-                    >
-                        {isMarkingAllRead ? '处理中...' : '全部已读'}
-                    </button>
-                    <button
-                        type="button"
-                        className="btn btn-small btn-danger"
-                        onClick={clearNotifications}
-                        disabled={isNotificationsLoading || isClearingNotifications || notifications.length === 0}
-                    >
-                        {isClearingNotifications ? '清空中...' : '清空通知'}
-                    </button>
-                    <button
-                        type="button"
-                        className="btn btn-small btn-secondary"
-                        onClick={refreshNotifications}
-                        disabled={isNotificationsLoading}
-                    >
-                        {isNotificationsLoading ? '刷新中...' : '刷新'}
-                    </button>
-                </div>
-                <div className="notifications-body">
-                    {adminReminders.length === 0 ? (
-                        <div className="no-notifications">暂无审批提醒</div>
-                    ) : (
-                        <div className="notifications-list">
-                            {adminReminders.map((reminder) => (
-                                <div key={reminder.key} className="notification-item unread">
-                                    <div className="notification-item-title-row">
-                                        <h4>{reminder.title}</h4>
-                                        <span className="notification-dot" />
-                                    </div>
-                                    <div className="notification-item-message">{reminder.message}</div>
-                                    <div className="notification-item-meta">
-                                        {formatNotificationTime(reminder.createdAt)}
-                                    </div>
-                                    <div className="notification-actions">
-                                        <button
-                                            type="button"
-                                            className="btn btn-small btn-warning"
-                                            onClick={() => {
-                                                setShowNotificationsPanel(false);
-                                                openAdminPanel('pending');
-                                            }}
-                                        >
-                                            前往待审批
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="notifications-panel">
-            <div className="notifications-header">
-                <h3>通知中心</h3>
-                <button
-                    type="button"
-                    className="btn btn-small btn-blue"
-                    onClick={markAllNotificationsRead}
-                    disabled={isNotificationsLoading || isMarkingAllRead || notificationUnreadCount === 0}
-                >
-                    {isMarkingAllRead ? '处理中...' : '全部已读'}
-                </button>
-                <button
-                    type="button"
-                    className="btn btn-small btn-danger"
-                    onClick={clearNotifications}
-                    disabled={isNotificationsLoading || isClearingNotifications || notifications.length === 0}
-                >
-                    {isClearingNotifications ? '清空中...' : '清空通知'}
-                </button>
-                <button
-                    type="button"
-                    className="btn btn-small btn-secondary"
-                    onClick={refreshNotifications}
-                    disabled={isNotificationsLoading}
-                >
-                    {isNotificationsLoading ? '刷新中...' : '刷新'}
-                </button>
-            </div>
-            <div className="notifications-body">
-                {notifications.length === 0 ? (
-                    <div className="no-notifications">暂无通知</div>
-                ) : (
-                    <div className="notifications-list">
-                        {notifications.map((notification) => {
-                            const isInvitePending =
-                                notification.type === 'domain_admin_invite' &&
-                                notification.status === 'pending';
-                            const isResignRequestPending =
-                                notification.type === 'domain_admin_resign_request' &&
-                                notification.status === 'pending';
-                            const isMasterApplyPending =
-                                notification.type === 'domain_master_apply' &&
-                                notification.status === 'pending';
-                            const isAllianceJoinApplyPending =
-                                notification.type === 'alliance_join_apply' &&
-                                notification.status === 'pending';
-                            const isDistributionAnnouncement =
-                                notification.type === 'domain_distribution_announcement';
-                            const isArrivalNotification =
-                                notification.type === 'info' &&
-                                typeof notification.nodeName === 'string' &&
-                                notification.nodeName.trim() !== '';
-                            const currentActionKey = notificationActionId.split(':')[0];
-                            const isActing = currentActionKey === notification._id;
-
-                            return (
-                                <div
-                                    key={notification._id}
-                                    className={`notification-item ${notification.read ? '' : 'unread'}`}
-                                    onClick={(event) => {
-                                        if (event.target.closest('.notification-actions')) {
-                                            return;
-                                        }
-                                        if (isDistributionAnnouncement) {
-                                            handleDistributionAnnouncementClick(notification);
-                                            return;
-                                        }
-                                        if (isArrivalNotification) {
-                                            handleArrivalNotificationClick(notification);
-                                            return;
-                                        }
-                                        if (isSenseArticleNotification(notification)) {
-                                            handleSenseArticleNotificationClick(notification);
-                                            return;
-                                        }
-                                        if (!notification.read) {
-                                            markNotificationRead(notification._id);
-                                        }
-                                    }}
-                                >
-                                    <div className="notification-item-title-row">
-                                        <h4>{notification.title || '系统通知'}</h4>
-                                        {!notification.read && <span className="notification-dot" />}
-                                    </div>
-                                    <div className="notification-item-message">{notification.message || ''}</div>
-                                    <div className="notification-item-meta">
-                                        {formatNotificationTime(notification.createdAt)}
-                                    </div>
-                                    {(notification.type === 'domain_admin_invite_result'
-                                        || notification.type === 'domain_admin_resign_result'
-                                        || notification.type === 'domain_master_apply_result'
-                                        || notification.type === 'alliance_join_apply_result') && (
-                                        <div className={`notification-result-tag ${notification.status === 'accepted' ? 'accepted' : 'rejected'}`}>
-                                            {notification.status === 'accepted'
-                                                ? (notification.type === 'domain_admin_resign_result'
-                                                    ? '域主已同意卸任'
-                                                    : notification.type === 'domain_master_apply_result'
-                                                        ? '管理员已同意你成为域主'
-                                                        : notification.type === 'alliance_join_apply_result'
-                                                            ? '盟主已同意入盟'
-                                                            : '对方已接受')
-                                                : (notification.type === 'domain_admin_resign_result'
-                                                    ? '域主已拒绝卸任'
-                                                    : notification.type === 'domain_master_apply_result'
-                                                        ? '管理员已拒绝你的域主申请'
-                                                        : notification.type === 'alliance_join_apply_result'
-                                                            ? '盟主已拒绝入盟'
-                                                            : '对方已拒绝')}
-                                        </div>
-                                    )}
-
-                                    {isInvitePending ? (
-                                        <div className="notification-actions">
-                                            <button
-                                                type="button"
-                                                className="btn btn-small btn-success"
-                                                onClick={() => respondDomainAdminInvite(notification._id, 'accept')}
-                                                disabled={isActing}
-                                            >
-                                                接受
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className="btn btn-small btn-danger"
-                                                onClick={() => respondDomainAdminInvite(notification._id, 'reject')}
-                                                disabled={isActing}
-                                            >
-                                                拒绝
-                                            </button>
-                                        </div>
-                                    ) : isResignRequestPending ? (
-                                        <div className="notification-actions">
-                                            <button
-                                                type="button"
-                                                className="btn btn-small btn-success"
-                                                onClick={() => respondDomainAdminInvite(notification._id, 'accept')}
-                                                disabled={isActing}
-                                            >
-                                                同意卸任
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className="btn btn-small btn-danger"
-                                                onClick={() => respondDomainAdminInvite(notification._id, 'reject')}
-                                                disabled={isActing}
-                                            >
-                                                拒绝
-                                            </button>
-                                        </div>
-                                    ) : isMasterApplyPending ? (
-                                        <div className="notification-actions">
-                                            <button
-                                                type="button"
-                                                className="btn btn-small btn-warning"
-                                                onClick={() => {
-                                                    setShowNotificationsPanel(false);
-                                                    openAdminPanel('pending');
-                                                }}
-                                            >
-                                                前往待审批
-                                            </button>
-                                        </div>
-                                    ) : isAllianceJoinApplyPending ? (
-                                        <div className="notification-actions">
-                                            <button
-                                                type="button"
-                                                className="btn btn-small btn-success"
-                                                onClick={() => respondDomainAdminInvite(notification._id, 'accept')}
-                                                disabled={isActing}
-                                            >
-                                                同意加入
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className="btn btn-small btn-danger"
-                                                onClick={() => respondDomainAdminInvite(notification._id, 'reject')}
-                                                disabled={isActing}
-                                            >
-                                                拒绝
-                                            </button>
-                                        </div>
-                                    ) : (isDistributionAnnouncement && notification.requiresArrival) ? (
-                                        <div className="notification-actions">
-                                            <button
-                                                type="button"
-                                                className="btn btn-small btn-warning"
-                                                onClick={() => handleDistributionAnnouncementClick(notification)}
-                                            >
-                                                点击前往
-                                            </button>
-                                        </div>
-                                    ) : null}
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </div>
-        </div>
     );
 };
 
@@ -1260,19 +1099,116 @@ export const SenseSelectorPanel = ({
     senseArticleEntryStatusMap,
     handleSwitchTitleView,
     handleSwitchSenseView,
-    openSenseArticleFromNode
+    openSenseArticleFromNode,
+    onClose
 }) => {
     const { openUserCard } = useUserCard();
+    const [isMobileLayout, setIsMobileLayout] = useState(readIsMobileShell);
+    const [latchedSelectorNode, setLatchedSelectorNode] = useState(null);
+    const [latchedAnchor, setLatchedAnchor] = useState({ x: 0, y: 0, visible: false });
+    const [viewportSize, setViewportSize] = useState(readViewportSize);
+    const [desktopPanelSize, setDesktopPanelSize] = useState(DEFAULT_DESKTOP_PANEL_SIZE);
+    const openedAtRef = useRef(0);
+    const isSupportedView = view === 'home' || view === 'nodeDetail' || view === 'titleDetail';
 
-    if (view !== 'home' && view !== 'nodeDetail' && view !== 'titleDetail') return null;
+    useEffect(() => {
+        const handleResize = () => {
+            setIsMobileLayout(readIsMobileShell());
+            setViewportSize(readViewportSize());
+        };
+        window.addEventListener('resize', handleResize);
+        window.visualViewport?.addEventListener('resize', handleResize);
+        window.visualViewport?.addEventListener('scroll', handleResize);
+        return () => {
+            window.removeEventListener('resize', handleResize);
+            window.visualViewport?.removeEventListener('resize', handleResize);
+            window.visualViewport?.removeEventListener('scroll', handleResize);
+        };
+    }, []);
 
-    const selectorNode = (() => {
+    const liveSelectorNode = (() => {
         if (view === 'titleDetail' && currentTitleDetail) return currentTitleDetail;
         if (view === 'nodeDetail' && currentNodeDetail) return currentNodeDetail;
         return senseSelectorSourceNode || null;
     })();
+
+    useEffect(() => {
+        if (!isSenseSelectorVisible) {
+            setLatchedSelectorNode(null);
+            return;
+        }
+        if (liveSelectorNode) {
+            setLatchedSelectorNode((prev) => (
+                normalizeObjectId(prev?._id) === normalizeObjectId(liveSelectorNode?._id)
+                    ? prev
+                    : liveSelectorNode
+            ));
+        }
+    }, [isSenseSelectorVisible, liveSelectorNode]);
+
+    useEffect(() => {
+        if (!isSenseSelectorVisible) {
+            setLatchedAnchor({ x: 0, y: 0, visible: false });
+            return;
+        }
+        if (senseSelectorAnchor?.visible) {
+            setLatchedAnchor(senseSelectorAnchor);
+        }
+    }, [isSenseSelectorVisible, senseSelectorAnchor]);
+
+    useEffect(() => {
+        if (isSenseSelectorVisible) {
+            openedAtRef.current = Date.now();
+        }
+    }, [isSenseSelectorVisible]);
+
+    useEffect(() => {
+        if (!isSenseSelectorVisible || !panelRef?.current || isMobileLayout) return undefined;
+        const panelElement = panelRef.current;
+        const updatePanelSize = () => {
+            const rect = panelElement.getBoundingClientRect();
+            if (!rect.width || !rect.height) return;
+            setDesktopPanelSize({
+                width: Math.round(rect.width),
+                height: Math.round(rect.height)
+            });
+        };
+        updatePanelSize();
+        const resizeObserver = typeof ResizeObserver === 'function'
+            ? new ResizeObserver(() => updatePanelSize())
+            : null;
+        resizeObserver?.observe(panelElement);
+        window.addEventListener('resize', updatePanelSize);
+        window.visualViewport?.addEventListener('resize', updatePanelSize);
+        return () => {
+            resizeObserver?.disconnect();
+            window.removeEventListener('resize', updatePanelSize);
+            window.visualViewport?.removeEventListener('resize', updatePanelSize);
+        };
+    }, [isMobileLayout, isSenseSelectorVisible, panelRef]);
+
+    useEffect(() => {
+        if (!isSenseSelectorVisible) return undefined;
+        const handlePointerDown = (event) => {
+            if (Date.now() - openedAtRef.current < 180) return;
+            const panelElement = panelRef?.current;
+            if (panelElement && panelElement.contains(event.target)) return;
+            onClose?.();
+        };
+        document.addEventListener('pointerdown', handlePointerDown, true);
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown, true);
+        };
+    }, [isSenseSelectorVisible, onClose, panelRef]);
+
+    const selectorNode = liveSelectorNode || latchedSelectorNode || null;
+    const effectiveAnchor = (!isMobileLayout && senseSelectorAnchor?.visible)
+        ? senseSelectorAnchor
+        : latchedAnchor;
+
+    if (!isSupportedView) return null;
     if (!selectorNode) return null;
-    if (!isSenseSelectorVisible || !senseSelectorAnchor.visible) return null;
+    if (!isSenseSelectorVisible || (!isMobileLayout && !effectiveAnchor.visible)) return null;
 
     const selectorNodeId = normalizeObjectId(selectorNode?._id);
     const overviewNode = normalizeObjectId(senseSelectorOverviewNode?._id) === selectorNodeId
@@ -1354,16 +1290,38 @@ export const SenseSelectorPanel = ({
             ? masterAllianceRaw.flag.trim()
             : ''
     );
-    const panelStyle = {
-        left: `${senseSelectorAnchor.x}px`,
-        top: `${senseSelectorAnchor.y}px`,
+    const panelThemeStyle = {
         background: `linear-gradient(120deg, ${hexToRgba(style.primaryColor || '#1e293b', 0.76)} 0%, ${hexToRgba(style.secondaryColor || '#334155', 0.68)} 100%)`,
         borderColor: hexToRgba(style.rimColor || style.primaryColor || '#a855f7', 0.74),
         color: style.textColor || '#f8fafc'
     };
+    const desktopPanelStyle = (() => {
+        const viewportWidth = viewportSize.width;
+        const viewportHeight = viewportSize.height;
+        const panelWidth = Math.min(Math.max(420, Math.round(viewportWidth * 0.76)), Math.max(420, desktopPanelSize.width));
+        const panelHeight = Math.max(360, desktopPanelSize.height);
+        const minCenterX = SENSE_SELECTOR_EDGE_MARGIN + panelWidth / 2;
+        const maxCenterX = viewportWidth - SENSE_SELECTOR_EDGE_MARGIN - panelWidth / 2;
+        const minCenterY = SENSE_SELECTOR_EDGE_MARGIN + panelHeight / 2;
+        const maxCenterY = viewportHeight - SENSE_SELECTOR_EDGE_MARGIN - panelHeight / 2;
+        const preferredRightCenterX = effectiveAnchor.x + SENSE_SELECTOR_DESKTOP_GAP + panelWidth / 2;
+        const preferredLeftCenterX = effectiveAnchor.x - SENSE_SELECTOR_DESKTOP_GAP - panelWidth / 2;
+        let left = preferredRightCenterX;
+        if (preferredRightCenterX > maxCenterX) {
+            left = preferredLeftCenterX >= minCenterX
+                ? preferredLeftCenterX
+                : Math.min(maxCenterX, Math.max(minCenterX, effectiveAnchor.x));
+        }
+        const top = Math.min(maxCenterY, Math.max(minCenterY, effectiveAnchor.y));
+        return {
+            ...panelThemeStyle,
+            left: `${Math.round(left)}px`,
+            top: `${Math.round(top)}px`
+        };
+    })();
 
-    return (
-        <div ref={panelRef} className="sense-selector-panel" style={panelStyle}>
+    const detailContent = (
+        <>
             <div className="sense-selector-overview-header">
                 <button
                     type="button"
@@ -1506,6 +1464,58 @@ export const SenseSelectorPanel = ({
             {!senseSelectorOverviewLoading && senseSelectorOverviewError && (
                 <div className="sense-selector-overview-hint error">{senseSelectorOverviewError}</div>
             )}
+        </>
+    );
+
+    if (isMobileLayout) {
+        return (
+            <div
+                className="sense-selector-overlay is-mobile"
+                onPointerDown={(event) => {
+                    if (event.target === event.currentTarget) {
+                        onClose?.();
+                    }
+                }}
+            >
+                <section
+                    ref={panelRef}
+                    className="sense-selector-mobile-page"
+                    style={panelThemeStyle}
+                >
+                    <div className="sense-selector-mobile-bar">
+                        <button
+                            type="button"
+                            className="sense-selector-mobile-back"
+                            onClick={onClose}
+                            aria-label="返回"
+                        >
+                            <ChevronLeft size={20} />
+                        </button>
+                        <div className="sense-selector-mobile-bar-text">节点信息</div>
+                    </div>
+                    <div className="sense-selector-mobile-page__body">
+                        {detailContent}
+                    </div>
+                </section>
+            </div>
+        );
+    }
+
+    return (
+        <div
+            ref={panelRef}
+            className="sense-selector-panel sense-selector-panel--desktop"
+            style={desktopPanelStyle}
+        >
+            <button
+                type="button"
+                className="sense-selector-desktop-close"
+                onClick={onClose}
+                aria-label="关闭"
+            >
+                <X size={16} />
+            </button>
+            {detailContent}
         </div>
     );
 };

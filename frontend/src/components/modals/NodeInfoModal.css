@@ -244,6 +244,25 @@
     }
 }
 
+@media (max-width: 560px) {
+    .domain-master-apply-counter {
+        text-align: left;
+    }
+
+    .domain-master-apply-actions,
+    .modal-footer {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .enter-domain-btn {
+        width: 100%;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0.72rem 1rem;
+    }
+}
+
 .modal-footer {
     display: flex;
     justify-content: flex-end;

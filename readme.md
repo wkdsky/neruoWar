@@ -7,6 +7,8 @@ pm2 start server.js --name backend
 cd /home/wkd/neruoWar/frontend
 pm2 start npm --name frontend -- start
 
+47.121.137.149:38088
+
 游戏性设计启发：将常见的会让玩家明显带来收益或明显具有习惯性动作的操作可以绑定到一起
 
 用户职业系统：

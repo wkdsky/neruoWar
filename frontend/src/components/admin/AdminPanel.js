@@ -434,7 +434,7 @@ const AdminPanel = ({ initialTab = 'users', onPendingMasterApplyHandled, onCreat
     });
 
     return (
-        <div className="admin-section">
+        <div className="admin-section admin-section--shell">
             <h2 className="section-title-large">
                 <Users className="icon" />
                 管理员面板

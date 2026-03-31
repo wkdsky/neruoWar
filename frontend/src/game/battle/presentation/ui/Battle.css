@@ -1792,3 +1792,91 @@
     max-height: min(64vh, 520px);
   }
 }
+
+@media (max-width: 720px) {
+  .pve2-overlay {
+    --pve2-card-zone-top: 68px;
+    --pve2-card-zone-height: 132px;
+    --pve2-card-zone-width: calc(100vw - 16px);
+  }
+
+  .pve2-head {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px 10px;
+  }
+
+  .pve2-side-info {
+    grid-template-columns: 1fr;
+  }
+
+  .pve2-hud {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .pve2-hud-left,
+  .pve2-hud-right {
+    flex-wrap: wrap;
+  }
+
+  .pve2-card-strip.left,
+  .pve2-card-strip.right {
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+
+  .pve2-card-strip.right {
+    top: calc(var(--pve2-card-zone-top) + var(--pve2-card-zone-height) + 8px);
+  }
+
+  .pve2-action-pad {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+  }
+
+  .pve2-order-mode-group {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .pve2-order-mode-group .btn {
+    flex: 1 1 0;
+  }
+
+  .pve2-minimap-wrap {
+    right: 8px;
+    bottom: 96px;
+  }
+
+  .pve2-minimap {
+    width: 136px;
+    height: 88px;
+  }
+
+  .pve2-map-dial-wrap {
+    right: 8px;
+    bottom: 194px;
+  }
+
+  .pve2-map-dial {
+    width: 88px;
+    height: 88px;
+  }
+
+  .pve2-map-dial-core {
+    inset: 20px;
+  }
+
+  .pve2-map-dial-arrow-text {
+    font-size: 18px;
+  }
+
+  .pve2-runtime-debug,
+  .pve2-debug-merged-panel {
+    max-width: calc(100vw - 16px);
+    font-size: 10px;
+  }
+}

@@ -28,6 +28,7 @@ const renderKeywordHighlight = (text, rawQuery) => {
 
 const KnowledgeTopPanel = ({
   className = '',
+  mobileTopbarMode = false,
   eyebrow = 'Knowledge Domain Atlas',
   title = '知识域总览',
   stats = [],
@@ -45,7 +46,8 @@ const KnowledgeTopPanel = ({
   createButtonLabel = '创建新知识域',
   searchPlaceholder = '搜索标题或释义题目...（支持多关键词）'
 }) => {
-  const rootClassName = ['knowledge-top-panel', className].filter(Boolean).join(' ');
+  const rootClassName = ['knowledge-top-panel', mobileTopbarMode ? 'knowledge-top-panel--mobile-topbar' : '', className].filter(Boolean).join(' ');
+  const createButtonText = mobileTopbarMode ? '新建' : createButtonLabel;
   const visibleStats = Array.isArray(stats) ? stats.filter((item) => item && item.label) : [];
   const visibleResults = Array.isArray(searchResults) ? searchResults : [];
   const shouldShowCreateButton = showCreateButton && typeof onCreateNode === 'function';
@@ -122,10 +124,12 @@ const KnowledgeTopPanel = ({
                   <button
                     type="button"
                     onClick={onCreateNode}
-                    className="btn btn-success create-node-btn knowledge-top-panel__create-btn"
+                    className={`btn btn-success create-node-btn knowledge-top-panel__create-btn${mobileTopbarMode ? ' knowledge-top-panel__create-btn--mobile-quick' : ''}`}
+                    aria-label={createButtonLabel}
+                    title={createButtonLabel}
                   >
-                    <Plus size={18} />
-                    {createButtonLabel}
+                    <Plus size={18} className="knowledge-top-panel__create-icon" />
+                    <span className="knowledge-top-panel__create-label">{createButtonText}</span>
                   </button>
                 ) : null}
               </div>

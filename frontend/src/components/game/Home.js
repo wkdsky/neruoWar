@@ -1,15 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import HexDomainGrid from './HexDomainGrid';
 import KnowledgeTopPanel from './KnowledgeTopPanel';
+import { readResponsiveViewportMetrics } from '../../app/appShared';
 import {
   buildHomeSafeAreaInsets
 } from './hexUtils';
 import './Home.css';
 
-const readViewport = () => ({
-  width: typeof window === 'undefined' ? 1440 : window.innerWidth,
-  height: typeof window === 'undefined' ? 900 : window.innerHeight
-});
+const readViewport = () => {
+  const metrics = readResponsiveViewportMetrics();
+  return {
+    width: metrics.effectiveWidth,
+    height: metrics.effectiveHeight
+  };
+};
 
 const Home = ({
   webglCanvasRef,
@@ -40,7 +44,13 @@ const Home = ({
   useEffect(() => {
     const handleResize = () => setViewport(readViewport());
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    window.visualViewport?.addEventListener('resize', handleResize);
+    window.visualViewport?.addEventListener('scroll', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.visualViewport?.removeEventListener('resize', handleResize);
+      window.visualViewport?.removeEventListener('scroll', handleResize);
+    };
   }, []);
 
   const safeInsets = useMemo(
@@ -71,17 +81,12 @@ const Home = ({
         </div>
       </div>
 
-      <div className="navigation-sidebar">
-        <div className="nav-item active">
-          <span className="nav-label">首页</span>
-        </div>
-      </div>
-
       <div className="home-main-layer">
         <div className="home-content-stack">
           <div className="home-sticky-overview">
             <KnowledgeTopPanel
               className="home-knowledge-top-panel"
+              mobileTopbarMode
               title="知识域总览"
               stats={summaryStats}
               searchQuery={searchQuery}

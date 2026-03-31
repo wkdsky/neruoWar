@@ -130,32 +130,6 @@ const useNotificationCenter = ({
     }
   }, [getApiErrorMessage, notifications, parseApiResponse]);
 
-  const markAllNotificationsRead = useCallback(async () => {
-    const token = localStorage.getItem('token');
-    if (!token || notificationUnreadCount <= 0) return;
-
-    setIsMarkingAllRead(true);
-    try {
-      const response = await fetch(`${API_BASE}/notifications/read-all`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      const parsed = await parseApiResponse(response);
-      if (!response.ok || !parsed.data) {
-        return;
-      }
-
-      setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
-      setNotificationUnreadCount(0);
-    } catch (_error) {
-      // 忽略提示，避免打断用户
-    } finally {
-      setIsMarkingAllRead(false);
-    }
-  }, [notificationUnreadCount, parseApiResponse]);
-
   const markAnnouncementNotificationsRead = useCallback(async () => {
     const token = localStorage.getItem('token');
     if (!token || isMarkingAnnouncementsRead) return;
@@ -203,6 +177,56 @@ const useNotificationCenter = ({
     fetchNotifications,
     isAdmin,
     isMarkingAnnouncementsRead,
+    notifications
+  ]);
+
+  const markNonAnnouncementNotificationsRead = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token || isMarkingAllRead) return;
+
+    const unreadNotificationIds = notifications
+      .filter((notification) => (
+        !isAnnouncementNotification(notification)
+        && !notification.read
+        && notification._id
+      ))
+      .map((notification) => notification._id);
+
+    if (unreadNotificationIds.length === 0) {
+      return;
+    }
+
+    setIsMarkingAllRead(true);
+    setNotifications((prev) => prev.map((item) => (
+      !isAnnouncementNotification(item) ? { ...item, read: true } : item
+    )));
+    setNotificationUnreadCount((prev) => Math.max(0, prev - unreadNotificationIds.length));
+
+    try {
+      await Promise.all(unreadNotificationIds.map(async (notificationId) => {
+        const response = await fetch(`${API_BASE}/notifications/${notificationId}/read`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        if (!response.ok) {
+          throw new Error('标记通知已读失败');
+        }
+      }));
+    } catch (_error) {
+      await fetchNotifications(true);
+      if (isAdmin) {
+        await fetchAdminPendingNodeReminders(true);
+      }
+    } finally {
+      setIsMarkingAllRead(false);
+    }
+  }, [
+    fetchAdminPendingNodeReminders,
+    fetchNotifications,
+    isAdmin,
+    isMarkingAllRead,
     notifications
   ]);
 
@@ -344,7 +368,7 @@ const useNotificationCenter = ({
     fetchNotifications,
     fetchAdminPendingNodeReminders,
     markNotificationRead,
-    markAllNotificationsRead,
+    markAllNotificationsRead: markNonAnnouncementNotificationsRead,
     markAnnouncementNotificationsRead,
     clearNotifications,
     respondDomainAdminInvite,

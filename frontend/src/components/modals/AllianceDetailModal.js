@@ -977,7 +977,7 @@ const AllianceDetailModal = ({
             </div>
 
             <div className="alliance-section-detail">
-                <h3>知识域视觉样式</h3>
+                <h3>所属知识域统一样式</h3>
                 <div className="alliance-style-list">
                     {(alliance.visualStyles || []).map((styleItem) => {
                         const styleId = (styleItem?._id || '').toString();

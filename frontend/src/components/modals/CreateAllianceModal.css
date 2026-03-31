@@ -2,7 +2,37 @@
 /* Create Alliance Modal Specific Styles */
 
 .create-alliance-modal {
-    max-width: 600px;
+    max-width: 860px;
+}
+
+.create-alliance-inline-hint-slot {
+    min-height: 1.25rem;
+    margin-top: 0.38rem;
+    padding: 0 0.15rem;
+    font-size: 0.84rem;
+    line-height: 1.45;
+    color: transparent;
+    user-select: none;
+}
+
+.create-alliance-inline-hint-slot--success {
+    color: #86efac;
+    user-select: text;
+}
+
+.create-alliance-inline-hint-slot--muted {
+    color: #94a3b8;
+    user-select: text;
+}
+
+.create-alliance-inline-hint-slot--error {
+    color: #fda4af;
+    user-select: text;
+}
+
+.create-alliance-modal .modal-body {
+    padding-left: 1.4rem;
+    padding-right: 1.4rem;
 }
 
 .color-picker-group {
@@ -55,6 +85,18 @@
 
 .create-alliance-info li {
     margin-bottom: 0.25rem;
+}
+
+.create-alliance-style-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+}
+
+.create-alliance-random-btn {
+    min-width: 0;
+    white-space: nowrap;
 }
 
 .alliance-style-editor-grid {
@@ -111,6 +153,38 @@
 }
 
 @media (max-width: 700px) {
+    .create-alliance-modal {
+        max-width: 100%;
+    }
+
+    .create-alliance-modal .modal-body,
+    .create-alliance-modal .modal-header,
+    .create-alliance-modal .modal-footer {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .color-picker-group {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.7rem;
+    }
+
+    .flag-preview {
+        height: 64px;
+        font-size: 1rem;
+    }
+
+    .create-alliance-inline-hint-slot {
+        min-height: 1.15rem;
+        font-size: 0.78rem;
+    }
+
+    .create-alliance-style-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
     .alliance-style-editor-grid {
         grid-template-columns: 1fr;
     }

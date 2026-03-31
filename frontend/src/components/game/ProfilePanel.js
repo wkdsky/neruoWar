@@ -34,7 +34,7 @@ const femaleAvatars = [
     { id: 'default_female_3', src: defaultFemale3, label: '海洋之心' }
 ];
 
-const ProfilePanel = ({ username, onAvatarChange }) => {
+const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
     const [userInfo, setUserInfo] = useState(null);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('info'); // 'info', 'avatar', 'password'
@@ -207,6 +207,15 @@ const ProfilePanel = ({ username, onAvatarChange }) => {
                     <span className="profile-role">{getRoleDisplay(userInfo?.role)}</span>
                     <span className="profile-profession">【{userInfo?.profession}】</span>
                 </div>
+                {typeof onLogout === 'function' ? (
+                    <button
+                        type="button"
+                        className="profile-logout-btn"
+                        onClick={onLogout}
+                    >
+                        退出登录
+                    </button>
+                ) : null}
             </div>
 
             <div className="profile-tabs">
