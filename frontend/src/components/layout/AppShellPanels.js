@@ -1295,7 +1295,15 @@ export const SenseSelectorPanel = ({
         borderColor: hexToRgba(style.rimColor || style.primaryColor || '#a855f7', 0.74),
         color: style.textColor || '#f8fafc'
     };
+    const isHomeCenteredPanel = view === 'home';
     const desktopPanelStyle = (() => {
+        if (isHomeCenteredPanel) {
+            return {
+                ...panelThemeStyle,
+                left: '50%',
+                top: '50%'
+            };
+        }
         const viewportWidth = viewportSize.width;
         const viewportHeight = viewportSize.height;
         const panelWidth = Math.min(Math.max(420, Math.round(viewportWidth * 0.76)), Math.max(420, desktopPanelSize.width));
@@ -1504,7 +1512,7 @@ export const SenseSelectorPanel = ({
     return (
         <div
             ref={panelRef}
-            className="sense-selector-panel sense-selector-panel--desktop"
+            className={`sense-selector-panel sense-selector-panel--desktop${isHomeCenteredPanel ? ' is-home-centered' : ''}`}
             style={desktopPanelStyle}
         >
             <button

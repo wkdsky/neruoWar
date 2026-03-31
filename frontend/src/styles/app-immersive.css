@@ -296,6 +296,10 @@
     padding: 0.78rem 0.88rem;
 }
 
+.sense-selector-panel--desktop.is-home-centered {
+    transform: translate(-50%, -50%);
+}
+
 .sense-selector-mobile-bar {
     display: none;
 }
@@ -673,6 +677,11 @@
         max-height: min(64vh, 520px);
         border-radius: 18px;
         padding: 0.74rem 0.76rem;
+    }
+
+    .sense-selector-panel--desktop.is-home-centered {
+        top: 50% !important;
+        bottom: auto !important;
     }
 
     .sense-selector-overview-header {
