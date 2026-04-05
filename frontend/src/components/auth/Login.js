@@ -25,6 +25,29 @@ const renderInlineHint = (hint) => (
     </div>
 );
 
+const parseJsonResponse = async (response) => {
+    const rawText = await response.text();
+    let data = null;
+    let parseError = null;
+
+    try {
+        data = rawText ? JSON.parse(rawText) : null;
+    } catch (error) {
+        parseError = error;
+    }
+
+    return { data, rawText, parseError };
+};
+
+const getResponseErrorMessage = (parsed, fallback) => {
+    if (parsed?.data?.error) return parsed.data.error;
+    if (parsed?.data?.message) return parsed.data.message;
+    if (parsed?.parseError) {
+        return '服务返回了非 JSON 响应，请检查公网反代 /api 或 CORS 配置';
+    }
+    return fallback;
+};
+
 const Login = ({ onLogin }) => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -130,12 +153,13 @@ const Login = ({ onLogin }) => {
 
         try {
             const response = await fetch(`${API_BASE}/username-availability?username=${encodeURIComponent(normalizedUsername)}`);
-            const data = await response.json();
+            const parsed = await parseJsonResponse(response);
+            const data = parsed.data;
             if (usernameCheckRequestIdRef.current !== requestId) return;
-            if (!response.ok) {
+            if (!response.ok || !data) {
                 setUsernameCheckState({
                     status: 'error',
-                    message: data.error || '用户名检查失败',
+                    message: getResponseErrorMessage(parsed, '用户名检查失败'),
                     available: null
                 });
                 return;
@@ -163,11 +187,12 @@ const Login = ({ onLogin }) => {
                 body: JSON.stringify({ username, password })
             });
 
-            const data = await response.json();
-            if (response.ok) {
+            const parsed = await parseJsonResponse(response);
+            const data = parsed.data;
+            if (response.ok && data) {
                 onLogin(data);
             } else {
-                openNotice(data.error || '登录失败');
+                openNotice(getResponseErrorMessage(parsed, '登录失败'), { title: '登录失败' });
             }
         } catch (error) {
             openNotice('连接失败: ' + error.message, { title: '登录失败' });
@@ -200,8 +225,9 @@ const Login = ({ onLogin }) => {
                 body: JSON.stringify({ username: normalizedUsername, password })
             });
 
-            const data = await response.json();
-            if (response.ok) {
+            const parsed = await parseJsonResponse(response);
+            const data = parsed.data;
+            if (response.ok && data) {
                 openNotice('注册成功！请登录', {
                     title: '注册成功',
                     onClose: () => {
@@ -210,7 +236,7 @@ const Login = ({ onLogin }) => {
                     }
                 });
             } else {
-                if (data.error === '用户名已存在') {
+                if (data?.error === '用户名已存在') {
                     setUsernameCheckState({
                         status: 'taken',
                         message: '用户名已存在',
@@ -218,7 +244,7 @@ const Login = ({ onLogin }) => {
                     });
                     return;
                 }
-                openNotice(data.error || '注册失败', { title: '注册失败' });
+                openNotice(getResponseErrorMessage(parsed, '注册失败'), { title: '注册失败' });
             }
         } catch (error) {
             openNotice('连接失败: ' + error.message, { title: '注册失败' });
@@ -250,8 +276,9 @@ const Login = ({ onLogin }) => {
                 })
             });
 
-            const data = await response.json();
-            if (response.ok) {
+            const parsed = await parseJsonResponse(response);
+            const data = parsed.data;
+            if (response.ok && data) {
                 openNotice('密码修改成功！请使用新密码登录', {
                     title: '修改成功',
                     onClose: () => {
@@ -262,7 +289,7 @@ const Login = ({ onLogin }) => {
                     }
                 });
             } else {
-                openNotice(data.error || '密码修改失败', { title: '修改失败' });
+                openNotice(getResponseErrorMessage(parsed, '密码修改失败'), { title: '修改失败' });
             }
         } catch (error) {
             openNotice('连接失败: ' + error.message, { title: '修改失败' });

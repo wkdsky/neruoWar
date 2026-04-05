@@ -3,6 +3,12 @@
   top: clamp(176px, 20vh, 244px);
   right: max(10px, env(safe-area-inset-right));
   z-index: var(--app-shell-z-dock, 36800);
+  pointer-events: none;
+}
+
+.utility-dock-buttons {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -23,6 +29,7 @@
   top: 0;
   right: calc(100% + 10px);
   width: var(--utility-panel-width, 344px);
+  z-index: 1;
   opacity: 0;
   transform: translate3d(14px, 0, 0);
   pointer-events: none;
@@ -45,6 +52,7 @@
 
 .utility-dock-trigger {
   position: relative;
+  z-index: 2;
   pointer-events: auto;
   width: 58px;
   min-height: 112px;
@@ -174,10 +182,17 @@
 
 @media (max-width: 920px) {
   .utility-dock-rail {
+    --utility-dock-mobile-rail-width: 46px;
+    --utility-dock-mobile-panel-gap: 12px;
     top: auto;
     bottom: calc(env(safe-area-inset-bottom) + 6.2rem);
     right: max(10px, env(safe-area-inset-right));
+    width: var(--utility-dock-mobile-rail-width);
+  }
+
+  .utility-dock-buttons {
     gap: 0.42rem;
+    width: 100%;
   }
 
   .utility-dock-row + .utility-dock-row {
@@ -185,15 +200,24 @@
   }
 
   .utility-dock-panel-slot {
-    position: fixed;
+    position: absolute;
     top: auto !important;
-    right: 12px;
-    left: 12px;
-    bottom: calc(env(safe-area-inset-bottom) + 8.1rem);
-    width: auto !important;
+    left: auto;
+    right: calc(100% + var(--utility-dock-mobile-panel-gap));
+    bottom: 0;
+    width: min(
+      var(--utility-panel-width, 344px),
+      calc(
+        100vw
+        - max(12px, env(safe-area-inset-left))
+        - max(10px, env(safe-area-inset-right))
+        - var(--utility-dock-mobile-rail-width)
+        - var(--utility-dock-mobile-panel-gap)
+      )
+    ) !important;
     max-height: calc(100dvh - env(safe-area-inset-bottom) - 10rem);
     overflow: hidden;
-    transform: translate3d(0, 18px, 0);
+    transform: translate3d(14px, 0, 0);
   }
 
   .utility-dock-trigger {
@@ -246,14 +270,24 @@
 
 @media (max-width: 720px) {
   .utility-dock-rail {
+    --utility-dock-mobile-rail-width: 42px;
+    --utility-dock-mobile-panel-gap: 10px;
     bottom: calc(env(safe-area-inset-bottom) + 6rem);
     right: max(8px, env(safe-area-inset-right));
+    width: var(--utility-dock-mobile-rail-width);
   }
 
   .utility-dock-panel-slot {
-    left: 8px;
-    right: 8px;
-    bottom: calc(env(safe-area-inset-bottom) + 7.7rem);
+    width: min(
+      var(--utility-panel-width, 344px),
+      calc(
+        100vw
+        - max(8px, env(safe-area-inset-left))
+        - max(8px, env(safe-area-inset-right))
+        - var(--utility-dock-mobile-rail-width)
+        - var(--utility-dock-mobile-panel-gap)
+      )
+    ) !important;
   }
 
   .utility-dock-trigger {

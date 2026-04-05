@@ -8,9 +8,28 @@ echo "========================================="
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$PROJECT_DIR/backend"
 FRONTEND_DIR="$PROJECT_DIR/frontend"
+ROOT_ENV_FILE="${NEUROWAR_ENV_FILE:-$PROJECT_DIR/.env}"
 
 export PATH="$HOME/.local/bin:$PATH"
 export PM2_HOME="${PM2_HOME:-$HOME/.pm2}"
+
+load_env_file_if_present() {
+    local env_file="$1"
+    if [ ! -f "$env_file" ]; then
+        return 0
+    fi
+
+    set -a
+    # shellcheck disable=SC1090
+    . "$env_file"
+    set +a
+}
+
+load_runtime_env_defaults() {
+    load_env_file_if_present "$ROOT_ENV_FILE"
+}
+
+load_runtime_env_defaults
 
 MONGO_PORT="${MONGO_PORT:-27017}"
 DEFAULT_MONGO_BIN="$HOME/.local/bin/mongod"
@@ -22,10 +41,11 @@ MONGO_DB_PATH="${MONGO_DB_PATH:-$HOME/.local/share/mongodb/data}"
 MONGO_LOG_DIR="${MONGO_LOG_DIR:-$HOME/.local/share/mongodb/log}"
 MONGO_LOG_PATH="${MONGO_LOG_PATH:-$MONGO_LOG_DIR/mongod.log}"
 MONGO_PM2_NAME="${MONGO_PM2_NAME:-neurowar-mongodb}"
-BACKEND_DEFAULT_PORT="${BACKEND_DEFAULT_PORT:-5001}"
-FRONTEND_DEFAULT_PORT="${FRONTEND_DEFAULT_PORT:-3001}"
+BACKEND_DEFAULT_PORT="${BACKEND_DEFAULT_PORT:-${PORT:-5001}}"
+FRONTEND_DEFAULT_PORT="${FRONTEND_DEFAULT_PORT:-${FRONTEND_PORT:-3001}}"
 MAX_PORT_SCAN_STEPS="${MAX_PORT_SCAN_STEPS:-2000}"
 MONGODB_URI_ENV="${MONGODB_URI:-mongodb://localhost:${MONGO_PORT}/strategy-game}"
+LOCAL_BIND_HOST="${LOCAL_BIND_HOST:-127.0.0.1}"
 
 FORCE_RESET_ADMIN=false
 CLEAR_DOMAINS=false
@@ -43,6 +63,7 @@ print_usage() {
 
 说明:
   - 默认无参数启动时，只重启 MongoDB / 前端 / 后端服务，不修改数据库内容。
+  - `start.sh` 仅用于本机访问：前后端默认绑定 `127.0.0.1`，不开放公网入口。
   - 仅当传入 --init-db 时，才会在数据库为空时执行基础注入（目录配置 + 管理员 + 用户字段初始化）。
 EOF
 }
@@ -495,10 +516,6 @@ BACKEND_PUBLIC_ORIGIN="http://127.0.0.1:${BACKEND_PORT}"
 FRONTEND_LOCALHOST_ORIGIN="http://localhost:${FRONTEND_PORT}"
 FRONTEND_LOOPBACK_ORIGIN="http://127.0.0.1:${FRONTEND_PORT}"
 FRONTEND_ALLOWED_ORIGINS="${FRONTEND_LOCALHOST_ORIGIN},${FRONTEND_LOOPBACK_ORIGIN}"
-EXTRA_FRONTEND_ORIGINS="${EXTRA_FRONTEND_ORIGINS:-}"
-if [ -n "$EXTRA_FRONTEND_ORIGINS" ]; then
-    FRONTEND_ALLOWED_ORIGINS="${FRONTEND_ALLOWED_ORIGINS},${EXTRA_FRONTEND_ORIGINS}"
-fi
 
 if [ "$BACKEND_PORT" != "$BACKEND_DEFAULT_PORT" ]; then
     echo "后端默认端口 ${BACKEND_DEFAULT_PORT} 已占用，切换为 ${BACKEND_PORT}"
@@ -510,6 +527,8 @@ fi
 echo "启动后端服务..."
 cd "$BACKEND_DIR"
 PORT="$BACKEND_PORT" \
+BIND_HOST="$LOCAL_BIND_HOST" \
+NODE_ENV="development" \
 PUBLIC_ORIGIN="$BACKEND_PUBLIC_ORIGIN" \
 FRONTEND_ORIGIN="$FRONTEND_ALLOWED_ORIGINS" \
 CORS_ORIGINS="$FRONTEND_ALLOWED_ORIGINS" \
@@ -521,6 +540,8 @@ sleep 3
 echo "启动前端服务..."
 cd "$FRONTEND_DIR"
 PORT="$FRONTEND_PORT" \
+HOST="$LOCAL_BIND_HOST" \
+BACKEND_PROXY_TARGET="$BACKEND_PUBLIC_ORIGIN" \
 REACT_APP_BACKEND_ORIGIN="$BACKEND_PUBLIC_ORIGIN" \
 pm2 start npm --name neurowar-frontend -- start >/dev/null
 
@@ -532,6 +553,7 @@ echo "Frontend actual origin: ${FRONTEND_LOOPBACK_ORIGIN}"
 echo "Backend actual origin:  ${BACKEND_PUBLIC_ORIGIN}"
 echo "API_BASE:               ${BACKEND_PUBLIC_ORIGIN}/api"
 echo "WebSocket endpoint:     ${BACKEND_PUBLIC_ORIGIN}"
+echo "Access mode:            local-only (${LOCAL_BIND_HOST})"
 echo "MongoDB:   mongodb://localhost:${MONGO_PORT}/strategy-game"
 echo "========================================="
 echo "查看日志:"

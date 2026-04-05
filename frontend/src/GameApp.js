@@ -74,6 +74,7 @@ const LocationSelectionModal = lazy(() => import('./LocationSelectionModal'));
 const SenseArticleViewRouter = lazy(() => import('./components/senseArticle/SenseArticleViewRouter'));
 const AppOverlays = lazy(() => import('./components/layout/AppOverlays'));
 const SystemConfirmDialog = lazy(() => import('./components/common/SystemConfirmDialog'));
+const KnowledgeBrocadeWorkspacePage = lazy(() => import('./components/knowledgeBrocade/KnowledgeBrocadeWorkspacePage'));
 
 const PRIMARY_NAVIGATION_TIMEOUT_MS = 10000;
 const PRIMARY_NAVIGATION_RETRY_DELAYS_MS = [250, 700];
@@ -181,6 +182,9 @@ const App = () => {
     // 首页相关状态
     const [rootNodes, setRootNodes] = useState([]);
     const [featuredNodes, setFeaturedNodes] = useState([]);
+    const [isJinzhiDockExpanded, setIsJinzhiDockExpanded] = useState(false);
+    const [activeJinzhiBrocadeId, setActiveJinzhiBrocadeId] = useState('');
+    const [activeJinzhiBrocadeName, setActiveJinzhiBrocadeName] = useState('');
 
     // 节点详情页面相关状态
     const [currentNodeDetail, setCurrentNodeDetail] = useState(null);
@@ -1164,6 +1168,24 @@ const App = () => {
     setIsRequestsModalOpen(true);
   }, [setActiveSidebarTab, setIsChatDockExpanded, setIsRequestsModalOpen]);
 
+  const handleJinzhiBrocadeDeleted = useCallback((deletedBrocadeId = '') => {
+    const normalizedId = normalizeObjectId(deletedBrocadeId);
+    if (!normalizedId) return;
+    if (normalizedId === activeJinzhiBrocadeId) {
+      setActiveJinzhiBrocadeId('');
+      setActiveJinzhiBrocadeName('');
+      if (view === 'jinzhi') {
+        setView('home');
+      }
+    }
+  }, [activeJinzhiBrocadeId, view]);
+
+  const handleJinzhiMetaChange = useCallback((brocade) => {
+    const brocadeId = normalizeObjectId(brocade?._id);
+    if (!brocadeId || brocadeId !== activeJinzhiBrocadeId) return;
+    setActiveJinzhiBrocadeName(typeof brocade?.name === 'string' ? brocade.name : '');
+  }, [activeJinzhiBrocadeId]);
+
   useEffect(() => {
     if (!isChatDockExpanded && isRequestsModalOpen) {
       setIsRequestsModalOpen(false);
@@ -1199,6 +1221,9 @@ const App = () => {
     setShowAssociationModal(false);
     setViewingAssociationNode(null);
     setShowCreateNodeModal(false);
+    setIsJinzhiDockExpanded(false);
+    setActiveJinzhiBrocadeId('');
+    setActiveJinzhiBrocadeName('');
     setSenseSelectorSourceNode(null);
     setSenseSelectorSourceSceneNodeId('');
     setSenseSelectorAnchor({ x: 0, y: 0, visible: false });
@@ -1665,6 +1690,16 @@ const App = () => {
         setView,
         setNavigationPath
     });
+
+    const handleOpenJinzhiWorkspace = useCallback(async (brocade) => {
+        const brocadeId = normalizeObjectId(brocade?._id);
+        if (!brocadeId) return;
+        await prepareForPrimaryNavigation();
+        setIsJinzhiDockExpanded(false);
+        setActiveJinzhiBrocadeId(brocadeId);
+        setActiveJinzhiBrocadeName(typeof brocade?.name === 'string' ? brocade.name : '');
+        setView('jinzhi');
+    }, [prepareForPrimaryNavigation]);
 
     const {
         fetchTitleStarMap,
@@ -2570,6 +2605,12 @@ const App = () => {
                     setMessageDockTab={setMessageDockTab}
                     isChatDockExpanded={isChatDockExpanded}
                     setIsChatDockExpanded={setIsChatDockExpanded}
+                    isJinzhiDockExpanded={isJinzhiDockExpanded}
+                    setIsJinzhiDockExpanded={setIsJinzhiDockExpanded}
+                    activeJinzhiBrocadeId={activeJinzhiBrocadeId}
+                    onOpenJinzhiWorkspace={handleOpenJinzhiWorkspace}
+                    onJinzhiBrocadeDeleted={handleJinzhiBrocadeDeleted}
+                    onJinzhiBrocadeMetaChange={handleJinzhiMetaChange}
                     chatBadgeCount={chatBadgeCount}
                     chatPanelProps={{
                       activeSidebarTab,
@@ -2828,6 +2869,16 @@ const App = () => {
                         <TrainingGroundPanel onExit={navigateToHomeWithDockCollapse} />
                     </Suspense>
                 )}
+                {view === "jinzhi" && (
+                    <Suspense fallback={null}>
+                        <KnowledgeBrocadeWorkspacePage
+                            activeBrocadeId={activeJinzhiBrocadeId}
+                            initialBrocadeName={activeJinzhiBrocadeName}
+                            onBack={navigateToHomeWithDockCollapse}
+                            onBrocadeMetaChange={handleJinzhiMetaChange}
+                        />
+                    </Suspense>
+                )}
 
                 {view !== "home" &&
                  !(view === "nodeDetail" && currentNodeDetail) &&
@@ -2838,6 +2889,7 @@ const App = () => {
                  !(view === "army" && !isAdmin) &&
                  !(view === "equipment" && !isAdmin) &&
                  !(view === "trainingGround" && !isAdmin) &&
+                 view !== "jinzhi" &&
                  !isSenseArticleSubView(view) && (
                     <div className="no-pending-nodes">
                         <p>页面状态异常，已为你回退到首页</p>

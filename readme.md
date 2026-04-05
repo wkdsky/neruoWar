@@ -96,6 +96,170 @@ pm2命令：
 
 pm2 restart neurowar-backend neurowar-frontend
 
+------------------------------
+启动与部署
+------------------------------
+
+### 1. 本地开发启动
+
+根目录脚本：
+- [start.sh](/home/wkd/neruoWar/start.sh)
+
+功能：
+- 自动检查并启动 MongoDB
+- 自动查找空闲后端端口
+- 自动查找空闲前端端口
+- 启动 `neurowar-backend` / `neurowar-frontend`
+- 自动把前端开发代理指向当前实际后端端口
+
+常用命令：
+```bash
+./start.sh
+./start.sh --force-reset-admin
+./start.sh --clear-domains
+./start.sh --clear-domains --force-reset-admin
+```
+
+启动完成后会输出：
+- Frontend actual origin
+- Backend actual origin
+- API_BASE
+- WebSocket endpoint
+
+说明：
+- `start.sh` 已支持“后端端口被占用时自动顺延到空闲端口”。
+- 前端开发代理不会再写死到 `5001`，而是跟随 `start.sh` 选中的实际后端端口。
+
+### 2. 生产构建与后端启动
+
+脚本：
+- [deploy/start-production.sh](/home/wkd/neruoWar/deploy/start-production.sh)
+
+功能：
+- 默认读取根目录 `.env`
+- 构建前端生产包
+- 用 `pm2` 启动后端生产进程
+
+典型执行方式：
+```bash
+BACKEND_ENV_FILE=/home/wkd/neruoWar/.env ./deploy/start-production.sh
+```
+
+### 3. nginx 一键部署
+
+根目录脚本：
+- [start-nginx.sh](/home/wkd/neruoWar/start-nginx.sh)
+
+这是当前推荐的“整站一键部署脚本”，放在和 `start.sh` 同级目录。
+
+功能：
+- 自动创建或更新根目录 `.env`
+- 自动写入 `PUBLIC_HOST / PUBLIC_PORT / PUBLIC_SCHEME`
+- 同时兼容写入 `PUBLIC_ORIGIN / FRONTEND_ORIGIN / CORS_ORIGINS / SOCKET_CORS_ORIGINS`
+- 可选覆盖后端生产端口
+- 先执行前端生产构建和后端启动
+- 检查系统是否已安装 `nginx`
+- 若未安装，自动尝试安装 `nginx`
+- 检查 `nginx` 是否已启动
+- 已启动则刷新配置，未启动则启动
+- 根据根目录 `.env` 渲染 nginx 配置模板并安装
+
+支持两种输入方式：
+- 命令参数
+- 交互输入
+
+命令示例：
+```bash
+./start-nginx.sh --ip 47.121.137.149 --port 8088
+./start-nginx.sh --domain example.com --port 443 --scheme https
+./start-nginx.sh --ip 47.121.137.149 --port 8088 --backend-port 5007
+```
+
+直接运行：
+```bash
+./start-nginx.sh
+```
+
+如果没有传 `ip / port`：
+- 脚本会先尝试自动探测公网 IP
+- 若仍不完整，则在终端里提示输入
+- 交互提示会提醒你把公网 IP/端口固化到根目录 `.env`
+
+支持参数：
+```text
+--ip <ip-or-domain>         公网访问 IP 或域名
+--domain <domain>           公网域名（等价于 --ip）
+--port <port>               公网访问端口
+--scheme <http|https>       公网协议，默认 http
+--backend-port <port>       可选，覆盖后端生产端口
+--https-cert <path>         HTTPS 证书路径
+--https-key <path>          HTTPS 私钥路径
+--env-file <path>           指定后端生产环境文件
+```
+
+说明：
+- 当 `--scheme https` 时，需要同时提供证书和私钥路径，或者这些值已经存在于根目录 `.env`。
+- 默认会通过 `sudo` 执行系统级安装和 nginx 服务管理，因此运行脚本的用户需要具备 sudo 权限。
+
+### 4. nginx 相关脚本
+
+底层脚本：
+- [deploy/install-nginx-site.sh](/home/wkd/neruoWar/deploy/install-nginx-site.sh)
+- [deploy/nginx/neurowar.conf](/home/wkd/neruoWar/deploy/nginx/neurowar.conf)
+
+说明：
+- `deploy/nginx/neurowar.conf` 现在是模板，不再写死公网端口和后端回源端口。
+- `deploy/install-nginx-site.sh` 会读取根目录 `.env` 中的：
+  - `PUBLIC_HOST`
+  - `PUBLIC_PORT`
+  - `PUBLIC_SCHEME`
+  - `PORT`
+  - `BIND_HOST`
+  - `NGINX_SCHEME`
+  - `NGINX_SSL_CERT_PATH`
+  - `NGINX_SSL_KEY_PATH`
+- 再生成最终的 `/etc/nginx/conf.d/neurowar.conf`
+
+### 5. 生产环境文件约定
+
+推荐使用：
+- [deploy/env/neurowar.env.example](/home/wkd/neruoWar/deploy/env/neurowar.env.example)
+
+统一环境文件建议至少确认这些字段：
+```env
+PORT=5001
+FRONTEND_PORT=3001
+BIND_HOST=127.0.0.1
+PUBLIC_HOST=47.121.137.149
+PUBLIC_PORT=8088
+PUBLIC_SCHEME=http
+JWT_SECRET=replace-with-a-strong-secret
+```
+
+HTTPS 示例：
+```env
+PUBLIC_SCHEME=https
+NGINX_SSL_CERT_PATH=/etc/letsencrypt/live/example/fullchain.pem
+NGINX_SSL_KEY_PATH=/etc/letsencrypt/live/example/privkey.pem
+```
+
+### 6. 推荐流程
+
+本地开发：
+```bash
+./start.sh
+```
+
+生产一键部署：
+```bash
+./start-nginx.sh
+```
+
+如果你已经准备好参数并希望无交互执行：
+```bash
+./start-nginx.sh --ip 47.121.137.149 --port 8088
+```
+
 git remote set-url origin https://github.com/wkdsky/neruoWar.git
 git config --global --unset http.proxy
 git config --global --unset https.proxy
@@ -231,7 +395,8 @@ PVE攻占部署流程（当前实现约束）
 
 示例（新增 unitType）：
 ```bash
-curl -X POST http://localhost:5000/api/admin/army/unit-types \
+API_BASE="${API_BASE:-http://127.0.0.1:${PORT:-5001}/api}"
+curl -X POST "$API_BASE/admin/army/unit-types" \
   -H "Authorization: Bearer <ADMIN_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -253,7 +418,8 @@ curl -X POST http://localhost:5000/api/admin/army/unit-types \
 
 示例（软下线）：
 ```bash
-curl -X PUT http://localhost:5000/api/admin/army/unit-types/u_custom_demo_t1 \
+API_BASE="${API_BASE:-http://127.0.0.1:${PORT:-5001}/api}"
+curl -X PUT "$API_BASE/admin/army/unit-types/u_custom_demo_t1" \
   -H "Authorization: Bearer <ADMIN_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"enabled": false}'
@@ -262,16 +428,19 @@ curl -X PUT http://localhost:5000/api/admin/army/unit-types/u_custom_demo_t1 \
 生效验证：
 1. 兵营端点：
 ```bash
-curl http://localhost:5000/api/army/unit-types
+API_BASE="${API_BASE:-http://127.0.0.1:${PORT:-5001}/api}"
+curl "$API_BASE/army/unit-types"
 ```
 2. 训练营端点（需 token）：
 ```bash
-curl http://localhost:5000/api/army/training/init \
+API_BASE="${API_BASE:-http://127.0.0.1:${PORT:-5001}/api}"
+curl "$API_BASE/army/training/init" \
   -H "Authorization: Bearer <USER_TOKEN>"
 ```
 3. 围城 PVE 初始化（需 token + 有效 nodeId + gateKey）：
 ```bash
-curl "http://localhost:5000/api/nodes/<nodeId>/siege/pve/battle-init?gateKey=cheng" \
+API_BASE="${API_BASE:-http://127.0.0.1:${PORT:-5001}/api}"
+curl "$API_BASE/nodes/<nodeId>/siege/pve/battle-init?gateKey=cheng" \
   -H "Authorization: Bearer <USER_TOKEN>"
 ```
 

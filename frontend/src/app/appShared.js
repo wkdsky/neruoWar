@@ -40,6 +40,7 @@ export const resolveAvatarSrc = (avatarKey = '') => {
 };
 
 export const PAGE_STATE_STORAGE_KEY = 'app:lastPageState';
+export const AUTH_EXPIRED_EVENT = 'app:auth-expired';
 export const isDevEnvironment = process.env.NODE_ENV !== 'production';
 export const SENSE_EDITOR_PREVIEW_RESIZE_CLASS = 'sense-editor-preview-resizing';
 export const LOCALHOST_STORAGE_RESET_KEY = 'app:localhostStorageResetVersion';

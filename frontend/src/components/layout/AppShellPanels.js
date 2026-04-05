@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bell, ChevronLeft, Home, Layers, MapPin, MessagesSquare, Shield, Star, User, Users, X } from 'lucide-react';
+import { Bell, ChevronLeft, Home, Layers, MapPin, MessagesSquare, Network, Shield, Star, User, Users, X } from 'lucide-react';
 import './AppShell.css';
 import {
     avatarMap,
@@ -20,6 +20,7 @@ import ChatDockPanel from '../chat/ChatDockPanel';
 import CurrentDomainPanel from '../game/CurrentDomainPanel';
 import MessageDockPanel from '../game/MessageDockPanel';
 import RightUtilityDock from '../game/RightUtilityDock';
+import KnowledgeBrocadeDockPanel from '../knowledgeBrocade/KnowledgeBrocadeDockPanel';
 import { useUserCard } from '../social/UserCardContext';
 
 const readIsMobileShell = () => readIsMobileViewport();
@@ -386,6 +387,12 @@ export const UnifiedRightDock = ({
     openAdminPanel,
     isChatDockExpanded,
     setIsChatDockExpanded,
+    isJinzhiDockExpanded,
+    setIsJinzhiDockExpanded,
+    activeJinzhiBrocadeId,
+    onOpenJinzhiWorkspace,
+    onJinzhiBrocadeDeleted,
+    onJinzhiBrocadeMetaChange,
     chatBadgeCount,
     chatPanelProps,
     isMarkingAnnouncementsRead,
@@ -417,6 +424,7 @@ export const UnifiedRightDock = ({
         setIsAnnouncementDockExpanded(false);
         setIsChatDockExpanded(false);
         setIsLocationDockExpanded(false);
+        setIsJinzhiDockExpanded(false);
     };
 
     const shouldRenderLocationDock = !isKnowledgeDomainActive;
@@ -425,7 +433,9 @@ export const UnifiedRightDock = ({
         ? 'message'
         : isChatDockExpanded
             ? 'chat'
-            : (shouldRenderLocationDock && isLocationDockExpanded ? 'domain' : '');
+            : isJinzhiDockExpanded
+                ? 'jinzhi'
+                : (shouldRenderLocationDock && isLocationDockExpanded ? 'domain' : '');
 
     const toggleExclusiveDock = (target) => {
         const isCurrentlyActive = activeDockSectionId === target;
@@ -437,6 +447,7 @@ export const UnifiedRightDock = ({
         setIsAnnouncementDockExpanded(nextAnnouncementOpen);
         setIsChatDockExpanded(nextChatOpen);
         setIsLocationDockExpanded(nextLocationOpen);
+        setIsJinzhiDockExpanded(target === 'jinzhi' && !isCurrentlyActive);
     };
 
     const canJumpToLocationView = Boolean(
@@ -593,6 +604,24 @@ export const UnifiedRightDock = ({
                 <ChatDockPanel
                     {...chatPanelProps}
                     onClose={() => setIsChatDockExpanded(false)}
+                />
+            )
+        },
+        {
+            id: 'jinzhi',
+            label: '知识锦',
+            icon: Network,
+            active: activeDockSectionId === 'jinzhi',
+            panelWidth: 440,
+            onToggle: () => toggleExclusiveDock('jinzhi'),
+            panel: (
+                <KnowledgeBrocadeDockPanel
+                    isOpen={activeDockSectionId === 'jinzhi'}
+                    activeBrocadeId={activeJinzhiBrocadeId}
+                    onClose={() => setIsJinzhiDockExpanded(false)}
+                    onOpenWorkspace={onOpenJinzhiWorkspace}
+                    onBrocadeDeleted={onJinzhiBrocadeDeleted}
+                    onBrocadeMetaChange={onJinzhiBrocadeMetaChange}
                 />
             )
         },
@@ -837,6 +866,12 @@ export const AppShellChrome = ({
     respondDomainAdminInvite,
     isChatDockExpanded,
     setIsChatDockExpanded,
+    isJinzhiDockExpanded,
+    setIsJinzhiDockExpanded,
+    activeJinzhiBrocadeId,
+    onOpenJinzhiWorkspace,
+    onJinzhiBrocadeDeleted,
+    onJinzhiBrocadeMetaChange,
     chatBadgeCount,
     chatPanelProps,
     isMarkingAnnouncementsRead,
@@ -1046,10 +1081,16 @@ export const AppShellChrome = ({
             markAllNotificationsRead={markAllNotificationsRead}
             respondDomainAdminInvite={respondDomainAdminInvite}
             openAdminPanel={openAdminPanel}
-            isChatDockExpanded={isChatDockExpanded}
-            setIsChatDockExpanded={setIsChatDockExpanded}
-            chatBadgeCount={chatBadgeCount}
-            chatPanelProps={chatPanelProps}
+                isChatDockExpanded={isChatDockExpanded}
+                setIsChatDockExpanded={setIsChatDockExpanded}
+                isJinzhiDockExpanded={isJinzhiDockExpanded}
+                setIsJinzhiDockExpanded={setIsJinzhiDockExpanded}
+                activeJinzhiBrocadeId={activeJinzhiBrocadeId}
+                onOpenJinzhiWorkspace={onOpenJinzhiWorkspace}
+                onJinzhiBrocadeDeleted={onJinzhiBrocadeDeleted}
+                onJinzhiBrocadeMetaChange={onJinzhiBrocadeMetaChange}
+                chatBadgeCount={chatBadgeCount}
+                chatPanelProps={chatPanelProps}
             isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
             announcementUnreadCount={announcementUnreadCount}
             markAnnouncementNotificationsRead={markAnnouncementNotificationsRead}

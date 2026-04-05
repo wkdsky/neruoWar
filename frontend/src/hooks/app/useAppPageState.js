@@ -145,7 +145,7 @@ const useAppPageState = ({
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
     if (view === 'login') return;
 
-    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround'].includes(view)
+    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround', 'jinzhi'].includes(view)
       || isSenseArticleSubView(view);
     if (!isKnownView) {
       if (isDevEnvironment) {

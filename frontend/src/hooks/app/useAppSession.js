@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { API_BASE } from '../../runtimeConfig';
 import {
+  AUTH_EXPIRED_EVENT,
   LOCAL_DEVELOPMENT_HOSTS,
   LOCALHOST_STORAGE_RESET_KEY,
   LOCALHOST_STORAGE_RESET_VERSION,
@@ -220,6 +221,19 @@ const useAppSession = ({
       isRestoringPageRef.current = false;
     }
   }, [authenticated, hasRestoredPageRef, isRestoringPageRef]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const handleAuthExpired = () => {
+      resetStoredSessionState();
+    };
+
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+    return () => {
+      window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+    };
+  }, [resetStoredSessionState]);
 
   const handleLoginSuccess = async (data) => {
     resetAppNavigationStateToHome({ clearHomeCollections: true });

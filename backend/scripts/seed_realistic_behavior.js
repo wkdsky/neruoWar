@@ -2,7 +2,8 @@
 
 require('dotenv').config();
 
-const DEFAULT_BASE_URL = process.env.SEED_BASE_URL || 'http://localhost:5000';
+const DEFAULT_PORT = String(process.env.PORT || process.env.BACKEND_DEFAULT_PORT || '5001').trim() || '5001';
+const DEFAULT_BASE_URL = process.env.SEED_BASE_URL || process.env.PUBLIC_ORIGIN || `http://127.0.0.1:${DEFAULT_PORT}`;
 const DEFAULT_ADMIN_USERNAME = process.env.SEED_ADMIN_USERNAME || 'admin';
 const DEFAULT_ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD || '123456';
 const DEFAULT_COMMON_PASSWORD = process.env.SEED_COMMON_PASSWORD || 'seed123456';
@@ -50,7 +51,7 @@ if (hasFlag('--help') || hasFlag('-h')) {
   node scripts/seed_realistic_behavior.js [options]
 
 选项:
-  --base-url <url>           后端地址，默认 http://localhost:5000
+  --base-url <url>           后端地址，默认读取 SEED_BASE_URL / PUBLIC_ORIGIN / PORT
   --admin-username <name>    管理员用户名，默认 admin
   --admin-password <pwd>     管理员密码，默认 123456
   --common-password <pwd>    普通用户密码，默认 seed123456

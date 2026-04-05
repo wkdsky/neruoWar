@@ -1,0 +1,168 @@
+.jinzhi-dock-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  max-height: min(78vh, 780px);
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(7, 12, 22, 0.92));
+  box-shadow:
+    0 24px 48px rgba(2, 6, 23, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+}
+
+.jinzhi-dock-panel__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.jinzhi-dock-panel__header h3 {
+  margin: 0.18rem 0 0;
+  font-size: 1.28rem;
+  color: #f8fafc;
+}
+
+.jinzhi-dock-panel__header p {
+  margin: 0.3rem 0 0;
+  color: rgba(203, 213, 225, 0.88);
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
+.jinzhi-dock-panel__eyebrow {
+  color: rgba(125, 211, 252, 0.92);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.jinzhi-dock-panel__actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+.jinzhi-dock-icon-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.52);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.jinzhi-dock-icon-btn.is-danger {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+.jinzhi-dock-panel__create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.6rem;
+}
+
+.jinzhi-dock-panel__create input,
+.jinzhi-dock-card__rename input {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.62);
+  color: #f8fafc;
+  padding: 0.72rem 0.78rem;
+  outline: none;
+}
+
+.jinzhi-dock-panel__body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.jinzhi-dock-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.jinzhi-dock-panel__empty,
+.jinzhi-dock-panel__error {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.38);
+  padding: 0.85rem 0.95rem;
+  color: rgba(203, 213, 225, 0.92);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.jinzhi-dock-panel__error {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+.jinzhi-dock-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  padding: 0.8rem 0.86rem;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.44);
+}
+
+.jinzhi-dock-card.is-active {
+  border-color: rgba(125, 211, 252, 0.44);
+  background: rgba(8, 47, 73, 0.42);
+}
+
+.jinzhi-dock-card__main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.jinzhi-dock-card__title {
+  color: #f8fafc;
+  font-size: 1rem;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.jinzhi-dock-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: rgba(191, 219, 254, 0.88);
+  font-size: 0.76rem;
+}
+
+.jinzhi-dock-card__actions,
+.jinzhi-dock-card__rename-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.jinzhi-dock-card__rename {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+@media (max-width: 920px) {
+  .jinzhi-dock-panel {
+    max-height: 100%;
+    border-radius: 22px;
+  }
+}

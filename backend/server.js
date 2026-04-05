@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const http = require('http');
 const path = require('path');
@@ -25,6 +27,7 @@ const senseArticleRoutes = require('./routes/senseArticles');
 const usersRoutes = require('./routes/users');
 const socialRoutes = require('./routes/social');
 const chatRoutes = require('./routes/chat');
+const knowledgeBrocadeRoutes = require('./routes/knowledgeBrocades');
 const { getUserSocketRoom, setSocketServer } = require('./services/socketGateway');
 // 初始化Express
 const app = express();
@@ -112,16 +115,76 @@ const isPrivateDevelopmentOrigin = (origin = '') => {
   return Boolean(parsed && (isLocalhostHost(parsed.hostname) || isPrivateIpv4Host(parsed.hostname)));
 };
 
-const createCorsOriginValidator = (allowList = []) => (origin, callback) => {
+const getPrimaryHeaderValue = (value = '') => (
+  String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .find(Boolean)
+    || ''
+);
+
+const resolveRequestOrigin = (req) => {
+  if (!req || typeof req !== 'object') return '';
+
+  const forwardedHost = getPrimaryHeaderValue(req.headers?.['x-forwarded-host']);
+  const host = forwardedHost || getPrimaryHeaderValue(req.headers?.host);
+  if (!host) return '';
+
+  const forwardedProto = getPrimaryHeaderValue(req.headers?.['x-forwarded-proto']);
+  const protocol = forwardedProto
+    || (typeof req.protocol === 'string' && req.protocol)
+    || (req.connection?.encrypted ? 'https' : 'http');
+
+  try {
+    return new URL(`${protocol}://${host}`).origin;
+  } catch (_error) {
+    return '';
+  }
+};
+
+const hasExplicitPortInHostHeader = (value = '') => {
+  const safeValue = getPrimaryHeaderValue(value);
+  if (!safeValue) return false;
+  if (safeValue.startsWith('[')) {
+    return /\]:\d+$/.test(safeValue);
+  }
+  const parts = safeValue.split(':');
+  return parts.length > 1;
+};
+
+const isSameRequestHostOrigin = (origin, req) => {
+  const requestOrigin = resolveRequestOrigin(req);
+  const parsedOrigin = parseOrigin(origin);
+  const parsedRequestOrigin = parseOrigin(requestOrigin);
+
+  if (!parsedOrigin || !parsedRequestOrigin) return false;
+  const sameProtocol = parsedOrigin.protocol === parsedRequestOrigin.protocol;
+  const sameHostname = parsedOrigin.hostname === parsedRequestOrigin.hostname;
+  if (!sameProtocol || !sameHostname) {
+    return false;
+  }
+
+  if (parsedOrigin.port === parsedRequestOrigin.port) {
+    return true;
+  }
+
+  const forwardedHost = getPrimaryHeaderValue(req.headers?.['x-forwarded-host']);
+  const host = forwardedHost || getPrimaryHeaderValue(req.headers?.host);
+  if (!hasExplicitPortInHostHeader(host)) {
+    return true;
+  }
+
+  return false;
+};
+
+const isOriginAllowedWithoutRequest = (origin, allowList = []) => {
   const expandedAllowList = expandOriginAliases(allowList);
   if (isOriginAllowed(origin, expandedAllowList)) {
-    callback(null, true);
-    return;
+    return true;
   }
 
   if (isDevelopmentEnvironment && isPrivateDevelopmentOrigin(origin)) {
-    callback(null, true);
-    return;
+    return true;
   }
 
   const requestOrigin = parseOrigin(origin);
@@ -133,9 +196,30 @@ const createCorsOriginValidator = (allowList = []) => (origin, callback) => {
   });
 
   if (allowByLocalhostTemplate) {
-    callback(null, true);
+    return true;
+  }
+  return false;
+};
+
+const isOriginAllowedForRequest = (origin, req, allowList = []) => {
+  if (!origin) return true;
+  if (isOriginAllowedWithoutRequest(origin, allowList)) return true;
+  if (!isDevelopmentEnvironment && isSameRequestHostOrigin(origin, req)) {
+    return true;
+  }
+  return false;
+};
+
+const createCorsOptionsDelegate = (allowList = []) => (req, callback) => {
+  const origin = req.header('Origin');
+  if (isOriginAllowedForRequest(origin, req, allowList)) {
+    callback(null, {
+      origin: origin || false,
+      credentials: true
+    });
     return;
   }
+
   callback(new Error(`CORS origin not allowed: ${origin}`));
 };
 
@@ -153,9 +237,13 @@ const expandedCorsOrigins = expandOriginAliases(corsOrigins);
 // 初始化Socket.IO
 const io = socketIo(server, {
   cors: {
-    origin: createCorsOriginValidator(socketCorsOrigins),
+    origin: (_origin, callback) => callback(null, true),
     methods: ["GET", "POST"],
     credentials: true
+  },
+  allowRequest: (req, callback) => {
+    const origin = getPrimaryHeaderValue(req.headers?.origin);
+    callback(null, isOriginAllowedForRequest(origin, req, socketCorsOrigins));
   },
   transports: ['websocket', 'polling'], // 添加这行
   allowEIO3: true, // 添加这行，兼容旧版本
@@ -165,10 +253,9 @@ const io = socketIo(server, {
 setSocketServer(io);
 
 // 中间件
-app.use(cors({
-  origin: createCorsOriginValidator(corsOrigins),
-  credentials: true
-}));
+app.use((req, res, next) => {
+  cors(createCorsOptionsDelegate(corsOrigins))(req, res, next);
+});
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use('/uploads/sense-article-media', express.static(path.join(__dirname, 'uploads', 'sense-article-media')));
@@ -183,6 +270,7 @@ app.use('/api/sense-articles', senseArticleRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/social', socialRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/knowledge-brocades', knowledgeBrocadeRoutes);
 
 // 错误处理中间件 - 必须放在所有路由之后
 app.use((err, req, res, next) => {
@@ -198,6 +286,13 @@ app.use((err, req, res, next) => {
       code: 'PAYLOAD_TOO_LARGE',
       message: 'Request body too large',
       limit: '10mb'
+    });
+  }
+
+  if (typeof err?.message === 'string' && err.message.startsWith('CORS origin not allowed:')) {
+    return res.status(403).json({
+      error: '跨域来源未授权',
+      origin: req.get('origin') || ''
     });
   }
 
@@ -564,7 +659,7 @@ if (!ENABLE_LEGACY_ADMIN_RESIGN_TICK && !ENABLE_LEGACY_DISTRIBUTION_TICK && ENAB
 }
 
 // 启动服务
-const PORT = process.env.PORT || 5000;
+const PORT = Number.parseInt(process.env.PORT || process.env.BACKEND_DEFAULT_PORT || '', 10) || 5001;
 const SERVER_BIND_HOST = typeof process.env.BIND_HOST === 'string' && process.env.BIND_HOST.trim()
   ? process.env.BIND_HOST.trim()
   : '';
@@ -583,7 +678,8 @@ const handleServerStart = () => {
   if (isDevelopmentEnvironment) {
     console.log(`开发态 CORS: 允许 localhost / 127.0.0.1 / ::1 的任意端口`);
   } else {
-    console.log(`生产态 CORS allowList: ${expandedCorsOrigins.join(', ')}`);
+    console.log(`生产态 CORS allowList: ${expandedCorsOrigins.join(', ') || '(empty)'}`);
+    console.log(`生产态 CORS: 额外允许反代同源请求按 Host / X-Forwarded-Host 自适应通过`);
   }
   console.log(`========================================`);
 };
