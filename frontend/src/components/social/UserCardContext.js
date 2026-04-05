@@ -26,6 +26,7 @@ export const UserCardProvider = ({
   children,
   currentUserId = '',
   friends = [],
+  blockedUsers = [],
   friendRequests = {},
   conversationActionId = '',
   friendActionId = '',
@@ -93,7 +94,8 @@ export const UserCardProvider = ({
       user: cardUser,
       currentUserId,
       friends,
-      friendRequests
+      friendRequests,
+      blockedUsers
     });
     const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 720;
@@ -109,6 +111,7 @@ export const UserCardProvider = ({
     const isFriend = friendStatus === 'friend';
     const isPendingSent = friendStatus === 'pending_sent';
     const isPendingReceived = friendStatus === 'pending_received';
+    const isBlocked = friendStatus === 'blocked';
     const isSelf = friendStatus === 'self';
 
     return createPortal(
@@ -136,7 +139,7 @@ export const UserCardProvider = ({
             <button
               type="button"
               className="btn btn-primary btn-small"
-              disabled={conversationActionId === `open:${cardUser?._id}` || isSelf}
+              disabled={conversationActionId === `open:${cardUser?._id}` || isSelf || isBlocked}
               onClick={() => handleSendMessage(cardUser)}
             >
               {conversationActionId === `open:${cardUser?._id}` ? '打开中...' : '发消息'}
@@ -144,6 +147,8 @@ export const UserCardProvider = ({
 
             {isSelf ? (
               <span className="global-user-card__tag">本人</span>
+            ) : isBlocked ? (
+              <span className="global-user-card__tag">黑名单中</span>
             ) : isFriend ? (
               <span className="global-user-card__tag">已是好友</span>
             ) : isPendingSent ? (

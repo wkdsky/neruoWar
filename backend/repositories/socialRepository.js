@@ -101,6 +101,17 @@ const listAcceptedFriendshipsForUser = async (userId) => {
     .lean();
 };
 
+const listBlockedFriendshipsForUser = async (userId) => {
+  const safeId = getIdString(userId);
+  if (!isValidObjectId(safeId)) return [];
+  return Friendship.find({
+    requesterId: toObjectId(safeId),
+    status: 'blocked'
+  })
+    .sort({ respondedAt: -1, updatedAt: -1, createdAt: -1 })
+    .lean();
+};
+
 const listFriendshipsByParticipantsKeys = async (keys = []) => {
   const safeKeys = Array.from(new Set((Array.isArray(keys) ? keys : []).filter(Boolean)));
   if (safeKeys.length === 0) return [];
@@ -121,6 +132,7 @@ module.exports = {
   findUserById,
   findUsersByIds,
   listAcceptedFriendshipsForUser,
+  listBlockedFriendshipsForUser,
   listFriendshipsByParticipantsKeys,
   listPendingFriendshipsForUser,
   searchUsersByKeyword

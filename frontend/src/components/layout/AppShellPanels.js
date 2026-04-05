@@ -598,7 +598,7 @@ export const UnifiedRightDock = ({
             icon: MessagesSquare,
             badge: chatBadgeCount > 0 ? (chatBadgeCount > 99 ? '99+' : String(chatBadgeCount)) : null,
             active: activeDockSectionId === 'chat',
-            panelWidth: 520,
+            panelWidth: '70vw',
             onToggle: () => toggleExclusiveDock('chat'),
             panel: (
                 <ChatDockPanel

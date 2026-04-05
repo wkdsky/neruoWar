@@ -25,7 +25,8 @@ export const resolveUserFriendStatus = ({
   user,
   currentUserId,
   friends = [],
-  friendRequests = {}
+  friendRequests = {},
+  blockedUsers = []
 }) => {
   const targetUserId = getUserId(user);
   if (!targetUserId) return 'none';
@@ -37,6 +38,11 @@ export const resolveUserFriendStatus = ({
   const safeFriends = Array.isArray(friends) ? friends : [];
   if (safeFriends.some((item) => getUserId(item?.user) === targetUserId)) {
     return 'friend';
+  }
+
+  const safeBlockedUsers = Array.isArray(blockedUsers) ? blockedUsers : [];
+  if (safeBlockedUsers.some((item) => getUserId(item?.user) === targetUserId)) {
+    return 'blocked';
   }
 
   const received = Array.isArray(friendRequests?.received) ? friendRequests.received : [];

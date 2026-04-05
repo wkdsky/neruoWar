@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const Conversation = require('../models/Conversation');
 const ConversationMember = require('../models/ConversationMember');
+const GroupInvitation = require('../models/GroupInvitation');
 const Message = require('../models/Message');
 const { getIdString, isValidObjectId } = require('../services/socialChatService');
 
@@ -208,6 +209,44 @@ const findMessageByClientMessageId = async ({
 
 const createMessage = async (doc) => Message.create(doc);
 
+const findGroupInvitationById = async (invitationId) => {
+  const safeId = getIdString(invitationId);
+  if (!isValidObjectId(safeId)) return null;
+  return GroupInvitation.findById(safeId);
+};
+
+const findGroupInvitationByConversationAndInvitee = async ({
+  conversationId,
+  inviteeId
+}) => GroupInvitation.findOne({
+  conversationId: toObjectId(conversationId),
+  inviteeId: toObjectId(inviteeId)
+});
+
+const listGroupInvitationsByInvitee = async ({
+  inviteeId,
+  status = null
+}) => GroupInvitation.find({
+  inviteeId: toObjectId(inviteeId),
+  ...(status ? { status } : {})
+})
+  .sort({ updatedAt: -1, createdAt: -1 })
+  .lean();
+
+const createGroupInvitation = async (doc) => GroupInvitation.create(doc);
+
+const countMessagesByConversationAndSender = async ({
+  conversationId,
+  senderId,
+  createdAfter = null,
+  afterSeq = 0
+}) => Message.countDocuments({
+  conversationId: toObjectId(conversationId),
+  senderId: toObjectId(senderId),
+  ...(afterSeq > 0 ? { seq: { $gt: afterSeq } } : {}),
+  ...(createdAfter ? { createdAt: { $gte: new Date(createdAfter) } } : {})
+});
+
 const listMessagesForConversationView = async ({
   conversationId,
   clearedBeforeSeq = 0,
@@ -239,14 +278,19 @@ const findLatestVisibleMessage = async ({
 
 module.exports = {
   allocateNextConversationSeq,
+  countMessagesByConversationAndSender,
+  createGroupInvitation,
   createConversation,
   createMessage,
   ensureConversationMember,
   findConversationById,
   findConversationMember,
   findDirectConversationByKey,
+  findGroupInvitationByConversationAndInvitee,
+  findGroupInvitationById,
   findLatestVisibleMessage,
   findMessageByClientMessageId,
+  listGroupInvitationsByInvitee,
   listConversationMembersByConversationId,
   listConversationMembersByConversationIds,
   listConversationMembersByUser,

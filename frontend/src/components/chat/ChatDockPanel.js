@@ -22,6 +22,15 @@ import {
 } from '../social/userCardUtils';
 import './ChatDockPanel.css';
 
+const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
+
+const normalizeConversationId = (value) => {
+  const normalizedValue = typeof value === 'string'
+    ? value.trim()
+    : value?.toString?.().trim?.() || '';
+  return OBJECT_ID_PATTERN.test(normalizedValue) ? normalizedValue : '';
+};
+
 const formatRelativeDateTime = (value) => {
   if (!value) return '';
   const date = new Date(value);
@@ -47,20 +56,21 @@ const formatRelativeDateTime = (value) => {
 const SidebarTabButton = ({
   active = false,
   badge = '',
+  badgeTone = 'default',
   icon: Icon,
   label,
   onClick
 }) => (
   <button
     type="button"
-    className={`chat-dock-tab-btn${active ? ' is-active' : ''}`}
+    className={`chat-dock-tab-btn${active ? ' is-active' : ''}${badge ? ` has-badge has-badge--${badgeTone}` : ''}`}
     onClick={onClick}
   >
     <span className="chat-dock-tab-btn__main">
       <span className="chat-dock-tab-btn__icon">{Icon ? <Icon size={15} strokeWidth={2} /> : null}</span>
       <span>{label}</span>
     </span>
-    {badge ? <span className="chat-dock-tab-btn__badge">{badge}</span> : null}
+    {badge ? <span className={`chat-dock-tab-btn__badge chat-dock-tab-btn__badge--${badgeTone}`}>{badge}</span> : null}
   </button>
 );
 
@@ -86,25 +96,37 @@ const ChatDockPanel = ({
   friendSearchQuery,
   friendSearchResults = [],
   friends = [],
+  blockedUsers = [],
   groupActionId,
   groupDetailLoading,
   groups = [],
+  groupInviteActionId,
+  groupInviteListLoading,
+  groupInviteSearchLoading,
+  groupInviteSearchQuery = '',
+  groupInviteSearchResults = [],
+  groupInvites = {},
   loadOlderMessages,
-  onAddGroupMembers,
+  onBlockUser,
   onClose,
   onCreateGroupConversation,
   onDeleteConversation,
   onFriendSearchQueryChange,
+  onInviteGroupMembers,
   onLeaveGroupConversation,
   onOpenConversation,
   onOpenDirectConversation,
   onOpenGroupDetail,
+  onRemoveFriend,
   onRemoveGroupMember,
   onRespondFriendRequest,
+  onRespondGroupInvitation,
   onSearchUsers,
+  onSearchGroupInviteUsers,
   onSendFriendRequest,
   onSendMessage,
   onTransferGroupOwnership,
+  onUnblockUser,
   onUpdateGroupConversation,
   isRequestsModalOpen,
   panelNotice = '',
@@ -115,17 +137,21 @@ const ChatDockPanel = ({
   selectedGroupId = '',
   selectedMessagesEntry,
   setActiveSidebarTab,
+  setGroupInviteSearchQuery,
   setIsRequestsModalOpen,
   setSelectedGroupId
 }) => {
   const [draftMessage, setDraftMessage] = useState('');
   const [showNewMessageHint, setShowNewMessageHint] = useState(false);
   const [isCreateGroupMode, setIsCreateGroupMode] = useState(false);
+  const [isGroupInviteModalOpen, setIsGroupInviteModalOpen] = useState(false);
+  const [groupInviteModalMode, setGroupInviteModalMode] = useState('outbound');
   const [newGroupTitle, setNewGroupTitle] = useState('');
   const [newGroupAnnouncement, setNewGroupAnnouncement] = useState('');
-  const [newGroupMemberIds, setNewGroupMemberIds] = useState([]);
   const [groupTitleDraft, setGroupTitleDraft] = useState('');
   const [groupAnnouncementDraft, setGroupAnnouncementDraft] = useState('');
+  const [friendRequestDraft, setFriendRequestDraft] = useState('');
+  const [friendRequestTarget, setFriendRequestTarget] = useState(null);
   const messagesViewportRef = useRef(null);
   const previousConversationIdRef = useRef('');
   const previousLastMessageKeyRef = useRef('');
@@ -136,7 +162,24 @@ const ChatDockPanel = ({
   const isGroupsTab = activeSidebarTab === 'groups';
   const receivedRequests = Array.isArray(friendRequests.received) ? friendRequests.received : [];
   const sentRequests = Array.isArray(friendRequests.sent) ? friendRequests.sent : [];
+  const receivedGroupInvites = Array.isArray(groupInvites?.received) ? groupInvites.received : [];
+  const blockedRows = useMemo(() => (Array.isArray(blockedUsers) ? blockedUsers : []), [blockedUsers]);
   const hasRequestInfo = receivedRequests.length > 0 || sentRequests.length > 0;
+  const unreadConversationCount = useMemo(
+    () => conversations.reduce((sum, item) => sum + Math.max(0, Number(item?.unreadCount) || 0), 0),
+    [conversations]
+  );
+  const unreadGroupCount = useMemo(
+    () => groups.reduce((sum, item) => sum + Math.max(0, Number(item?.unreadCount) || 0), 0),
+    [groups]
+  );
+  const conversationTabBadge = unreadConversationCount > 0
+    ? String(unreadConversationCount > 99 ? '99+' : unreadConversationCount)
+    : '';
+  const friendsTabBadge = receivedRequests.length > 0
+    ? String(receivedRequests.length > 99 ? '99+' : receivedRequests.length)
+    : '';
+  const isFriendRequestComposerOpen = Boolean(friendRequestTarget?._id);
   const selectedMessages = useMemo(
     () => (Array.isArray(selectedMessagesEntry?.rows) ? selectedMessagesEntry.rows : []),
     [selectedMessagesEntry?.rows]
@@ -155,10 +198,19 @@ const ChatDockPanel = ({
         user: selectedConversation.directUser,
         currentUserId,
         friends,
-        friendRequests
+        friendRequests,
+        blockedUsers: blockedRows
       })
       : 'none'
-  ), [currentUserId, friendRequests, friends, selectedConversation?.directUser]);
+  ), [blockedRows, currentUserId, friendRequests, friends, selectedConversation?.directUser]);
+  const isUserBlockedByCurrentUser = (userId) => (
+    blockedRows.some((item) => String(item?.user?._id || '') === String(userId || ''))
+  );
+  const selectedConversationBlockedByCurrentUser = useMemo(() => (
+    blockedRows.some((item) => (
+      String(item?.user?._id || '') === String(selectedConversation?.directUser?._id || '')
+    ))
+  ), [blockedRows, selectedConversation?.directUser?._id]);
 
   const selectedGroup = useMemo(() => (
     selectedGroupDetail?.group || null
@@ -166,18 +218,19 @@ const ChatDockPanel = ({
   const selectedGroupConversation = useMemo(() => (
     selectedGroupDetail?.conversation || null
   ), [selectedGroupDetail]);
+  const selectedGroupConversationId = useMemo(() => (
+    normalizeConversationId(
+      selectedGroup?.conversationId
+      || selectedGroupConversation?.conversationId
+      || selectedGroupId
+    )
+  ), [selectedGroup?.conversationId, selectedGroupConversation?.conversationId, selectedGroupId]);
   const selectedGroupMembers = useMemo(() => (
     Array.isArray(selectedGroup?.members) ? selectedGroup.members : []
   ), [selectedGroup?.members]);
   const selectedGroupMemberIdSet = useMemo(() => (
     new Set(selectedGroupMembers.map((item) => String(item?.userId || '')))
   ), [selectedGroupMembers]);
-
-  const createGroupCandidateRows = useMemo(() => (
-    friends
-      .map((item) => item?.user || null)
-      .filter((item) => item?._id && String(item._id) !== String(currentUserId || ''))
-  ), [currentUserId, friends]);
 
   const availableGroupInviteRows = useMemo(() => (
     friends
@@ -190,18 +243,74 @@ const ChatDockPanel = ({
     setGroupAnnouncementDraft(selectedGroup?.announcement || '');
   }, [selectedGroup?.announcement, selectedGroup?.title]);
 
-  useEffect(() => {
-    if (!isGroupsTab) return;
-    setIsCreateGroupMode(!selectedGroupId);
-  }, [isGroupsTab, selectedGroupId]);
+  const openFriendRequestComposer = (user = null) => {
+    const targetUserId = user?._id || '';
+    if (!targetUserId) return;
+    setFriendRequestTarget({
+      _id: targetUserId,
+      username: user?.username || '该用户'
+    });
+    setFriendRequestDraft('');
+  };
+
+  const closeFriendRequestComposer = () => {
+    setFriendRequestTarget(null);
+    setFriendRequestDraft('');
+  };
+
+  const submitFriendRequest = async () => {
+    const targetUserId = friendRequestTarget?._id || '';
+    const message = friendRequestDraft.trim();
+    if (!targetUserId || !message) return;
+    const result = await onSendFriendRequest(targetUserId, message);
+    if (result) {
+      closeFriendRequestComposer();
+    }
+  };
+
+  const handleOpenFriendRequestComposer = async (user = null) => {
+    const targetUserId = user?._id || '';
+    if (!targetUserId) return;
+    if (isUserBlockedByCurrentUser(targetUserId)) {
+      const confirmed = window.confirm(`你已将「${user?.username || '该用户'}」加入黑名单。是否先解除拉黑，再继续发送好友申请？`);
+      if (!confirmed) return;
+      const unblocked = await onUnblockUser(targetUserId);
+      if (!unblocked) return;
+    }
+    openFriendRequestComposer(user);
+  };
+
+  const handleRemoveFriend = async (friendship = {}) => {
+    const friendshipId = friendship?.friendshipId || '';
+    const username = friendship?.user?.username || '该好友';
+    if (!friendshipId) return;
+    const confirmed = window.confirm(`确认删除好友「${username}」吗？删除后双方仍可通过私聊进行最多三条临时聊天。`);
+    if (!confirmed) return;
+    await onRemoveFriend(friendshipId);
+  };
+
+  const handleBlockTarget = async ({ targetUserId = '', friendshipId = '', username = '该用户' } = {}) => {
+    if (!targetUserId && !friendshipId) return;
+    const confirmed = window.confirm(`确认将「${username}」加入黑名单吗？之后对方的好友申请和临时消息都会被拒绝。`);
+    if (!confirmed) return;
+    await onBlockUser({ targetUserId, friendshipId });
+  };
 
   const handleSubmitMessage = async () => {
     if (!selectedConversation?.conversationId) return;
     const message = draftMessage.trim();
     if (!message) return;
+    if (selectedConversationFriendStatus === 'blocked') {
+      if (!selectedConversationBlockedByCurrentUser) return;
+      const targetUserId = selectedConversation?.directUser?._id || '';
+      const confirmed = window.confirm(`你已将「${selectedConversation?.title || '对方'}」加入黑名单。是否先解除拉黑并继续发送这条消息？`);
+      if (!confirmed) return;
+      const unblocked = await onUnblockUser(targetUserId);
+      if (!unblocked) return;
+    }
 
     const sent = await onSendMessage(selectedConversation.conversationId, message);
-    if (sent) {
+    if (sent?.message) {
       setDraftMessage('');
     }
   };
@@ -277,6 +386,28 @@ const ChatDockPanel = ({
     setIsRequestsModalOpen(false);
   };
 
+  const openGroupInviteModal = (mode = 'outbound') => {
+    const nextMode = mode === 'received' ? 'received' : 'outbound';
+    if (nextMode === 'outbound' && !selectedGroupConversationId) {
+      return;
+    }
+    setGroupInviteModalMode(nextMode);
+    setIsGroupInviteModalOpen(true);
+  };
+
+  const closeGroupInviteModal = () => {
+    setIsGroupInviteModalOpen(false);
+    setGroupInviteModalMode('outbound');
+    setGroupInviteSearchQuery('');
+  };
+
+  useEffect(() => {
+    if (!isGroupInviteModalOpen || groupInviteModalMode !== 'outbound' || selectedGroupConversationId) return;
+    setIsGroupInviteModalOpen(false);
+    setGroupInviteModalMode('outbound');
+    setGroupInviteSearchQuery('');
+  }, [groupInviteModalMode, isGroupInviteModalOpen, selectedGroupConversationId, setGroupInviteSearchQuery]);
+
   const renderAvatarTrigger = (user, size = 40, options = {}) => {
     const targetUserId = getUserId(user);
     const disabled = !targetUserId || targetUserId === String(currentUserId || '');
@@ -306,54 +437,46 @@ const ChatDockPanel = ({
     );
   };
 
-  const toggleCreateGroupMember = (userId) => {
-    setNewGroupMemberIds((prev) => (
-      prev.includes(userId)
-        ? prev.filter((item) => item !== userId)
-        : [...prev, userId]
-    ));
-  };
-
   const handleCreateGroup = async () => {
     const result = await onCreateGroupConversation({
       title: newGroupTitle,
       announcement: newGroupAnnouncement,
-      memberUserIds: newGroupMemberIds
+      memberUserIds: []
     });
     if (!result?.group?.conversationId) return;
     setIsCreateGroupMode(false);
     setNewGroupTitle('');
     setNewGroupAnnouncement('');
-    setNewGroupMemberIds([]);
   };
 
   const handleOpenGroupDetail = async (conversationId) => {
+    const safeConversationId = normalizeConversationId(conversationId);
+    if (!safeConversationId) return;
     setIsCreateGroupMode(false);
-    setSelectedGroupId(conversationId);
-    await onOpenGroupDetail(conversationId);
+    setSelectedGroupId(safeConversationId);
+    await onOpenGroupDetail(safeConversationId);
   };
 
   const handleOpenGroupConversation = async () => {
-    const conversationId = selectedGroup?.conversationId || selectedGroupConversation?.conversationId || '';
-    if (!conversationId) return;
+    if (!selectedGroupConversationId) return;
     setIsCreateGroupMode(false);
-    await onOpenConversation(conversationId);
+    await onOpenConversation(selectedGroupConversationId);
   };
 
   const handleSaveGroupSettings = async () => {
-    if (!selectedGroup?.conversationId) return;
+    if (!selectedGroupConversationId) return;
     await onUpdateGroupConversation({
-      conversationId: selectedGroup.conversationId,
+      conversationId: selectedGroupConversationId,
       title: groupTitleDraft,
       announcement: groupAnnouncementDraft
     });
   };
 
   const handleLeaveGroup = async () => {
-    if (!selectedGroup?.conversationId) return;
+    if (!selectedGroupConversationId) return;
     const confirmed = window.confirm(`确认退出群聊「${selectedGroup.title || '未命名群聊'}」吗？`);
     if (!confirmed) return;
-    await onLeaveGroupConversation(selectedGroup.conversationId);
+    await onLeaveGroupConversation(selectedGroupConversationId);
     setIsCreateGroupMode(false);
   };
 
@@ -458,14 +581,31 @@ const ChatDockPanel = ({
             {selectedConversation?.directUser && selectedConversationFriendStatus !== 'friend' ? (
               <div className="chat-dock-relationship-banner">
                 <div className="chat-dock-relationship-banner__text">
-                  {selectedConversationFriendStatus === 'pending_sent'
+                  {selectedConversationFriendStatus === 'blocked'
+                    ? selectedConversationBlockedByCurrentUser
+                      ? `你已将 ${selectedConversation?.title || '对方'} 加入黑名单。若要继续发送消息或申请好友，需要先解除拉黑。`
+                      : `${selectedConversation?.title || '对方'} 已将你加入黑名单，当前无法发送好友申请或临时消息。`
+                    : selectedConversationFriendStatus === 'pending_sent'
                     ? `你已经向 ${selectedConversation?.title || '对方'} 发送了好友申请，当前仍可继续聊天。`
                     : selectedConversationFriendStatus === 'pending_received'
                       ? `${selectedConversation?.title || '对方'} 已向你发送好友申请，当前仍可继续聊天。`
                       : `你和 ${selectedConversation?.title || '对方'} 还不是好友，当前仍可直接聊天。`}
                 </div>
                 <div className="chat-dock-relationship-banner__actions">
-                  {selectedConversationFriendStatus === 'pending_received' ? (
+                  {selectedConversationFriendStatus === 'blocked' ? (
+                    selectedConversationBlockedByCurrentUser ? (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        disabled={friendActionId === `unblock:${selectedConversation?.directUser?._id}`}
+                        onClick={() => handleOpenFriendRequestComposer(selectedConversation?.directUser)}
+                      >
+                        {friendActionId === `unblock:${selectedConversation?.directUser?._id}` ? '处理中...' : '解除拉黑并加好友'}
+                      </button>
+                    ) : (
+                      <span className="chat-user-card__tag">对方已拉黑你</span>
+                    )
+                  ) : selectedConversationFriendStatus === 'pending_received' ? (
                     <button
                       type="button"
                       className="btn btn-secondary btn-small"
@@ -478,7 +618,7 @@ const ChatDockPanel = ({
                       type="button"
                       className="btn btn-secondary btn-small"
                       disabled={friendActionId === `request:${selectedConversation?.directUser?._id}`}
-                      onClick={() => onSendFriendRequest(selectedConversation?.directUser?._id)}
+                      onClick={() => handleOpenFriendRequestComposer(selectedConversation?.directUser)}
                     >
                       {friendActionId === `request:${selectedConversation?.directUser?._id}` ? '发送中...' : '加好友'}
                     </button>
@@ -524,10 +664,14 @@ const ChatDockPanel = ({
                 return (
                   <div key={item?._id || `${item?.conversationId}:${item?.seq}`} className={`chat-message-row${isSelf ? ' is-self' : ''}`}>
                     {!isSelf ? <UserAvatar user={item?.sender} size={32} /> : null}
-                    <div className={`chat-message-bubble${isSelf ? ' is-self' : ''}`}>
-                      {!isSelf ? <div className="chat-message-bubble__sender">{item?.sender?.username || '对方'}</div> : null}
+                    <div className={`chat-message-stack${isSelf ? ' is-self' : ''}`}>
+                      <div className={`chat-message-meta-row${isSelf ? ' is-self' : ''}`}>
+                        {!isSelf ? <div className="chat-message-bubble__sender">{item?.sender?.username || '对方'}</div> : null}
+                        <div className="chat-message-meta-time">{formatRelativeDateTime(item?.createdAt)}</div>
+                      </div>
+                      <div className={`chat-message-bubble${isSelf ? ' is-self' : ''}`}>
                       <div className="chat-message-bubble__content">{item?.content || ''}</div>
-                      <div className="chat-message-bubble__meta">{formatRelativeDateTime(item?.createdAt)}</div>
+                      </div>
                     </div>
                   </div>
                 );
@@ -556,12 +700,21 @@ const ChatDockPanel = ({
                     handleSubmitMessage();
                   }
                 }}
-                placeholder="输入消息，Enter 发送，Shift + Enter 换行"
+                disabled={selectedConversationFriendStatus === 'blocked' && !selectedConversationBlockedByCurrentUser}
+                placeholder={selectedConversationFriendStatus === 'blocked'
+                  ? selectedConversationBlockedByCurrentUser
+                    ? '发送时会先提示你解除拉黑'
+                    : '对方已将你拉黑，无法发送临时消息'
+                  : '输入消息，Enter 发送，Shift + Enter 换行'}
               />
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={conversationActionId === `send:${selectedConversation?.conversationId}` || !draftMessage.trim()}
+                disabled={
+                  (selectedConversationFriendStatus === 'blocked' && !selectedConversationBlockedByCurrentUser)
+                  || conversationActionId === `send:${selectedConversation?.conversationId}`
+                  || !draftMessage.trim()
+                }
                 onClick={handleSubmitMessage}
               >
                 {conversationActionId === `send:${selectedConversation?.conversationId}` ? <Loader2 size={15} className="chat-spin" /> : <Send size={15} />}
@@ -650,6 +803,8 @@ const ChatDockPanel = ({
             ) : friendSearchResults.map((item) => {
               const actionKey = `request:${item?._id}`;
               const isFriend = item?.friendStatus === 'friend';
+              const isBlocked = item?.friendStatus === 'blocked';
+              const isBlockedByCurrentUser = isUserBlockedByCurrentUser(item?._id);
               const isPendingSent = item?.friendStatus === 'pending_sent';
               const isPendingReceived = item?.friendStatus === 'pending_received';
               return (
@@ -663,6 +818,19 @@ const ChatDockPanel = ({
                     <button type="button" className="btn btn-primary btn-small" onClick={() => onOpenDirectConversation(item?._id)}>
                       发消息
                     </button>
+                  ) : isBlocked ? (
+                    isBlockedByCurrentUser ? (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        disabled={friendActionId === `unblock:${item?._id}`}
+                        onClick={() => handleOpenFriendRequestComposer(item)}
+                      >
+                        {friendActionId === `unblock:${item?._id}` ? '处理中...' : '解除拉黑并加好友'}
+                      </button>
+                    ) : (
+                      <span className="chat-dock-chip chat-dock-chip--danger">对方已拉黑你</span>
+                    )
                   ) : isPendingSent ? (
                     <span className="chat-dock-chip">已发送</span>
                   ) : isPendingReceived ? (
@@ -674,11 +842,24 @@ const ChatDockPanel = ({
                       type="button"
                       className="btn btn-primary btn-small"
                       disabled={friendActionId === actionKey}
-                      onClick={() => onSendFriendRequest(item?._id)}
+                      onClick={() => handleOpenFriendRequestComposer(item)}
                     >
                       {friendActionId === actionKey ? '发送中...' : '加好友'}
                     </button>
                   )}
+                  {!isFriend && !isBlocked ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      disabled={friendActionId === `block:${item?._id}`}
+                      onClick={() => handleBlockTarget({
+                        targetUserId: item?._id,
+                        username: item?.username || '该用户'
+                      })}
+                    >
+                      {friendActionId === `block:${item?._id}` ? '处理中...' : '拉黑'}
+                    </button>
+                  ) : null}
                 </div>
               );
             })}
@@ -708,103 +889,140 @@ const ChatDockPanel = ({
                   <div className="chat-dock-user-row__hint">还没有会话窗口，打开时会懒创建</div>
                 )}
               </div>
-              <button
-                type="button"
-                className="btn btn-primary btn-small"
-                disabled={conversationActionId === `open:${item?.user?._id}`}
-                onClick={() => onOpenDirectConversation(item?.user?._id)}
-              >
-                {conversationActionId === `open:${item?.user?._id}` ? '打开中...' : '发消息'}
-              </button>
+              <div className="chat-dock-inline-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-small"
+                  disabled={conversationActionId === `open:${item?.user?._id}`}
+                  onClick={() => onOpenDirectConversation(item?.user?._id)}
+                >
+                  {conversationActionId === `open:${item?.user?._id}` ? '打开中...' : '发消息'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={friendActionId === `remove:${item?.friendshipId}`}
+                  onClick={() => handleRemoveFriend(item)}
+                >
+                  {friendActionId === `remove:${item?.friendshipId}` ? '处理中...' : '删除好友'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={friendActionId === `block:${item?.user?._id || item?.friendshipId}`}
+                  onClick={() => handleBlockTarget({
+                    targetUserId: item?.user?._id,
+                    friendshipId: item?.friendshipId,
+                    username: item?.user?.username || '该好友'
+                  })}
+                >
+                  {friendActionId === `block:${item?.user?._id || item?.friendshipId}` ? '处理中...' : '拉黑'}
+                </button>
+              </div>
             </div>
           ))}
+        </div>
+
+        <div className="chat-dock-subsection">
+          <div className="chat-dock-list__header">
+            <span>黑名单</span>
+            {friendListLoading ? <Loader2 size={14} className="chat-spin" /> : <span>{blockedRows.length}</span>}
+          </div>
+          {blockedRows.length === 0 ? (
+            <div className="chat-dock-empty">当前黑名单为空。</div>
+          ) : blockedRows.map((item) => {
+            const actionKey = `unblock:${item?.user?._id || ''}`;
+            return (
+              <div key={item?.friendshipId} className="chat-dock-user-row is-blocked">
+                {renderAvatarTrigger(item?.user, 38)}
+                <div className="chat-dock-user-row__content">
+                  <div className="chat-dock-user-row__title">{item?.user?.username || '未命名用户'}</div>
+                  <div className="chat-dock-user-row__meta">{renderUserMetaText(item?.user) || '已加入黑名单'}</div>
+                  <div className="chat-dock-user-row__hint">不会再收到其好友申请与临时消息</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={friendActionId === actionKey}
+                  onClick={() => onUnblockUser(item?.user?._id)}
+                >
+                  {friendActionId === actionKey ? '处理中...' : '解除拉黑'}
+                </button>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
   );
 
   const renderGroupCreatePane = () => (
-    <div className="chat-dock-main">
-      <div className="chat-dock-main__header">
-        <div>
-          <div className="chat-dock-main__title">创建群聊</div>
-          <div className="chat-dock-main__subtitle">先建群，再在这里持续管理群名、公告、成员和群主转让。</div>
-        </div>
-      </div>
-      <div className="chat-dock-group-body">
-        <div className="chat-dock-group-form">
-          <label className="chat-dock-field">
-            <span>群名称</span>
-            <input
-              type="text"
-              value={newGroupTitle}
-              onChange={(event) => setNewGroupTitle(event.target.value)}
-              placeholder="输入群聊名称"
-            />
-          </label>
-          <label className="chat-dock-field">
-            <span>群公告</span>
-            <textarea
-              value={newGroupAnnouncement}
-              onChange={(event) => setNewGroupAnnouncement(event.target.value)}
-              placeholder="输入群公告（可选）"
-            />
-          </label>
-        </div>
-
-        <div className="chat-dock-subsection">
-          <div className="chat-dock-list__header">
-            <span>初始成员</span>
-            <span>{newGroupMemberIds.length} 人</span>
+    <div className="chat-dock-modal-layer" onClick={() => setIsCreateGroupMode(false)}>
+      <div
+        className="chat-dock-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="创建群聊"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="chat-dock-modal__header">
+          <div>
+            <div className="chat-dock-panel__eyebrow">Group Chat</div>
+            <div className="chat-dock-modal__title">创建群聊</div>
+            <div className="chat-dock-modal__subtitle">先创建群聊，再进入详情页管理群名、公告、成员和群主转让。</div>
           </div>
-          {createGroupCandidateRows.length === 0 ? (
-            <div className="chat-dock-empty">当前没有可选好友，先去好友页添加成员。</div>
-          ) : (
-            <div className="chat-dock-member-picker">
-              {createGroupCandidateRows.map((item) => {
-                const isSelected = newGroupMemberIds.includes(item?._id);
-                return (
-                  <button
-                    key={item?._id}
-                    type="button"
-                    className={`chat-dock-member-pick${isSelected ? ' is-selected' : ''}`}
-                    onClick={() => toggleCreateGroupMember(item?._id)}
-                  >
-                    {renderAvatarTrigger(item, 34)}
-                    <span className="chat-dock-member-pick__content">
-                      <span className="chat-dock-user-row__title">{item?.username || '未命名用户'}</span>
-                      <span className="chat-dock-user-row__meta">{renderUserMetaText(item) || '好友成员'}</span>
-                    </span>
-                    <span className="chat-dock-chip">{isSelected ? '已选' : '选择'}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <button
+            type="button"
+            className="chat-dock-close-btn"
+            onClick={() => setIsCreateGroupMode(false)}
+            title="关闭创建群聊弹窗"
+          >
+            <X size={16} />
+          </button>
         </div>
+        <div className="chat-dock-modal__body">
+          <div className="chat-dock-group-form">
+            <label className="chat-dock-field">
+              <span>群名称</span>
+              <input
+                type="text"
+                value={newGroupTitle}
+                onChange={(event) => setNewGroupTitle(event.target.value)}
+                placeholder="输入群聊名称"
+              />
+            </label>
+            <label className="chat-dock-field">
+              <span>群公告</span>
+              <textarea
+                value={newGroupAnnouncement}
+                onChange={(event) => setNewGroupAnnouncement(event.target.value)}
+                placeholder="输入群公告（可选）"
+              />
+            </label>
+          </div>
 
-        <div className="chat-dock-group-actions">
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => {
-              setIsCreateGroupMode(false);
-              if (!selectedGroupId && groups[0]?.conversationId) {
-                handleOpenGroupDetail(groups[0].conversationId);
-              }
-            }}
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={groupActionId === 'create-group' || !newGroupTitle.trim()}
-            onClick={handleCreateGroup}
-          >
-            {groupActionId === 'create-group' ? <Loader2 size={15} className="chat-spin" /> : <Plus size={15} />}
-            创建群聊
-          </button>
+          <div className="chat-dock-empty">
+            群聊会先以你自己为首个成员创建，创建完成后再通过邀请让其他人自行加入。
+          </div>
+
+          <div className="chat-dock-group-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setIsCreateGroupMode(false)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={groupActionId === 'create-group' || !newGroupTitle.trim()}
+              onClick={handleCreateGroup}
+            >
+              {groupActionId === 'create-group' ? <Loader2 size={15} className="chat-spin" /> : <Plus size={15} />}
+              创建群聊
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -849,6 +1067,16 @@ const ChatDockPanel = ({
             </div>
           </div>
           <div className="chat-dock-group-head-actions">
+            {selectedGroup.canManage ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={() => openGroupInviteModal('outbound')}
+              >
+                <UserPlus size={14} />
+                邀请成员
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn btn-secondary btn-small"
@@ -871,6 +1099,23 @@ const ChatDockPanel = ({
         </div>
 
         <div className="chat-dock-group-body">
+          {selectedGroup.canManage && selectedGroupMembers.length <= 1 ? (
+            <div className="chat-dock-group-invite-cta">
+              <div>
+                <div className="chat-dock-main__title">邀请其他成员</div>
+                <div className="chat-dock-main__subtitle">当前群里只有你自己，先邀请好友或搜索用户加入。</div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => openGroupInviteModal('outbound')}
+              >
+                <UserPlus size={15} />
+                邀请成员
+              </button>
+            </div>
+          ) : null}
+
           {selectedGroup.canManage ? (
             <div className="chat-dock-group-form">
               <label className="chat-dock-field">
@@ -984,35 +1229,12 @@ const ChatDockPanel = ({
           {selectedGroup.canManage ? (
             <div className="chat-dock-subsection">
               <div className="chat-dock-list__header">
-                <span>添加群成员</span>
-                <span>{availableGroupInviteRows.length} 位好友可加入</span>
+                <span>邀请新成员</span>
+                <span>{availableGroupInviteRows.length} 位好友可邀请</span>
               </div>
-              {availableGroupInviteRows.length === 0 ? (
-                <div className="chat-dock-empty">当前没有可添加的好友成员。</div>
-              ) : (
-                <div className="chat-dock-group-member-list">
-                  {availableGroupInviteRows.map((item) => (
-                    <div key={item?._id} className="chat-dock-user-row">
-                      {renderAvatarTrigger(item, 36)}
-                      <div className="chat-dock-user-row__content">
-                        <div className="chat-dock-user-row__title">{item?.username || '未命名用户'}</div>
-                        <div className="chat-dock-user-row__meta">{renderUserMetaText(item) || '好友成员'}</div>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-small"
-                        disabled={groupActionId === `group-add:${selectedGroup.conversationId}`}
-                        onClick={() => onAddGroupMembers({
-                          conversationId: selectedGroup.conversationId,
-                          memberUserIds: [item?._id]
-                        })}
-                      >
-                        {groupActionId === `group-add:${selectedGroup.conversationId}` ? '添加中...' : '加入群聊'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div className="chat-dock-empty">
+                邀请改为审批制。点击“邀请成员”后，对方会在群聊页看到邀请，并可同意、拒绝或忽略。
+              </div>
             </div>
           ) : null}
         </div>
@@ -1024,6 +1246,31 @@ const ChatDockPanel = ({
     <>
       <div className="chat-dock-sidebar">
         <div className="chat-dock-list">
+          {receivedGroupInvites.length > 0 ? (
+            <button
+              type="button"
+              className="chat-dock-request-entry has-pending"
+              onClick={() => openGroupInviteModal('received')}
+            >
+              <span className="chat-dock-request-entry__main">
+                <span className="chat-dock-request-entry__icon">
+                  <UserPlus size={16} />
+                </span>
+                <span className="chat-dock-request-entry__content">
+                  <span className="chat-dock-request-entry__title">群聊邀请</span>
+                  <span className="chat-dock-request-entry__meta">
+                    {`有 ${receivedGroupInvites.length} 条待处理群聊邀请`}
+                  </span>
+                </span>
+              </span>
+              <span className="chat-dock-request-entry__side">
+                <span className="chat-dock-unread-badge">
+                  {receivedGroupInvites.length > 99 ? '99+' : receivedGroupInvites.length}
+                </span>
+              </span>
+            </button>
+          ) : null}
+
           <div className="chat-dock-list__header">
             <span>我的群聊</span>
             <button
@@ -1031,7 +1278,6 @@ const ChatDockPanel = ({
               className="chat-dock-inline-link"
               onClick={() => {
                 setIsCreateGroupMode(true);
-                setSelectedGroupId('');
               }}
             >
               <Plus size={14} />
@@ -1067,7 +1313,8 @@ const ChatDockPanel = ({
           })}
         </div>
       </div>
-      {isCreateGroupMode ? renderGroupCreatePane() : renderGroupDetailPane()}
+      {renderGroupDetailPane()}
+      {isCreateGroupMode ? renderGroupCreatePane() : null}
     </>
   );
 
@@ -1075,8 +1322,8 @@ const ChatDockPanel = ({
     <div className="chat-dock-panel">
       <div className="chat-dock-panel__header">
         <div>
-          <div className="chat-dock-panel__eyebrow">社交与会话</div>
-          <h3>好友 / 会话中心</h3>
+          <div className="chat-dock-panel__eyebrow">Social Center</div>
+          <h3>社交与会话</h3>
           <p>会话列表统一承载单聊和群聊，群聊页签用于创建和管理群聊。</p>
         </div>
         <button type="button" className="chat-dock-close-btn" onClick={onClose} title="收起聊天面板">
@@ -1091,21 +1338,25 @@ const ChatDockPanel = ({
           active={isConversationTab}
           icon={MessagesSquare}
           label="会话"
-          badge={conversations.length > 0 ? String(conversations.length) : ''}
+          badge={conversationTabBadge}
+          badgeTone={unreadConversationCount > 0 ? 'alert' : 'default'}
           onClick={() => setActiveSidebarTab('conversations')}
         />
         <SidebarTabButton
           active={isFriendsTab}
           icon={Users}
           label="好友"
-          badge={friends.length > 0 ? String(friends.length) : ''}
+          badge={friendsTabBadge}
+          badgeTone={receivedRequests.length > 0 ? 'alert' : 'default'}
           onClick={() => setActiveSidebarTab('friends')}
         />
         <SidebarTabButton
           active={isGroupsTab}
           icon={UserPlus}
           label="群聊"
-          badge={groups.length > 0 ? String(groups.length) : ''}
+          badge={unreadGroupCount + receivedGroupInvites.length > 0
+            ? String(unreadGroupCount + receivedGroupInvites.length > 99 ? '99+' : unreadGroupCount + receivedGroupInvites.length)
+            : ''}
           onClick={() => setActiveSidebarTab('groups')}
         />
       </div>
@@ -1152,35 +1403,54 @@ const ChatDockPanel = ({
                 ) : receivedRequests.map((item) => {
                   const acceptKey = `${item?.friendshipId}:accept`;
                   const rejectKey = `${item?.friendshipId}:reject`;
+                  const ignoreKey = `${item?.friendshipId}:ignore`;
+                  const blockKey = `block:${item?.user?._id || item?.friendshipId || ''}`;
+                  const responding = [acceptKey, rejectKey, ignoreKey].includes(requestActionId);
                   return (
                     <div key={item?.friendshipId} className="chat-dock-request-card">
-                      <div className="chat-dock-request-card__main">
+                      <div className="chat-dock-request-card__topline">
                         {renderAvatarTrigger(item?.user, 38)}
                         <div className="chat-dock-request-card__content">
                           <div className="chat-dock-user-row__title">{item?.user?.username || '未命名用户'}</div>
                           <div className="chat-dock-user-row__meta">{renderUserMetaText(item?.user) || '发来了好友申请'}</div>
-                          <div className="chat-dock-request-card__message">
-                            {item?.requestMessage || '对方未填写附言'}
-                          </div>
+                        </div>
+                        <div className="chat-dock-request-card__actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-small"
+                            disabled={responding || friendActionId === blockKey}
+                            onClick={() => onRespondFriendRequest(item?.friendshipId, 'accept')}
+                          >
+                            {requestActionId === acceptKey ? '处理中...' : '通过'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            disabled={responding || friendActionId === blockKey}
+                            onClick={() => onRespondFriendRequest(item?.friendshipId, 'reject')}
+                          >
+                            {requestActionId === rejectKey ? '处理中...' : '拒绝'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-small"
+                            disabled={responding || friendActionId === blockKey}
+                            onClick={() => onRespondFriendRequest(item?.friendshipId, 'ignore')}
+                          >
+                            {requestActionId === ignoreKey ? '处理中...' : '忽略'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-small"
+                            disabled={responding || friendActionId === blockKey}
+                            onClick={() => onBlockUser({ targetUserId: item?.user?._id, friendshipId: item?.friendshipId })}
+                          >
+                            {friendActionId === blockKey ? '处理中...' : '拉黑'}
+                          </button>
                         </div>
                       </div>
-                      <div className="chat-dock-request-card__actions">
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-small"
-                          disabled={requestActionId === acceptKey || requestActionId === rejectKey}
-                          onClick={() => onRespondFriendRequest(item?.friendshipId, 'accept')}
-                        >
-                          {requestActionId === acceptKey ? '处理中...' : '通过'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          disabled={requestActionId === acceptKey || requestActionId === rejectKey}
-                          onClick={() => onRespondFriendRequest(item?.friendshipId, 'reject')}
-                        >
-                          {requestActionId === rejectKey ? '处理中...' : '拒绝'}
-                        </button>
+                      <div className="chat-dock-request-card__message">
+                        {item?.requestMessage || '对方未填写附言'}
                       </div>
                     </div>
                   );
@@ -1195,17 +1465,266 @@ const ChatDockPanel = ({
                 {sentRequests.length === 0 ? (
                   <div className="chat-dock-empty">当前没有发出的待处理申请。</div>
                 ) : sentRequests.map((item) => (
-                  <div key={item?.friendshipId} className="chat-dock-user-row">
-                    {renderAvatarTrigger(item?.user, 36)}
-                    <div className="chat-dock-user-row__content">
-                      <div className="chat-dock-user-row__title">{item?.user?.username || '未命名用户'}</div>
-                      <div className="chat-dock-user-row__meta">
-                        {item?.requestMessage || '等待对方处理好友申请'}
+                  <div key={item?.friendshipId} className="chat-dock-request-card is-sent">
+                    <div className="chat-dock-request-card__topline">
+                      {renderAvatarTrigger(item?.user, 36)}
+                      <div className="chat-dock-user-row__content">
+                        <div className="chat-dock-user-row__title">{item?.user?.username || '未命名用户'}</div>
+                        <div className="chat-dock-user-row__meta">等待对方处理好友申请</div>
                       </div>
+                      <span className="chat-dock-chip">待处理</span>
                     </div>
-                    <span className="chat-dock-chip">待处理</span>
+                    <div className="chat-dock-request-card__message">
+                      {item?.requestMessage || '未填写附言'}
+                    </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isGroupInviteModalOpen ? (
+        <div className="chat-dock-modal-layer" onClick={closeGroupInviteModal}>
+          <div
+            className="chat-dock-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={groupInviteModalMode === 'received' ? '群聊邀请' : '邀请成员'}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="chat-dock-modal__header">
+              <div>
+                <div className="chat-dock-panel__eyebrow">{groupInviteModalMode === 'received' ? 'Group Invite' : 'Invite Members'}</div>
+                <div className="chat-dock-modal__title">{groupInviteModalMode === 'received' ? '群聊邀请' : '邀请成员'}</div>
+                <div className="chat-dock-modal__subtitle">
+                  {groupInviteModalMode === 'received'
+                    ? '在这里处理别人发给你的群聊邀请。'
+                    : `向「${selectedGroup?.title || '当前群聊'}」发送邀请，对方需自行同意后才会加入。`}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="chat-dock-close-btn"
+                onClick={closeGroupInviteModal}
+                title="关闭群聊邀请弹窗"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="chat-dock-modal__body">
+              {groupInviteModalMode === 'received' ? (
+                <div className="chat-dock-subsection">
+                  <div className="chat-dock-list__header">
+                    <span>收到的邀请</span>
+                    {groupInviteListLoading ? <Loader2 size={14} className="chat-spin" /> : <span>{receivedGroupInvites.length}</span>}
+                  </div>
+                  {receivedGroupInvites.length === 0 ? (
+                    <div className="chat-dock-empty">当前没有待处理群聊邀请。</div>
+                  ) : receivedGroupInvites.map((item) => {
+                    const acceptKey = `${item?.invitationId}:accept`;
+                    const rejectKey = `${item?.invitationId}:reject`;
+                    const ignoreKey = `${item?.invitationId}:ignore`;
+                    const acting = [acceptKey, rejectKey, ignoreKey].includes(groupInviteActionId);
+                    return (
+                      <div key={item?.invitationId} className="chat-dock-request-card">
+                        <div className="chat-dock-request-card__topline">
+                          {renderAvatarTrigger(item?.inviter, 38)}
+                          <div className="chat-dock-request-card__content">
+                            <div className="chat-dock-user-row__title">{item?.group?.title || '未命名群聊'}</div>
+                            <div className="chat-dock-user-row__meta">
+                              {`${item?.inviter?.username || '某位玩家'} 邀请你加入`}
+                            </div>
+                          </div>
+                          <div className="chat-dock-request-card__actions">
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-small"
+                              disabled={acting}
+                              onClick={() => onRespondGroupInvitation(item?.invitationId, 'accept')}
+                            >
+                              {groupInviteActionId === acceptKey ? '处理中...' : '同意'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-small"
+                              disabled={acting}
+                              onClick={() => onRespondGroupInvitation(item?.invitationId, 'reject')}
+                            >
+                              {groupInviteActionId === rejectKey ? '处理中...' : '拒绝'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-small"
+                              disabled={acting}
+                              onClick={() => onRespondGroupInvitation(item?.invitationId, 'ignore')}
+                            >
+                              {groupInviteActionId === ignoreKey ? '处理中...' : '忽略'}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="chat-dock-request-card__message">
+                          {item?.group?.announcement || '加入后可查看群成员与后续消息。'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <>
+                  <form
+                    className="chat-dock-search-box"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      onSearchGroupInviteUsers(groupInviteSearchQuery);
+                    }}
+                  >
+                    <div className="chat-dock-search-input">
+                      <Search size={14} />
+                      <input
+                        type="text"
+                        value={groupInviteSearchQuery}
+                        onChange={(event) => setGroupInviteSearchQuery(event.target.value)}
+                        placeholder="搜索用户名并发送群聊邀请"
+                      />
+                    </div>
+                    <button type="submit" className="btn btn-secondary btn-small" disabled={groupInviteSearchLoading}>
+                      {groupInviteSearchLoading ? '搜索中...' : '搜索'}
+                    </button>
+                  </form>
+
+                  <div className="chat-dock-subsection">
+                    <div className="chat-dock-list__header">
+                      <span>好友邀请</span>
+                      <span>{availableGroupInviteRows.length}</span>
+                    </div>
+                    {availableGroupInviteRows.length === 0 ? (
+                      <div className="chat-dock-empty">当前没有可邀请的好友。</div>
+                    ) : (
+                      <div className="chat-dock-group-member-list">
+                        {availableGroupInviteRows.map((item) => {
+                          const stableActionKey = `group-invite:${selectedGroupConversationId}:${item?._id || ''}`;
+                          return (
+                            <div key={item?._id} className="chat-dock-user-row">
+                              {renderAvatarTrigger(item, 36)}
+                              <div className="chat-dock-user-row__content">
+                                <div className="chat-dock-user-row__title">{item?.username || '未命名用户'}</div>
+                                <div className="chat-dock-user-row__meta">{renderUserMetaText(item) || '好友成员'}</div>
+                              </div>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-small"
+                                disabled={!selectedGroupConversationId || groupInviteActionId === stableActionKey}
+                                onClick={() => onInviteGroupMembers({
+                                  conversationId: selectedGroupConversationId,
+                                  inviteeUserIds: [item?._id]
+                                })}
+                              >
+                                {groupInviteActionId === stableActionKey ? '邀请中...' : '邀请'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {groupInviteSearchQuery.trim() ? (
+                    <div className="chat-dock-subsection">
+                      <div className="chat-dock-list__header">
+                        <span>搜索结果</span>
+                        {groupInviteSearchLoading ? <Loader2 size={14} className="chat-spin" /> : null}
+                      </div>
+                      {groupInviteSearchResults.length === 0 && !groupInviteSearchLoading ? (
+                        <div className="chat-dock-empty">没有找到匹配用户。</div>
+                      ) : groupInviteSearchResults
+                        .filter((item) => !selectedGroupMemberIdSet.has(String(item?._id || '')))
+                        .map((item) => {
+                          const stableActionKey = `group-invite:${selectedGroupConversationId}:${item?._id || ''}`;
+                          return (
+                            <div key={item?._id} className="chat-dock-user-row">
+                              {renderAvatarTrigger(item, 36)}
+                              <div className="chat-dock-user-row__content">
+                                <div className="chat-dock-user-row__title">{item?.username || '未命名用户'}</div>
+                                <div className="chat-dock-user-row__meta">{renderUserMetaText(item) || '可发送群聊邀请'}</div>
+                              </div>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-small"
+                                disabled={!selectedGroupConversationId || groupInviteActionId === stableActionKey}
+                                onClick={() => onInviteGroupMembers({
+                                  conversationId: selectedGroupConversationId,
+                                  inviteeUserIds: [item?._id]
+                                })}
+                              >
+                                {groupInviteActionId === stableActionKey ? '邀请中...' : '邀请'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isFriendRequestComposerOpen ? (
+        <div className="chat-dock-modal-layer" onClick={closeFriendRequestComposer}>
+          <div
+            className="chat-dock-modal chat-dock-modal--compact"
+            role="dialog"
+            aria-modal="true"
+            aria-label="填写好友申请留言"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="chat-dock-modal__header">
+              <div>
+                <div className="chat-dock-panel__eyebrow">Friend Request</div>
+                <div className="chat-dock-modal__title">填写好友申请留言</div>
+                <div className="chat-dock-modal__subtitle">
+                  发送给 {friendRequestTarget?.username || '对方'} 的好友申请会附带这段留言。
+                </div>
+              </div>
+              <button
+                type="button"
+                className="chat-dock-close-btn"
+                onClick={closeFriendRequestComposer}
+                title="关闭留言弹窗"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="chat-dock-modal__body">
+              <label className="chat-dock-field">
+                <span>留言内容</span>
+                <textarea
+                  value={friendRequestDraft}
+                  maxLength={120}
+                  onChange={(event) => setFriendRequestDraft(event.target.value)}
+                  placeholder="写一句自我介绍、来意或认识原因"
+                />
+              </label>
+              <div className="chat-dock-compose-meta">
+                <span>必填，最多 120 字</span>
+                <span>{friendRequestDraft.trim().length}/120</span>
+              </div>
+              <div className="chat-dock-request-card__actions chat-dock-request-card__actions--composer">
+                <button type="button" className="btn btn-secondary" onClick={closeFriendRequestComposer}>
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={!friendRequestDraft.trim() || friendActionId === `request:${friendRequestTarget?._id || ''}`}
+                  onClick={submitFriendRequest}
+                >
+                  {friendActionId === `request:${friendRequestTarget?._id || ''}` ? '发送中...' : '发送申请'}
+                </button>
               </div>
             </div>
           </div>

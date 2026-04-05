@@ -14,6 +14,7 @@ const RightUtilityDock = ({
     () => visibleSections.find((section) => section?.active) || null,
     [visibleSections]
   );
+  const panelWidthValue = activeSection?.panelWidth;
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -66,7 +67,13 @@ const RightUtilityDock = ({
         className={`utility-dock-panel-slot${activeSection ? ' is-open' : ''}`}
         aria-hidden={!activeSection}
         style={{
-          ...(activeSection?.panelWidth ? { '--utility-panel-width': `${activeSection.panelWidth}px` } : undefined)
+          ...(panelWidthValue
+            ? {
+                '--utility-panel-width': typeof panelWidthValue === 'number'
+                  ? `${panelWidthValue}px`
+                  : panelWidthValue
+              }
+            : undefined)
         }}
       >
         <div className={`utility-dock-panel-shell${activeSection ? ' is-open' : ''}`}>
@@ -77,6 +84,12 @@ const RightUtilityDock = ({
       <div className="utility-dock-buttons">
         {visibleSections.map((section, index) => {
           const Icon = section.icon;
+          const hasBadge = Boolean(section.badge);
+          const toneClass = section.id === 'message'
+            ? ' tone-message'
+            : section.id === 'chat'
+              ? ' tone-social'
+              : '';
           return (
             <div
               key={section.id}
@@ -84,7 +97,7 @@ const RightUtilityDock = ({
             >
               <button
                 type="button"
-                className={`utility-dock-trigger${section.active ? ' is-active' : ''}`}
+                className={`utility-dock-trigger${section.active ? ' is-active' : ''}${hasBadge ? ' has-badge' : ''}${hasBadge ? toneClass : ''}`}
                 onClick={section.onToggle}
                 title={section.active ? `收起${section.label}` : `展开${section.label}`}
                 aria-expanded={section.active}

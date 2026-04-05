@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../runtimeConfig';
-import { isAnnouncementNotification } from '../app/appShared';
+import { isAnnouncementNotification, isSocialNotification } from '../app/appShared';
 
 const sortByCreatedAtDesc = (items = []) => (
   [...items].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+);
+
+const getVisibleNotifications = (items = []) => (
+  (Array.isArray(items) ? items : []).filter((item) => !isSocialNotification(item))
+);
+
+const countUnreadVisibleNotifications = (items = []) => (
+  getVisibleNotifications(items).filter((item) => !item?.read).length
 );
 
 const useNotificationCenter = ({
@@ -54,8 +62,9 @@ const useNotificationCenter = ({
         return null;
       }
 
-      setNotifications(data.notifications || []);
-      setNotificationUnreadCount(data.unreadCount || 0);
+      const nextNotifications = data.notifications || [];
+      setNotifications(nextNotifications);
+      setNotificationUnreadCount(countUnreadVisibleNotifications(nextNotifications));
       return data;
     } catch (error) {
       if (!silent) {
@@ -137,6 +146,7 @@ const useNotificationCenter = ({
     const unreadAnnouncementIds = notifications
       .filter((notification) => (
         isAnnouncementNotification(notification)
+        && !isSocialNotification(notification)
         && !notification.read
         && notification._id
       ))
@@ -187,6 +197,7 @@ const useNotificationCenter = ({
     const unreadNotificationIds = notifications
       .filter((notification) => (
         !isAnnouncementNotification(notification)
+        && !isSocialNotification(notification)
         && !notification.read
         && notification._id
       ))
@@ -324,25 +335,25 @@ const useNotificationCenter = ({
   }, [authenticated, fetchAdminPendingNodeReminders, fetchNotifications, isAdmin, resetNotificationCenter]);
 
   const pendingMasterApplyCount = useMemo(() => (
-    notifications.filter((notification) => (
+    getVisibleNotifications(notifications).filter((notification) => (
       notification.type === 'domain_master_apply' && notification.status === 'pending'
     )).length
   ), [notifications]);
 
   const systemAnnouncements = useMemo(() => (
     sortByCreatedAtDesc(
-      notifications.filter((notification) => notification.type === 'domain_distribution_announcement')
+      getVisibleNotifications(notifications).filter((notification) => notification.type === 'domain_distribution_announcement')
     ).slice(0, 10)
   ), [notifications]);
 
   const allianceAnnouncements = useMemo(() => (
     sortByCreatedAtDesc(
-      notifications.filter((notification) => notification.type === 'alliance_announcement')
+      getVisibleNotifications(notifications).filter((notification) => notification.type === 'alliance_announcement')
     ).slice(0, 10)
   ), [notifications]);
 
   const announcementUnreadCount = useMemo(() => (
-    notifications.filter((notification) => (
+    getVisibleNotifications(notifications).filter((notification) => (
       isAnnouncementNotification(notification) && !notification.read
     )).length
   ), [notifications]);

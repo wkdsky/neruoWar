@@ -6,6 +6,14 @@ const { chatService } = require('../services/chatService');
 const { emitToUser, emitToUsers } = require('../services/socketGateway');
 
 const router = express.Router();
+const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
+
+const normalizeConversationId = (value) => {
+  const normalizedValue = typeof value === 'string'
+    ? value.trim()
+    : value?.toString?.().trim?.() || '';
+  return OBJECT_ID_PATTERN.test(normalizedValue) ? normalizedValue : '';
+};
 
 const handleRouteError = (res, error, context = '聊天接口错误') => {
   if (error instanceof SocialChatError) {
@@ -46,8 +54,18 @@ const emitConversationUpserts = async (userIds = [], conversationId) => {
 };
 
 const emitGroupUpdated = (userIds = [], conversationId) => {
+  const safeConversationId = normalizeConversationId(conversationId);
+  if (!safeConversationId) return;
   emitToUsers(userIds, 'chat:group-updated', {
-    conversationId,
+    conversationId: safeConversationId,
+    emittedAt: new Date().toISOString()
+  });
+};
+
+const emitGroupInvitationUpdated = (userIds = [], conversationId = '') => {
+  const safeConversationId = normalizeConversationId(conversationId);
+  emitToUsers(userIds, 'chat:group-invitation-updated', {
+    conversationId: safeConversationId,
     emittedAt: new Date().toISOString()
   });
 };
@@ -117,6 +135,20 @@ router.post('/groups', authenticateToken, async (req, res) => {
   }
 });
 
+router.get('/groups/invitations', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.listGroupInvitationsForUser({
+      userId: req?.user?.userId
+    });
+    return res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '获取群聊邀请列表错误:');
+  }
+});
+
 router.get('/groups/:conversationId', authenticateToken, async (req, res) => {
   try {
     const result = await chatService.getGroupDetailForUser({
@@ -130,6 +162,55 @@ router.get('/groups/:conversationId', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     return handleRouteError(res, error, '获取群聊详情错误:');
+  }
+});
+
+router.post('/groups/:conversationId/invitations', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.inviteGroupMembers({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId,
+      inviteeUserIds: req.body?.inviteeUserIds
+    });
+
+    emitGroupInvitationUpdated([
+      ...result.invitedUserIds,
+      ...result.participantUserIds
+    ], result.conversationId);
+
+    return res.json({
+      success: true,
+      conversationId: result.conversationId,
+      invitedUserIds: result.invitedUserIds
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '发送群聊邀请错误:');
+  }
+});
+
+router.post('/groups/invitations/:invitationId/respond', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.respondToGroupInvitation({
+      userId: req?.user?.userId,
+      invitationId: req.params?.invitationId,
+      action: req.body?.action
+    });
+
+    emitGroupInvitationUpdated([
+      result?.inviter?._id,
+      result?.invitee?._id
+    ], result?.invitation?.conversationId || '');
+    if (result.action === 'accept' && result.participantUserIds.length > 0) {
+      await emitConversationUpserts(result.participantUserIds, result.invitation.conversationId);
+      emitGroupUpdated(result.participantUserIds, result.invitation.conversationId);
+    }
+
+    return res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '处理群聊邀请错误:');
   }
 });
 

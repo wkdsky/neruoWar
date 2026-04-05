@@ -122,6 +122,11 @@
   gap: 0.65rem;
   padding: 0.72rem 0.8rem;
   text-align: left;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease;
 }
 
 .chat-dock-tab-btn.is-active {
@@ -149,14 +154,14 @@
 .chat-dock-tab-btn__badge,
 .chat-dock-unread-badge,
 .chat-dock-chip {
-  min-width: 20px;
-  height: 20px;
-  padding: 0 0.36rem;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 0.42rem;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.68rem;
+  font-size: 0.7rem;
   font-weight: 800;
 }
 
@@ -164,6 +169,30 @@
 .chat-dock-chip {
   color: rgba(221, 237, 249, 0.86);
   background: rgba(124, 151, 175, 0.18);
+}
+
+.chat-dock-chip--danger {
+  color: #fff5f5;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.78), rgba(185, 28, 28, 0.86));
+  box-shadow: 0 8px 18px rgba(239, 68, 68, 0.18);
+}
+
+.chat-dock-tab-btn.has-badge--alert {
+  border-color: rgba(255, 122, 122, 0.2);
+}
+
+.chat-dock-tab-btn__badge {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.chat-dock-tab-btn__badge--alert {
+  color: #fff8fb;
+  background: linear-gradient(135deg, #ff8f62, #ff5f7a);
+  border-color: rgba(255, 214, 214, 0.16);
+  box-shadow:
+    0 0 0 2px rgba(255, 111, 121, 0.12),
+    0 8px 18px rgba(255, 110, 121, 0.28);
 }
 
 .chat-dock-unread-badge {
@@ -203,12 +232,24 @@
 }
 
 .chat-dock-inline-link {
-  border: 0;
-  padding: 0;
-  color: rgba(199, 220, 238, 0.84);
-  background: transparent;
+  border: 1px solid rgba(118, 144, 169, 0.18);
+  padding: 0.38rem 0.72rem;
+  border-radius: 999px;
+  color: rgba(226, 239, 249, 0.92);
+  background: rgba(255, 255, 255, 0.05);
   font-size: 0.74rem;
   font-weight: 700;
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.chat-dock-inline-link:hover {
+  border-color: rgba(132, 189, 164, 0.34);
+  background: linear-gradient(135deg, rgba(40, 91, 76, 0.32), rgba(19, 37, 56, 0.22));
+  box-shadow: 0 10px 20px rgba(8, 20, 29, 0.18);
+}
+
+.chat-dock-inline-link:active {
+  transform: translateY(1px) scale(0.985);
 }
 
 .chat-dock-empty,
@@ -405,6 +446,11 @@
   margin-bottom: 0.55rem;
 }
 
+.chat-dock-user-row.is-blocked {
+  border-color: rgba(239, 68, 68, 0.16);
+  background: linear-gradient(135deg, rgba(72, 19, 22, 0.28), rgba(255, 255, 255, 0.03));
+}
+
 .chat-dock-user-row__meta,
 .chat-dock-user-row__hint,
 .chat-dock-request-card__message {
@@ -413,28 +459,66 @@
 
 .chat-dock-request-card {
   margin-bottom: 0.7rem;
-  padding: 0.78rem;
+  padding: 0.72rem 0.78rem;
   border: 1px solid rgba(114, 143, 168, 0.12);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.03);
 }
 
-.chat-dock-request-card__main {
+.chat-dock-request-card__topline {
   display: flex;
+  align-items: center;
   gap: 0.72rem;
 }
 
+.chat-dock-request-card__content {
+  min-width: 0;
+  flex: 1;
+}
+
 .chat-dock-request-card__message {
-  margin-top: 0.28rem;
+  margin-top: 0.34rem;
+  padding-left: calc(38px + 0.72rem);
   color: rgba(227, 237, 247, 0.84);
   font-size: 0.76rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-dock-request-card.is-sent .chat-dock-request-card__message {
+  padding-left: calc(36px + 0.72rem);
 }
 
 .chat-dock-request-card__actions {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.36rem;
   justify-content: flex-end;
-  margin-top: 0.72rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.chat-dock-request-card__actions .btn {
+  min-width: 0;
+  padding: 0.32rem 0.54rem;
+  font-size: 0.69rem;
+  line-height: 1.15;
+}
+
+.chat-dock-request-card__actions--composer {
+  margin-top: 0.95rem;
+}
+
+.chat-dock-compose-meta {
+  margin-top: 0.55rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: rgba(187, 206, 223, 0.72);
+  font-size: 0.72rem;
 }
 
 .chat-dock-single-pane {
@@ -469,6 +553,10 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
   display: flex;
   flex-direction: column;
+}
+
+.chat-dock-modal--compact {
+  width: min(460px, 100%);
 }
 
 .chat-dock-modal__header {
@@ -585,8 +673,38 @@
   justify-content: flex-end;
 }
 
-.chat-message-bubble {
+.chat-message-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   max-width: min(74%, 420px);
+}
+
+.chat-message-stack.is-self {
+  align-items: flex-end;
+}
+
+.chat-message-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  min-height: 1rem;
+  margin-bottom: 0.28rem;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+
+.chat-message-meta-row.is-self {
+  justify-content: flex-end;
+}
+
+.chat-message-row:hover .chat-message-meta-row {
+  opacity: 1;
+}
+
+.chat-message-bubble {
+  max-width: 100%;
   padding: 0.7rem 0.82rem 0.62rem;
   border-radius: 18px 18px 18px 8px;
   color: rgba(236, 244, 251, 0.95);
@@ -603,9 +721,9 @@
 }
 
 .chat-message-bubble__sender {
-  margin-bottom: 0.22rem;
   color: rgba(188, 210, 229, 0.74);
   font-size: 0.71rem;
+  line-height: 1;
 }
 
 .chat-message-bubble__content {
@@ -615,8 +733,10 @@
   line-height: 1.6;
 }
 
-.chat-message-bubble__meta {
-  margin-top: 0.35rem;
+.chat-message-meta-time {
+  color: rgba(187, 206, 223, 0.72);
+  font-size: 0.7rem;
+  line-height: 1;
 }
 
 .chat-dock-composer {
@@ -653,6 +773,18 @@
   border: 1px solid rgba(112, 140, 165, 0.12);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-dock-group-invite-cta {
+  margin-bottom: 1rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(120, 186, 156, 0.22);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(32, 75, 63, 0.34), rgba(13, 28, 41, 0.22));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .chat-dock-field {
@@ -936,6 +1068,7 @@
   }
 
   .chat-dock-request-card__actions,
+  .chat-dock-group-invite-cta,
   .chat-dock-main__header,
   .chat-dock-relationship-banner,
   .chat-dock-group-actions {

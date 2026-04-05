@@ -2,6 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE } from '../runtimeConfig';
 
 const DEFAULT_MESSAGE_PAGE_SIZE = 30;
+const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
+
+const normalizeConversationId = (value) => {
+  const normalizedValue = typeof value === 'string'
+    ? value.trim()
+    : value?.toString?.().trim?.() || '';
+  return OBJECT_ID_PATTERN.test(normalizedValue) ? normalizedValue : '';
+};
 
 const sortConversations = (rows = []) => (
   [...rows].sort((left, right) => {
@@ -64,6 +72,7 @@ const useChatCenter = ({
   const [activeSidebarTab, setActiveSidebarTab] = useState('conversations');
   const [conversations, setConversations] = useState([]);
   const [friends, setFriends] = useState([]);
+  const [blockedUsers, setBlockedUsers] = useState([]);
   const [friendRequests, setFriendRequests] = useState({ received: [], sent: [] });
   const [selectedConversationId, setSelectedConversationId] = useState('');
   const [selectedGroupId, setSelectedGroupId] = useState('');
@@ -73,14 +82,20 @@ const useChatCenter = ({
   const [friendListLoading, setFriendListLoading] = useState(false);
   const [requestListLoading, setRequestListLoading] = useState(false);
   const [groupDetailLoading, setGroupDetailLoading] = useState(false);
+  const [groupInviteListLoading, setGroupInviteListLoading] = useState(false);
   const [friendSearchQuery, setFriendSearchQuery] = useState('');
   const [friendSearchResults, setFriendSearchResults] = useState([]);
   const [friendSearchLoading, setFriendSearchLoading] = useState(false);
+  const [groupInviteSearchQuery, setGroupInviteSearchQuery] = useState('');
+  const [groupInviteSearchResults, setGroupInviteSearchResults] = useState([]);
+  const [groupInviteSearchLoading, setGroupInviteSearchLoading] = useState(false);
+  const [groupInvites, setGroupInvites] = useState({ received: [] });
   const [panelNotice, setPanelNotice] = useState('');
   const [conversationActionId, setConversationActionId] = useState('');
   const [groupActionId, setGroupActionId] = useState('');
   const [friendActionId, setFriendActionId] = useState('');
   const [requestActionId, setRequestActionId] = useState('');
+  const [groupInviteActionId, setGroupInviteActionId] = useState('');
   const [chatToasts, setChatToasts] = useState([]);
   const toastTimersRef = useRef(new Map());
 
@@ -136,6 +151,7 @@ const useChatCenter = ({
     setActiveSidebarTab('conversations');
     setConversations([]);
     setFriends([]);
+    setBlockedUsers([]);
     setFriendRequests({ received: [], sent: [] });
     setSelectedConversationId('');
     setSelectedGroupId('');
@@ -145,14 +161,20 @@ const useChatCenter = ({
     setFriendListLoading(false);
     setRequestListLoading(false);
     setGroupDetailLoading(false);
+    setGroupInviteListLoading(false);
     setFriendSearchQuery('');
     setFriendSearchResults([]);
     setFriendSearchLoading(false);
+    setGroupInviteSearchQuery('');
+    setGroupInviteSearchResults([]);
+    setGroupInviteSearchLoading(false);
+    setGroupInvites({ received: [] });
     setPanelNotice('');
     setConversationActionId('');
     setGroupActionId('');
     setFriendActionId('');
     setRequestActionId('');
+    setGroupInviteActionId('');
     setChatToasts([]);
   }, []);
 
@@ -240,15 +262,16 @@ const useChatCenter = ({
   }, []);
 
   const fetchGroupDetail = useCallback(async (conversationId, options = {}) => {
+    const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders();
-    if (!headers || !conversationId) return null;
+    if (!headers || !safeConversationId) return null;
 
     if (!options.silent) {
       setGroupDetailLoading(true);
     }
 
     try {
-      const response = await fetch(`${API_BASE}/chat/groups/${conversationId}`, {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}`, {
         headers
       });
       const parsed = await parseApiResponse(response);
@@ -292,6 +315,7 @@ const useChatCenter = ({
       });
       const parsed = await parseApiResponse(response);
       const rows = Array.isArray(parsed.data?.rows) ? parsed.data.rows : null;
+      const blockedRows = Array.isArray(parsed.data?.blockedRows) ? parsed.data.blockedRows : [];
       if (!response.ok || !rows) {
         if (!silent) {
           window.alert(getApiErrorMessage(parsed, '获取好友列表失败'));
@@ -300,7 +324,11 @@ const useChatCenter = ({
       }
 
       setFriends(rows);
-      return rows;
+      setBlockedUsers(blockedRows);
+      return {
+        rows,
+        blockedRows
+      };
     } catch (error) {
       if (!silent) {
         window.alert(`获取好友列表失败: ${error.message}`);
@@ -390,6 +418,46 @@ const useChatCenter = ({
     }
   }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
 
+  const searchGroupInviteUsers = useCallback(async (keyword, options = {}) => {
+    const headers = buildAuthHeaders();
+    const trimmedKeyword = String(keyword || '').trim();
+    if (!headers) return [];
+    if (!trimmedKeyword) {
+      setGroupInviteSearchResults([]);
+      return [];
+    }
+
+    if (!options.silent) {
+      setGroupInviteSearchLoading(true);
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/social/users/search?keyword=${encodeURIComponent(trimmedKeyword)}`, {
+        headers
+      });
+      const parsed = await parseApiResponse(response);
+      const rows = Array.isArray(parsed.data?.rows) ? parsed.data.rows : null;
+      if (!response.ok || !rows) {
+        if (!options.silent) {
+          window.alert(getApiErrorMessage(parsed, '搜索邀请用户失败'));
+        }
+        return [];
+      }
+
+      setGroupInviteSearchResults(rows);
+      return rows;
+    } catch (error) {
+      if (!options.silent) {
+        window.alert(`搜索邀请用户失败: ${error.message}`);
+      }
+      return [];
+    } finally {
+      if (!options.silent) {
+        setGroupInviteSearchLoading(false);
+      }
+    }
+  }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
+
   const syncSocialSidebarData = useCallback(async () => {
     await Promise.all([
       fetchFriendRequests(true),
@@ -403,12 +471,49 @@ const useChatCenter = ({
     searchUsers
   ]);
 
-  const markConversationRead = useCallback(async (conversationId, lastReadSeq = 0) => {
-    const headers = buildAuthHeaders({ json: true });
-    if (!headers || !conversationId) return null;
+  const fetchGroupInvitations = useCallback(async (silent = true) => {
+    const headers = buildAuthHeaders();
+    if (!headers) return null;
+
+    if (!silent) {
+      setGroupInviteListLoading(true);
+    }
 
     try {
-      const response = await fetch(`${API_BASE}/chat/conversations/${conversationId}/read`, {
+      const response = await fetch(`${API_BASE}/chat/groups/invitations`, {
+        headers
+      });
+      const parsed = await parseApiResponse(response);
+      const received = Array.isArray(parsed.data?.received) ? parsed.data.received : null;
+      if (!response.ok || !received) {
+        if (!silent) {
+          window.alert(getApiErrorMessage(parsed, '获取群聊邀请失败'));
+        }
+        return null;
+      }
+
+      const nextState = { received };
+      setGroupInvites(nextState);
+      return nextState;
+    } catch (error) {
+      if (!silent) {
+        window.alert(`获取群聊邀请失败: ${error.message}`);
+      }
+      return null;
+    } finally {
+      if (!silent) {
+        setGroupInviteListLoading(false);
+      }
+    }
+  }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
+
+  const markConversationRead = useCallback(async (conversationId, lastReadSeq = 0) => {
+    const safeConversationId = normalizeConversationId(conversationId);
+    const headers = buildAuthHeaders({ json: true });
+    if (!headers || !safeConversationId) return null;
+
+    try {
+      const response = await fetch(`${API_BASE}/chat/conversations/${safeConversationId}/read`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ lastReadSeq })
@@ -419,7 +524,7 @@ const useChatCenter = ({
       }
 
       setConversations((prev) => sortConversations(prev.map((item) => (
-        item?.conversationId === conversationId
+        item?.conversationId === safeConversationId
           ? {
             ...item,
             lastReadSeq: Number(parsed.data.lastReadSeq) || Number(item?.lastReadSeq) || 0,
@@ -441,10 +546,11 @@ const useChatCenter = ({
     silent = true,
     shouldMarkRead = true
   }) => {
+    const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders();
-    if (!headers || !conversationId) return null;
+    if (!headers || !safeConversationId) return null;
 
-    updateConversationMessagesEntry(conversationId, (current) => ({
+    updateConversationMessagesEntry(safeConversationId, (current) => ({
       ...current,
       loading: !silent,
       error: silent ? current.error : ''
@@ -456,14 +562,14 @@ const useChatCenter = ({
       if (beforeSeq > 0) {
         query.set('beforeSeq', String(beforeSeq));
       }
-      const response = await fetch(`${API_BASE}/chat/conversations/${conversationId}/messages?${query.toString()}`, {
+      const response = await fetch(`${API_BASE}/chat/conversations/${safeConversationId}/messages?${query.toString()}`, {
         headers
       });
       const parsed = await parseApiResponse(response);
       const rows = Array.isArray(parsed.data?.rows) ? parsed.data.rows : null;
       const nextBeforeSeq = Number(parsed.data?.nextBeforeSeq) || 0;
       if (!response.ok || !rows) {
-        updateConversationMessagesEntry(conversationId, (current) => ({
+        updateConversationMessagesEntry(safeConversationId, (current) => ({
           ...current,
           loading: false,
           error: getApiErrorMessage(parsed, '获取聊天记录失败'),
@@ -473,7 +579,7 @@ const useChatCenter = ({
       }
 
       let mergedRows = rows;
-      updateConversationMessagesEntry(conversationId, (current) => {
+      updateConversationMessagesEntry(safeConversationId, (current) => {
         mergedRows = mergeMessagesAscending(current.rows, rows, prepend ? 'prepend' : 'replace');
         return {
           rows: mergedRows,
@@ -486,12 +592,12 @@ const useChatCenter = ({
 
       if (shouldMarkRead) {
         const latestSeq = mergedRows.length > 0 ? Number(mergedRows[mergedRows.length - 1]?.seq) || 0 : 0;
-        const activeConversation = conversations.find((item) => item?.conversationId === conversationId) || null;
+        const activeConversation = conversations.find((item) => item?.conversationId === safeConversationId) || null;
         if (latestSeq > 0 && (
           latestSeq > (Number(activeConversation?.lastReadSeq) || 0)
           || (Number(activeConversation?.unreadCount) || 0) > 0
         )) {
-          markConversationRead(conversationId, latestSeq);
+          markConversationRead(safeConversationId, latestSeq);
         }
       }
 
@@ -500,7 +606,7 @@ const useChatCenter = ({
         nextBeforeSeq
       };
     } catch (error) {
-      updateConversationMessagesEntry(conversationId, (current) => ({
+      updateConversationMessagesEntry(safeConversationId, (current) => ({
         ...current,
         loading: false,
         error: `获取聊天记录失败: ${error.message}`,
@@ -518,11 +624,12 @@ const useChatCenter = ({
   ]);
 
   const openConversation = useCallback(async (conversationId) => {
-    if (!conversationId) return null;
+    const safeConversationId = normalizeConversationId(conversationId);
+    if (!safeConversationId) return null;
     setActiveSidebarTab('conversations');
-    setSelectedConversationId(conversationId);
+    setSelectedConversationId(safeConversationId);
     return fetchMessages({
-      conversationId,
+      conversationId: safeConversationId,
       beforeSeq: 0,
       prepend: false,
       silent: false,
@@ -531,10 +638,11 @@ const useChatCenter = ({
   }, [fetchMessages]);
 
   const openGroupDetail = useCallback(async (conversationId) => {
-    if (!conversationId) return null;
+    const safeConversationId = normalizeConversationId(conversationId);
+    if (!safeConversationId) return null;
     setActiveSidebarTab('groups');
-    setSelectedGroupId(conversationId);
-    return fetchGroupDetail(conversationId, { silent: false });
+    setSelectedGroupId(safeConversationId);
+    return fetchGroupDetail(safeConversationId, { silent: false });
   }, [fetchGroupDetail]);
 
   const openDirectConversation = useCallback(async (targetUserId) => {
@@ -629,12 +737,13 @@ const useChatCenter = ({
     title,
     announcement
   }) => {
+    const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders({ json: true });
-    if (!headers || !conversationId) return null;
+    if (!headers || !safeConversationId) return null;
 
-    setGroupActionId(`group-update:${conversationId}`);
+    setGroupActionId(`group-update:${safeConversationId}`);
     try {
-      const response = await fetch(`${API_BASE}/chat/groups/${conversationId}`, {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}`, {
         method: 'PATCH',
         headers,
         body: JSON.stringify({
@@ -668,12 +777,13 @@ const useChatCenter = ({
     conversationId,
     memberUserIds = []
   }) => {
+    const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders({ json: true });
-    if (!headers || !conversationId) return null;
+    if (!headers || !safeConversationId) return null;
 
-    setGroupActionId(`group-add:${conversationId}`);
+    setGroupActionId(`group-add:${safeConversationId}`);
     try {
-      const response = await fetch(`${API_BASE}/chat/groups/${conversationId}/members`, {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}/members`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ memberUserIds })
@@ -700,16 +810,118 @@ const useChatCenter = ({
     }
   }, [applyGroupPayload, buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
 
+  const inviteGroupMembers = useCallback(async ({
+    conversationId,
+    inviteeUserIds = []
+  }) => {
+    const safeConversationId = normalizeConversationId(conversationId);
+    const headers = buildAuthHeaders({ json: true });
+    const safeInviteeUserIds = Array.isArray(inviteeUserIds) ? inviteeUserIds.filter(Boolean) : [];
+    if (!headers || !safeConversationId || safeInviteeUserIds.length === 0) return null;
+
+    const actionKey = `group-invite:${safeConversationId}:${safeInviteeUserIds.join(',')}`;
+    setGroupInviteActionId(actionKey);
+    try {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}/invitations`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ inviteeUserIds: safeInviteeUserIds })
+      });
+      const parsed = await parseApiResponse(response);
+      const invitedUserIds = Array.isArray(parsed.data?.invitedUserIds) ? parsed.data.invitedUserIds : null;
+      if (!response.ok || !invitedUserIds) {
+        window.alert(getApiErrorMessage(parsed, '发送群聊邀请失败'));
+        return null;
+      }
+
+      setPanelNotice(invitedUserIds.length > 1 ? '群聊邀请已发送。' : '群聊邀请已发送，等待对方处理。');
+      await Promise.all([
+        fetchGroupInvitations(true),
+        fetchGroupDetail(safeConversationId, { silent: true }),
+        groupInviteSearchQuery ? searchGroupInviteUsers(groupInviteSearchQuery, { silent: true }) : Promise.resolve([])
+      ]);
+      return invitedUserIds;
+    } catch (error) {
+      window.alert(`发送群聊邀请失败: ${error.message}`);
+      return null;
+    } finally {
+      setGroupInviteActionId('');
+    }
+  }, [
+    buildAuthHeaders,
+    fetchGroupDetail,
+    fetchGroupInvitations,
+    getApiErrorMessage,
+    groupInviteSearchQuery,
+    parseApiResponse,
+    searchGroupInviteUsers
+  ]);
+
+  const respondToGroupInvitation = useCallback(async (invitationId, action) => {
+    const headers = buildAuthHeaders({ json: true });
+    if (!headers || !invitationId) return null;
+
+    const actionKey = `${invitationId}:${action}`;
+    setGroupInviteActionId(actionKey);
+    try {
+      const response = await fetch(`${API_BASE}/chat/groups/invitations/${invitationId}/respond`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action })
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok || !parsed.data?.invitation?.invitationId) {
+        const fallbackText = action === 'accept'
+          ? '接受群聊邀请失败'
+          : action === 'ignore'
+            ? '忽略群聊邀请失败'
+            : '处理群聊邀请失败';
+        window.alert(getApiErrorMessage(parsed, fallbackText));
+        return null;
+      }
+
+      setPanelNotice(
+        action === 'accept'
+          ? '已加入群聊。'
+          : action === 'ignore'
+            ? '该次群聊邀请已忽略。'
+            : '群聊邀请已拒绝。'
+      );
+      await Promise.all([
+        fetchConversations(true),
+        fetchGroupInvitations(true)
+      ]);
+      return parsed.data.invitation;
+    } catch (error) {
+      const errorText = action === 'accept'
+        ? '接受群聊邀请失败'
+        : action === 'ignore'
+          ? '忽略群聊邀请失败'
+          : '处理群聊邀请失败';
+      window.alert(`${errorText}: ${error.message}`);
+      return null;
+    } finally {
+      setGroupInviteActionId('');
+    }
+  }, [
+    buildAuthHeaders,
+    fetchConversations,
+    fetchGroupInvitations,
+    getApiErrorMessage,
+    parseApiResponse
+  ]);
+
   const removeGroupMember = useCallback(async ({
     conversationId,
     targetUserId
   }) => {
+    const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders();
-    if (!headers || !conversationId || !targetUserId) return null;
+    if (!headers || !safeConversationId || !targetUserId) return null;
 
-    setGroupActionId(`group-remove:${conversationId}:${targetUserId}`);
+    setGroupActionId(`group-remove:${safeConversationId}:${targetUserId}`);
     try {
-      const response = await fetch(`${API_BASE}/chat/groups/${conversationId}/members/${targetUserId}`, {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}/members/${targetUserId}`, {
         method: 'DELETE',
         headers
       });
@@ -739,12 +951,13 @@ const useChatCenter = ({
     conversationId,
     targetUserId
   }) => {
+    const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders({ json: true });
-    if (!headers || !conversationId || !targetUserId) return null;
+    if (!headers || !safeConversationId || !targetUserId) return null;
 
-    setGroupActionId(`group-transfer:${conversationId}:${targetUserId}`);
+    setGroupActionId(`group-transfer:${safeConversationId}:${targetUserId}`);
     try {
-      const response = await fetch(`${API_BASE}/chat/groups/${conversationId}/transfer`, {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}/transfer`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ targetUserId })
@@ -772,12 +985,13 @@ const useChatCenter = ({
   }, [applyGroupPayload, buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
 
   const leaveGroupConversation = useCallback(async (conversationId) => {
+    const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders({ json: true });
-    if (!headers || !conversationId) return null;
+    if (!headers || !safeConversationId) return null;
 
-    setGroupActionId(`group-leave:${conversationId}`);
+    setGroupActionId(`group-leave:${safeConversationId}`);
     try {
-      const response = await fetch(`${API_BASE}/chat/groups/${conversationId}/leave`, {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}/leave`, {
         method: 'POST',
         headers,
         body: JSON.stringify({})
@@ -788,13 +1002,13 @@ const useChatCenter = ({
         return null;
       }
 
-      setConversations((prev) => removeConversationRow(prev, conversationId));
-      setSelectedGroupId((prev) => (prev === conversationId ? '' : prev));
-      setSelectedConversationId((prev) => (prev === conversationId ? '' : prev));
+      setConversations((prev) => removeConversationRow(prev, safeConversationId));
+      setSelectedGroupId((prev) => (prev === safeConversationId ? '' : prev));
+      setSelectedConversationId((prev) => (prev === safeConversationId ? '' : prev));
       setSelectedGroupDetail((prev) => (
-        prev?.group?.conversationId === conversationId ? null : prev
+        prev?.group?.conversationId === safeConversationId ? null : prev
       ));
-      updateConversationMessagesEntry(conversationId, () => ({
+      updateConversationMessagesEntry(safeConversationId, () => ({
         rows: [],
         nextBeforeSeq: 0,
         loading: false,
@@ -812,15 +1026,16 @@ const useChatCenter = ({
   }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse, updateConversationMessagesEntry]);
 
   const sendMessage = useCallback(async (conversationId, content) => {
+    const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders({ json: true });
     const messageContent = String(content || '').trim();
-    if (!headers || !conversationId) return null;
+    if (!headers || !safeConversationId) return null;
     if (!messageContent) return null;
 
-    const actionKey = `send:${conversationId}`;
+    const actionKey = `send:${safeConversationId}`;
     setConversationActionId(actionKey);
     try {
-      const response = await fetch(`${API_BASE}/chat/conversations/${conversationId}/messages`, {
+      const response = await fetch(`${API_BASE}/chat/conversations/${safeConversationId}/messages`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -831,19 +1046,20 @@ const useChatCenter = ({
       });
       const parsed = await parseApiResponse(response);
       const message = parsed.data?.message || null;
+      const temporaryMessageInfo = parsed.data?.temporaryMessageInfo || null;
       if (!response.ok || !message?._id) {
         window.alert(getApiErrorMessage(parsed, '发送消息失败'));
         return null;
       }
 
-      updateConversationMessagesEntry(conversationId, (current) => ({
+      updateConversationMessagesEntry(safeConversationId, (current) => ({
         ...current,
         rows: mergeMessagesAscending(current.rows, [message], 'append'),
         initialized: true
       }));
 
       setConversations((prev) => {
-        const currentConversation = prev.find((item) => item?.conversationId === conversationId);
+        const currentConversation = prev.find((item) => item?.conversationId === safeConversationId);
         const nextRow = currentConversation
           ? {
             ...currentConversation,
@@ -857,23 +1073,42 @@ const useChatCenter = ({
         return nextRow ? upsertConversationRow(prev, nextRow) : prev;
       });
 
-      return message;
+      if (temporaryMessageInfo?.maxCount) {
+        const noticeText = temporaryMessageInfo.remainingCount > 0
+          ? `当前为非好友临时聊天，已发送 ${temporaryMessageInfo.usedCount}/${temporaryMessageInfo.maxCount} 条，还可再发 ${temporaryMessageInfo.remainingCount} 条。`
+          : `当前为非好友临时聊天，已发送 ${temporaryMessageInfo.usedCount}/${temporaryMessageInfo.maxCount} 条，临时消息额度已用完。`;
+        setPanelNotice(noticeText);
+        pushChatToast({
+          id: `temporary-message:${safeConversationId}:${temporaryMessageInfo.usedCount}`,
+          kind: 'notice',
+          tone: temporaryMessageInfo.remainingCount > 0 ? 'info' : 'warning',
+          title: '临时消息提醒',
+          message: noticeText,
+          conversationId: safeConversationId
+        });
+      }
+
+      return {
+        message,
+        temporaryMessageInfo
+      };
     } catch (error) {
       window.alert(`发送消息失败: ${error.message}`);
       return null;
     } finally {
       setConversationActionId('');
     }
-  }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse, updateConversationMessagesEntry]);
+  }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse, pushChatToast, updateConversationMessagesEntry]);
 
   const hideConversation = useCallback(async (conversationId) => {
+    const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders();
-    if (!headers || !conversationId) return null;
+    if (!headers || !safeConversationId) return null;
 
-    const actionKey = `hide:${conversationId}`;
+    const actionKey = `hide:${safeConversationId}`;
     setConversationActionId(actionKey);
     try {
-      const response = await fetch(`${API_BASE}/chat/conversations/${conversationId}`, {
+      const response = await fetch(`${API_BASE}/chat/conversations/${safeConversationId}`, {
         method: 'DELETE',
         headers
       });
@@ -883,9 +1118,9 @@ const useChatCenter = ({
         return null;
       }
 
-      setConversations((prev) => removeConversationRow(prev, conversationId));
-      setSelectedConversationId((prev) => (prev === conversationId ? '' : prev));
-      updateConversationMessagesEntry(conversationId, () => ({
+      setConversations((prev) => removeConversationRow(prev, safeConversationId));
+      setSelectedConversationId((prev) => (prev === safeConversationId ? '' : prev));
+      updateConversationMessagesEntry(safeConversationId, () => ({
         rows: [],
         nextBeforeSeq: 0,
         loading: false,
@@ -945,6 +1180,49 @@ const useChatCenter = ({
     searchUsers
   ]);
 
+  const removeFriend = useCallback(async (friendshipId) => {
+    const headers = buildAuthHeaders();
+    const safeFriendshipId = String(friendshipId || '').trim();
+    if (!headers || !safeFriendshipId) return null;
+
+    const actionKey = `remove:${safeFriendshipId}`;
+    setFriendActionId(actionKey);
+    try {
+      const response = await fetch(`${API_BASE}/social/friends/${safeFriendshipId}`, {
+        method: 'DELETE',
+        headers
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok || !parsed.data?.friendship?.friendshipId) {
+        window.alert(getApiErrorMessage(parsed, '删除好友失败'));
+        return null;
+      }
+
+      setPanelNotice('好友关系已删除；若双方没有私聊窗口，系统会补出一个私聊入口并显示当前已非好友。');
+      await Promise.all([
+        fetchFriendRequests(true),
+        fetchFriends(true),
+        fetchConversations(true),
+        friendSearchQuery ? searchUsers(friendSearchQuery, { silent: true }) : Promise.resolve([])
+      ]);
+      return parsed.data.friendship;
+    } catch (error) {
+      window.alert(`删除好友失败: ${error.message}`);
+      return null;
+    } finally {
+      setFriendActionId('');
+    }
+  }, [
+    buildAuthHeaders,
+    fetchConversations,
+    fetchFriendRequests,
+    fetchFriends,
+    friendSearchQuery,
+    getApiErrorMessage,
+    parseApiResponse,
+    searchUsers
+  ]);
+
   const respondToFriendRequest = useCallback(async (friendshipId, action) => {
     const headers = buildAuthHeaders({ json: true });
     if (!headers || !friendshipId) return null;
@@ -959,11 +1237,22 @@ const useChatCenter = ({
       });
       const parsed = await parseApiResponse(response);
       if (!response.ok || !parsed.data?.friendship?.friendshipId) {
-        window.alert(getApiErrorMessage(parsed, action === 'accept' ? '通过好友申请失败' : '拒绝好友申请失败'));
+        const fallbackText = action === 'accept'
+          ? '通过好友申请失败'
+          : action === 'ignore'
+            ? '忽略好友申请失败'
+            : '处理好友申请失败';
+        window.alert(getApiErrorMessage(parsed, fallbackText));
         return null;
       }
 
-      setPanelNotice(action === 'accept' ? '好友关系已建立，私聊会在你主动打开时才创建。' : '好友申请已拒绝。');
+      setPanelNotice(
+        action === 'accept'
+          ? '好友关系已建立，私聊会在你主动打开时才创建。'
+          : action === 'ignore'
+            ? '该次好友申请已忽略，对方仍可再次申请或发送临时消息。'
+            : '好友申请已拒绝。'
+      );
       await Promise.all([
         fetchFriendRequests(true),
         fetchFriends(true),
@@ -971,7 +1260,12 @@ const useChatCenter = ({
       ]);
       return parsed.data.friendship;
     } catch (error) {
-      window.alert(`${action === 'accept' ? '通过好友申请失败' : '拒绝好友申请失败'}: ${error.message}`);
+      const errorText = action === 'accept'
+        ? '通过好友申请失败'
+        : action === 'ignore'
+          ? '忽略好友申请失败'
+          : '处理好友申请失败';
+      window.alert(`${errorText}: ${error.message}`);
       return null;
     } finally {
       setRequestActionId('');
@@ -986,13 +1280,106 @@ const useChatCenter = ({
     searchUsers
   ]);
 
+  const blockUser = useCallback(async ({ targetUserId, friendshipId = '' } = {}) => {
+    const headers = buildAuthHeaders({ json: true });
+    const safeTargetUserId = String(targetUserId || '').trim();
+    const safeFriendshipId = String(friendshipId || '').trim();
+    if (!headers || (!safeTargetUserId && !safeFriendshipId)) return null;
+
+    const actionTarget = safeTargetUserId || safeFriendshipId;
+    const actionKey = `block:${actionTarget}`;
+    setFriendActionId(actionKey);
+    try {
+      const response = await fetch(`${API_BASE}/social/blocks`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          targetUserId: safeTargetUserId,
+          friendshipId: safeFriendshipId
+        })
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok || !parsed.data?.friendship?.friendshipId) {
+        window.alert(getApiErrorMessage(parsed, '拉黑用户失败'));
+        return null;
+      }
+
+      setPanelNotice('对方已加入黑名单，后续不会再收到其好友申请或临时消息。');
+      await Promise.all([
+        fetchFriendRequests(true),
+        fetchFriends(true),
+        fetchConversations(true),
+        friendSearchQuery ? searchUsers(friendSearchQuery, { silent: true }) : Promise.resolve([])
+      ]);
+      return parsed.data.friendship;
+    } catch (error) {
+      window.alert(`拉黑用户失败: ${error.message}`);
+      return null;
+    } finally {
+      setFriendActionId('');
+    }
+  }, [
+    buildAuthHeaders,
+    fetchConversations,
+    fetchFriendRequests,
+    fetchFriends,
+    friendSearchQuery,
+    getApiErrorMessage,
+    parseApiResponse,
+    searchUsers
+  ]);
+
+  const unblockUser = useCallback(async (targetUserId) => {
+    const headers = buildAuthHeaders();
+    const safeTargetUserId = String(targetUserId || '').trim();
+    if (!headers || !safeTargetUserId) return null;
+
+    const actionKey = `unblock:${safeTargetUserId}`;
+    setFriendActionId(actionKey);
+    try {
+      const response = await fetch(`${API_BASE}/social/blocks/${safeTargetUserId}`, {
+        method: 'DELETE',
+        headers
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok || !parsed.data?.friendship?.friendshipId) {
+        window.alert(getApiErrorMessage(parsed, '解除拉黑失败'));
+        return null;
+      }
+
+      setPanelNotice('已解除拉黑，对方可再次发送好友申请或临时消息。');
+      await Promise.all([
+        fetchFriendRequests(true),
+        fetchFriends(true),
+        fetchConversations(true),
+        friendSearchQuery ? searchUsers(friendSearchQuery, { silent: true }) : Promise.resolve([])
+      ]);
+      return parsed.data.friendship;
+    } catch (error) {
+      window.alert(`解除拉黑失败: ${error.message}`);
+      return null;
+    } finally {
+      setFriendActionId('');
+    }
+  }, [
+    buildAuthHeaders,
+    fetchConversations,
+    fetchFriendRequests,
+    fetchFriends,
+    friendSearchQuery,
+    getApiErrorMessage,
+    parseApiResponse,
+    searchUsers
+  ]);
+
   const loadOlderMessages = useCallback(async (conversationId) => {
-    const entry = conversationMessages[conversationId] || createEmptyMessagesEntry();
-    if (!conversationId || entry.loading || !entry.nextBeforeSeq) {
+    const safeConversationId = normalizeConversationId(conversationId);
+    const entry = conversationMessages[safeConversationId] || createEmptyMessagesEntry();
+    if (!safeConversationId || entry.loading || !entry.nextBeforeSeq) {
       return null;
     }
     return fetchMessages({
-      conversationId,
+      conversationId: safeConversationId,
       beforeSeq: entry.nextBeforeSeq,
       prepend: true,
       silent: false,
@@ -1001,24 +1388,36 @@ const useChatCenter = ({
   }, [conversationMessages, fetchMessages]);
 
   useEffect(() => {
+    if (selectedConversationId && !normalizeConversationId(selectedConversationId)) {
+      setSelectedConversationId('');
+      return;
+    }
+    if (selectedGroupId && !normalizeConversationId(selectedGroupId)) {
+      setSelectedGroupId('');
+    }
+  }, [selectedConversationId, selectedGroupId]);
+
+  useEffect(() => {
     if (authenticated) {
       fetchConversations(true);
       fetchFriends(true);
       fetchFriendRequests(true);
+      fetchGroupInvitations(true);
       return;
     }
     resetChatCenter();
-  }, [authenticated, fetchConversations, fetchFriendRequests, fetchFriends, resetChatCenter]);
+  }, [authenticated, fetchConversations, fetchFriendRequests, fetchFriends, fetchGroupInvitations, resetChatCenter]);
 
   useEffect(() => {
     if (!authenticated || !isChatDockExpanded) return;
     fetchConversations(false);
     fetchFriends(false);
     fetchFriendRequests(false);
+    fetchGroupInvitations(false);
     if (selectedGroupId) {
       fetchGroupDetail(selectedGroupId, { silent: false });
     }
-  }, [authenticated, fetchConversations, fetchFriendRequests, fetchFriends, fetchGroupDetail, isChatDockExpanded, selectedGroupId]);
+  }, [authenticated, fetchConversations, fetchFriendRequests, fetchFriends, fetchGroupDetail, fetchGroupInvitations, isChatDockExpanded, selectedGroupId]);
 
   useEffect(() => {
     if (!authenticated || !socket) return undefined;
@@ -1111,56 +1510,28 @@ const useChatCenter = ({
       }
     };
 
-    const handleFriendRequestCreated = async (payload = {}) => {
+    const handleFriendRequestCreated = async () => {
       await syncSocialSidebarData();
-
-      if (String(payload?.requester?._id || '') === String(currentUserId || '')) {
-        return;
-      }
-
-      const requesterName = payload?.requester?.username || '有玩家';
-      pushChatToast({
-        id: `friend-request:${payload?.friendship?.friendshipId || requesterName}`,
-        kind: 'friend-request',
-        tone: 'success',
-        title: '新的好友申请',
-        message: `${requesterName} 向你发送了好友申请`,
-        friendshipId: payload?.friendship?.friendshipId || ''
-      });
     };
 
-    const handleFriendRequestResponded = async (payload = {}) => {
+    const handleFriendRequestResponded = async () => {
       await syncSocialSidebarData();
+    };
 
-      const friendshipStatus = String(payload?.friendship?.status || '').trim();
-      const requesterId = String(payload?.requester?._id || '');
-      const addresseeName = payload?.addressee?.username || '对方';
-      const requesterName = payload?.requester?.username || '对方';
+    const handleRelationshipUpdated = async () => {
+      await Promise.all([
+        syncSocialSidebarData(),
+        fetchConversations(true)
+      ]);
+    };
 
-      if (requesterId === String(currentUserId || '')) {
-        pushChatToast({
-          id: `friend-response:${payload?.friendship?.friendshipId || friendshipStatus}`,
-          kind: 'friend-response',
-          tone: friendshipStatus === 'accepted' ? 'success' : 'muted',
-          title: friendshipStatus === 'accepted' ? '好友申请已通过' : '好友申请被拒绝',
-          message: friendshipStatus === 'accepted'
-            ? `${addresseeName} 已同意你的好友申请`
-            : `${addresseeName} 已拒绝你的好友申请`,
-          friendshipId: payload?.friendship?.friendshipId || ''
-        });
-        return;
+    const handleGroupInvitationUpdated = async (payload = {}) => {
+      await fetchGroupInvitations(true);
+      const conversationId = String(payload?.conversationId || '');
+      if (conversationId && selectedGroupId === conversationId) {
+        await fetchGroupDetail(conversationId, { silent: true });
       }
-
-      if (friendshipStatus === 'accepted') {
-        pushChatToast({
-          id: `friend-response:${payload?.friendship?.friendshipId || friendshipStatus}`,
-          kind: 'friend-response',
-          tone: 'success',
-          title: '好友已添加',
-          message: `你已和 ${requesterName} 成为好友`,
-          friendshipId: payload?.friendship?.friendshipId || ''
-        });
-      }
+      await fetchConversations(true);
     };
 
     socket.on('chat:message', handleIncomingMessage);
@@ -1170,6 +1541,8 @@ const useChatCenter = ({
     socket.on('chat:group-updated', handleGroupUpdated);
     socket.on('social:friend-request-created', handleFriendRequestCreated);
     socket.on('social:friend-request-responded', handleFriendRequestResponded);
+    socket.on('social:relationship-updated', handleRelationshipUpdated);
+    socket.on('chat:group-invitation-updated', handleGroupInvitationUpdated);
 
     return () => {
       socket.off('chat:message', handleIncomingMessage);
@@ -1179,11 +1552,15 @@ const useChatCenter = ({
       socket.off('chat:group-updated', handleGroupUpdated);
       socket.off('social:friend-request-created', handleFriendRequestCreated);
       socket.off('social:friend-request-responded', handleFriendRequestResponded);
+      socket.off('social:relationship-updated', handleRelationshipUpdated);
+      socket.off('chat:group-invitation-updated', handleGroupInvitationUpdated);
     };
   }, [
     authenticated,
     currentUserId,
+    fetchConversations,
     fetchGroupDetail,
+    fetchGroupInvitations,
     isChatDockExpanded,
     markConversationRead,
     pushChatToast,
@@ -1206,7 +1583,8 @@ const useChatCenter = ({
       await Promise.all([
         fetchConversations(true),
         fetchFriendRequests(true),
-        fetchFriends(true)
+        fetchFriends(true),
+        fetchGroupInvitations(true)
       ]);
 
       if (isChatDockExpanded && selectedConversationId) {
@@ -1231,6 +1609,7 @@ const useChatCenter = ({
     fetchConversations,
     fetchFriendRequests,
     fetchFriends,
+    fetchGroupInvitations,
     fetchGroupDetail,
     fetchMessages,
     isChatDockExpanded,
@@ -1266,10 +1645,16 @@ const useChatCenter = ({
     Array.isArray(friendRequests.received) ? friendRequests.received.length : 0
   ), [friendRequests.received]);
 
-  const chatBadgeCount = unreadConversationCount + pendingRequestCount;
+  const pendingGroupInvitationCount = useMemo(() => (
+    Array.isArray(groupInvites.received) ? groupInvites.received.length : 0
+  ), [groupInvites.received]);
+
+  const chatBadgeCount = unreadConversationCount + pendingRequestCount + pendingGroupInvitationCount;
 
   return {
     activeSidebarTab,
+    blockedUsers,
+    blockUser,
     chatBadgeCount,
     chatToasts,
     conversationActionId,
@@ -1291,8 +1676,15 @@ const useChatCenter = ({
     friends,
     groupActionId,
     groupDetailLoading,
+    groupInviteActionId,
+    groupInviteListLoading,
+    groupInviteSearchLoading,
+    groupInviteSearchQuery,
+    groupInviteSearchResults,
+    groupInvites,
     groups,
     hideConversation,
+    inviteGroupMembers,
     isChatDockExpanded,
     isRequestsModalOpen,
     leaveGroupConversation,
@@ -1302,14 +1694,18 @@ const useChatCenter = ({
     openDirectConversation,
     addGroupMembers,
     panelNotice,
+    pendingGroupInvitationCount,
     pendingRequestCount,
+    removeFriend,
     requestActionId,
     requestFriendship,
     requestListLoading,
     removeGroupMember,
     resetChatCenter,
     respondToFriendRequest,
+    respondToGroupInvitation,
     searchUsers,
+    searchGroupInviteUsers,
     selectedConversation,
     selectedConversationId,
     selectedGroupDetail,
@@ -1318,12 +1714,14 @@ const useChatCenter = ({
     sendMessage,
     setActiveSidebarTab,
     setFriendSearchQuery,
+    setGroupInviteSearchQuery,
     setSelectedGroupId,
     setIsChatDockExpanded,
     setIsRequestsModalOpen,
     setPanelNotice,
     setSelectedConversationId,
     transferGroupOwnership,
+    unblockUser,
     unreadConversationCount,
     updateGroupConversation
   };

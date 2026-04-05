@@ -290,6 +290,11 @@ export const isSenseArticleNotification = (notification) => (
     typeof notification?.type === 'string' && notification.type.startsWith('sense_article_')
 );
 
+export const SOCIAL_NOTIFICATION_TYPES = ['friend_request', 'friend_request_result'];
+export const isSocialNotification = (notification) => (
+    SOCIAL_NOTIFICATION_TYPES.includes(notification?.type)
+);
+
 export const getNodeDisplayName = (node) => {
     if (typeof node?.displayName === 'string' && node.displayName.trim()) return node.displayName.trim();
     const name = typeof node?.name === 'string' ? node.name.trim() : '';

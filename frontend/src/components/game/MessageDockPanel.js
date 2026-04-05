@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Bell, ChevronDown, FileText, Inbox, Megaphone, X } from 'lucide-react';
 import {
   isAnnouncementNotification,
+  isSocialNotification,
   isSenseArticleNotification
 } from '../../app/appShared';
 import './MessageDockPanel.css';
@@ -190,7 +191,7 @@ const MessageDockPanel = ({
   ), [allianceAnnouncements, systemAnnouncements]);
 
   const notificationItems = useMemo(() => {
-    const baseRows = notifications.filter((item) => !isAnnouncementNotification(item));
+    const baseRows = notifications.filter((item) => !isAnnouncementNotification(item) && !isSocialNotification(item));
     const adminRows = isAdmin && adminPendingNodes.length > 0
       ? [{
         _id: 'admin-pending-node-create',
@@ -208,7 +209,7 @@ const MessageDockPanel = ({
   }, [adminPendingNodes, isAdmin, notifications]);
 
   const directNotificationUnreadCount = useMemo(() => (
-    notifications.filter((item) => !isAnnouncementNotification(item) && !item.read).length
+    notifications.filter((item) => !isAnnouncementNotification(item) && !isSocialNotification(item) && !item.read).length
   ), [notifications]);
 
   const toggleExpanded = async (itemKey, item) => {

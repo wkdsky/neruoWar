@@ -1083,10 +1083,19 @@ const App = () => {
     friendSearchQuery,
     friendSearchResults,
     friends,
+    blockedUsers,
+    blockUser,
     groupActionId,
     groupDetailLoading,
+    groupInviteActionId,
+    groupInviteListLoading,
+    groupInviteSearchLoading,
+    groupInviteSearchQuery,
+    groupInviteSearchResults,
+    groupInvites,
     groups,
     hideConversation,
+    inviteGroupMembers,
     isChatDockExpanded,
     isRequestsModalOpen,
     leaveGroupConversation,
@@ -1099,10 +1108,13 @@ const App = () => {
     requestActionId,
     requestFriendship,
     requestListLoading,
+    removeFriend,
     removeGroupMember,
     resetChatCenter,
     respondToFriendRequest,
+    respondToGroupInvitation,
     searchUsers,
+    searchGroupInviteUsers,
     selectedConversation,
     selectedGroupDetail,
     selectedGroupId,
@@ -1110,11 +1122,13 @@ const App = () => {
     sendMessage,
     setActiveSidebarTab,
     setFriendSearchQuery,
+    setGroupInviteSearchQuery,
     setIsChatDockExpanded,
     setIsRequestsModalOpen,
     setPanelNotice,
     setSelectedGroupId,
     transferGroupOwnership,
+    unblockUser,
     updateGroupConversation
   } = useChatCenter({
     authenticated,
@@ -1158,8 +1172,14 @@ const App = () => {
 
   const handleSendFriendRequestFromUserCard = useCallback(async (targetUserId) => {
     if (!targetUserId) return null;
+    const message = window.prompt('请输入好友申请留言（必填，最多 120 字）', '') || '';
+    const trimmedMessage = message.trim().slice(0, 120);
+    if (!trimmedMessage) {
+      window.alert('请先填写好友申请留言。');
+      return null;
+    }
     setIsChatDockExpanded(true);
-    return requestFriendship({ targetUserId });
+    return requestFriendship({ targetUserId, message: trimmedMessage });
   }, [requestFriendship, setIsChatDockExpanded]);
 
   const handleOpenFriendRequestsFromUserCard = useCallback(() => {
@@ -2524,6 +2544,7 @@ const App = () => {
         <UserCardProvider
             currentUserId={chatCurrentUserId}
             friends={friends}
+            blockedUsers={blockedUsers}
             friendRequests={friendRequests}
             conversationActionId={conversationActionId}
             friendActionId={friendActionId}
@@ -2626,8 +2647,15 @@ const App = () => {
                       friendSearchQuery,
                       friendSearchResults,
                       friends,
+                      blockedUsers,
                       groupActionId,
                       groupDetailLoading,
+                      groupInviteActionId,
+                      groupInviteListLoading,
+                      groupInviteSearchLoading,
+                      groupInviteSearchQuery,
+                      groupInviteSearchResults,
+                      groupInvites,
                       groups,
                       loadOlderMessages,
                       onDeleteConversation: (conversation) => {
@@ -2648,17 +2676,23 @@ const App = () => {
                         setPanelNotice('');
                       },
                       onAddGroupMembers: addGroupMembers,
+                      onBlockUser: blockUser,
                       onCreateGroupConversation: createGroupConversation,
+                      onInviteGroupMembers: inviteGroupMembers,
                       onLeaveGroupConversation: leaveGroupConversation,
                       onOpenConversation: openConversation,
                       onOpenDirectConversation: openDirectConversation,
                       onOpenGroupDetail: openGroupDetail,
+                      onRemoveFriend: removeFriend,
                       onRemoveGroupMember: removeGroupMember,
                       onRespondFriendRequest: respondToFriendRequest,
+                      onRespondGroupInvitation: respondToGroupInvitation,
                       onSearchUsers: searchUsers,
-                      onSendFriendRequest: (targetUserId) => requestFriendship({ targetUserId }),
+                      onSearchGroupInviteUsers: searchGroupInviteUsers,
+                      onSendFriendRequest: (targetUserId, message = '') => requestFriendship({ targetUserId, message }),
                       onSendMessage: sendMessage,
                       onTransferGroupOwnership: transferGroupOwnership,
+                      onUnblockUser: unblockUser,
                       onUpdateGroupConversation: updateGroupConversation,
                       panelNotice,
                       isRequestsModalOpen,
@@ -2670,6 +2704,7 @@ const App = () => {
                       selectedMessagesEntry,
                       setActiveSidebarTab,
                       setSelectedGroupId,
+                      setGroupInviteSearchQuery,
                       setIsRequestsModalOpen
                     }}
                     isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}

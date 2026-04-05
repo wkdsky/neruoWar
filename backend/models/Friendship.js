@@ -43,6 +43,10 @@ const FriendshipSchema = new mongoose.Schema({
   respondedAt: {
     type: Date,
     default: null
+  },
+  messageQuotaResetSeq: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true

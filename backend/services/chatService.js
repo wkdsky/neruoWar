@@ -5,7 +5,8 @@ const {
   MAX_GROUP_ANNOUNCEMENT_LENGTH,
   MAX_GROUP_MEMBER_COUNT,
   MAX_GROUP_MEMBERSHIP_COUNT,
-  MAX_GROUP_TITLE_LENGTH
+  MAX_GROUP_TITLE_LENGTH,
+  MAX_NON_FRIEND_DIRECT_MESSAGES
 } = require('../constants/socialChat');
 const SocialChatError = require('./socialChatError');
 const {
@@ -269,6 +270,29 @@ const createChatService = ({
       }
     };
   };
+
+  const serializeGroupInvitationItem = ({
+    invitation = {},
+    conversation = null,
+    inviter = null
+  } = {}) => ({
+    invitationId: getIdString(invitation?._id),
+    conversationId: getIdString(invitation?.conversationId || conversation?._id),
+    status: invitation?.status || 'pending',
+    createdAt: invitation?.createdAt || null,
+    updatedAt: invitation?.updatedAt || null,
+    respondedAt: invitation?.respondedAt || null,
+    group: conversation
+      ? {
+        conversationId: getIdString(conversation?._id),
+        title: conversation?.title || '群聊',
+        announcement: conversation?.announcement || '',
+        memberCount: Number(conversation?.memberCount) || 0,
+        avatar: conversation?.avatar || ''
+      }
+      : null,
+    inviter: inviter ? serializeUserSummary(inviter) : null
+  });
 
   const ensureConversationMemberSafely = async ({
     conversationId,
@@ -706,6 +730,238 @@ const createChatService = ({
     };
   };
 
+  const inviteGroupMembers = async ({
+    userId,
+    conversationId,
+    inviteeUserIds = []
+  }) => {
+    const {
+      conversation,
+      member,
+      userId: safeUserId
+    } = await getGroupConversationAccessContext({ userId, conversationId });
+    assertGroupOwnerAccess(member);
+
+    const targetUserIds = dedupeUserIds(inviteeUserIds).filter((item) => item !== safeUserId);
+    if (targetUserIds.length === 0) {
+      throw new SocialChatError('请至少选择一名要邀请的成员', {
+        status: 400,
+        code: 'EMPTY_GROUP_INVITEE_LIST'
+      });
+    }
+
+    const [currentMembers, inviter] = await Promise.all([
+      chatRepo.listConversationMembersByConversationId(conversation._id, {
+        isActive: true
+      }),
+      socialRepo.findUserById(safeUserId, '_id username avatar profession allianceId')
+    ]);
+    const activeMemberIdSet = new Set(currentMembers.map((item) => getIdString(item?.userId)));
+    const candidateUserIds = targetUserIds.filter((item) => !activeMemberIdSet.has(item));
+    if (candidateUserIds.length === 0) {
+      throw new SocialChatError('所选用户已全部在群聊中', {
+        status: 400,
+        code: 'GROUP_INVITEES_ALREADY_INCLUDED'
+      });
+    }
+
+    const { users } = await ensureUsersExist(candidateUserIds);
+    const userMap = new Map(users.map((item) => [getIdString(item?._id), item]));
+    const invitedUserIds = [];
+
+    for (const inviteeUserId of candidateUserIds) {
+      const existingInvitation = await chatRepo.findGroupInvitationByConversationAndInvitee({
+        conversationId: conversation._id,
+        inviteeId: inviteeUserId
+      });
+      if (existingInvitation?.status === 'pending') {
+        continue;
+      }
+
+      if (existingInvitation) {
+        existingInvitation.inviterId = safeUserId;
+        existingInvitation.status = 'pending';
+        existingInvitation.respondedAt = null;
+        await existingInvitation.save();
+      } else {
+        await chatRepo.createGroupInvitation({
+          conversationId: conversation._id,
+          inviterId: safeUserId,
+          inviteeId: inviteeUserId,
+          status: 'pending'
+        });
+      }
+      invitedUserIds.push(inviteeUserId);
+    }
+
+    if (invitedUserIds.length === 0) {
+      throw new SocialChatError('这些用户已经收到待处理邀请', {
+        status: 409,
+        code: 'GROUP_INVITATION_ALREADY_SENT'
+      });
+    }
+
+    return {
+      conversationId: getIdString(conversation._id),
+      invitedUserIds,
+      inviter: inviter ? serializeUserSummary(inviter) : null,
+      invitees: invitedUserIds.map((item) => serializeUserSummary(userMap.get(item))),
+      participantUserIds: currentMembers.map((item) => getIdString(item?.userId)).filter(Boolean)
+    };
+  };
+
+  const listGroupInvitationsForUser = async ({ userId }) => {
+    const safeUserId = assertValidUserId(userId);
+    const invitations = await chatRepo.listGroupInvitationsByInvitee({
+      inviteeId: safeUserId,
+      status: 'pending'
+    });
+    if (invitations.length === 0) {
+      return { received: [] };
+    }
+
+    const [conversations, inviters] = await Promise.all([
+      chatRepo.listConversationsByIds(invitations.map((item) => item?.conversationId)),
+      socialRepo.findUsersByIds(invitations.map((item) => item?.inviterId))
+    ]);
+    const conversationMap = new Map(conversations.map((item) => [getIdString(item?._id), item]));
+    const inviterMap = new Map(inviters.map((item) => [getIdString(item?._id), item]));
+
+    return {
+      received: invitations
+        .map((item) => serializeGroupInvitationItem({
+          invitation: item,
+          conversation: conversationMap.get(getIdString(item?.conversationId)) || null,
+          inviter: inviterMap.get(getIdString(item?.inviterId)) || null
+        }))
+        .filter((item) => item?.group?.conversationId)
+    };
+  };
+
+  const respondToGroupInvitation = async ({
+    userId,
+    invitationId,
+    action
+  }) => {
+    const safeUserId = assertValidUserId(userId);
+    const safeInvitationId = getIdString(invitationId);
+    const normalizedAction = String(action || '').trim();
+
+    if (!isValidObjectId(safeInvitationId)) {
+      throw new SocialChatError('无效的群聊邀请', {
+        status: 400,
+        code: 'INVALID_GROUP_INVITATION_ID'
+      });
+    }
+    if (!['accept', 'reject', 'ignore'].includes(normalizedAction)) {
+      throw new SocialChatError('无效的邀请操作', {
+        status: 400,
+        code: 'INVALID_GROUP_INVITATION_ACTION'
+      });
+    }
+
+    const invitation = await chatRepo.findGroupInvitationById(safeInvitationId);
+    if (!invitation) {
+      throw new SocialChatError('群聊邀请不存在', {
+        status: 404,
+        code: 'GROUP_INVITATION_NOT_FOUND'
+      });
+    }
+    if (invitation.status !== 'pending') {
+      throw new SocialChatError('该群聊邀请已处理', {
+        status: 400,
+        code: 'GROUP_INVITATION_ALREADY_RESOLVED'
+      });
+    }
+    if (getIdString(invitation.inviteeId) !== safeUserId) {
+      throw new SocialChatError('无权处理该群聊邀请', {
+        status: 403,
+        code: 'FORBIDDEN_GROUP_INVITATION_ACTION'
+      });
+    }
+
+    const [conversation, inviter, invitee] = await Promise.all([
+      chatRepo.findConversationById(invitation.conversationId),
+      socialRepo.findUserById(invitation.inviterId, '_id username avatar profession allianceId'),
+      socialRepo.findUserById(invitation.inviteeId, '_id username avatar profession allianceId')
+    ]);
+    if (!conversation || conversation?.type !== 'group') {
+      throw new SocialChatError('群聊不存在', {
+        status: 404,
+        code: 'GROUP_CONVERSATION_NOT_FOUND'
+      });
+    }
+    if (!inviter || !invitee) {
+      throw new SocialChatError('邀请相关用户不存在', {
+        status: 400,
+        code: 'GROUP_INVITATION_USER_NOT_FOUND'
+      });
+    }
+
+    let participantUserIds = [];
+    if (normalizedAction === 'accept') {
+      await assertGroupMembershipQuota([safeUserId]);
+      const currentMembers = await chatRepo.listConversationMembersByConversationId(conversation._id, {
+        isActive: true
+      });
+      const activeMemberIdSet = new Set(currentMembers.map((item) => getIdString(item?.userId)));
+      if (!activeMemberIdSet.has(safeUserId)) {
+        if (currentMembers.length >= MAX_GROUP_MEMBER_COUNT) {
+          throw new SocialChatError(`群成员数量不能超过 ${MAX_GROUP_MEMBER_COUNT} 人`, {
+            status: 400,
+            code: 'GROUP_MEMBER_COUNT_EXCEEDED'
+          });
+        }
+        const now = new Date();
+        const currentSeq = Number(conversation?.messageSeq) || 0;
+        await ensureConversationMemberSafely({
+          conversationId: conversation._id,
+          userId: safeUserId,
+          set: {
+            role: 'member',
+            isActive: true,
+            isVisible: true,
+            leftAt: null,
+            deletedAt: null,
+            clearedAt: currentSeq > 0 ? now : null,
+            clearedBeforeSeq: currentSeq,
+            lastReadSeq: currentSeq,
+            unreadCount: 0,
+            updatedAt: now
+          },
+          setOnInsert: {
+            joinedAt: now
+          }
+        });
+        await syncConversationMemberCount(conversation._id);
+      }
+      const nextMembers = await chatRepo.listConversationMembersByConversationId(conversation._id, {
+        isActive: true
+      });
+      participantUserIds = nextMembers.map((item) => getIdString(item?.userId)).filter(Boolean);
+    }
+
+    invitation.status = normalizedAction === 'accept'
+      ? 'accepted'
+      : normalizedAction === 'ignore'
+        ? 'ignored'
+        : 'rejected';
+    invitation.respondedAt = new Date();
+    await invitation.save();
+
+    return {
+      invitation: serializeGroupInvitationItem({
+        invitation,
+        conversation,
+        inviter
+      }),
+      action: normalizedAction,
+      inviter: serializeUserSummary(inviter),
+      invitee: serializeUserSummary(invitee),
+      participantUserIds
+    };
+  };
+
   const removeGroupMember = async ({
     userId,
     conversationId,
@@ -1046,8 +1302,9 @@ const createChatService = ({
       conversationId
     });
 
+    let directUserIds = [];
     if (conversation.type === 'direct') {
-      const directUserIds = String(conversation.directKey || '').split(':').filter(Boolean);
+      directUserIds = String(conversation.directKey || '').split(':').filter(Boolean);
       if (directUserIds.length !== 2 || !directUserIds.includes(safeUserId)) {
         throw new SocialChatError('私聊会话参与者异常', {
           status: 400,
@@ -1067,6 +1324,46 @@ const createChatService = ({
         return {
           conversationId: getIdString(conversation._id),
           message: serializeMessageForUserView(existingMessage, sender)
+        };
+      }
+    }
+
+    let temporaryMessageInfo = null;
+    if (conversation.type === 'direct') {
+      const targetUserId = directUserIds.find((item) => item !== safeUserId) || '';
+      const friendship = await socialRepo.findFriendshipByParticipantsKey(buildUserPairKey(safeUserId, targetUserId));
+      if (friendship?.status === 'blocked') {
+        const isBlockedByCurrentUser = getIdString(friendship?.requesterId) === safeUserId;
+        throw new SocialChatError(
+          isBlockedByCurrentUser
+            ? '你已将对方加入黑名单，请先解除拉黑后再发送消息'
+            : '对方已将你加入黑名单，消息已被拒绝',
+          {
+            status: 403,
+            code: 'DIRECT_MESSAGE_BLOCKED'
+          }
+        );
+      }
+
+      if (friendship?.status !== 'accepted') {
+        const resetBoundarySeq = friendship?.status === 'rejected'
+          ? Math.max(0, Number(friendship?.messageQuotaResetSeq) || 0)
+          : 0;
+        const sentCount = await chatRepo.countMessagesByConversationAndSender({
+          conversationId: conversation._id,
+          senderId: safeUserId,
+          afterSeq: resetBoundarySeq
+        });
+        if (sentCount >= MAX_NON_FRIEND_DIRECT_MESSAGES) {
+          throw new SocialChatError(`非好友用户最多只能累计发送 ${MAX_NON_FRIEND_DIRECT_MESSAGES} 条临时消息`, {
+            status: 403,
+            code: 'NON_FRIEND_MESSAGE_LIMIT_REACHED'
+          });
+        }
+        temporaryMessageInfo = {
+          usedCount: sentCount + 1,
+          remainingCount: Math.max(0, MAX_NON_FRIEND_DIRECT_MESSAGES - sentCount - 1),
+          maxCount: MAX_NON_FRIEND_DIRECT_MESSAGES
         };
       }
     }
@@ -1123,7 +1420,8 @@ const createChatService = ({
     const sender = await socialRepo.findUserById(safeUserId, '_id username avatar profession allianceId');
     return {
       conversationId: getIdString(conversation._id),
-      message: serializeMessageForUserView(message, sender)
+      message: serializeMessageForUserView(message, sender),
+      temporaryMessageInfo
     };
   };
 
@@ -1211,14 +1509,17 @@ const createChatService = ({
     getGroupConversationAccessContext,
     getGroupDetailForUser,
     hideConversationForUser,
+    inviteGroupMembers,
     leaveGroupConversation,
     listConversationParticipantUserIds,
+    listGroupInvitationsForUser,
     listGroupsForUser,
     listMessagesForUserView,
     listVisibleConversationsForUser,
     markConversationReadForUser,
     reactivateConversationForRecipientOnIncomingMessage,
     removeGroupMember,
+    respondToGroupInvitation,
     serializeConversationForUserView,
     sendMessage,
     transferGroupOwnership,

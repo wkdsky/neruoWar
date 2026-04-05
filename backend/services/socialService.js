@@ -29,6 +29,15 @@ const createSocialService = ({
     return safeUserId;
   };
 
+  const loadFriendshipUsers = async (friendship = null) => {
+    if (!friendship) return { requester: null, addressee: null };
+    const [requester, addressee] = await Promise.all([
+      socialRepo.findUserById(friendship.requesterId, '_id username'),
+      socialRepo.findUserById(friendship.addresseeId, '_id username')
+    ]);
+    return { requester, addressee };
+  };
+
   const searchUsers = async ({ requestUserId, keyword, limit = 20 }) => {
     const safeUserId = assertValidUserId(requestUserId);
     const trimmedKeyword = String(keyword || '').trim();
@@ -119,10 +128,14 @@ const createSocialService = ({
       });
     }
     if (friendship?.status === 'blocked') {
-      throw new SocialChatError('当前无法发起好友申请', {
-        status: 403,
-        code: 'FRIEND_REQUEST_BLOCKED'
-      });
+      const isBlockedByCurrentUser = getIdString(friendship?.requesterId) === safeRequesterId;
+      throw new SocialChatError(
+        isBlockedByCurrentUser ? '你已将对方加入黑名单，请先解除拉黑' : '对方已将你加入黑名单，当前无法发起好友申请',
+        {
+          status: 403,
+          code: 'FRIEND_REQUEST_BLOCKED'
+        }
+      );
     }
     if (friendship?.status === 'pending') {
       if (getIdString(friendship.requesterId) === safeRequesterId) {
@@ -223,7 +236,7 @@ const createSocialService = ({
         code: 'INVALID_FRIENDSHIP_ID'
       });
     }
-    if (!['accept', 'reject'].includes(normalizedAction)) {
+    if (!['accept', 'reject', 'ignore'].includes(normalizedAction)) {
       throw new SocialChatError('无效的操作类型', {
         status: 400,
         code: 'INVALID_FRIENDSHIP_ACTION'
@@ -250,10 +263,7 @@ const createSocialService = ({
       });
     }
 
-    const [requester, addressee] = await Promise.all([
-      socialRepo.findUserById(friendship.requesterId, '_id username'),
-      socialRepo.findUserById(friendship.addresseeId, '_id username')
-    ]);
+    const { requester, addressee } = await loadFriendshipUsers(friendship);
     if (!requester || !addressee) {
       throw new SocialChatError('申请相关用户不存在', {
         status: 400,
@@ -285,21 +295,231 @@ const createSocialService = ({
     friendship.acceptedAt = normalizedAction === 'accept' ? new Date() : null;
     await friendship.save();
 
-    await notificationSender(requester._id, {
-      type: 'friend_request_result',
-      title: `好友申请${normalizedAction === 'accept' ? '已通过' : '被拒绝'}`,
-      message: `${addressee.username}${normalizedAction === 'accept' ? '已同意' : '已拒绝'}你的好友申请`,
-      read: false,
-      status: normalizedAction === 'accept' ? 'accepted' : 'rejected',
-      inviterId: requester._id,
-      inviterUsername: requester.username,
-      inviteeId: addressee._id,
-      inviteeUsername: addressee.username,
-      respondedAt: friendship.respondedAt,
-      payload: {
-        friendshipId: getIdString(friendship._id)
+    if (normalizedAction !== 'ignore') {
+      await notificationSender(requester._id, {
+        type: 'friend_request_result',
+        title: `好友申请${normalizedAction === 'accept' ? '已通过' : '被拒绝'}`,
+        message: `${addressee.username}${normalizedAction === 'accept' ? '已同意' : '已拒绝'}你的好友申请`,
+        read: false,
+        status: normalizedAction === 'accept' ? 'accepted' : 'rejected',
+        inviterId: requester._id,
+        inviterUsername: requester.username,
+        inviteeId: addressee._id,
+        inviteeUsername: addressee.username,
+        respondedAt: friendship.respondedAt,
+        payload: {
+          friendshipId: getIdString(friendship._id)
+        }
+      });
+    }
+
+    return {
+      friendship: {
+        friendshipId: getIdString(friendship._id),
+        requesterId: getIdString(friendship.requesterId),
+        addresseeId: getIdString(friendship.addresseeId),
+        status: friendship.status,
+        action: normalizedAction,
+        respondedAt: friendship.respondedAt,
+        acceptedAt: friendship.acceptedAt
+      },
+      requester: serializeUserSummary(requester),
+      addressee: serializeUserSummary(addressee)
+    };
+  };
+
+  const removeFriend = async ({ userId, friendshipId }) => {
+    const safeUserId = assertValidUserId(userId);
+    const safeFriendshipId = getIdString(friendshipId);
+
+    if (!isValidObjectId(safeFriendshipId)) {
+      throw new SocialChatError('无效的好友关系', {
+        status: 400,
+        code: 'INVALID_FRIENDSHIP_ID'
+      });
+    }
+
+    const friendship = await socialRepo.findFriendshipById(safeFriendshipId);
+    if (!friendship) {
+      throw new SocialChatError('好友关系不存在', {
+        status: 404,
+        code: 'FRIENDSHIP_NOT_FOUND'
+      });
+    }
+
+    const requesterId = getIdString(friendship.requesterId);
+    const addresseeId = getIdString(friendship.addresseeId);
+    if (![requesterId, addresseeId].includes(safeUserId)) {
+      throw new SocialChatError('无权处理该好友关系', {
+        status: 403,
+        code: 'FORBIDDEN_FRIENDSHIP_ACTION'
+      });
+    }
+    if (friendship.status !== 'accepted') {
+      throw new SocialChatError('当前不是可删除的好友关系', {
+        status: 400,
+        code: 'FRIENDSHIP_NOT_ACCEPTED'
+      });
+    }
+
+    const { requester, addressee } = await loadFriendshipUsers(friendship);
+    if (!requester || !addressee) {
+      throw new SocialChatError('好友相关用户不存在', {
+        status: 400,
+        code: 'FRIENDSHIP_USER_NOT_FOUND'
+      });
+    }
+
+    const directConversation = await chatRepo.findDirectConversationByKey(
+      buildUserPairKey(requesterId, addresseeId)
+    );
+    friendship.status = 'rejected';
+    friendship.requestMessage = '';
+    friendship.acceptedAt = null;
+    friendship.respondedAt = new Date();
+    friendship.messageQuotaResetSeq = Number(directConversation?.messageSeq) || 0;
+    await friendship.save();
+
+    return {
+      friendship: {
+        friendshipId: getIdString(friendship._id),
+        requesterId,
+        addresseeId,
+        status: friendship.status,
+        action: 'remove',
+        respondedAt: friendship.respondedAt,
+        acceptedAt: friendship.acceptedAt
+      },
+      requester: serializeUserSummary(requester),
+      addressee: serializeUserSummary(addressee)
+    };
+  };
+
+  const blockUser = async ({ userId, targetUserId, friendshipId = '' }) => {
+    const safeUserId = assertValidUserId(userId);
+    const safeTargetUserId = getIdString(targetUserId);
+    const safeFriendshipId = getIdString(friendshipId);
+
+    let targetId = safeTargetUserId;
+    if (!targetId && isValidObjectId(safeFriendshipId)) {
+      const friendship = await socialRepo.findFriendshipById(safeFriendshipId);
+      if (!friendship) {
+        throw new SocialChatError('好友申请不存在', {
+          status: 404,
+          code: 'FRIENDSHIP_NOT_FOUND'
+        });
       }
-    });
+      const requesterId = getIdString(friendship.requesterId);
+      const addresseeId = getIdString(friendship.addresseeId);
+      if (![requesterId, addresseeId].includes(safeUserId)) {
+        throw new SocialChatError('无权处理该好友关系', {
+          status: 403,
+          code: 'FORBIDDEN_FRIENDSHIP_ACTION'
+        });
+      }
+      targetId = requesterId === safeUserId ? addresseeId : requesterId;
+    }
+
+    if (!isValidObjectId(targetId)) {
+      throw new SocialChatError('无效的目标用户', {
+        status: 400,
+        code: 'INVALID_TARGET_USER_ID'
+      });
+    }
+    if (targetId === safeUserId) {
+      throw new SocialChatError('不能拉黑自己', {
+        status: 400,
+        code: 'SELF_BLOCK_NOT_ALLOWED'
+      });
+    }
+
+    const [currentUser, targetUser] = await Promise.all([
+      socialRepo.findUserById(safeUserId, '_id username'),
+      socialRepo.findUserById(targetId, '_id username')
+    ]);
+    if (!currentUser || !targetUser) {
+      throw new SocialChatError('目标用户不存在', {
+        status: 404,
+        code: 'TARGET_USER_NOT_FOUND'
+      });
+    }
+
+    const pairKey = buildUserPairKey(safeUserId, targetId);
+    let friendship = await socialRepo.findFriendshipByParticipantsKey(pairKey);
+    const directConversation = await chatRepo.findDirectConversationByKey(pairKey);
+    const now = new Date();
+
+    if (!friendship) {
+      friendship = await socialRepo.createFriendship({
+        requesterId: safeUserId,
+        addresseeId: targetId,
+        participantsKey: pairKey,
+        status: 'blocked',
+        requestMessage: '',
+        acceptedAt: null,
+        respondedAt: now,
+        messageQuotaResetSeq: Number(directConversation?.messageSeq) || 0
+      });
+    } else {
+      friendship.requesterId = safeUserId;
+      friendship.addresseeId = targetId;
+      friendship.status = 'blocked';
+      friendship.requestMessage = '';
+      friendship.acceptedAt = null;
+      friendship.respondedAt = now;
+      friendship.messageQuotaResetSeq = Number(directConversation?.messageSeq) || 0;
+      await friendship.save();
+    }
+
+    return {
+      friendship: {
+        friendshipId: getIdString(friendship._id),
+        requesterId: getIdString(friendship.requesterId),
+        addresseeId: getIdString(friendship.addresseeId),
+        status: friendship.status,
+        respondedAt: friendship.respondedAt,
+        acceptedAt: friendship.acceptedAt
+      },
+      requester: serializeUserSummary(currentUser),
+      addressee: serializeUserSummary(targetUser)
+    };
+  };
+
+  const unblockUser = async ({ userId, targetUserId }) => {
+    const safeUserId = assertValidUserId(userId);
+    const safeTargetUserId = getIdString(targetUserId);
+
+    if (!isValidObjectId(safeTargetUserId)) {
+      throw new SocialChatError('无效的目标用户', {
+        status: 400,
+        code: 'INVALID_TARGET_USER_ID'
+      });
+    }
+
+    const pairKey = buildUserPairKey(safeUserId, safeTargetUserId);
+    const friendship = await socialRepo.findFriendshipByParticipantsKey(pairKey);
+    if (!friendship || friendship.status !== 'blocked' || getIdString(friendship.requesterId) !== safeUserId) {
+      throw new SocialChatError('该用户不在你的黑名单中', {
+        status: 404,
+        code: 'BLOCKED_RELATION_NOT_FOUND'
+      });
+    }
+
+    const { requester, addressee } = await loadFriendshipUsers(friendship);
+    if (!requester || !addressee) {
+      throw new SocialChatError('申请相关用户不存在', {
+        status: 400,
+        code: 'FRIENDSHIP_USER_NOT_FOUND'
+      });
+    }
+
+    const directConversation = await chatRepo.findDirectConversationByKey(pairKey);
+    friendship.status = 'rejected';
+    friendship.requestMessage = '';
+    friendship.acceptedAt = null;
+    friendship.respondedAt = new Date();
+    friendship.messageQuotaResetSeq = Number(directConversation?.messageSeq) || 0;
+    await friendship.save();
 
     return {
       friendship: {
@@ -317,14 +537,18 @@ const createSocialService = ({
 
   const listFriends = async ({ userId }) => {
     const safeUserId = assertValidUserId(userId);
-    const friendships = await socialRepo.listAcceptedFriendshipsForUser(safeUserId);
-    const otherUserIds = friendships.map((item) => (
+    const [friendships, blockedFriendships] = await Promise.all([
+      socialRepo.listAcceptedFriendshipsForUser(safeUserId),
+      socialRepo.listBlockedFriendshipsForUser(safeUserId)
+    ]);
+    const relatedFriendships = [...friendships, ...blockedFriendships];
+    const otherUserIds = relatedFriendships.map((item) => (
       getIdString(item?.requesterId) === safeUserId ? item?.addresseeId : item?.requesterId
     ));
     const users = await socialRepo.findUsersByIds(otherUserIds);
     const userMap = new Map(users.map((item) => [getIdString(item?._id), item]));
 
-    const directKeys = friendships.map((item) => buildUserPairKey(item?.requesterId, item?.addresseeId));
+    const directKeys = relatedFriendships.map((item) => buildUserPairKey(item?.requesterId, item?.addresseeId));
     const conversations = await chatRepo.listDirectConversationsByKeys(directKeys);
     const conversationMap = new Map(conversations.map((item) => [item.directKey, item]));
     const conversationMembers = await chatRepo.listConversationMembersByUser({
@@ -334,8 +558,7 @@ const createSocialService = ({
     });
     const memberMap = new Map(conversationMembers.map((item) => [getIdString(item?.conversationId), item]));
 
-    return {
-      rows: friendships.map((item) => {
+    const mapRelationshipRows = (rows = []) => rows.map((item) => {
         const otherUserId = getIdString(item?.requesterId) === safeUserId
           ? getIdString(item?.addresseeId)
           : getIdString(item?.requesterId);
@@ -350,16 +573,23 @@ const createSocialService = ({
           conversation,
           conversationMember: member
         });
-      })
+      });
+
+    return {
+      rows: mapRelationshipRows(friendships),
+      blockedRows: mapRelationshipRows(blockedFriendships)
     };
   };
 
   return {
+    blockUser,
     listFriends,
     listFriendRequests,
+    removeFriend,
     requestFriendship,
     respondToFriendRequest,
-    searchUsers
+    searchUsers,
+    unblockUser
   };
 };
 
