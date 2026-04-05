@@ -1,4 +1,20 @@
-export const getUserId = (user = {}) => String(user?._id || user?.userId || user?.id || '').trim();
+const toIdText = (value) => String(value || '').trim();
+
+export const getUserId = (user = {}) => {
+  const candidates = [
+    user?.userId,
+    user?.user?._id,
+    user?.user?.userId,
+    user?.user?.id,
+    user?._id,
+    user?.id,
+    user?.inviteeId,
+    user?.requesterId,
+    user?.addresseeId
+  ];
+
+  return candidates.map(toIdText).find(Boolean) || '';
+};
 
 export const renderUserMetaText = (user = {}) => {
   const parts = [user?.profession, user?.allianceName].filter(Boolean);

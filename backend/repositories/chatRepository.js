@@ -88,33 +88,43 @@ const ensureConversationMember = async ({
   userId,
   set = {},
   setOnInsert = {}
-}) => ConversationMember.findOneAndUpdate(
-  {
-    conversationId: toObjectId(conversationId),
-    userId: toObjectId(userId)
-  },
-  {
-    $set: set,
-    $setOnInsert: {
-      role: 'member',
-      mute: false,
-      pinned: false,
-      lastReadSeq: 0,
-      unreadCount: 0,
-      isVisible: true,
-      deletedAt: null,
-      clearedBeforeSeq: 0,
-      clearedAt: null,
-      joinedAt: new Date(),
-      isActive: true,
-      ...setOnInsert
+}) => {
+  const insertDefaults = {
+    role: 'member',
+    mute: false,
+    pinned: false,
+    lastReadSeq: 0,
+    unreadCount: 0,
+    isVisible: true,
+    deletedAt: null,
+    clearedBeforeSeq: 0,
+    clearedAt: null,
+    joinedAt: new Date(),
+    isActive: true,
+    ...setOnInsert
+  };
+
+  Object.keys(set || {}).forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(insertDefaults, key)) {
+      delete insertDefaults[key];
     }
-  },
-  {
-    upsert: true,
-    new: true
-  }
-);
+  });
+
+  return ConversationMember.findOneAndUpdate(
+    {
+      conversationId: toObjectId(conversationId),
+      userId: toObjectId(userId)
+    },
+    {
+      $set: set,
+      $setOnInsert: insertDefaults
+    },
+    {
+      upsert: true,
+      new: true
+    }
+  );
+};
 
 const findConversationMember = async ({
   conversationId,

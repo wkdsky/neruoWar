@@ -107,6 +107,8 @@ const extractPreviewText = (contentText = '') => {
 
 const buildDefaultNodeContent = (title = '未命名节点') => `${String(title || '未命名节点').trim() || '未命名节点'}\n\n在这里记录你的知识。`;
 
+const trimPreviewText = (value = '') => String(value || '').trim().slice(0, 240);
+
 const serializeBrocade = (doc = {}) => ({
   _id: getIdString(doc?._id),
   name: doc?.name || '未命名知识锦',
@@ -474,6 +476,109 @@ router.patch('/:brocadeId/nodes/:nodeId', authenticateToken, async (req, res) =>
   } catch (error) {
     console.error('更新知识锦节点错误:', error);
     return res.status(500).json({ error: '服务器错误' });
+  }
+});
+
+router.post('/:brocadeId/nodes/restore', authenticateToken, async (req, res) => {
+  try {
+    const ownerUserId = getRequestUserId(req);
+    const { brocadeId } = req.params || {};
+    if (!ownerUserId) return res.status(401).json({ error: '无效的用户身份' });
+
+    const brocade = await loadOwnedBrocade(brocadeId, ownerUserId);
+    if (!brocade) return res.status(404).json({ error: '知识锦不存在' });
+
+    const inputNodes = Array.isArray(req.body?.nodes) ? req.body.nodes : [];
+    if (inputNodes.length < 1) {
+      return res.status(400).json({ error: '缺少可恢复的节点数据' });
+    }
+
+    const currentNodes = await KnowledgeBrocadeNode.find({
+      brocadeId: brocade._id,
+      ownerUserId: brocade.ownerUserId
+    })
+      .select('_id parentNodeId')
+      .lean();
+    const existingIdSet = new Set(currentNodes.map((item) => getIdString(item?._id)).filter(Boolean));
+    const restoreIdSet = new Set();
+    const restoreDocs = inputNodes.map((item, index) => {
+      const nodeId = getIdString(item?._id);
+      if (!isValidObjectId(nodeId)) {
+        throw new Error(`第 ${index + 1} 个节点缺少有效 ID`);
+      }
+      if (existingIdSet.has(nodeId) || restoreIdSet.has(nodeId)) {
+        throw new Error('存在重复的恢复节点 ID');
+      }
+      restoreIdSet.add(nodeId);
+      const parentNodeId = getIdString(item?.parentNodeId);
+      const contentText = String(item?.contentText || '');
+      const fallbackTitle = normalizeNodeTitle(item?.title, '未命名节点');
+      const safeContentText = contentText || buildDefaultNodeContent(fallbackTitle);
+      const safeTitle = normalizeNodeTitle(item?.title, extractNodeTitle(safeContentText));
+      return {
+        _id: new mongoose.Types.ObjectId(nodeId),
+        brocadeId: brocade._id,
+        ownerUserId: brocade.ownerUserId,
+        parentNodeId: parentNodeId ? new mongoose.Types.ObjectId(parentNodeId) : null,
+        isRoot: !!item?.isRoot,
+        isStarred: !!item?.isStarred,
+        title: safeTitle,
+        previewText: trimPreviewText(item?.previewText || extractPreviewText(safeContentText)),
+        contentText: safeContentText,
+        position: {
+          x: Math.round(clampNumber(item?.position?.x, 0)),
+          y: Math.round(clampNumber(item?.position?.y, 0))
+        }
+      };
+    });
+
+    const validParentIds = new Set([
+      ...existingIdSet,
+      ...restoreDocs.map((item) => getIdString(item?._id)).filter(Boolean)
+    ]);
+    const hasInvalidParent = restoreDocs.some((item) => {
+      const parentNodeId = getIdString(item?.parentNodeId);
+      return parentNodeId && !validParentIds.has(parentNodeId);
+    });
+    if (hasInvalidParent) {
+      return res.status(400).json({ error: '恢复失败：存在缺失的父节点' });
+    }
+
+    if (((Number(brocade.nodeCount) || currentNodes.length || 1) + restoreDocs.length) > MAX_NODES_PER_BROCADE) {
+      return res.status(400).json({ error: `恢复后节点数量将超过上限（${MAX_NODES_PER_BROCADE}）` });
+    }
+
+    await KnowledgeBrocadeNode.insertMany(restoreDocs, { ordered: true });
+
+    const nextNodeCount = await KnowledgeBrocadeNode.countDocuments({
+      brocadeId: brocade._id,
+      ownerUserId: brocade.ownerUserId
+    });
+    brocade.nodeCount = Math.max(1, nextNodeCount);
+    brocade.updatedAt = new Date();
+    await brocade.save();
+
+    const restoredNodes = await KnowledgeBrocadeNode.find({
+      _id: { $in: restoreDocs.map((item) => item._id) },
+      brocadeId: brocade._id,
+      ownerUserId: brocade.ownerUserId
+    })
+      .sort({ isRoot: -1, createdAt: 1, _id: 1 })
+      .lean();
+
+    return res.status(201).json({
+      success: true,
+      brocade: serializeBrocade(brocade),
+      nodes: restoredNodes.map((item) => serializeNodeSummary(item))
+    });
+  } catch (error) {
+    console.error('恢复知识锦节点错误:', error);
+    const statusCode = (
+      String(error?.message || '').includes('缺少')
+      || String(error?.message || '').includes('重复')
+      || String(error?.message || '').includes('有效 ID')
+    ) ? 400 : 500;
+    return res.status(statusCode).json({ error: error.message || '服务器错误' });
   }
 });
 

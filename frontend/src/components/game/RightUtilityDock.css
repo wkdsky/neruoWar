@@ -1,6 +1,7 @@
 .utility-dock-rail {
+  --utility-dock-top: clamp(176px, 20vh, 244px);
   position: fixed;
-  top: clamp(176px, 20vh, 244px);
+  top: var(--utility-dock-top);
   right: max(10px, env(safe-area-inset-right));
   z-index: var(--app-shell-z-dock, 36800);
   pointer-events: none;
@@ -29,6 +30,7 @@
   top: 0;
   right: calc(100% + 10px);
   width: var(--utility-panel-width, 344px);
+  max-height: calc(100dvh - var(--utility-dock-top) - 18px);
   z-index: 1;
   opacity: 0;
   transform: translate3d(14px, 0, 0);
@@ -44,6 +46,7 @@
 
 .utility-dock-panel-shell {
   pointer-events: none;
+  max-height: 100%;
 }
 
 .utility-dock-panel-shell.is-open {

@@ -92,3 +92,8 @@ export const updateKnowledgeBrocadeNodeContent = (brocadeId, nodeId, payload = {
 export const deleteKnowledgeBrocadeNode = (brocadeId, nodeId) => request(`/${encodeURIComponent(brocadeId)}/nodes/${encodeURIComponent(nodeId)}`, {
   method: 'DELETE'
 });
+
+export const restoreKnowledgeBrocadeNodes = (brocadeId, payload = {}) => request(`/${encodeURIComponent(brocadeId)}/nodes/restore`, {
+  method: 'POST',
+  body: JSON.stringify(payload)
+});

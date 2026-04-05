@@ -95,10 +95,10 @@ export const UserCardProvider = ({
       friends,
       friendRequests
     });
-    const anchorRect = activeUserCard.anchorRect || { top: 0, left: 0, width: 0, height: 0 };
-    const popoverWidth = 288;
     const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 720;
+    const anchorRect = activeUserCard.anchorRect || { top: 0, left: 0, width: 0, height: 0 };
+    const popoverWidth = 360;
     const nextLeft = Math.min(
       Math.max(12, anchorRect.left + anchorRect.width + 12),
       viewportWidth - popoverWidth - 12
@@ -126,20 +126,10 @@ export const UserCardProvider = ({
             <div className="global-user-card__identity">
               <div className="global-user-card__title">{cardUser?.username || '未命名用户'}</div>
               <div className="global-user-card__subline">{publicId}</div>
-              <div className="global-user-card__meta">{renderUserMetaText(cardUser) || '可直接私聊'}</div>
+              {renderUserMetaText(cardUser) ? (
+                <div className="global-user-card__meta">{renderUserMetaText(cardUser)}</div>
+              ) : null}
             </div>
-          </div>
-
-          <div className="global-user-card__status">
-            {isSelf
-              ? '这是你自己的用户卡片'
-              : isFriend
-                ? '当前已经是好友'
-                : isPendingSent
-                  ? '好友申请已发送'
-                  : isPendingReceived
-                    ? '对方已向你发送好友申请'
-                    : '当前还不是好友，但可以直接私聊'}
           </div>
 
           <div className="global-user-card__actions">

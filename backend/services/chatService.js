@@ -270,6 +270,39 @@ const createChatService = ({
     };
   };
 
+  const ensureConversationMemberSafely = async ({
+    conversationId,
+    userId,
+    set = {},
+    setOnInsert = {}
+  }) => {
+    try {
+      return await chatRepo.ensureConversationMember({
+        conversationId,
+        userId,
+        set,
+        setOnInsert
+      });
+    } catch (error) {
+      if (error?.code !== 11000) {
+        throw error;
+      }
+
+      await chatRepo.updateConversationMember({
+        conversationId,
+        userId,
+        update: {
+          $set: set
+        }
+      });
+      return chatRepo.findConversationMember({
+        conversationId,
+        userId,
+        isActive: typeof set?.isActive === 'boolean' ? set.isActive : true
+      });
+    }
+  };
+
   const createDirectConversation = async ({ userIdA, userIdB, openerUserId }) => {
     let conversation = null;
     const directKey = buildUserPairKey(userIdA, userIdB);
@@ -295,7 +328,7 @@ const createChatService = ({
 
     const now = new Date();
     await Promise.all([
-      chatRepo.ensureConversationMember({
+      ensureConversationMemberSafely({
         conversationId: conversation._id,
         userId: userIdA,
         set: {
@@ -305,7 +338,7 @@ const createChatService = ({
           updatedAt: now
         }
       }),
-      chatRepo.ensureConversationMember({
+      ensureConversationMemberSafely({
         conversationId: conversation._id,
         userId: userIdB,
         set: {
@@ -339,6 +372,10 @@ const createChatService = ({
       });
     }
 
+    const directUserSummary = await buildDirectUserSummary({
+      currentUserId: safeRequestUserId,
+      peerUserId: safeTargetUserId
+    });
     const directKey = buildUserPairKey(safeRequestUserId, safeTargetUserId);
     let conversation = await chatRepo.findDirectConversationByKey(directKey);
     if (!conversation) {
@@ -356,31 +393,28 @@ const createChatService = ({
       isActive: true
     });
     const [requestMember, targetMember, targetUser] = await Promise.all([
-      chatRepo.ensureConversationMember({
-        conversationId: conversation._id,
-        userId: safeRequestUserId,
-        set: {
-          isActive: true,
-          isVisible: true,
-          leftAt: null,
-          updatedAt: now
-        }
+      ensureConversationMemberSafely({
+          conversationId: conversation._id,
+          userId: safeRequestUserId,
+          set: {
+            isActive: true,
+            isVisible: true,
+            leftAt: null,
+            updatedAt: now
+          }
       }),
-      chatRepo.ensureConversationMember({
-        conversationId: conversation._id,
-        userId: safeTargetUserId,
-        set: {
-          isActive: true,
-          leftAt: null
+      ensureConversationMemberSafely({
+          conversationId: conversation._id,
+          userId: safeTargetUserId,
+          set: {
+            isActive: true,
+            leftAt: null
         },
-        setOnInsert: {
-          isVisible: false
-        }
+          setOnInsert: {
+            isVisible: false
+          }
       }),
-      buildDirectUserSummary({
-        currentUserId: safeRequestUserId,
-        peerUserId: safeTargetUserId
-      })
+      Promise.resolve(directUserSummary)
     ]);
 
     const latestVisibleMessage = await chatRepo.findLatestVisibleMessage({

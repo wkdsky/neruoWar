@@ -236,6 +236,8 @@ const createHarness = () => {
 
   return {
     state,
+    socialRepo,
+    chatRepo,
     socialService: createSocialService({ socialRepo, chatRepo, notificationSender }),
     chatService: createChatService({ socialRepo, chatRepo })
   };
@@ -273,6 +275,48 @@ test('主动打开私聊会懒创建 direct conversation，并保证 directKey �
   assert.equal(first.conversation.conversationId, second.conversation.conversationId);
   assert.equal(state.conversations[0].directKey, buildUserPairKey(aliceId, bobId));
   assert.equal(first.conversation.directUser.friendStatus, 'none');
+});
+
+test('目标用户不存在时不会创建脏私聊会话', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const missingUserId = makeObjectId(999);
+
+  await assert.rejects(
+    chatService.ensureDirectConversationByUsers({ requestUserId: aliceId, targetUserId: missingUserId }),
+    (error) => error?.code === 'TARGET_USER_NOT_FOUND'
+  );
+
+  assert.equal(state.conversations.length, 0);
+  assert.equal(state.members.length, 0);
+});
+
+test('私聊成员 upsert 遇到并发重复键时仍可恢复打开会话', async () => {
+  const { state, socialRepo, chatRepo } = createHarness();
+  const aliceId = state.users[0]._id;
+  const bobId = state.users[1]._id;
+  let duplicateInjected = false;
+
+  const flakyChatRepo = {
+    ...chatRepo,
+    ensureConversationMember: async (args) => {
+      if (!duplicateInjected && args?.userId === aliceId) {
+        duplicateInjected = true;
+        await chatRepo.ensureConversationMember(args);
+        const error = new Error('duplicate member');
+        error.code = 11000;
+        throw error;
+      }
+      return chatRepo.ensureConversationMember(args);
+    }
+  };
+
+  const chatService = createChatService({ socialRepo, chatRepo: flakyChatRepo });
+  const result = await chatService.ensureDirectConversationByUsers({ requestUserId: aliceId, targetUserId: bobId });
+
+  assert.equal(state.conversations.length, 1);
+  assert.equal(result.conversation.conversationId, state.conversations[0]._id);
+  assert.equal(state.members.filter((item) => item.conversationId === state.conversations[0]._id).length, 2);
 });
 
 test('发送消息会推进 seq、更新摘要，并增加接收方未读', async () => {
