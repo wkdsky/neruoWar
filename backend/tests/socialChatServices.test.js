@@ -17,16 +17,33 @@ const createHarness = () => {
     users: [
       { _id: makeObjectId(1), username: 'alice', avatar: 'a', profession: 'p1', allianceId: '' },
       { _id: makeObjectId(2), username: 'bob', avatar: 'b', profession: 'p2', allianceId: '' },
-      { _id: makeObjectId(3), username: 'carol', avatar: 'c', profession: 'p3', allianceId: '' }
+      { _id: makeObjectId(3), username: 'carol', avatar: 'c', profession: 'p3', allianceId: '' },
+      { _id: makeObjectId(4), username: 'dave', avatar: 'd', profession: 'p4', allianceId: '' },
+      { _id: makeObjectId(5), username: 'erin', avatar: 'e', profession: 'p5', allianceId: '' },
+      { _id: makeObjectId(6), username: 'frank', avatar: 'f', profession: 'p6', allianceId: '' },
+      { _id: makeObjectId(7), username: 'grace', avatar: 'g', profession: 'p7', allianceId: '' },
+      { _id: makeObjectId(8), username: 'heidi', avatar: 'h', profession: 'p8', allianceId: '' },
+      { _id: makeObjectId(9), username: 'ivan', avatar: 'i', profession: 'p9', allianceId: '' },
+      { _id: makeObjectId(10), username: 'judy', avatar: 'j', profession: 'p10', allianceId: '' },
+      { _id: makeObjectId(11), username: 'kate', avatar: 'k', profession: 'p11', allianceId: '' },
+      { _id: makeObjectId(12), username: 'leo', avatar: 'l', profession: 'p12', allianceId: '' },
+      { _id: makeObjectId(13), username: 'mallory', avatar: 'm', profession: 'p13', allianceId: '' },
+      { _id: makeObjectId(14), username: 'nick', avatar: 'n', profession: 'p14', allianceId: '' },
+      { _id: makeObjectId(15), username: 'olivia', avatar: 'o', profession: 'p15', allianceId: '' }
     ],
     friendships: [],
     conversations: [],
     members: [],
     groupInvitations: [],
+    groupNotices: [],
     messages: [],
     notifications: [],
+    chatSequences: {
+      'chat:group-no': 1000000000
+    },
     nextConversationSeq: 10,
     nextMessageSeq: 100,
+    nextGroupNoticeSeq: 150,
     nextFriendshipSeq: 200,
     nextInvitationSeq: 300
   };
@@ -76,6 +93,16 @@ const createHarness = () => {
   const chatRepo = {
     listDirectConversationsByKeys: async (keys) => state.conversations.filter((item) => item.type === 'direct' && keys.includes(item.directKey)),
     findDirectConversationByKey: async (directKey) => state.conversations.find((item) => item.type === 'direct' && item.directKey === directKey) || null,
+    findGroupConversationByGroupNo: async (groupNo) => state.conversations.find((item) => item.type === 'group' && item.groupNo === groupNo && item.isArchived !== true) || null,
+    allocateNextGroupNo: async () => {
+      state.chatSequences['chat:group-no'] += 1;
+      return state.chatSequences['chat:group-no'];
+    },
+    countGroupConversationsByCreator: async (creatorId) => state.conversations.filter((item) => (
+      item.type === 'group'
+      && item.isArchived !== true
+      && (item.creatorId === creatorId || (!item.creatorId && item.ownerId === creatorId))
+    )).length,
     createConversation: async (doc) => {
       const directExists = state.conversations.find((item) => item.type === 'direct' && item.directKey === doc.directKey);
       if (directExists) {
@@ -95,6 +122,23 @@ const createHarness = () => {
       });
       state.conversations.push(conversation);
       return conversation;
+    },
+    createGroupNotice: async (doc) => {
+      const notice = {
+        _id: makeObjectId(state.nextGroupNoticeSeq++),
+        createdAt: doc.createdAt || now(),
+        updatedAt: doc.updatedAt || doc.createdAt || now(),
+        ...doc
+      };
+      state.groupNotices.push(notice);
+      return notice;
+    },
+    findGroupNoticeById: async (noticeId) => state.groupNotices.find((item) => item._id === noticeId) || null,
+    deleteGroupNoticeById: async (noticeId) => {
+      const index = state.groupNotices.findIndex((item) => item._id === noticeId);
+      if (index < 0) return { deletedCount: 0 };
+      state.groupNotices.splice(index, 1);
+      return { deletedCount: 1 };
     },
     findConversationById: async (conversationId) => state.conversations.find((item) => item._id === conversationId) || null,
     listConversationsByIds: async (ids) => {
@@ -232,6 +276,18 @@ const createHarness = () => {
     listGroupInvitationsByInvitee: async ({ inviteeId, status = null }) => state.groupInvitations.filter((item) => (
       item.inviteeId === inviteeId && (status ? item.status === status : true)
     )),
+    listGroupNoticesByConversationId: async (conversationId, { limit = 20 } = {}) => (
+      state.groupNotices
+        .filter((item) => item.conversationId === conversationId)
+        .sort((left, right) => {
+          const timeDiff = new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime();
+          if (timeDiff !== 0) {
+            return timeDiff;
+          }
+          return String(right._id || '').localeCompare(String(left._id || ''));
+        })
+        .slice(0, limit)
+    ),
     createGroupInvitation: async (doc) => {
       const invitation = attachSave({
         _id: makeObjectId(state.nextInvitationSeq++),
@@ -373,6 +429,40 @@ test('发送消息会推进 seq、更新摘要，并增加接收方未读', asyn
   assert.equal(conversation.lastMessagePreview, 'first message');
   assert.equal(bobMember.unreadCount, 1);
   assert.equal(bobMember.isVisible, true);
+});
+
+test('会话支持按当前用户置顶，置顶后排序优先于最新消息时间', async () => {
+  const { state, socialService, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const bobId = state.users[1]._id;
+  const carolId = state.users[2]._id;
+
+  const firstRequest = await socialService.requestFriendship({ requesterId: aliceId, targetUserId: bobId, message: '' });
+  await socialService.respondToFriendRequest({ userId: bobId, friendshipId: firstRequest.friendship.friendshipId, action: 'accept' });
+  const secondRequest = await socialService.requestFriendship({ requesterId: aliceId, targetUserId: carolId, message: '' });
+  await socialService.respondToFriendRequest({ userId: carolId, friendshipId: secondRequest.friendship.friendshipId, action: 'accept' });
+
+  const bobConversation = await chatService.ensureDirectConversationForFriends({ requestUserId: aliceId, targetUserId: bobId });
+  const carolConversation = await chatService.ensureDirectConversationForFriends({ requestUserId: aliceId, targetUserId: carolId });
+
+  await chatService.sendMessage({
+    userId: carolId,
+    conversationId: carolConversation.conversation.conversationId,
+    type: 'text',
+    content: 'carol-latest',
+    clientMessageId: 'pin-carol'
+  });
+  await chatService.updateConversationPinnedForUser({
+    userId: aliceId,
+    conversationId: bobConversation.conversation.conversationId,
+    pinned: true
+  });
+
+  const result = await chatService.listVisibleConversationsForUser({ userId: aliceId });
+
+  assert.equal(result.rows[0].conversationId, bobConversation.conversation.conversationId);
+  assert.equal(result.rows[0].pinned, true);
+  assert.equal(result.rows[1].conversationId, carolConversation.conversation.conversationId);
 });
 
 test('未加好友时也可以发送私聊消息，私聊与好友状态彻底解耦', async () => {
@@ -586,6 +676,79 @@ test('删除好友后私聊仍保留，且非好友临时消息额度重置为�
   assert.equal(resend3.temporaryMessageInfo.remainingCount, 0);
 });
 
+test('加入他人群聊达到上限后仍可继续创建自己的群聊', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+
+  for (let index = 0; index < 10; index += 1) {
+    const ownerUserId = state.users[index + 1]._id;
+    const group = await chatService.createGroupConversation({
+      ownerUserId,
+      title: `external-group-${index}`,
+      announcement: '',
+      memberUserIds: []
+    });
+    await chatService.joinGroupConversation({
+      userId: aliceId,
+      conversationId: group.group.conversationId
+    });
+  }
+
+  const created = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: 'alice-self-group',
+    announcement: '',
+    memberUserIds: []
+  });
+
+  assert.equal(created.group.title, 'alice-self-group');
+  assert.equal(created.group.currentUserRole, 'owner');
+});
+
+test('群号搜索可返回群信息，并按加入他人群聊上限阻止第 11 个', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+
+  let lastGroupNo = '';
+  for (let index = 0; index < 10; index += 1) {
+    const ownerUserId = state.users[index + 1]._id;
+    const created = await chatService.createGroupConversation({
+      ownerUserId,
+      title: `joinable-group-${index}`,
+      announcement: '',
+      memberUserIds: []
+    });
+    lastGroupNo = created.group.groupNo;
+    await chatService.joinGroupConversation({
+      userId: aliceId,
+      groupNo: created.group.groupNo
+    });
+  }
+
+  const searchResult = await chatService.searchGroupConversationByGroupNo({
+    userId: aliceId,
+    groupNo: lastGroupNo
+  });
+
+  assert.equal(searchResult.group.groupNo, lastGroupNo);
+  assert.equal(searchResult.group.membershipStatus, 'joined');
+
+  const extraGroup = await chatService.createGroupConversation({
+    ownerUserId: state.users[11]._id,
+    title: 'limit-group',
+    announcement: '',
+    memberUserIds: []
+  });
+
+  await assert.rejects(
+    chatService.joinGroupConversation({
+      userId: aliceId,
+      groupNo: extraGroup.group.groupNo
+    }),
+    (error) => error?.code === 'GROUP_MEMBERSHIP_LIMIT_REACHED'
+  );
+});
+
 test('单边删除会话只影响当前用户视图，不影响 Friendship/Conversation/Message/对方视图', async () => {
   const { state, socialService, chatService } = createHarness();
   const aliceId = state.users[0]._id;
@@ -693,9 +856,14 @@ test('可以创建群聊并查看群详情', async () => {
   assert.equal(state.conversations.length, 1);
   assert.equal(state.conversations[0].type, 'group');
   assert.equal(created.group.title, '作战讨论组');
+  assert.equal(created.group.avatar, 'group_general');
+  assert.equal(created.conversation.avatar, 'group_general');
+  assert.match(created.group.groupNo, /^\d{10}$/);
   assert.equal(created.group.announcement, '先集合再推进');
   assert.equal(created.group.members.length, 2);
   assert.equal(created.group.currentUserRole, 'owner');
+  assert.ok(created.group.createdAt);
+  assert.ok(created.group.lastActiveAt);
 });
 
 test('创建群聊时允许先只创建自己一个成员', async () => {
@@ -711,6 +879,66 @@ test('创建群聊时允许先只创建自己一个成员', async () => {
   assert.equal(created.group.memberCount, 1);
   assert.equal(created.group.members.length, 1);
   assert.equal(created.group.members[0].userId, aliceId);
+});
+
+test('读取旧群时会自动补齐群号、creatorId 和默认头像', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const legacyConversationId = makeObjectId(801);
+  const legacyMemberId = makeObjectId(802);
+  const timestamp = new Date();
+
+  state.conversations.push({
+    _id: legacyConversationId,
+    type: 'group',
+    title: '旧群',
+    announcement: '',
+    avatar: '',
+    ownerId: aliceId,
+    creatorId: null,
+    groupNo: '',
+    memberCount: 1,
+    lastMessageId: null,
+    lastMessagePreview: '',
+    lastMessageAt: null,
+    messageSeq: 0,
+    isArchived: false,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  });
+  state.members.push({
+    _id: legacyMemberId,
+    conversationId: legacyConversationId,
+    userId: aliceId,
+    role: 'owner',
+    mute: false,
+    pinned: false,
+    lastReadSeq: 0,
+    unreadCount: 0,
+    isVisible: true,
+    deletedAt: null,
+    clearedBeforeSeq: 0,
+    clearedAt: null,
+    joinedAt: timestamp,
+    leftAt: null,
+    isActive: true,
+    updatedAt: timestamp
+  });
+
+  const detail = await chatService.getGroupDetailForUser({
+    userId: aliceId,
+    conversationId: legacyConversationId
+  });
+  const list = await chatService.listGroupsForUser({ userId: aliceId });
+
+  assert.match(detail.group.groupNo, /^\d{10}$/);
+  assert.equal(detail.group.avatar, 'group_general');
+  assert.equal(state.conversations[0].creatorId, aliceId);
+  assert.equal(state.conversations[0].avatar, 'group_general');
+  assert.equal(state.conversations[0].groupNo, detail.group.groupNo);
+  assert.equal(new Date(detail.group.createdAt).getTime(), timestamp.getTime());
+  assert.equal(new Date(detail.group.lastActiveAt).getTime(), timestamp.getTime());
+  assert.equal(list.rows[0].groupNo, detail.group.groupNo);
 });
 
 test('群主可以发送群聊邀请，受邀者接受后加入群聊', async () => {
@@ -796,7 +1024,8 @@ test('群主可以更新群资料、添加成员并转让群主', async () => {
     userId: aliceId,
     conversationId: created.group.conversationId,
     title: '重命名后的群',
-    announcement: '新的群公告'
+    announcement: '新的群通知',
+    avatar: 'group_project'
   });
   await chatService.addGroupMembers({
     userId: aliceId,
@@ -810,11 +1039,180 @@ test('群主可以更新群资料、添加成员并转让群主', async () => {
   });
 
   assert.equal(updated.group.title, '重命名后的群');
-  assert.equal(state.conversations[0].announcement, '新的群公告');
+  assert.equal(updated.group.groupNo, created.group.groupNo);
+  assert.equal(updated.group.avatar, 'group_project');
+  assert.equal(updated.group.noticeHistory[0].content, '新的群通知');
+  assert.equal(state.conversations[0].announcement, '新的群通知');
+  assert.equal(state.conversations[0].avatar, 'group_project');
   assert.equal(state.conversations[0].memberCount, 3);
   assert.equal(transferred.group.ownerId, bobId);
   assert.equal(state.members.find((item) => item.userId === aliceId).role, 'member');
   assert.equal(state.members.find((item) => item.userId === bobId).role, 'owner');
+});
+
+test('群通知历史会持久化保存并按时间倒序返回', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+
+  const created = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: '通知历史群',
+    announcement: '第一条群通知',
+    memberUserIds: []
+  });
+
+  await chatService.updateGroupConversation({
+    userId: aliceId,
+    conversationId: created.group.conversationId,
+    announcement: '第二条群通知'
+  });
+
+  const detail = await chatService.getGroupDetailForUser({
+    userId: aliceId,
+    conversationId: created.group.conversationId
+  });
+
+  assert.equal(state.groupNotices.length, 2);
+  assert.equal(detail.group.noticeHistory.length, 2);
+  assert.equal(detail.group.noticeHistory[0].content, '第二条群通知');
+  assert.equal(detail.group.noticeHistory[1].content, '第一条群通知');
+});
+
+test('群主可以新增和删除群公告，并同步最新公告摘要', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+
+  const created = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: '公告管理群',
+    announcement: '初始化公告',
+    memberUserIds: []
+  });
+
+  const appended = await chatService.createGroupNotice({
+    userId: aliceId,
+    conversationId: created.group.conversationId,
+    content: '第二条公告'
+  });
+
+  assert.equal(appended.group.noticeHistory.length, 2);
+  assert.equal(appended.group.noticeHistory[0].content, '第二条公告');
+  assert.equal(state.conversations[0].announcement, '第二条公告');
+
+  const deleted = await chatService.deleteGroupNotice({
+    userId: aliceId,
+    conversationId: created.group.conversationId,
+    noticeId: appended.group.noticeHistory[0].noticeId
+  });
+
+  assert.equal(deleted.group.noticeHistory.length, 1);
+  assert.equal(deleted.group.noticeHistory[0].content, '初始化公告');
+  assert.equal(state.groupNotices.length, 1);
+  assert.equal(state.conversations[0].announcement, '初始化公告');
+});
+
+test('每个用户最多创建三个群聊，群号会持久化记录在会话上', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+
+  const createdGroups = [];
+  createdGroups.push(await chatService.createGroupConversation({ ownerUserId: aliceId, title: '群聊1', memberUserIds: [] }));
+  createdGroups.push(await chatService.createGroupConversation({ ownerUserId: aliceId, title: '群聊2', memberUserIds: [] }));
+  createdGroups.push(await chatService.createGroupConversation({ ownerUserId: aliceId, title: '群聊3', memberUserIds: [] }));
+
+  assert.equal(createdGroups.length, 3);
+  assert.equal(new Set(createdGroups.map((item) => item.group.groupNo)).size, 3);
+  assert.equal(state.conversations.every((item) => /^\d{10}$/.test(String(item.groupNo || ''))), true);
+
+  await assert.rejects(
+    () => chatService.createGroupConversation({ ownerUserId: aliceId, title: '群聊4', memberUserIds: [] }),
+    (error) => error?.code === 'GROUP_CREATE_LIMIT_REACHED'
+  );
+});
+
+test('可以把群分享卡发送给好友私聊和其他群聊', async () => {
+  const { state, socialService, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const bobId = state.users[1]._id;
+  const carolId = state.users[2]._id;
+
+  const request = await socialService.requestFriendship({
+    requesterId: aliceId,
+    targetUserId: bobId,
+    message: 'share-group'
+  });
+  await socialService.respondToFriendRequest({
+    userId: bobId,
+    friendshipId: request.friendship.friendshipId,
+    action: 'accept'
+  });
+
+  const sourceGroup = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: '源群',
+    announcement: '源群公告',
+    memberUserIds: []
+  });
+  const targetGroup = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: '目标群',
+    announcement: '目标群公告',
+    memberUserIds: [carolId]
+  });
+
+  const result = await chatService.shareGroupConversationCard({
+    userId: aliceId,
+    conversationId: sourceGroup.group.conversationId,
+    targetUserIds: [bobId],
+    targetConversationIds: [targetGroup.group.conversationId]
+  });
+
+  const directConversation = state.conversations.find((item) => item.type === 'direct');
+  const directMessage = state.messages.find((item) => item.conversationId === directConversation?._id);
+  const groupMessage = state.messages.find((item) => item.conversationId === targetGroup.group.conversationId);
+
+  assert.equal(result.targetCount, 2);
+  assert.deepEqual(result.targetUserIds, [bobId]);
+  assert.equal(result.targetConversationIds.includes(targetGroup.group.conversationId), true);
+  assert.equal(directMessage?.type, 'group_share');
+  assert.equal(groupMessage?.type, 'group_share');
+  assert.equal(directMessage?.payload?.group?.title, '源群');
+  assert.equal(groupMessage?.payload?.group?.groupNo, sourceGroup.group.groupNo);
+  assert.equal(directMessage?.content, '分享了群聊「源群」');
+  assert.equal(groupMessage?.content, '分享了群聊「源群」');
+});
+
+test('群分享卡不能分享回原群，也不能分享给非好友私聊', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const bobId = state.users[1]._id;
+
+  const sourceGroup = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: '只读源群',
+    announcement: '',
+    memberUserIds: []
+  });
+
+  await assert.rejects(
+    chatService.shareGroupConversationCard({
+      userId: aliceId,
+      conversationId: sourceGroup.group.conversationId,
+      targetConversationIds: [sourceGroup.group.conversationId]
+    }),
+    (error) => error?.code === 'EMPTY_GROUP_SHARE_TARGETS'
+  );
+
+  await assert.rejects(
+    chatService.shareGroupConversationCard({
+      userId: aliceId,
+      conversationId: sourceGroup.group.conversationId,
+      targetUserIds: [bobId]
+    }),
+    (error) => error?.code === 'GROUP_SHARE_FRIEND_REQUIRED'
+  );
+
+  assert.equal(state.messages.length, 0);
 });
 
 test('普通群成员可以退群，群主不能直接退群', async () => {
@@ -844,4 +1242,31 @@ test('普通群成员可以退群，群主不能直接退群', async () => {
   assert.equal(leaveResult.conversationHiddenForCurrentUser, true);
   assert.equal(state.members.find((item) => item.userId === bobId).isActive, false);
   assert.equal(state.conversations[0].memberCount, 1);
+});
+
+test('群主可以解散群聊，解散后群聊归档并对所有成员隐藏', async () => {
+  const { state, chatService } = createHarness();
+  const aliceId = state.users[0]._id;
+  const bobId = state.users[1]._id;
+
+  const created = await chatService.createGroupConversation({
+    ownerUserId: aliceId,
+    title: '解散测试群',
+    memberUserIds: [bobId]
+  });
+
+  const result = await chatService.disbandGroupConversation({
+    userId: aliceId,
+    conversationId: created.group.conversationId
+  });
+
+  assert.equal(result.groupDisbanded, true);
+  assert.equal(state.conversations[0].isArchived, true);
+  assert.equal(state.members.every((item) => item.isActive === false), true);
+
+  const searchResult = await chatService.searchGroupConversationByGroupNo({
+    userId: aliceId,
+    groupNo: created.group.groupNo
+  });
+  assert.equal(searchResult.group, null);
 });

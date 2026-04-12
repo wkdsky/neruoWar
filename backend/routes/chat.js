@@ -53,6 +53,41 @@ const emitConversationUpserts = async (userIds = [], conversationId) => {
   }));
 };
 
+const emitConversationMessages = async (deliveries = []) => {
+  await Promise.all((Array.isArray(deliveries) ? deliveries : []).map(async (delivery) => {
+    if (!delivery?.conversationId || !delivery?.message?._id) return;
+
+    const participantUserIds = Array.from(new Set(
+      (Array.isArray(delivery?.participantUserIds) ? delivery.participantUserIds : [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    ));
+    if (participantUserIds.length === 0) return;
+
+    const entries = await Promise.all(
+      participantUserIds.map(async (participantUserId) => {
+        try {
+          const conversation = await chatService.serializeConversationForUserView({
+            userId: participantUserId,
+            conversationId: delivery.conversationId
+          });
+          return [participantUserId, conversation];
+        } catch (_error) {
+          return null;
+        }
+      })
+    );
+
+    const conversationEntryMap = new Map(entries.filter(Boolean));
+    const emittedAt = new Date().toISOString();
+    emitToUsers(Array.from(conversationEntryMap.keys()), 'chat:message', (participantUserId) => ({
+      conversation: conversationEntryMap.get(participantUserId) || null,
+      message: delivery.message,
+      emittedAt
+    }));
+  }));
+};
+
 const emitGroupUpdated = (userIds = [], conversationId) => {
   const safeConversationId = normalizeConversationId(conversationId);
   if (!safeConversationId) return;
@@ -113,12 +148,28 @@ router.get('/groups', authenticateToken, async (req, res) => {
   }
 });
 
+router.get('/groups/search', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.searchGroupConversationByGroupNo({
+      userId: req?.user?.userId,
+      groupNo: req.query?.groupNo
+    });
+    return res.json({
+      success: true,
+      group: result.group
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '搜索群聊错误:');
+  }
+});
+
 router.post('/groups', authenticateToken, async (req, res) => {
   try {
     const result = await chatService.createGroupConversation({
       ownerUserId: req?.user?.userId,
       title: req.body?.title,
       announcement: req.body?.announcement,
+      avatar: req.body?.avatar,
       memberUserIds: req.body?.memberUserIds
     });
 
@@ -132,6 +183,28 @@ router.post('/groups', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     return handleRouteError(res, error, '创建群聊错误:');
+  }
+});
+
+router.post('/groups/join', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.joinGroupConversation({
+      userId: req?.user?.userId,
+      conversationId: req.body?.conversationId,
+      groupNo: req.body?.groupNo
+    });
+
+    await emitConversationUpserts(result.participantUserIds, result.group.conversationId);
+    emitGroupUpdated(result.participantUserIds, result.group.conversationId);
+
+    return res.json({
+      success: true,
+      conversation: result.conversation,
+      group: result.group,
+      alreadyJoined: result.alreadyJoined
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '加入群聊错误:');
   }
 });
 
@@ -220,7 +293,8 @@ router.patch('/groups/:conversationId', authenticateToken, async (req, res) => {
       userId: req?.user?.userId,
       conversationId: req.params?.conversationId,
       title: req.body?.title,
-      announcement: req.body?.announcement
+      announcement: req.body?.announcement,
+      avatar: req.body?.avatar
     });
 
     await emitConversationUpserts(result.participantUserIds, result.group.conversationId);
@@ -233,6 +307,49 @@ router.patch('/groups/:conversationId', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     return handleRouteError(res, error, '更新群聊错误:');
+  }
+});
+
+router.post('/groups/:conversationId/notices', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.createGroupNotice({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId,
+      content: req.body?.content
+    });
+
+    await emitConversationUpserts(result.participantUserIds, result.group.conversationId);
+    emitGroupUpdated(result.participantUserIds, result.group.conversationId);
+
+    return res.json({
+      success: true,
+      conversation: result.conversation,
+      group: result.group
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '新增群公告错误:');
+  }
+});
+
+router.delete('/groups/:conversationId/notices/:noticeId', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.deleteGroupNotice({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId,
+      noticeId: req.params?.noticeId
+    });
+
+    await emitConversationUpserts(result.participantUserIds, result.group.conversationId);
+    emitGroupUpdated(result.participantUserIds, result.group.conversationId);
+
+    return res.json({
+      success: true,
+      conversation: result.conversation,
+      group: result.group,
+      deletedNoticeId: result.deletedNoticeId
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '删除群公告错误:');
   }
 });
 
@@ -331,6 +448,52 @@ router.post('/groups/:conversationId/leave', authenticateToken, async (req, res)
   }
 });
 
+router.post('/groups/:conversationId/disband', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.disbandGroupConversation({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId
+    });
+
+    emitToUsers(result.participantUserIds, 'chat:conversation-hidden', {
+      conversationId: result.conversationId,
+      conversationHiddenForCurrentUser: true,
+      groupDisbanded: true,
+      emittedAt: new Date().toISOString()
+    });
+
+    return res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '解散群聊错误:');
+  }
+});
+
+router.post('/groups/:conversationId/share', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.shareGroupConversationCard({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId,
+      targetUserIds: req.body?.targetUserIds,
+      targetConversationIds: req.body?.targetConversationIds
+    });
+
+    await emitConversationMessages(result.deliveries);
+
+    return res.json({
+      success: true,
+      sharedGroup: result.sharedGroup,
+      targetCount: result.targetCount,
+      targetUserIds: result.targetUserIds,
+      targetConversationIds: result.targetConversationIds
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '分享群聊卡片错误:');
+  }
+});
+
 router.get('/conversations/:conversationId/messages', authenticateToken, async (req, res) => {
   try {
     const result = await chatService.listMessagesForUserView({
@@ -361,22 +524,11 @@ router.post('/conversations/:conversationId/messages', authenticateToken, async 
     const participantUserIds = await chatService.listConversationParticipantUserIds({
       conversationId: result.conversationId
     });
-    const conversationEntries = await Promise.all(
-      participantUserIds.map(async (participantUserId) => ([
-        participantUserId,
-        await chatService.serializeConversationForUserView({
-          userId: participantUserId,
-          conversationId: result.conversationId
-        })
-      ]))
-    );
-    const conversationEntryMap = new Map(conversationEntries);
-
-    emitToUsers(participantUserIds, 'chat:message', (participantUserId) => ({
-      conversation: conversationEntryMap.get(participantUserId) || null,
-      message: result.message,
-      emittedAt: new Date().toISOString()
-    }));
+    await emitConversationMessages([{
+      conversationId: result.conversationId,
+      participantUserIds,
+      message: result.message
+    }]);
 
     return res.json({
       success: true,
@@ -384,6 +536,28 @@ router.post('/conversations/:conversationId/messages', authenticateToken, async 
     });
   } catch (error) {
     return handleRouteError(res, error, '发送会话消息错误:');
+  }
+});
+
+router.patch('/conversations/:conversationId/preferences', authenticateToken, async (req, res) => {
+  try {
+    const result = await chatService.updateConversationPinnedForUser({
+      userId: req?.user?.userId,
+      conversationId: req.params?.conversationId,
+      pinned: req.body?.pinned
+    });
+
+    emitToUser(req?.user?.userId, 'chat:conversation-upsert', {
+      conversation: result.conversation,
+      emittedAt: new Date().toISOString()
+    });
+
+    return res.json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    return handleRouteError(res, error, '更新会话偏好错误:');
   }
 });
 

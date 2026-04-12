@@ -70,6 +70,18 @@ router.get('/users/search', authenticateToken, async (req, res) => {
   }
 });
 
+router.get('/users/:userId/profile', authenticateToken, async (req, res) => {
+  try {
+    const result = await socialService.getUserPublicProfile({
+      requestUserId: req?.user?.userId,
+      targetUserId: req.params?.userId
+    });
+    return res.json(result);
+  } catch (error) {
+    return handleRouteError(res, error, '获取公开用户资料错误:');
+  }
+});
+
 router.post('/friends/request', authenticateToken, async (req, res) => {
   try {
     const result = await socialService.requestFriendship({

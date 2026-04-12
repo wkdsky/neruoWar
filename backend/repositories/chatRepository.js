@@ -1,10 +1,13 @@
 const mongoose = require('mongoose');
 
+const ChatSequence = require('../models/ChatSequence');
 const Conversation = require('../models/Conversation');
 const ConversationMember = require('../models/ConversationMember');
 const GroupInvitation = require('../models/GroupInvitation');
+const GroupNotice = require('../models/GroupNotice');
 const Message = require('../models/Message');
 const { getIdString, isValidObjectId } = require('../services/socialChatService');
+const { GROUP_NO_SEQUENCE_KEY, GROUP_NO_SEQUENCE_START } = require('../constants/socialChat');
 
 const toObjectId = (value) => new mongoose.Types.ObjectId(getIdString(value));
 
@@ -12,6 +15,17 @@ const findDirectConversationByKey = async (directKey) => Conversation.findOne({
   type: 'direct',
   directKey
 });
+
+const findGroupConversationByGroupNo = async (groupNo, select = null) => {
+  const safeGroupNo = String(groupNo || '').trim();
+  if (!safeGroupNo) return null;
+  const query = Conversation.findOne({
+    type: 'group',
+    groupNo: safeGroupNo,
+    isArchived: { $ne: true }
+  });
+  return select ? query.select(select) : query;
+};
 
 const listDirectConversationsByKeys = async (directKeys = []) => {
   const safeKeys = Array.from(new Set((Array.isArray(directKeys) ? directKeys : []).filter(Boolean)));
@@ -23,6 +37,72 @@ const listDirectConversationsByKeys = async (directKeys = []) => {
 };
 
 const createConversation = async (doc) => Conversation.create(doc);
+const createGroupNotice = async (doc) => GroupNotice.create(doc);
+const findGroupNoticeById = async (noticeId) => {
+  const safeId = getIdString(noticeId);
+  if (!isValidObjectId(safeId)) return null;
+  return GroupNotice.findById(safeId);
+};
+const deleteGroupNoticeById = async (noticeId) => {
+  const safeId = getIdString(noticeId);
+  if (!isValidObjectId(safeId)) return { deletedCount: 0 };
+  return GroupNotice.deleteOne({ _id: toObjectId(safeId) });
+};
+
+const allocateNextSequenceValue = async (key, startValue = 0) => {
+  const safeKey = String(key || '').trim();
+  if (!safeKey) return null;
+
+  const loadNextSequenceValue = () => ChatSequence.findOneAndUpdate(
+    { key: safeKey },
+    {
+      $inc: { value: 1 }
+    },
+    {
+      new: true
+    }
+  ).lean();
+
+  const existingSequence = await loadNextSequenceValue();
+  if (existingSequence) {
+    return existingSequence;
+  }
+
+  try {
+    await ChatSequence.create({
+      key: safeKey,
+      value: Number(startValue) || 0
+    });
+  } catch (error) {
+    if (error?.code !== 11000) {
+      throw error;
+    }
+  }
+
+  return loadNextSequenceValue();
+};
+
+const allocateNextGroupNo = async () => {
+  const sequence = await allocateNextSequenceValue(GROUP_NO_SEQUENCE_KEY, GROUP_NO_SEQUENCE_START);
+  return Number(sequence?.value) || 0;
+};
+
+const countGroupConversationsByCreator = async (creatorId) => {
+  const safeCreatorId = getIdString(creatorId);
+  if (!isValidObjectId(safeCreatorId)) return 0;
+
+  return Conversation.countDocuments({
+    type: 'group',
+    isArchived: { $ne: true },
+    $or: [
+      { creatorId: toObjectId(safeCreatorId) },
+      {
+        creatorId: null,
+        ownerId: toObjectId(safeCreatorId)
+      }
+    ]
+  });
+};
 
 const updateConversation = async ({
   conversationId,
@@ -233,6 +313,16 @@ const listGroupInvitationsByInvitee = async ({
   .sort({ updatedAt: -1, createdAt: -1 })
   .lean();
 
+const listGroupNoticesByConversationId = async (
+  conversationId,
+  { limit = 20 } = {}
+) => GroupNotice.find({
+  conversationId: toObjectId(conversationId)
+})
+  .sort({ createdAt: -1, _id: -1 })
+  .limit(Math.max(1, Math.min(50, Number(limit) || 20)))
+  .lean();
+
 const createGroupInvitation = async (doc) => GroupInvitation.create(doc);
 
 const countMessagesByConversationAndSender = async ({
@@ -278,19 +368,26 @@ const findLatestVisibleMessage = async ({
 
 module.exports = {
   allocateNextConversationSeq,
+  allocateNextGroupNo,
   countMessagesByConversationAndSender,
+  countGroupConversationsByCreator,
   createGroupInvitation,
+  createGroupNotice,
   createConversation,
   createMessage,
+  deleteGroupNoticeById,
   ensureConversationMember,
   findConversationById,
   findConversationMember,
   findDirectConversationByKey,
+  findGroupNoticeById,
+  findGroupConversationByGroupNo,
   findGroupInvitationByConversationAndInvitee,
   findGroupInvitationById,
   findLatestVisibleMessage,
   findMessageByClientMessageId,
   listGroupInvitationsByInvitee,
+  listGroupNoticesByConversationId,
   listConversationMembersByConversationId,
   listConversationMembersByConversationIds,
   listConversationMembersByUser,

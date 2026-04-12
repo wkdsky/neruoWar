@@ -1,9 +1,16 @@
+const { randomInt } = require('crypto');
+
 const socialRepository = require('../repositories/socialRepository');
 const chatRepository = require('../repositories/chatRepository');
 const {
+  DEFAULT_GROUP_AVATAR,
+  GROUP_NO_LENGTH,
+  GROUP_AVATAR_KEYS,
   MAX_DIRECT_MESSAGE_LENGTH,
   MAX_GROUP_ANNOUNCEMENT_LENGTH,
+  MAX_GROUP_CREATED_COUNT,
   MAX_GROUP_MEMBER_COUNT,
+  MAX_GROUP_SHARE_TARGET_COUNT,
   MAX_GROUP_MEMBERSHIP_COUNT,
   MAX_GROUP_TITLE_LENGTH,
   MAX_NON_FRIEND_DIRECT_MESSAGES
@@ -11,6 +18,7 @@ const {
 const SocialChatError = require('./socialChatError');
 const {
   buildUserPairKey,
+  buildMessagePreviewText,
   deriveFriendStatus,
   getIdString,
   isValidObjectId,
@@ -25,6 +33,10 @@ const createChatService = ({
   socialRepo = socialRepository,
   chatRepo = chatRepository
 } = {}) => {
+  const GROUP_NO_RANDOM_MIN = 10 ** Math.max(0, GROUP_NO_LENGTH - 1);
+  const GROUP_NO_RANDOM_MAX = 10 ** GROUP_NO_LENGTH;
+  const MAX_GROUP_NO_GENERATION_ATTEMPTS = 12;
+
   const assertValidUserId = (userId) => {
     const safeUserId = getIdString(userId);
     if (!isValidObjectId(safeUserId)) {
@@ -64,11 +76,179 @@ const createChatService = ({
     return announcement;
   };
 
+  const normalizeGroupAvatar = (value, { allowEmpty = false } = {}) => {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue) {
+      if (allowEmpty) return '';
+      return DEFAULT_GROUP_AVATAR;
+    }
+    if (!GROUP_AVATAR_KEYS.includes(normalizedValue)) {
+      throw new SocialChatError('群头像选项无效', {
+        status: 400,
+        code: 'INVALID_GROUP_AVATAR'
+      });
+    }
+    return normalizedValue;
+  };
+
   const dedupeUserIds = (values = []) => Array.from(new Set(
     (Array.isArray(values) ? values : [])
       .map((item) => getIdString(item))
       .filter((item) => isValidObjectId(item))
   ));
+
+  const formatGroupNo = (value) => {
+    const numericValue = Number(value);
+    if (!Number.isInteger(numericValue) || numericValue <= 0) {
+      throw new SocialChatError('群号分配失败，请稍后重试', {
+        status: 500,
+        code: 'INVALID_GROUP_NO_SEQUENCE'
+      });
+    }
+
+    const groupNo = String(numericValue).padStart(GROUP_NO_LENGTH, '0');
+    if (groupNo.length > GROUP_NO_LENGTH) {
+      throw new SocialChatError('群号容量已满，请联系管理员扩容', {
+        status: 500,
+        code: 'GROUP_NO_EXHAUSTED'
+      });
+    }
+    return groupNo;
+  };
+
+  const buildRandomGroupNo = () => formatGroupNo(
+    randomInt(GROUP_NO_RANDOM_MIN, GROUP_NO_RANDOM_MAX)
+  );
+
+  const allocateUniqueRandomGroupNo = async () => {
+    for (let attempt = 0; attempt < MAX_GROUP_NO_GENERATION_ATTEMPTS; attempt += 1) {
+      const nextGroupNo = buildRandomGroupNo();
+      const existingConversation = await chatRepo.findGroupConversationByGroupNo(nextGroupNo, '_id');
+      if (!existingConversation?._id) {
+        return nextGroupNo;
+      }
+    }
+
+    throw new SocialChatError('群号分配失败，请稍后重试', {
+      status: 500,
+      code: 'GROUP_NO_ALLOCATION_FAILED'
+    });
+  };
+
+  const createGroupConversationRecord = async (payload = {}) => {
+    for (let attempt = 0; attempt < MAX_GROUP_NO_GENERATION_ATTEMPTS; attempt += 1) {
+      const nextGroupNo = await allocateUniqueRandomGroupNo();
+      try {
+        return await chatRepo.createConversation({
+          ...payload,
+          groupNo: nextGroupNo
+        });
+      } catch (error) {
+        if (error?.code === 11000) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new SocialChatError('群号分配失败，请稍后重试', {
+      status: 500,
+      code: 'GROUP_NO_ALLOCATION_FAILED'
+    });
+  };
+
+  const normalizeGroupNo = (value, { allowEmpty = false } = {}) => {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue) {
+      if (allowEmpty) return '';
+      throw new SocialChatError('群号不能为空', {
+        status: 400,
+        code: 'EMPTY_GROUP_NO'
+      });
+    }
+
+    if (!/^\d+$/.test(normalizedValue)) {
+      throw new SocialChatError('群号格式无效', {
+        status: 400,
+        code: 'INVALID_GROUP_NO'
+      });
+    }
+
+    if (normalizedValue.length > GROUP_NO_LENGTH) {
+      throw new SocialChatError('群号格式无效', {
+        status: 400,
+        code: 'INVALID_GROUP_NO'
+      });
+    }
+
+    return normalizedValue.padStart(GROUP_NO_LENGTH, '0');
+  };
+
+  const getConversationCreatorId = (conversation = {}) => {
+    const creatorId = getIdString(conversation?.creatorId || conversation?.ownerId);
+    return isValidObjectId(creatorId) ? creatorId : '';
+  };
+
+  const materializeConversation = (conversation = {}, patch = {}) => {
+    const baseConversation = typeof conversation?.toObject === 'function'
+      ? conversation.toObject()
+      : { ...conversation };
+    return {
+      ...baseConversation,
+      ...patch
+    };
+  };
+
+  const ensureLegacyGroupConversationMetadata = async (conversation = null) => {
+    if (!conversation || conversation?.type !== 'group') {
+      return conversation;
+    }
+
+    const updateSet = {};
+    const currentGroupNo = String(conversation?.groupNo || '').trim();
+    const currentAvatar = String(conversation?.avatar || '').trim();
+    const currentCreatorId = getIdString(conversation?.creatorId);
+    const fallbackCreatorId = getConversationCreatorId(conversation);
+
+    if (!currentAvatar) {
+      updateSet.avatar = DEFAULT_GROUP_AVATAR;
+    }
+    if (!isValidObjectId(currentCreatorId) && fallbackCreatorId) {
+      updateSet.creatorId = fallbackCreatorId;
+    }
+
+    if (Object.keys(updateSet).length === 0) {
+      return conversation;
+    }
+
+    for (let attempt = 0; attempt < MAX_GROUP_NO_GENERATION_ATTEMPTS; attempt += 1) {
+      const nextUpdateSet = {
+        ...updateSet,
+        ...(currentGroupNo ? {} : { groupNo: await allocateUniqueRandomGroupNo() }),
+        updatedAt: new Date()
+      };
+
+      try {
+        await chatRepo.updateConversation({
+          conversationId: conversation._id,
+          update: {
+            $set: nextUpdateSet
+          }
+        });
+        return materializeConversation(conversation, nextUpdateSet);
+      } catch (error) {
+        if (!currentGroupNo && error?.code === 11000) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new SocialChatError('群号分配失败，请稍后重试', {
+      status: 500,
+      code: 'GROUP_NO_ALLOCATION_FAILED'
+    });
+  };
 
   const buildDirectUserSummary = async ({
     currentUserId,
@@ -100,6 +280,78 @@ const createChatService = ({
     });
   };
 
+  const buildSharedGroupCardPayload = (conversation = {}) => ({
+    group: {
+      conversationId: getIdString(conversation?._id),
+      title: conversation?.title || '群聊',
+      announcement: conversation?.announcement || '',
+      avatar: conversation?.avatar || DEFAULT_GROUP_AVATAR,
+      groupNo: String(conversation?.groupNo || ''),
+      memberCount: Number(conversation?.memberCount) || 0,
+      ownerId: getIdString(conversation?.ownerId)
+    }
+  });
+
+  const serializeGroupNoticeItem = ({
+    notice = {},
+    user = null
+  } = {}) => ({
+    noticeId: getIdString(notice?._id),
+    content: notice?.content || '',
+    createdAt: notice?.createdAt || null,
+    createdBy: user ? serializeUserSummary(user) : null
+  });
+
+  const recordGroupNotice = async ({
+    conversationId,
+    content,
+    createdBy,
+    createdAt = new Date()
+  }) => {
+    const normalizedContent = String(content || '').trim();
+    if (!normalizedContent) {
+      return null;
+    }
+
+    return chatRepo.createGroupNotice({
+      conversationId,
+      content: normalizedContent,
+      createdBy,
+      createdAt,
+      updatedAt: createdAt
+    });
+  };
+
+  const syncConversationAnnouncementFromLatestNotice = async ({
+    conversationId,
+    fallbackConversation = null
+  }) => {
+    const conversation = fallbackConversation || await chatRepo.findConversationById(conversationId);
+    if (!conversation?._id) {
+      return null;
+    }
+
+    const latestNoticeRows = await chatRepo.listGroupNoticesByConversationId(conversation._id, {
+      limit: 1
+    });
+    const latestNotice = latestNoticeRows[0] || null;
+    const updateSet = {
+      announcement: latestNotice?.content || '',
+      announcementUpdatedAt: latestNotice?.createdAt || null,
+      announcementUpdatedBy: latestNotice?.createdBy || null,
+      updatedAt: new Date()
+    };
+
+    await chatRepo.updateConversation({
+      conversationId: conversation._id,
+      update: {
+        $set: updateSet
+      }
+    });
+
+    return materializeConversation(conversation, updateSet);
+  };
+
   const countActiveGroupMembershipsForUser = async (userId) => {
     const safeUserId = assertValidUserId(userId);
     const memberships = await chatRepo.listConversationMembersByUser({
@@ -114,13 +366,37 @@ const createChatService = ({
     return conversations.filter((item) => item?.type === 'group').length;
   };
 
-  const assertGroupMembershipQuota = async (userIds = []) => {
+  const countJoinedExternalGroupsForUser = async (userId) => {
+    const safeUserId = assertValidUserId(userId);
+    const memberships = await chatRepo.listConversationMembersByUser({
+      userId: safeUserId,
+      isActive: true
+    });
+    if (memberships.length === 0) return 0;
+
+    const conversations = await chatRepo.listConversationsByIds(
+      memberships.map((item) => item?.conversationId)
+    );
+
+    return conversations.filter((item) => {
+      if (item?.type !== 'group') return false;
+      const creatorId = getConversationCreatorId(item);
+      return creatorId ? creatorId !== safeUserId : true;
+    }).length;
+  };
+
+  const assertJoinedExternalGroupQuota = async (userIds = [], { conversationCreatorId = '' } = {}) => {
+    const safeConversationCreatorId = getIdString(conversationCreatorId);
     for (const userId of dedupeUserIds(userIds)) {
-      const count = await countActiveGroupMembershipsForUser(userId);
+      if (safeConversationCreatorId && safeConversationCreatorId === userId) {
+        continue;
+      }
+
+      const count = await countJoinedExternalGroupsForUser(userId);
       if (count >= MAX_GROUP_MEMBERSHIP_COUNT) {
         const user = await socialRepo.findUserById(userId, '_id username');
         throw new SocialChatError(
-          `${user?.username || '该用户'}加入的群聊数量已达上限，当前最多支持 ${MAX_GROUP_MEMBERSHIP_COUNT} 个群聊`,
+          `${user?.username || '该用户'}加入的他人群聊数量已达上限，当前最多支持 ${MAX_GROUP_MEMBERSHIP_COUNT} 个`,
           {
             status: 400,
             code: 'GROUP_MEMBERSHIP_LIMIT_REACHED'
@@ -128,6 +404,21 @@ const createChatService = ({
         );
       }
     }
+  };
+
+  const assertGroupCreateQuota = async (userId) => {
+    const safeUserId = assertValidUserId(userId);
+    const count = await chatRepo.countGroupConversationsByCreator(safeUserId);
+    if (count < MAX_GROUP_CREATED_COUNT) return;
+
+    const user = await socialRepo.findUserById(safeUserId, '_id username');
+    throw new SocialChatError(
+      `${user?.username || '该用户'}最多只能创建 ${MAX_GROUP_CREATED_COUNT} 个群聊`,
+      {
+        status: 400,
+        code: 'GROUP_CREATE_LIMIT_REACHED'
+      }
+    );
   };
 
   const ensureUsersExist = async (userIds = [], { allowEmpty = false } = {}) => {
@@ -162,6 +453,147 @@ const createChatService = ({
     return memberCount;
   };
 
+  const persistConversationMessage = async ({
+    conversation,
+    senderUserId,
+    type = 'text',
+    content = '',
+    clientMessageId = '',
+    payload = null
+  }) => {
+    const safeSenderUserId = assertValidUserId(senderUserId);
+    const normalizedClientMessageId = String(clientMessageId || '').trim().slice(0, 80);
+
+    if (!conversation?._id) {
+      throw new SocialChatError('会话不存在', {
+        status: 404,
+        code: 'CONVERSATION_NOT_FOUND'
+      });
+    }
+
+    if (normalizedClientMessageId) {
+      const existingMessage = await chatRepo.findMessageByClientMessageId({
+        conversationId: conversation._id,
+        senderId: safeSenderUserId,
+        clientMessageId: normalizedClientMessageId
+      });
+      if (existingMessage) {
+        return {
+          message: existingMessage,
+          reusedExisting: true
+        };
+      }
+    }
+
+    const seqRow = await chatRepo.allocateNextConversationSeq(conversation._id);
+    const nextSeq = Number(seqRow?.messageSeq) || 0;
+    if (nextSeq <= 0) {
+      throw new SocialChatError('消息序号分配失败', {
+        status: 500,
+        code: 'MESSAGE_SEQ_ALLOCATION_FAILED'
+      });
+    }
+
+    const createdAt = new Date();
+    const messageDoc = {
+      conversationId: conversation._id,
+      seq: nextSeq,
+      senderId: safeSenderUserId,
+      type,
+      content,
+      clientMessageId: normalizedClientMessageId,
+      createdAt,
+      updatedAt: createdAt
+    };
+    if (payload && typeof payload === 'object') {
+      messageDoc.payload = payload;
+    }
+
+    const message = await chatRepo.createMessage(messageDoc);
+    const previewText = truncateMessagePreview(buildMessagePreviewText({
+      type,
+      content,
+      payload
+    }));
+
+    await Promise.all([
+      chatRepo.updateConversationLastMessage({
+        conversationId: conversation._id,
+        messageId: message._id,
+        preview: previewText,
+        at: createdAt
+      }),
+      reactivateConversationForRecipientOnIncomingMessage({
+        conversationId: conversation._id,
+        senderUserId: safeSenderUserId,
+        at: createdAt
+      }),
+      chatRepo.updateConversationMember({
+        conversationId: conversation._id,
+        userId: safeSenderUserId,
+        update: {
+          $set: {
+            isVisible: true,
+            isActive: true,
+            lastReadSeq: nextSeq,
+            unreadCount: 0,
+            updatedAt: createdAt,
+            leftAt: null
+          }
+        }
+      })
+    ]);
+
+    return {
+      message,
+      reusedExisting: false
+    };
+  };
+
+  const buildGroupSearchResultForUser = async ({
+    userId,
+    conversation
+  }) => {
+    const safeUserId = assertValidUserId(userId);
+    if (!conversation || conversation?.type !== 'group') {
+      return null;
+    }
+    const normalizedConversation = await ensureLegacyGroupConversationMetadata(conversation);
+
+    const [member, ownerUser] = await Promise.all([
+      chatRepo.findConversationMember({
+        conversationId: normalizedConversation._id,
+        userId: safeUserId,
+        isActive: true
+      }),
+      normalizedConversation?.ownerId
+        ? socialRepo.findUserById(normalizedConversation.ownerId, '_id username avatar profession allianceId')
+        : Promise.resolve(null)
+    ]);
+
+    const currentUserRole = member?.role || '';
+    const membershipStatus = member
+      ? currentUserRole === 'owner'
+        ? 'owner'
+        : getConversationCreatorId(normalizedConversation) === safeUserId
+          ? 'creator'
+          : 'joined'
+      : 'none';
+
+    return {
+      conversationId: getIdString(normalizedConversation?._id),
+      title: normalizedConversation?.title || '群聊',
+      avatar: normalizedConversation?.avatar || DEFAULT_GROUP_AVATAR,
+      groupNo: String(normalizedConversation?.groupNo || ''),
+      announcement: normalizedConversation?.announcement || '',
+      memberCount: Number(normalizedConversation?.memberCount) || 0,
+      currentUserRole,
+      membershipStatus,
+      canJoin: !member,
+      owner: ownerUser ? serializeUserSummary(ownerUser) : null
+    };
+  };
+
   const getConversationAccessContext = async ({ userId, conversationId }) => {
     const safeUserId = assertValidUserId(userId);
     const safeConversationId = getIdString(conversationId);
@@ -193,8 +625,12 @@ const createChatService = ({
       });
     }
 
+    const normalizedConversation = conversation?.type === 'group'
+      ? await ensureLegacyGroupConversationMetadata(conversation)
+      : conversation;
+
     return {
-      conversation,
+      conversation: normalizedConversation,
       member,
       userId: safeUserId
     };
@@ -230,15 +666,25 @@ const createChatService = ({
       userId: safeUserId
     } = await getGroupConversationAccessContext({ userId, conversationId });
 
-    const members = await chatRepo.listConversationMembersByConversationId(conversation._id, {
-      isActive: true
-    });
-    const users = await socialRepo.findUsersByIds(members.map((item) => item?.userId));
+    const [members, notices, latestVisibleMessage] = await Promise.all([
+      chatRepo.listConversationMembersByConversationId(conversation._id, {
+        isActive: true
+      }),
+      chatRepo.listGroupNoticesByConversationId(conversation._id, {
+        limit: 20
+      }),
+      chatRepo.findLatestVisibleMessage({
+        conversationId: conversation._id,
+        clearedBeforeSeq: member?.clearedBeforeSeq || 0
+      })
+    ]);
+    const relatedUserIds = dedupeUserIds([
+      ...members.map((item) => item?.userId),
+      ...notices.map((item) => item?.createdBy),
+      conversation?.announcementUpdatedBy
+    ]);
+    const users = await socialRepo.findUsersByIds(relatedUserIds);
     const userMap = new Map(users.map((item) => [getIdString(item?._id), item]));
-    const latestVisibleMessage = await chatRepo.findLatestVisibleMessage({
-      conversationId: conversation._id,
-      clearedBeforeSeq: member?.clearedBeforeSeq || 0
-    });
 
     const sortedMembers = [...members].sort((left, right) => {
       if (left?.role !== right?.role) {
@@ -257,12 +703,24 @@ const createChatService = ({
       group: {
         conversationId: getIdString(conversation?._id),
         title: conversation?.title || '群聊',
+        avatar: conversation?.avatar || DEFAULT_GROUP_AVATAR,
+        groupNo: String(conversation?.groupNo || ''),
         announcement: conversation?.announcement || '',
+        createdAt: conversation?.createdAt || null,
+        lastActiveAt: conversation?.lastMessageAt || conversation?.updatedAt || conversation?.createdAt || null,
+        announcementUpdatedAt: conversation?.announcementUpdatedAt || null,
+        announcementUpdatedByUser: serializeUserSummary(
+          userMap.get(getIdString(conversation?.announcementUpdatedBy)) || null
+        ),
         ownerId: getIdString(conversation?.ownerId),
         memberCount: Number(conversation?.memberCount) || sortedMembers.length,
         currentUserRole: member?.role || 'member',
         canManage: member?.role === 'owner',
         canLeave: member?.role !== 'owner',
+        noticeHistory: notices.map((item) => serializeGroupNoticeItem({
+          notice: item,
+          user: userMap.get(getIdString(item?.createdBy)) || null
+        })),
         members: sortedMembers.map((item) => serializeGroupMemberItem({
           member: item,
           user: userMap.get(getIdString(item?.userId)) || null
@@ -286,6 +744,7 @@ const createChatService = ({
       ? {
         conversationId: getIdString(conversation?._id),
         title: conversation?.title || '群聊',
+        groupNo: String(conversation?.groupNo || ''),
         announcement: conversation?.announcement || '',
         memberCount: Number(conversation?.memberCount) || 0,
         avatar: conversation?.avatar || ''
@@ -499,14 +958,17 @@ const createChatService = ({
     for (const member of members) {
       const conversation = conversationMap.get(getIdString(member?.conversationId));
       if (!conversation) continue;
+      const normalizedConversation = conversation?.type === 'group'
+        ? await ensureLegacyGroupConversationMetadata(conversation)
+        : conversation;
       const latestVisibleMessage = await chatRepo.findLatestVisibleMessage({
-        conversationId: conversation._id,
+        conversationId: normalizedConversation._id,
         clearedBeforeSeq: member?.clearedBeforeSeq || 0
       });
       rows.push(serializeConversationItem({
-        conversation,
+        conversation: normalizedConversation,
         member,
-        directUser: directConversationUserMap.get(getIdString(conversation?._id)) || null,
+        directUser: directConversationUserMap.get(getIdString(normalizedConversation?._id)) || null,
         latestVisibleMessage
       }));
     }
@@ -528,15 +990,36 @@ const createChatService = ({
     };
   };
 
+  const searchGroupConversationByGroupNo = async ({
+    userId,
+    groupNo
+  }) => {
+    assertValidUserId(userId);
+    const normalizedGroupNo = normalizeGroupNo(groupNo);
+    const conversation = await chatRepo.findGroupConversationByGroupNo(normalizedGroupNo);
+    if (!conversation) {
+      return { group: null };
+    }
+
+    return {
+      group: await buildGroupSearchResultForUser({
+        userId,
+        conversation
+      })
+    };
+  };
+
   const createGroupConversation = async ({
     ownerUserId,
     title,
     announcement = '',
+    avatar = DEFAULT_GROUP_AVATAR,
     memberUserIds = []
   }) => {
     const safeOwnerUserId = assertValidUserId(ownerUserId);
     const normalizedTitle = normalizeGroupTitle(title);
     const normalizedAnnouncement = normalizeGroupAnnouncement(announcement);
+    const normalizedAvatar = normalizeGroupAvatar(avatar);
     const inviteeUserIds = dedupeUserIds(memberUserIds).filter((item) => item !== safeOwnerUserId);
     const allParticipantUserIds = [safeOwnerUserId, ...inviteeUserIds];
 
@@ -549,19 +1032,33 @@ const createChatService = ({
 
     await Promise.all([
       ensureUsersExist(allParticipantUserIds),
-      assertGroupMembershipQuota(allParticipantUserIds)
+      assertJoinedExternalGroupQuota(inviteeUserIds, {
+        conversationCreatorId: safeOwnerUserId
+      }),
+      assertGroupCreateQuota(safeOwnerUserId)
     ]);
 
     const now = new Date();
-    const conversation = await chatRepo.createConversation({
+    const conversation = await createGroupConversationRecord({
       type: 'group',
       title: normalizedTitle,
       announcement: normalizedAnnouncement,
       announcementUpdatedAt: normalizedAnnouncement ? now : null,
       announcementUpdatedBy: normalizedAnnouncement ? safeOwnerUserId : null,
+      avatar: normalizedAvatar,
       ownerId: safeOwnerUserId,
+      creatorId: safeOwnerUserId,
       memberCount: allParticipantUserIds.length
     });
+
+    if (normalizedAnnouncement) {
+      await recordGroupNotice({
+        conversationId: conversation._id,
+        content: normalizedAnnouncement,
+        createdBy: safeOwnerUserId,
+        createdAt: now
+      });
+    }
 
     await Promise.all(allParticipantUserIds.map((participantUserId) => chatRepo.ensureConversationMember({
       conversationId: conversation._id,
@@ -604,7 +1101,8 @@ const createChatService = ({
     userId,
     conversationId,
     title,
-    announcement
+    announcement,
+    avatar
   }) => {
     const {
       conversation,
@@ -616,15 +1114,26 @@ const createChatService = ({
     const updateSet = {
       updatedAt: new Date()
     };
+    let shouldRecordGroupNotice = false;
+    let nextAnnouncement = '';
+    let announcementUpdatedAt = null;
 
     if (typeof title === 'string') {
       updateSet.title = normalizeGroupTitle(title);
     }
 
     if (typeof announcement === 'string') {
-      updateSet.announcement = normalizeGroupAnnouncement(announcement);
-      updateSet.announcementUpdatedAt = new Date();
+      nextAnnouncement = normalizeGroupAnnouncement(announcement);
+      announcementUpdatedAt = new Date();
+      updateSet.announcement = nextAnnouncement;
+      updateSet.announcementUpdatedAt = announcementUpdatedAt;
       updateSet.announcementUpdatedBy = safeUserId;
+      shouldRecordGroupNotice = Boolean(nextAnnouncement)
+        && nextAnnouncement !== String(conversation?.announcement || '').trim();
+    }
+
+    if (typeof avatar === 'string') {
+      updateSet.avatar = normalizeGroupAvatar(avatar);
     }
 
     await chatRepo.updateConversation({
@@ -633,6 +1142,15 @@ const createChatService = ({
         $set: updateSet
       }
     });
+
+    if (shouldRecordGroupNotice) {
+      await recordGroupNotice({
+        conversationId: conversation._id,
+        content: nextAnnouncement,
+        createdBy: safeUserId,
+        createdAt: announcementUpdatedAt || new Date()
+      });
+    }
 
     const detail = await buildGroupDetailForUser({
       userId: safeUserId,
@@ -646,6 +1164,93 @@ const createChatService = ({
     return {
       ...detail,
       participantUserIds
+    };
+  };
+
+  const createGroupNotice = async ({
+    userId,
+    conversationId,
+    content
+  }) => {
+    const {
+      conversation,
+      member,
+      userId: safeUserId
+    } = await getGroupConversationAccessContext({ userId, conversationId });
+    assertGroupOwnerAccess(member);
+
+    const normalizedContent = normalizeGroupAnnouncement(content);
+    if (!normalizedContent) {
+      throw new SocialChatError('群公告不能为空', {
+        status: 400,
+        code: 'EMPTY_GROUP_NOTICE'
+      });
+    }
+
+    const createdAt = new Date();
+    await recordGroupNotice({
+      conversationId: conversation._id,
+      content: normalizedContent,
+      createdBy: safeUserId,
+      createdAt
+    });
+    await syncConversationAnnouncementFromLatestNotice({
+      conversationId: conversation._id,
+      fallbackConversation: conversation
+    });
+
+    const detail = await buildGroupDetailForUser({
+      userId: safeUserId,
+      conversationId: conversation._id
+    });
+    const participantUserIds = await listConversationParticipantUserIds({
+      conversationId: conversation._id
+    });
+
+    return {
+      ...detail,
+      participantUserIds
+    };
+  };
+
+  const deleteGroupNotice = async ({
+    userId,
+    conversationId,
+    noticeId
+  }) => {
+    const {
+      conversation,
+      member,
+      userId: safeUserId
+    } = await getGroupConversationAccessContext({ userId, conversationId });
+    assertGroupOwnerAccess(member);
+
+    const notice = await chatRepo.findGroupNoticeById(noticeId);
+    if (!notice?._id || getIdString(notice?.conversationId) !== getIdString(conversation?._id)) {
+      throw new SocialChatError('群公告不存在', {
+        status: 404,
+        code: 'GROUP_NOTICE_NOT_FOUND'
+      });
+    }
+
+    await chatRepo.deleteGroupNoticeById(notice._id);
+    await syncConversationAnnouncementFromLatestNotice({
+      conversationId: conversation._id,
+      fallbackConversation: conversation
+    });
+
+    const detail = await buildGroupDetailForUser({
+      userId: safeUserId,
+      conversationId: conversation._id
+    });
+    const participantUserIds = await listConversationParticipantUserIds({
+      conversationId: conversation._id
+    });
+
+    return {
+      ...detail,
+      participantUserIds,
+      deletedNoticeId: getIdString(notice._id)
     };
   };
 
@@ -689,7 +1294,9 @@ const createChatService = ({
 
     await Promise.all([
       ensureUsersExist(newUserIds),
-      assertGroupMembershipQuota(newUserIds)
+      assertJoinedExternalGroupQuota(newUserIds, {
+        conversationCreatorId: getConversationCreatorId(conversation)
+      })
     ]);
 
     const now = new Date();
@@ -900,7 +1507,9 @@ const createChatService = ({
 
     let participantUserIds = [];
     if (normalizedAction === 'accept') {
-      await assertGroupMembershipQuota([safeUserId]);
+      await assertJoinedExternalGroupQuota([safeUserId], {
+        conversationCreatorId: getConversationCreatorId(conversation)
+      });
       const currentMembers = await chatRepo.listConversationMembersByConversationId(conversation._id, {
         isActive: true
       });
@@ -959,6 +1568,91 @@ const createChatService = ({
       inviter: serializeUserSummary(inviter),
       invitee: serializeUserSummary(invitee),
       participantUserIds
+    };
+  };
+
+  const joinGroupConversation = async ({
+    userId,
+    conversationId = '',
+    groupNo = ''
+  }) => {
+    const safeUserId = assertValidUserId(userId);
+    const safeConversationId = getIdString(conversationId);
+    const normalizedGroupNo = groupNo ? normalizeGroupNo(groupNo) : '';
+
+    let conversation = null;
+    if (safeConversationId && isValidObjectId(safeConversationId)) {
+      conversation = await chatRepo.findConversationById(safeConversationId);
+    } else if (normalizedGroupNo) {
+      conversation = await chatRepo.findGroupConversationByGroupNo(normalizedGroupNo);
+    } else {
+      throw new SocialChatError('请提供有效的群聊标识', {
+        status: 400,
+        code: 'GROUP_IDENTIFIER_REQUIRED'
+      });
+    }
+
+    if (!conversation || conversation?.type !== 'group') {
+      throw new SocialChatError('群聊不存在', {
+        status: 404,
+        code: 'GROUP_CONVERSATION_NOT_FOUND'
+      });
+    }
+
+    const currentMembers = await chatRepo.listConversationMembersByConversationId(conversation._id, {
+      isActive: true
+    });
+    const activeMemberIdSet = new Set(currentMembers.map((item) => getIdString(item?.userId)));
+    const alreadyJoined = activeMemberIdSet.has(safeUserId);
+
+    if (!alreadyJoined) {
+      if (currentMembers.length >= MAX_GROUP_MEMBER_COUNT) {
+        throw new SocialChatError(`群成员数量不能超过 ${MAX_GROUP_MEMBER_COUNT} 人`, {
+          status: 400,
+          code: 'GROUP_MEMBER_COUNT_EXCEEDED'
+        });
+      }
+
+      await assertJoinedExternalGroupQuota([safeUserId], {
+        conversationCreatorId: getConversationCreatorId(conversation)
+      });
+
+      const now = new Date();
+      const currentSeq = Number(conversation?.messageSeq) || 0;
+      await ensureConversationMemberSafely({
+        conversationId: conversation._id,
+        userId: safeUserId,
+        set: {
+          role: 'member',
+          isActive: true,
+          isVisible: true,
+          leftAt: null,
+          deletedAt: null,
+          clearedAt: currentSeq > 0 ? now : null,
+          clearedBeforeSeq: currentSeq,
+          lastReadSeq: currentSeq,
+          unreadCount: 0,
+          updatedAt: now
+        },
+        setOnInsert: {
+          joinedAt: now
+        }
+      });
+      await syncConversationMemberCount(conversation._id);
+    }
+
+    const detail = await buildGroupDetailForUser({
+      userId: safeUserId,
+      conversationId: conversation._id
+    });
+    const participantUserIds = await listConversationParticipantUserIds({
+      conversationId: conversation._id
+    });
+
+    return {
+      ...detail,
+      participantUserIds,
+      alreadyJoined
     };
   };
 
@@ -1165,6 +1859,57 @@ const createChatService = ({
     };
   };
 
+  const disbandGroupConversation = async ({
+    userId,
+    conversationId
+  }) => {
+    const {
+      conversation,
+      member,
+      userId: safeUserId
+    } = await getGroupConversationAccessContext({ userId, conversationId });
+    assertGroupOwnerAccess(member);
+
+    const participantUserIds = await listConversationParticipantUserIds({
+      conversationId: conversation._id
+    });
+    const now = new Date();
+    const currentSeq = Number(conversation?.messageSeq) || 0;
+
+    await Promise.all([
+      chatRepo.updateConversation({
+        conversationId: conversation._id,
+        update: {
+          $set: {
+            isArchived: true,
+            updatedAt: now
+          }
+        }
+      }),
+      chatRepo.updateConversationMembers({
+        conversationId: conversation._id,
+        isActive: true,
+        update: {
+          $set: {
+            isActive: false,
+            isVisible: false,
+            leftAt: now,
+            updatedAt: now,
+            unreadCount: 0,
+            lastReadSeq: currentSeq
+          }
+        }
+      })
+    ]);
+
+    return {
+      conversationId: getIdString(conversation._id),
+      participantUserIds,
+      groupDisbanded: true,
+      ownerUserId: safeUserId
+    };
+  };
+
   const serializeConversationForUserView = async ({
     userId,
     conversationId
@@ -1210,6 +1955,45 @@ const createChatService = ({
 
     const members = await chatRepo.listConversationMembersByConversationId(safeConversationId, { isActive });
     return members.map((item) => getIdString(item?.userId)).filter(Boolean);
+  };
+
+  const updateConversationPinnedForUser = async ({
+    userId,
+    conversationId,
+    pinned
+  }) => {
+    const {
+      conversation,
+      member,
+      userId: safeUserId
+    } = await getConversationAccessContext({ userId, conversationId });
+
+    if (typeof pinned !== 'boolean') {
+      throw new SocialChatError('置顶状态无效', {
+        status: 400,
+        code: 'INVALID_CONVERSATION_PINNED_STATE'
+      });
+    }
+
+    if (!!member?.pinned !== pinned) {
+      await chatRepo.updateConversationMember({
+        conversationId: conversation._id,
+        userId: safeUserId,
+        update: {
+          $set: {
+            pinned,
+            updatedAt: new Date()
+          }
+        }
+      });
+    }
+
+    return {
+      conversation: await serializeConversationForUserView({
+        userId: safeUserId,
+        conversationId: conversation._id
+      })
+    };
   };
 
   const listMessagesForUserView = async ({
@@ -1313,21 +2097,6 @@ const createChatService = ({
       }
     }
 
-    if (normalizedClientMessageId) {
-      const existingMessage = await chatRepo.findMessageByClientMessageId({
-        conversationId: conversation._id,
-        senderId: safeUserId,
-        clientMessageId: normalizedClientMessageId
-      });
-      if (existingMessage) {
-        const sender = await socialRepo.findUserById(safeUserId, '_id username avatar profession allianceId');
-        return {
-          conversationId: getIdString(conversation._id),
-          message: serializeMessageForUserView(existingMessage, sender)
-        };
-      }
-    }
-
     let temporaryMessageInfo = null;
     if (conversation.type === 'direct') {
       const targetUserId = directUserIds.find((item) => item !== safeUserId) || '';
@@ -1368,60 +2137,131 @@ const createChatService = ({
       }
     }
 
-    const seqRow = await chatRepo.allocateNextConversationSeq(conversation._id);
-    const nextSeq = Number(seqRow?.messageSeq) || 0;
-    if (nextSeq <= 0) {
-      throw new SocialChatError('消息序号分配失败', {
-        status: 500,
-        code: 'MESSAGE_SEQ_ALLOCATION_FAILED'
-      });
-    }
-
-    const createdAt = new Date();
-    const message = await chatRepo.createMessage({
-      conversationId: conversation._id,
-      seq: nextSeq,
-      senderId: safeUserId,
+    const { message } = await persistConversationMessage({
+      conversation,
+      senderUserId: safeUserId,
       type: normalizedType,
       content: messageContent,
-      clientMessageId: normalizedClientMessageId,
-      createdAt,
-      updatedAt: createdAt
+      clientMessageId: normalizedClientMessageId
     });
-
-    await Promise.all([
-      chatRepo.updateConversationLastMessage({
-        conversationId: conversation._id,
-        messageId: message._id,
-        preview: truncateMessagePreview(messageContent),
-        at: createdAt
-      }),
-      reactivateConversationForRecipientOnIncomingMessage({
-        conversationId: conversation._id,
-        senderUserId: safeUserId,
-        at: createdAt
-      }),
-      chatRepo.updateConversationMember({
-        conversationId: conversation._id,
-        userId: safeUserId,
-        update: {
-          $set: {
-            isVisible: true,
-            isActive: true,
-            lastReadSeq: nextSeq,
-            unreadCount: 0,
-            updatedAt: createdAt,
-            leftAt: null
-          }
-        }
-      })
-    ]);
 
     const sender = await socialRepo.findUserById(safeUserId, '_id username avatar profession allianceId');
     return {
       conversationId: getIdString(conversation._id),
       message: serializeMessageForUserView(message, sender),
       temporaryMessageInfo
+    };
+  };
+
+  const shareGroupConversationCard = async ({
+    userId,
+    conversationId,
+    targetUserIds = [],
+    targetConversationIds = []
+  }) => {
+    const {
+      conversation,
+      userId: safeUserId
+    } = await getGroupConversationAccessContext({ userId, conversationId });
+
+    const safeTargetUserIds = dedupeUserIds(targetUserIds).filter((item) => item !== safeUserId);
+    const safeTargetConversationIds = dedupeUserIds(targetConversationIds).filter((item) => item !== getIdString(conversation?._id));
+    const totalTargetCount = safeTargetUserIds.length + safeTargetConversationIds.length;
+
+    if (totalTargetCount === 0) {
+      throw new SocialChatError('请至少选择一个好友或群聊', {
+        status: 400,
+        code: 'EMPTY_GROUP_SHARE_TARGETS'
+      });
+    }
+    if (totalTargetCount > MAX_GROUP_SHARE_TARGET_COUNT) {
+      throw new SocialChatError(`单次最多只能分享给 ${MAX_GROUP_SHARE_TARGET_COUNT} 个目标`, {
+        status: 400,
+        code: 'GROUP_SHARE_TARGET_LIMIT_EXCEEDED'
+      });
+    }
+
+    const [sender, friendUserContext] = await Promise.all([
+      socialRepo.findUserById(safeUserId, '_id username avatar profession allianceId'),
+      ensureUsersExist(safeTargetUserIds, { allowEmpty: true })
+    ]);
+
+    for (const targetUserId of safeTargetUserIds) {
+      const friendship = await socialRepo.findAcceptedFriendshipByParticipantsKey(buildUserPairKey(safeUserId, targetUserId));
+      if (!friendship) {
+        throw new SocialChatError('只能将群分享给好友', {
+          status: 403,
+          code: 'GROUP_SHARE_FRIEND_REQUIRED'
+        });
+      }
+    }
+
+    const targetConversationMap = new Map();
+
+    for (const targetUserId of safeTargetUserIds) {
+      const direct = await ensureDirectConversationByUsers({
+        requestUserId: safeUserId,
+        targetUserId
+      });
+      const directConversation = await chatRepo.findConversationById(direct.conversation.conversationId);
+      if (directConversation?._id) {
+        targetConversationMap.set(getIdString(directConversation._id), directConversation);
+      }
+    }
+
+    for (const targetConversationId of safeTargetConversationIds) {
+      const targetContext = await getGroupConversationAccessContext({
+        userId: safeUserId,
+        conversationId: targetConversationId
+      });
+      if (targetContext?.conversation?._id) {
+        targetConversationMap.set(getIdString(targetContext.conversation._id), targetContext.conversation);
+      }
+    }
+
+    if (targetConversationMap.size === 0) {
+      throw new SocialChatError('没有可发送的目标会话', {
+        status: 400,
+        code: 'GROUP_SHARE_TARGETS_INVALID'
+      });
+    }
+
+    const shareCardPayload = buildSharedGroupCardPayload(conversation);
+    const deliveries = [];
+    for (const targetConversation of targetConversationMap.values()) {
+      const targetConversationId = getIdString(targetConversation?._id);
+      const { message } = await persistConversationMessage({
+        conversation: targetConversation,
+        senderUserId: safeUserId,
+        type: 'group_share',
+        content: buildMessagePreviewText({
+          type: 'group_share',
+          payload: shareCardPayload
+        }),
+        clientMessageId: `share:${getIdString(conversation?._id)}:${targetConversationId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+        payload: shareCardPayload
+      });
+
+      deliveries.push({
+        conversationId: targetConversationId,
+        participantUserIds: await listConversationParticipantUserIds({
+          conversationId: targetConversationId
+        }),
+        message: serializeMessageForUserView(message, sender)
+      });
+    }
+
+    return {
+      deliveries,
+      sharedGroup: {
+        conversationId: getIdString(conversation?._id),
+        title: conversation?.title || '群聊',
+        announcement: conversation?.announcement || '',
+        groupNo: String(conversation?.groupNo || '')
+      },
+      targetCount: deliveries.length,
+      targetUserIds: friendUserContext.users.map((item) => getIdString(item?._id)),
+      targetConversationIds: Array.from(targetConversationMap.keys())
     };
   };
 
@@ -1501,8 +2341,10 @@ const createChatService = ({
 
   return {
     addGroupMembers,
+    createGroupNotice,
     createDirectConversation,
     createGroupConversation,
+    deleteGroupNotice,
     ensureDirectConversationByUsers,
     ensureDirectConversationForFriends: ensureDirectConversationByUsers,
     getConversationAccessContext,
@@ -1510,6 +2352,8 @@ const createChatService = ({
     getGroupDetailForUser,
     hideConversationForUser,
     inviteGroupMembers,
+    joinGroupConversation,
+    disbandGroupConversation,
     leaveGroupConversation,
     listConversationParticipantUserIds,
     listGroupInvitationsForUser,
@@ -1520,9 +2364,12 @@ const createChatService = ({
     reactivateConversationForRecipientOnIncomingMessage,
     removeGroupMember,
     respondToGroupInvitation,
+    searchGroupConversationByGroupNo,
     serializeConversationForUserView,
     sendMessage,
+    shareGroupConversationCard,
     transferGroupOwnership,
+    updateConversationPinnedForUser,
     updateGroupConversation
   };
 };

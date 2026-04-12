@@ -18,6 +18,7 @@
         "migrate-all-data": "node scripts/migrateAllDataAndVerify.js --mode=migrate-verify --strict=true",
         "rebuild-all-migrated-data": "node scripts/migrateAllDataAndVerify.js --mode=migrate-verify --reset-target=true --strict=true",
         "verify-migrated-data": "node scripts/migrateAllDataAndVerify.js --mode=verify --strict=true",
+        "repair-legacy-chat-groups": "node scripts/repairLegacyChatGroups.js",
         "migrate-and-clean-legacy": "node scripts/migrateAllDataAndVerify.js --mode=migrate-verify --reset-target=true --clear-legacy-notifications=true --clear-legacy-participants=true --strict=true",
         "migrate-and-clean-all-legacy": "node scripts/migrateAllDataAndVerify.js --mode=migrate-verify --reset-target=true --clear-legacy-notifications=true --clear-legacy-participants=true --clear-legacy-node-senses=true --clear-legacy-title-states=true --strict=true",
         "migrate-distribution-participants": "node scripts/migrateDistributionParticipants.js",

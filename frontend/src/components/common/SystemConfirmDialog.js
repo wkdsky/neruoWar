@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 
 const SystemConfirmDialog = ({
   open = false,
@@ -11,7 +12,7 @@ const SystemConfirmDialog = ({
   onConfirm,
   onClose
 }) => {
-  if (!open) return null;
+  if (!open || typeof document === 'undefined') return null;
 
   const confirmButtonClassName = confirmTone === 'primary'
     ? 'btn btn-primary'
@@ -19,7 +20,7 @@ const SystemConfirmDialog = ({
       ? 'btn btn-warning'
       : 'btn btn-danger';
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={() => !busy && onClose && onClose()}>
       <div
         className="modal-content system-confirm-modal"
@@ -43,7 +44,8 @@ const SystemConfirmDialog = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

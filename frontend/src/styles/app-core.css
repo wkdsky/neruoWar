@@ -21,7 +21,7 @@
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    z-index: 1000;
+    z-index: calc(var(--app-shell-z-topbar-panel, 37100) + 24);
     overflow: auto;
     padding:
         calc(var(--knowledge-header-offset, 92px) + var(--app-shell-overlay-top-gap))

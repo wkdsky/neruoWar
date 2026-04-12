@@ -89,6 +89,10 @@ const useChatCenter = ({
   const [groupInviteSearchQuery, setGroupInviteSearchQuery] = useState('');
   const [groupInviteSearchResults, setGroupInviteSearchResults] = useState([]);
   const [groupInviteSearchLoading, setGroupInviteSearchLoading] = useState(false);
+  const [groupSearchQuery, setGroupSearchQuery] = useState('');
+  const [groupSearchResult, setGroupSearchResult] = useState(null);
+  const [groupSearchLoading, setGroupSearchLoading] = useState(false);
+  const [groupSearchAttempted, setGroupSearchAttempted] = useState(false);
   const [groupInvites, setGroupInvites] = useState({ received: [] });
   const [panelNotice, setPanelNotice] = useState('');
   const [conversationActionId, setConversationActionId] = useState('');
@@ -168,6 +172,10 @@ const useChatCenter = ({
     setGroupInviteSearchQuery('');
     setGroupInviteSearchResults([]);
     setGroupInviteSearchLoading(false);
+    setGroupSearchQuery('');
+    setGroupSearchResult(null);
+    setGroupSearchLoading(false);
+    setGroupSearchAttempted(false);
     setGroupInvites({ received: [] });
     setPanelNotice('');
     setConversationActionId('');
@@ -507,6 +515,49 @@ const useChatCenter = ({
     }
   }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
 
+  const searchGroupConversation = useCallback(async (groupNo, options = {}) => {
+    const headers = buildAuthHeaders();
+    const trimmedGroupNo = String(groupNo || '').trim();
+    if (!headers) return null;
+
+    if (!trimmedGroupNo) {
+      setGroupSearchResult(null);
+      setGroupSearchAttempted(false);
+      return null;
+    }
+
+    if (!options.silent) {
+      setGroupSearchLoading(true);
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/chat/groups/search?groupNo=${encodeURIComponent(trimmedGroupNo)}`, {
+        headers
+      });
+      const parsed = await parseApiResponse(response);
+      const group = parsed.data?.group || null;
+      if (!response.ok) {
+        if (!options.silent) {
+          window.alert(getApiErrorMessage(parsed, '搜索群聊失败'));
+        }
+        return null;
+      }
+
+      setGroupSearchResult(group);
+      setGroupSearchAttempted(true);
+      return group;
+    } catch (error) {
+      if (!options.silent) {
+        window.alert(`搜索群聊失败: ${error.message}`);
+      }
+      return null;
+    } finally {
+      if (!options.silent) {
+        setGroupSearchLoading(false);
+      }
+    }
+  }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
+
   const markConversationRead = useCallback(async (conversationId, lastReadSeq = 0) => {
     const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders({ json: true });
@@ -637,13 +688,49 @@ const useChatCenter = ({
     });
   }, [fetchMessages]);
 
+  const refreshConversation = useCallback(async (conversationId, options = {}) => {
+    const safeConversationId = normalizeConversationId(conversationId);
+    if (!safeConversationId) return null;
+
+    const activeConversation = conversations.find((item) => item?.conversationId === safeConversationId) || null;
+    const silent = options.silent !== false;
+    const tasks = [
+      fetchConversations(true),
+      fetchMessages({
+        conversationId: safeConversationId,
+        beforeSeq: 0,
+        prepend: false,
+        silent,
+        shouldMarkRead: true
+      })
+    ];
+
+    if (activeConversation?.type === 'group') {
+      tasks.push(fetchGroupDetail(safeConversationId, { silent: true }));
+    }
+
+    const [, messageResult] = await Promise.all(tasks);
+    return messageResult;
+  }, [conversations, fetchConversations, fetchGroupDetail, fetchMessages]);
+
   const openGroupDetail = useCallback(async (conversationId) => {
     const safeConversationId = normalizeConversationId(conversationId);
     if (!safeConversationId) return null;
     setActiveSidebarTab('groups');
     setSelectedGroupId(safeConversationId);
-    return fetchGroupDetail(safeConversationId, { silent: false });
-  }, [fetchGroupDetail]);
+    setSelectedConversationId(safeConversationId);
+    const [detail] = await Promise.all([
+      fetchGroupDetail(safeConversationId, { silent: false }),
+      fetchMessages({
+        conversationId: safeConversationId,
+        beforeSeq: 0,
+        prepend: false,
+        silent: false,
+        shouldMarkRead: true
+      })
+    ]);
+    return detail;
+  }, [fetchGroupDetail, fetchMessages]);
 
   const openDirectConversation = useCallback(async (targetUserId) => {
     const headers = buildAuthHeaders({ json: true });
@@ -694,6 +781,7 @@ const useChatCenter = ({
   const createGroupConversation = useCallback(async ({
     title,
     announcement = '',
+    avatar = '',
     memberUserIds = []
   }) => {
     const headers = buildAuthHeaders({ json: true });
@@ -707,6 +795,7 @@ const useChatCenter = ({
         body: JSON.stringify({
           title,
           announcement,
+          avatar,
           memberUserIds
         })
       });
@@ -719,7 +808,16 @@ const useChatCenter = ({
       }
 
       applyGroupPayload(conversation, group);
+      setPanelNotice('群聊已创建。');
       setActiveSidebarTab('groups');
+      setSelectedConversationId(group.conversationId);
+      await fetchMessages({
+        conversationId: group.conversationId,
+        beforeSeq: 0,
+        prepend: false,
+        silent: true,
+        shouldMarkRead: true
+      });
       return {
         conversation,
         group
@@ -730,12 +828,13 @@ const useChatCenter = ({
     } finally {
       setGroupActionId('');
     }
-  }, [applyGroupPayload, buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
+  }, [applyGroupPayload, buildAuthHeaders, fetchMessages, getApiErrorMessage, parseApiResponse]);
 
   const updateGroupConversation = useCallback(async ({
     conversationId,
     title,
-    announcement
+    announcement,
+    avatar
   }) => {
     const safeConversationId = normalizeConversationId(conversationId);
     const headers = buildAuthHeaders({ json: true });
@@ -743,13 +842,20 @@ const useChatCenter = ({
 
     setGroupActionId(`group-update:${safeConversationId}`);
     try {
+      const payload = {};
+      if (typeof title === 'string') {
+        payload.title = title;
+      }
+      if (typeof announcement === 'string') {
+        payload.announcement = announcement;
+      }
+      if (typeof avatar === 'string') {
+        payload.avatar = avatar;
+      }
       const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}`, {
         method: 'PATCH',
         headers,
-        body: JSON.stringify({
-          title,
-          announcement
-        })
+        body: JSON.stringify(payload)
       });
       const parsed = await parseApiResponse(response);
       const conversation = parsed.data?.conversation || null;
@@ -767,6 +873,81 @@ const useChatCenter = ({
       };
     } catch (error) {
       window.alert(`更新群聊失败: ${error.message}`);
+      return null;
+    } finally {
+      setGroupActionId('');
+    }
+  }, [applyGroupPayload, buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
+
+  const createGroupNotice = useCallback(async ({
+    conversationId,
+    content
+  }) => {
+    const safeConversationId = normalizeConversationId(conversationId);
+    const headers = buildAuthHeaders({ json: true });
+    if (!headers || !safeConversationId) return null;
+
+    setGroupActionId(`group-notice-create:${safeConversationId}`);
+    try {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}/notices`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ content })
+      });
+      const parsed = await parseApiResponse(response);
+      const conversation = parsed.data?.conversation || null;
+      const group = parsed.data?.group || null;
+      if (!response.ok || !group?.conversationId) {
+        window.alert(getApiErrorMessage(parsed, '新增群公告失败'));
+        return null;
+      }
+
+      applyGroupPayload(conversation, group);
+      setPanelNotice('群公告已发布。');
+      return {
+        conversation,
+        group
+      };
+    } catch (error) {
+      window.alert(`新增群公告失败: ${error.message}`);
+      return null;
+    } finally {
+      setGroupActionId('');
+    }
+  }, [applyGroupPayload, buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
+
+  const deleteGroupNotice = useCallback(async ({
+    conversationId,
+    noticeId
+  }) => {
+    const safeConversationId = normalizeConversationId(conversationId);
+    const safeNoticeId = normalizeConversationId(noticeId);
+    const headers = buildAuthHeaders();
+    if (!headers || !safeConversationId || !safeNoticeId) return null;
+
+    setGroupActionId(`group-notice-delete:${safeConversationId}:${safeNoticeId}`);
+    try {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}/notices/${safeNoticeId}`, {
+        method: 'DELETE',
+        headers
+      });
+      const parsed = await parseApiResponse(response);
+      const conversation = parsed.data?.conversation || null;
+      const group = parsed.data?.group || null;
+      if (!response.ok || !group?.conversationId) {
+        window.alert(getApiErrorMessage(parsed, '删除群公告失败'));
+        return null;
+      }
+
+      applyGroupPayload(conversation, group);
+      setPanelNotice('群公告已删除。');
+      return {
+        conversation,
+        group,
+        deletedNoticeId: parsed.data?.deletedNoticeId || safeNoticeId
+      };
+    } catch (error) {
+      window.alert(`删除群公告失败: ${error.message}`);
       return null;
     } finally {
       setGroupActionId('');
@@ -911,6 +1092,71 @@ const useChatCenter = ({
     parseApiResponse
   ]);
 
+  const joinGroupConversation = useCallback(async ({
+    conversationId = '',
+    groupNo = ''
+  } = {}) => {
+    const headers = buildAuthHeaders({ json: true });
+    const safeConversationId = normalizeConversationId(conversationId);
+    const trimmedGroupNo = String(groupNo || '').trim();
+    if (!headers || (!safeConversationId && !trimmedGroupNo)) return null;
+
+    const actionTarget = safeConversationId || trimmedGroupNo;
+    setGroupActionId(`group-join:${actionTarget}`);
+    try {
+      const response = await fetch(`${API_BASE}/chat/groups/join`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          conversationId: safeConversationId,
+          groupNo: trimmedGroupNo
+        })
+      });
+      const parsed = await parseApiResponse(response);
+      const conversation = parsed.data?.conversation || null;
+      const group = parsed.data?.group || null;
+      const alreadyJoined = !!parsed.data?.alreadyJoined;
+      if (!response.ok || !group?.conversationId) {
+        window.alert(getApiErrorMessage(parsed, '加入群聊失败'));
+        return null;
+      }
+
+      applyGroupPayload(conversation, group);
+      setActiveSidebarTab('groups');
+      setSelectedConversationId(group.conversationId);
+      setPanelNotice(alreadyJoined ? '已打开该群聊。' : '已加入群聊。');
+
+      await Promise.all([
+        fetchMessages({
+          conversationId: group.conversationId,
+          beforeSeq: 0,
+          prepend: false,
+          silent: true,
+          shouldMarkRead: true
+        }),
+        trimmedGroupNo ? searchGroupConversation(trimmedGroupNo, { silent: true }) : Promise.resolve(null)
+      ]);
+
+      return {
+        conversation,
+        group,
+        alreadyJoined
+      };
+    } catch (error) {
+      window.alert(`加入群聊失败: ${error.message}`);
+      return null;
+    } finally {
+      setGroupActionId('');
+    }
+  }, [
+    applyGroupPayload,
+    buildAuthHeaders,
+    fetchMessages,
+    getApiErrorMessage,
+    parseApiResponse,
+    searchGroupConversation
+  ]);
+
   const removeGroupMember = useCallback(async ({
     conversationId,
     targetUserId
@@ -1024,6 +1270,129 @@ const useChatCenter = ({
       setGroupActionId('');
     }
   }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse, updateConversationMessagesEntry]);
+
+  const disbandGroupConversation = useCallback(async (conversationId) => {
+    const safeConversationId = normalizeConversationId(conversationId);
+    const headers = buildAuthHeaders({ json: true });
+    if (!headers || !safeConversationId) return null;
+
+    setGroupActionId(`group-disband:${safeConversationId}`);
+    try {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}/disband`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({})
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok || !parsed.data?.groupDisbanded) {
+        window.alert(getApiErrorMessage(parsed, '解散群聊失败'));
+        return null;
+      }
+
+      setConversations((prev) => removeConversationRow(prev, safeConversationId));
+      setSelectedGroupId((prev) => (prev === safeConversationId ? '' : prev));
+      setSelectedConversationId((prev) => (prev === safeConversationId ? '' : prev));
+      setSelectedGroupDetail((prev) => (
+        prev?.group?.conversationId === safeConversationId ? null : prev
+      ));
+      updateConversationMessagesEntry(safeConversationId, () => ({
+        rows: [],
+        nextBeforeSeq: 0,
+        loading: false,
+        error: '',
+        initialized: true
+      }));
+      setPanelNotice('群聊已解散。');
+      return parsed.data;
+    } catch (error) {
+      window.alert(`解散群聊失败: ${error.message}`);
+      return null;
+    } finally {
+      setGroupActionId('');
+    }
+  }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse, updateConversationMessagesEntry]);
+
+  const updateConversationPinned = useCallback(async ({
+    conversationId,
+    pinned
+  } = {}) => {
+    const safeConversationId = normalizeConversationId(conversationId);
+    const headers = buildAuthHeaders({ json: true });
+    if (!headers || !safeConversationId || typeof pinned !== 'boolean') return null;
+
+    const actionKey = `pin:${safeConversationId}`;
+    setConversationActionId(actionKey);
+    try {
+      const response = await fetch(`${API_BASE}/chat/conversations/${safeConversationId}/preferences`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ pinned })
+      });
+      const parsed = await parseApiResponse(response);
+      const conversation = parsed.data?.conversation || null;
+      if (!response.ok || !conversation?.conversationId) {
+        window.alert(getApiErrorMessage(parsed, pinned ? '置顶会话失败' : '取消置顶失败'));
+        return null;
+      }
+
+      setConversations((prev) => upsertConversationRow(prev, conversation));
+      setPanelNotice(pinned ? '会话已置顶。' : '会话已取消置顶。');
+      return conversation;
+    } catch (error) {
+      window.alert(`${pinned ? '置顶会话失败' : '取消置顶失败'}: ${error.message}`);
+      return null;
+    } finally {
+      setConversationActionId('');
+    }
+  }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
+
+  const shareGroupConversationCard = useCallback(async ({
+    sourceConversationId,
+    targetUserIds = [],
+    targetConversationIds = []
+  } = {}) => {
+    const safeConversationId = normalizeConversationId(sourceConversationId);
+    const headers = buildAuthHeaders({ json: true });
+    const safeTargetUserIds = Array.from(new Set(
+      (Array.isArray(targetUserIds) ? targetUserIds : [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    ));
+    const safeTargetConversationIds = Array.from(new Set(
+      (Array.isArray(targetConversationIds) ? targetConversationIds : [])
+        .map((item) => normalizeConversationId(item))
+        .filter(Boolean)
+    ));
+    if (!headers || !safeConversationId || (safeTargetUserIds.length + safeTargetConversationIds.length) === 0) {
+      return null;
+    }
+
+    const actionKey = `group-share:${safeConversationId}`;
+    setGroupActionId(actionKey);
+    try {
+      const response = await fetch(`${API_BASE}/chat/groups/${safeConversationId}/share`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          targetUserIds: safeTargetUserIds,
+          targetConversationIds: safeTargetConversationIds
+        })
+      });
+      const parsed = await parseApiResponse(response);
+      if (!response.ok || !parsed.data?.targetCount) {
+        window.alert(getApiErrorMessage(parsed, '发送群分享卡失败'));
+        return null;
+      }
+
+      setPanelNotice(`群分享卡已发送至 ${parsed.data.targetCount} 个会话。`);
+      return parsed.data;
+    } catch (error) {
+      window.alert(`发送群分享卡失败: ${error.message}`);
+      return null;
+    } finally {
+      setGroupActionId('');
+    }
+  }, [buildAuthHeaders, getApiErrorMessage, parseApiResponse]);
 
   const sendMessage = useCallback(async (conversationId, content) => {
     const safeConversationId = normalizeConversationId(conversationId);
@@ -1662,7 +2031,10 @@ const useChatCenter = ({
     dismissChatToast,
     conversations,
     createGroupConversation,
+    createGroupNotice,
     currentUserId,
+    deleteGroupNotice,
+    disbandGroupConversation,
     fetchGroupDetail,
     fetchConversations,
     fetchFriendRequests,
@@ -1681,12 +2053,17 @@ const useChatCenter = ({
     groupInviteSearchLoading,
     groupInviteSearchQuery,
     groupInviteSearchResults,
+    groupSearchAttempted,
+    groupSearchLoading,
+    groupSearchQuery,
+    groupSearchResult,
     groupInvites,
     groups,
     hideConversation,
     inviteGroupMembers,
     isChatDockExpanded,
     isRequestsModalOpen,
+    joinGroupConversation,
     leaveGroupConversation,
     loadOlderMessages,
     openGroupDetail,
@@ -1700,10 +2077,13 @@ const useChatCenter = ({
     requestActionId,
     requestFriendship,
     requestListLoading,
+    refreshConversation,
     removeGroupMember,
     resetChatCenter,
     respondToFriendRequest,
     respondToGroupInvitation,
+    shareGroupConversationCard,
+    searchGroupConversation,
     searchUsers,
     searchGroupInviteUsers,
     selectedConversation,
@@ -1713,8 +2093,10 @@ const useChatCenter = ({
     selectedMessagesEntry,
     sendMessage,
     setActiveSidebarTab,
+    updateConversationPinned,
     setFriendSearchQuery,
     setGroupInviteSearchQuery,
+    setGroupSearchQuery,
     setSelectedGroupId,
     setIsChatDockExpanded,
     setIsRequestsModalOpen,

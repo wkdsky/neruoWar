@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, ChevronLeft, Home, Layers, MapPin, MessagesSquare, Network, Shield, Star, User, Users, X } from 'lucide-react';
 import './AppShell.css';
 import {
@@ -10,6 +10,7 @@ import {
     isTitleBattleView,
     readIsMobileViewport,
     normalizeObjectId,
+    RIGHT_DOCK_COLLAPSE_MS,
     resolveAvatarSrc
 } from '../../app/appShared';
 import {
@@ -418,14 +419,45 @@ export const UnifiedRightDock = ({
     const isKnowledgeDomainActive = showKnowledgeDomain || isTransitioningToDomain;
     const activeDetailNode = isTitleBattleView(view) ? currentTitleDetail : currentNodeDetail;
     const shouldHideDock = view === 'senseArticleEditor';
-    if (shouldHideDock) return null;
 
-    const closeAllDockPanels = () => {
+    const closeAllDockPanels = useCallback(() => {
         setIsAnnouncementDockExpanded(false);
         setIsChatDockExpanded(false);
         setIsLocationDockExpanded(false);
         setIsJinzhiDockExpanded(false);
-    };
+    }, [
+        setIsAnnouncementDockExpanded,
+        setIsChatDockExpanded,
+        setIsLocationDockExpanded,
+        setIsJinzhiDockExpanded
+    ]);
+
+    const collapseExpandedRightDockPanels = useCallback(async () => {
+        const hasExpandedRightDock = (
+            isAnnouncementDockExpanded
+            || isChatDockExpanded
+            || isJinzhiDockExpanded
+            || isLocationDockExpanded
+        );
+
+        closeAllDockPanels();
+
+        if (!hasExpandedRightDock || typeof window === 'undefined') {
+            return;
+        }
+
+        await new Promise((resolve) => {
+            window.setTimeout(resolve, RIGHT_DOCK_COLLAPSE_MS);
+        });
+    }, [
+        isAnnouncementDockExpanded,
+        isChatDockExpanded,
+        isJinzhiDockExpanded,
+        isLocationDockExpanded,
+        closeAllDockPanels
+    ]);
+
+    if (shouldHideDock) return null;
 
     const shouldRenderLocationDock = !isKnowledgeDomainActive;
 
@@ -582,13 +614,28 @@ export const UnifiedRightDock = ({
                     onMarkAllNotificationsRead={markAllNotificationsRead}
                     onMarkAnnouncementNotificationsRead={markAnnouncementNotificationsRead}
                     onClearNotifications={clearNotifications}
-                    onOpenAdminPending={() => openAdminPanel('pending')}
+                    onOpenAdminPending={async () => {
+                        await collapseExpandedRightDockPanels();
+                        openAdminPanel('pending');
+                    }}
                     onMarkNotificationRead={markNotificationRead}
                     onRespondNotification={respondDomainAdminInvite}
-                    onOpenDistributionNotification={handleDistributionAnnouncementClick}
-                    onOpenArrivalNotification={handleArrivalNotificationClick}
-                    onOpenSenseArticleNotification={handleSenseArticleNotificationClick}
-                    onOpenAnnouncement={handleHomeAnnouncementClick}
+                    onOpenDistributionNotification={async (notification) => {
+                        await collapseExpandedRightDockPanels();
+                        await handleDistributionAnnouncementClick(notification);
+                    }}
+                    onOpenArrivalNotification={async (notification) => {
+                        await collapseExpandedRightDockPanels();
+                        await handleArrivalNotificationClick(notification);
+                    }}
+                    onOpenSenseArticleNotification={async (notification) => {
+                        await collapseExpandedRightDockPanels();
+                        await handleSenseArticleNotificationClick(notification);
+                    }}
+                    onOpenAnnouncement={async (item) => {
+                        await collapseExpandedRightDockPanels();
+                        await handleHomeAnnouncementClick(item);
+                    }}
                 />
             )
         },
@@ -603,6 +650,10 @@ export const UnifiedRightDock = ({
             panel: (
                 <ChatDockPanel
                     {...chatPanelProps}
+                    onOpenUserProfile={async (targetUser) => {
+                        await collapseExpandedRightDockPanels();
+                        await chatPanelProps?.onOpenUserProfile?.(targetUser);
+                    }}
                     onClose={() => setIsChatDockExpanded(false)}
                 />
             )
@@ -619,7 +670,10 @@ export const UnifiedRightDock = ({
                     isOpen={activeDockSectionId === 'jinzhi'}
                     activeBrocadeId={activeJinzhiBrocadeId}
                     onClose={() => setIsJinzhiDockExpanded(false)}
-                    onOpenWorkspace={onOpenJinzhiWorkspace}
+                    onOpenWorkspace={async (brocade) => {
+                        await collapseExpandedRightDockPanels();
+                        await onOpenJinzhiWorkspace(brocade);
+                    }}
                     onBrocadeDeleted={onJinzhiBrocadeDeleted}
                     onBrocadeMetaChange={onJinzhiBrocadeMetaChange}
                 />
@@ -651,7 +705,10 @@ export const UnifiedRightDock = ({
                     refreshDisabled={isRefreshingLocationDetail || !userLocation || userLocation === '任意' || travelStatus?.isTraveling}
                     refreshLabel={isRefreshingLocationDetail ? '刷新中...' : '刷新'}
                     primaryActionLabel={canJumpToLocationView ? '转到该知识域' : '当前所在位置'}
-                    onPrimaryAction={handleJumpToCurrentLocationView}
+                    onPrimaryAction={async () => {
+                        await collapseExpandedRightDockPanels();
+                        await handleJumpToCurrentLocationView();
+                    }}
                     primaryActionDisabled={!canJumpToLocationView}
                     emptyTitle="暂未定位到知识域"
                     emptyHint={
@@ -836,6 +893,7 @@ export const AppShellChrome = ({
     closeHeaderPanels,
     handleHeaderHomeNavigation,
     prepareForPrimaryNavigation,
+    openOwnProfile,
     setView,
     militaryMenuWrapperRef,
     toggleMilitaryMenu,
@@ -925,26 +983,61 @@ export const AppShellChrome = ({
         />
     );
 
+    const collapseExpandedRightDockPanels = useCallback(async () => {
+        const hasExpandedRightDock = (
+            isAnnouncementDockExpanded
+            || isChatDockExpanded
+            || isJinzhiDockExpanded
+            || isLocationDockExpanded
+        );
+
+        setIsAnnouncementDockExpanded(false);
+        setIsChatDockExpanded(false);
+        setIsJinzhiDockExpanded(false);
+        setIsLocationDockExpanded(false);
+
+        if (!hasExpandedRightDock || typeof window === 'undefined') {
+            return;
+        }
+
+        await new Promise((resolve) => {
+            window.setTimeout(resolve, RIGHT_DOCK_COLLAPSE_MS);
+        });
+    }, [
+        isAnnouncementDockExpanded,
+        isChatDockExpanded,
+        isJinzhiDockExpanded,
+        isLocationDockExpanded,
+        setIsAnnouncementDockExpanded,
+        setIsChatDockExpanded,
+        setIsJinzhiDockExpanded,
+        setIsLocationDockExpanded
+    ]);
+
     const onOpenArmy = async () => {
         setShowMilitaryMenu(false);
+        await collapseExpandedRightDockPanels();
         await prepareForPrimaryNavigation();
         setView('army');
     };
 
     const onOpenTrainingGround = async () => {
         setShowMilitaryMenu(false);
+        await collapseExpandedRightDockPanels();
         await prepareForPrimaryNavigation();
         setView('trainingGround');
     };
 
     const onOpenEquipment = async () => {
         setShowMilitaryMenu(false);
+        await collapseExpandedRightDockPanels();
         await prepareForPrimaryNavigation();
         setView('equipment');
     };
 
-    const onOpenAdmin = () => {
+    const onOpenAdmin = async () => {
         setShowMilitaryMenu(false);
+        await collapseExpandedRightDockPanels();
         openAdminPanel('users');
     };
 
@@ -987,10 +1080,7 @@ export const AppShellChrome = ({
             headerExpTarget={headerExpTarget}
             headerArmyCount={headerArmyCount}
             headerKnowledgeBalance={headerKnowledgeBalance}
-            onProfileClick={async () => {
-                await prepareForPrimaryNavigation();
-                setView('profile');
-            }}
+            onProfileClick={openOwnProfile}
             onLogout={handleLogout}
             relatedDomainsWrapperRef={relatedDomainsWrapperRef}
             onToggleRelatedDomains={toggleRelatedDomainsPanel}
@@ -998,10 +1088,12 @@ export const AppShellChrome = ({
             relatedDomainsPanel={isMobileLayout ? null : relatedDomainsPanelNode}
             onHomeClick={async () => {
                 closeHeaderPanels();
+                await collapseExpandedRightDockPanels();
                 await handleHeaderHomeNavigation();
             }}
             onAllianceClick={async () => {
                 closeHeaderPanels();
+                await collapseExpandedRightDockPanels();
                 await prepareForPrimaryNavigation();
                 setView('alliance');
             }}
@@ -1035,20 +1127,31 @@ export const AppShellChrome = ({
                 }
                 onHomeClick={async () => {
                     closeHeaderPanels();
+                    await collapseExpandedRightDockPanels();
                     await handleHeaderHomeNavigation();
                 }}
-                onToggleRelatedDomains={toggleRelatedDomainsPanel}
+                onToggleRelatedDomains={async () => {
+                    await collapseExpandedRightDockPanels();
+                    toggleRelatedDomainsPanel();
+                }}
                 onAllianceClick={async () => {
                     closeHeaderPanels();
+                    await collapseExpandedRightDockPanels();
                     await prepareForPrimaryNavigation();
                     setView('alliance');
                 }}
-                onToggleMilitaryMenu={toggleMilitaryMenu}
-                onOpenAdmin={onOpenAdmin}
+                onToggleMilitaryMenu={async () => {
+                    await collapseExpandedRightDockPanels();
+                    toggleMilitaryMenu();
+                }}
+                onOpenAdmin={async () => {
+                    await collapseExpandedRightDockPanels();
+                    onOpenAdmin();
+                }}
                 onProfileClick={async () => {
                     closeHeaderPanels();
-                    await prepareForPrimaryNavigation();
-                    setView('profile');
+                    await collapseExpandedRightDockPanels();
+                    await openOwnProfile();
                 }}
             />
         ) : null}

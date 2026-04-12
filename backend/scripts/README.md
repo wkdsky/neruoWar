@@ -7,6 +7,7 @@
 - `createAdmin.js`：创建或修复管理员账户（`admin`）。
 - `initUserDomainPreferences.js`：补齐用户知识域偏好字段（历史数据修复）。
 - `initUserLevels.js`：补齐/修正用户等级字段（历史数据修复）。
+- `repairLegacyChatGroups.js`：补齐旧群聊缺失的群号、群头像、创建者字段。
 - `migrateAllDataAndVerify.js`：全量迁移与核验主脚本（推荐入口）。
 - `migrateDistributionParticipants.js`：分发参与者迁移脚本。
 - `migrateDomainTitleProjection.js`：标题投影迁移脚本。

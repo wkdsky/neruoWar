@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { User, Camera, Lock, Save, X, Check } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Camera, Check, Lock, Save, User, X } from 'lucide-react';
 import './ProfilePanel.css';
 import { API_BASE } from '../../runtimeConfig';
 
-// 导入头像
 import defaultMale1 from '../../assets/avatars/default_male_1.svg';
 import defaultMale2 from '../../assets/avatars/default_male_2.svg';
 import defaultMale3 from '../../assets/avatars/default_male_3.svg';
@@ -11,7 +10,6 @@ import defaultFemale1 from '../../assets/avatars/default_female_1.svg';
 import defaultFemale2 from '../../assets/avatars/default_female_2.svg';
 import defaultFemale3 from '../../assets/avatars/default_female_3.svg';
 
-// 头像映射
 const avatarMap = {
     default_male_1: defaultMale1,
     default_male_2: defaultMale2,
@@ -21,7 +19,6 @@ const avatarMap = {
     default_female_3: defaultFemale3
 };
 
-// 头像列表
 const maleAvatars = [
     { id: 'default_male_1', src: defaultMale1, label: '方块战士' },
     { id: 'default_male_2', src: defaultMale2, label: '森林守护' },
@@ -34,16 +31,30 @@ const femaleAvatars = [
     { id: 'default_female_3', src: defaultFemale3, label: '海洋之心' }
 ];
 
-const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
+const readJsonSafe = async (response) => {
+    try {
+        return await response.json();
+    } catch (_error) {
+        return {};
+    }
+};
+
+const ProfilePanel = ({
+    currentUserId = '',
+    profileUserId = '',
+    onAvatarChange,
+    onLogout,
+    onViewOwnProfile
+}) => {
+    const normalizedCurrentUserId = String(currentUserId || '').trim();
+    const normalizedProfileUserId = String(profileUserId || '').trim();
+    const isViewingOtherUser = Boolean(normalizedProfileUserId) && normalizedProfileUserId !== normalizedCurrentUserId;
     const [userInfo, setUserInfo] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState('info'); // 'info', 'avatar', 'password'
-
-    // 头像选择相关
+    const [requestError, setRequestError] = useState('');
+    const [activeTab, setActiveTab] = useState('info');
     const [selectedAvatar, setSelectedAvatar] = useState(null);
     const [savingAvatar, setSavingAvatar] = useState(false);
-
-    // 密码修改相关
     const [passwordForm, setPasswordForm] = useState({
         oldPassword: '',
         newPassword: '',
@@ -53,34 +64,69 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
     const [passwordSuccess, setPasswordSuccess] = useState('');
     const [savingPassword, setSavingPassword] = useState(false);
 
-    // 获取用户信息
+    const profileEndpoint = useMemo(() => (
+        isViewingOtherUser
+            ? `${API_BASE}/social/users/${normalizedProfileUserId}/profile`
+            : `${API_BASE}/profile`
+    ), [isViewingOtherUser, normalizedProfileUserId]);
+
     useEffect(() => {
-        fetchUserInfo();
-    }, []);
-
-    const fetchUserInfo = async () => {
-        const token = localStorage.getItem('token');
-        try {
-            const response = await fetch(`${API_BASE}/profile`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-            if (response.ok) {
-                const data = await response.json();
-                setUserInfo(data);
-                setSelectedAvatar(data.avatar);
-            }
-        } catch (error) {
-            console.error('获取用户信息失败:', error);
-        } finally {
-            setLoading(false);
+        if (isViewingOtherUser) {
+            setActiveTab('info');
         }
-    };
+    }, [isViewingOtherUser]);
 
-    // 保存头像
+    useEffect(() => {
+        let cancelled = false;
+
+        const fetchUserInfo = async () => {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                if (!cancelled) {
+                    setRequestError('未检测到登录凭证');
+                    setLoading(false);
+                }
+                return;
+            }
+
+            setLoading(true);
+            setRequestError('');
+            setPasswordError('');
+            setPasswordSuccess('');
+
+            try {
+                const response = await fetch(profileEndpoint, {
+                    headers: {
+                        Authorization: `Bearer ${token}`
+                    }
+                });
+                const data = await readJsonSafe(response);
+                if (!response.ok) {
+                    throw new Error(data?.error || '获取用户信息失败');
+                }
+                if (cancelled) return;
+                setUserInfo(data);
+                setSelectedAvatar(data?.avatar || null);
+            } catch (error) {
+                if (cancelled) return;
+                console.error('获取用户信息失败:', error);
+                setUserInfo(null);
+                setRequestError(error.message || '获取用户信息失败');
+            } finally {
+                if (!cancelled) {
+                    setLoading(false);
+                }
+            }
+        };
+
+        fetchUserInfo();
+        return () => {
+            cancelled = true;
+        };
+    }, [profileEndpoint]);
+
     const handleSaveAvatar = async () => {
-        if (!selectedAvatar || selectedAvatar === userInfo?.avatar) return;
+        if (isViewingOtherUser || !selectedAvatar || selectedAvatar === userInfo?.avatar) return;
 
         setSavingAvatar(true);
         const token = localStorage.getItem('token');
@@ -90,48 +136,43 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    Authorization: `Bearer ${token}`
                 },
                 body: JSON.stringify({ avatar: selectedAvatar })
             });
+            const data = await readJsonSafe(response);
 
-            if (response.ok) {
-                const data = await response.json();
-                setUserInfo(prev => ({ ...prev, avatar: data.avatar }));
-                localStorage.setItem('userAvatar', data.avatar);
-                if (onAvatarChange) {
-                    onAvatarChange(data.avatar);
-                }
-                alert('头像修改成功！');
-            } else {
-                const error = await response.json();
-                alert(error.error || '修改失败');
+            if (!response.ok) {
+                throw new Error(data?.error || '修改失败');
             }
+
+            setUserInfo((prev) => ({ ...prev, avatar: data.avatar }));
+            localStorage.setItem('userAvatar', data.avatar);
+            if (typeof onAvatarChange === 'function') {
+                onAvatarChange(data.avatar);
+            }
+            window.alert('头像修改成功！');
         } catch (error) {
             console.error('修改头像失败:', error);
-            alert('网络错误');
+            window.alert(error.message || '网络错误');
         } finally {
             setSavingAvatar(false);
         }
     };
 
-    // 修改密码
-    const handleChangePassword = async (e) => {
-        e.preventDefault();
+    const handleChangePassword = async (event) => {
+        event.preventDefault();
         setPasswordError('');
         setPasswordSuccess('');
 
-        // 验证
         if (!passwordForm.oldPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
             setPasswordError('请填写所有字段');
             return;
         }
-
         if (passwordForm.newPassword.length < 6) {
             setPasswordError('新密码至少6个字符');
             return;
         }
-
         if (passwordForm.newPassword !== passwordForm.confirmPassword) {
             setPasswordError('两次输入的新密码不一致');
             return;
@@ -145,33 +186,33 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
+                    Authorization: `Bearer ${token}`
                 },
                 body: JSON.stringify({
                     oldPassword: passwordForm.oldPassword,
                     newPassword: passwordForm.newPassword
                 })
             });
+            const data = await readJsonSafe(response);
 
-            if (response.ok) {
-                setPasswordSuccess('密码修改成功！');
-                setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' });
-            } else {
-                const error = await response.json();
-                setPasswordError(error.error || '修改失败');
+            if (!response.ok) {
+                throw new Error(data?.error || '修改失败');
             }
+
+            setPasswordSuccess('密码修改成功！');
+            setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' });
         } catch (error) {
             console.error('修改密码失败:', error);
-            setPasswordError('网络错误');
+            setPasswordError(error.message || '网络错误');
         } finally {
             setSavingPassword(false);
         }
     };
 
-    // 格式化日期
     const formatDate = (dateStr) => {
         if (!dateStr) return '-';
         const date = new Date(dateStr);
+        if (Number.isNaN(date.getTime())) return '-';
         return date.toLocaleDateString('zh-CN', {
             year: 'numeric',
             month: 'long',
@@ -179,15 +220,24 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
         });
     };
 
-    // 获取角色显示名称
-    const getRoleDisplay = (role) => {
-        return role === 'admin' ? '管理员' : '普通用户';
-    };
+    const getRoleDisplay = (role) => (role === 'admin' ? '管理员' : '普通用户');
+    const allianceText = userInfo?.allianceName || (userInfo?.allianceId ? '已加入熵盟' : '未加入熵盟');
 
     if (loading) {
         return (
             <div className="profile-panel">
                 <div className="profile-loading">加载中...</div>
+            </div>
+        );
+    }
+
+    if (!userInfo) {
+        return (
+            <div className="profile-panel">
+                <div className="profile-error">
+                    <X size={16} />
+                    {requestError || '用户信息加载失败'}
+                </div>
             </div>
         );
     }
@@ -198,58 +248,81 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                 <div className="profile-avatar-display">
                     <img
                         src={avatarMap[userInfo?.avatar] || defaultMale1}
-                        alt="用户头像"
+                        alt={userInfo?.username || '用户头像'}
                         className="profile-avatar-large"
                     />
                 </div>
                 <div className="profile-header-info">
+                    <span className="profile-mode-badge">{isViewingOtherUser ? '用户信息' : '个人中心'}</span>
                     <h2 className="profile-username">{userInfo?.username}</h2>
                     <span className="profile-role">{getRoleDisplay(userInfo?.role)}</span>
-                    <span className="profile-profession">【{userInfo?.profession}】</span>
+                    <span className="profile-profession">【{userInfo?.profession || '未设职业'}】</span>
                 </div>
-                {typeof onLogout === 'function' ? (
-                    <button
-                        type="button"
-                        className="profile-logout-btn"
-                        onClick={onLogout}
-                    >
-                        退出登录
-                    </button>
-                ) : null}
+                <div className="profile-header-actions">
+                    {isViewingOtherUser && typeof onViewOwnProfile === 'function' ? (
+                        <button
+                            type="button"
+                            className="profile-secondary-btn"
+                            onClick={() => {
+                                void onViewOwnProfile();
+                            }}
+                        >
+                            <ArrowLeft size={16} />
+                            我的资料
+                        </button>
+                    ) : null}
+                    {!isViewingOtherUser && typeof onLogout === 'function' ? (
+                        <button
+                            type="button"
+                            className="profile-logout-btn"
+                            onClick={onLogout}
+                        >
+                            退出登录
+                        </button>
+                    ) : null}
+                </div>
             </div>
 
-            <div className="profile-tabs">
-                <button
-                    className={`profile-tab ${activeTab === 'info' ? 'active' : ''}`}
-                    onClick={() => setActiveTab('info')}
-                >
-                    <User size={18} />
-                    个人信息
-                </button>
-                <button
-                    className={`profile-tab ${activeTab === 'avatar' ? 'active' : ''}`}
-                    onClick={() => setActiveTab('avatar')}
-                >
-                    <Camera size={18} />
-                    修改头像
-                </button>
-                <button
-                    className={`profile-tab ${activeTab === 'password' ? 'active' : ''}`}
-                    onClick={() => setActiveTab('password')}
-                >
-                    <Lock size={18} />
-                    修改密码
-                </button>
-            </div>
+            {requestError ? (
+                <div className="profile-error">
+                    <X size={16} />
+                    {requestError}
+                </div>
+            ) : null}
+
+            {!isViewingOtherUser ? (
+                <div className="profile-tabs">
+                    <button
+                        className={`profile-tab ${activeTab === 'info' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('info')}
+                    >
+                        <User size={18} />
+                        个人信息
+                    </button>
+                    <button
+                        className={`profile-tab ${activeTab === 'avatar' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('avatar')}
+                    >
+                        <Camera size={18} />
+                        修改头像
+                    </button>
+                    <button
+                        className={`profile-tab ${activeTab === 'password' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('password')}
+                    >
+                        <Lock size={18} />
+                        修改密码
+                    </button>
+                </div>
+            ) : null}
 
             <div className="profile-content">
-                {/* 个人信息 */}
-                {activeTab === 'info' && (
+                {(isViewingOtherUser || activeTab === 'info') && (
                     <div className="profile-info-section">
                         <div className="info-grid">
                             <div className="info-item">
                                 <span className="info-label">用户名</span>
-                                <span className="info-value">{userInfo?.username}</span>
+                                <span className="info-value">{userInfo?.username || '-'}</span>
                             </div>
                             <div className="info-item">
                                 <span className="info-label">等级</span>
@@ -259,22 +332,38 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                                 <span className="info-label">经验值</span>
                                 <span className="info-value">{userInfo?.experience || 0}</span>
                             </div>
-                            <div className="info-item">
-                                <span className="info-label">账户知识点</span>
-                                <span className="info-value">{Number(userInfo?.knowledgeBalance || 0).toFixed(2)}</span>
-                            </div>
+                            {!isViewingOtherUser ? (
+                                <div className="info-item">
+                                    <span className="info-label">账户知识点</span>
+                                    <span className="info-value">{Number(userInfo?.knowledgeBalance || 0).toFixed(2)}</span>
+                                </div>
+                            ) : null}
                             <div className="info-item">
                                 <span className="info-label">职业</span>
-                                <span className="info-value">{userInfo?.profession}</span>
+                                <span className="info-value">{userInfo?.profession || '未设置'}</span>
                             </div>
                             <div className="info-item">
                                 <span className="info-label">降临位置</span>
                                 <span className="info-value">{userInfo?.location || '未设置'}</span>
                             </div>
                             <div className="info-item">
-                                <span className="info-label">拥有节点</span>
-                                <span className="info-value">{userInfo?.ownedNodes?.length || 0} 个</span>
+                                <span className="info-label">熵盟</span>
+                                <span className="info-value">{allianceText}</span>
                             </div>
+                            <div className="info-item">
+                                <span className="info-label">{isViewingOtherUser ? '好友数' : '拥有节点'}</span>
+                                <span className="info-value">
+                                    {isViewingOtherUser
+                                        ? `${userInfo?.friendCount || 0} 人`
+                                        : `${userInfo?.ownedNodeCount ?? userInfo?.ownedNodes?.length ?? 0} 个`}
+                                </span>
+                            </div>
+                            {userInfo?.publicId ? (
+                                <div className="info-item">
+                                    <span className="info-label">公开编号</span>
+                                    <span className="info-value">{userInfo.publicId}</span>
+                                </div>
+                            ) : null}
                             <div className="info-item">
                                 <span className="info-label">注册时间</span>
                                 <span className="info-value">{formatDate(userInfo?.createdAt)}</span>
@@ -283,8 +372,7 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                     </div>
                 )}
 
-                {/* 修改头像 */}
-                {activeTab === 'avatar' && (
+                {!isViewingOtherUser && activeTab === 'avatar' && (
                     <div className="profile-avatar-section">
                         <div className="avatar-preview">
                             <img
@@ -298,7 +386,7 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                         <div className="avatar-category">
                             <h4 className="avatar-category-title">男生头像</h4>
                             <div className="avatar-grid">
-                                {maleAvatars.map(avatar => (
+                                {maleAvatars.map((avatar) => (
                                     <div
                                         key={avatar.id}
                                         className={`avatar-option ${selectedAvatar === avatar.id ? 'selected' : ''}`}
@@ -306,11 +394,11 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                                     >
                                         <img src={avatar.src} alt={avatar.label} />
                                         <span className="avatar-label">{avatar.label}</span>
-                                        {selectedAvatar === avatar.id && (
+                                        {selectedAvatar === avatar.id ? (
                                             <div className="avatar-check">
                                                 <Check size={16} />
                                             </div>
-                                        )}
+                                        ) : null}
                                     </div>
                                 ))}
                             </div>
@@ -319,7 +407,7 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                         <div className="avatar-category">
                             <h4 className="avatar-category-title">女生头像</h4>
                             <div className="avatar-grid">
-                                {femaleAvatars.map(avatar => (
+                                {femaleAvatars.map((avatar) => (
                                     <div
                                         key={avatar.id}
                                         className={`avatar-option ${selectedAvatar === avatar.id ? 'selected' : ''}`}
@@ -327,11 +415,11 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                                     >
                                         <img src={avatar.src} alt={avatar.label} />
                                         <span className="avatar-label">{avatar.label}</span>
-                                        {selectedAvatar === avatar.id && (
+                                        {selectedAvatar === avatar.id ? (
                                             <div className="avatar-check">
                                                 <Check size={16} />
                                             </div>
-                                        )}
+                                        ) : null}
                                     </div>
                                 ))}
                             </div>
@@ -348,8 +436,7 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                     </div>
                 )}
 
-                {/* 修改密码 */}
-                {activeTab === 'password' && (
+                {!isViewingOtherUser && activeTab === 'password' && (
                     <div className="profile-password-section">
                         <form onSubmit={handleChangePassword} className="password-form">
                             <div className="form-group">
@@ -357,7 +444,7 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                                 <input
                                     type="password"
                                     value={passwordForm.oldPassword}
-                                    onChange={(e) => setPasswordForm(prev => ({ ...prev, oldPassword: e.target.value }))}
+                                    onChange={(event) => setPasswordForm((prev) => ({ ...prev, oldPassword: event.target.value }))}
                                     placeholder="请输入原密码"
                                     className="form-input"
                                 />
@@ -367,7 +454,7 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                                 <input
                                     type="password"
                                     value={passwordForm.newPassword}
-                                    onChange={(e) => setPasswordForm(prev => ({ ...prev, newPassword: e.target.value }))}
+                                    onChange={(event) => setPasswordForm((prev) => ({ ...prev, newPassword: event.target.value }))}
                                     placeholder="请输入新密码（至少6个字符）"
                                     className="form-input"
                                 />
@@ -377,25 +464,25 @@ const ProfilePanel = ({ username, onAvatarChange, onLogout }) => {
                                 <input
                                     type="password"
                                     value={passwordForm.confirmPassword}
-                                    onChange={(e) => setPasswordForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                                    onChange={(event) => setPasswordForm((prev) => ({ ...prev, confirmPassword: event.target.value }))}
                                     placeholder="请再次输入新密码"
                                     className="form-input"
                                 />
                             </div>
 
-                            {passwordError && (
+                            {passwordError ? (
                                 <div className="password-error">
                                     <X size={16} />
                                     {passwordError}
                                 </div>
-                            )}
+                            ) : null}
 
-                            {passwordSuccess && (
+                            {passwordSuccess ? (
                                 <div className="password-success">
                                     <Check size={16} />
                                     {passwordSuccess}
                                 </div>
-                            )}
+                            ) : null}
 
                             <button
                                 type="submit"

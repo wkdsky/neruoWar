@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const { createChatModel } = require('../config/chatDatabase');
 
-const MESSAGE_TYPES = ['text', 'system'];
+const MESSAGE_TYPES = ['text', 'system', 'group_share'];
 
 const MessageSchema = new mongoose.Schema({
   conversationId: {
@@ -27,6 +27,10 @@ const MessageSchema = new mongoose.Schema({
   content: {
     type: String,
     default: ''
+  },
+  payload: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
   },
   mentions: {
     type: [mongoose.Schema.Types.ObjectId],

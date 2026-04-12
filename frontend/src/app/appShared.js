@@ -4,6 +4,14 @@ import defaultMale3 from '../assets/avatars/default_male_3.svg';
 import defaultFemale1 from '../assets/avatars/default_female_1.svg';
 import defaultFemale2 from '../assets/avatars/default_female_2.svg';
 import defaultFemale3 from '../assets/avatars/default_female_3.svg';
+import groupGeneral from '../assets/avatars/group_general.svg';
+import groupStudy from '../assets/avatars/group_study.svg';
+import groupSocial from '../assets/avatars/group_social.svg';
+import groupGaming from '../assets/avatars/group_gaming.svg';
+import groupProject from '../assets/avatars/group_project.svg';
+import groupNews from '../assets/avatars/group_news.svg';
+
+export const DEFAULT_GROUP_AVATAR_KEY = 'group_general';
 
 export const avatarMap = {
     default_male_1: defaultMale1,
@@ -17,7 +25,13 @@ export const avatarMap = {
     male3: defaultMale3,
     female1: defaultFemale1,
     female2: defaultFemale2,
-    female3: defaultFemale3
+    female3: defaultFemale3,
+    group_general: groupGeneral,
+    group_study: groupStudy,
+    group_social: groupSocial,
+    group_gaming: groupGaming,
+    group_project: groupProject,
+    group_news: groupNews
 };
 
 export const PRESET_AVATAR_OPTIONS = [
@@ -27,6 +41,15 @@ export const PRESET_AVATAR_OPTIONS = [
     { id: 'default_female_1', src: defaultFemale1, label: '粉色幻梦' },
     { id: 'default_female_2', src: defaultFemale2, label: '阳光少女' },
     { id: 'default_female_3', src: defaultFemale3, label: '海洋之心' }
+];
+
+export const GROUP_PRESET_AVATAR_OPTIONS = [
+    { id: 'group_general', src: groupGeneral, label: '综合群' },
+    { id: 'group_study', src: groupStudy, label: '学习群' },
+    { id: 'group_social', src: groupSocial, label: '社交群' },
+    { id: 'group_gaming', src: groupGaming, label: '开黑群' },
+    { id: 'group_project', src: groupProject, label: '项目群' },
+    { id: 'group_news', src: groupNews, label: '资讯群' }
 ];
 
 export const resolveAvatarSrc = (avatarKey = '') => {

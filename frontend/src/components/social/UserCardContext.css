@@ -1,7 +1,7 @@
 .global-user-card-layer {
   position: fixed;
   inset: 0;
-  z-index: 2200;
+  z-index: calc(var(--app-shell-z-dock, 36800) + 12);
 }
 
 .global-user-card {
@@ -63,12 +63,22 @@
 
 .global-user-card__actions {
   display: flex;
-  align-items: center;
-  gap: 0.6rem;
+  flex-direction: column;
+  gap: 0.56rem;
   margin-top: 0.82rem;
 }
 
-.global-user-card__actions .btn {
+.global-user-card__action-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.global-user-card__action-row .btn {
+  flex: 1 1 0;
+}
+
+.global-user-card__action-row--secondary > * {
   flex: 1 1 0;
 }
 
@@ -82,4 +92,15 @@
   background: rgba(255, 255, 255, 0.06);
   color: rgba(202, 218, 233, 0.88);
   font-size: 0.78rem;
+}
+
+@media (max-width: 560px) {
+  .global-user-card__action-row {
+    flex-wrap: wrap;
+  }
+
+  .global-user-card__action-row .btn,
+  .global-user-card__action-row--secondary > * {
+    flex: 1 1 100%;
+  }
 }

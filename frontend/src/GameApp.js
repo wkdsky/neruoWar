@@ -49,6 +49,7 @@ import {
     isSenseArticleSubView,
     isTitleBattleView,
     normalizeObjectId,
+    RIGHT_DOCK_COLLAPSE_MS,
     } from './app/appShared';
 import useNotificationCenter from './hooks/useNotificationCenter';
 import useAppShellState from './hooks/useAppShellState';
@@ -103,6 +104,7 @@ const App = () => {
     const [username, setUsername] = useState('');
     const [profession, setProfession] = useState('');
     const [userAvatar, setUserAvatar] = useState('default_male_1');
+    const [selectedProfileUserId, setSelectedProfileUserId] = useState('');
     const [headerUserStats, setHeaderUserStats] = useState(createDefaultHeaderUserStats);
     const [nodes, setNodes] = useState([]);
     const [, setTechnologies] = useState([]);
@@ -1075,6 +1077,7 @@ const App = () => {
     conversations,
     createGroupConversation,
     currentUserId: chatCurrentUserId,
+    disbandGroupConversation,
     dismissChatToast,
     friendActionId,
     friendListLoading,
@@ -1092,12 +1095,17 @@ const App = () => {
     groupInviteSearchLoading,
     groupInviteSearchQuery,
     groupInviteSearchResults,
+    groupSearchAttempted,
+    groupSearchLoading,
+    groupSearchQuery,
+    groupSearchResult,
     groupInvites,
     groups,
     hideConversation,
     inviteGroupMembers,
     isChatDockExpanded,
     isRequestsModalOpen,
+    joinGroupConversation,
     leaveGroupConversation,
     loadOlderMessages,
     openGroupDetail,
@@ -1108,14 +1116,18 @@ const App = () => {
     requestActionId,
     requestFriendship,
     requestListLoading,
+    refreshConversation,
     removeFriend,
     removeGroupMember,
     resetChatCenter,
     respondToFriendRequest,
     respondToGroupInvitation,
+    shareGroupConversationCard,
+    searchGroupConversation,
     searchUsers,
     searchGroupInviteUsers,
     selectedConversation,
+    setSelectedConversationId,
     selectedGroupDetail,
     selectedGroupId,
     selectedMessagesEntry,
@@ -1123,12 +1135,14 @@ const App = () => {
     setActiveSidebarTab,
     setFriendSearchQuery,
     setGroupInviteSearchQuery,
+    setGroupSearchQuery,
     setIsChatDockExpanded,
     setIsRequestsModalOpen,
     setPanelNotice,
     setSelectedGroupId,
     transferGroupOwnership,
     unblockUser,
+    updateConversationPinned,
     updateGroupConversation
   } = useChatCenter({
     authenticated,
@@ -1187,6 +1201,68 @@ const App = () => {
     setActiveSidebarTab('friends');
     setIsRequestsModalOpen(true);
   }, [setActiveSidebarTab, setIsChatDockExpanded, setIsRequestsModalOpen]);
+
+  const handleRemoveFriendFromUserCard = useCallback(async ({
+    friendshipId = '',
+    username = '该好友'
+  } = {}) => {
+    const safeFriendshipId = String(friendshipId || '').trim();
+    if (!safeFriendshipId) return;
+
+    openSystemConfirm({
+      title: '确认删除好友',
+      message: `确认删除好友「${username}」吗？删除后双方仍可通过私聊进行最多三条临时聊天。`,
+      confirmText: '删除好友',
+      confirmTone: 'danger',
+      onConfirm: async () => {
+        closeSystemConfirm();
+        await removeFriend(safeFriendshipId);
+      }
+    });
+  }, [closeSystemConfirm, openSystemConfirm, removeFriend]);
+
+  const handleBlockUserFromUserCard = useCallback(async ({
+    targetUserId = '',
+    friendshipId = '',
+    username = '该用户'
+  } = {}) => {
+    const safeTargetUserId = String(targetUserId || '').trim();
+    const safeFriendshipId = String(friendshipId || '').trim();
+    if (!safeTargetUserId && !safeFriendshipId) return;
+
+    openSystemConfirm({
+      title: '确认拉黑用户',
+      message: `确认将「${username}」加入黑名单吗？之后对方的好友申请和临时消息都会被拒绝。`,
+      confirmText: '拉黑',
+      confirmTone: 'danger',
+      onConfirm: async () => {
+        closeSystemConfirm();
+        await blockUser({
+          targetUserId: safeTargetUserId,
+          friendshipId: safeFriendshipId
+        });
+      }
+    });
+  }, [blockUser, closeSystemConfirm, openSystemConfirm]);
+
+  const handleUnblockUserFromUserCard = useCallback(async ({
+    targetUserId = '',
+    username = '该用户'
+  } = {}) => {
+    const safeTargetUserId = String(targetUserId || '').trim();
+    if (!safeTargetUserId) return;
+
+    openSystemConfirm({
+      title: '确认解除拉黑',
+      message: `确认将「${username}」移出黑名单吗？解除后对方可再次发送好友申请或临时消息。`,
+      confirmText: '解除拉黑',
+      confirmTone: 'primary',
+      onConfirm: async () => {
+        closeSystemConfirm();
+        await unblockUser(safeTargetUserId);
+      }
+    });
+  }, [closeSystemConfirm, openSystemConfirm, unblockUser]);
 
   const handleJinzhiBrocadeDeleted = useCallback((deletedBrocadeId = '') => {
     const normalizedId = normalizeObjectId(deletedBrocadeId);
@@ -1711,15 +1787,58 @@ const App = () => {
         setNavigationPath
     });
 
+    const collapseOverlayUtilityDocks = useCallback(async () => {
+        const hasExpandedOverlayDock = isChatDockExpanded || isJinzhiDockExpanded;
+
+        setIsChatDockExpanded(false);
+        setIsJinzhiDockExpanded(false);
+
+        if (!hasExpandedOverlayDock || typeof window === 'undefined') {
+            return;
+        }
+
+        await new Promise((resolve) => {
+            window.setTimeout(resolve, RIGHT_DOCK_COLLAPSE_MS);
+        });
+    }, [isChatDockExpanded, isJinzhiDockExpanded, setIsChatDockExpanded, setIsJinzhiDockExpanded]);
+
+    const openOwnProfile = useCallback(async () => {
+        setSelectedProfileUserId('');
+        await collapseOverlayUtilityDocks();
+        await prepareForPrimaryNavigation();
+        setView('profile');
+    }, [collapseOverlayUtilityDocks, prepareForPrimaryNavigation]);
+
+    const openUserProfile = useCallback(async (targetUser = null) => {
+        const targetUserId = normalizeObjectId(
+            targetUser?._id
+            || targetUser?.userId
+            || targetUser
+        );
+        const currentUserId = normalizeObjectId(userId);
+
+        if (!targetUserId) return;
+        if (targetUserId === currentUserId) {
+            await openOwnProfile();
+            return;
+        }
+
+        setSelectedProfileUserId(targetUserId);
+        await collapseOverlayUtilityDocks();
+        await prepareForPrimaryNavigation();
+        setView('profile');
+    }, [collapseOverlayUtilityDocks, openOwnProfile, prepareForPrimaryNavigation, userId]);
+
     const handleOpenJinzhiWorkspace = useCallback(async (brocade) => {
         const brocadeId = normalizeObjectId(brocade?._id);
         if (!brocadeId) return;
+        await collapseOverlayUtilityDocks();
         await prepareForPrimaryNavigation();
         setIsJinzhiDockExpanded(false);
         setActiveJinzhiBrocadeId(brocadeId);
         setActiveJinzhiBrocadeName(typeof brocade?.name === 'string' ? brocade.name : '');
         setView('jinzhi');
-    }, [prepareForPrimaryNavigation]);
+    }, [collapseOverlayUtilityDocks, prepareForPrimaryNavigation]);
 
     const {
         fetchTitleStarMap,
@@ -2549,8 +2668,12 @@ const App = () => {
             conversationActionId={conversationActionId}
             friendActionId={friendActionId}
             onOpenDirectConversation={handleOpenDirectConversationFromUserCard}
+            onOpenUserProfile={openUserProfile}
             onSendFriendRequest={handleSendFriendRequestFromUserCard}
             onOpenRequestsTab={handleOpenFriendRequestsFromUserCard}
+            onRemoveFriend={handleRemoveFriendFromUserCard}
+            onBlockUser={handleBlockUserFromUserCard}
+            onUnblockUser={handleUnblockUserFromUserCard}
         >
         <div
             className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''} ${view === 'home' ? 'home-view-active' : ''} ${(view === 'titleDetail' || view === 'nodeDetail') ? 'knowledge-mainview-active' : ''} ${isSenseArticleSubView(view) ? 'sense-article-shell-active' : ''} ${isSenseArticleHeaderPinned ? 'sense-article-shell-pinned' : ''}`}
@@ -2610,6 +2733,7 @@ const App = () => {
                     closeHeaderPanels={closeHeaderPanels}
                     handleHeaderHomeNavigation={handleHeaderHomeNavigation}
                     prepareForPrimaryNavigation={prepareForPrimaryNavigation}
+                    openOwnProfile={openOwnProfile}
                     setView={setView}
                     militaryMenuWrapperRef={militaryMenuWrapperRef}
                     toggleMilitaryMenu={toggleMilitaryMenu}
@@ -2655,9 +2779,14 @@ const App = () => {
                       groupInviteSearchLoading,
                       groupInviteSearchQuery,
                       groupInviteSearchResults,
+                      groupSearchAttempted,
+                      groupSearchLoading,
+                      groupSearchQuery,
+                      groupSearchResult,
                       groupInvites,
                       groups,
                       loadOlderMessages,
+                      onCloseSystemConfirm: closeSystemConfirm,
                       onDeleteConversation: (conversation) => {
                         if (!conversation?.conversationId) return;
                         openSystemConfirm({
@@ -2678,19 +2807,27 @@ const App = () => {
                       onAddGroupMembers: addGroupMembers,
                       onBlockUser: blockUser,
                       onCreateGroupConversation: createGroupConversation,
+                      onDisbandGroupConversation: disbandGroupConversation,
                       onInviteGroupMembers: inviteGroupMembers,
+                      onJoinGroupConversation: joinGroupConversation,
                       onLeaveGroupConversation: leaveGroupConversation,
                       onOpenConversation: openConversation,
                       onOpenDirectConversation: openDirectConversation,
                       onOpenGroupDetail: openGroupDetail,
+                      onOpenSystemConfirm: openSystemConfirm,
+                      onOpenUserProfile: openUserProfile,
+                      onRefreshConversation: refreshConversation,
                       onRemoveFriend: removeFriend,
                       onRemoveGroupMember: removeGroupMember,
                       onRespondFriendRequest: respondToFriendRequest,
                       onRespondGroupInvitation: respondToGroupInvitation,
+                      onShareGroupConversationCard: shareGroupConversationCard,
+                      onSearchGroupConversation: searchGroupConversation,
                       onSearchUsers: searchUsers,
                       onSearchGroupInviteUsers: searchGroupInviteUsers,
                       onSendFriendRequest: (targetUserId, message = '') => requestFriendship({ targetUserId, message }),
                       onSendMessage: sendMessage,
+                      onToggleConversationPinned: updateConversationPinned,
                       onTransferGroupOwnership: transferGroupOwnership,
                       onUnblockUser: unblockUser,
                       onUpdateGroupConversation: updateGroupConversation,
@@ -2703,9 +2840,12 @@ const App = () => {
                       selectedGroupId,
                       selectedMessagesEntry,
                       setActiveSidebarTab,
+                      setSelectedConversationId,
                       setSelectedGroupId,
                       setGroupInviteSearchQuery,
-                      setIsRequestsModalOpen
+                      setGroupSearchQuery,
+                      setIsRequestsModalOpen,
+                      setPanelNotice
                     }}
                     isMarkingAnnouncementsRead={isMarkingAnnouncementsRead}
                     announcementUnreadCount={announcementUnreadCount}
@@ -2881,11 +3021,14 @@ const App = () => {
                     <Suspense fallback={null}>
                         <ProfilePanel
                             username={username}
+                            currentUserId={userId}
+                            profileUserId={selectedProfileUserId}
                             onAvatarChange={(newAvatar) => {
                                 setUserAvatar(newAvatar);
                                 localStorage.setItem('userAvatar', newAvatar);
                             }}
                             onLogout={handleLogout}
+                            onViewOwnProfile={openOwnProfile}
                         />
                     </Suspense>
                 )}

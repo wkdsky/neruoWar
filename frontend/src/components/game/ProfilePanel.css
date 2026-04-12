@@ -44,6 +44,27 @@
     gap: 0.5rem;
 }
 
+.profile-header-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.profile-mode-badge {
+    width: fit-content;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid rgba(132, 182, 255, 0.24);
+    border-radius: 999px;
+    color: #a7c2ff;
+    background: rgba(74, 105, 189, 0.18);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
 .profile-username {
     font-size: 1.8rem;
     font-weight: 700;
@@ -68,7 +89,6 @@
 }
 
 .profile-logout-btn {
-    margin-left: auto;
     padding: 0.75rem 1rem;
     border: 1px solid rgba(248, 113, 113, 0.28);
     border-radius: 12px;
@@ -83,6 +103,27 @@
 .profile-logout-btn:hover {
     background: linear-gradient(180deg, rgba(127, 29, 29, 0.92) 0%, rgba(69, 10, 10, 0.96) 100%);
     box-shadow: 0 12px 24px rgba(69, 10, 10, 0.28);
+    transform: translateY(-1px);
+}
+
+.profile-secondary-btn {
+    padding: 0.75rem 1rem;
+    border: 1px solid rgba(132, 182, 255, 0.24);
+    border-radius: 12px;
+    background: rgba(74, 105, 189, 0.14);
+    color: #dbe7ff;
+    font-size: 0.92rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.profile-secondary-btn:hover {
+    background: rgba(74, 105, 189, 0.24);
+    box-shadow: 0 12px 24px rgba(28, 54, 108, 0.2);
     transform: translateY(-1px);
 }
 
@@ -122,6 +163,19 @@
 /* 内容区域 */
 .profile-content {
     min-height: 400px;
+}
+
+.profile-error {
+    margin-bottom: 1rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid rgba(231, 76, 60, 0.3);
+    border-radius: 12px;
+    background: rgba(231, 76, 60, 0.12);
+    color: #ffb4b4;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.92rem;
 }
 
 /* 个人信息 */
@@ -381,9 +435,20 @@
         text-align: center;
     }
 
-    .profile-logout-btn {
+    .profile-header-actions {
         margin-left: 0;
         width: 100%;
+        justify-content: center;
+    }
+
+    .profile-logout-btn {
+        width: 100%;
+        min-height: 44px;
+    }
+
+    .profile-secondary-btn {
+        width: 100%;
+        justify-content: center;
         min-height: 44px;
     }
 
@@ -443,6 +508,10 @@
         gap: 0.9rem;
         padding-bottom: 1rem;
         margin-bottom: 1rem;
+    }
+
+    .profile-header-actions {
+        gap: 0.55rem;
     }
 
     .profile-avatar-large {

@@ -25,6 +25,19 @@
   margin-top: -1px;
 }
 
+.utility-dock-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: rgba(4, 10, 16, 0.18);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+  touch-action: none;
+}
+
 .utility-dock-panel-slot {
   position: absolute;
   top: 0;
@@ -35,6 +48,7 @@
   opacity: 0;
   transform: translate3d(14px, 0, 0);
   pointer-events: none;
+  overscroll-behavior: contain;
   transition: opacity 190ms ease, transform 190ms ease;
 }
 
@@ -245,17 +259,21 @@
 
 @media (max-width: 920px) {
   .utility-dock-rail {
+    --utility-dock-mobile-left-offset: max(6px, env(safe-area-inset-left));
+    --utility-dock-mobile-right-offset: max(6px, env(safe-area-inset-right));
+    --utility-dock-mobile-bottom-offset: calc(env(safe-area-inset-bottom) + 6.2rem);
     --utility-dock-mobile-rail-width: 46px;
-    --utility-dock-mobile-panel-gap: 12px;
+    --utility-dock-mobile-panel-gap: 4px;
     top: auto;
-    bottom: calc(env(safe-area-inset-bottom) + 6.2rem);
-    right: max(10px, env(safe-area-inset-right));
+    bottom: var(--utility-dock-mobile-bottom-offset);
+    right: var(--utility-dock-mobile-right-offset);
     width: var(--utility-dock-mobile-rail-width);
   }
 
   .utility-dock-buttons {
     gap: 0.42rem;
     width: 100%;
+    z-index: 5;
   }
 
   .utility-dock-row + .utility-dock-row {
@@ -263,24 +281,26 @@
   }
 
   .utility-dock-panel-slot {
-    position: absolute;
-    top: auto !important;
-    left: auto;
-    right: calc(100% + var(--utility-dock-mobile-panel-gap));
-    bottom: 0;
-    width: min(
-      var(--utility-panel-width, 344px),
-      calc(
-        100vw
-        - max(12px, env(safe-area-inset-left))
-        - max(10px, env(safe-area-inset-right))
-        - var(--utility-dock-mobile-rail-width)
-        - var(--utility-dock-mobile-panel-gap)
-      )
-    ) !important;
-    max-height: calc(100dvh - env(safe-area-inset-bottom) - 10rem);
+    position: fixed;
+    left: var(--utility-dock-mobile-left-offset);
+    right: calc(
+      var(--utility-dock-mobile-right-offset)
+      + var(--utility-dock-mobile-rail-width)
+      + var(--utility-dock-mobile-panel-gap)
+    );
+    top: max(8px, env(safe-area-inset-top));
+    bottom: var(--utility-dock-mobile-bottom-offset);
+    width: auto !important;
+    max-height: none;
+    z-index: 4;
     overflow: hidden;
-    transform: translate3d(14px, 0, 0);
+    transform: translate3d(0, 12px, 0);
+  }
+
+  .utility-dock-panel-shell,
+  .utility-dock-panel-shell.is-open {
+    height: 100%;
+    max-height: 100%;
   }
 
   .utility-dock-trigger {
@@ -333,24 +353,26 @@
 
 @media (max-width: 720px) {
   .utility-dock-rail {
+    --utility-dock-mobile-left-offset: max(4px, env(safe-area-inset-left));
+    --utility-dock-mobile-right-offset: max(4px, env(safe-area-inset-right));
+    --utility-dock-mobile-bottom-offset: calc(env(safe-area-inset-bottom) + 6rem);
     --utility-dock-mobile-rail-width: 42px;
-    --utility-dock-mobile-panel-gap: 10px;
-    bottom: calc(env(safe-area-inset-bottom) + 6rem);
-    right: max(8px, env(safe-area-inset-right));
+    --utility-dock-mobile-panel-gap: 3px;
+    bottom: var(--utility-dock-mobile-bottom-offset);
+    right: var(--utility-dock-mobile-right-offset);
     width: var(--utility-dock-mobile-rail-width);
   }
 
   .utility-dock-panel-slot {
-    width: min(
-      var(--utility-panel-width, 344px),
-      calc(
-        100vw
-        - max(8px, env(safe-area-inset-left))
-        - max(8px, env(safe-area-inset-right))
-        - var(--utility-dock-mobile-rail-width)
-        - var(--utility-dock-mobile-panel-gap)
-      )
-    ) !important;
+    left: var(--utility-dock-mobile-left-offset);
+    right: calc(
+      var(--utility-dock-mobile-right-offset)
+      + var(--utility-dock-mobile-rail-width)
+      + var(--utility-dock-mobile-panel-gap)
+    );
+    top: max(6px, env(safe-area-inset-top));
+    bottom: var(--utility-dock-mobile-bottom-offset);
+    width: auto !important;
   }
 
   .utility-dock-trigger {

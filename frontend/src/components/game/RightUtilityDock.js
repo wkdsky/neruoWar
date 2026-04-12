@@ -15,6 +15,11 @@ const RightUtilityDock = ({
     [visibleSections]
   );
   const panelWidthValue = activeSection?.panelWidth;
+  const closeActiveSection = () => {
+    if (typeof activeSection?.onToggle === 'function') {
+      activeSection.onToggle();
+    }
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -22,11 +27,11 @@ const RightUtilityDock = ({
     }
 
     const hasOpenPanel = Boolean(activeSection);
-    const isMobileDock = readResponsiveViewportWidth() <= 920;
-    if (!hasOpenPanel || !isMobileDock) {
+    if (!hasOpenPanel) {
       return undefined;
     }
 
+    const isMobileDock = readResponsiveViewportWidth() <= 920;
     const { body } = document;
     const scrollY = window.scrollY || window.pageYOffset || 0;
     const previous = {
@@ -40,12 +45,14 @@ const RightUtilityDock = ({
     };
 
     body.style.overflow = 'hidden';
-    body.style.position = 'fixed';
-    body.style.top = `-${scrollY}px`;
-    body.style.left = '0';
-    body.style.right = '0';
-    body.style.width = '100%';
-    body.style.touchAction = 'none';
+    if (isMobileDock) {
+      body.style.position = 'fixed';
+      body.style.top = `-${scrollY}px`;
+      body.style.left = '0';
+      body.style.right = '0';
+      body.style.width = '100%';
+      body.style.touchAction = 'none';
+    }
 
     return () => {
       body.style.overflow = previous.overflow;
@@ -55,7 +62,9 @@ const RightUtilityDock = ({
       body.style.right = previous.right;
       body.style.width = previous.width;
       body.style.touchAction = previous.touchAction;
-      window.scrollTo(0, scrollY);
+      if (isMobileDock) {
+        window.scrollTo(0, scrollY);
+      }
     };
   }, [activeSection]);
 
@@ -63,6 +72,18 @@ const RightUtilityDock = ({
 
   return (
     <div className="utility-dock-rail" aria-label="右侧工具坞">
+      {activeSection ? (
+        <button
+          type="button"
+          className="utility-dock-backdrop"
+          aria-label={`关闭${activeSection?.label || '抽屉'}`}
+          onPointerDown={(event) => {
+            event.preventDefault();
+          }}
+          onClick={closeActiveSection}
+        />
+      ) : null}
+
       <div
         className={`utility-dock-panel-slot${activeSection ? ' is-open' : ''}`}
         aria-hidden={!activeSection}

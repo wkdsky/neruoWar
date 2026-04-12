@@ -49,6 +49,35 @@ const truncateMessagePreview = (value = '', maxLength = 120) => {
   return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
 };
 
+const normalizeSharedGroupCard = (payload = {}) => {
+  const group = payload?.group && typeof payload.group === 'object' ? payload.group : {};
+  const conversationId = getIdString(group?.conversationId);
+  const title = String(group?.title || '').trim();
+  if (!conversationId || !title) return null;
+
+  return {
+    group: {
+      conversationId,
+      title,
+      announcement: String(group?.announcement || '').trim(),
+      avatar: String(group?.avatar || '').trim(),
+      groupNo: String(group?.groupNo || '').trim(),
+      memberCount: Math.max(0, Number(group?.memberCount) || 0),
+      ownerId: getIdString(group?.ownerId)
+    }
+  };
+};
+
+const buildMessagePreviewText = (message = {}) => {
+  const type = String(message?.type || 'text').trim();
+  if (type === 'group_share') {
+    const shareCard = normalizeSharedGroupCard(message?.payload || null);
+    const groupTitle = shareCard?.group?.title || '';
+    return groupTitle ? `分享了群聊「${groupTitle}」` : '分享了一个群聊';
+  }
+  return String(message?.content || '').trim();
+};
+
 const buildNotificationPayload = (payload = {}) => ({
   ...payload,
   _id: payload?._id && isValidObjectId(payload._id)
@@ -137,11 +166,14 @@ const serializeMessageForUserView = (message = {}, sender = null) => ({
   seq: Number(message?.seq) || 0,
   senderId: getIdString(message?.senderId),
   type: message?.type || 'text',
-  content: message?.content || '',
+  content: buildMessagePreviewText(message),
   clientMessageId: message?.clientMessageId || '',
   createdAt: message?.createdAt || null,
   editedAt: message?.editedAt || null,
   recalledAt: message?.recalledAt || null,
+  shareCard: message?.type === 'group_share'
+    ? normalizeSharedGroupCard(message?.payload || null)
+    : null,
   sender: sender ? serializeUserSummary(sender) : null
 });
 
@@ -156,14 +188,15 @@ const serializeConversationItem = ({
   title: conversation?.type === 'direct'
     ? (directUser?.username || conversation?.title || '私聊')
     : (conversation?.title || '群聊'),
+  groupNo: conversation?.type === 'group' ? String(conversation?.groupNo || '') : '',
   ownerId: getIdString(conversation?.ownerId),
   announcement: conversation?.type === 'group' ? (conversation?.announcement || '') : '',
   avatar: conversation?.type === 'direct'
     ? (directUser?.avatar || 'default_male_1')
     : (conversation?.avatar || ''),
   memberCount: Number(conversation?.memberCount) || (conversation?.type === 'direct' ? 2 : 0),
-  lastMessagePreview: latestVisibleMessage?.content
-    ? truncateMessagePreview(latestVisibleMessage.content)
+  lastMessagePreview: latestVisibleMessage
+    ? truncateMessagePreview(buildMessagePreviewText(latestVisibleMessage))
     : '',
   lastMessageAt: latestVisibleMessage?.createdAt || null,
   lastReadSeq: Number(member?.lastReadSeq) || 0,
@@ -198,6 +231,8 @@ module.exports = {
   serializeConversationItem,
   serializeGroupMemberItem,
   serializeFriendItem,
+  normalizeSharedGroupCard,
+  buildMessagePreviewText,
   serializeMessageForUserView,
   serializeUserSummary,
   toCollectionNotificationDoc,

@@ -35,7 +35,16 @@ const ConversationSchema = new mongoose.Schema({
     ref: 'User',
     default: null
   },
+  creatorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   directKey: {
+    type: String,
+    default: ''
+  },
+  groupNo: {
     type: String,
     default: ''
   },
@@ -80,8 +89,19 @@ ConversationSchema.index(
     }
   }
 );
+ConversationSchema.index(
+  { type: 1, groupNo: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      type: 'group',
+      groupNo: { $exists: true, $type: 'string', $ne: '' }
+    }
+  }
+);
 ConversationSchema.index({ lastMessageAt: -1, updatedAt: -1 });
 ConversationSchema.index({ type: 1, lastMessageAt: -1 });
 ConversationSchema.index({ type: 1, memberCount: 1, updatedAt: -1 });
+ConversationSchema.index({ type: 1, creatorId: 1, isArchived: 1 });
 
 module.exports = createChatModel('Conversation', ConversationSchema);

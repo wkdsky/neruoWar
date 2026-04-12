@@ -81,6 +81,56 @@ const createSocialService = ({
     };
   };
 
+  const getUserPublicProfile = async ({ requestUserId, targetUserId }) => {
+    const safeRequestUserId = assertValidUserId(requestUserId);
+    const safeTargetUserId = getIdString(targetUserId);
+
+    if (!isValidObjectId(safeTargetUserId)) {
+      throw new SocialChatError('无效的目标用户', {
+        status: 400,
+        code: 'INVALID_TARGET_USER_ID'
+      });
+    }
+
+    const targetUser = await socialRepo.findUserById(
+      safeTargetUserId,
+      '_id username role level experience location profession avatar gender ownedNodes allianceId publicId createdAt updatedAt'
+    );
+    if (!targetUser) {
+      throw new SocialChatError('目标用户不存在', {
+        status: 404,
+        code: 'TARGET_USER_NOT_FOUND'
+      });
+    }
+
+    const [allianceRows, friendCount] = await Promise.all([
+      socialRepo.findAllianceNamesByIds([targetUser?.allianceId]),
+      socialRepo.countAcceptedFriendshipsForUser(safeTargetUserId)
+    ]);
+    const allianceMap = new Map(allianceRows.map((item) => [getIdString(item?._id), item?.name || '']));
+    const allianceId = getIdString(targetUser?.allianceId);
+
+    return {
+      userId: getIdString(targetUser?._id),
+      username: targetUser?.username || '',
+      role: targetUser?.role || 'common',
+      level: Number(targetUser?.level) || 0,
+      experience: Number(targetUser?.experience) || 0,
+      location: targetUser?.location || '',
+      profession: targetUser?.profession || '',
+      avatar: targetUser?.avatar || 'default_male_1',
+      gender: targetUser?.gender || 'other',
+      publicId: targetUser?.publicId || '',
+      allianceId,
+      allianceName: allianceMap.get(allianceId) || '',
+      ownedNodeCount: Array.isArray(targetUser?.ownedNodes) ? targetUser.ownedNodes.length : 0,
+      friendCount,
+      isSelf: safeTargetUserId === safeRequestUserId,
+      createdAt: targetUser?.createdAt || null,
+      updatedAt: targetUser?.updatedAt || null
+    };
+  };
+
   const requestFriendship = async ({ requesterId, targetUserId, message = '' }) => {
     const safeRequesterId = assertValidUserId(requesterId);
     const safeTargetUserId = getIdString(targetUserId);
@@ -583,6 +633,7 @@ const createSocialService = ({
 
   return {
     blockUser,
+    getUserPublicProfile,
     listFriends,
     listFriendRequests,
     removeFriend,
