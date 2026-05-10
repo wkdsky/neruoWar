@@ -4,7 +4,7 @@ import {
   normalizeObjectId
 } from '../../app/appShared';
 
-const clampRevealProgress = (value) => Math.max(0.04, Math.min(1, Number(value) || 0));
+const clampRevealProgress = (value) => Math.max(0.82, Math.min(1, Number(value) || 0));
 
 const createIdleHomeTransition = () => ({
   runId: 0,
@@ -213,7 +213,7 @@ const useHomeDetailTransition = ({
       const radius = typeof renderer.getNodeScreenRadius === 'function'
         ? renderer.getNodeScreenRadius(centerNode)
         : Math.max(48, Number(centerNode.radius) || 80);
-      renderer.setNodeRevealProgress(centerNode.id, 0.04);
+      renderer.setNodeRevealProgress(centerNode.id, 1);
       setHomeDetailTransition((prev) => {
         if (!prev || prev.runId !== transition.runId) return prev;
         return {

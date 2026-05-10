@@ -106,8 +106,152 @@
     border: 1px solid rgba(154, 200, 255, 0.12);
 }
 
+.webgl-node-label.is-title-anchor {
+    padding: 0 0.12em;
+    max-width: min(var(--label-width-hint, 72px), 5.8rem);
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    color: rgba(243, 247, 251, 0.94);
+    gap: 0.08em;
+    align-items: center;
+    justify-content: center;
+    overflow: visible;
+    text-shadow:
+        0 1px 2px rgba(2, 6, 23, 0.98),
+        0 0 12px rgba(8, 15, 28, 0.82);
+}
+
+.webgl-node-label.is-title-anchor .node-label-title,
+.webgl-node-label.is-title-anchor .node-label-sense,
+.webgl-node-label.is-title-anchor .node-label-line {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.webgl-node-label.is-title-anchor .node-label-title {
+    width: 100%;
+    max-width: min(var(--label-title-width-hint, var(--label-width-hint, 72px)), 100%);
+    display: -webkit-box;
+    -webkit-line-clamp: var(--label-line-clamp, 2);
+    line-clamp: var(--label-line-clamp, 2);
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.02;
+    font-weight: 800;
+    letter-spacing: 0;
+}
+
+.webgl-node-label.is-title-anchor .node-label-sense {
+    position: absolute;
+    left: 50%;
+    top: calc(50% + var(--node-screen-radius, 36px) + 8px);
+    transform: translateX(-50%);
+    width: max-content;
+    min-width: max-content;
+    max-width: min(8rem, 24vw);
+    display: block;
+    overflow: visible;
+    white-space: nowrap;
+    text-align: center;
+    text-overflow: clip;
+    font-size: 0.66em;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: rgba(205, 220, 235, 0.92);
+    background: transparent !important;
+    padding: 0;
+    border: none !important;
+    box-shadow: none !important;
+    text-shadow:
+        0 1px 2px rgba(2, 6, 23, 0.98),
+        0 0 12px rgba(120, 170, 220, 0.26);
+}
+
+.webgl-node-label.is-title-anchor .node-label-line {
+    display: block;
+    width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
 .webgl-node-label.is-sense {
     border: 1px solid rgba(129, 219, 186, 0.14);
+}
+
+.webgl-node-label.is-title-sense {
+    padding: 0;
+    gap: 0.04em;
+    max-width: min(var(--label-width-hint, 152px), 18vw);
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    overflow: visible;
+    text-shadow:
+        0 1px 2px rgba(2, 6, 23, 0.96),
+        0 0 10px rgba(8, 15, 28, 0.8);
+}
+
+.webgl-node-label.is-title-sense .node-label-title,
+.webgl-node-label.is-title-sense .node-label-sense,
+.webgl-node-label.is-title-sense .node-label-line {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.webgl-node-label.is-title-sense .node-label-title,
+.webgl-node-label.is-title-sense .node-label-line {
+    display: block;
+    width: 100%;
+    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+    letter-spacing: 0;
+}
+
+.webgl-node-label.is-title-sense .node-label-title {
+    font-size: 0.94em;
+    font-weight: 800;
+    line-height: 1.04;
+    opacity: 0.96;
+}
+
+.webgl-node-label.is-title-sense .node-label-sense {
+    position: absolute;
+    left: 50%;
+    top: calc(50% + var(--node-screen-radius, 42px) + 9px);
+    transform: translateX(-50%);
+    width: max-content;
+    min-width: max-content;
+    max-width: min(8rem, 24vw);
+    display: block;
+    overflow: visible;
+    white-space: nowrap;
+    text-align: center;
+    text-overflow: clip;
+    font-size: 0.62em;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    opacity: 0.78;
+    color: rgba(205, 220, 235, 0.9);
+    background: transparent !important;
+    padding: 0;
+    border: none !important;
+    box-shadow: none !important;
+    text-shadow:
+        0 1px 2px rgba(2, 6, 23, 0.98),
+        0 0 12px rgba(120, 170, 220, 0.24);
 }
 
 .webgl-node-label.is-below {

@@ -362,10 +362,10 @@ const KnowledgeDomainScene = ({
     handleCityBuildDropAction(event, getPointerNormPosition);
   };
 
-  // 计算实际的显示透明度（在进度40%后开始淡入，或退出时在60%前淡出完成）
-  const displayOpacity = transitionProgress < 0.4
+  // 计算实际的显示透明度：进入时尽早露出，避免主视角退场后出现空白等待。
+  const displayOpacity = transitionProgress < 0.12
     ? 0
-    : Math.min(1, (transitionProgress - 0.4) / 0.5);
+    : Math.min(1, (transitionProgress - 0.12) / 0.42);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {

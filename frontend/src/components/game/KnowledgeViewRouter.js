@@ -18,6 +18,7 @@ const KnowledgeViewRouter = ({
   isStarMapLoading = false,
   starMapZoomState,
   onStarMapZoomChange,
+  onKnowledgeModeRequest,
   titleRelationInfo,
   onCloseTitleRelationInfo,
   searchQuery,
@@ -96,6 +97,7 @@ const KnowledgeViewRouter = ({
           isStarMapLoading={isStarMapLoading}
           starMapZoomState={starMapZoomState}
           onStarMapZoomChange={onStarMapZoomChange}
+          onKnowledgeModeRequest={onKnowledgeModeRequest}
           titleRelatedDomainCount={Math.max(0, (Number((knowledgeMainViewMode === 'starMap' ? titleStarMapData?.nodeCount : titleGraphData?.nodeCount) || 0) - 1))}
           navigationPath={navigationPath}
           onNavigate={onTitleNavigate}
@@ -135,6 +137,7 @@ const KnowledgeViewRouter = ({
           isStarMapLoading={isStarMapLoading}
           starMapZoomState={starMapZoomState}
           onStarMapZoomChange={onStarMapZoomChange}
+          onKnowledgeModeRequest={onKnowledgeModeRequest}
           navigationPath={navigationPath}
           onNavigate={onNodeNavigate}
           onNavigateHistory={onNavigateHistory}

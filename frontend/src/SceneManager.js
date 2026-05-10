@@ -6,6 +6,11 @@
 import { WebGLNodeRenderer } from './WebGLNodeRenderer';
 import LayoutManager from './LayoutManager';
 
+const BUTTON_COLOR_NEUTRAL = [0.56, 0.62, 0.68, 0.92];
+const BUTTON_COLOR_NEUTRAL_SOFT = [0.42, 0.48, 0.55, 0.88];
+const BUTTON_COLOR_DISABLED = [0.38, 0.43, 0.5, 0.78];
+const BUTTON_COLOR_ALERT = [0.78, 0.42, 0.34, 0.94];
+
 class SceneManager {
   constructor(canvas) {
     this.canvas = canvas;
@@ -65,11 +70,78 @@ class SceneManager {
         this.onLineClick(lineHit);
       }
     };
+    this.renderer.onPinchZoom = (zoom) => {
+      if (this.currentLayout?.meta?.type !== 'starMap') return;
+      this.preferredStarMapZoom = this.resolveStarMapZoom(this.currentLayout, zoom);
+      this.emitStarMapViewportChange(this.currentLayout);
+    };
   }
 
   resetCameraToLayoutCenter() {
     this.renderer.setCameraZoom(1, { render: false });
     this.renderer.setCameraOffset(0, 0);
+  }
+
+  resolveMainViewViewportInsets() {
+    if (typeof window === 'undefined' || typeof document === 'undefined' || !this.canvas) {
+      return { top: 0, right: 0, bottom: 0, left: 0 };
+    }
+
+    const canvasRect = this.canvas.getBoundingClientRect();
+    if (!canvasRect || canvasRect.width <= 0 || canvasRect.height <= 0) {
+      return { top: 0, right: 0, bottom: 0, left: 0 };
+    }
+
+    const hasOverlap = (rect) => (
+      rect
+      && rect.width > 0
+      && rect.height > 0
+      && rect.right > canvasRect.left
+      && rect.left < canvasRect.right
+      && rect.bottom > canvasRect.top
+      && rect.top < canvasRect.bottom
+    );
+    const isVisible = (element) => {
+      const style = window.getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+    };
+
+    let top = 0;
+    let floatingTopPanelInset = 0;
+    let left = 0;
+    document.querySelectorAll('.header:not(.header-mobile-suppressed)').forEach((element) => {
+      if (!isVisible(element)) return;
+      const rect = element.getBoundingClientRect();
+      if (!hasOverlap(rect)) return;
+      top = Math.max(top, rect.bottom - canvasRect.top);
+    });
+    document.querySelectorAll('.node-detail-top-overlay').forEach((element) => {
+      if (!isVisible(element)) return;
+      const rect = element.getBoundingClientRect();
+      if (!hasOverlap(rect)) return;
+      const overlapHeight = Math.max(0, rect.bottom - Math.max(rect.top, canvasRect.top));
+      floatingTopPanelInset = Math.max(floatingTopPanelInset, overlapHeight * 0.32);
+    });
+
+    document.querySelectorAll('.navigation-sidebar, .navigation-sidebar__edge-tab').forEach((element) => {
+      if (!isVisible(element)) return;
+      const rect = element.getBoundingClientRect();
+      if (!hasOverlap(rect)) return;
+      left = Math.max(left, rect.right - canvasRect.left);
+    });
+
+    return {
+      top: Math.max(0, Math.min(canvasRect.height * 0.32, top + floatingTopPanelInset)),
+      right: 0,
+      bottom: 0,
+      left: Math.max(0, Math.min(canvasRect.width * 0.45, left))
+    };
+  }
+
+  refreshMainViewViewportInsets() {
+    const insets = this.resolveMainViewViewportInsets();
+    this.layout.setViewportInsets(insets);
+    return insets;
   }
 
   getStarMapZoomBounds(layout = this.currentLayout) {
@@ -85,16 +157,35 @@ class SceneManager {
     const bounds = layout?.bounds;
     const canvasWidth = Math.max(1, Number(this.canvas?.width) || Number(this.layout?.width) || 1);
     const canvasHeight = Math.max(1, Number(this.canvas?.height) || Number(this.layout?.height) || 1);
-    const paddedWidth = Math.max(1, canvasWidth - 240);
-    const paddedHeight = Math.max(1, canvasHeight - 180);
     const boundsWidth = Math.max(1, Number(bounds?.width) || 1);
     const boundsHeight = Math.max(1, Number(bounds?.height) || 1);
+    const isDesktopViewport = canvasWidth > 768;
+    const paddedWidth = Math.max(
+      1,
+      canvasWidth - (isDesktopViewport ? 420 : 240)
+    );
+    const paddedHeight = Math.max(
+      1,
+      canvasHeight - (isDesktopViewport ? 260 : 180)
+    );
     const fitZoom = Math.min(paddedWidth / boundsWidth, paddedHeight / boundsHeight);
 
+    if (!isDesktopViewport) {
+      return {
+        min: Math.max(0.22, Math.min(1, fitZoom)),
+        max: 1.12,
+        defaultValue: 1
+      };
+    }
+
+    const defaultValue = Math.max(0.28, Math.min(1, fitZoom));
+    const min = Math.max(0.22, Math.min(defaultValue, defaultValue * 0.82));
+    const max = Math.max(defaultValue, Math.min(1.28, Math.max(defaultValue * 1.42, defaultValue + 0.24)));
+
     return {
-      min: Math.max(0.22, Math.min(1, fitZoom)),
-      max: 1.12,
-      defaultValue: 1
+      min,
+      max,
+      defaultValue
     };
   }
 
@@ -105,6 +196,20 @@ class SceneManager {
       ...bounds,
       value
     };
+  }
+
+  syncStarMapInteractionConfig(layout = this.currentLayout) {
+    if (layout?.meta?.type !== 'starMap') {
+      this.renderer.setPinchZoomOptions({ enabled: false });
+      return;
+    }
+
+    const bounds = this.getStarMapZoomBounds(layout);
+    this.renderer.setPinchZoomOptions({
+      enabled: true,
+      min: bounds.min,
+      max: bounds.max
+    });
   }
 
   emitStarMapViewportChange(layout = this.currentLayout) {
@@ -128,10 +233,18 @@ class SceneManager {
     const zoom = this.resolveStarMapZoom(layout, requestedZoom);
     this.preferredStarMapZoom = zoom;
 
-    const contentCenterX = bounds.left + bounds.width * 0.5;
-    const contentCenterY = bounds.top + bounds.height * 0.5;
-    const viewportCenterX = this.layout.centerX;
-    const viewportCenterY = this.layout.centerY + 42;
+    const centerNode = Array.isArray(layout?.nodes)
+      ? layout.nodes.find((node) => node?.type === 'center' && node?.visible !== false)
+      : null;
+    const contentCenterX = Number.isFinite(Number(centerNode?.x))
+      ? Number(centerNode.x)
+      : bounds.left + bounds.width * 0.5;
+    const contentCenterY = Number.isFinite(Number(centerNode?.y))
+      ? Number(centerNode.y)
+      : bounds.top + bounds.height * 0.5;
+    const viewportCenter = this.layout.getViewportFocusCenter();
+    const viewportCenterX = viewportCenter.centerX;
+    const viewportCenterY = viewportCenter.centerY;
     this.renderer.setCameraZoom(zoom, { render: false });
     this.renderer.setCameraOffset(
       viewportCenterX - contentCenterX * zoom,
@@ -142,11 +255,25 @@ class SceneManager {
     this.emitStarMapViewportChange(layout);
   }
 
+  frameStarMapOnCenter(layout = this.currentLayout, requestedZoom = this.preferredStarMapZoom) {
+    if (layout?.meta?.type !== 'starMap') return;
+    this.refreshMainViewViewportInsets();
+    this.applyStarMapFraming(layout, requestedZoom);
+  }
+
+  scheduleStarMapCenterRefit(transitionVersion = null) {
+    this.scheduleTransitionTimeout(() => {
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
+      if (this.currentLayout?.meta?.type !== 'starMap') return;
+      this.frameStarMapOnCenter(this.currentLayout, this.preferredStarMapZoom);
+    }, 0);
+  }
+
   setStarMapZoom(zoom = this.preferredStarMapZoom, layout = this.currentLayout) {
     if (layout?.meta?.type !== 'starMap') return null;
     const resolvedZoom = this.resolveStarMapZoom(layout, zoom);
     this.preferredStarMapZoom = resolvedZoom;
-    this.applyStarMapFraming(layout, resolvedZoom);
+    this.frameStarMapOnCenter(layout, resolvedZoom);
     return this.getStarMapZoomState(layout);
   }
 
@@ -173,6 +300,10 @@ class SceneManager {
     return timeoutId;
   }
 
+  previewNodeActivation(node) {
+    this.renderer.previewNodeActivation(node);
+  }
+
   beginLayoutTransition({ cancelAnimations = true, cancelMeasuredLabelPass = false, restoreStableLayout = false } = {}) {
     const hadPendingVisualTransition = this.pendingTransitionTimeouts.size > 0
       || this.renderer.animations.length > 0
@@ -188,7 +319,7 @@ class SceneManager {
     if (restoreStableLayout && hadPendingVisualTransition && this.currentLayout) {
       this.setLayout(this.currentLayout);
       if (this.currentLayout?.meta?.type === 'starMap') {
-        this.applyStarMapFraming(this.currentLayout);
+        this.frameStarMapOnCenter(this.currentLayout);
       } else {
         this.resetCameraToLayoutCenter();
       }
@@ -235,7 +366,7 @@ class SceneManager {
 
       if (refined?.applied && refined.layout?.meta?.layoutKey === layoutKey) {
         this.setLayout(refined.layout);
-        this.applyStarMapFraming(refined.layout);
+        this.frameStarMapOnCenter(refined.layout);
       } else if (refined?.layout?.debug) {
         this.renderer.setLayoutDebugData(refined.layout.debug);
         this.renderer.render();
@@ -309,6 +440,7 @@ class SceneManager {
     this.renderer.setSceneType('nodeDetail');
     this.renderer.setCameraPanEnabled(false);
     this.resetCameraToLayoutCenter();
+    this.refreshMainViewViewportInsets();
     this.centerNodeButtonContext = buttonContext || {};
 
     // 清除之前的按钮
@@ -338,10 +470,12 @@ class SceneManager {
 
     if (this.currentScene === 'home' && clickedNode) {
       // 从首页点击节点：特殊过渡动画
-      await this.clickTransition(clickedNode, newLayout, 800, transitionVersion);
+      await this.clickTransition(clickedNode, newLayout, 620, transitionVersion);
     } else if (this.currentScene === 'nodeDetail') {
       // 节点详情之间切换
-      await this.nodeToNodeTransition(clickedNode, newLayout, 700, transitionVersion);
+      await this.nodeToNodeTransition(clickedNode, newLayout, 360, transitionVersion);
+    } else if (this.currentScene === 'titleDetail') {
+      await this.titleSenseOrbitTransition(newLayout, 'titleToSense', 330, transitionVersion, clickedNode);
     } else {
       // 其他情况：直接设置布局
       this.setLayout(newLayout);
@@ -375,6 +509,7 @@ class SceneManager {
     this.renderer.setSceneType('titleDetail');
     this.renderer.setCameraPanEnabled(false);
     this.resetCameraToLayoutCenter();
+    this.refreshMainViewViewportInsets();
     this.centerNodeButtonContext = buttonContext || {};
     this.renderer.clearNodeButtons();
 
@@ -401,9 +536,11 @@ class SceneManager {
     }
 
     if (this.currentScene === 'home' && clickedNode) {
-      await this.clickTransition(clickedNode, newLayout, 800, transitionVersion);
+      await this.clickTransition(clickedNode, newLayout, 620, transitionVersion);
     } else if (this.currentScene === 'titleDetail') {
-      await this.nodeToNodeTransition(clickedNode, newLayout, 700, transitionVersion);
+      await this.nodeToNodeTransition(clickedNode, newLayout, 360, transitionVersion);
+    } else if (this.currentScene === 'nodeDetail') {
+      await this.titleSenseOrbitTransition(newLayout, 'senseToTitle', 330, transitionVersion, clickedNode);
     } else {
       await this.fadeTransition(newLayout, 400, transitionVersion);
     }
@@ -433,11 +570,13 @@ class SceneManager {
     this.renderer.setSceneType(scene);
     this.renderer.setCameraPanEnabled(true);
     this.resetCameraToLayoutCenter();
+    this.refreshMainViewViewportInsets();
     this.centerNodeButtonContext = {};
     this.renderer.clearNodeButtons();
 
     const layer = scene === 'titleDetail' ? 'title' : 'sense';
     const newLayout = this.layout.calculateStarMapLayout(graph, { layer });
+    this.preferredStarMapZoom = this.getStarMapZoomBounds(newLayout).defaultValue;
     this.currentLayoutSource = {
       mode: 'starMap',
       scene,
@@ -448,7 +587,8 @@ class SceneManager {
       if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
       this.setLayout(newLayout);
       this.currentScene = scene;
-      this.applyStarMapFraming(newLayout);
+      this.frameStarMapOnCenter(newLayout);
+      this.scheduleStarMapCenterRefit(transitionVersion);
       this.scheduleStarMapMeasuredLabelPass(newLayout);
       if (this.onSceneChange) {
         this.onSceneChange(scene, graph?.centerNode || null);
@@ -460,7 +600,8 @@ class SceneManager {
       if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
       this.setLayout(newLayout);
       this.currentScene = scene;
-      this.applyStarMapFraming(newLayout);
+      this.frameStarMapOnCenter(newLayout);
+      this.scheduleStarMapCenterRefit(transitionVersion);
       this.scheduleStarMapMeasuredLabelPass(newLayout);
 
       if (this.onSceneChange) {
@@ -470,16 +611,17 @@ class SceneManager {
     }
 
     if (this.currentScene !== scene) {
-      await this.fadeTransition(newLayout, 400, transitionVersion);
+      await this.fadeTransition(newLayout, 320, transitionVersion);
     } else if (clickedNode) {
-      await this.nodeToNodeTransition(clickedNode, newLayout, 560, transitionVersion);
+      await this.nodeToNodeTransition(clickedNode, newLayout, 360, transitionVersion);
     } else {
-      await this.transitionTo(newLayout, 560, transitionVersion);
+      await this.transitionTo(newLayout, 360, transitionVersion);
     }
 
     if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     this.currentScene = scene;
-    this.applyStarMapFraming(newLayout);
+    this.frameStarMapOnCenter(newLayout);
+    this.scheduleStarMapCenterRefit(transitionVersion);
     this.scheduleStarMapMeasuredLabelPass(newLayout);
 
     if (this.onSceneChange) {
@@ -494,22 +636,42 @@ class SceneManager {
     if (!centerNode) return;
 
     const centerNodeId = `center-${centerNode._id}`;
-    if (buttonContext?.senseDetailOnly) {
-      this.renderer.setNodeButtons(centerNodeId, [{
-        id: 'sense-entry',
-        icon: 'i',
-        angle: -Math.PI / 7,
-        action: 'showSenseEntry',
-        tooltip: '查看释义词条详情',
-        color: [0.36, 0.74, 0.96, 0.92]
-      }]);
-      return;
-    }
     if (buttonContext?.disableDefault) {
       this.renderer.setNodeButtons(centerNodeId, []);
       return;
     }
     const isFavorite = !!buttonContext.isFavorite;
+
+    if (buttonContext?.senseFocus || buttonContext?.senseDetailOnly) {
+      const senseButtons = [
+        {
+          id: 'toggle-favorite',
+          icon: isFavorite ? '★' : '☆',
+          angle: -Math.PI / 5,
+          action: 'toggleFavoriteNode',
+          tooltip: isFavorite ? '取消收藏' : '收藏该释义',
+          color: BUTTON_COLOR_NEUTRAL_SOFT,
+          size: 30,
+          distance: 25,
+          iconSize: 14
+        },
+        {
+          id: 'sense-entry',
+          icon: 'i',
+          angle: Math.PI / 5,
+          action: 'showSenseEntry',
+          tooltip: '查看释义详情',
+          color: BUTTON_COLOR_NEUTRAL,
+          size: 30,
+          distance: 25,
+          iconSize: 14
+        }
+      ];
+
+      this.renderer.setNodeButtons(centerNodeId, senseButtons);
+      this.setupTitleAnchorButtons(centerNode, buttonContext);
+      return;
+    }
 
     const buttons = [
       {
@@ -518,7 +680,7 @@ class SceneManager {
         angle: -Math.PI / 7, // 右上偏侧，避开顶部连线区域
         action: 'enterKnowledgeDomain',
         tooltip: '进入知识域',
-        color: [0.3, 0.7, 0.9, 0.9]  // 柔和的青蓝色
+        color: BUTTON_COLOR_NEUTRAL
       },
       {
         id: 'toggle-favorite',
@@ -526,7 +688,7 @@ class SceneManager {
         angle: Math.PI / 7, // 右下偏侧，避开底部连线区域
         action: 'toggleFavoriteNode',
         tooltip: isFavorite ? '取消收藏' : '收藏该知识域',
-        color: [0.98, 0.80, 0.20, 0.95]
+        color: BUTTON_COLOR_NEUTRAL_SOFT
       }
     ];
 
@@ -537,7 +699,7 @@ class SceneManager {
         angle: -Math.PI * 0.62,
         action: 'joinDistribution',
         tooltip: '知识点分发',
-        color: [0.25, 0.72, 0.95, 0.92],
+        color: BUTTON_COLOR_NEUTRAL,
         disabled: !!buttonContext.distributionDisabled
       });
     }
@@ -552,8 +714,8 @@ class SceneManager {
           ? (buttonContext.moveDisabledReason || '当前不可移动')
           : '移动到该节点',
         color: buttonContext.moveDisabled
-          ? [0.47, 0.55, 0.67, 0.85]
-          : [0.20, 0.75, 0.40, 0.92],
+          ? BUTTON_COLOR_DISABLED
+          : BUTTON_COLOR_NEUTRAL,
         disabled: !!buttonContext.moveDisabled
       });
     }
@@ -566,8 +728,8 @@ class SceneManager {
         action: 'intelSteal',
         tooltip: buttonContext.intelStealTooltip || '情报窃取',
         color: buttonContext.intelStealHasSnapshot
-          ? [0.96, 0.58, 0.24, 0.95]
-          : [0.56, 0.64, 0.78, 0.9],
+          ? BUTTON_COLOR_ALERT
+          : BUTTON_COLOR_NEUTRAL_SOFT,
         disabled: !!buttonContext.intelStealDisabled
       });
     }
@@ -580,26 +742,92 @@ class SceneManager {
         action: 'siegeDomain',
         tooltip: buttonContext.siegeTooltip || '攻占知识域',
         color: buttonContext.siegeActive
-          ? [0.96, 0.38, 0.28, 0.96]
-          : [0.78, 0.46, 0.26, 0.92],
+          ? BUTTON_COLOR_ALERT
+          : BUTTON_COLOR_NEUTRAL_SOFT,
         disabled: !!buttonContext.siegeDisabled
       });
+    }
+
+    if (this.renderer?.sceneType === 'titleDetail') {
+      const titleButtons = this.arrangeTitleNodeButtons(buttons, centerNodeId);
+      this.renderer.setNodeButtons(centerNodeId, titleButtons);
+      return;
     }
 
     this.renderer.setNodeButtons(centerNodeId, buttons);
   }
 
+  arrangeTitleNodeButtons(buttons = [], centerNodeId = '') {
+    const node = this.renderer.nodes.get(centerNodeId);
+    const radius = Math.max(48, Number(node?.radius) || 72);
+    const innerX = -(radius + 34);
+    const outerX = -(radius + 70);
+    const rowGap = 34;
+    return buttons.map((button, index) => {
+      const column = index % 2;
+      const row = Math.floor(index / 2);
+      const offsetY = (row - 1) * rowGap + (column === 0 ? -8 : 8);
+      return {
+        ...button,
+        angle: Math.PI,
+        offsetX: column === 0 ? innerX : outerX,
+        offsetY,
+        size: Number(button?.size) || 28,
+        hitRadius: Number(button?.hitRadius) || 18,
+        iconSize: Number(button?.iconSize) || 13,
+        distance: 0
+      };
+    });
+  }
+
+  setupTitleAnchorButtons(centerNode, buttonContext = this.centerNodeButtonContext || {}) {
+    if (!centerNode?._id) return;
+    const titleAnchorId = `title-anchor-${centerNode._id}`;
+    if (this.renderer?.sceneType === 'nodeDetail') {
+      this.renderer.setNodeButtons(titleAnchorId, []);
+      return;
+    }
+    const anchorButtons = [
+      {
+        id: 'open-title-detail',
+        icon: '⬡',
+        angle: Math.PI * 0.16,
+        action: 'openTitleDetail',
+        tooltip: '切到标题主视角',
+        color: BUTTON_COLOR_NEUTRAL,
+        size: 24,
+        distance: 15,
+        hitRadius: 17,
+        iconSize: 12
+      }
+    ];
+
+    if (buttonContext.showSiegeButton) {
+      anchorButtons.push({
+        id: 'title-siege-domain',
+        icon: buttonContext.siegeActive ? '⚔' : '✦',
+        angle: Math.PI * 0.47,
+        action: 'siegeDomain',
+        tooltip: buttonContext.siegeTooltip || '攻占知识域',
+        color: buttonContext.siegeActive ? BUTTON_COLOR_ALERT : BUTTON_COLOR_NEUTRAL_SOFT,
+        disabled: !!buttonContext.siegeDisabled,
+        size: 24,
+        distance: 15,
+        hitRadius: 17,
+        iconSize: 12
+      });
+    }
+
+    this.renderer.setNodeButtons(titleAnchorId, anchorButtons);
+  }
+
   setupSenseDetailButton(centerNode) {
     if (!centerNode?._id) return;
-    const centerNodeId = `center-${centerNode._id}`;
-    this.renderer.setNodeButtons(centerNodeId, [{
-      id: 'sense-entry',
-      icon: 'i',
-      angle: -Math.PI / 7,
-      action: 'showSenseEntry',
-      tooltip: '查看释义词条详情',
-      color: [0.36, 0.74, 0.96, 0.92]
-    }]);
+    this.setupCenterNodeButtons(centerNode, {
+      ...this.centerNodeButtonContext,
+      senseFocus: true,
+      showSenseEntryButton: true
+    });
   }
 
   clearNodeButtons() {
@@ -621,12 +849,210 @@ class SceneManager {
     }
 
     this.renderer.setLines(layout.lines);
-    this.renderer.render();
     this.currentLayout = layout;
+    this.syncStarMapInteractionConfig(layout);
+    this.renderer.render();
   }
 
   setUserState(locationName, travelStatus) {
     this.renderer.setUserState({ locationName, travelStatus });
+  }
+
+  async titleSenseOrbitTransition(newLayout, direction = 'titleToSense', duration = 330, transitionVersion = null, clickedNode = null) {
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
+    const newCenterConfig = newLayout.nodes.find((node) => node.type === 'center');
+    if (!newCenterConfig) {
+      await this.fadeTransition(newLayout, duration, transitionVersion);
+      return;
+    }
+
+    const newNodeIds = new Set(newLayout.nodes.map((node) => node.id));
+    const currentCenterNode = Array.from(this.renderer.nodes.values()).find((node) => node.type === 'center');
+    const currentTitleAnchor = Array.from(this.renderer.nodes.values()).find((node) => node.type === 'title-anchor');
+    const newTitleAnchorConfig = newLayout.nodes.find((node) => node.type === 'title-anchor');
+
+    this.renderer.setLines([]);
+
+    if (direction === 'titleToSense' && currentCenterNode && newTitleAnchorConfig) {
+      const clickedSenseNode = clickedNode?.id ? this.renderer.nodes.get(clickedNode.id) : null;
+      const senseSourceNode = clickedSenseNode?.data?.detailRole === 'title-sense'
+        ? clickedSenseNode
+        : Array.from(this.renderer.nodes.values()).find((node) => node?.data?.detailRole === 'title-sense');
+      this.renderer.setNode(newTitleAnchorConfig.id, {
+        ...currentCenterNode,
+        ...newTitleAnchorConfig,
+        id: newTitleAnchorConfig.id,
+        x: currentCenterNode.x,
+        y: currentCenterNode.y,
+        radius: currentCenterNode.radius,
+        scale: 1,
+        opacity: 0.92,
+        rotation: -0.16,
+        type: 'title-anchor'
+      });
+
+      if (senseSourceNode && senseSourceNode.id !== newCenterConfig.id) {
+        this.renderer.setNode(newCenterConfig.id, {
+          ...newCenterConfig,
+          id: newCenterConfig.id,
+          type: 'center',
+          x: senseSourceNode.x,
+          y: senseSourceNode.y,
+          radius: senseSourceNode.radius,
+          scale: Number(senseSourceNode.scale) || 1,
+          opacity: Math.max(0.88, Math.min(1, Number(senseSourceNode.opacity) || 1)),
+          rotation: Number(senseSourceNode.rotation) || 0
+        });
+      }
+
+      const exitAnimations = [];
+      for (const [nodeId, node] of this.renderer.nodes) {
+        if (nodeId === currentCenterNode.id || nodeId === newTitleAnchorConfig.id || nodeId === newCenterConfig.id) continue;
+        const directionX = node.x - currentCenterNode.x;
+        const directionY = node.y - currentCenterNode.y;
+        const distance = Math.hypot(directionX, directionY) || 1;
+        exitAnimations.push(this.renderer.animateNode(nodeId, {
+          x: node.x + (directionX / distance) * 130,
+          y: node.y + (directionY / distance) * 130,
+          scale: node.scale * 0.42,
+          opacity: 0,
+          rotation: node.rotation + (directionX >= 0 ? 0.16 : -0.16)
+        }, duration * 0.26, 'easeInCubic'));
+      }
+
+      const anchorAnimation = this.renderer.animateNode(newTitleAnchorConfig.id, {
+        ...newTitleAnchorConfig,
+        rotation: 0
+      }, duration * 0.62, 'easeInOutCubic');
+      const centerAnimation = this.renderer.animateNode(newCenterConfig.id, {
+        ...newCenterConfig,
+        scale: 1,
+        rotation: 0
+      }, duration * 0.62, 'easeOutCubic');
+      const oldCenterExit = currentCenterNode.id === newCenterConfig.id
+        ? Promise.resolve()
+        : this.renderer.animateNode(currentCenterNode.id, {
+            ...newTitleAnchorConfig,
+            opacity: 0,
+            scale: 0.36,
+            rotation: -0.1
+          }, duration * 0.28, 'easeInCubic');
+
+      await Promise.all([...exitAnimations, anchorAnimation, centerAnimation, oldCenterExit]);
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
+
+      for (const nodeId of Array.from(this.renderer.nodes.keys())) {
+        if (nodeId !== newCenterConfig.id && nodeId !== newTitleAnchorConfig.id) {
+          this.renderer.removeNode(nodeId);
+        }
+      }
+      this.renderer.setNode(newCenterConfig.id, {
+        ...newCenterConfig,
+        rotation: 0
+      });
+      this.renderer.setNode(newTitleAnchorConfig.id, newTitleAnchorConfig);
+      this.renderer.setLines(newLayout.lines);
+
+      const enterNodes = newLayout.nodes.filter((node) => (
+        node.id !== newCenterConfig.id
+        && node.id !== newTitleAnchorConfig.id
+      ));
+      const enterAnimations = enterNodes.map((nodeConfig, index) => {
+        this.renderer.setNode(nodeConfig.id, {
+          ...nodeConfig,
+          x: nodeConfig.type === 'title-anchor' ? newCenterConfig.x - 120 : newCenterConfig.x,
+          y: newCenterConfig.y,
+          scale: 0.16,
+          opacity: 0,
+          rotation: index % 2 === 0 ? -0.12 : 0.12
+        });
+        return new Promise((resolve) => {
+          this.scheduleTransitionTimeout(() => {
+            if (!this.isLayoutTransitionCurrent(transitionVersion)) {
+              resolve();
+              return;
+            }
+            this.renderer.animateNode(nodeConfig.id, {
+              ...nodeConfig,
+              rotation: 0
+            }, duration * 0.3, 'easeOutCubic').then(resolve);
+          }, Math.min(index, 5) * 10);
+        });
+      });
+
+      await Promise.all(enterAnimations);
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
+      this.currentLayout = newLayout;
+      this.renderer.renderingLoop = false;
+      this.renderer.render();
+      return;
+    }
+
+    if (direction === 'senseToTitle' && currentTitleAnchor) {
+      const exitAnimations = [];
+      for (const [nodeId, node] of this.renderer.nodes) {
+        if (nodeId === currentTitleAnchor.id) continue;
+        const isCurrentCenter = currentCenterNode && nodeId === currentCenterNode.id;
+        const offsetX = isCurrentCenter ? 84 : (node.x - currentTitleAnchor.x);
+        const offsetY = isCurrentCenter ? 72 : (node.y - currentTitleAnchor.y);
+        const distance = Math.hypot(offsetX, offsetY) || 1;
+        exitAnimations.push(this.renderer.animateNode(nodeId, {
+          x: node.x + (offsetX / distance) * (isCurrentCenter ? 72 : 118),
+          y: node.y + (offsetY / distance) * (isCurrentCenter ? 72 : 118),
+          scale: node.scale * (isCurrentCenter ? 0.42 : 0.36),
+          opacity: 0,
+          rotation: node.rotation + (offsetX >= 0 ? 0.18 : -0.18)
+        }, duration * 0.24, 'easeInCubic'));
+      }
+
+      const anchorToCenterAnimation = this.renderer.animateNode(currentTitleAnchor.id, {
+        ...newCenterConfig,
+        id: currentTitleAnchor.id,
+        type: 'center',
+        rotation: 0
+      }, duration * 0.62, 'easeInOutCubic');
+
+      await Promise.all([...exitAnimations, anchorToCenterAnimation]);
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
+
+      this.setLayout(newLayout);
+      const enterNodes = newLayout.nodes.filter((node) => node.id !== newCenterConfig.id);
+      const enterAnimations = enterNodes.map((nodeConfig, index) => {
+        this.renderer.setNode(nodeConfig.id, {
+          ...nodeConfig,
+          x: newCenterConfig.x,
+          y: newCenterConfig.y,
+          scale: 0.18,
+          opacity: 0,
+          rotation: index % 2 === 0 ? -0.12 : 0.12
+        });
+        return new Promise((resolve) => {
+          this.scheduleTransitionTimeout(() => {
+            if (!this.isLayoutTransitionCurrent(transitionVersion)) {
+              resolve();
+              return;
+            }
+            this.renderer.animateNode(nodeConfig.id, {
+              ...nodeConfig,
+              rotation: 0
+            }, duration * 0.3, 'easeOutCubic').then(resolve);
+          }, Math.min(index, 5) * 10);
+        });
+      });
+
+      await Promise.all(enterAnimations);
+      if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
+      this.currentLayout = newLayout;
+      this.renderer.renderingLoop = false;
+      this.renderer.render();
+      return;
+    }
+
+    await this.fadeTransition(newLayout, duration, transitionVersion);
+    if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
+    for (const nodeId of Array.from(this.renderer.nodes.keys())) {
+      if (!newNodeIds.has(nodeId)) this.renderer.removeNode(nodeId);
+    }
   }
 
   /**
@@ -726,7 +1152,7 @@ class SceneManager {
   /**
    * 点击节点过渡动画 (从首页到节点详情)
    */
-  async clickTransition(clickedNode, newLayout, duration = 800, transitionVersion = null) {
+  async clickTransition(clickedNode, newLayout, duration = 620, transitionVersion = null) {
     if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     const transitions = this.layout.calculateClickTransition(
       clickedNode,
@@ -734,10 +1160,10 @@ class SceneManager {
       newLayout
     );
 
-    // 阶段1: 其他节点淡出 (300ms)
+    // 阶段1: 其他节点快速淡出
     await Promise.all(
       transitions.exit.map(t =>
-        this.renderer.animateNode(t.id, t.to, duration * 0.3, 'easeInCubic')
+        this.renderer.animateNode(t.id, t.to, duration * 0.22, 'easeInCubic')
       )
     );
     if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
@@ -745,10 +1171,10 @@ class SceneManager {
     // 移除淡出的节点
     transitions.exit.forEach(t => this.renderer.removeNode(t.id));
 
-    // 阶段2: 被点击节点移动并放大到中心 (400ms)
+    // 阶段2: 被点击节点移动并放大到中心
     if (transitions.special) {
       const t = transitions.special;
-      await this.renderer.animateNode(t.id, t.to, duration * 0.5, 'easeOutCubic');
+      await this.renderer.animateNode(t.id, t.to, duration * 0.38, 'easeOutCubic');
       if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
 
       // 重命名节点ID (从 root-xxx 到 center-xxx)
@@ -767,7 +1193,7 @@ class SceneManager {
     // 更新连线
     this.renderer.setLines(newLayout.lines);
 
-    // 阶段3: 母域和子域节点依次出现 (300ms，错开时间)
+    // 阶段3: 母域和子域节点紧凑出现
     const enterAnimations = transitions.enter.map((t, index) => {
       if (!this.isLayoutTransitionCurrent(transitionVersion)) {
         return Promise.resolve();
@@ -782,9 +1208,9 @@ class SceneManager {
             resolve();
             return;
           }
-          this.renderer.animateNode(t.id, t.to, duration * 0.4, 'easeOutBack')
+          this.renderer.animateNode(t.id, t.to, duration * 0.3, 'easeOutCubic')
             .then(resolve);
-        }, index * 60); // 每个节点延迟60ms
+        }, Math.min(index, 6) * 14);
       });
     });
 
@@ -801,7 +1227,7 @@ class SceneManager {
   /**
    * 节点详情之间的切换动画
    */
-  async nodeToNodeTransition(clickedNode, newLayout, duration = 700, transitionVersion = null) {
+  async nodeToNodeTransition(clickedNode, newLayout, duration = 360, transitionVersion = null) {
     if (!this.isLayoutTransitionCurrent(transitionVersion)) return;
     if (!clickedNode) {
       await this.transitionTo(newLayout, duration, transitionVersion);
@@ -824,7 +1250,7 @@ class SceneManager {
     // 中心节点和被点击节点：特殊处理
     const newCenterNode = newLayout.nodes.find(n => n.type === 'center');
 
-    // 阶段1: 旧中心节点和其他节点移开/缩小 (300ms)
+    // 阶段1: 旧中心节点和其他节点快速移开/缩小
     for (const [id, node] of this.renderer.nodes) {
       if (id === clickedNode.id) {
         // 被点击的节点：移动到中心并放大
@@ -838,7 +1264,7 @@ class SceneManager {
         const dx = node.x - sourceNode.x;
         const dy = node.y - sourceNode.y;
         const length = Math.sqrt(dx * dx + dy * dy) || 1;
-        const distance = 240 + Math.min(160, length * 0.35);
+        const distance = 170 + Math.min(110, length * 0.28);
         transitions.exit.push({
           id,
           from: { ...node },
@@ -855,7 +1281,7 @@ class SceneManager {
 
     // 执行退出和移动动画
     const exitAnimations = transitions.exit.map(t =>
-      this.renderer.animateNode(t.id, t.to, duration * 0.4, 'easeInCubic')
+      this.renderer.animateNode(t.id, t.to, duration * 0.24, 'easeInCubic')
     );
 
     let specialAnimation = Promise.resolve();
@@ -863,7 +1289,7 @@ class SceneManager {
       specialAnimation = this.renderer.animateNode(
         transitions.special.id,
         transitions.special.to,
-        duration * 0.5,
+        duration * 0.34,
         'easeOutCubic'
       );
     }
@@ -889,7 +1315,7 @@ class SceneManager {
     // 更新连线
     this.renderer.setLines(newLayout.lines);
 
-    // 阶段2: 新的母域和子域节点出现 (400ms)
+    // 阶段2: 新的母域和子域节点紧凑出现
     const newNodes = newLayout.nodes.filter(n => n.type !== 'center');
 
     const enterAnimations = newNodes.map((nodeConfig, index) => {
@@ -916,9 +1342,9 @@ class SceneManager {
           this.renderer.animateNode(nodeConfig.id, {
             ...nodeConfig,
             rotation: 0
-          }, duration * 0.56, 'easeOutBack')
+          }, duration * 0.34, 'easeOutCubic')
             .then(resolve);
-        }, index * 70);
+        }, Math.min(index, 6) * 12);
       });
     });
 
@@ -958,6 +1384,7 @@ class SceneManager {
   resize(width, height) {
     this.layout.resize(width, height);
     this.renderer.resize(width, height);
+    this.refreshMainViewViewportInsets();
 
     // 重新计算并应用当前布局
     if (this.currentLayoutSource?.mode === 'starMap' && this.currentLayout.nodes.length > 0) {
@@ -968,7 +1395,8 @@ class SceneManager {
         }
       );
       this.setLayout(newLayout);
-      this.applyStarMapFraming(newLayout);
+      this.frameStarMapOnCenter(newLayout);
+      this.scheduleStarMapCenterRefit();
       this.scheduleStarMapMeasuredLabelPass(newLayout);
     } else if (this.currentScene === 'home' && this.currentLayout.nodes.length > 0) {
       const rootNodes = this.currentLayout.nodes

@@ -73,7 +73,7 @@ const useAppPageState = ({
         return;
       }
 
-      if ((targetView === 'army' || targetView === 'equipment' || targetView === 'trainingGround') && !isAdmin) {
+      if ((targetView === 'army' || targetView === 'equipment' || targetView === 'trainingGround' || targetView === 'cityWorkshop') && !isAdmin) {
         setView(targetView);
         return;
       }
@@ -145,7 +145,7 @@ const useAppPageState = ({
     if (!authenticated || showLocationModal || isRestoringPageRef.current) return;
     if (view === 'login') return;
 
-    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround', 'jinzhi'].includes(view)
+    const isKnownView = ['home', 'nodeDetail', 'titleDetail', 'alliance', 'admin', 'profile', 'army', 'equipment', 'trainingGround', 'cityWorkshop', 'jinzhi'].includes(view)
       || isSenseArticleSubView(view);
     if (!isKnownView) {
       if (isDevEnvironment) {
@@ -160,7 +160,7 @@ const useAppPageState = ({
       return;
     }
 
-    if ((view === 'army' || view === 'equipment' || view === 'trainingGround') && isAdmin) {
+    if ((view === 'army' || view === 'equipment' || view === 'trainingGround' || view === 'cityWorkshop') && isAdmin) {
       setView('home');
       return;
     }

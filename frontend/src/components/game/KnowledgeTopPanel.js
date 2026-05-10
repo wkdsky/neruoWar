@@ -1,9 +1,17 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Search, Plus, X } from 'lucide-react';
 import { getNodeDisplayName } from './hexUtils';
 import './KnowledgeTopPanel.css';
 
 const escapeRegExp = (text = '') => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SEARCH_RESULT_TITLE_MAX_LINES = 2;
+const SEARCH_RESULT_TITLE_MAX_FONT_REM = 0.98;
+const SEARCH_RESULT_TITLE_MIN_FONT_REM = 0.46;
+const SEARCH_RESULT_TITLE_FONT_STEP_REM = 0.025;
+const PANEL_TITLE_MAX_LINES = 1;
+const PANEL_TITLE_MAX_FONT_REM = 1.08;
+const PANEL_TITLE_MIN_FONT_REM = 0.36;
+const PANEL_TITLE_FONT_STEP_REM = 0.025;
 
 const renderKeywordHighlight = (text, rawQuery) => {
   const content = typeof text === 'string' ? text : '';
@@ -24,6 +32,150 @@ const renderKeywordHighlight = (text, rawQuery) => {
     if (!matched) return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
     return <mark key={`mark-${index}`} className="subtle-keyword-highlight">{part}</mark>;
   });
+};
+
+const fitTwoLineText = (element, options = {}) => {
+  if (!element || typeof window === 'undefined') return;
+  const {
+    maxLines = 2,
+    maxFontRem = 1,
+    minFontRem = 0.4,
+    stepRem = 0.025,
+    maxFontCssVar,
+    fontCssVar
+  } = options;
+  const computedStyle = window.getComputedStyle(element);
+  const configuredMax = maxFontCssVar
+    ? computedStyle.getPropertyValue(maxFontCssVar).trim()
+    : '';
+  const configuredMaxRem = configuredMax.endsWith('rem')
+    ? Number.parseFloat(configuredMax)
+    : maxFontRem;
+  let nextFontRem = Number.isFinite(configuredMaxRem) && configuredMaxRem > 0
+    ? configuredMaxRem
+    : maxFontRem;
+  const resolvedFontCssVar = fontCssVar || '--auto-fit-font-size';
+  element.style.setProperty(resolvedFontCssVar, `${nextFontRem}rem`);
+
+  const hasMeasuredWidth = () => element.clientWidth > 0;
+  const titleFits = () => {
+    if (!hasMeasuredWidth()) return true;
+    const style = window.getComputedStyle(element);
+    const fontSize = Number.parseFloat(style.fontSize) || 16;
+    const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.04;
+    const maxHeight = (lineHeight * maxLines) + 1;
+    return element.scrollHeight <= maxHeight && element.scrollWidth <= element.clientWidth + 1;
+  };
+
+  while (nextFontRem > minFontRem && !titleFits()) {
+    nextFontRem = Math.max(
+      minFontRem,
+      nextFontRem - stepRem
+    );
+    element.style.setProperty(resolvedFontCssVar, `${nextFontRem}rem`);
+  }
+};
+
+const fitSearchResultTitle = (element) => {
+  fitTwoLineText(element, {
+    maxLines: SEARCH_RESULT_TITLE_MAX_LINES,
+    maxFontRem: SEARCH_RESULT_TITLE_MAX_FONT_REM,
+    minFontRem: SEARCH_RESULT_TITLE_MIN_FONT_REM,
+    stepRem: SEARCH_RESULT_TITLE_FONT_STEP_REM,
+    maxFontCssVar: '--search-result-title-max-font-size',
+    fontCssVar: '--search-result-title-font-size'
+  });
+};
+
+const fitPanelTitle = (element) => {
+  fitTwoLineText(element, {
+    maxLines: PANEL_TITLE_MAX_LINES,
+    maxFontRem: PANEL_TITLE_MAX_FONT_REM,
+    minFontRem: PANEL_TITLE_MIN_FONT_REM,
+    stepRem: PANEL_TITLE_FONT_STEP_REM,
+    maxFontCssVar: '--knowledge-top-title-max-font-size',
+    fontCssVar: '--knowledge-top-title-font-size'
+  });
+};
+
+const useAutoFitText = (ref, fitFn, dependencyKey = '') => {
+  const runFit = useCallback(() => {
+    fitFn(ref.current);
+  }, [fitFn, ref]);
+
+  useLayoutEffect(() => {
+    runFit();
+  }, [dependencyKey, runFit]);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || typeof window === 'undefined') return undefined;
+    let frameId = 0;
+    const scheduleFit = () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(runFit);
+    };
+    const observerTarget = element.parentElement || element;
+    let resizeObserver = null;
+
+    if (typeof ResizeObserver === 'function') {
+      resizeObserver = new ResizeObserver(scheduleFit);
+      resizeObserver.observe(observerTarget);
+    } else {
+      window.addEventListener('resize', scheduleFit);
+    }
+
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(scheduleFit).catch(() => {});
+    }
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      } else {
+        window.removeEventListener('resize', scheduleFit);
+      }
+    };
+  }, [runFit, ref]);
+};
+
+const PanelTitle = ({ title }) => {
+  const titleRef = useRef(null);
+  const normalizedTitle = typeof title === 'string' ? title : '';
+  useAutoFitText(titleRef, fitPanelTitle, normalizedTitle);
+
+  return (
+    <h1
+      ref={titleRef}
+      className="knowledge-top-panel__title"
+      title={normalizedTitle}
+      aria-label={normalizedTitle}
+    >
+      {normalizedTitle}
+    </h1>
+  );
+};
+
+const SearchResultTitle = ({ text, searchQuery }) => {
+  const titleRef = useRef(null);
+  const normalizedText = typeof text === 'string' ? text : '';
+  useAutoFitText(titleRef, fitSearchResultTitle, `${normalizedText}\n${searchQuery || ''}`);
+
+  return (
+    <div
+      ref={titleRef}
+      className="knowledge-top-panel__result-title"
+      title={normalizedText}
+      aria-label={normalizedText}
+    >
+      {renderKeywordHighlight(normalizedText, searchQuery)}
+    </div>
+  );
 };
 
 const KnowledgeTopPanel = ({
@@ -77,7 +229,7 @@ const KnowledgeTopPanel = ({
         <div className="knowledge-top-panel__heading-row">
           <div className="knowledge-top-panel__title-group">
             {eyebrow ? <span className="knowledge-top-panel__eyebrow">{eyebrow}</span> : null}
-            <h1 className="knowledge-top-panel__title">{title}</h1>
+            <PanelTitle title={title} />
           </div>
           {visibleStats.length > 0 ? (
             <div className="knowledge-top-panel__stats">
@@ -138,22 +290,23 @@ const KnowledgeTopPanel = ({
             {searchQuery && visibleResults.length > 0 && showSearchResults ? (
               <div className="knowledge-top-panel__results">
                 <div className="knowledge-top-panel__results-scroll">
-                  {visibleResults.map((node) => (
-                    <div
-                      key={node.searchKey || `${node._id || ''}-${node.senseId || ''}`}
-                      className="knowledge-top-panel__result-card"
-                      onClick={() => {
-                        if (typeof onSearchResultClick === 'function') {
-                          onSearchResultClick(node);
-                        }
-                      }}
-                    >
-                      <div className="knowledge-top-panel__result-title">
-                        {renderKeywordHighlight(getNodeDisplayName(node), searchQuery)}
+                  {visibleResults.map((node) => {
+                    const resultTitle = getNodeDisplayName(node);
+                    return (
+                      <div
+                        key={node.searchKey || `${node._id || ''}-${node.senseId || ''}`}
+                        className="knowledge-top-panel__result-card"
+                        onClick={() => {
+                          if (typeof onSearchResultClick === 'function') {
+                            onSearchResultClick(node);
+                          }
+                        }}
+                      >
+                        <SearchResultTitle text={resultTitle} searchQuery={searchQuery} />
+                        <div className="knowledge-top-panel__result-desc">{node.description || ''}</div>
                       </div>
-                      <div className="knowledge-top-panel__result-desc">{node.description || ''}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ) : null}

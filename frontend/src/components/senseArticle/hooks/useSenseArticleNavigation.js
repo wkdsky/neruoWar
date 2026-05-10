@@ -23,7 +23,6 @@ const useSenseArticleNavigation = ({
   setShowNodeInfoModal,
   setNodeInfoModalTarget,
   setIsSenseSelectorVisible,
-  prepareHomeDetailTransitionTarget,
   cancelHomeDetailTransition,
   buildClickedNodeFromScene,
   fetchTitleDetail,
@@ -47,14 +46,7 @@ const useSenseArticleNavigation = ({
       setIsSenseSelectorVisible(false);
       return;
     }
-    if (typeof prepareHomeDetailTransitionTarget === 'function') {
-      prepareHomeDetailTransitionTarget({
-        mode: 'titleDetail',
-        nodeId,
-        senseId: ''
-      });
-    }
-    // 先收起 selector，再让 ghost/目标视图接管，避免旧面板在过渡中残留。
+    // 先收起 selector，避免旧面板在主视角切换时残留。
     setIsSenseSelectorVisible(false);
     const clickedNode = buildClickedNodeFromScene(nodeId);
     const nextNode = await fetchTitleDetail(nodeId, clickedNode, {
@@ -68,7 +60,6 @@ const useSenseArticleNavigation = ({
     cancelHomeDetailTransition,
     currentTitleDetail,
     fetchTitleDetail,
-    prepareHomeDetailTransitionTarget,
     resolveSenseSelectorNode,
     setIsSenseSelectorVisible,
     view
@@ -87,14 +78,7 @@ const useSenseArticleNavigation = ({
       setIsSenseSelectorVisible(false);
       return;
     }
-    if (typeof prepareHomeDetailTransitionTarget === 'function') {
-      prepareHomeDetailTransitionTarget({
-        mode: 'nodeDetail',
-        nodeId,
-        senseId: nextSenseId
-      });
-    }
-    // 同步关闭 selector，让跨层过渡从用户确认那一刻开始。
+    // 同步关闭 selector，避免旧面板在主视角切换时残留。
     setIsSenseSelectorVisible(false);
     const clickedNode = buildClickedNodeFromScene(nodeId);
     const nextNode = await fetchNodeDetail(nodeId, clickedNode, {
@@ -109,7 +93,6 @@ const useSenseArticleNavigation = ({
     cancelHomeDetailTransition,
     currentNodeDetail,
     fetchNodeDetail,
-    prepareHomeDetailTransitionTarget,
     resolveSenseSelectorNode,
     setIsSenseSelectorVisible,
     view

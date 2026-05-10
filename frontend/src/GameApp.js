@@ -13,7 +13,6 @@ import useAppSession from './hooks/app/useAppSession';
 import useAppPageState from './hooks/app/useAppPageState';
 import useAppRuntimeStatus from './hooks/app/useAppRuntimeStatus';
 import useBattleStatusPolling from './hooks/app/useBattleStatusPolling';
-import useHomeDetailTransition from './hooks/app/useHomeDetailTransition';
 import useKnowledgeDomainTransition from './hooks/app/useKnowledgeDomainTransition';
 import useKnowledgeEntryActions from './hooks/app/useKnowledgeEntryActions';
 import useKnowledgeNavigation from './hooks/app/useKnowledgeNavigation';
@@ -32,6 +31,8 @@ import {
     CITY_GATE_LABEL_MAP,
     PAGE_STATE_STORAGE_KEY,
     SENSE_EDITOR_PREVIEW_RESIZE_CLASS,
+    AUTH_EXPIRED_EVENT,
+    clearStoredAuthState,
     createDefaultHeaderUserStats,
     createEmptyIntelHeistStatus,
     createEmptyNodeDistributionStatus,
@@ -68,9 +69,9 @@ const AlliancePanel = lazy(() => import('./components/game/AlliancePanel'));
 const ProfilePanel = lazy(() => import('./components/game/ProfilePanel'));
 const ArmyPanel = lazy(() => import('./components/game/ArmyPanel'));
 const TrainingGroundPanel = lazy(() => import('./components/game/TrainingGroundPanel'));
+const CityWorkshopPage = lazy(() => import('./components/game/CityWorkshopPage'));
 const KnowledgeViewRouter = lazy(() => import('./components/game/KnowledgeViewRouter'));
 const KnowledgeDomainScene = lazy(() => import('./components/game/KnowledgeDomainScene'));
-const TransitionGhostLayer = lazy(() => import('./components/game/TransitionGhostLayer'));
 const LocationSelectionModal = lazy(() => import('./LocationSelectionModal'));
 const SenseArticleViewRouter = lazy(() => import('./components/senseArticle/SenseArticleViewRouter'));
 const AppOverlays = lazy(() => import('./components/layout/AppOverlays'));
@@ -79,6 +80,11 @@ const KnowledgeBrocadeWorkspacePage = lazy(() => import('./components/knowledgeB
 
 const PRIMARY_NAVIGATION_TIMEOUT_MS = 10000;
 const PRIMARY_NAVIGATION_RETRY_DELAYS_MS = [250, 700];
+const AUTH_ERROR_MESSAGES = new Set([
+    '未提供认证令牌',
+    '无效的令牌',
+    '无效的用户身份'
+]);
 const createDefaultStarMapZoomState = () => ({
     min: 0.22,
     max: 1.12,
@@ -245,8 +251,38 @@ const App = () => {
     // WebGL场景管理
     const webglCanvasRef = useRef(null);
     const sceneManagerRef = useRef(null);
+    const sceneManagerCanvasRef = useRef(null);
+    const sceneManagerInitSeqRef = useRef(0);
+    const pendingWebglCanvasClearRef = useRef(0);
+    const [webglCanvasElement, setWebglCanvasElement] = useState(null);
     const [isWebGLReady, setIsWebGLReady] = useState(false);
     const [clickedNodeForTransition, setClickedNodeForTransition] = useState(null);
+    const handleWebglCanvasRef = useCallback((canvas) => {
+        if (pendingWebglCanvasClearRef.current) {
+            window.clearTimeout(pendingWebglCanvasClearRef.current);
+            pendingWebglCanvasClearRef.current = 0;
+        }
+        if (!canvas) {
+            pendingWebglCanvasClearRef.current = window.setTimeout(() => {
+                pendingWebglCanvasClearRef.current = 0;
+                if (webglCanvasRef.current?.isConnected) return;
+                webglCanvasRef.current = null;
+                setWebglCanvasElement(null);
+            }, 0);
+            return;
+        }
+        webglCanvasRef.current = canvas;
+        setWebglCanvasElement((previousCanvas) => (
+            previousCanvas === canvas ? previousCanvas : canvas
+        ));
+    }, []);
+
+    useEffect(() => () => {
+        if (pendingWebglCanvasClearRef.current) {
+            window.clearTimeout(pendingWebglCanvasClearRef.current);
+            pendingWebglCanvasClearRef.current = 0;
+        }
+    }, []);
 
     const headerRef = useRef(null);
     const relatedDomainsWrapperRef = useRef(null);
@@ -293,25 +329,6 @@ const App = () => {
     }, [syncStarMapZoomState]);
     const [knowledgeHeaderOffset, setKnowledgeHeaderOffset] = useState(92);
     const [isSenseArticleHeaderPinned, setIsSenseArticleHeaderPinned] = useState(false);
-
-    const {
-        homeDetailTransition,
-        clearHomeDetailTransition,
-        armHomeDetailTransition,
-        prepareHomeDetailTransitionTarget,
-        handleGhostStatusChange,
-        handleGhostSettleProgress,
-        handleGhostSettleComplete
-    } = useHomeDetailTransition({
-        featuredNodes,
-        isWebGLReady,
-        sceneManagerRef,
-        webglCanvasRef,
-        view,
-        currentTitleDetail,
-        currentNodeDetail,
-        isSenseSelectorVisible
-    });
 
     const delay = useCallback((ms) => new Promise((resolve) => {
         window.setTimeout(resolve, Math.max(0, Number(ms) || 0));
@@ -673,26 +690,33 @@ const App = () => {
     // 初始化WebGL场景
     // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
-        const canvas = webglCanvasRef.current;
+        const canvas = webglCanvasElement;
         let didCancel = false;
         let parentResizeObserver = null;
+        const initSeq = sceneManagerInitSeqRef.current + 1;
+        sceneManagerInitSeqRef.current = initSeq;
+        const isCurrentInit = () => (
+            !didCancel
+            && sceneManagerInitSeqRef.current === initSeq
+            && webglCanvasRef.current === canvas
+        );
 
         if (!canvas) {
-            // canvas不存在时，清理旧的场景管理器
             if (sceneManagerRef.current) {
                 sceneManagerRef.current.destroy();
                 sceneManagerRef.current = null;
+                sceneManagerCanvasRef.current = null;
                 setIsWebGLReady(false);
             }
             return;
         }
 
-        // 每次view变化时，清理并重新创建场景管理器
-        if (sceneManagerRef.current) {
-            setIsWebGLReady(false);
+        if (sceneManagerRef.current && sceneManagerCanvasRef.current !== canvas) {
             sceneManagerRef.current.destroy();
             sceneManagerRef.current = null;
+            sceneManagerCanvasRef.current = null;
         }
+        setIsWebGLReady(false);
 
         const initializeSceneManager = async () => {
             try {
@@ -722,13 +746,28 @@ const App = () => {
 
             // 设置 canvas 初始大小
             syncCanvasSize(false);
+            window.requestAnimationFrame(() => {
+                if (isCurrentInit()) {
+                    syncCanvasSize(true);
+                }
+            });
 
             const sceneManagerModule = await import('./SceneManager');
-            if (didCancel) return;
+            if (!isCurrentInit()) return;
 
-            // 创建场景管理器
+            if (sceneManagerRef.current && sceneManagerCanvasRef.current !== canvas) {
+                sceneManagerRef.current.destroy();
+                sceneManagerRef.current = null;
+                sceneManagerCanvasRef.current = null;
+                setIsWebGLReady(false);
+            }
+
             const SceneManager = sceneManagerModule.default;
             const sceneManager = new SceneManager(canvas);
+            if (!isCurrentInit()) {
+                sceneManager.destroy();
+                return;
+            }
             sceneManager.onStarMapViewportChange = (nextState) => {
                 syncStarMapZoomState(nextState);
             };
@@ -736,6 +775,7 @@ const App = () => {
             // 设置点击回调
             sceneManager.onNodeClick = (node) => {
                 if (!node.data || !node.data._id) return;
+                sceneManager.previewNodeActivation(node);
                 if (view === 'home') {
                     setTitleRelationInfo(null);
                     setSenseSelectorSourceNode(node.data);
@@ -749,6 +789,13 @@ const App = () => {
                     setTitleRelationInfo(null);
                     if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
                         recenterStarMapFromNode(node);
+                        return;
+                    }
+                    if (node?.data?.detailRole === 'title-sense') {
+                        fetchNodeDetail(node.data._id, node, {
+                            relationHint: 'jump',
+                            activeSenseId: typeof node?.data?.activeSenseId === 'string' ? node.data.activeSenseId : ''
+                        });
                         return;
                     }
                     if (node.type === 'center') {
@@ -772,6 +819,12 @@ const App = () => {
                     setTitleRelationInfo(null);
                     if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
                         recenterStarMapFromNode(node);
+                        return;
+                    }
+                    if (node.type === 'title-anchor') {
+                        fetchTitleDetail(node.data._id, node, {
+                            relationHint: 'jump'
+                        });
                         return;
                     }
                     if (node.type === 'center') {
@@ -822,10 +875,21 @@ const App = () => {
                 } else if (button.action === 'showSenseEntry' && view === 'nodeDetail' && currentNodeDetail) {
                     setNodeInfoModalTarget(currentNodeDetail);
                     setShowNodeInfoModal(true);
+                } else if (button.action === 'openTitleDetail' && actionNode?._id) {
+                    fetchTitleDetail(actionNode._id, null, {
+                        relationHint: 'jump'
+                    });
                 }
             };
 
             sceneManagerRef.current = sceneManager;
+            sceneManagerCanvasRef.current = canvas;
+            syncCanvasSize(true);
+            window.requestAnimationFrame(() => {
+                if (isCurrentInit()) {
+                    syncCanvasSize(true);
+                }
+            });
             setIsWebGLReady(true);
 
             // 监听大小变化（窗口 + 容器）
@@ -870,14 +934,15 @@ const App = () => {
                 parentResizeObserver.disconnect();
                 parentResizeObserver = null;
             }
-            if (sceneManagerRef.current) {
+            if (sceneManagerRef.current && sceneManagerCanvasRef.current === canvas) {
                 sceneManagerRef.current.destroy();
                 sceneManagerRef.current = null;
+                sceneManagerCanvasRef.current = null;
                 setIsWebGLReady(false);
             }
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [syncStarMapZoomState, view]);
+    }, [syncStarMapZoomState, webglCanvasElement]);
 
     // 更新按钮点击回调（确保获取最新的当前主视角节点）
     useEffect(() => {
@@ -899,6 +964,10 @@ const App = () => {
                 } else if (button.action === 'showSenseEntry' && view === 'nodeDetail' && currentNodeDetail) {
                     setNodeInfoModalTarget(currentNodeDetail);
                     setShowNodeInfoModal(true);
+                } else if (button.action === 'openTitleDetail' && actionNode?._id) {
+                    fetchTitleDetail(actionNode._id, null, {
+                        relationHint: 'jump'
+                    });
                 }
             };
         }
@@ -922,8 +991,15 @@ const App = () => {
   }, []);
 
   const getApiErrorMessage = useCallback(({ response, data, rawText }, fallbackText) => {
-    if (data?.error) return data.error;
-    if (data?.message) return data.message;
+    const directMessage = String(data?.error || data?.message || '').trim();
+    if (AUTH_ERROR_MESSAGES.has(directMessage)) {
+      clearStoredAuthState();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+      }
+      return '登录状态已过期，请重新登录';
+    }
+    if (directMessage) return directMessage;
     if (typeof rawText === 'string' && rawText.includes('Cannot POST /api/travel/start')) {
       return '移动接口不存在（后端可能未重启，请重启后端服务）';
     }
@@ -1328,7 +1404,6 @@ const App = () => {
     setSenseSelectorOverviewLoading(false);
     setSenseSelectorOverviewError('');
     resetKnowledgeSearch();
-    clearHomeDetailTransition({ immediate: true });
     closeHeaderPanels();
     resetDistributionState();
     setIsLocationDockExpanded(false);
@@ -1896,6 +1971,134 @@ const App = () => {
         fetchNodeDetail
     });
 
+    const buildClickedNodeFromScene = useCallback((targetNodeId, options = {}) => {
+        const sceneNodes = sceneManagerRef.current?.currentLayout?.nodes || [];
+        const matched = sceneNodes.find((n) => {
+            if (options?.predicate && typeof options.predicate === 'function') {
+                return options.predicate(n);
+            }
+            return n?.data?._id === targetNodeId;
+        });
+        if (!matched) return null;
+        return {
+            id: matched.id,
+            data: matched.data,
+            type: matched.type
+        };
+    }, []);
+
+    const enterKnowledgeStarMapMode = useCallback(async () => {
+        if (isStarMapLoading) return;
+
+        if (view === 'titleDetail' && currentTitleDetail?._id) {
+            await fetchTitleStarMap(currentTitleDetail._id, {
+                silent: false
+            });
+            return;
+        }
+
+        if (view === 'nodeDetail' && currentNodeDetail?._id) {
+            await fetchSenseStarMap(currentNodeDetail._id, currentNodeDetail?.activeSenseId || '', {
+                silent: false
+            });
+        }
+    }, [
+        currentNodeDetail,
+        currentTitleDetail,
+        fetchSenseStarMap,
+        fetchTitleStarMap,
+        isStarMapLoading,
+        view
+    ]);
+
+    const exitKnowledgeStarMapMode = useCallback(async () => {
+        if (isStarMapLoading) return;
+        if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
+
+        if (view === 'titleDetail') {
+            const targetNodeId = normalizeObjectId(currentStarMapCenter?.nodeId || currentTitleDetail?._id);
+            const currentNodeId = normalizeObjectId(currentTitleDetail?._id);
+            if (!targetNodeId) {
+                clearStarMapState();
+                return;
+            }
+            if (targetNodeId === currentNodeId) {
+                clearStarMapState();
+                return;
+            }
+            const clickedNode = buildClickedNodeFromScene(targetNodeId);
+            const result = await fetchTitleDetail(targetNodeId, clickedNode, {
+                historyIndex: Math.max(0, (navigationPath?.length || 1) - 1),
+                requestSource: 'star-map-exit',
+                keepStarMapState: true,
+                silent: true
+            });
+            if (result) {
+                clearStarMapState();
+            }
+            return;
+        }
+
+        if (view === 'nodeDetail') {
+            const targetNodeId = normalizeObjectId(currentStarMapCenter?.nodeId || currentNodeDetail?._id);
+            const targetSenseId = typeof currentStarMapCenter?.senseId === 'string' && currentStarMapCenter.senseId.trim()
+                ? currentStarMapCenter.senseId.trim()
+                : (typeof currentNodeDetail?.activeSenseId === 'string' ? currentNodeDetail.activeSenseId.trim() : '');
+            const currentNodeId = normalizeObjectId(currentNodeDetail?._id);
+            const currentSenseId = typeof currentNodeDetail?.activeSenseId === 'string' ? currentNodeDetail.activeSenseId.trim() : '';
+            if (!targetNodeId) {
+                clearStarMapState();
+                return;
+            }
+            if (targetNodeId === currentNodeId && targetSenseId === currentSenseId) {
+                clearStarMapState();
+                return;
+            }
+            const targetVertexKey = toSenseVertexKey(targetNodeId, targetSenseId);
+            const clickedNode = buildClickedNodeFromScene(targetNodeId, {
+                predicate: (sceneNode) => (
+                    normalizeObjectId(sceneNode?.data?._id) === targetNodeId
+                    && getSenseNodeKey(sceneNode?.data || {}) === targetVertexKey
+                )
+            });
+            const result = await fetchNodeDetail(targetNodeId, clickedNode, {
+                historyIndex: Math.max(0, (navigationPath?.length || 1) - 1),
+                requestSource: 'star-map-exit',
+                keepStarMapState: true,
+                silent: true,
+                activeSenseId: targetSenseId
+            });
+            if (result) {
+                clearStarMapState();
+            }
+        }
+    }, [
+        buildClickedNodeFromScene,
+        clearStarMapState,
+        currentNodeDetail,
+        currentStarMapCenter,
+        currentTitleDetail,
+        fetchNodeDetail,
+        fetchTitleDetail,
+        isStarMapLoading,
+        knowledgeMainViewMode,
+        navigationPath,
+        view
+    ]);
+
+    const handleKnowledgeModeDialRequest = useCallback((nextMode = KNOWLEDGE_MAIN_VIEW_MODE.MAIN) => {
+        if (nextMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
+            if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
+            enterKnowledgeStarMapMode();
+            return;
+        }
+
+        if (nextMode === KNOWLEDGE_MAIN_VIEW_MODE.MAIN) {
+            if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.MAIN) return;
+            exitKnowledgeStarMapMode();
+        }
+    }, [enterKnowledgeStarMapMode, exitKnowledgeStarMapMode, knowledgeMainViewMode]);
+
     const {
         updateSenseSelectorAnchorBySceneNode,
         handleHomeDomainActivate
@@ -1912,7 +2115,6 @@ const App = () => {
         isSenseSelectorVisible,
         senseSelectorOverviewNode,
         senseArticleEntryStatusMap,
-        armHomeDetailTransition,
         setTitleRelationInfo,
         setSenseSelectorSourceNode,
         setSenseSelectorSourceSceneNodeId,
@@ -1997,22 +2199,6 @@ const App = () => {
     setView,
     updateUserLocation
   ]);
-
-    const buildClickedNodeFromScene = useCallback((targetNodeId, options = {}) => {
-        const sceneNodes = sceneManagerRef.current?.currentLayout?.nodes || [];
-        const matched = sceneNodes.find((n) => {
-            if (options?.predicate && typeof options.predicate === 'function') {
-                return options.predicate(n);
-            }
-            return n?.data?._id === targetNodeId;
-        });
-        if (!matched) return null;
-        return {
-            id: matched.id,
-            data: matched.data,
-            type: matched.type
-        };
-    }, []);
 
     const {
         handleJumpToCurrentLocationView,
@@ -2262,6 +2448,7 @@ const App = () => {
 
         sceneManagerRef.current.onNodeClick = (node) => {
             if (!node?.data?._id) return;
+            sceneManagerRef.current.previewNodeActivation(node);
 
             if (view === 'home') {
                 setTitleRelationInfo(null);
@@ -2276,6 +2463,13 @@ const App = () => {
                 setTitleRelationInfo(null);
                 if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) {
                     recenterStarMapFromNode(node);
+                    return;
+                }
+                if (node?.data?.detailRole === 'title-sense') {
+                    fetchNodeDetail(node.data._id, node, {
+                        relationHint: 'jump',
+                        activeSenseId: typeof node?.data?.activeSenseId === 'string' ? node.data.activeSenseId : ''
+                    });
                     return;
                 }
                 if (node.type === 'center') {
@@ -2301,6 +2495,12 @@ const App = () => {
                     recenterStarMapFromNode(node);
                     return;
                 }
+                if (node.type === 'title-anchor') {
+                    fetchTitleDetail(node.data._id, node, {
+                        relationHint: 'jump'
+                    });
+                    return;
+                }
                 if (node.type === 'center') {
                     setSenseSelectorSourceNode(currentNodeDetail || node.data);
                     setSenseSelectorSourceSceneNodeId('');
@@ -2317,6 +2517,15 @@ const App = () => {
                     activeSenseId: typeof node?.data?.activeSenseId === 'string' ? node.data.activeSenseId : ''
                 });
             }
+        };
+
+        sceneManagerRef.current.onLineClick = (lineHit) => {
+            if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
+            if (view !== 'titleDetail') return;
+            const meta = lineHit?.line?.edgeMeta;
+            if (!meta) return;
+            setIsSenseSelectorVisible(false);
+            setTitleRelationInfo(meta);
         };
 	    // eslint-disable-next-line react-hooks/exhaustive-deps
 	    }, [view, currentNodeDetail, currentTitleDetail, knowledgeMainViewMode, openSenseSelectorNextFrame, recenterStarMapFromNode]);
@@ -2356,51 +2565,68 @@ const App = () => {
 
     // 更新WebGL首页场景
     useEffect(() => {
-        if (!sceneManagerRef.current || !isWebGLReady) return;
+        const sceneManager = sceneManagerRef.current;
+        if (!sceneManager || !isWebGLReady || sceneManagerCanvasRef.current !== webglCanvasElement) return;
         if (view !== 'home') return;
 
         // 首页主入口改为 HTML/SVG 六边形层，WebGL 在首页只承担背景氛围层。
-        sceneManagerRef.current.showHome([], [], []);
+        sceneManager.showHome([], [], []);
         if (isMapDebugEnabled()) {
             console.info('[MapDebug] showHome', {
                 rootCount: rootNodes.length,
                 featuredCount: featuredNodes.length
             });
         }
-    }, [isWebGLReady, view, rootNodes, featuredNodes]);
+    }, [isWebGLReady, view, rootNodes, featuredNodes, webglCanvasElement]);
 
     // 更新WebGL释义主视角场景
     useEffect(() => {
-        if (!sceneManagerRef.current || !isWebGLReady) return;
+        const sceneManager = sceneManagerRef.current;
+        if (!sceneManager || !isWebGLReady || sceneManagerCanvasRef.current !== webglCanvasElement) return;
         if (view !== 'nodeDetail' || !currentNodeDetail) return;
         if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.MAIN) return;
+        let cancelled = false;
 
         const parentNodes = currentNodeDetail.parentNodesInfo || [];
         const childNodes = currentNodeDetail.childNodesInfo || [];
 
         // 将被点击的节点传递给SceneManager，用于正确的过渡动画
-        sceneManagerRef.current.showNodeDetail(
+        const renderPromise = sceneManager.showNodeDetail(
             currentNodeDetail,
             parentNodes,
             childNodes,
             clickedNodeForTransition,
-            { senseDetailOnly: true }
+            {
+                ...getNodeDetailButtonContext(currentNodeDetail),
+                senseFocus: true,
+                showSenseEntryButton: true
+            }
         );
 
-        // 动画完成后清除clickedNode状态
-        setClickedNodeForTransition(null);
-    }, [isWebGLReady, view, currentNodeDetail, clickedNodeForTransition, knowledgeMainViewMode]);
+        Promise.resolve(renderPromise).finally(() => {
+            if (!cancelled && sceneManagerRef.current === sceneManager) {
+                setClickedNodeForTransition(null);
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isWebGLReady, view, currentNodeDetail, clickedNodeForTransition, knowledgeMainViewMode, webglCanvasElement]);
 
     // 更新WebGL标题主视角场景
     useEffect(() => {
-        if (!sceneManagerRef.current || !isWebGLReady) return;
+        const sceneManager = sceneManagerRef.current;
+        if (!sceneManager || !isWebGLReady || sceneManagerCanvasRef.current !== webglCanvasElement) return;
         if (view !== 'titleDetail' || !currentTitleDetail || !titleGraphData) return;
         if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.MAIN) return;
+        let cancelled = false;
 
         const graphNodes = Array.isArray(titleGraphData?.nodes) ? titleGraphData.nodes : [];
         const graphEdges = Array.isArray(titleGraphData?.edges) ? titleGraphData.edges : [];
         const levelByNodeId = titleGraphData?.levelByNodeId || {};
-        sceneManagerRef.current.showTitleDetail(
+        const renderPromise = sceneManager.showTitleDetail(
             currentTitleDetail,
             graphNodes,
             graphEdges,
@@ -2408,149 +2634,58 @@ const App = () => {
             clickedNodeForTransition,
             getNodeDetailButtonContext(currentTitleDetail)
         );
-        setClickedNodeForTransition(null);
+
+        Promise.resolve(renderPromise).finally(() => {
+            if (!cancelled && sceneManagerRef.current === sceneManager) {
+                setClickedNodeForTransition(null);
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
 	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	    }, [isWebGLReady, view, currentTitleDetail, titleGraphData, clickedNodeForTransition, knowledgeMainViewMode]);
+	    }, [isWebGLReady, view, currentTitleDetail, titleGraphData, clickedNodeForTransition, knowledgeMainViewMode, webglCanvasElement]);
 
     useEffect(() => {
-        if (!sceneManagerRef.current || !isWebGLReady) return;
+        const sceneManager = sceneManagerRef.current;
+        if (!sceneManager || !isWebGLReady || sceneManagerCanvasRef.current !== webglCanvasElement) return;
         if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
 
         if (view === 'titleDetail' && currentStarMapLayer === STAR_MAP_LAYER.TITLE && titleStarMapData) {
-            sceneManagerRef.current.showStarMap('titleDetail', titleStarMapData, clickedNodeForTransition);
-            setClickedNodeForTransition(null);
+            let cancelled = false;
+            const renderPromise = sceneManager.showStarMap('titleDetail', titleStarMapData, clickedNodeForTransition);
+            Promise.resolve(renderPromise).finally(() => {
+                if (!cancelled && sceneManagerRef.current === sceneManager) {
+                    setClickedNodeForTransition(null);
+                }
+            });
+            return () => {
+                cancelled = true;
+            };
         }
-    }, [clickedNodeForTransition, currentStarMapLayer, isWebGLReady, knowledgeMainViewMode, titleStarMapData, view]);
+        return undefined;
+    }, [clickedNodeForTransition, currentStarMapLayer, isWebGLReady, knowledgeMainViewMode, titleStarMapData, view, webglCanvasElement]);
 
     useEffect(() => {
-        if (!sceneManagerRef.current || !isWebGLReady) return;
+        const sceneManager = sceneManagerRef.current;
+        if (!sceneManager || !isWebGLReady || sceneManagerCanvasRef.current !== webglCanvasElement) return;
         if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
 
         if (view === 'nodeDetail' && currentStarMapLayer === STAR_MAP_LAYER.SENSE && nodeStarMapData) {
-            sceneManagerRef.current.showStarMap('nodeDetail', nodeStarMapData, clickedNodeForTransition);
-            setClickedNodeForTransition(null);
+            let cancelled = false;
+            const renderPromise = sceneManager.showStarMap('nodeDetail', nodeStarMapData, clickedNodeForTransition);
+            Promise.resolve(renderPromise).finally(() => {
+                if (!cancelled && sceneManagerRef.current === sceneManager) {
+                    setClickedNodeForTransition(null);
+                }
+            });
+            return () => {
+                cancelled = true;
+            };
         }
-    }, [clickedNodeForTransition, currentStarMapLayer, isWebGLReady, knowledgeMainViewMode, nodeStarMapData, view]);
-
-    useEffect(() => {
-        const canvas = webglCanvasRef.current;
-        if (!canvas || !isWebGLReady) return undefined;
-        if (!isKnowledgeDetailView(view)) return undefined;
-
-        const enterStarMapMode = async () => {
-            if (view === 'titleDetail' && currentTitleDetail?._id) {
-                await fetchTitleStarMap(currentTitleDetail._id, {
-                    silent: false
-                });
-                return;
-            }
-
-            if (view === 'nodeDetail' && currentNodeDetail?._id) {
-                await fetchSenseStarMap(currentNodeDetail._id, currentNodeDetail?.activeSenseId || '', {
-                    silent: false
-                });
-            }
-        };
-
-        const exitStarMapMode = async () => {
-            if (knowledgeMainViewMode !== KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP) return;
-
-            if (view === 'titleDetail') {
-                const targetNodeId = normalizeObjectId(currentStarMapCenter?.nodeId || currentTitleDetail?._id);
-                const currentNodeId = normalizeObjectId(currentTitleDetail?._id);
-                if (!targetNodeId) {
-                    clearStarMapState();
-                    return;
-                }
-                if (targetNodeId === currentNodeId) {
-                    clearStarMapState();
-                    return;
-                }
-                const clickedNode = buildClickedNodeFromScene(targetNodeId);
-                const result = await fetchTitleDetail(targetNodeId, clickedNode, {
-                    historyIndex: Math.max(0, (navigationPath?.length || 1) - 1),
-                    requestSource: 'star-map-exit',
-                    keepStarMapState: true,
-                    silent: true
-                });
-                if (result) {
-                    clearStarMapState();
-                }
-                return;
-            }
-
-            if (view === 'nodeDetail') {
-                const targetNodeId = normalizeObjectId(currentStarMapCenter?.nodeId || currentNodeDetail?._id);
-                const targetSenseId = typeof currentStarMapCenter?.senseId === 'string' && currentStarMapCenter.senseId.trim()
-                    ? currentStarMapCenter.senseId.trim()
-                    : (typeof currentNodeDetail?.activeSenseId === 'string' ? currentNodeDetail.activeSenseId.trim() : '');
-                const currentNodeId = normalizeObjectId(currentNodeDetail?._id);
-                const currentSenseId = typeof currentNodeDetail?.activeSenseId === 'string' ? currentNodeDetail.activeSenseId.trim() : '';
-                if (!targetNodeId) {
-                    clearStarMapState();
-                    return;
-                }
-                if (targetNodeId === currentNodeId && targetSenseId === currentSenseId) {
-                    clearStarMapState();
-                    return;
-                }
-                const targetVertexKey = toSenseVertexKey(targetNodeId, targetSenseId);
-                const clickedNode = buildClickedNodeFromScene(targetNodeId, {
-                    predicate: (sceneNode) => (
-                        normalizeObjectId(sceneNode?.data?._id) === targetNodeId
-                        && getSenseNodeKey(sceneNode?.data || {}) === targetVertexKey
-                    )
-                });
-                const result = await fetchNodeDetail(targetNodeId, clickedNode, {
-                    historyIndex: Math.max(0, (navigationPath?.length || 1) - 1),
-                    requestSource: 'star-map-exit',
-                    keepStarMapState: true,
-                    silent: true,
-                    activeSenseId: targetSenseId
-                });
-                if (result) {
-                    clearStarMapState();
-                }
-            }
-        };
-
-        const handleWheel = (event) => {
-            const deltaY = Number(event.deltaY) || 0;
-            if (Math.abs(deltaY) < 16 || isStarMapLoading) return;
-
-            if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.MAIN && deltaY > 0) {
-                event.preventDefault();
-                enterStarMapMode();
-                return;
-            }
-
-            if (knowledgeMainViewMode === KNOWLEDGE_MAIN_VIEW_MODE.STAR_MAP && deltaY < 0) {
-                event.preventDefault();
-                exitStarMapMode();
-            }
-        };
-
-        canvas.addEventListener('wheel', handleWheel, { passive: false });
-        return () => {
-            canvas.removeEventListener('wheel', handleWheel);
-        };
-    }, [
-        buildClickedNodeFromScene,
-        clearStarMapState,
-        currentNodeDetail,
-        currentStarMapCenter,
-        currentStarMapLimit,
-        currentTitleDetail,
-        fetchNodeDetail,
-        fetchSenseStarMap,
-        fetchTitleDetail,
-        fetchTitleStarMap,
-        isStarMapLoading,
-        isWebGLReady,
-        knowledgeMainViewMode,
-        navigationPath,
-        view
-    ]);
+        return undefined;
+    }, [clickedNodeForTransition, currentStarMapLayer, isWebGLReady, knowledgeMainViewMode, nodeStarMapData, view, webglCanvasElement]);
 
     useEffect(() => {
         if (!sceneManagerRef.current) return;
@@ -2566,7 +2701,14 @@ const App = () => {
             return;
         }
         if (view === 'nodeDetail' && currentNodeDetail) {
-            sceneManagerRef.current.setupSenseDetailButton(currentNodeDetail);
+            sceneManagerRef.current.setupCenterNodeButtons(
+                currentNodeDetail,
+                {
+                    ...getNodeDetailButtonContext(currentNodeDetail),
+                    senseFocus: true,
+                    showSenseEntryButton: true
+                }
+            );
             return;
         }
         if (view !== 'titleDetail' && view !== 'nodeDetail') {
@@ -2621,8 +2763,7 @@ const App = () => {
         setShowNodeInfoModal,
         setNodeInfoModalTarget,
         setIsSenseSelectorVisible,
-        prepareHomeDetailTransitionTarget,
-        cancelHomeDetailTransition: () => clearHomeDetailTransition({ immediate: true }),
+        cancelHomeDetailTransition: () => {},
         buildClickedNodeFromScene,
         fetchTitleDetail,
         fetchNodeDetail,
@@ -2658,6 +2799,11 @@ const App = () => {
     const headerKnowledgeBalance = Number.isFinite(Number(headerUserStats.knowledgeBalance))
       ? Math.max(0, Number(headerUserStats.knowledgeBalance))
       : 0;
+    const isBattleShellImmersive = (
+      (view === 'trainingGround' && !isAdmin) ||
+      Boolean(pveBattleState?.open) ||
+      Boolean(siegeBattlefieldPreviewState?.open)
+    );
 
     return (
         <UserCardProvider
@@ -2676,10 +2822,10 @@ const App = () => {
             onUnblockUser={handleUnblockUserFromUserCard}
         >
         <div
-            className={`game-container ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''} ${view === 'home' ? 'home-view-active' : ''} ${(view === 'titleDetail' || view === 'nodeDetail') ? 'knowledge-mainview-active' : ''} ${isSenseArticleSubView(view) ? 'sense-article-shell-active' : ''} ${isSenseArticleHeaderPinned ? 'sense-article-shell-pinned' : ''}`}
+            className={`game-container ${isBattleShellImmersive ? 'battle-shell-immersive' : ''} ${isKnowledgeDomainActive ? 'knowledge-domain-active' : ''} ${isSenseSelectorVisible ? 'sense-selector-open' : ''} ${view === 'home' ? 'home-view-active' : ''} ${(view === 'titleDetail' || view === 'nodeDetail') ? 'knowledge-mainview-active' : ''} ${isSenseArticleSubView(view) ? 'sense-article-shell-active' : ''} ${isSenseArticleHeaderPinned ? 'sense-article-shell-pinned' : ''}`}
             style={{
-              '--knowledge-header-offset': `${knowledgeHeaderOffset}px`,
-              '--knowledge-domain-top-offset': isKnowledgeDomainActive ? `${knowledgeHeaderOffset}px` : '0px'
+              '--knowledge-header-offset': isBattleShellImmersive ? '0px' : `${knowledgeHeaderOffset}px`,
+              '--knowledge-domain-top-offset': isKnowledgeDomainActive && !isBattleShellImmersive ? `${knowledgeHeaderOffset}px` : '0px'
             }}
         >
             <div className="game-content">
@@ -2687,6 +2833,7 @@ const App = () => {
                     headerRef={headerRef}
                     isKnowledgeDomainActive={isKnowledgeDomainActive}
                     isCompact={isSenseArticleSubView(view) && isSenseArticleHeaderPinned}
+                    hideShellNavigation={isBattleShellImmersive}
                     profession={profession}
                     username={username}
                     userAvatar={userAvatar}
@@ -2742,6 +2889,9 @@ const App = () => {
                     showKnowledgeDomain={showKnowledgeDomain}
                     isTransitioningToDomain={isTransitioningToDomain}
                     view={view}
+                    knowledgeMainViewMode={knowledgeMainViewMode}
+                    isKnowledgeModeDialBusy={isStarMapLoading}
+                    onRequestKnowledgeMainViewMode={handleKnowledgeModeDialRequest}
                     currentTitleDetail={currentTitleDetail}
                     currentNodeDetail={currentNodeDetail}
                     isAnnouncementDockExpanded={isAnnouncementDockExpanded}
@@ -2904,7 +3054,7 @@ const App = () => {
                 <Suspense fallback={null}>
                     <KnowledgeViewRouter
                         view={view}
-                        webglCanvasRef={webglCanvasRef}
+                        webglCanvasRef={handleWebglCanvasRef}
                         navigationPath={navigationPath}
                         currentTitleDetail={currentTitleDetail}
                         titleGraphData={titleGraphData}
@@ -2916,6 +3066,7 @@ const App = () => {
                         isStarMapLoading={isStarMapLoading}
                         starMapZoomState={starMapZoomState}
                         onStarMapZoomChange={handleStarMapZoomChange}
+                        onKnowledgeModeRequest={handleKnowledgeModeDialRequest}
                         titleRelationInfo={titleRelationInfo}
                         onCloseTitleRelationInfo={() => setTitleRelationInfo(null)}
                         searchQuery={homeSearchQuery}
@@ -2990,14 +3141,6 @@ const App = () => {
                     openSenseArticleFromNode={openSenseArticleFromNode}
                     onClose={dismissSenseSelector}
                 />
-                <Suspense fallback={null}>
-                    <TransitionGhostLayer
-                        transition={homeDetailTransition}
-                        onStatusChange={handleGhostStatusChange}
-                        onSettleProgress={handleGhostSettleProgress}
-                        onSettleComplete={handleGhostSettleComplete}
-                    />
-                </Suspense>
                 {view === "alliance" && (
                     <Suspense fallback={null}>
                         <AlliancePanel 
@@ -3047,6 +3190,11 @@ const App = () => {
                         <TrainingGroundPanel onExit={navigateToHomeWithDockCollapse} />
                     </Suspense>
                 )}
+                {view === "cityWorkshop" && !isAdmin && (
+                    <Suspense fallback={null}>
+                        <CityWorkshopPage />
+                    </Suspense>
+                )}
                 {view === "jinzhi" && (
                     <Suspense fallback={null}>
                         <KnowledgeBrocadeWorkspacePage
@@ -3067,6 +3215,7 @@ const App = () => {
                  !(view === "army" && !isAdmin) &&
                  !(view === "equipment" && !isAdmin) &&
                  !(view === "trainingGround" && !isAdmin) &&
+                 !(view === "cityWorkshop" && !isAdmin) &&
                  view !== "jinzhi" &&
                  !isSenseArticleSubView(view) && (
                     <div className="no-pending-nodes">

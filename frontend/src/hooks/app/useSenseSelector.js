@@ -23,7 +23,6 @@ const useSenseSelector = ({
   isSenseSelectorVisible,
   senseSelectorOverviewNode,
   senseArticleEntryStatusMap,
-  armHomeDetailTransition,
   setTitleRelationInfo,
   setSenseSelectorSourceNode,
   setSenseSelectorSourceSceneNodeId,
@@ -116,7 +115,6 @@ const useSenseSelector = ({
     setTitleRelationInfo(null);
     setSenseSelectorSourceNode(node);
     setSenseSelectorSourceSceneNodeId('');
-    armHomeDetailTransition(node, anchorElement);
     if (anchorElement) {
       updateSenseSelectorAnchorByElement(anchorElement);
     }
@@ -129,7 +127,6 @@ const useSenseSelector = ({
       setIsSenseSelectorVisible(true);
     }
   }, [
-    armHomeDetailTransition,
     setIsSenseSelectorVisible,
     setSenseSelectorSourceNode,
     setSenseSelectorSourceSceneNodeId,

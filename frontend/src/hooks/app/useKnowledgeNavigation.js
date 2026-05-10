@@ -9,6 +9,39 @@ import {
   normalizeObjectId
 } from '../../app/appShared';
 
+const normalizeNodeDetailActiveSense = (node = null, requestedSenseId = '', clickedNode = null) => {
+  if (!node || typeof node !== 'object') return node;
+  const clickData = clickedNode?.data && typeof clickedNode.data === 'object' ? clickedNode.data : {};
+  const requestedId = typeof requestedSenseId === 'string' ? requestedSenseId.trim() : '';
+  const responseId = typeof node?.activeSenseId === 'string' ? node.activeSenseId.trim() : '';
+  const clickedId = typeof clickData?.activeSenseId === 'string' ? clickData.activeSenseId.trim() : '';
+  const activeSenseId = requestedId || responseId || clickedId;
+  const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+  const matchedSense = activeSenseId
+    ? senses.find((item) => String(item?.senseId || '').trim() === activeSenseId)
+    : null;
+  const clickedMatchesActive = !!activeSenseId && clickedId === activeSenseId;
+  const resolvedTitle = (
+    (typeof matchedSense?.title === 'string' && matchedSense.title.trim())
+    || (clickedMatchesActive && typeof clickData?.activeSenseTitle === 'string' ? clickData.activeSenseTitle.trim() : '')
+    || (requestedId && responseId !== requestedId ? '' : (typeof node?.activeSenseTitle === 'string' ? node.activeSenseTitle.trim() : ''))
+    || (typeof senses[0]?.title === 'string' ? senses[0].title.trim() : '')
+  );
+  const resolvedContent = (
+    (typeof matchedSense?.content === 'string' ? matchedSense.content : '')
+    || (clickedMatchesActive && typeof clickData?.activeSenseContent === 'string' ? clickData.activeSenseContent : '')
+    || (requestedId && responseId !== requestedId ? '' : (typeof node?.activeSenseContent === 'string' ? node.activeSenseContent : ''))
+  );
+
+  if (!activeSenseId && !resolvedTitle && !resolvedContent) return node;
+  return {
+    ...node,
+    activeSenseId: activeSenseId || responseId,
+    activeSenseTitle: resolvedTitle || node.activeSenseTitle || '',
+    activeSenseContent: resolvedContent || node.activeSenseContent || ''
+  };
+};
+
 const useKnowledgeNavigation = ({
   view,
   currentNodeDetail,
@@ -395,7 +428,8 @@ const useKnowledgeNavigation = ({
       }
       if (response.ok) {
         const data = await response.json();
-        const targetNodeId = normalizeObjectId(data?.node?._id);
+        const detailNode = normalizeNodeDetailActiveSense(data?.node, requestedSenseId, clickedNode);
+        const targetNodeId = normalizeObjectId(detailNode?._id);
         if (!isPrimaryNavigationRequestCurrent(request)) {
           return null;
         }
@@ -414,11 +448,11 @@ const useKnowledgeNavigation = ({
         if (!isSenseOnlySwitch) {
           setIsSenseSelectorVisible(false);
         }
-        trackRecentDomain(data.node, {
+        trackRecentDomain(detailNode, {
           mode: 'sense',
-          senseId: typeof data?.node?.activeSenseId === 'string' ? data.node.activeSenseId : ''
+          senseId: typeof detailNode?.activeSenseId === 'string' ? detailNode.activeSenseId : ''
         });
-        setCurrentNodeDetail(data.node);
+        setCurrentNodeDetail(detailNode);
         setCurrentTitleDetail(null);
         setTitleGraphData(null);
         setTitleRelationInfo(null);
@@ -443,7 +477,7 @@ const useKnowledgeNavigation = ({
             const lastHistory = nextPath[nextPath.length - 1];
             if (lastHistory?.type === 'node') {
               const nextItem = buildNavigationTrailItem(
-                data?.node || {},
+                detailNode || {},
                 lastHistory.relation,
                 { mode: 'sense' }
               );
@@ -452,7 +486,7 @@ const useKnowledgeNavigation = ({
                 {
                   ...lastHistory,
                   mode: 'sense',
-                  senseId: typeof data?.node?.activeSenseId === 'string' ? data.node.activeSenseId : (lastHistory.senseId || ''),
+                  senseId: typeof detailNode?.activeSenseId === 'string' ? detailNode.activeSenseId : (lastHistory.senseId || ''),
                   label: nextItem?.label || lastHistory.label
                 }
               ];
@@ -460,7 +494,7 @@ const useKnowledgeNavigation = ({
             return nextPath;
           }
 
-          const targetNavItem = buildNavigationTrailItem(data.node, relation, { mode: 'sense' });
+          const targetNavItem = buildNavigationTrailItem(detailNode, relation, { mode: 'sense' });
           if (!targetNavItem) return safePath;
 
           if (shouldResetTrail) {
@@ -481,7 +515,7 @@ const useKnowledgeNavigation = ({
 
           return [...safePath, targetNavItem];
         });
-        return data.node;
+        return detailNode;
       }
 
       if (shouldAlert) {

@@ -19,6 +19,7 @@ import {
 } from '../senseArticle/senseArticleUi';
 import ChatDockPanel from '../chat/ChatDockPanel';
 import CurrentDomainPanel from '../game/CurrentDomainPanel';
+import KnowledgeModeDial from '../game/KnowledgeModeDial';
 import MessageDockPanel from '../game/MessageDockPanel';
 import RightUtilityDock from '../game/RightUtilityDock';
 import KnowledgeBrocadeDockPanel from '../knowledgeBrocade/KnowledgeBrocadeDockPanel';
@@ -62,6 +63,7 @@ export const GameHeader = ({
     showMilitaryMenu,
     onOpenArmy,
     onOpenTrainingGround,
+    onOpenCityWorkshop,
     onOpenEquipment,
     onOpenAdmin
 }) => (
@@ -163,6 +165,9 @@ export const GameHeader = ({
                                         <button type="button" className="military-menu-item" onClick={onOpenTrainingGround}>
                                             训练场
                                         </button>
+                                        <button type="button" className="military-menu-item" onClick={onOpenCityWorkshop}>
+                                            城内工坊
+                                        </button>
                                         <button type="button" className="military-menu-item" onClick={onOpenEquipment}>
                                             装备库
                                         </button>
@@ -194,73 +199,99 @@ const MobileBottomBar = ({
     militaryMenuPanel,
     isAdmin,
     activeView,
+    showKnowledgeModeDial,
+    knowledgeMainViewMode,
+    isKnowledgeModeDialBusy,
+    onRequestKnowledgeMainViewMode,
     onHomeClick,
     onToggleRelatedDomains,
     onAllianceClick,
     onToggleMilitaryMenu,
     onOpenAdmin,
     onProfileClick
-}) => (
-    <div className="mobile-bottom-bar" aria-label="移动端主导航">
-        <div className="mobile-bottom-bar__shell">
-            <button
-                type="button"
-                className={`mobile-bottom-bar__btn${activeView === 'home' ? ' is-active' : ''}`}
-                onClick={onHomeClick}
-            >
-                <span className="mobile-bottom-bar__icon"><Home size={17} /></span>
-                <span className="mobile-bottom-bar__label">首页</span>
-            </button>
+}) => {
+    const hasDockedModeDial = showKnowledgeModeDial;
+    const barStateClassName = knowledgeMainViewMode === 'starMap' ? 'is-star-map' : 'is-main-view';
+    const getButtonClassName = (role, isActive) => [
+        'mobile-bottom-bar__btn',
+        isActive ? 'is-active' : '',
+        hasDockedModeDial ? `mobile-bottom-bar__btn--${role}` : ''
+    ].filter(Boolean).join(' ');
 
-            <div className="mobile-bottom-bar__slot" ref={relatedDomainsWrapperRef}>
+    return (
+        <div
+            className={`mobile-bottom-bar${hasDockedModeDial ? ' has-mode-dial' : ''} ${barStateClassName}`.trim()}
+            aria-label="移动端主导航"
+        >
+            <div className={`mobile-bottom-bar__floating-accessory${hasDockedModeDial ? ' is-visible' : ''}`}>
+                <KnowledgeModeDial
+                    mode={knowledgeMainViewMode}
+                    isBusy={isKnowledgeModeDialBusy}
+                    isHidden={!hasDockedModeDial}
+                    variant="mobile"
+                    onRequestMode={onRequestKnowledgeMainViewMode}
+                />
+            </div>
+            <div className={`mobile-bottom-bar__shell${hasDockedModeDial ? ' has-mode-dial' : ''}`}>
                 <button
                     type="button"
-                    className={`mobile-bottom-bar__btn${activeView === 'related' ? ' is-active' : ''}`}
-                    onClick={onToggleRelatedDomains}
+                    className={getButtonClassName('outer-left', activeView === 'home')}
+                    onClick={onHomeClick}
                 >
-                    <span className="mobile-bottom-bar__icon"><Layers size={17} /></span>
-                    <span className="mobile-bottom-bar__label">我的域</span>
-                    {relatedDomainCount > 0 ? (
-                        <span className="mobile-bottom-bar__badge">
-                            {relatedDomainCount > 99 ? '99+' : relatedDomainCount}
-                        </span>
-                    ) : null}
+                    <span className="mobile-bottom-bar__icon"><Home size={17} /></span>
+                    <span className="mobile-bottom-bar__label">首页</span>
                 </button>
-                {relatedDomainsPanel}
-            </div>
 
-            <button
-                type="button"
-                className={`mobile-bottom-bar__btn${activeView === 'alliance' ? ' is-active' : ''}`}
-                onClick={onAllianceClick}
-            >
-                <span className="mobile-bottom-bar__icon"><Shield size={17} /></span>
-                <span className="mobile-bottom-bar__label">熵盟</span>
-            </button>
+                <div className="mobile-bottom-bar__slot" ref={relatedDomainsWrapperRef}>
+                    <button
+                        type="button"
+                        className={getButtonClassName('near-left', activeView === 'related')}
+                        onClick={onToggleRelatedDomains}
+                    >
+                        <span className="mobile-bottom-bar__icon"><Layers size={17} /></span>
+                        <span className="mobile-bottom-bar__label">我的域</span>
+                        {relatedDomainCount > 0 ? (
+                            <span className="mobile-bottom-bar__badge">
+                                {relatedDomainCount > 99 ? '99+' : relatedDomainCount}
+                            </span>
+                        ) : null}
+                    </button>
+                    {relatedDomainsPanel}
+                </div>
 
-            <div className="mobile-bottom-bar__slot" ref={militaryMenuWrapperRef}>
                 <button
                     type="button"
-                    className={`mobile-bottom-bar__btn${(isAdmin ? activeView === 'admin' : activeView === 'military') ? ' is-active' : ''}`}
-                    onClick={isAdmin ? onOpenAdmin : onToggleMilitaryMenu}
+                    className={getButtonClassName('mode-center', activeView === 'alliance')}
+                    onClick={onAllianceClick}
                 >
-                    <span className="mobile-bottom-bar__icon"><Users size={17} /></span>
-                    <span className="mobile-bottom-bar__label">{isAdmin ? '管理' : '军事'}</span>
+                    <span className="mobile-bottom-bar__icon"><Shield size={17} /></span>
+                    <span className="mobile-bottom-bar__label">熵盟</span>
                 </button>
-                {!isAdmin && showMilitaryMenu ? militaryMenuPanel : null}
-            </div>
 
-            <button
-                type="button"
-                className={`mobile-bottom-bar__btn${activeView === 'profile' ? ' is-active' : ''}`}
-                onClick={onProfileClick}
-            >
-                <span className="mobile-bottom-bar__icon"><User size={17} /></span>
-                <span className="mobile-bottom-bar__label">我的</span>
-            </button>
+                <div className="mobile-bottom-bar__slot" ref={militaryMenuWrapperRef}>
+                    <button
+                        type="button"
+                        className={getButtonClassName('near-right', isAdmin ? activeView === 'admin' : activeView === 'military')}
+                        onClick={isAdmin ? onOpenAdmin : onToggleMilitaryMenu}
+                    >
+                        <span className="mobile-bottom-bar__icon"><Users size={17} /></span>
+                        <span className="mobile-bottom-bar__label">{isAdmin ? '管理' : '军事'}</span>
+                    </button>
+                    {!isAdmin && showMilitaryMenu ? militaryMenuPanel : null}
+                </div>
+
+                <button
+                    type="button"
+                    className={getButtonClassName('outer-right', activeView === 'profile')}
+                    onClick={onProfileClick}
+                >
+                    <span className="mobile-bottom-bar__icon"><User size={17} /></span>
+                    <span className="mobile-bottom-bar__label">我的</span>
+                </button>
+            </div>
         </div>
-    </div>
-);
+    );
+};
 
 export const RelatedDomainsPanel = ({
     showRelatedDomainsPanel,
@@ -363,6 +394,9 @@ export const UnifiedRightDock = ({
     showKnowledgeDomain,
     isTransitioningToDomain,
     view,
+    knowledgeMainViewMode,
+    isKnowledgeModeDialBusy,
+    onRequestKnowledgeMainViewMode,
     currentTitleDetail,
     currentNodeDetail,
     isAnnouncementDockExpanded,
@@ -861,6 +895,7 @@ export const AppShellChrome = ({
     headerRef,
     isKnowledgeDomainActive,
     isCompact,
+    hideShellNavigation = false,
     profession,
     username,
     userAvatar,
@@ -902,6 +937,9 @@ export const AppShellChrome = ({
     showKnowledgeDomain,
     isTransitioningToDomain,
     view,
+    knowledgeMainViewMode,
+    isKnowledgeModeDialBusy,
+    onRequestKnowledgeMainViewMode,
     currentTitleDetail,
     currentNodeDetail,
     isAnnouncementDockExpanded,
@@ -959,6 +997,9 @@ export const AppShellChrome = ({
 }) => {
     const [isMobileLayout, setIsMobileLayout] = useState(readIsMobileShell);
     const shouldPromoteSceneTopPanel = isMobileLayout && (view === 'home' || view === 'nodeDetail' || view === 'titleDetail');
+    const shouldShowKnowledgeModeDial = !showKnowledgeDomain
+        && !isTransitioningToDomain
+        && isKnowledgeDetailView(view);
 
     useEffect(() => {
         const handleResize = () => setIsMobileLayout(readIsMobileShell());
@@ -1028,6 +1069,13 @@ export const AppShellChrome = ({
         setView('trainingGround');
     };
 
+    const onOpenCityWorkshop = async () => {
+        setShowMilitaryMenu(false);
+        await collapseExpandedRightDockPanels();
+        await prepareForPrimaryNavigation();
+        setView('cityWorkshop');
+    };
+
     const onOpenEquipment = async () => {
         setShowMilitaryMenu(false);
         await collapseExpandedRightDockPanels();
@@ -1051,6 +1099,9 @@ export const AppShellChrome = ({
                     <button type="button" className="military-menu-item" onClick={onOpenTrainingGround}>
                         训练场
                     </button>
+                    <button type="button" className="military-menu-item" onClick={onOpenCityWorkshop}>
+                        城内工坊
+                    </button>
                     <button type="button" className="military-menu-item" onClick={onOpenEquipment}>
                         装备库
                     </button>
@@ -1065,49 +1116,52 @@ export const AppShellChrome = ({
 
     return (
     <>
-        <GameHeader
-            headerRef={headerRef}
-            isKnowledgeDomainActive={isKnowledgeDomainActive}
-            isCompact={isCompact}
-            isMobileLayout={isMobileLayout}
-            isMobileSuppressed={shouldPromoteSceneTopPanel}
-            profession={profession}
-            username={username}
-            userAvatar={userAvatar}
-            headerLevel={headerLevel}
-            headerExpProgress={headerExpProgress}
-            headerExperience={headerExperience}
-            headerExpTarget={headerExpTarget}
-            headerArmyCount={headerArmyCount}
-            headerKnowledgeBalance={headerKnowledgeBalance}
-            onProfileClick={openOwnProfile}
-            onLogout={handleLogout}
-            relatedDomainsWrapperRef={relatedDomainsWrapperRef}
-            onToggleRelatedDomains={toggleRelatedDomainsPanel}
-            relatedDomainCount={relatedDomainCount}
-            relatedDomainsPanel={isMobileLayout ? null : relatedDomainsPanelNode}
-            onHomeClick={async () => {
-                closeHeaderPanels();
-                await collapseExpandedRightDockPanels();
-                await handleHeaderHomeNavigation();
-            }}
-            onAllianceClick={async () => {
-                closeHeaderPanels();
-                await collapseExpandedRightDockPanels();
-                await prepareForPrimaryNavigation();
-                setView('alliance');
-            }}
-            isAdmin={isAdmin}
-            militaryMenuWrapperRef={militaryMenuWrapperRef}
-            onToggleMilitaryMenu={toggleMilitaryMenu}
-            showMilitaryMenu={showMilitaryMenu}
-            onOpenArmy={onOpenArmy}
-            onOpenTrainingGround={onOpenTrainingGround}
-            onOpenEquipment={onOpenEquipment}
-            onOpenAdmin={onOpenAdmin}
-        />
+        {!hideShellNavigation ? (
+            <GameHeader
+                headerRef={headerRef}
+                isKnowledgeDomainActive={isKnowledgeDomainActive}
+                isCompact={isCompact}
+                isMobileLayout={isMobileLayout}
+                isMobileSuppressed={shouldPromoteSceneTopPanel}
+                profession={profession}
+                username={username}
+                userAvatar={userAvatar}
+                headerLevel={headerLevel}
+                headerExpProgress={headerExpProgress}
+                headerExperience={headerExperience}
+                headerExpTarget={headerExpTarget}
+                headerArmyCount={headerArmyCount}
+                headerKnowledgeBalance={headerKnowledgeBalance}
+                onProfileClick={openOwnProfile}
+                onLogout={handleLogout}
+                relatedDomainsWrapperRef={relatedDomainsWrapperRef}
+                onToggleRelatedDomains={toggleRelatedDomainsPanel}
+                relatedDomainCount={relatedDomainCount}
+                relatedDomainsPanel={isMobileLayout ? null : relatedDomainsPanelNode}
+                onHomeClick={async () => {
+                    closeHeaderPanels();
+                    await collapseExpandedRightDockPanels();
+                    await handleHeaderHomeNavigation();
+                }}
+                onAllianceClick={async () => {
+                    closeHeaderPanels();
+                    await collapseExpandedRightDockPanels();
+                    await prepareForPrimaryNavigation();
+                    setView('alliance');
+                }}
+                isAdmin={isAdmin}
+                militaryMenuWrapperRef={militaryMenuWrapperRef}
+                onToggleMilitaryMenu={toggleMilitaryMenu}
+                showMilitaryMenu={showMilitaryMenu}
+                onOpenArmy={onOpenArmy}
+                onOpenTrainingGround={onOpenTrainingGround}
+                onOpenCityWorkshop={onOpenCityWorkshop}
+                onOpenEquipment={onOpenEquipment}
+                onOpenAdmin={onOpenAdmin}
+            />
+        ) : null}
 
-        {isMobileLayout ? (
+        {isMobileLayout && !hideShellNavigation ? (
             <MobileBottomBar
                 relatedDomainsWrapperRef={relatedDomainsWrapperRef}
                 militaryMenuWrapperRef={militaryMenuWrapperRef}
@@ -1125,6 +1179,10 @@ export const AppShellChrome = ({
                             ? 'military'
                             : view
                 }
+                showKnowledgeModeDial={shouldShowKnowledgeModeDial}
+                knowledgeMainViewMode={knowledgeMainViewMode}
+                isKnowledgeModeDialBusy={isKnowledgeModeDialBusy}
+                onRequestKnowledgeMainViewMode={onRequestKnowledgeMainViewMode}
                 onHomeClick={async () => {
                     closeHeaderPanels();
                     await collapseExpandedRightDockPanels();

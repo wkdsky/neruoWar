@@ -19,6 +19,12 @@ export const getNodeDisplayName = (node) => {
 };
 
 export const getNodeSenseTitle = (node) => {
+  const activeSenseId = typeof node?.activeSenseId === 'string' ? node.activeSenseId.trim() : '';
+  const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+  if (activeSenseId) {
+    const matched = senses.find((item) => item?.senseId === activeSenseId);
+    if (typeof matched?.title === 'string' && matched.title.trim()) return matched.title.trim();
+  }
   if (typeof node?.activeSenseTitle === 'string' && node.activeSenseTitle.trim()) return node.activeSenseTitle.trim();
   const sense = getNodePrimarySense(node);
   return typeof sense?.title === 'string' ? sense.title.trim() : '';

@@ -16,7 +16,6 @@ const readViewport = () => {
 };
 
 const Home = ({
-  webglCanvasRef,
   searchQuery,
   onSearchChange,
   onSearchFocus,
@@ -77,7 +76,7 @@ const Home = ({
         <div className="home-background-grid" />
         <div className="home-background-stars" />
         <div className="webgl-scene-container home-scene-shell">
-          <canvas ref={webglCanvasRef} className="webgl-canvas home-atmosphere-canvas" />
+          <canvas className="webgl-canvas home-atmosphere-canvas" />
         </div>
       </div>
 

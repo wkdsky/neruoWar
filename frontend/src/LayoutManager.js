@@ -23,24 +23,80 @@ import {
   radialDagLayout
 } from './starMap/starMapRadialDagLayout';
 
+const HEX_AXIAL_X_FACTOR = Math.sqrt(3);
+
+const clampLayoutValue = (value, min, max) => Math.max(min, Math.min(max, value));
+
+const TITLE_DETAIL_HEX_SLOT_PREFERENCE = [
+  { axialQ: 1, axialR: 0 },
+  { axialQ: 1, axialR: -1 },
+  { axialQ: 0, axialR: 1 },
+  { axialQ: 0, axialR: -1 },
+  { axialQ: -1, axialR: 1 },
+  { axialQ: -1, axialR: 0 },
+  { axialQ: 2, axialR: 0 },
+  { axialQ: 2, axialR: -1 },
+  { axialQ: 1, axialR: 1 },
+  { axialQ: 1, axialR: -2 },
+  { axialQ: 0, axialR: 2 },
+  { axialQ: 0, axialR: -2 },
+  { axialQ: -1, axialR: 2 },
+  { axialQ: -1, axialR: -1 },
+  { axialQ: -2, axialR: 2 },
+  { axialQ: -2, axialR: 1 },
+  { axialQ: -2, axialR: 0 },
+  { axialQ: 2, axialR: -2 }
+];
+
 class LayoutManager {
   constructor(width, height) {
     this.width = width;
     this.height = height;
     this.centerX = width / 2;
     this.centerY = height / 2;
+    this.viewportInsets = {
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0
+    };
   }
 
   resolveNodeLabel(node = {}, options = {}) {
     const includeSense = options?.includeSense !== false;
     const title = typeof node?.name === 'string' ? node.name.trim() : '';
-    const senseTitle = typeof node?.activeSenseTitle === 'string'
-      ? node.activeSenseTitle.trim()
-      : '';
+    const senseTitle = this.resolveActiveSenseTitle(node);
     if (includeSense && title && senseTitle) {
       return `${title}\n${senseTitle}`;
     }
     return title || '未命名知识域';
+  }
+
+  resolveActiveSenseTitle(node = {}) {
+    const activeSenseId = typeof node?.activeSenseId === 'string'
+      ? node.activeSenseId.trim()
+      : '';
+    const senses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+    if (activeSenseId) {
+      const matchedSense = senses.find((item) => String(item?.senseId || '').trim() === activeSenseId);
+      const matchedTitle = typeof matchedSense?.title === 'string' ? matchedSense.title.trim() : '';
+      if (matchedTitle) return matchedTitle;
+    }
+    const activeSenseTitle = typeof node?.activeSenseTitle === 'string'
+      ? node.activeSenseTitle.trim()
+      : '';
+    if (activeSenseTitle) return activeSenseTitle;
+    const fallbackSense = senses.find((item) => typeof item?.title === 'string' && item.title.trim());
+    return typeof fallbackSense?.title === 'string' ? fallbackSense.title.trim() : '';
+  }
+
+  resolveSenseFocusLabel(node = {}) {
+    const title = typeof node?.name === 'string' ? node.name.trim() : '';
+    const senseTitle = this.resolveActiveSenseTitle(node);
+    if (senseTitle && title) {
+      return `${senseTitle}\n${title}`;
+    }
+    return senseTitle || title || '未命名释义';
   }
 
   resize(width, height) {
@@ -48,6 +104,256 @@ class LayoutManager {
     this.height = height;
     this.centerX = width / 2;
     this.centerY = height / 2;
+  }
+
+  setViewportInsets(insets = {}) {
+    const maxHorizontalInset = Math.max(0, this.width - 1);
+    const maxVerticalInset = Math.max(0, this.height - 1);
+    this.viewportInsets = {
+      top: Math.max(0, Math.min(maxVerticalInset, Number(insets.top) || 0)),
+      right: Math.max(0, Math.min(maxHorizontalInset, Number(insets.right) || 0)),
+      bottom: Math.max(0, Math.min(maxVerticalInset, Number(insets.bottom) || 0)),
+      left: Math.max(0, Math.min(maxHorizontalInset, Number(insets.left) || 0))
+    };
+  }
+
+  getViewportFocusCenter() {
+    const left = this.viewportInsets.left || 0;
+    const right = this.viewportInsets.right || 0;
+    const top = this.viewportInsets.top || 0;
+    const bottom = this.viewportInsets.bottom || 0;
+    const availableWidth = Math.max(1, this.width - left - right);
+    const availableHeight = Math.max(1, this.height - top - bottom);
+    return {
+      centerX: left + availableWidth / 2,
+      centerY: top + availableHeight / 2
+    };
+  }
+
+  getViewportContentMetrics() {
+    const left = this.viewportInsets.left || 0;
+    const right = this.viewportInsets.right || 0;
+    const top = this.viewportInsets.top || 0;
+    const bottom = this.viewportInsets.bottom || 0;
+    const availableWidth = Math.max(1, this.width - left - right);
+    const availableHeight = Math.max(1, this.height - top - bottom);
+    const focusCenter = this.getViewportFocusCenter();
+    return {
+      ...focusCenter,
+      left,
+      right,
+      top,
+      bottom,
+      availableWidth,
+      availableHeight
+    };
+  }
+
+  resolveAxialHexPosition(centerX, centerY, hexStep, slot = {}) {
+    const axialQ = Number(slot.axialQ) || 0;
+    const axialR = Number(slot.axialR) || 0;
+    return {
+      x: centerX + HEX_AXIAL_X_FACTOR * hexStep * (axialQ + axialR / 2),
+      y: centerY + 1.5 * hexStep * axialR
+    };
+  }
+
+  resolveFlatTopHexPosition(centerX, centerY, hexStep, slot = {}) {
+    const axialQ = Number(slot.axialQ) || 0;
+    const axialR = Number(slot.axialR) || 0;
+    return {
+      x: centerX + 1.5 * hexStep * axialQ,
+      y: centerY + HEX_AXIAL_X_FACTOR * hexStep * (axialR + axialQ / 2)
+    };
+  }
+
+  buildDetailHexSlots(preferredSlots = [], wantedCount = 0, verticalDirection = 1) {
+    const count = Math.max(0, Number(wantedCount) || 0);
+    const slots = [];
+    const seen = new Set();
+    const addSlot = (slot) => {
+      const axialQ = Number(slot?.axialQ) || 0;
+      const axialR = Number(slot?.axialR) || 0;
+      const key = `${axialQ}:${axialR}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      slots.push({ axialQ, axialR });
+    };
+
+    preferredSlots.forEach((slot) => {
+      if (slots.length < count) addSlot(slot);
+    });
+
+    for (let ringIndex = 2; slots.length < count && ringIndex <= 8; ringIndex += 1) {
+      for (let axialQ = -ringIndex; axialQ <= ringIndex; axialQ += 1) {
+        for (let axialR = -ringIndex; axialR <= ringIndex; axialR += 1) {
+          const axialS = -axialQ - axialR;
+          const axialDistance = Math.max(Math.abs(axialQ), Math.abs(axialR), Math.abs(axialS));
+          if (axialDistance !== ringIndex) continue;
+          const verticalUnit = 1.5 * axialR;
+          if (verticalDirection < 0 && verticalUnit > 0.25) continue;
+          if (verticalDirection > 0 && verticalUnit < -0.25) continue;
+          addSlot({ axialQ, axialR });
+          if (slots.length >= count) break;
+        }
+        if (slots.length >= count) break;
+      }
+    }
+
+    return slots.slice(0, count);
+  }
+
+  buildDetailProjectionPositions(centerX, centerY, count = 0, verticalDirection = 1, options = {}) {
+    const wantedCount = Math.max(0, Number(count) || 0);
+    const positions = [];
+    const hexStep = Math.max(1, Number(options?.hexStep) || 76);
+    const firstDistance = Math.max(hexStep * 1.42, Number(options?.firstDistance) || 0);
+    const rowGap = Math.max(hexStep * 1.26, Number(options?.rowGap) || 0);
+    const columnGap = Math.max(hexStep * 1.58, Number(options?.columnGap) || 0);
+    const direction = verticalDirection < 0 ? -1 : 1;
+    let remaining = wantedCount;
+    let rowIndex = 0;
+
+    while (remaining > 0) {
+      const targetRowSize = rowIndex % 2 === 0 ? 2 : 3;
+      const rowSize = Math.min(remaining, targetRowSize);
+      const xOffsets = rowSize === 1
+        ? [0]
+        : Array.from({ length: rowSize }, (_, index) => (index - (rowSize - 1) / 2) * columnGap);
+      const currentRowIndex = rowIndex;
+      const y = centerY + direction * (firstDistance + rowIndex * rowGap);
+      xOffsets.forEach((offsetX) => {
+        positions.push({
+          x: centerX + offsetX,
+          y,
+          rowIndex: currentRowIndex,
+          rowSize
+        });
+      });
+      remaining -= rowSize;
+      rowIndex += 1;
+    }
+
+    return positions.slice(0, wantedCount);
+  }
+
+  normalizeTitleSenseList(node = {}) {
+    const sourceSenses = Array.isArray(node?.synonymSenses) ? node.synonymSenses : [];
+    const seenSenseIds = new Set();
+    const senses = [];
+
+    sourceSenses.forEach((sense, index) => {
+      const rawSenseId = typeof sense?.senseId === 'string' ? sense.senseId.trim() : '';
+      const senseId = rawSenseId || `sense_${index + 1}`;
+      const title = typeof sense?.title === 'string' ? sense.title.trim() : '';
+      if (!senseId || !title || seenSenseIds.has(senseId)) return;
+      seenSenseIds.add(senseId);
+      senses.push({
+        ...sense,
+        senseId,
+        title,
+        content: typeof sense?.content === 'string' ? sense.content : ''
+      });
+    });
+
+    const activeSenseId = typeof node?.activeSenseId === 'string' ? node.activeSenseId.trim() : '';
+    const activeSenseTitle = typeof node?.activeSenseTitle === 'string' ? node.activeSenseTitle.trim() : '';
+    if (senses.length < 1 && activeSenseTitle) {
+      senses.push({
+        senseId: activeSenseId || 'sense_1',
+        title: activeSenseTitle,
+        content: typeof node?.activeSenseContent === 'string' ? node.activeSenseContent : ''
+      });
+    }
+
+    return senses;
+  }
+
+  buildTitleDetailHexSlots(wantedCount = 0, options = {}) {
+    const count = Math.max(0, Number(wantedCount) || 0);
+    const slots = [];
+    const seen = new Set();
+    const reserveRect = options?.reserveRect || null;
+    const centerX = Number(options?.centerX) || 0;
+    const centerY = Number(options?.centerY) || 0;
+    const hexStep = Math.max(1, Number(options?.hexStep) || 1);
+    const nodeRadius = Math.max(1, Number(options?.nodeRadius) || 1);
+    const isReserved = (slot) => {
+      if (!reserveRect) return false;
+      const point = this.resolveFlatTopHexPosition(centerX, centerY, hexStep, slot);
+      return (
+        point.x > reserveRect.left - nodeRadius
+        && point.x < reserveRect.right + nodeRadius
+        && point.y > reserveRect.top - nodeRadius
+        && point.y < reserveRect.bottom + nodeRadius
+      );
+    };
+    const addSlot = (slot, allowReserved = false) => {
+      const axialQ = Number(slot?.axialQ) || 0;
+      const axialR = Number(slot?.axialR) || 0;
+      if (axialQ === 0 && axialR === 0) return;
+      const key = `${axialQ}:${axialR}`;
+      if (seen.has(key)) return;
+      if (!allowReserved && isReserved({ axialQ, axialR })) return;
+      seen.add(key);
+      slots.push({ axialQ, axialR });
+    };
+
+    TITLE_DETAIL_HEX_SLOT_PREFERENCE.forEach((slot) => {
+      if (slots.length < count) addSlot(slot);
+    });
+
+    for (let ringIndex = 1; slots.length < count && ringIndex <= 9; ringIndex += 1) {
+      const ringSlots = [];
+      for (let axialQ = -ringIndex; axialQ <= ringIndex; axialQ += 1) {
+        for (let axialR = -ringIndex; axialR <= ringIndex; axialR += 1) {
+          const axialS = -axialQ - axialR;
+          const axialDistance = Math.max(Math.abs(axialQ), Math.abs(axialR), Math.abs(axialS));
+          if (axialDistance !== ringIndex) continue;
+          const point = this.resolveFlatTopHexPosition(0, 0, 1, { axialQ, axialR });
+          const angle = Math.atan2(point.y, point.x);
+          const upperLeftPenalty = point.x < -0.1 && point.y < -0.1 ? 10 : 0;
+          const startRightScore = Math.abs(angle);
+          ringSlots.push({
+            axialQ,
+            axialR,
+            sortScore: upperLeftPenalty + startRightScore
+          });
+        }
+      }
+      ringSlots
+        .sort((a, b) => a.sortScore - b.sortScore || a.axialR - b.axialR || a.axialQ - b.axialQ)
+        .forEach((slot) => {
+          if (slots.length < count) addSlot(slot);
+        });
+    }
+
+    for (let ringIndex = 1; slots.length < count && ringIndex <= 9; ringIndex += 1) {
+      for (let axialQ = -ringIndex; axialQ <= ringIndex; axialQ += 1) {
+        for (let axialR = -ringIndex; axialR <= ringIndex; axialR += 1) {
+          const axialS = -axialQ - axialR;
+          const axialDistance = Math.max(Math.abs(axialQ), Math.abs(axialR), Math.abs(axialS));
+          if (axialDistance === ringIndex && slots.length < count) {
+            addSlot({ axialQ, axialR }, true);
+          }
+        }
+      }
+    }
+
+    return slots.slice(0, count);
+  }
+
+  resolveTitleAnchorPosition(metrics, anchorRadius) {
+    const horizontalOffset = clampLayoutValue(metrics.availableWidth * 0.19, 180, 230);
+    const verticalOffset = clampLayoutValue(metrics.availableHeight * 0.012, 0, 20);
+    const minX = metrics.left + anchorRadius + 24;
+    const maxX = this.width - metrics.right - anchorRadius - 24;
+    const minY = metrics.top + anchorRadius + 24;
+    const maxY = this.height - metrics.bottom - anchorRadius - 24;
+    return {
+      x: clampLayoutValue(metrics.centerX - horizontalOffset, minX, maxX),
+      y: clampLayoutValue(metrics.centerY - verticalOffset, minY, maxY)
+    };
   }
 
   buildStarMapLayoutKey(graph = {}, layer = STAR_MAP_LAYER.TITLE) {
@@ -75,6 +381,10 @@ class LayoutManager {
       centerKey,
       this.width,
       this.height,
+      Math.round(this.viewportInsets.left || 0),
+      Math.round(this.viewportInsets.top || 0),
+      Math.round(this.viewportInsets.right || 0),
+      Math.round(this.viewportInsets.bottom || 0),
       graphNodes.length,
       graphEdges.length,
       nodeSignature,
@@ -258,40 +568,116 @@ class LayoutManager {
       lines: []
     };
 
-    // 整体下移偏移量
-    const yOffset = 60;
+    const metrics = this.getViewportContentMetrics();
+    const { centerX, centerY } = metrics;
+    const minContentSide = Math.max(320, Math.min(metrics.availableWidth, metrics.availableHeight));
+    const centerRadius = clampLayoutValue(minContentSide * 0.105, 62, 82);
+    const relationRadius = clampLayoutValue(centerRadius * 0.62, 34, 52);
+    const hexStep = clampLayoutValue(centerRadius * 1.02, 66, 86);
+    const anchorRadius = clampLayoutValue(centerRadius * 0.54, 32, 44);
+    const titleAnchorPosition = this.resolveTitleAnchorPosition(metrics, anchorRadius);
+    const centerLayoutId = `center-${centerNode._id}`;
+    const titleAnchorId = `title-anchor-${centerNode._id}`;
+    const centerFocusLabel = this.resolveSenseFocusLabel(centerNode);
+    const [centerFocusTitleLine = '', ...centerFocusSenseLineParts] = centerFocusLabel.split('\n');
+    const centerFocusSenseLine = centerFocusSenseLineParts.join('\n').trim();
 
     // 中心节点
     layout.nodes.push({
-      id: `center-${centerNode._id}`,
-      x: this.centerX,
-      y: this.centerY + yOffset,
-      radius: 80,
+      id: centerLayoutId,
+      x: centerX,
+      y: centerY,
+      radius: centerRadius,
       scale: 1,
       opacity: 1,
       type: 'center',
-      label: this.resolveNodeLabel(centerNode),
+      label: centerFocusLabel,
       visualStyle: centerNode.visualStyle || null,
       labelColor: centerNode.visualStyle?.textColor || '',
-      data: centerNode,
+      data: {
+        ...centerNode,
+        detailRole: 'sense-focus'
+      },
+      labelMaxWidthStrategy: 'wide',
+      labelTitleLines: centerFocusTitleLine ? [centerFocusTitleLine] : null,
+      labelSenseLines: centerFocusSenseLine ? [centerFocusSenseLine] : null,
+      labelLineClamp: 1,
+      labelSenseLineClamp: 1,
+      shapeMorph: 0,
+      drawOrder: 8,
       visible: true
     });
 
-    // 母域节点 (上半圆)
-    const parentDistance = Math.min(250, this.height * 0.25);
-    const parentRadius = 50;
+    layout.nodes.push({
+      id: titleAnchorId,
+      x: titleAnchorPosition.x,
+      y: titleAnchorPosition.y,
+      radius: anchorRadius,
+      scale: 1,
+      opacity: 0.96,
+      type: 'title-anchor',
+      label: `${this.resolveNodeLabel(centerNode, { includeSense: false })}\n上级知识域`,
+      visualStyle: centerNode.visualStyle || null,
+      labelColor: centerNode.visualStyle?.textColor || '',
+      data: {
+        ...centerNode,
+        detailRole: 'title-anchor'
+      },
+      labelMaxWidthStrategy: 'wide',
+      labelWidthHint: Math.max(54, anchorRadius * 1.62),
+      labelTitleWidthHint: Math.max(52, anchorRadius * 1.48),
+      labelSenseWidthHint: Math.max(48, anchorRadius * 1.42),
+      labelTitleLines: [this.resolveNodeLabel(centerNode, { includeSense: false })],
+      labelSenseLines: ['上级知识域'],
+      labelLineClamp: 2,
+      labelSenseLineClamp: 1,
+      shapeMorph: 0,
+      drawOrder: 7,
+      visible: true
+    });
+
+      layout.lines.push({
+        id: `domain-anchor-beam-${centerNode._id}`,
+        from: titleAnchorId,
+        to: centerLayoutId,
+        color: [0.76, 0.85, 0.94, 0.68],
+        beamColor: [0.66, 0.80, 0.94, 1],
+        lineVariant: 'domain-anchor-beam',
+        glowOpacity: 0.42,
+        lineOpacity: 0.3,
+        innerGlowOpacity: 0.2,
+        glowWidth: 9,
+        lineWidth: 1.8,
+        beamFillOpacity: 0.22,
+        beamSpreadPx: 11,
+        beamCoreWidth: 4.8,
+        beamBlurPx: 22,
+        railWidth: 1.1,
+        railOpacity: 0.32,
+        curveOffset: 0,
+        curveBias: 0.5,
+        capStrength: 0.9,
+        drawOrder: -2
+    });
+
+    // 母域节点：中心向上按 2 / 3 / 2 交替展开，单行最多三个。
+    const parentRadius = relationRadius;
+    const parentPositions = this.buildDetailProjectionPositions(centerX, centerY, parentNodes.length, -1, {
+      hexStep,
+      firstDistance: hexStep * 1.48,
+      rowGap: hexStep * 1.42,
+      columnGap: hexStep * 1.62
+    });
 
     parentNodes.forEach((node, index) => {
-      const angle = Math.PI + (Math.PI / (parentNodes.length + 1)) * (index + 1);
-      const x = this.centerX + Math.cos(angle) * parentDistance;
-      const y = this.centerY + yOffset + Math.sin(angle) * parentDistance;
+      const slotPosition = parentPositions[index] || { x: centerX, y: centerY - hexStep * 1.48 };
 
       const nodeId = `parent-${node._id}`;
 
       layout.nodes.push({
         id: nodeId,
-        x,
-        y,
+        x: slotPosition.x,
+        y: slotPosition.y,
         radius: parentRadius,
         scale: 1,
         opacity: 1,
@@ -300,32 +686,46 @@ class LayoutManager {
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
+        labelMaxWidthStrategy: 'compact',
+        shapeMorph: 0,
+        drawOrder: 4,
         visible: true
       });
 
       // 添加连线
       layout.lines.push({
-        from: `center-${centerNode._id}`,
+        id: `sense-parent-${centerNode._id}-${node._id}`,
+        from: centerLayoutId,
         to: nodeId,
-        color: [0.06, 0.73, 0.51, 0.6] // 绿色
+        color: [0.70, 0.80, 0.90, 0.48],
+        lineVariant: 'center-parent-route',
+        glowOpacity: 0.18,
+        lineOpacity: 0.22,
+        innerGlowOpacity: 0.1,
+        glowWidth: 4.4,
+        lineWidth: 1.2,
+        drawOrder: -1
       });
     });
 
-    // 子域节点 (下半圆)
-    const childDistance = Math.min(230, this.height * 0.22);
-    const childRadius = 40;
+    // 子域节点：中心向下按 2 / 3 / 2 交替展开，单行最多三个。
+    const childRadius = clampLayoutValue(relationRadius * 0.9, 32, 46);
+    const childPositions = this.buildDetailProjectionPositions(centerX, centerY, childNodes.length, 1, {
+      hexStep,
+      firstDistance: hexStep * 1.48,
+      rowGap: hexStep * 1.42,
+      columnGap: hexStep * 1.62
+    });
 
     childNodes.forEach((node, index) => {
-      const angle = (Math.PI / (childNodes.length + 1)) * (index + 1);
-      const x = this.centerX + Math.cos(angle) * childDistance;
-      const y = this.centerY + yOffset + Math.sin(angle) * childDistance;
+      const slotPosition = childPositions[index] || { x: centerX, y: centerY + hexStep * 1.48 };
 
       const nodeId = `child-${node._id}`;
 
       layout.nodes.push({
         id: nodeId,
-        x,
-        y,
+        x: slotPosition.x,
+        y: slotPosition.y,
         radius: childRadius,
         scale: 1,
         opacity: 1,
@@ -334,14 +734,25 @@ class LayoutManager {
         visualStyle: node.visualStyle || null,
         labelColor: node.visualStyle?.textColor || '',
         data: node,
+        labelMaxWidthStrategy: 'compact',
+        shapeMorph: 0,
+        drawOrder: 3,
         visible: true
       });
 
       // 添加连线
       layout.lines.push({
-        from: `center-${centerNode._id}`,
+        id: `sense-child-${centerNode._id}-${node._id}`,
+        from: centerLayoutId,
         to: nodeId,
-        color: [0.98, 0.75, 0.14, 0.6] // 黄色
+        color: [0.68, 0.78, 0.88, 0.44],
+        lineVariant: 'center-child-route',
+        glowOpacity: 0.16,
+        lineOpacity: 0.2,
+        innerGlowOpacity: 0.09,
+        glowWidth: 4,
+        lineWidth: 1.1,
+        drawOrder: -1
       });
     });
 
@@ -350,7 +761,7 @@ class LayoutManager {
 
   /**
    * 标题主视角布局
-   * 中央标题 + 多层同心环标题节点 + 标题并集关系连线
+   * 中央标题 + 父/子标题蜂窝 + 右侧所属释义投影簇
    */
   calculateTitleDetailLayout(centerNode, graphNodes = [], graphEdges = [], levelByNodeId = {}) {
     const layout = {
@@ -359,119 +770,346 @@ class LayoutManager {
     };
     if (!centerNode?._id) return layout;
 
-    const yOffset = 60;
+    const metrics = this.getViewportContentMetrics();
+    const { centerX, centerY } = metrics;
     const centerId = String(centerNode._id);
     const centerLayoutId = `center-${centerId}`;
     const ringNodes = (Array.isArray(graphNodes) ? graphNodes : [])
       .filter((item) => String(item?._id || '') !== centerId);
-    const nodeIdToLayoutId = new Map([[centerId, centerLayoutId]]);
+
+    const minContentSide = Math.max(320, Math.min(metrics.availableWidth, metrics.availableHeight));
+    const centerRadius = clampLayoutValue(minContentSide * 0.105, 62, 82);
+    const relationRadius = clampLayoutValue(centerRadius * 0.62, 34, 52);
+    const hexStep = clampLayoutValue(centerRadius * 1.02, 66, 86);
+    const titleSenses = this.normalizeTitleSenseList(centerNode);
+    const maxSenseChainHeight = Math.max(116, metrics.availableHeight * 0.46);
+    const senseRadiusByCount = titleSenses.length > 1
+      ? maxSenseChainHeight / (2 + (titleSenses.length - 1) * 1.48)
+      : centerRadius * 0.52;
+    const senseRadius = clampLayoutValue(
+      Math.min(centerRadius * 0.5, senseRadiusByCount),
+      23,
+      40
+    );
+    const senseStepY = senseRadius * 1.48;
+    const senseStepX = Math.min(14, senseRadius * 0.26);
+    const senseChainHeight = Math.max(0, titleSenses.length - 1) * senseStepY;
+    const senseChainWidth = Math.max(0, titleSenses.length - 1) * senseStepX;
+    const senseHorizontalOffset = Math.min(360, Math.max(190, metrics.availableWidth * 0.26));
+    const senseVerticalOffset = Math.min(24, Math.max(0, metrics.availableHeight * 0.014));
+    const senseMinX = metrics.left + senseRadius + 22;
+    const senseMaxX = Math.max(
+      senseMinX,
+      this.width - metrics.right - senseRadius - 22 - senseChainWidth
+    );
+    const senseMinY = metrics.top + senseRadius + 22 + senseChainHeight / 2;
+    const senseMaxY = Math.max(
+      senseMinY,
+      this.height - metrics.bottom - senseRadius - 22 - senseChainHeight / 2
+    );
+    const senseClusterX = clampLayoutValue(
+      centerX + senseHorizontalOffset,
+      senseMinX,
+      senseMaxX
+    );
+    const senseClusterY = clampLayoutValue(
+      centerY - senseVerticalOffset,
+      senseMinY,
+      senseMaxY
+    );
+    const senseStartX = senseClusterX - senseChainWidth / 2;
+    const senseStartY = senseClusterY - senseChainHeight / 2;
+    const directRelationByNodeId = new Map();
+    const addRelationScore = (nodeId, role, edge, score = 1) => {
+      if (!nodeId || nodeId === centerId) return;
+      const entry = directRelationByNodeId.get(nodeId) || {
+        parentScore: 0,
+        childScore: 0,
+        edge: null
+      };
+      if (role === 'parent') {
+        entry.parentScore += Math.max(1, Number(score) || 1);
+      } else if (role === 'child') {
+        entry.childScore += Math.max(1, Number(score) || 1);
+      }
+      if (edge && !entry.edge) {
+        entry.edge = edge;
+      }
+      directRelationByNodeId.set(nodeId, entry);
+    };
+
+    (Array.isArray(graphEdges) ? graphEdges : []).forEach((edge) => {
+      const nodeAId = String(edge?.nodeAId || '');
+      const nodeBId = String(edge?.nodeBId || '');
+      const directNeighborId = nodeAId === centerId
+        ? nodeBId
+        : (nodeBId === centerId ? nodeAId : '');
+      if (!directNeighborId) return;
+
+      let scoredFromPairs = false;
+      (Array.isArray(edge?.pairs) ? edge.pairs : []).forEach((pair) => {
+        const sourceNodeId = String(pair?.sourceNodeId || '');
+        const targetNodeId = String(pair?.targetNodeId || '');
+        const relationType = String(pair?.relationType || '');
+        let neighborId = '';
+        let role = '';
+
+        if (sourceNodeId === centerId && targetNodeId) {
+          neighborId = targetNodeId;
+          role = relationType === 'extends'
+            ? 'parent'
+            : (relationType === 'contains' ? 'child' : '');
+        } else if (targetNodeId === centerId && sourceNodeId) {
+          neighborId = sourceNodeId;
+          role = relationType === 'contains'
+            ? 'parent'
+            : (relationType === 'extends' ? 'child' : '');
+        }
+
+        if (neighborId && neighborId === directNeighborId && role) {
+          scoredFromPairs = true;
+          addRelationScore(neighborId, role, edge, 1);
+        }
+      });
+
+      if (!scoredFromPairs) {
+        addRelationScore(
+          directNeighborId,
+          'child',
+          edge,
+          Number(edge?.pairCount) || Number(edge?.containsCount) || Number(edge?.extendsCount) || 1
+        );
+      }
+    });
+
+    const parentEntries = [];
+    const childEntries = [];
+
+    ringNodes.forEach((node) => {
+      const nodeId = String(node?._id || '');
+      if (!nodeId) return;
+      const relationEntry = directRelationByNodeId.get(nodeId) || null;
+      const rawLevel = Number(levelByNodeId?.[nodeId]);
+      const resolvedLevel = Number.isFinite(rawLevel) && rawLevel > 0 ? Math.floor(rawLevel) : 1;
+      const entry = {
+        node,
+        edge: relationEntry?.edge || null,
+        level: resolvedLevel,
+        score: Math.max(relationEntry?.parentScore || 0, relationEntry?.childScore || 0)
+      };
+      if (relationEntry && relationEntry.parentScore > relationEntry.childScore) {
+        parentEntries.push(entry);
+      } else {
+        childEntries.push(entry);
+      }
+    });
+
+    const sortTitleEntries = (left, right) => (
+      right.score - left.score
+      || left.level - right.level
+      || String(left.node?.name || '').localeCompare(String(right.node?.name || ''), 'zh-Hans-CN')
+    );
+    parentEntries.sort(sortTitleEntries);
+    childEntries.sort(sortTitleEntries);
+    const centerTitleLabel = this.resolveNodeLabel(centerNode, { includeSense: false });
 
     layout.nodes.push({
       id: centerLayoutId,
-      x: this.centerX,
-      y: this.centerY + yOffset,
-      radius: 82,
+      x: centerX,
+      y: centerY,
+      radius: centerRadius,
       scale: 1,
       opacity: 1,
       type: 'center',
-      label: this.resolveNodeLabel(centerNode, { includeSense: false }),
+      label: centerTitleLabel,
       visualStyle: centerNode.visualStyle || null,
       labelColor: centerNode.visualStyle?.textColor || '',
       data: {
         ...centerNode,
         graphLevel: 0
       },
+      labelTitleLines: centerTitleLabel ? [centerTitleLabel] : null,
+      labelSenseLines: null,
+      labelLineClamp: 1,
+      labelSenseLineClamp: 1,
+      shapeMorph: 0,
+      drawOrder: 8,
       visible: true
     });
 
-    const groups = new Map();
-    ringNodes.forEach((node) => {
+    const parentPositions = this.buildDetailProjectionPositions(centerX, centerY, parentEntries.length, -1, {
+      hexStep,
+      firstDistance: hexStep * 1.48,
+      rowGap: hexStep * 1.42,
+      columnGap: hexStep * 1.62
+    });
+    parentEntries.forEach((entry, index) => {
+      const node = entry.node;
+      const slotPosition = parentPositions[index] || { x: centerX, y: centerY - hexStep * 1.48 };
       const nodeId = String(node?._id || '');
-      if (!nodeId) return;
-      const rawLevel = Number(levelByNodeId?.[nodeId]);
-      const level = Number.isFinite(rawLevel) && rawLevel > 0 ? Math.floor(rawLevel) : 1;
-      const group = groups.get(level) || [];
-      group.push(node);
-      groups.set(level, group);
-    });
+      const layoutId = `parent-${nodeId}`;
 
-    const levels = Array.from(groups.keys()).sort((a, b) => a - b);
-    const minSide = Math.min(this.width, this.height);
-    const baseDistance = Math.max(190, Math.min(minSide * 0.28, 320));
-    const ringGap = Math.max(130, Math.min(minSide * 0.18, 210));
-    const minNodeGap = Math.max(26, Math.min(minSide * 0.045, 44));
-    const centerRadius = 82;
-    let previousRingDistance = 0;
-    let previousRingNodeRadius = centerRadius;
-
-    levels.forEach((level) => {
-      const nodes = (groups.get(level) || []).slice();
-      nodes.sort((a, b) => (a?.name || '').localeCompare((b?.name || ''), 'zh-Hans-CN'));
-      const count = Math.max(1, nodes.length);
-      const startAngle = -Math.PI / 2;
-      const baseNodeRadius = Math.max(30, 54 - Math.min(3, level - 1) * 6);
-      const preferredDistance = baseDistance + (level - 1) * ringGap;
-      const maxRadiusByPreferredDistance = count > 1
-        ? ((Math.PI * 2 * preferredDistance) / count - minNodeGap) / 2
-        : baseNodeRadius;
-      const nodeRadius = Math.max(22, Math.min(baseNodeRadius, maxRadiusByPreferredDistance));
-      const distanceByArc = count > 1
-        ? (count * ((nodeRadius * 2) + minNodeGap)) / (Math.PI * 2)
-        : 0;
-      const distanceByRingGap = previousRingDistance > 0
-        ? previousRingDistance + previousRingNodeRadius + nodeRadius + minNodeGap
-        : centerRadius + nodeRadius + minNodeGap;
-      const distance = Math.max(
-        preferredDistance,
-        distanceByArc,
-        distanceByRingGap
-      );
-      previousRingDistance = distance;
-      previousRingNodeRadius = nodeRadius;
-
-      nodes.forEach((node, index) => {
-        const angle = startAngle + ((Math.PI * 2) * index) / count;
-        const nodeId = String(node?._id || '');
-        const layoutId = `title-${nodeId}`;
-        nodeIdToLayoutId.set(nodeId, layoutId);
-        layout.nodes.push({
-          id: layoutId,
-          x: this.centerX + Math.cos(angle) * distance,
-          y: this.centerY + yOffset + Math.sin(angle) * distance,
-          radius: nodeRadius,
-          scale: 1,
-          opacity: 1,
-          type: 'title',
-          label: this.resolveNodeLabel(node, { includeSense: false }),
-          visualStyle: node.visualStyle || null,
-          labelColor: node.visualStyle?.textColor || '',
-          data: {
-            ...node,
-            graphLevel: level
-          },
-          visible: true
-        });
+      layout.nodes.push({
+        id: layoutId,
+        x: slotPosition.x,
+        y: slotPosition.y,
+        radius: relationRadius,
+        scale: 1,
+        opacity: 1,
+        type: 'parent',
+        label: this.resolveNodeLabel(node, { includeSense: false }),
+        visualStyle: node.visualStyle || null,
+        labelColor: node.visualStyle?.textColor || '',
+        data: {
+          ...node,
+          graphLevel: entry.level,
+          titleRelationRole: 'parent'
+        },
+        labelMaxWidthStrategy: 'compact',
+        labelLineClamp: 1,
+        labelSenseLineClamp: 1,
+        shapeMorph: 0,
+        drawOrder: 4,
+        visible: true
       });
-    });
-
-    (Array.isArray(graphEdges) ? graphEdges : []).forEach((edge) => {
-      const nodeAId = String(edge?.nodeAId || '');
-      const nodeBId = String(edge?.nodeBId || '');
-      const isCenterEdge = nodeAId === centerId || nodeBId === centerId;
-      if (!isCenterEdge) return;
-      const from = nodeIdToLayoutId.get(nodeAId);
-      const to = nodeIdToLayoutId.get(nodeBId);
-      if (!from || !to) return;
 
       layout.lines.push({
-        id: edge?.edgeId || `${nodeAId}|${nodeBId}`,
-        from,
-        to,
-        color: isCenterEdge ? [0.72, 0.86, 0.99, 0.74] : [0.55, 0.72, 0.92, 0.54],
-        clickable: true,
-        edgeMeta: edge
+        id: `title-parent-${centerId}-${nodeId}`,
+        from: centerLayoutId,
+        to: layoutId,
+        color: [0.70, 0.80, 0.90, 0.48],
+        lineVariant: 'center-parent-route',
+        glowOpacity: 0.18,
+        lineOpacity: 0.22,
+        innerGlowOpacity: 0.1,
+        glowWidth: 4.4,
+        lineWidth: 1.2,
+        drawOrder: -1,
+        clickable: !!entry.edge,
+        edgeMeta: entry.edge || null
       });
     });
+
+    const childRadius = clampLayoutValue(relationRadius * 0.9, 32, 46);
+    const childPositions = this.buildDetailProjectionPositions(centerX, centerY, childEntries.length, 1, {
+      hexStep,
+      firstDistance: hexStep * 1.48,
+      rowGap: hexStep * 1.42,
+      columnGap: hexStep * 1.62
+    });
+    childEntries.forEach((entry, index) => {
+      const node = entry.node;
+      const slotPosition = childPositions[index] || { x: centerX, y: centerY + hexStep * 1.48 };
+      const nodeId = String(node?._id || '');
+      const layoutId = `child-${nodeId}`;
+
+      layout.nodes.push({
+        id: layoutId,
+        x: slotPosition.x,
+        y: slotPosition.y,
+        radius: childRadius,
+        scale: 1,
+        opacity: 1,
+        type: 'child',
+        label: this.resolveNodeLabel(node, { includeSense: false }),
+        visualStyle: node.visualStyle || null,
+        labelColor: node.visualStyle?.textColor || '',
+        data: {
+          ...node,
+          graphLevel: entry.level,
+          titleRelationRole: 'child'
+        },
+        labelMaxWidthStrategy: 'compact',
+        labelLineClamp: 1,
+        labelSenseLineClamp: 1,
+        shapeMorph: 0,
+        drawOrder: 3,
+        visible: true
+      });
+
+      layout.lines.push({
+        id: `title-child-${centerId}-${nodeId}`,
+        from: centerLayoutId,
+        to: layoutId,
+        color: [0.68, 0.78, 0.88, 0.44],
+        lineVariant: 'center-child-route',
+        glowOpacity: 0.16,
+        lineOpacity: 0.2,
+        innerGlowOpacity: 0.09,
+        glowWidth: 4,
+        lineWidth: 1.1,
+        drawOrder: -1,
+        clickable: !!entry.edge,
+        edgeMeta: entry.edge || null
+      });
+    });
+
+    const titleSenseNodeIds = [];
+    titleSenses.forEach((sense, index) => {
+      const senseNodeId = `title-sense-${centerId}-${sense.senseId}`;
+      titleSenseNodeIds.push(senseNodeId);
+      const senseX = senseStartX + index * senseStepX;
+      const senseY = senseStartY + index * senseStepY;
+      const senseData = {
+        ...centerNode,
+        activeSenseId: sense.senseId,
+        activeSenseTitle: sense.title,
+        activeSenseContent: sense.content || '',
+        displayName: `${centerNode.name || ''}-${sense.title}`,
+        detailRole: 'title-sense',
+        senseChainIndex: index
+      };
+      layout.nodes.push({
+        id: senseNodeId,
+        x: senseX,
+        y: senseY,
+        radius: senseRadius,
+        scale: 1,
+        opacity: 0.96,
+        type: 'sense',
+        label: `${sense.title}\n所属释义`,
+        visualStyle: centerNode.visualStyle || null,
+        labelColor: centerNode.visualStyle?.textColor || '',
+        data: senseData,
+        labelMaxWidthStrategy: 'wide',
+        labelWidthHint: Math.max(118, Math.min(metrics.availableWidth * 0.28, senseRadius * 4.7)),
+        labelTitleLines: [sense.title],
+        labelSenseLines: ['所属释义'],
+        labelLineClamp: 2,
+        labelSenseLineClamp: 1,
+        shapeMorph: 0,
+        drawOrder: 7,
+        visible: true
+      });
+    });
+
+    if (titleSenseNodeIds.length > 0) {
+      const middleSenseNodeId = titleSenseNodeIds[Math.floor((titleSenseNodeIds.length - 1) / 2)];
+      layout.lines.push({
+        id: `title-sense-projection-${centerId}`,
+        from: centerLayoutId,
+        to: middleSenseNodeId,
+        color: [0.76, 0.86, 0.96, 0.64],
+        beamColor: [0.62, 0.78, 0.94, 1],
+        lineVariant: 'sense-anchor-beam',
+        beamTargetNodeIds: titleSenseNodeIds,
+        glowOpacity: 0.38,
+        lineOpacity: 0.28,
+        innerGlowOpacity: 0.18,
+        glowWidth: 8,
+        lineWidth: 1.6,
+        beamSpreadPx: Math.max(12, senseRadius * 0.48),
+        beamFillOpacity: 0.2,
+        beamCoreWidth: 4.8,
+        beamBlurPx: 22,
+        railWidth: 1.1,
+        railOpacity: 0.3,
+        curveOffset: 0,
+        curveBias: 0.5,
+        capStrength: 0.8,
+        drawOrder: -2
+      });
+    }
 
     return layout;
   }
@@ -497,9 +1135,7 @@ class LayoutManager {
       nodes: [],
       lines: []
     };
-    const yOffset = 42;
-    const centerX = this.centerX;
-    const centerY = this.centerY + yOffset;
+    const { centerX, centerY } = this.getViewportFocusCenter();
     const nodeLayoutIdByKey = new Map();
     const layoutNodeByKey = new Map();
     const labelMetricsByKey = new Map();
@@ -892,7 +1528,9 @@ class LayoutManager {
         const currentNode = currentLayout.nodes.find(n => n.id === node.id);
         const styleChanged = JSON.stringify(currentNode.visualStyle || null) !== JSON.stringify(node.visualStyle || null)
           || (currentNode.labelColor || '') !== (node.labelColor || '')
-          || (currentNode.label || '') !== (node.label || '');
+          || (currentNode.label || '') !== (node.label || '')
+          || (Number(currentNode.shapeMorph) || 0) !== (Number(node.shapeMorph) || 0)
+          || (Number(currentNode.drawOrder) || 0) !== (Number(node.drawOrder) || 0);
         const moved = currentNode.x !== node.x || currentNode.y !== node.y ||
                      currentNode.scale !== node.scale || currentNode.radius !== node.radius ||
                      styleChanged;
@@ -989,8 +1627,7 @@ class LayoutManager {
    * @returns {Object} 预览布局配置
    */
   calculateAssociationPreviewLayout(newNodeData, nodeA, relationType, nodeB, currentLayout) {
-    // 整体下移偏移量
-    const yOffset = 60;
+    const { centerX, centerY } = this.getViewportFocusCenter();
 
     // 找到 nodeA 在当前布局中的位置
     const nodeAInLayout = currentLayout.nodes.find(
@@ -1000,7 +1637,7 @@ class LayoutManager {
     // 如果找不到 nodeA，使用中心位置
     const nodeAPosition = nodeAInLayout
       ? { x: nodeAInLayout.x, y: nodeAInLayout.y }
-      : { x: this.centerX, y: this.centerY + yOffset };
+      : { x: centerX, y: centerY };
 
     // 根据关系类型计算预览布局
     if (relationType === 'insert' && nodeB) {

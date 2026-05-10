@@ -72,10 +72,16 @@ module.exports = function setupProxy(app) {
     return;
   }
 
+  const stripBrowserOrigin = (proxyReq) => {
+    proxyReq.removeHeader('origin');
+  };
+
   const options = {
     target,
     changeOrigin: true,
     ws: true,
+    onProxyReq: stripBrowserOrigin,
+    onProxyReqWs: stripBrowserOrigin,
     logLevel: 'warn'
   };
 

@@ -4,7 +4,7 @@
     left: 0;
     width: 100vw;
     height: calc(100vh - var(--knowledge-domain-top-offset, 0px));
-    z-index: 100;
+    z-index: 140;
     background: #1a1f35;
 }
 

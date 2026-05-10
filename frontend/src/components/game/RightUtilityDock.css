@@ -241,6 +241,100 @@
   color: rgba(171, 193, 215, 0.56);
 }
 
+.battle-shell-immersive .utility-dock-rail {
+  --utility-dock-top: max(0.55rem, env(safe-area-inset-top));
+  top: var(--utility-dock-top);
+  bottom: auto;
+  right: max(0.35rem, env(safe-area-inset-right));
+  width: 30px;
+}
+
+.battle-shell-immersive .utility-dock-buttons {
+  gap: 0.18rem;
+}
+
+.battle-shell-immersive .utility-dock-row + .utility-dock-row {
+  margin-top: 0;
+}
+
+.battle-shell-immersive .utility-dock-panel-slot {
+  right: calc(100% + 6px);
+  width: min(var(--utility-panel-width, 344px), calc(100vw - 48px));
+  max-height: calc(100dvh - var(--utility-dock-top) - 10px);
+  transform: translate3d(8px, 0, 0);
+}
+
+.battle-shell-immersive .utility-dock-panel-slot.is-open {
+  transform: translate3d(0, 0, 0);
+}
+
+.battle-shell-immersive .utility-dock-trigger {
+  width: 30px;
+  min-height: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 9px;
+  justify-content: center;
+  gap: 0;
+  color: rgba(232, 241, 251, 0.88);
+  background: rgba(8, 14, 24, 0.72);
+  border-color: rgba(180, 205, 230, 0.16);
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.battle-shell-immersive .utility-dock-trigger:hover,
+.battle-shell-immersive .utility-dock-trigger.is-active {
+  transform: translate3d(0, -1px, 0);
+  background: rgba(12, 20, 34, 0.84);
+  border-color: rgba(194, 218, 239, 0.22);
+}
+
+.battle-shell-immersive .utility-dock-row.is-first .utility-dock-trigger,
+.battle-shell-immersive .utility-dock-row.is-last .utility-dock-trigger,
+.battle-shell-immersive .utility-dock-row.is-first.is-last .utility-dock-trigger {
+  border-radius: 9px;
+}
+
+.battle-shell-immersive .utility-dock-trigger__label,
+.battle-shell-immersive .utility-dock-trigger__arrow {
+  display: none;
+}
+
+.battle-shell-immersive .utility-dock-trigger__icon,
+.battle-shell-immersive .utility-dock-trigger.has-badge .utility-dock-trigger__icon {
+  width: 14px;
+  height: 14px;
+  transform: none;
+  background: transparent;
+  box-shadow: none;
+  filter: none;
+}
+
+.battle-shell-immersive .utility-dock-trigger__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.battle-shell-immersive .utility-dock-trigger__badge {
+  top: -4px;
+  right: -4px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  font-size: 0.52rem;
+}
+
+.battle-shell-immersive .utility-dock-trigger__badge.is-dot {
+  top: 2px;
+  right: 2px;
+  min-width: 5px;
+  width: 5px;
+  height: 5px;
+  box-shadow: 0 0 0 3px rgba(255, 147, 80, 0.1);
+}
+
 @media (max-width: 1320px) {
   .utility-dock-panel-slot {
     width: min(var(--utility-panel-width, 320px), calc(100vw - 88px));
@@ -379,6 +473,61 @@
     width: 42px;
     min-height: 42px;
     padding: 0.38rem;
+  }
+}
+
+@media (max-width: 920px) {
+  .battle-shell-immersive .utility-dock-rail {
+    --utility-dock-mobile-rail-width: 30px;
+    top: max(0.55rem, env(safe-area-inset-top));
+    bottom: auto;
+    right: max(0.35rem, env(safe-area-inset-right));
+    width: 30px;
+  }
+
+  .battle-shell-immersive .utility-dock-buttons {
+    gap: 0.18rem;
+  }
+
+  .battle-shell-immersive .utility-dock-panel-slot {
+    position: absolute;
+    top: 0;
+    right: calc(100% + 6px);
+    bottom: auto;
+    left: auto;
+    width: min(var(--utility-panel-width, 320px), calc(100vw - 48px)) !important;
+    max-height: calc(100dvh - var(--utility-dock-top) - 10px);
+    transform: translate3d(8px, 0, 0);
+  }
+
+  .battle-shell-immersive .utility-dock-panel-slot.is-open {
+    transform: translate3d(0, 0, 0);
+  }
+
+  .battle-shell-immersive .utility-dock-panel-shell,
+  .battle-shell-immersive .utility-dock-panel-shell.is-open {
+    height: auto;
+    max-height: 100%;
+  }
+
+  .battle-shell-immersive .utility-dock-trigger {
+    width: 30px;
+    min-height: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 9px;
+  }
+
+  .battle-shell-immersive .utility-dock-trigger__icon,
+  .battle-shell-immersive .utility-dock-trigger.has-badge .utility-dock-trigger__icon {
+    width: 14px;
+    height: 14px;
+  }
+
+  .battle-shell-immersive .utility-dock-row.is-first .utility-dock-trigger,
+  .battle-shell-immersive .utility-dock-row.is-last .utility-dock-trigger,
+  .battle-shell-immersive .utility-dock-row.is-first.is-last .utility-dock-trigger {
+    border-radius: 9px;
   }
 }
 
