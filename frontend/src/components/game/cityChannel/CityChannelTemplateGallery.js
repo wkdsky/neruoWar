@@ -3,13 +3,15 @@ import { Box, FilePlus2, Layers, PencilLine, Sparkles, Users } from 'lucide-reac
 import {
   CITY_CHANNEL_TEMPLATE_GROUPS,
   describeCityChannelMap,
-  readCityChannelDraft
+  readCityChannelDraft,
+  readCityChannelUserTemplates
 } from './cityChannelTemplates';
 import './CityChannelTemplateGallery.css';
 
 const groupIconByKey = {
   create: FilePlus2,
   draft: PencilLine,
+  user: PencilLine,
   official: Sparkles,
   shared: Users
 };
@@ -84,6 +86,7 @@ const TemplateGroup = ({ group, onOpen }) => {
 
 const CityChannelTemplateGallery = ({ onOpenTemplate, refreshKey = 0 }) => {
   const draft = readCityChannelDraft();
+  const userTemplates = readCityChannelUserTemplates();
   const draftGroup = {
     key: 'draft',
     title: '我的草稿',
@@ -100,8 +103,24 @@ const CityChannelTemplateGallery = ({ onOpenTemplate, refreshKey = 0 }) => {
         mapData: null
       }]
   };
+  const userTemplateGroup = {
+    key: 'user',
+    title: '我的模板库',
+    description: userTemplates.length > 0 ? '从官方或玩家模板另存后的个人模板。' : '从官方推荐或玩家分享模板另存后会出现在这里。',
+    templates: userTemplates.length > 0
+      ? userTemplates
+      : [{
+        id: 'empty-user-template',
+        name: '暂无我的模板',
+        description: '使用官方推荐或玩家分享模板并保存后，会自动另存到这里。',
+        actionLabel: '暂无模板',
+        source: 'user',
+        disabled: true,
+        mapData: null
+      }]
+  };
   const [createGroup, ...restGroups] = CITY_CHANNEL_TEMPLATE_GROUPS;
-  const groups = [createGroup, draftGroup, ...restGroups];
+  const groups = [createGroup, draftGroup, userTemplateGroup, ...restGroups];
   void refreshKey;
 
   return (

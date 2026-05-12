@@ -3,15 +3,21 @@ import {
   CITY_CHANNEL_STORAGE_KEY,
   CITY_CHANNEL_TILE_TYPES,
   CITY_CHANNEL_TOOLS,
+  cloneConnectors,
+  cloneHiddenModule,
   clampLayer,
   createCellKey,
   createDefaultCityChannelMap,
   createTile,
+  createWall,
+  createWallKey,
   getTileDefinition,
   normalizeRotation,
+  normalizeWallEdge,
   normalizeCityChannelMap,
   serializeCityChannelMap
 } from './cityChannelSchema';
+import { getCityChannelMaterial } from './cityChannelCatalog';
 import { validateCityChannelSafeRoute } from './cityChannelValidation';
 
 const MAX_HISTORY_STEPS = 30;
@@ -37,9 +43,16 @@ const createPointId = (prefix, point) => (
 
 const removePointsAtCell = (points = [], cell) => points.filter((point) => !sameCell(point, cell));
 
+const movePointsAtCell = (points = [], from, to) => points.map((point) => (
+  sameCell(point, from)
+    ? { ...point, x: to.x, y: to.y, z: to.z }
+    : point
+));
+
 const upsertTile = (mapData, cell, tilePatch = {}) => {
   const panelType = tilePatch.panelType || CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR;
   const definition = getTileDefinition(panelType);
+  const catalogItem = getCityChannelMaterial(panelType);
   const key = createCellKey(cell.x, cell.y, cell.z);
   const existing = mapData.tiles[key] || {};
   return {
@@ -52,18 +65,40 @@ const upsertTile = (mapData, cell, tilePatch = {}) => {
       y: cell.y,
       z: cell.z,
       panelType,
+      category: definition.category || catalogItem.category || 'structure',
       rotation: normalizeRotation(tilePatch.rotation !== undefined ? tilePatch.rotation : existing.rotation),
       walkable: !!definition.walkable,
       solid: !!definition.solid,
+      transparent: !!definition.transparent,
+      marker: tilePatch.marker !== undefined
+        ? tilePatch.marker
+        : (catalogItem.markerType || existing.marker || null),
       hiddenModule: tilePatch.hiddenModule !== undefined
         ? tilePatch.hiddenModule
-        : (existing.hiddenModule || null),
+        : cloneHiddenModule(catalogItem.hiddenModule),
       connectors: Array.isArray(tilePatch.connectors)
         ? tilePatch.connectors
-        : (Array.isArray(existing.connectors) ? existing.connectors : [])
+        : cloneConnectors(catalogItem.hiddenModule?.connectorPoints || definition.connectors || [])
     }
   };
 };
+
+const resetPortalTiles = (tiles = {}, marker) => (
+  Object.entries(tiles).reduce((nextTiles, [key, tile]) => {
+    if (tile.marker !== marker && tile.panelType !== marker) {
+      nextTiles[key] = tile;
+      return nextTiles;
+    }
+    nextTiles[key] = createTile({
+      x: tile.x,
+      y: tile.y,
+      z: tile.z,
+      panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+      rotation: tile.rotation
+    });
+    return nextTiles;
+  }, {})
+);
 
 const clearSafeRoute = (mapData) => ({
   ...mapData,
@@ -77,11 +112,12 @@ const useCityChannelEditorState = (initialMapData = null) => {
     initialMapData ? normalizeCityChannelMap(initialMapData) : createDefaultCityChannelMap()
   ));
   const [activeLayer, setActiveLayer] = useState(0);
-  const [activeTool, setActiveTool] = useState(CITY_CHANNEL_TOOLS.SELECT);
+  const [activeTool, setActiveTool] = useState(CITY_CHANNEL_TOOLS.BROWSE);
+  const [activeTileType, setActiveTileType] = useState(null);
   const [activeRotation, setActiveRotation] = useState(0);
   const [selectedCell, setSelectedCell] = useState(null);
   const [validationResult, setValidationResult] = useState(createInitialValidation);
-  const [statusMessage, setStatusMessage] = useState('选择物品后，在虚空平面上点击放置。');
+  const [statusMessage, setStatusMessage] = useState('浏览模式：拖拽查看通道，滚轮缩放。');
   const [isDirty, setIsDirty] = useState(false);
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
@@ -102,22 +138,75 @@ const useCityChannelEditorState = (initialMapData = null) => {
     if (message) setStatusMessage(message);
   }, []);
 
+  const movePortalTile = useCallback((cell, portalType) => {
+    if (!cell) return;
+    const isEntrance = portalType === CITY_CHANNEL_TILE_TYPES.ENTRANCE;
+    const marker = isEntrance ? 'entrance' : 'exit';
+    const message = isEntrance
+      ? '入口已放置，旧入口已还原为木质地板。'
+      : '出口已放置，旧出口已还原为木质地板。';
+    applyMapMutation((current) => {
+      const withoutOldPortal = resetPortalTiles(current.tiles, marker);
+      const tempMap = { ...current, tiles: withoutOldPortal };
+      return {
+        ...current,
+        tiles: upsertTile(tempMap, cell, {
+          panelType: portalType,
+          rotation: activeRotation,
+          marker
+        }),
+        entrances: isEntrance
+          ? [{ id: createPointId('entrance', cell), x: cell.x, y: cell.y, z: cell.z }]
+          : removePointsAtCell(current.entrances, cell),
+        exits: isEntrance
+          ? removePointsAtCell(current.exits, cell)
+          : [{ id: createPointId('exit', cell), x: cell.x, y: cell.y, z: cell.z }]
+      };
+    }, message);
+  }, [activeRotation, applyMapMutation]);
+
   const placeTile = useCallback((cell, panelType) => {
     if (!cell) return;
+    if (panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || panelType === CITY_CHANNEL_TILE_TYPES.EXIT) {
+      movePortalTile(cell, panelType);
+      return;
+    }
     applyMapMutation((current) => {
+      const existingMarker = current.tiles[createCellKey(cell.x, cell.y, cell.z)]?.marker || null;
       const nextTiles = upsertTile(current, cell, {
         panelType: panelType === CITY_CHANNEL_TOOLS.FLOOR ? CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR : panelType,
         rotation: activeRotation,
-        marker: panelType === CITY_CHANNEL_TILE_TYPES.WALL ? null : (current.tiles[createCellKey(cell.x, cell.y, cell.z)]?.marker || null)
+        marker: existingMarker === 'safe' || existingMarker === 'highlight' ? existingMarker : null
       });
       return {
         ...current,
         tiles: nextTiles,
-        entrances: panelType === CITY_CHANNEL_TILE_TYPES.WALL ? removePointsAtCell(current.entrances, cell) : current.entrances,
-        exits: panelType === CITY_CHANNEL_TILE_TYPES.WALL ? removePointsAtCell(current.exits, cell) : current.exits
+        entrances: removePointsAtCell(current.entrances, cell),
+        exits: removePointsAtCell(current.exits, cell)
       };
     }, '板材已放置，白线验证结果已重置。');
-  }, [activeRotation, applyMapMutation]);
+  }, [activeRotation, applyMapMutation, movePortalTile]);
+
+  const placeWall = useCallback((wallPlacement, panelType = CITY_CHANNEL_TILE_TYPES.WALL) => {
+    if (!wallPlacement) return;
+    const edge = normalizeWallEdge(wallPlacement.edge);
+    const safePanelType = panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL
+      ? CITY_CHANNEL_TILE_TYPES.GLASS_WALL
+      : CITY_CHANNEL_TILE_TYPES.WALL;
+    applyMapMutation((current) => ({
+      ...current,
+      walls: {
+        ...(current.walls || {}),
+        [createWallKey(wallPlacement.x, wallPlacement.y, wallPlacement.z, edge)]: createWall({
+          x: wallPlacement.x,
+          y: wallPlacement.y,
+          z: wallPlacement.z,
+          edge,
+          panelType: safePanelType
+        })
+      }
+    }), '墙壁已吸附到边缘。');
+  }, [applyMapMutation]);
 
   const eraseTile = useCallback((cell) => {
     if (!cell) return;
@@ -134,33 +223,222 @@ const useCityChannelEditorState = (initialMapData = null) => {
     }, '格子内容已清除。');
   }, [applyMapMutation]);
 
+  const eraseWall = useCallback((wallPlacement) => {
+    if (!wallPlacement) return;
+    applyMapMutation((current) => {
+      const key = createWallKey(wallPlacement.x, wallPlacement.y, wallPlacement.z, wallPlacement.edge);
+      const nextWalls = { ...(current.walls || {}) };
+      delete nextWalls[key];
+      return {
+        ...current,
+        walls: nextWalls
+      };
+    }, '墙壁已移除。');
+  }, [applyMapMutation]);
+
+  const deletePlacements = useCallback((placements = []) => {
+    if (!Array.isArray(placements) || placements.length <= 0) return;
+    applyMapMutation((current) => {
+      const nextTiles = { ...(current.tiles || {}) };
+      const nextWalls = { ...(current.walls || {}) };
+      let nextEntrances = current.entrances || [];
+      let nextExits = current.exits || [];
+
+      placements.forEach((placement) => {
+        if (!placement) return;
+        if (placement.edge) {
+          delete nextWalls[createWallKey(placement.x, placement.y, placement.z, placement.edge)];
+          return;
+        }
+        delete nextTiles[createCellKey(placement.x, placement.y, placement.z)];
+        nextEntrances = removePointsAtCell(nextEntrances, placement);
+        nextExits = removePointsAtCell(nextExits, placement);
+      });
+
+      return {
+        ...current,
+        tiles: nextTiles,
+        walls: nextWalls,
+        entrances: nextEntrances,
+        exits: nextExits
+      };
+    }, '已删除选中板材。');
+  }, [applyMapMutation]);
+
+  const movePlacements = useCallback((moves = []) => {
+    if (!Array.isArray(moves) || moves.length <= 0) return;
+    applyMapMutation((current) => {
+      const nextTiles = { ...(current.tiles || {}) };
+      const nextWalls = { ...(current.walls || {}) };
+      let nextEntrances = current.entrances || [];
+      let nextExits = current.exits || [];
+      const tileMoves = [];
+      const wallMoves = [];
+
+      moves.forEach(({ from, to }) => {
+        if (!from || !to) return;
+        if (from.edge) {
+          const fromKey = createWallKey(from.x, from.y, from.z, from.edge);
+          const existingWall = nextWalls[fromKey];
+          if (!existingWall) return;
+          wallMoves.push({ from, to, wall: existingWall });
+          return;
+        }
+
+        const fromKey = createCellKey(from.x, from.y, from.z);
+        const existingTile = nextTiles[fromKey];
+        if (!existingTile) return;
+        tileMoves.push({ from, to, tile: existingTile });
+      });
+
+      wallMoves.forEach(({ from }) => {
+        delete nextWalls[createWallKey(from.x, from.y, from.z, from.edge)];
+      });
+      tileMoves.forEach(({ from }) => {
+        delete nextTiles[createCellKey(from.x, from.y, from.z)];
+      });
+
+      wallMoves.forEach(({ from, to, wall }) => {
+        const edge = normalizeWallEdge(to.edge || from.edge);
+        nextWalls[createWallKey(to.x, to.y, to.z, edge)] = createWall({
+          ...wall,
+          x: to.x,
+          y: to.y,
+          z: to.z,
+          edge
+        });
+      });
+      tileMoves.forEach(({ from, to, tile }) => {
+        nextTiles[createCellKey(to.x, to.y, to.z)] = {
+          ...tile,
+          x: to.x,
+          y: to.y,
+          z: to.z
+        };
+        nextEntrances = movePointsAtCell(nextEntrances, from, to);
+        nextExits = movePointsAtCell(nextExits, from, to);
+      });
+
+      return {
+        ...current,
+        tiles: nextTiles,
+        walls: nextWalls,
+        entrances: nextEntrances,
+        exits: nextExits
+      };
+    }, '已移动选中板材。');
+  }, [applyMapMutation]);
+
+  const rotatePlacements = useCallback((placements = []) => {
+    if (!Array.isArray(placements) || placements.length <= 0) return;
+    applyMapMutation((current) => {
+      const nextTiles = { ...(current.tiles || {}) };
+      const nextWalls = { ...(current.walls || {}) };
+
+      placements.forEach((placement) => {
+        if (!placement) return;
+        if (placement.edge) {
+          const key = createWallKey(placement.x, placement.y, placement.z, placement.edge);
+          const existingWall = nextWalls[key];
+          if (!existingWall) return;
+          nextWalls[key] = {
+            ...existingWall,
+            rotation: normalizeRotation((existingWall.rotation || 0) + 180)
+          };
+          return;
+        }
+
+        const key = createCellKey(placement.x, placement.y, placement.z);
+        const existingTile = nextTiles[key];
+        if (!existingTile) return;
+        nextTiles[key] = {
+          ...existingTile,
+          rotation: normalizeRotation((existingTile.rotation || 0) + 90)
+        };
+      });
+
+      return {
+        ...current,
+        tiles: nextTiles,
+        walls: nextWalls
+      };
+    }, '已旋转选中板材。');
+  }, [applyMapMutation]);
+
+  const rotatePlacementsReverse = useCallback((placements = []) => {
+    if (!Array.isArray(placements) || placements.length <= 0) return;
+    applyMapMutation((current) => {
+      const nextTiles = { ...(current.tiles || {}) };
+      const nextWalls = { ...(current.walls || {}) };
+
+      placements.forEach((placement) => {
+        if (!placement) return;
+        if (placement.edge) {
+          const key = createWallKey(placement.x, placement.y, placement.z, placement.edge);
+          const existingWall = nextWalls[key];
+          if (!existingWall) return;
+          nextWalls[key] = {
+            ...existingWall,
+            rotation: normalizeRotation((existingWall.rotation || 0) - 180)
+          };
+          return;
+        }
+
+        const key = createCellKey(placement.x, placement.y, placement.z);
+        const existingTile = nextTiles[key];
+        if (!existingTile) return;
+        nextTiles[key] = {
+          ...existingTile,
+          rotation: normalizeRotation((existingTile.rotation || 0) - 90)
+        };
+      });
+
+      return {
+        ...current,
+        tiles: nextTiles,
+        walls: nextWalls
+      };
+    }, '已反向旋转选中板材。');
+  }, [applyMapMutation]);
+
+  const flipPlacements = useCallback((placements = []) => {
+    if (!Array.isArray(placements) || placements.length <= 0) return;
+    applyMapMutation((current) => {
+      const nextTiles = { ...(current.tiles || {}) };
+      const nextWalls = { ...(current.walls || {}) };
+
+      placements.forEach((placement) => {
+        if (!placement) return;
+        if (placement.edge) {
+          const key = createWallKey(placement.x, placement.y, placement.z, placement.edge);
+          const existing = nextWalls[key];
+          if (!existing) return;
+          nextWalls[key] = { ...existing, flipped: !existing.flipped };
+          return;
+        }
+        const key = createCellKey(placement.x, placement.y, placement.z);
+        const existing = nextTiles[key];
+        if (!existing) return;
+        nextTiles[key] = { ...existing, flipped: !existing.flipped };
+      });
+
+      return {
+        ...current,
+        tiles: nextTiles,
+        walls: nextWalls
+      };
+    }, '已颠倒选中板材。');
+  }, [applyMapMutation]);
+
   const setEntrance = useCallback((cell) => {
     if (!cell) return;
-    applyMapMutation((current) => ({
-      ...current,
-      tiles: upsertTile(current, cell, {
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
-        rotation: activeRotation,
-        marker: current.tiles[createCellKey(cell.x, cell.y, cell.z)]?.marker || null
-      }),
-      entrances: [{ id: createPointId('entrance', cell), x: cell.x, y: cell.y, z: cell.z }],
-      exits: removePointsAtCell(current.exits, cell)
-    }), '入口已放置。');
-  }, [activeRotation, applyMapMutation]);
+    movePortalTile(cell, CITY_CHANNEL_TILE_TYPES.ENTRANCE);
+  }, [movePortalTile]);
 
   const setExit = useCallback((cell) => {
     if (!cell) return;
-    applyMapMutation((current) => ({
-      ...current,
-      tiles: upsertTile(current, cell, {
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
-        rotation: activeRotation,
-        marker: current.tiles[createCellKey(cell.x, cell.y, cell.z)]?.marker || null
-      }),
-      exits: [{ id: createPointId('exit', cell), x: cell.x, y: cell.y, z: cell.z }],
-      entrances: removePointsAtCell(current.entrances, cell)
-    }), '出口已放置。');
-  }, [activeRotation, applyMapMutation]);
+    movePortalTile(cell, CITY_CHANNEL_TILE_TYPES.EXIT);
+  }, [movePortalTile]);
 
   const setSafeMarker = useCallback((cell) => {
     if (!cell) return;
@@ -181,6 +459,21 @@ const useCityChannelEditorState = (initialMapData = null) => {
   const rotateTileAtCell = useCallback((cell) => {
     if (!cell) return;
     applyMapMutation((current) => {
+      if (cell.edge) {
+        const key = createWallKey(cell.x, cell.y, cell.z, cell.edge);
+        const existingWall = current.walls?.[key];
+        if (!existingWall) return current;
+        return {
+          ...current,
+          walls: {
+            ...(current.walls || {}),
+            [key]: {
+              ...existingWall,
+              rotation: normalizeRotation((existingWall.rotation || 0) + 180)
+            }
+          }
+        };
+      }
       const key = createCellKey(cell.x, cell.y, cell.z);
       const existing = current.tiles[key];
       if (!existing) return current;
@@ -200,6 +493,21 @@ const useCityChannelEditorState = (initialMapData = null) => {
   const toggleTileHighlight = useCallback((cell) => {
     if (!cell) return;
     applyMapMutation((current) => {
+      if (cell.edge) {
+        const key = createWallKey(cell.x, cell.y, cell.z, cell.edge);
+        const existingWall = current.walls?.[key];
+        if (!existingWall) return current;
+        return {
+          ...current,
+          walls: {
+            ...(current.walls || {}),
+            [key]: {
+              ...existingWall,
+              marker: existingWall.marker === 'highlight' ? null : 'highlight'
+            }
+          }
+        };
+      }
       const key = createCellKey(cell.x, cell.y, cell.z);
       const existing = current.tiles[key];
       if (!existing) return current;
@@ -306,6 +614,9 @@ const useCityChannelEditorState = (initialMapData = null) => {
 
   const handleCellAction = useCallback((cell) => {
     if (!cell) return;
+    if (activeTool === CITY_CHANNEL_TOOLS.BROWSE) {
+      return;
+    }
     setSelectedCell(cell);
     if (activeTool === CITY_CHANNEL_TOOLS.SELECT) {
       setStatusMessage('已选中格子。');
@@ -327,8 +638,13 @@ const useCityChannelEditorState = (initialMapData = null) => {
       setSafeMarker(cell);
       return;
     }
+    if (activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && activeTileType) {
+      placeTile(cell, activeTileType);
+      return;
+    }
     placeTile(cell, activeTool === CITY_CHANNEL_TOOLS.FLOOR ? CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR : activeTool);
   }, [
+    activeTileType,
     activeTool,
     eraseTile,
     placeTile,
@@ -340,6 +656,30 @@ const useCityChannelEditorState = (initialMapData = null) => {
   const rotateActiveItem = useCallback(() => {
     setActiveRotation((current) => normalizeRotation(current + 90));
     setStatusMessage('物品方向已旋转 90°。');
+  }, []);
+
+  const selectMaterial = useCallback((panelType) => {
+    const material = getCityChannelMaterial(panelType);
+    setActiveTileType(material.id);
+    setActiveTool(CITY_CHANNEL_TOOLS.PLACE_TILE);
+    setSelectedCell(null);
+    setStatusMessage(`当前板材：${material.name}。`);
+  }, []);
+
+  const selectOperationTool = useCallback((tool) => {
+    setActiveTool(tool);
+    if (
+      tool === CITY_CHANNEL_TOOLS.BROWSE
+      || tool === CITY_CHANNEL_TOOLS.SELECT
+      || tool === CITY_CHANNEL_TOOLS.ERASE
+    ) {
+      setActiveTileType(null);
+    }
+    if (tool === CITY_CHANNEL_TOOLS.BROWSE) {
+      setStatusMessage('浏览模式：拖拽查看通道，滚轮缩放。');
+      return;
+    }
+    setStatusMessage(tool === CITY_CHANNEL_TOOLS.ERASE ? '擦除模式：点击板材删除。' : '选择模式：点击格子查看信息。');
   }, []);
 
   const undo = useCallback(() => {
@@ -370,6 +710,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
     mapData,
     activeLayer,
     activeTool,
+    activeTileType,
     activeRotation,
     selectedCell,
     validationResult,
@@ -379,10 +720,18 @@ const useCityChannelEditorState = (initialMapData = null) => {
     canRedo: redoStack.length > 0,
     routeKeySet,
     setActiveTool,
+    setActiveTileType,
     setActiveRotation,
     setSelectedCell,
     placeTile,
+    placeWall,
     eraseTile,
+    eraseWall,
+    deletePlacements,
+    movePlacements,
+    rotatePlacements,
+    rotatePlacementsReverse,
+    flipPlacements,
     setEntrance,
     setExit,
     rotateTileAtCell,
@@ -396,6 +745,8 @@ const useCityChannelEditorState = (initialMapData = null) => {
     validateSafeRoute,
     handleCellAction,
     rotateActiveItem,
+    selectMaterial,
+    selectOperationTool,
     undo,
     redo
   };

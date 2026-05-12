@@ -33,7 +33,9 @@ const CityWorkshopPage = () => {
       {editingTemplate ? (
         <CityChannelImmersiveEditor
           initialMapData={editingTemplate.mapData}
+          templateId={editingTemplate.id}
           templateName={editingTemplate.name}
+          templateSource={editingTemplate.source}
           onExit={handleExitEditor}
         />
       ) : null}

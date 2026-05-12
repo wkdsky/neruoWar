@@ -1,6 +1,9 @@
 import {
   CITY_CHANNEL_TILE_TYPES,
+  CITY_CHANNEL_WALL_EDGES,
   createCellKey,
+  createWallKey,
+  getPortalPassAxis,
   isValidCell,
   normalizeCityChannelMap
 } from './cityChannelSchema';
@@ -28,7 +31,41 @@ const isStairTile = (mapData, point) => (
   mapData.tiles[createCellKey(point.x, point.y, point.z)]?.panelType === CITY_CHANNEL_TILE_TYPES.STAIR
 );
 
+const getEdgeBetween = (from, to) => {
+  if (to.x === from.x + 1 && to.y === from.y) return CITY_CHANNEL_WALL_EDGES.EAST;
+  if (to.x === from.x - 1 && to.y === from.y) return CITY_CHANNEL_WALL_EDGES.WEST;
+  if (to.y === from.y + 1 && to.x === from.x) return CITY_CHANNEL_WALL_EDGES.SOUTH;
+  if (to.y === from.y - 1 && to.x === from.x) return CITY_CHANNEL_WALL_EDGES.NORTH;
+  return null;
+};
+
+const getOppositeEdge = (edge) => {
+  if (edge === CITY_CHANNEL_WALL_EDGES.EAST) return CITY_CHANNEL_WALL_EDGES.WEST;
+  if (edge === CITY_CHANNEL_WALL_EDGES.WEST) return CITY_CHANNEL_WALL_EDGES.EAST;
+  if (edge === CITY_CHANNEL_WALL_EDGES.SOUTH) return CITY_CHANNEL_WALL_EDGES.NORTH;
+  return CITY_CHANNEL_WALL_EDGES.SOUTH;
+};
+
+const isBlockedByWall = (mapData, from, to) => {
+  const edge = getEdgeBetween(from, to);
+  if (!edge) return false;
+  const opposite = getOppositeEdge(edge);
+  return Boolean(
+    mapData.walls?.[createWallKey(from.x, from.y, from.z, edge)]
+    || mapData.walls?.[createWallKey(to.x, to.y, to.z, opposite)]
+  );
+};
+
+const isPortalTile = (tile) => (
+  tile?.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE
+  || tile?.panelType === CITY_CHANNEL_TILE_TYPES.EXIT
+);
+
 const getNeighbors = (mapData, point) => {
+  const currentTile = mapData.tiles[createCellKey(point.x, point.y, point.z)];
+  const currentIsPortal = isPortalTile(currentTile);
+  const currentPassAxis = currentIsPortal ? getPortalPassAxis(currentTile.rotation) : null;
+
   const candidates = [
     { x: point.x + 1, y: point.y, z: point.z },
     { x: point.x - 1, y: point.y, z: point.z },
@@ -43,11 +80,29 @@ const getNeighbors = (mapData, point) => {
     );
   }
 
-  return candidates.filter((candidate) => (
-    isValidCell(candidate.x, candidate.y, candidate.z, mapData)
-    && isWalkableTile(mapData, candidate)
-    && (candidate.z === point.z || isStairTile(mapData, candidate))
-  ));
+  return candidates.filter((candidate) => {
+    if (!isValidCell(candidate.x, candidate.y, candidate.z, mapData)) return false;
+    if (!isWalkableTile(mapData, candidate)) return false;
+    if (isBlockedByWall(mapData, point, candidate)) return false;
+    if (candidate.z !== point.z && !isStairTile(mapData, candidate)) return false;
+
+    const dx = candidate.x - point.x;
+    const dy = candidate.y - point.y;
+
+    if (currentIsPortal) {
+      if (currentPassAxis === 'x' && dx === 0) return false;
+      if (currentPassAxis === 'y' && dy === 0) return false;
+    }
+
+    const candidateTile = mapData.tiles[createCellKey(candidate.x, candidate.y, candidate.z)];
+    if (isPortalTile(candidateTile)) {
+      const candidateAxis = getPortalPassAxis(candidateTile.rotation);
+      if (candidateAxis === 'x' && dx === 0) return false;
+      if (candidateAxis === 'y' && dy === 0) return false;
+    }
+
+    return true;
+  });
 };
 
 const rebuildRoute = (parentByKey, endKey) => {

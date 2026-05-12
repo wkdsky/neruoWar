@@ -1,11 +1,16 @@
 import {
   CITY_CHANNEL_STORAGE_KEY,
   CITY_CHANNEL_TILE_TYPES,
+  CITY_CHANNEL_USER_TEMPLATE_STORAGE_KEY,
   createBaseCityChannelMap,
   createCellKey,
+  createWall,
+  createWallKey,
   createDefaultCityChannelMap,
   createTile,
-  normalizeCityChannelMap
+  normalizeTemplateMeta,
+  normalizeCityChannelMap,
+  serializeCityChannelMap
 } from './cityChannelSchema';
 import { validateCityChannelSafeRoute } from './cityChannelValidation';
 
@@ -45,22 +50,47 @@ const addWall = (mapData, x, y, z = 0, rotation = 0) => {
 
 const withEntranceExit = (mapData, entrance, exit) => ({
   ...mapData,
-  entrances: [{ id: `${mapData.id || 'template'}_entrance`, ...entrance }],
-  exits: [{ id: `${mapData.id || 'template'}_exit`, ...exit }]
+  tiles: {
+    ...mapData.tiles,
+    [createCellKey(entrance.x, entrance.y, entrance.z || 0)]: createTile({
+      x: entrance.x,
+      y: entrance.y,
+      z: entrance.z || 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.ENTRANCE,
+      rotation: entrance.rotation || 0
+    }),
+    [createCellKey(exit.x, exit.y, exit.z || 0)]: createTile({
+      x: exit.x,
+      y: exit.y,
+      z: exit.z || 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.EXIT,
+      rotation: exit.rotation || 0
+    })
+  },
+  entrances: [{ id: `${mapData.id || 'template'}_entrance`, x: entrance.x, y: entrance.y, z: entrance.z || 0 }],
+  exits: [{ id: `${mapData.id || 'template'}_exit`, x: exit.x, y: exit.y, z: exit.z || 0 }]
 });
 
-const finalizeTemplateMap = (mapData) => {
+const finalizeTemplateMap = (mapData, templateMeta = {}) => {
   const validation = validateCityChannelSafeRoute(mapData);
   return normalizeCityChannelMap({
     ...mapData,
+    templateMeta: normalizeTemplateMeta(templateMeta, mapData.templateMeta),
     safeRoute: validation.ok ? validation.route : []
   });
 };
 
-const createBlankLegalTemplate = () => finalizeTemplateMap(createDefaultCityChannelMap());
+const createBlankLegalTemplate = () => finalizeTemplateMap(createDefaultCityChannelMap(), {
+  source: 'create',
+  templateId: 'blank-legal',
+  visibility: 'official'
+});
 
 const createAlleyTemplate = () => {
-  let map = createBaseCityChannelMap({ name: '小巷通道模板' });
+  let map = createBaseCityChannelMap({
+    name: '小巷通道模板',
+    templateMeta: { source: 'official', templateId: 'alley-l', visibility: 'official' }
+  });
   const points = [
     [14, 15],
     [15, 15],
@@ -75,11 +105,14 @@ const createAlleyTemplate = () => {
   });
   map = addWall(map, 16, 14, 0, 90);
   map = addWall(map, 18, 16, 0, 0);
-  return finalizeTemplateMap(withEntranceExit(map, { x: 14, y: 15, z: 0 }, { x: 18, y: 17, z: 0 }));
+  return finalizeTemplateMap(withEntranceExit(map, { x: 14, y: 15, z: 0, rotation: 90 }, { x: 18, y: 17, z: 0, rotation: 90 }), map.templateMeta);
 };
 
 const createHallTemplate = () => {
-  let map = createBaseCityChannelMap({ name: '多门厅模板' });
+  let map = createBaseCityChannelMap({
+    name: '多门厅模板',
+    templateMeta: { source: 'official', templateId: 'split-hall', visibility: 'official' }
+  });
   const points = [
     [15, 16],
     [16, 16],
@@ -96,11 +129,14 @@ const createHallTemplate = () => {
   });
   map = addWall(map, 15, 15, 0, 0);
   map = addWall(map, 15, 17, 0, 0);
-  return finalizeTemplateMap(withEntranceExit(map, { x: 15, y: 16, z: 0 }, { x: 19, y: 16, z: 0 }));
+  return finalizeTemplateMap(withEntranceExit(map, { x: 15, y: 16, z: 0, rotation: 90 }, { x: 19, y: 16, z: 0, rotation: 90 }), map.templateMeta);
 };
 
 const createMechanismPreviewTemplate = () => {
-  let map = createBaseCityChannelMap({ name: '机关坊雏形' });
+  let map = createBaseCityChannelMap({
+    name: '机关坊雏形',
+    templateMeta: { source: 'shared', templateId: 'shared-mechanism-seed', visibility: 'shared' }
+  });
   const points = [
     [15, 16],
     [16, 16],
@@ -115,7 +151,7 @@ const createMechanismPreviewTemplate = () => {
   });
   map = addWall(map, 17, 15, 0, 90);
   return finalizeTemplateMap({
-    ...withEntranceExit(map, { x: 15, y: 16, z: 0 }, { x: 19, y: 17, z: 0 }),
+    ...withEntranceExit(map, { x: 15, y: 16, z: 0, rotation: 90 }, { x: 19, y: 17, z: 0, rotation: 90 }),
     mechanisms: [
       {
         id: 'mock_mechanism_preview',
@@ -123,7 +159,52 @@ const createMechanismPreviewTemplate = () => {
         label: '机关预留位'
       }
     ]
+  }, map.templateMeta);
+};
+
+export const createOcclusionRegressionTemplate = () => {
+  let map = createBaseCityChannelMap({
+    name: '遮挡回归测试模板',
+    templateMeta: { source: 'debug', templateId: 'occlusion-regression', visibility: 'private' }
   });
+  [
+    [15, 15],
+    [15, 16],
+    [16, 16],
+    [16, 17],
+    [17, 16],
+    [18, 16],
+    [18, 17]
+  ].forEach(([x, y]) => {
+    map = addFloor(map, x, y);
+  });
+
+  const wallBehindKey = createWallKey(15, 16, 0, 'north');
+  const wallFrontKey = createWallKey(16, 16, 0, 'south');
+  const wallMechanismKey = createWallKey(17, 16, 0, 'south');
+  map = {
+    ...map,
+    tiles: {
+      ...map.tiles,
+      [createCellKey(17, 16, 0)]: createTile({
+        x: 17,
+        y: 16,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.PRESSURE_PLATE
+      })
+    },
+    walls: {
+      ...map.walls,
+      [wallBehindKey]: createWall({ x: 15, y: 16, z: 0, edge: 'north' }),
+      [wallFrontKey]: createWall({ x: 16, y: 16, z: 0, edge: 'south' }),
+      [wallMechanismKey]: createWall({ x: 17, y: 16, z: 0, edge: 'south' })
+    }
+  };
+
+  return finalizeTemplateMap(
+    withEntranceExit(map, { x: 15, y: 15, z: 0, rotation: 90 }, { x: 18, y: 17, z: 0, rotation: 90 }),
+    map.templateMeta
+  );
 };
 
 export const CITY_CHANNEL_TEMPLATE_GROUPS = [
@@ -181,6 +262,105 @@ export const CITY_CHANNEL_TEMPLATE_GROUPS = [
     ]
   }
 ];
+
+export const readCityChannelUserTemplates = () => {
+  try {
+    const raw = localStorage.getItem(CITY_CHANNEL_USER_TEMPLATE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((record, index) => {
+        const mapData = normalizeCityChannelMap(record?.mapData || record);
+        const validation = validateCityChannelSafeRoute(mapData);
+        return {
+          id: typeof record?.id === 'string' && record.id ? record.id : `local-template-${index}`,
+          name: mapData.name || record?.name || '我的模板',
+          description: record?.description || '保存到当前浏览器的个人模板。',
+          actionLabel: '编辑模板',
+          source: 'user',
+          mapData,
+          validation,
+          savedAt: record?.savedAt || null
+        };
+      });
+  } catch (error) {
+    return [{
+      id: 'local-template-read-error',
+      name: '我的模板读取失败',
+      description: error.message,
+      actionLabel: '无法编辑',
+      source: 'user',
+      disabled: true,
+      mapData: null,
+      validation: {
+        ok: false,
+        message: '我的模板读取失败',
+        route: [],
+        checkedCells: 0
+      }
+    }];
+  }
+};
+
+export const saveCityChannelUserTemplate = ({
+  id = null,
+  name,
+  description = '保存到当前浏览器的个人模板。',
+  mapData,
+  sourceTemplate = null
+} = {}) => {
+  const trimmedName = typeof name === 'string' ? name.trim() : '';
+  if (!trimmedName) {
+    throw new Error('模板名称不能为空');
+  }
+  const now = new Date().toISOString();
+  const existingMeta = normalizeTemplateMeta(mapData?.templateMeta);
+  const sourceId = sourceTemplate?.id || existingMeta.templateId || null;
+  const normalizedMap = serializeCityChannelMap({
+    ...mapData,
+    name: trimmedName,
+    templateMeta: normalizeTemplateMeta({
+      ...existingMeta,
+      source: 'user',
+      templateId: id || existingMeta.templateId,
+      parentTemplateId: id ? existingMeta.parentTemplateId : sourceId,
+      rootTemplateId: existingMeta.rootTemplateId || sourceId,
+      originalTemplateId: existingMeta.originalTemplateId || sourceId,
+      visibility: 'private',
+      forkedAt: existingMeta.forkedAt || now,
+      savedAt: now,
+      lineage: existingMeta.lineage
+    })
+  });
+  const raw = localStorage.getItem(CITY_CHANNEL_USER_TEMPLATE_STORAGE_KEY);
+  const records = raw ? JSON.parse(raw) : [];
+  const list = Array.isArray(records) ? records : [];
+  const nextId = id || `user_template_${Date.now().toString(36)}`;
+  const mapWithRecordId = serializeCityChannelMap({
+    ...normalizedMap,
+    templateMeta: normalizeTemplateMeta({
+      ...normalizedMap.templateMeta,
+      templateId: nextId,
+      savedAt: now
+    }, normalizedMap.templateMeta)
+  });
+  const nextRecord = {
+    id: nextId,
+    name: trimmedName,
+    description,
+    savedAt: now,
+    sourceTemplateId: mapWithRecordId.templateMeta.parentTemplateId,
+    rootTemplateId: mapWithRecordId.templateMeta.rootTemplateId,
+    mapData: mapWithRecordId
+  };
+  const existingIndex = list.findIndex((item) => item?.id === nextId);
+  const nextList = existingIndex >= 0
+    ? list.map((item, index) => (index === existingIndex ? nextRecord : item))
+    : [nextRecord, ...list];
+  localStorage.setItem(CITY_CHANNEL_USER_TEMPLATE_STORAGE_KEY, JSON.stringify(nextList));
+  return nextRecord;
+};
 
 export const readCityChannelDraft = () => {
   try {

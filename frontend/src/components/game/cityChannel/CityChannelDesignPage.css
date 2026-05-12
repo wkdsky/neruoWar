@@ -263,17 +263,79 @@
   --cell-edge: rgba(125, 211, 252, 0.3);
 }
 
+.city-channel-cell.is-glass {
+  --cell-top: rgba(125, 211, 252, 0.4);
+  --cell-side: rgba(14, 116, 144, 0.28);
+  --cell-edge: rgba(186, 230, 253, 0.7);
+}
+
 .city-channel-cell.is-wall {
   --cell-top: #263241;
   --cell-side: #0f172a;
   --cell-edge: rgba(148, 163, 184, 0.32);
 }
 
-.city-channel-cell.is-wall .city-channel-cell__face {
+.city-channel-cell.is-glass-wall {
+  --cell-top: rgba(125, 211, 252, 0.34);
+  --cell-side: rgba(14, 116, 144, 0.28);
+  --cell-edge: rgba(186, 230, 253, 0.72);
+}
+
+.city-channel-cell.is-wall .city-channel-cell__face,
+.city-channel-cell.is-glass-wall .city-channel-cell__face {
   transform: translateY(-12px);
   box-shadow:
     0 20px 24px rgba(0, 0, 0, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.city-channel-cell.city-channel-tile--vertical .city-channel-cell__face {
+  opacity: 0.72;
+}
+
+.city-channel-cell__vertical-outline,
+.city-channel-cell__vertical-base {
+  position: absolute;
+  left: 50%;
+  bottom: 47%;
+  width: 34px;
+  height: 44px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.city-channel-cell__vertical-outline {
+  border: 1px dashed var(--cell-edge);
+  border-bottom: 0;
+  background: transparent;
+  opacity: 0.2;
+  clip-path: polygon(10% 12%, 90% 0, 96% 78%, 50% 100%, 4% 78%);
+}
+
+.city-channel-cell__vertical-base {
+  height: 18px;
+  background: linear-gradient(to top, var(--cell-top) 0%, color-mix(in srgb, var(--cell-top) 68%, transparent) 54%, transparent 100%);
+  opacity: 1;
+  filter: drop-shadow(0 7px 10px rgba(0, 0, 0, 0.28));
+  clip-path: polygon(4% 12%, 96% 0, 96% 72%, 50% 100%, 4% 72%);
+}
+
+.city-channel-cell.is-entrance-tile {
+  --cell-top: rgba(14, 116, 144, 0.62);
+  --cell-side: rgba(8, 47, 73, 0.72);
+  --cell-edge: rgba(103, 232, 249, 0.76);
+}
+
+.city-channel-cell.is-exit-tile {
+  --cell-top: rgba(161, 98, 7, 0.62);
+  --cell-side: rgba(69, 26, 3, 0.72);
+  --cell-edge: rgba(250, 204, 21, 0.76);
+}
+
+.city-channel-cell.is-mechanical {
+  --cell-top: #1f4d57;
+  --cell-side: #0f2f3a;
+  --cell-edge: rgba(45, 212, 191, 0.62);
 }
 
 .city-channel-cell.is-stair {
@@ -297,7 +359,8 @@
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
 }
 
-.city-channel-cell.is-wall .city-channel-cell__glyph {
+.city-channel-cell.is-wall .city-channel-cell__glyph,
+.city-channel-cell.is-glass-wall .city-channel-cell__glyph {
   transform: translate(-50%, calc(-50% - 12px));
 }
 

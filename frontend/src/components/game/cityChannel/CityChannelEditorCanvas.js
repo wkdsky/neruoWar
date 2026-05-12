@@ -5,6 +5,7 @@ import {
   CITY_CHANNEL_WIDTH,
   createCellKey
 } from './cityChannelSchema';
+import { getCityChannelMaterial, isMechanicalMaterial } from './cityChannelCatalog';
 
 const TILE_WIDTH = 58;
 const TILE_HEIGHT = 30;
@@ -15,7 +16,11 @@ const tileClassByType = {
   [CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR]: 'is-wood',
   [CITY_CHANNEL_TILE_TYPES.STONE_FLOOR]: 'is-stone',
   [CITY_CHANNEL_TILE_TYPES.IRON_FLOOR]: 'is-iron',
+  [CITY_CHANNEL_TILE_TYPES.GLASS_FLOOR]: 'is-glass',
   [CITY_CHANNEL_TILE_TYPES.WALL]: 'is-wall',
+  [CITY_CHANNEL_TILE_TYPES.GLASS_WALL]: 'is-glass-wall',
+  [CITY_CHANNEL_TILE_TYPES.ENTRANCE]: 'is-entrance-tile',
+  [CITY_CHANNEL_TILE_TYPES.EXIT]: 'is-exit-tile',
   [CITY_CHANNEL_TILE_TYPES.STAIR]: 'is-stair'
 };
 
@@ -23,8 +28,23 @@ const tileGlyphByType = {
   [CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR]: '木',
   [CITY_CHANNEL_TILE_TYPES.STONE_FLOOR]: '石',
   [CITY_CHANNEL_TILE_TYPES.IRON_FLOOR]: '铁',
+  [CITY_CHANNEL_TILE_TYPES.GLASS_FLOOR]: '玻',
   [CITY_CHANNEL_TILE_TYPES.WALL]: '墙',
-  [CITY_CHANNEL_TILE_TYPES.STAIR]: '梯'
+  [CITY_CHANNEL_TILE_TYPES.GLASS_WALL]: '璃',
+  [CITY_CHANNEL_TILE_TYPES.ENTRANCE]: '入',
+  [CITY_CHANNEL_TILE_TYPES.EXIT]: '出',
+  [CITY_CHANNEL_TILE_TYPES.STAIR]: '梯',
+  [CITY_CHANNEL_TILE_TYPES.PRESSURE_PLATE]: '压',
+  [CITY_CHANNEL_TILE_TYPES.DIRECTIONAL_PRESSURE_PLATE]: '向',
+  [CITY_CHANNEL_TILE_TYPES.VERTICAL_PUSH_BUTTON]: '纵',
+  [CITY_CHANNEL_TILE_TYPES.HORIZONTAL_PUSH_BUTTON]: '横',
+  [CITY_CHANNEL_TILE_TYPES.ROTARY_BUTTON]: '旋',
+  [CITY_CHANNEL_TILE_TYPES.EXTERNAL_GEAR_PLATE]: '齿',
+  [CITY_CHANNEL_TILE_TYPES.INTERNAL_GEAR_PLATE]: '内',
+  [CITY_CHANNEL_TILE_TYPES.PEG_GEAR_PLATE]: '凸',
+  [CITY_CHANNEL_TILE_TYPES.TRAPDOOR_PLATE]: '翻',
+  [CITY_CHANNEL_TILE_TYPES.SIDE_PUSHER_PLATE]: '推',
+  [CITY_CHANNEL_TILE_TYPES.SPRING_PLATE]: '簧'
 };
 
 const buildCells = (activeLayer) => {
@@ -72,6 +92,10 @@ const CityChannelEditorCanvas = ({
         {cells.map((cell) => {
           const key = createCellKey(cell.x, cell.y, cell.z);
           const tile = mapData.tiles[key] || null;
+          const material = tile ? getCityChannelMaterial(tile.panelType) : null;
+          const useVerticalPreview = material?.isVertical
+            && tile?.panelType !== CITY_CHANNEL_TILE_TYPES.ENTRANCE
+            && tile?.panelType !== CITY_CHANNEL_TILE_TYPES.EXIT;
           const entrance = findPointAtCell(mapData.entrances, cell);
           const exit = findPointAtCell(mapData.exits, cell);
           const isSelected = selectedCell
@@ -83,6 +107,8 @@ const CityChannelEditorCanvas = ({
             'city-channel-cell',
             tile ? 'has-tile' : 'is-empty',
             tile ? tileClassByType[tile.panelType] || 'is-wood' : '',
+            useVerticalPreview ? 'city-channel-tile--vertical' : '',
+            material && isMechanicalMaterial(material) ? 'is-mechanical' : '',
             entrance ? 'has-entrance' : '',
             exit ? 'has-exit' : '',
             tile?.marker === 'safe' ? 'has-safe-marker' : '',
@@ -100,11 +126,17 @@ const CityChannelEditorCanvas = ({
               style={{
                 left: `${cell.left}px`,
                 top: `${cell.top}px`,
-                zIndex: cell.zIndex + (tile?.panelType === CITY_CHANNEL_TILE_TYPES.WALL ? 6 : 0)
+                zIndex: cell.zIndex + (useVerticalPreview ? 6 : 0)
               }}
               onClick={() => onCellClick(cell)}
             >
               <span className="city-channel-cell__face" />
+              {useVerticalPreview ? (
+                <>
+                  <span className="city-channel-cell__vertical-outline" aria-hidden="true" />
+                  <span className="city-channel-cell__vertical-base" aria-hidden="true" />
+                </>
+              ) : null}
               {tile ? (
                 <span className="city-channel-cell__glyph" aria-hidden="true">
                   {tileGlyphByType[tile.panelType] || ''}

@@ -76,18 +76,22 @@ module.exports = function setupProxy(app) {
     proxyReq.removeHeader('origin');
   };
 
-  const options = {
+  const httpProxyOptions = {
     target,
     changeOrigin: true,
-    ws: true,
     onProxyReq: stripBrowserOrigin,
-    onProxyReqWs: stripBrowserOrigin,
     logLevel: 'warn'
   };
 
-  app.use('/api', createProxyMiddleware(options));
-  app.use('/socket.io', createProxyMiddleware(options));
-  app.use('/uploads', createProxyMiddleware(options));
+  const socketProxyOptions = {
+    ...httpProxyOptions,
+    ws: true,
+    onProxyReqWs: stripBrowserOrigin
+  };
+
+  app.use('/api', createProxyMiddleware(httpProxyOptions));
+  app.use('/socket.io', createProxyMiddleware(socketProxyOptions));
+  app.use('/uploads', createProxyMiddleware(httpProxyOptions));
 
   console.log(`[setupProxy] proxying dev requests to ${target}`);
 };
