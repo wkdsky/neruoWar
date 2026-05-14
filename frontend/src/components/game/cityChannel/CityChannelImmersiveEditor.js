@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Eraser,
   Eye,
   EyeOff,
   Hand,
@@ -66,6 +65,7 @@ const MAP_CENTER = {
 };
 const CAMERA_PAN_SPEED = 520;
 const CAMERA_ROTATION_SPEED = 96;
+const SELECTED_MOVE_HOLD_DELAY = 260;
 const EDGE_NEIGHBOR_OFFSETS = {
   north: { x: 0, y: -1 },
   south: { x: 0, y: 1 },
@@ -78,6 +78,18 @@ const normalizeCameraYaw = normalizeCityChannelCameraYaw;
 const createWallSelectionKey = (wall) => (
   wall ? createWallKey(wall.x, wall.y, wall.z, wall.edge) : ''
 );
+
+const createHitIdentity = (hit) => {
+  if (!hit?.cell) return '';
+  const cellKey = createCellKey(hit.cell.x, hit.cell.y, hit.cell.z);
+  return [
+    hit.type || '',
+    cellKey,
+    hit.edge || '',
+    hit.hitZone || '',
+    hit.connector?.id || ''
+  ].join(':');
+};
 
 const normalizeClientRect = ({ startX, startY, endX, endY }) => ({
   left: Math.min(startX, endX),
@@ -106,14 +118,29 @@ const normalizePointerAngleDelta = (delta) => {
 
 const TOOL_ITEMS = [
   { key: CITY_CHANNEL_TOOLS.BROWSE, label: '浏览', Icon: Hand },
-  { key: CITY_CHANNEL_TOOLS.SELECT, label: '选择', Icon: MousePointer2 },
-  { key: CITY_CHANNEL_TOOLS.ERASE, label: '擦除', Icon: Eraser },
-  { key: 'rotate_selection', label: '旋转物件', Icon: RotateCw }
+  { key: CITY_CHANNEL_TOOLS.SELECT, label: '选择', Icon: MousePointer2 }
 ];
 
 const FLOATING_PANELS = [
   { key: 'layers', label: '图层', Icon: Layers }
 ];
+
+const WALL_VIEW_MODES = ['semi', 'perspective', 'solid'];
+
+const WALL_VIEW_MODE_CONFIG = {
+  semi: {
+    label: '半透视',
+    toast: '墙板显示：半透视'
+  },
+  perspective: {
+    label: '透视',
+    toast: '墙板显示：透视'
+  },
+  solid: {
+    label: '不透视',
+    toast: '墙板显示：不透视'
+  }
+};
 
 const toolLabelByKey = {
   [CITY_CHANNEL_TOOLS.BROWSE]: '浏览',
@@ -130,7 +157,8 @@ const getInteractionHintConfig = ({
   activeTool,
   isPlaceMode,
   carryState,
-  selectedCount
+  selectedCount,
+  isTemporarySelection = false
 }) => {
   if (activeTool === CITY_CHANNEL_TOOLS.BROWSE) {
     return {
@@ -155,8 +183,10 @@ const getInteractionHintConfig = ({
   }
   if (activeTool === CITY_CHANNEL_TOOLS.SELECT) {
     return {
-      mode: '选择',
-      mouse: '点击选择 / Shift 追加 / 空白拖拽框选',
+      mode: isTemporarySelection ? '临时选择' : '选择',
+      mouse: isTemporarySelection
+        ? '点击选择 / Shift 追加 / 空白拖拽框选 / 右键返回浏览'
+        : '点击选择 / Shift 追加 / 空白拖拽框选',
       keyboard: selectedCount > 0
         ? 'M 移动 / Del 删除 / Space 翻转 / WASD 平移 / Q E 旋转'
         : 'WASD 平移 / Q E 旋转'
@@ -447,8 +477,8 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     markSavedMap,
     placeTile,
     eraseTile,
-    placeWall,
     eraseWall,
+    applyPlacementOperations,
     deletePlacements,
     movePlacements,
     rotatePlacements,
@@ -471,6 +501,10 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   const keyboardActionsRef = useRef({});
   const movePreviewRef = useRef({ valid: true, conflicts: [], targetKey: '' });
   const browsePointerSequenceRef = useRef({ lastDownAt: 0, lastX: 0, lastY: 0 });
+  const selectedMoveHoldTimerRef = useRef(null);
+  const hoverSnapshotRef = useRef({ cellKey: '', actionKey: '', verticalKey: '', edge: '' });
+  const paintOperationQueueRef = useRef([]);
+  const paintFlushFrameRef = useRef(null);
 
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: -40 });
@@ -482,22 +516,45 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   const [isPanning, setIsPanning] = useState(false);
   const [isBrowseRotating, setIsBrowseRotating] = useState(false);
   const [openPanel, setOpenPanel] = useState(null);
-  const [wallTransparency, setWallTransparency] = useState(false);
+  const [wallViewMode, setWallViewMode] = useState('semi');
   const [showHelperGrid, setShowHelperGrid] = useState(false);
   const [showCoordinates, setShowCoordinates] = useState(false);
   const [panelPose, setPanelPose] = useState('floor');
   const [selectedCells, setSelectedCells] = useState([]);
   const [selectedWalls, setSelectedWalls] = useState([]);
+  const [selectionModeOrigin, setSelectionModeOrigin] = useState(null);
+  const [placeReturnState, setPlaceReturnState] = useState(null);
   const [selectionBox, setSelectionBox] = useState(null);
   const [carryState, setCarryState] = useState(null);
   const [toasts, setToasts] = useState([]);
   const domainModel = useMemo(() => buildCityChannelDomainModel(mapData), [mapData]);
   const isPlaceMode = activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && !!activeTileType;
+  const isWallPerspectiveMode = wallViewMode === 'perspective';
+  const isWallSolidMode = wallViewMode === 'solid';
+  const wallViewModeConfig = WALL_VIEW_MODE_CONFIG[wallViewMode] || WALL_VIEW_MODE_CONFIG.semi;
 
   const addToast = useCallback((message, type = 'info') => {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     setToasts((prev) => [...prev, { id, message, type, timestamp: Date.now() }]);
   }, []);
+
+  const flushPaintOperations = useCallback(() => {
+    if (paintFlushFrameRef.current) {
+      cancelAnimationFrame(paintFlushFrameRef.current);
+      paintFlushFrameRef.current = null;
+    }
+    const operations = paintOperationQueueRef.current;
+    if (operations.length <= 0) return;
+    paintOperationQueueRef.current = [];
+    applyPlacementOperations(operations);
+  }, [applyPlacementOperations]);
+
+  const queuePaintOperation = useCallback((operation) => {
+    if (!operation) return;
+    paintOperationQueueRef.current.push(operation);
+    if (paintFlushFrameRef.current) return;
+    paintFlushFrameRef.current = requestAnimationFrame(flushPaintOperations);
+  }, [flushPaintOperations]);
 
   useEffect(() => {
     if (toasts.length === 0) return;
@@ -587,6 +644,15 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     document.body.classList.add('city-channel-immersive-active');
     return () => {
       document.body.classList.remove('city-channel-immersive-active');
+      if (selectedMoveHoldTimerRef.current) {
+        clearTimeout(selectedMoveHoldTimerRef.current);
+        selectedMoveHoldTimerRef.current = null;
+      }
+      if (paintFlushFrameRef.current) {
+        cancelAnimationFrame(paintFlushFrameRef.current);
+        paintFlushFrameRef.current = null;
+      }
+      paintOperationQueueRef.current = [];
       stopCameraRotation();
       stopCameraPan();
     };
@@ -614,18 +680,6 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     };
   }, []);
 
-  const getLocalPointForCell = useCallback((clientX, clientY, cell) => {
-    const rect = viewportRef.current?.getBoundingClientRect();
-    if (!rect || !cell) return null;
-    const cellProj = projectCell(cell, cameraYaw);
-    const cellScreenX = rect.left + rect.width / 2 + offset.x + cellProj.left * zoom;
-    const cellScreenY = rect.top + rect.height / 2 + offset.y + cellProj.top * zoom;
-    return {
-      x: (clientX - (cellScreenX - (TILE_RENDER_WIDTH * 0.5 * zoom))) / zoom,
-      y: (clientY - (cellScreenY - (TILE_RENDER_HEIGHT * 0.57 * zoom))) / zoom
-    };
-  }, [cameraYaw, offset, zoom]);
-
   const placePanelAtCell = useCallback((cell) => {
     if (!cell) return;
     placeTile(cell, panelPose === 'wall' ? CITY_CHANNEL_TILE_TYPES.WALL : CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR);
@@ -639,31 +693,36 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     setCarryState(null);
   }, [setSelectedCell]);
 
+  const enterBrowseMode = useCallback(() => {
+    clearSelection();
+    setSelectionModeOrigin(null);
+    setPlaceReturnState(null);
+    setIsBrowseRotating(false);
+    browsePointerSequenceRef.current = { lastDownAt: 0, lastX: 0, lastY: 0 };
+    selectOperationTool(CITY_CHANNEL_TOOLS.BROWSE);
+  }, [clearSelection, selectOperationTool]);
+
   const selectedPlacements = useMemo(() => (
     [...selectedCells, ...selectedWalls]
   ), [selectedCells, selectedWalls]);
 
-  const startCarry = useCallback(() => {
-    if (selectedPlacements.length === 0) return;
-    setCarryState({ origins: selectedPlacements.map((placement) => ({ ...placement })) });
-  }, [selectedPlacements]);
-
-  const commitCarry = useCallback((targetCell) => {
-    if (!carryState || !targetCell) return;
+  const commitPlacementsMove = useCallback((origins, targetCell) => {
+    if (!Array.isArray(origins) || origins.length === 0 || !targetCell) return false;
     const targetKey = createCellKey(targetCell.x, targetCell.y, targetCell.z);
     if (
       movePreviewRef.current?.targetKey !== targetKey
       || !movePreviewRef.current?.valid
     ) {
       addToast('目标位置存在冲突，无法完成移动。', 'error');
-      return;
+      return false;
     }
-    const origins = Array.isArray(carryState.origins) ? carryState.origins : [];
-    if (origins.length === 0) return;
     const anchor = origins[0];
     const dx = targetCell.x - anchor.x;
     const dy = targetCell.y - anchor.y;
-    if (dx === 0 && dy === 0) { setCarryState(null); return; }
+    if (dx === 0 && dy === 0) {
+      setCarryState(null);
+      return true;
+    }
     const moves = origins.map((placement) => ({
       from: placement,
       to: {
@@ -678,7 +737,19 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     setSelectedWalls(moves.filter((move) => !!move.to.edge).map((move) => move.to));
     setSelectedCell(moves.find((move) => !move.to.edge)?.to || null);
     setCarryState(null);
-  }, [addToast, carryState, movePlacements, setSelectedCell]);
+    return true;
+  }, [addToast, movePlacements, setSelectedCell]);
+
+  const startCarry = useCallback(() => {
+    if (selectedPlacements.length === 0) return;
+    setCarryState({ origins: selectedPlacements.map((placement) => ({ ...placement })) });
+  }, [selectedPlacements]);
+
+  const commitCarry = useCallback((targetCell) => {
+    if (!carryState || !targetCell) return;
+    const origins = Array.isArray(carryState.origins) ? carryState.origins : [];
+    commitPlacementsMove(origins, targetCell);
+  }, [carryState, commitPlacementsMove]);
 
   const flipSelectedWalls = useCallback(() => {
     if (selectedWalls.length === 0) return;
@@ -739,6 +810,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
           keyboardActionsRef.current.flipWall();
         } else {
           setPanelPose((current) => (current === 'floor' ? 'wall' : 'floor'));
+          setSelectionModeOrigin(null);
           setActiveTool(CITY_CHANNEL_TOOLS.FLOOR);
         }
         return;
@@ -1086,6 +1158,29 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
 
   const buildHitStackFromEvent = useCallback((event) => {
     const hits = [];
+    const rect = viewportRef.current?.getBoundingClientRect();
+    if (!rect) return hits;
+    const getLocalPoint = (cell) => {
+      const cellProj = projectCell(cell, cameraYaw);
+      const cellScreenX = rect.left + rect.width / 2 + offset.x + cellProj.left * zoom;
+      const cellScreenY = rect.top + rect.height / 2 + offset.y + cellProj.top * zoom;
+      const left = cellScreenX - (TILE_RENDER_WIDTH * 0.5 * zoom);
+      const top = cellScreenY - (TILE_RENDER_HEIGHT * 0.57 * zoom);
+      const right = left + (TILE_RENDER_WIDTH * zoom);
+      const bottom = top + (TILE_RENDER_HEIGHT * zoom);
+      if (
+        event.clientX < left - 6
+        || event.clientX > right + 6
+        || event.clientY < top - 6
+        || event.clientY > bottom + 6
+      ) {
+        return null;
+      }
+      return {
+        x: (event.clientX - left) / zoom,
+        y: (event.clientY - top) / zoom
+      };
+    };
 
     visibleItems.forEach((item) => {
       if (item.kind === 'hint') return;
@@ -1098,7 +1193,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       ) {
         return;
       }
-      const localPoint = getLocalPointForCell(event.clientX, event.clientY, item.cell);
+      const localPoint = getLocalPoint(item.cell);
       if (!localPoint) return;
       const cellKey = createCellKey(item.cell.x, item.cell.y, item.cell.z);
 
@@ -1195,7 +1290,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
         ((b.item?.renderOrder || 0) - (a.item?.renderOrder || 0))
         || (b.priority - a.priority)
       ));
-  }, [cameraYaw, getLocalPointForCell, getTileGeometry, visibleItems]);
+  }, [cameraYaw, getTileGeometry, offset.x, offset.y, visibleItems, zoom]);
 
   const resolveActionHit = useCallback((hitStack) => (
     hitStack.find((hit) => !(hit.isVertical && hit.hitZone === 'outline')) || null
@@ -1218,17 +1313,16 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     return hoverCell ? '空地，可吸附放置' : '未指向通道';
   }, [hoverActionHit, hoverCell, hoverVerticalTarget]);
 
-  const updateHoverFromEvent = useCallback((event) => {
+  const updateHoverFromEvent = useCallback((event, { hitTest = true } = {}) => {
     const rect = viewportRef.current?.getBoundingClientRect();
     if (!rect) return null;
     const groundCell = screenToCell({ clientX: event.clientX, clientY: event.clientY, rect, offset, zoom, cameraYaw });
-    const hitStack = buildHitStackFromEvent(event);
+    const hitStack = hitTest ? buildHitStackFromEvent(event) : [];
     const actionHit = resolveActionHit(hitStack);
     const outlineHit = hitStack.find((hit) => hit.isVertical && hit.hitZone === 'outline') || null;
     const cell = actionHit?.cell || groundCell;
-    setHoverCell(cell);
-    setHoverActionHit(actionHit || null);
-    setHoverVerticalTarget(outlineHit || (actionHit?.isVertical ? actionHit : null));
+    const verticalTarget = outlineHit || (actionHit?.isVertical ? actionHit : null);
+    let nextHoverEdge = null;
     if (cell) {
       const cellProj = projectCell(cell, cameraYaw);
       const centerScreenX = rect.left + rect.width / 2 + offset.x + cellProj.left * zoom;
@@ -1250,12 +1344,27 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
         const dist = dx * dx + dy * dy;
         if (dist < minDist) { minDist = dist; closest = edge; }
       });
-      setHoverEdge(closest);
+      nextHoverEdge = closest;
+    }
 
-    } else {
-      setHoverEdge(null);
-      setHoverActionHit(null);
-      setHoverVerticalTarget(null);
+    const nextSnapshot = {
+      cellKey: cell ? createCellKey(cell.x, cell.y, cell.z) : '',
+      actionKey: createHitIdentity(actionHit),
+      verticalKey: createHitIdentity(verticalTarget),
+      edge: nextHoverEdge || ''
+    };
+    const currentSnapshot = hoverSnapshotRef.current;
+    if (
+      currentSnapshot.cellKey !== nextSnapshot.cellKey
+      || currentSnapshot.actionKey !== nextSnapshot.actionKey
+      || currentSnapshot.verticalKey !== nextSnapshot.verticalKey
+      || currentSnapshot.edge !== nextSnapshot.edge
+    ) {
+      hoverSnapshotRef.current = nextSnapshot;
+      setHoverCell(cell);
+      setHoverActionHit(actionHit || null);
+      setHoverVerticalTarget(verticalTarget);
+      setHoverEdge(nextHoverEdge);
     }
     return cell;
   }, [buildHitStackFromEvent, cameraYaw, offset, resolveActionHit, zoom]);
@@ -1376,8 +1485,22 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     return closest;
   }, [cameraYaw, offset, zoom]);
 
-  const applyPlaceModeAction = useCallback((cell, paintedCells, event) => {
+  const applyPlaceModeAction = useCallback((cell, placeStroke, event) => {
+    const paintedCells = placeStroke?.paintedCells;
+    if (!paintedCells) return;
     const key = createCellKey(cell.x, cell.y, cell.z);
+    if (activeTileType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || activeTileType === CITY_CHANNEL_TILE_TYPES.EXIT) {
+      if (paintedCells.has(key)) return;
+      paintedCells.add(key);
+      placeTile(cell, activeTileType);
+      return;
+    }
+    const ensurePaintIntent = (intent) => {
+      if (!placeStroke.paintIntent) {
+        placeStroke.paintIntent = intent;
+      }
+      return placeStroke.paintIntent;
+    };
 
     if (isWallMaterial(activeTileType)) {
       const existingTile = mapData.tiles[key];
@@ -1387,10 +1510,25 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       if (paintedCells.has(wallKey)) return;
       paintedCells.add(wallKey);
       const existingWall = mapData.walls[createWallKey(cell.x, cell.y, cell.z, edge)];
-      if (existingWall) {
-        eraseWall({ x: cell.x, y: cell.y, z: cell.z, edge });
-      } else {
-        placeWall({ x: cell.x, y: cell.y, z: cell.z, edge }, activeTileType);
+      const intent = ensurePaintIntent(existingWall ? 'erase' : 'place');
+      if (intent === 'erase') {
+        if (!existingWall) return;
+        queuePaintOperation({
+          kind: 'wall',
+          action: 'erase',
+          cell,
+          edge
+        });
+        return;
+      }
+      if (!existingWall) {
+        queuePaintOperation({
+          kind: 'wall',
+          action: 'place',
+          cell,
+          edge,
+          panelType: activeTileType
+        });
       }
       return;
     }
@@ -1398,14 +1536,29 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     if (paintedCells.has(key)) return;
     paintedCells.add(key);
     const existingTile = mapData.tiles[key];
-    if (!existingTile) {
-      placeTile(cell, activeTileType);
-    } else if (existingTile.panelType === activeTileType) {
-      eraseTile(cell);
-    } else {
-      placeTile(cell, activeTileType);
+    const intent = ensurePaintIntent(
+      existingTile?.panelType === activeTileType ? 'erase' : 'place'
+    );
+    if (intent === 'erase') {
+      if (existingTile?.panelType === activeTileType) {
+        queuePaintOperation({
+          kind: 'tile',
+          action: 'erase',
+          cell
+        });
+      }
+      return;
     }
-  }, [activeTileType, detectNearestEdge, eraseTile, eraseWall, mapData.tiles, mapData.walls, placeTile, placeWall]);
+    if (!existingTile || existingTile.panelType !== activeTileType) {
+      queuePaintOperation({
+        kind: 'tile',
+        action: 'place',
+        cell,
+        panelType: activeTileType,
+        rotation: activeRotation
+      });
+    }
+  }, [activeRotation, activeTileType, detectNearestEdge, mapData.tiles, mapData.walls, placeTile, queuePaintOperation]);
 
   const getRenderItemClientBounds = useCallback((item) => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -1488,6 +1641,63 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     setSelectedCell(Array.from(tileByKey.values())[0] || null);
   }, [getRenderItemClientBounds, setSelectedCell, visibleItems]);
 
+  const selectPlacementFromHit = useCallback(({ actionHit, clickedCell, additive = false }) => {
+    if (!actionHit || !clickedCell) return false;
+    if (actionHit.edge && actionHit.hitZone === 'base') {
+      const clickedWall = { x: clickedCell.x, y: clickedCell.y, z: clickedCell.z, edge: actionHit.edge };
+      const clickedWallKey = createWallSelectionKey(clickedWall);
+      if (additive) {
+        setSelectedWalls((prev) => (
+          selectedWallKeySet.has(clickedWallKey)
+            ? prev.filter((wall) => createWallSelectionKey(wall) !== clickedWallKey)
+            : [...prev, clickedWall]
+        ));
+      } else {
+        setSelectedWalls([clickedWall]);
+        setSelectedCells([]);
+      }
+      setSelectedCell(null);
+      return true;
+    }
+
+    const clickedTile = actionHit.type === 'tile' || actionHit.type === 'connector'
+      ? (mapData.tiles[createCellKey(actionHit.cell.x, actionHit.cell.y, actionHit.cell.z)] || null)
+      : null;
+    if (!clickedTile) return false;
+
+    if (!additive) {
+      setSelectedWalls([]);
+      setSelectedCells([clickedCell]);
+      setSelectedCell(clickedCell);
+      return true;
+    }
+
+    const cellKey = createCellKey(clickedCell.x, clickedCell.y, clickedCell.z);
+    setSelectedCells((prev) => (
+      selectedCellKeySet.has(cellKey)
+        ? prev.filter((cell) => createCellKey(cell.x, cell.y, cell.z) !== cellKey)
+        : [...prev, clickedCell]
+    ));
+    setSelectedCell(clickedCell);
+    return true;
+  }, [mapData.tiles, selectedCellKeySet, selectedWallKeySet, setSelectedCell]);
+
+  const isSelectedPlacementHit = useCallback((actionHit) => {
+    if (!actionHit?.cell) return false;
+    if (actionHit.edge && actionHit.hitZone === 'base') {
+      return selectedWallKeySet.has(createWallSelectionKey({
+        x: actionHit.cell.x,
+        y: actionHit.cell.y,
+        z: actionHit.cell.z,
+        edge: actionHit.edge
+      }));
+    }
+    if (actionHit.type === 'tile' || actionHit.type === 'connector') {
+      return selectedCellKeySet.has(createCellKey(actionHit.cell.x, actionHit.cell.y, actionHit.cell.z));
+    }
+    return false;
+  }, [selectedCellKeySet, selectedWallKeySet]);
+
   const getPointerOrbitAngle = useCallback((clientX, clientY) => {
     const rect = viewportRef.current?.getBoundingClientRect();
     if (!rect) return null;
@@ -1512,9 +1722,10 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
         startY: event.clientY,
         moved: false,
         placeMode: true,
-        paintedCells: new Set()
+        paintedCells: new Set(),
+        paintIntent: null
       };
-      if (cell) applyPlaceModeAction(cell, dragRef.current.paintedCells, event);
+      if (cell) applyPlaceModeAction(cell, dragRef.current, event);
       return;
     }
     if (activeTool === CITY_CHANNEL_TOOLS.BROWSE) {
@@ -1545,7 +1756,13 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       };
       return;
     }
-    dragRef.current = {
+    const shouldStartHoldMove = (
+      activeTool === CITY_CHANNEL_TOOLS.SELECT
+      && !carryState
+      && selectedPlacements.length > 0
+      && isSelectedPlacementHit(actionHit)
+    );
+    const dragState = {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
@@ -1553,17 +1770,50 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       lastY: event.clientY,
       moved: false,
       shiftKey: event.shiftKey,
-      selectionMode: activeTool === CITY_CHANNEL_TOOLS.SELECT && !carryState && !actionHit
+      selectionMode: activeTool === CITY_CHANNEL_TOOLS.SELECT && !carryState && !actionHit,
+      holdMoveCandidate: shouldStartHoldMove
     };
-  }, [activeTool, applyPlaceModeAction, buildHitStackFromEvent, carryState, getPointerOrbitAngle, isPlaceMode, resolveActionHit, updateHoverFromEvent]);
+    dragRef.current = dragState;
+    if (shouldStartHoldMove) {
+      if (selectedMoveHoldTimerRef.current) clearTimeout(selectedMoveHoldTimerRef.current);
+      const origins = selectedPlacements.map((placement) => ({ ...placement }));
+      selectedMoveHoldTimerRef.current = setTimeout(() => {
+        selectedMoveHoldTimerRef.current = null;
+        const currentDrag = dragRef.current;
+        if (!currentDrag || currentDrag.pointerId !== event.pointerId || currentDrag.moved) return;
+        currentDrag.longPressCarryStarted = true;
+        currentDrag.longPressOrigins = origins;
+        currentDrag.selectionMode = false;
+        setSelectionBox(null);
+        setCarryState({ origins });
+      }, SELECTED_MOVE_HOLD_DELAY);
+    }
+  }, [activeTool, applyPlaceModeAction, buildHitStackFromEvent, carryState, getPointerOrbitAngle, isPlaceMode, isSelectedPlacementHit, resolveActionHit, selectedPlacements, updateHoverFromEvent]);
 
   const handleContextMenu = useCallback((event) => {
     event.preventDefault();
     if (activeTool === CITY_CHANNEL_TOOLS.BROWSE) {
       return;
     }
+    if (activeTool === CITY_CHANNEL_TOOLS.SELECT && selectionModeOrigin === 'browse') {
+      enterBrowseMode();
+      return;
+    }
     if (isPlaceMode) {
+      const returnState = placeReturnState || { tool: CITY_CHANNEL_TOOLS.SELECT, selectionModeOrigin: null };
+      setPlaceReturnState(null);
+      if (returnState.tool === CITY_CHANNEL_TOOLS.BROWSE) {
+        enterBrowseMode();
+        return;
+      }
+      setSelectionModeOrigin(returnState.selectionModeOrigin || null);
       selectOperationTool(CITY_CHANNEL_TOOLS.SELECT);
+      return;
+    }
+    if (activeTool === CITY_CHANNEL_TOOLS.SELECT) {
+      if (selectedPlacements.length > 0) {
+        clearSelection();
+      }
       return;
     }
     if (selectedPlacements.length > 0) {
@@ -1582,14 +1832,18 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     if (actionHit?.type === 'tile') {
       eraseTile(actionHit.cell);
     }
-  }, [activeTool, buildHitStackFromEvent, cameraYaw, clearSelection, eraseTile, eraseWall, isPlaceMode, offset, resolveActionHit, selectOperationTool, selectedPlacements.length, zoom]);
+  }, [activeTool, buildHitStackFromEvent, cameraYaw, clearSelection, enterBrowseMode, eraseTile, eraseWall, isPlaceMode, offset, placeReturnState, resolveActionHit, selectOperationTool, selectedPlacements.length, selectionModeOrigin, zoom]);
 
   const handlePointerMove = useCallback((event) => {
-    const cell = updateHoverFromEvent(event);
     const dragState = dragRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    if (!dragState) {
+      updateHoverFromEvent(event, { hitTest: !carryState });
+      return;
+    }
+    if (dragState.pointerId !== event.pointerId) return;
     if (dragState.placeMode) {
-      if (cell) applyPlaceModeAction(cell, dragState.paintedCells, event);
+      const cell = updateHoverFromEvent(event);
+      if (cell) applyPlaceModeAction(cell, dragState, event);
       return;
     }
     if (dragState.browseMode) {
@@ -1621,6 +1875,20 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     }
     const totalDx = event.clientX - dragState.startX;
     const totalDy = event.clientY - dragState.startY;
+    if (dragState.longPressCarryStarted) {
+      updateHoverFromEvent(event, { hitTest: false });
+      if (Math.hypot(totalDx, totalDy) > 4) {
+        dragState.moved = true;
+      }
+      return;
+    }
+    if (dragState.holdMoveCandidate && Math.hypot(totalDx, totalDy) > 6) {
+      dragState.holdMoveCandidate = false;
+      if (selectedMoveHoldTimerRef.current) {
+        clearTimeout(selectedMoveHoldTimerRef.current);
+        selectedMoveHoldTimerRef.current = null;
+      }
+    }
     if (Math.hypot(totalDx, totalDy) > 4) {
       dragState.moved = true;
       if (!dragState.selectionMode) {
@@ -1643,20 +1911,44 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       dragState.lastY = event.clientY;
       setOffset((current) => clampOffsetToVisibleContent({ x: current.x + dx, y: current.y + dy }));
     }
-  }, [applyPlaceModeAction, clampOffsetToVisibleContent, getPointerOrbitAngle, updateHoverFromEvent]);
+  }, [applyPlaceModeAction, carryState, clampOffsetToVisibleContent, getPointerOrbitAngle, updateHoverFromEvent]);
 
   const handlePointerUp = useCallback((event) => {
     const dragState = dragRef.current;
     dragRef.current = null;
+    if (selectedMoveHoldTimerRef.current) {
+      clearTimeout(selectedMoveHoldTimerRef.current);
+      selectedMoveHoldTimerRef.current = null;
+    }
     setIsPanning(false);
     if (!dragState || dragState.pointerId !== event.pointerId) return;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-    if (dragState.placeMode) return;
+    if (dragState.placeMode) {
+      flushPaintOperations();
+      return;
+    }
+    if (dragState.longPressCarryStarted) {
+      const cell = updateHoverFromEvent(event, { hitTest: false });
+      if (cell) {
+        commitPlacementsMove(dragState.longPressOrigins || [], cell);
+      } else {
+        setCarryState(null);
+      }
+      return;
+    }
     if (dragState.browseMode) {
       if (dragState.browseMode === 'rotate') {
         setIsBrowseRotating(false);
       } else if (dragState.moved) {
         browsePointerSequenceRef.current = { lastDownAt: 0, lastX: 0, lastY: 0 };
+      } else {
+        const hitStack = buildHitStackFromEvent(event);
+        const actionHit = resolveActionHit(hitStack);
+        const clickedCell = actionHit?.cell || updateHoverFromEvent(event);
+        if (selectPlacementFromHit({ actionHit, clickedCell })) {
+          setSelectionModeOrigin('browse');
+          selectOperationTool(CITY_CHANNEL_TOOLS.SELECT);
+        }
       }
       return;
     }
@@ -1683,55 +1975,24 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
 
     const hitStack = buildHitStackFromEvent(event);
     const actionHit = resolveActionHit(hitStack);
-    const clickedTile = actionHit?.type === 'tile' || actionHit?.type === 'connector'
-      ? (mapData.tiles[createCellKey(actionHit.cell.x, actionHit.cell.y, actionHit.cell.z)] || null)
-      : null;
     const clickedCell = actionHit?.cell || cell;
 
-    if (activeTool === CITY_CHANNEL_TOOLS.SELECT || (activeTool === CITY_CHANNEL_TOOLS.FLOOR && clickedTile)) {
-      if (actionHit?.edge && actionHit.hitZone === 'base') {
-        const clickedWall = { x: clickedCell.x, y: clickedCell.y, z: clickedCell.z, edge: actionHit.edge };
-        const clickedWallKey = createWallSelectionKey(clickedWall);
-        if (dragState.shiftKey) {
-          setSelectedWalls((prev) => (
-            selectedWallKeySet.has(clickedWallKey)
-              ? prev.filter((wall) => createWallSelectionKey(wall) !== clickedWallKey)
-              : [...prev, clickedWall]
-          ));
-        } else {
-          setSelectedWalls([clickedWall]);
-          setSelectedCells([]);
-        }
-        setSelectedCell(null);
-        return;
-      }
-
-      if (!dragState.shiftKey) {
-        setSelectedWalls([]);
-      }
-
-      if (clickedTile) {
-        if (dragState.shiftKey) {
-          const cellKey2 = createCellKey(clickedCell.x, clickedCell.y, clickedCell.z);
-          if (selectedCellKeySet.has(cellKey2)) {
-            setSelectedCells((prev) => prev.filter((c) => createCellKey(c.x, c.y, c.z) !== cellKey2));
-          } else {
-            setSelectedCells((prev) => [...prev, clickedCell]);
-          }
-        } else {
-          setSelectedCells([clickedCell]);
-        }
-        setSelectedCell(clickedCell);
+    if (activeTool === CITY_CHANNEL_TOOLS.SELECT) {
+      if (selectPlacementFromHit({ actionHit, clickedCell, additive: dragState.shiftKey })) {
         return;
       }
       if (!dragState.shiftKey) { clearSelection(); }
       return;
     }
 
+    if (activeTool === CITY_CHANNEL_TOOLS.FLOOR && selectPlacementFromHit({ actionHit, clickedCell, additive: dragState.shiftKey })) {
+      return;
+    }
+
     if (activeTool === CITY_CHANNEL_TOOLS.ERASE) {
       if (actionHit?.edge && actionHit.hitZone === 'base') {
         eraseWall({ x: clickedCell.x, y: clickedCell.y, z: clickedCell.z, edge: actionHit.edge });
-      } else if (clickedTile) {
+      } else if (actionHit?.type === 'tile' || actionHit?.type === 'connector') {
         eraseTile(clickedCell);
       }
       return;
@@ -1744,15 +2005,19 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       return;
     }
     handleCellAction(cell);
-  }, [activeTool, buildHitStackFromEvent, carryState, clearSelection, collectSelectionsInRect, eraseTile, eraseWall, handleCellAction, mapData.tiles, placePanelAtCell, resolveActionHit, selectedCellKeySet, selectedWallKeySet, setSelectedCell, updateHoverFromEvent]);
+  }, [activeTool, buildHitStackFromEvent, carryState, clearSelection, collectSelectionsInRect, commitPlacementsMove, eraseTile, eraseWall, flushPaintOperations, handleCellAction, placePanelAtCell, resolveActionHit, selectOperationTool, selectPlacementFromHit, updateHoverFromEvent]);
 
   const handleMaterialSelect = useCallback((panelType) => {
+    setPlaceReturnState((current) => current || {
+      tool: activeTool === CITY_CHANNEL_TOOLS.SELECT ? CITY_CHANNEL_TOOLS.SELECT : CITY_CHANNEL_TOOLS.BROWSE,
+      selectionModeOrigin
+    });
     selectMaterial(panelType);
     setSelectedCells([]);
     setSelectedWalls([]);
     setSelectionBox(null);
     setCarryState(null);
-  }, [selectMaterial]);
+  }, [activeTool, selectMaterial, selectionModeOrigin]);
 
 
   const activeLayerLabel = CITY_CHANNEL_LAYER_LABELS[0] || '地面层';
@@ -1760,7 +2025,8 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     activeTool,
     isPlaceMode,
     carryState,
-    selectedCount: selectedPlacements.length
+    selectedCount: selectedPlacements.length,
+    isTemporarySelection: activeTool === CITY_CHANNEL_TOOLS.SELECT && selectionModeOrigin === 'browse'
   });
 
 
@@ -1960,7 +2226,15 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
 
 
   return (
-    <div className={`city-channel-immersive has-palette ${wallTransparency ? 'is-wall-transparent' : ''} ${showHelperGrid ? 'is-helper-grid-visible' : ''}`}>
+    <div
+      className={[
+        'city-channel-immersive',
+        'has-palette',
+        isWallPerspectiveMode ? 'is-wall-transparent' : '',
+        isWallSolidMode ? 'is-wall-solid' : '',
+        showHelperGrid ? 'is-helper-grid-visible' : ''
+      ].filter(Boolean).join(' ')}
+    >
       <div className="city-channel-immersive__void" aria-hidden="true" />
 
       <CityChannelMaterialPalette
@@ -2132,7 +2406,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
                     isCarryOrigin && !isGhost ? 'is-move-origin' : '',
                     tile?.marker === 'highlight' && !isGhost ? 'is-user-marked' : '',
                     tile?.flipped && !isGhost ? 'is-flipped' : '',
-                    wallTransparency && isWallMaterial(tile?.panelType) && !isGhost ? 'is-transparent-wall' : ''
+                    isWallPerspectiveMode && isWallMaterial(tile?.panelType) && !isGhost ? 'is-transparent-wall' : ''
                   ].filter(Boolean).join(' ')}
                   style={{
                     ...commonStyle,
@@ -2175,10 +2449,24 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
                 }));
                 const fadeMaskId = `vfade-ew-${item.cell.x}-${item.cell.y}-${wall.edge}`;
                 const fadeGradId = `vfadegrad-ew-${item.cell.x}-${item.cell.y}-${wall.edge}`;
+                const wallFadeMask = isWallSolidMode ? undefined : `url(#${fadeMaskId})`;
                 return (
                   <div
                     key={key}
-                    className={`${isGhost ? ghostClass : 'city-channel-build-item'} has-tile is-wall ${wall.panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL ? 'is-glass-wall' : ''} is-edge-wall is-vertical city-channel-tile--vertical ${wall.flipped && !isGhost ? 'is-flipped' : ''} ${isWallSelected && !isGhost ? 'is-selected' : ''} ${isWallCarryOrigin && !isGhost ? 'is-move-origin' : ''} ${!isGhost ? wallVerticalHoverClass : ''}`}
+                    className={[
+                      isGhost ? ghostClass : 'city-channel-build-item',
+                      'has-tile',
+                      'is-wall',
+                      wall.panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL ? 'is-glass-wall' : '',
+                      'is-edge-wall',
+                      'is-vertical',
+                      'city-channel-tile--vertical',
+                      wall.flipped && !isGhost ? 'is-flipped' : '',
+                      isWallSelected && !isGhost ? 'is-selected' : '',
+                      isWallCarryOrigin && !isGhost ? 'is-move-origin' : '',
+                      isWallPerspectiveMode && !isGhost ? 'is-transparent-wall' : '',
+                      !isGhost ? wallVerticalHoverClass : ''
+                    ].filter(Boolean).join(' ')}
                     style={{
                       ...commonStyle,
                       '--tile-rotation': `${wall.rotation || 0}deg`
@@ -2191,33 +2479,38 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
                       viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}
                       aria-hidden="true"
                     >
-                      <defs>
-                        <linearGradient
-                          id={fadeGradId}
-                          gradientUnits="userSpaceOnUse"
-                          x1="80"
-                          y1={wallGeometry.wallFadeStartY}
-                          x2="80"
-                          y2={wallGeometry.wallFadeEndY}
-                        >
-                          <stop offset="0%" stopColor="white" stopOpacity="0" />
-                          <stop offset="18%" stopColor="white" stopOpacity="0.24" />
-                          <stop offset="56%" stopColor="white" stopOpacity="0.82" />
-                          <stop offset="100%" stopColor="white" stopOpacity="1" />
-                        </linearGradient>
-                        <mask id={fadeMaskId}>
-                          <rect x="0" y="0" width={TILE_RENDER_WIDTH} height={TILE_RENDER_HEIGHT} fill={`url(#${fadeGradId})`} />
-                        </mask>
-                      </defs>
+                      {!isWallSolidMode ? (
+                        <defs>
+                          <linearGradient
+                            id={fadeGradId}
+                            gradientUnits="userSpaceOnUse"
+                            x1="80"
+                            y1={wallGeometry.wallFadeStartY}
+                            x2="80"
+                            y2={wallGeometry.wallFadeEndY}
+                          >
+                            <stop offset="0%" stopColor="white" stopOpacity="0" />
+                            <stop offset="18%" stopColor="white" stopOpacity="0.24" />
+                            <stop offset="56%" stopColor="white" stopOpacity="0.82" />
+                            <stop offset="100%" stopColor="white" stopOpacity="1" />
+                          </linearGradient>
+                          <mask id={fadeMaskId}>
+                            <rect x="0" y="0" width={TILE_RENDER_WIDTH} height={TILE_RENDER_HEIGHT} fill={`url(#${fadeGradId})`} />
+                          </mask>
+                        </defs>
+                      ) : null}
                       <g className="city-channel-vertical-outline">
                         <polygon className="city-channel-block-wall city-channel-tile--vertical-outline" points={wallGeometry.wall} />
                         <polygon className="city-channel-block-wall-side city-channel-tile--vertical-outline" points={wallGeometry.wallSideStart} />
                         <polygon className="city-channel-block-wall-side city-channel-tile--vertical-outline" points={wallGeometry.wallSideEnd} />
                         <polygon className="city-channel-block-wall-cap city-channel-tile--vertical-outline" points={wallGeometry.wallCap} />
                       </g>
-                      <polygon className="city-channel-block-wall city-channel-wall-opacity-gradient" points={wallGeometry.wall} mask={`url(#${fadeMaskId})`} />
-                      <polygon className="city-channel-block-wall-side city-channel-wall-opacity-gradient" points={wallGeometry.wallSideStart} mask={`url(#${fadeMaskId})`} />
-                      <polygon className="city-channel-block-wall-side city-channel-wall-opacity-gradient" points={wallGeometry.wallSideEnd} mask={`url(#${fadeMaskId})`} />
+                      <polygon className="city-channel-block-wall city-channel-wall-opacity-gradient" points={wallGeometry.wall} mask={wallFadeMask} />
+                      <polygon className="city-channel-block-wall-side city-channel-wall-opacity-gradient" points={wallGeometry.wallSideStart} mask={wallFadeMask} />
+                      <polygon className="city-channel-block-wall-side city-channel-wall-opacity-gradient" points={wallGeometry.wallSideEnd} mask={wallFadeMask} />
+                      {isWallSolidMode ? (
+                        <polygon className="city-channel-block-wall-cap city-channel-wall-opacity-gradient" points={wallGeometry.wallCap} />
+                      ) : null}
                     </svg>
                   </div>
                 );
@@ -2227,6 +2520,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
                 const isTileWallSelected = selectedCellKeySet.has(cellKey);
                 const tileWallMaskId = `vfade-tw-${item.cell.x}-${item.cell.y}`;
                 const tileWallGradId = `vfadegrad-tw-${item.cell.x}-${item.cell.y}`;
+                const tileWallFadeMask = isWallSolidMode ? undefined : `url(#${tileWallMaskId})`;
                 const TileWallTag = isGhost ? 'div' : 'button';
                 return (
                   <TileWallTag
@@ -2241,7 +2535,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
                       'city-channel-tile--vertical',
                       isTileWallSelected && !isGhost ? 'is-selected' : '',
                       !isGhost ? tileVerticalHoverClass : '',
-                      wallTransparency && isWallMaterial(tile?.panelType) && !isGhost ? 'is-transparent-wall' : ''
+                      isWallPerspectiveMode && isWallMaterial(tile?.panelType) && !isGhost ? 'is-transparent-wall' : ''
                     ].filter(Boolean).join(' ')}
                     style={{
                       ...commonStyle,
@@ -2256,33 +2550,38 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
                       viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}
                       aria-hidden="true"
                     >
-                      <defs>
-                        <linearGradient
-                          id={tileWallGradId}
-                          gradientUnits="userSpaceOnUse"
-                          x1="80"
-                          y1={tileGeometry.wallFadeStartY}
-                          x2="80"
-                          y2={tileGeometry.wallFadeEndY}
-                        >
-                          <stop offset="0%" stopColor="white" stopOpacity="0" />
-                          <stop offset="18%" stopColor="white" stopOpacity="0.24" />
-                          <stop offset="56%" stopColor="white" stopOpacity="0.82" />
-                          <stop offset="100%" stopColor="white" stopOpacity="1" />
-                        </linearGradient>
-                        <mask id={tileWallMaskId}>
-                          <rect x="0" y="0" width={TILE_RENDER_WIDTH} height={TILE_RENDER_HEIGHT} fill={`url(#${tileWallGradId})`} />
-                        </mask>
-                      </defs>
+                      {!isWallSolidMode ? (
+                        <defs>
+                          <linearGradient
+                            id={tileWallGradId}
+                            gradientUnits="userSpaceOnUse"
+                            x1="80"
+                            y1={tileGeometry.wallFadeStartY}
+                            x2="80"
+                            y2={tileGeometry.wallFadeEndY}
+                          >
+                            <stop offset="0%" stopColor="white" stopOpacity="0" />
+                            <stop offset="18%" stopColor="white" stopOpacity="0.24" />
+                            <stop offset="56%" stopColor="white" stopOpacity="0.82" />
+                            <stop offset="100%" stopColor="white" stopOpacity="1" />
+                          </linearGradient>
+                          <mask id={tileWallMaskId}>
+                            <rect x="0" y="0" width={TILE_RENDER_WIDTH} height={TILE_RENDER_HEIGHT} fill={`url(#${tileWallGradId})`} />
+                          </mask>
+                        </defs>
+                      ) : null}
                       <g className="city-channel-vertical-outline">
                         <polygon className="city-channel-block-wall city-channel-tile--vertical-outline" points={tileGeometry.wall} />
                         <polygon className="city-channel-block-wall-side city-channel-tile--vertical-outline" points={tileGeometry.wallSideStart} />
                         <polygon className="city-channel-block-wall-side city-channel-tile--vertical-outline" points={tileGeometry.wallSideEnd} />
                         <polygon className="city-channel-block-wall-cap city-channel-tile--vertical-outline" points={tileGeometry.wallCap} />
                       </g>
-                      <polygon className="city-channel-block-wall city-channel-wall-opacity-gradient" points={tileGeometry.wall} mask={`url(#${tileWallMaskId})`} />
-                      <polygon className="city-channel-block-wall-side city-channel-wall-opacity-gradient" points={tileGeometry.wallSideStart} mask={`url(#${tileWallMaskId})`} />
-                      <polygon className="city-channel-block-wall-side city-channel-wall-opacity-gradient" points={tileGeometry.wallSideEnd} mask={`url(#${tileWallMaskId})`} />
+                      <polygon className="city-channel-block-wall city-channel-wall-opacity-gradient" points={tileGeometry.wall} mask={tileWallFadeMask} />
+                      <polygon className="city-channel-block-wall-side city-channel-wall-opacity-gradient" points={tileGeometry.wallSideStart} mask={tileWallFadeMask} />
+                      <polygon className="city-channel-block-wall-side city-channel-wall-opacity-gradient" points={tileGeometry.wallSideEnd} mask={tileWallFadeMask} />
+                      {isWallSolidMode ? (
+                        <polygon className="city-channel-block-wall-cap city-channel-wall-opacity-gradient" points={tileGeometry.wallCap} />
+                      ) : null}
                     </svg>
                   </TileWallTag>
                 );
@@ -2310,7 +2609,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
                   isTileVertical ? 'is-vertical' : '',
                   isTileVertical ? 'city-channel-tile--vertical' : '',
                   !isGhost ? tileVerticalHoverClass : '',
-                  wallTransparency && isWallMaterial(tile?.panelType) && !isGhost ? 'is-transparent-wall' : ''
+                  isWallPerspectiveMode && isWallMaterial(tile?.panelType) && !isGhost ? 'is-transparent-wall' : ''
                 ].filter(Boolean).join(' ')}
                 style={{
                   ...commonStyle,
@@ -2386,16 +2685,13 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
             type="button"
             className={`city-channel-hotbar__item ${activeTool === key ? 'is-active' : ''}`}
             onClick={() => {
-              if (key === 'rotate_selection') {
-                if (selectedPlacements.length > 0) rotatePlacements(selectedPlacements);
-              } else {
-                if (key === CITY_CHANNEL_TOOLS.BROWSE) {
-                  clearSelection();
-                  setIsBrowseRotating(false);
-                  browsePointerSequenceRef.current = { lastDownAt: 0, lastX: 0, lastY: 0 };
-                }
-                selectOperationTool(key);
+              setSelectionModeOrigin(null);
+              setPlaceReturnState(null);
+              if (key === CITY_CHANNEL_TOOLS.BROWSE) {
+                enterBrowseMode();
+                return;
               }
+              selectOperationTool(key);
             }}
             title={label}
           >
@@ -2406,18 +2702,23 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
         <span className="city-channel-hotbar__divider" aria-hidden="true" />
         <button
           type="button"
-          className={`city-channel-hotbar__item ${wallTransparency ? 'is-active' : ''}`}
+          className={[
+            'city-channel-hotbar__item',
+            isWallPerspectiveMode ? 'is-active' : '',
+            `is-wall-view-${wallViewMode}`
+          ].filter(Boolean).join(' ')}
           onClick={() => {
-            setWallTransparency((c) => {
-              const next = !c;
-              addToast(next ? '透视模式已开启' : '透视模式已关闭', 'info');
+            setWallViewMode((current) => {
+              const currentIndex = WALL_VIEW_MODES.indexOf(current);
+              const next = WALL_VIEW_MODES[(Math.max(0, currentIndex) + 1) % WALL_VIEW_MODES.length];
+              addToast(WALL_VIEW_MODE_CONFIG[next].toast, 'info');
               return next;
             });
           }}
-          title="透视"
+          title={`墙板显示：${wallViewModeConfig.label}`}
         >
-          {wallTransparency ? <EyeOff size={18} /> : <Eye size={18} />}
-          <span>透视</span>
+          {isWallPerspectiveMode ? <EyeOff size={18} /> : <Eye size={18} />}
+          <span>{wallViewModeConfig.label}</span>
         </button>
         <button type="button" className="city-channel-hotbar__item" onClick={runValidation} title="验证白通路">
           <Wand2 size={18} />

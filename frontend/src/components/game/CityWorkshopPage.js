@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Castle } from 'lucide-react';
-import CityChannelImmersiveEditor from './cityChannel/CityChannelImmersiveEditor';
+import CityChannelPhaserEditor from './cityChannel/CityChannelPhaserEditor';
 import CityChannelTemplateGallery from './cityChannel/CityChannelTemplateGallery';
 import './CityWorkshopPage.css';
 
@@ -31,7 +31,7 @@ const CityWorkshopPage = () => {
       />
 
       {editingTemplate ? (
-        <CityChannelImmersiveEditor
+        <CityChannelPhaserEditor
           initialMapData={editingTemplate.mapData}
           templateId={editingTemplate.id}
           templateName={editingTemplate.name}

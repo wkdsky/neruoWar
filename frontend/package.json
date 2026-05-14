@@ -25,6 +25,7 @@
         "@tiptap/react": "^3.20.1",
         "@tiptap/starter-kit": "^3.20.1",
         "lucide-react": "^0.263.1",
+        "phaser": "^4.0.0",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
         "react-scripts": "5.0.1",

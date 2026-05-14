@@ -236,6 +236,88 @@ const useCityChannelEditorState = (initialMapData = null) => {
     }, '墙壁已移除。');
   }, [applyMapMutation]);
 
+  const applyPlacementOperations = useCallback((operations = []) => {
+    const cleanOperations = Array.isArray(operations) ? operations.filter(Boolean) : [];
+    if (cleanOperations.length <= 0) return;
+    applyMapMutation((current) => {
+      let nextTiles = { ...(current.tiles || {}) };
+      const nextWalls = { ...(current.walls || {}) };
+      let nextEntrances = current.entrances || [];
+      let nextExits = current.exits || [];
+
+      cleanOperations.forEach((operation) => {
+        if (!operation?.cell) return;
+        const { cell } = operation;
+        if (operation.kind === 'wall') {
+          const edge = normalizeWallEdge(operation.edge);
+          const wallKey = createWallKey(cell.x, cell.y, cell.z, edge);
+          if (operation.action === 'erase') {
+            delete nextWalls[wallKey];
+            return;
+          }
+          const safePanelType = operation.panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL
+            ? CITY_CHANNEL_TILE_TYPES.GLASS_WALL
+            : CITY_CHANNEL_TILE_TYPES.WALL;
+          nextWalls[wallKey] = createWall({
+            x: cell.x,
+            y: cell.y,
+            z: cell.z,
+            edge,
+            panelType: safePanelType
+          });
+          return;
+        }
+
+        const tileKey = createCellKey(cell.x, cell.y, cell.z);
+        if (operation.action === 'erase') {
+          delete nextTiles[tileKey];
+          nextEntrances = removePointsAtCell(nextEntrances, cell);
+          nextExits = removePointsAtCell(nextExits, cell);
+          return;
+        }
+
+        const existingMarker = nextTiles[tileKey]?.marker || null;
+        if (operation.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || operation.panelType === CITY_CHANNEL_TILE_TYPES.EXIT) {
+          const isEntrance = operation.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE;
+          const marker = isEntrance ? 'entrance' : 'exit';
+          nextTiles = resetPortalTiles(nextTiles, marker);
+          const tempMap = { ...current, tiles: nextTiles };
+          nextTiles = upsertTile(tempMap, cell, {
+            panelType: operation.panelType,
+            rotation: operation.rotation,
+            marker
+          });
+          nextEntrances = isEntrance
+            ? [{ id: createPointId('entrance', cell), x: cell.x, y: cell.y, z: cell.z }]
+            : removePointsAtCell(nextEntrances, cell);
+          nextExits = isEntrance
+            ? removePointsAtCell(nextExits, cell)
+            : [{ id: createPointId('exit', cell), x: cell.x, y: cell.y, z: cell.z }];
+          return;
+        }
+
+        const tempMap = { ...current, tiles: nextTiles };
+        nextTiles = upsertTile(tempMap, cell, {
+          panelType: operation.panelType === CITY_CHANNEL_TOOLS.FLOOR
+            ? CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+            : operation.panelType,
+          rotation: operation.rotation,
+          marker: existingMarker === 'safe' || existingMarker === 'highlight' ? existingMarker : null
+        });
+        nextEntrances = removePointsAtCell(nextEntrances, cell);
+        nextExits = removePointsAtCell(nextExits, cell);
+      });
+
+      return {
+        ...current,
+        tiles: nextTiles,
+        walls: nextWalls,
+        entrances: nextEntrances,
+        exits: nextExits
+      };
+    }, cleanOperations.length > 1 ? '板材已批量更新，白线验证结果已重置。' : '板材已更新，白线验证结果已重置。');
+  }, [applyMapMutation]);
+
   const deletePlacements = useCallback((placements = []) => {
     if (!Array.isArray(placements) || placements.length <= 0) return;
     applyMapMutation((current) => {
@@ -727,6 +809,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
     placeWall,
     eraseTile,
     eraseWall,
+    applyPlacementOperations,
     deletePlacements,
     movePlacements,
     rotatePlacements,

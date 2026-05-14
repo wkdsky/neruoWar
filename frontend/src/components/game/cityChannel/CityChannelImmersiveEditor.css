@@ -546,6 +546,15 @@ body.city-channel-immersive-active .home-location-dock {
   opacity: var(--vertical-perspective-outline-opacity);
 }
 
+.city-channel-immersive.is-wall-solid .city-channel-vertical-outline {
+  opacity: 0;
+}
+
+.city-channel-immersive.is-wall-solid .city-channel-build-item.is-wall .city-channel-wall-opacity-gradient.city-channel-block-wall-cap {
+  fill: #334155;
+  stroke: rgba(226, 232, 240, 0.5);
+}
+
 .city-channel-build-item.is-selected.is-vertical .city-channel-block-wall,
 .city-channel-build-item.is-selected.is-vertical .city-channel-block-wall-side,
 .city-channel-build-item.is-selected.is-vertical .city-channel-block-wall-cap {
@@ -555,6 +564,10 @@ body.city-channel-immersive-active .home-location-dock {
 
 .city-channel-build-item.is-selected.is-vertical .city-channel-vertical-outline {
   opacity: 0.34;
+}
+
+.city-channel-immersive.is-wall-solid .city-channel-build-item.is-selected.is-vertical .city-channel-vertical-outline {
+  opacity: 0;
 }
 
 .city-channel-tile-mark {
