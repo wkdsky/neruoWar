@@ -4,42 +4,34 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDot,
-  DoorOpen,
-  Flag,
   Gauge,
   Hexagon,
-  Layers,
   PanelTop,
   Square,
-  Waves
+  Workflow
 } from 'lucide-react';
 import {
   CITY_CHANNEL_MATERIAL_CATALOG,
   CITY_CHANNEL_MATERIAL_GROUPS,
+  getPaletteCityChannelMaterials,
   isMechanicalMaterial
 } from './cityChannelCatalog';
 import './CityChannelMaterialPalette.css';
 
 const iconByPanelType = {
-  wood_floor: Square,
-  stone_floor: Square,
-  iron_floor: PanelTop,
-  glass_floor: Layers,
-  wall: Box,
-  glass_wall: Box,
-  entrance: DoorOpen,
-  exit: Flag,
-  pressure_plate: Gauge,
-  directional_pressure_plate: Gauge,
-  vertical_push_button: CircleDot,
-  horizontal_push_button: CircleDot,
-  rotary_button: CircleDot,
-  external_gear_plate: Hexagon,
-  internal_gear_plate: Hexagon,
-  peg_gear_plate: Hexagon,
-  trapdoor_plate: PanelTop,
-  side_pusher_plate: Box,
-  spring_plate: Waves
+  basic_plate: Square,
+  transmission_straight_plate: Workflow,
+  transmission_cross_plate: Workflow,
+  transmission_t_plate: Workflow,
+  transmission_l_plate: Workflow,
+  transmission_endpoint_plate: Workflow,
+  gear_pressure_plate: Gauge,
+  actuator_center_gear_plate: CircleDot,
+  actuator_single_corner_gear_plate: Hexagon,
+  actuator_same_side_gear_plate: Box,
+  actuator_opposite_corner_gear_plate: Box,
+  actuator_triangle_gear_plate: PanelTop,
+  actuator_four_corner_gear_plate: Hexagon
 };
 
 const CityChannelMaterialPalette = ({
@@ -59,7 +51,7 @@ const CityChannelMaterialPalette = ({
 
       <div className="city-channel-material-palette__body">
         {CITY_CHANNEL_MATERIAL_GROUPS.map((group) => {
-          const materials = CITY_CHANNEL_MATERIAL_CATALOG.filter((material) => (
+          const materials = getPaletteCityChannelMaterials(CITY_CHANNEL_MATERIAL_CATALOG).filter((material) => (
             group.categories.includes(material.category)
           ));
           const isCollapsed = !!collapsedGroups[group.id];

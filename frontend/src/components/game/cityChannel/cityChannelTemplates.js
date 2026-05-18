@@ -24,7 +24,7 @@ const addFloor = (mapData, x, y, z = 0, patch = {}) => {
         x,
         y,
         z,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
         ...patch
       })
     }
@@ -41,7 +41,7 @@ const addWall = (mapData, x, y, z = 0, rotation = 0) => {
         x,
         y,
         z,
-        panelType: CITY_CHANNEL_TILE_TYPES.WALL,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
         rotation
       })
     }
@@ -190,7 +190,7 @@ export const createOcclusionRegressionTemplate = () => {
         x: 17,
         y: 16,
         z: 0,
-        panelType: CITY_CHANNEL_TILE_TYPES.PRESSURE_PLATE
+        panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
       })
     },
     walls: {

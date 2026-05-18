@@ -5,9 +5,11 @@ import {
   CITY_CHANNEL_TOOLS,
   cloneConnectors,
   cloneHiddenModule,
+  cloneMechanicalPorts,
   clampLayer,
   createCellKey,
   createDefaultCityChannelMap,
+  createMechanicalLink,
   createTile,
   createWall,
   createWallKey,
@@ -50,7 +52,7 @@ const movePointsAtCell = (points = [], from, to) => points.map((point) => (
 ));
 
 const upsertTile = (mapData, cell, tilePatch = {}) => {
-  const panelType = tilePatch.panelType || CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR;
+  const panelType = tilePatch.panelType || CITY_CHANNEL_TILE_TYPES.BASIC_PLATE;
   const definition = getTileDefinition(panelType);
   const catalogItem = getCityChannelMaterial(panelType);
   const key = createCellKey(cell.x, cell.y, cell.z);
@@ -76,11 +78,40 @@ const upsertTile = (mapData, cell, tilePatch = {}) => {
       hiddenModule: tilePatch.hiddenModule !== undefined
         ? tilePatch.hiddenModule
         : cloneHiddenModule(catalogItem.hiddenModule),
+      mechanismModel: tilePatch.mechanismModel !== undefined
+        ? tilePatch.mechanismModel
+        : (catalogItem.mechanismModel || null),
       connectors: Array.isArray(tilePatch.connectors)
         ? tilePatch.connectors
-        : cloneConnectors(catalogItem.hiddenModule?.connectorPoints || definition.connectors || [])
+        : cloneConnectors(catalogItem.connectors || catalogItem.hiddenModule?.connectorPoints || definition.connectors || []),
+      mechanicalPorts: Array.isArray(tilePatch.mechanicalPorts)
+        ? cloneMechanicalPorts(tilePatch.mechanicalPorts, catalogItem)
+        : cloneMechanicalPorts(catalogItem.mechanicalPorts || createTile({ x: cell.x, y: cell.y, z: cell.z, panelType }).mechanicalPorts || [], catalogItem)
     }
   };
+};
+
+const removeMechanicalLinksForComponents = (links = [], componentKeys = new Set()) => (
+  (Array.isArray(links) ? links : []).filter((link) => (
+    !componentKeys.has(link.from?.componentKey) && !componentKeys.has(link.to?.componentKey)
+  ))
+);
+
+const moveMechanicalLinksForTiles = (links = [], tileMoves = []) => {
+  if (!Array.isArray(links) || tileMoves.length <= 0) return links || [];
+  const keyMap = new Map(tileMoves.map(({ from, to }) => [
+    createCellKey(from.x, from.y, from.z),
+    createCellKey(to.x, to.y, to.z)
+  ]));
+  return links.map((link) => ({
+    ...link,
+    from: keyMap.has(link.from?.componentKey)
+      ? { ...link.from, componentKey: keyMap.get(link.from.componentKey) }
+      : link.from,
+    to: keyMap.has(link.to?.componentKey)
+      ? { ...link.to, componentKey: keyMap.get(link.to.componentKey) }
+      : link.to
+  }));
 };
 
 const resetPortalTiles = (tiles = {}, marker) => (
@@ -93,7 +124,7 @@ const resetPortalTiles = (tiles = {}, marker) => (
       x: tile.x,
       y: tile.y,
       z: tile.z,
-      panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
       rotation: tile.rotation
     });
     return nextTiles;
@@ -105,7 +136,21 @@ const clearSafeRoute = (mapData) => ({
   safeRoute: []
 });
 
-const createHistorySnapshot = (mapData) => serializeCityChannelMap(clearSafeRoute(mapData));
+const cloneList = (list = []) => (Array.isArray(list) ? list.map((item) => ({ ...item })) : []);
+
+const createHistorySnapshot = (mapData) => {
+  const next = clearSafeRoute(mapData);
+  return {
+    ...next,
+    tiles: { ...(next.tiles || {}) },
+    walls: { ...(next.walls || {}) },
+    entrances: cloneList(next.entrances),
+    exits: cloneList(next.exits),
+    mechanisms: cloneList(next.mechanisms),
+    mechanicalLinks: cloneList(next.mechanicalLinks),
+    safeRoute: []
+  };
+};
 
 const useCityChannelEditorState = (initialMapData = null) => {
   const [mapData, setMapData] = useState(() => (
@@ -174,7 +219,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
     applyMapMutation((current) => {
       const existingMarker = current.tiles[createCellKey(cell.x, cell.y, cell.z)]?.marker || null;
       const nextTiles = upsertTile(current, cell, {
-        panelType: panelType === CITY_CHANNEL_TOOLS.FLOOR ? CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR : panelType,
+        panelType: panelType === CITY_CHANNEL_TOOLS.FLOOR ? CITY_CHANNEL_TILE_TYPES.BASIC_PLATE : panelType,
         rotation: activeRotation,
         marker: existingMarker === 'safe' || existingMarker === 'highlight' ? existingMarker : null
       });
@@ -187,12 +232,9 @@ const useCityChannelEditorState = (initialMapData = null) => {
     }, '板材已放置，白线验证结果已重置。');
   }, [activeRotation, applyMapMutation, movePortalTile]);
 
-  const placeWall = useCallback((wallPlacement, panelType = CITY_CHANNEL_TILE_TYPES.WALL) => {
+  const placeWall = useCallback((wallPlacement, panelType = CITY_CHANNEL_TILE_TYPES.BASIC_PLATE) => {
     if (!wallPlacement) return;
     const edge = normalizeWallEdge(wallPlacement.edge);
-    const safePanelType = panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL
-      ? CITY_CHANNEL_TILE_TYPES.GLASS_WALL
-      : CITY_CHANNEL_TILE_TYPES.WALL;
     applyMapMutation((current) => ({
       ...current,
       walls: {
@@ -202,7 +244,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
           y: wallPlacement.y,
           z: wallPlacement.z,
           edge,
-          panelType: safePanelType
+          panelType
         })
       }
     }), '墙壁已吸附到边缘。');
@@ -244,8 +286,39 @@ const useCityChannelEditorState = (initialMapData = null) => {
       const nextWalls = { ...(current.walls || {}) };
       let nextEntrances = current.entrances || [];
       let nextExits = current.exits || [];
+      let nextMechanicalLinks = current.mechanicalLinks || [];
 
       cleanOperations.forEach((operation) => {
+        if (operation.kind === 'mechanicalLink') {
+          if (operation.action === 'erase' && operation.id) {
+            nextMechanicalLinks = nextMechanicalLinks.filter((link) => link.id !== operation.id);
+            return;
+          }
+          if (operation.action !== 'place' || !operation.from || !operation.to) return;
+          const duplicate = nextMechanicalLinks.some((link) => (
+            (link.from?.componentKey === operation.from.componentKey
+              && link.from?.portId === operation.from.portId
+              && link.to?.componentKey === operation.to.componentKey
+              && link.to?.portId === operation.to.portId)
+            || (link.from?.componentKey === operation.to.componentKey
+              && link.from?.portId === operation.to.portId
+              && link.to?.componentKey === operation.from.componentKey
+              && link.to?.portId === operation.from.portId)
+          ));
+          if (!duplicate) {
+            nextMechanicalLinks = [
+              ...nextMechanicalLinks,
+              createMechanicalLink({
+                medium: operation.medium || 'rigid_rod',
+                from: operation.from,
+                to: operation.to,
+                routing: operation.routing,
+                tensionMode: operation.tensionMode || 'push_pull'
+              })
+            ];
+          }
+          return;
+        }
         if (!operation?.cell) return;
         const { cell } = operation;
         if (operation.kind === 'wall') {
@@ -255,15 +328,13 @@ const useCityChannelEditorState = (initialMapData = null) => {
             delete nextWalls[wallKey];
             return;
           }
-          const safePanelType = operation.panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL
-            ? CITY_CHANNEL_TILE_TYPES.GLASS_WALL
-            : CITY_CHANNEL_TILE_TYPES.WALL;
           nextWalls[wallKey] = createWall({
             x: cell.x,
             y: cell.y,
             z: cell.z,
             edge,
-            panelType: safePanelType
+            panelType: operation.panelType,
+            rotation: operation.rotation
           });
           return;
         }
@@ -271,6 +342,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
         const tileKey = createCellKey(cell.x, cell.y, cell.z);
         if (operation.action === 'erase') {
           delete nextTiles[tileKey];
+          nextMechanicalLinks = removeMechanicalLinksForComponents(nextMechanicalLinks, new Set([tileKey]));
           nextEntrances = removePointsAtCell(nextEntrances, cell);
           nextExits = removePointsAtCell(nextExits, cell);
           return;
@@ -299,7 +371,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
         const tempMap = { ...current, tiles: nextTiles };
         nextTiles = upsertTile(tempMap, cell, {
           panelType: operation.panelType === CITY_CHANNEL_TOOLS.FLOOR
-            ? CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+            ? CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
             : operation.panelType,
           rotation: operation.rotation,
           marker: existingMarker === 'safe' || existingMarker === 'highlight' ? existingMarker : null
@@ -313,7 +385,8 @@ const useCityChannelEditorState = (initialMapData = null) => {
         tiles: nextTiles,
         walls: nextWalls,
         entrances: nextEntrances,
-        exits: nextExits
+        exits: nextExits,
+        mechanicalLinks: nextMechanicalLinks
       };
     }, cleanOperations.length > 1 ? '板材已批量更新，白线验证结果已重置。' : '板材已更新，白线验证结果已重置。');
   }, [applyMapMutation]);
@@ -325,6 +398,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
       const nextWalls = { ...(current.walls || {}) };
       let nextEntrances = current.entrances || [];
       let nextExits = current.exits || [];
+      const removedTileKeys = new Set();
 
       placements.forEach((placement) => {
         if (!placement) return;
@@ -332,7 +406,9 @@ const useCityChannelEditorState = (initialMapData = null) => {
           delete nextWalls[createWallKey(placement.x, placement.y, placement.z, placement.edge)];
           return;
         }
-        delete nextTiles[createCellKey(placement.x, placement.y, placement.z)];
+        const tileKey = createCellKey(placement.x, placement.y, placement.z);
+        delete nextTiles[tileKey];
+        removedTileKeys.add(tileKey);
         nextEntrances = removePointsAtCell(nextEntrances, placement);
         nextExits = removePointsAtCell(nextExits, placement);
       });
@@ -342,7 +418,8 @@ const useCityChannelEditorState = (initialMapData = null) => {
         tiles: nextTiles,
         walls: nextWalls,
         entrances: nextEntrances,
-        exits: nextExits
+        exits: nextExits,
+        mechanicalLinks: removeMechanicalLinksForComponents(current.mechanicalLinks || [], removedTileKeys)
       };
     }, '已删除选中板材。');
   }, [applyMapMutation]);
@@ -406,7 +483,8 @@ const useCityChannelEditorState = (initialMapData = null) => {
         tiles: nextTiles,
         walls: nextWalls,
         entrances: nextEntrances,
-        exits: nextExits
+        exits: nextExits,
+        mechanicalLinks: moveMechanicalLinksForTiles(current.mechanicalLinks || [], tileMoves)
       };
     }, '已移动选中板材。');
   }, [applyMapMutation]);
@@ -531,7 +609,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
       return {
         ...current,
         tiles: upsertTile(current, cell, {
-          panelType: existing?.panelType || CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+          panelType: existing?.panelType || CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
           marker: nextMarker
         })
       };
@@ -724,7 +802,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
       placeTile(cell, activeTileType);
       return;
     }
-    placeTile(cell, activeTool === CITY_CHANNEL_TOOLS.FLOOR ? CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR : activeTool);
+    placeTile(cell, activeTool === CITY_CHANNEL_TOOLS.FLOOR ? CITY_CHANNEL_TILE_TYPES.BASIC_PLATE : activeTool);
   }, [
     activeTileType,
     activeTool,

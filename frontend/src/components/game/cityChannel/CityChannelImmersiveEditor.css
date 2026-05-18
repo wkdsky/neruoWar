@@ -1232,6 +1232,30 @@ body.city-channel-immersive-active .home-location-dock {
   accent-color: #22d3ee;
 }
 
+.city-channel-layer-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.city-channel-layer-list button {
+  min-height: 30px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.76);
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.city-channel-layer-list button:hover,
+.city-channel-layer-list button.is-active {
+  color: #ecfeff;
+  border-color: rgba(34, 211, 238, 0.62);
+  background: rgba(14, 116, 144, 0.58);
+}
+
 .city-channel-mini-btn {
   min-height: 30px;
   border: 1px solid rgba(103, 232, 249, 0.22);

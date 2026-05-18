@@ -9,8 +9,9 @@ import { TILE_HEIGHT, TILE_WIDTH, projectWorldOffset } from '../../cityChannelGe
 export const TILE_RENDER_WIDTH = 160;
 export const TILE_RENDER_HEIGHT = 172;
 export const TILE_RENDER_CENTER = { x: 80, y: 98 };
-export const FLOOR_THICKNESS = 14;
+export const FLOOR_THICKNESS = 8;
 export const WALL_HEIGHT = 62;
+export const LAYER_HEIGHT = WALL_HEIGHT;
 
 export const getMapCenter = (mapData = {}) => ({
   x: Math.floor((Number.isInteger(mapData.width) ? mapData.width : CITY_CHANNEL_WIDTH) / 2),
@@ -24,8 +25,8 @@ export const projectCell = (cell, cameraYaw = 0, mapData = {}) => {
   const projected = projectWorldOffset(dx, dy, cameraYaw);
   return {
     x: projected.x,
-    y: projected.y,
-    depth: Math.round((projected.y / (TILE_HEIGHT / 2)) * 100)
+    y: projected.y - ((Number(cell.z) || 0) * LAYER_HEIGHT),
+    depth: Math.round(((projected.y - ((Number(cell.z) || 0) * 4)) / (TILE_HEIGHT / 2)) * 100)
   };
 };
 
@@ -44,6 +45,19 @@ export const localToCell = ({ x, y, cameraYaw = 0, mapData = {} }) => {
   const cellX = Math.round(dx + center.x);
   const cellY = Math.round(dy + center.y);
   return isValidCell(cellX, cellY, 0, mapData) ? { x: cellX, y: cellY, z: 0 } : null;
+};
+
+export const localToCellAtLayer = ({ x, y, z = 0, cameraYaw = 0, mapData = {} }) => {
+  const layer = Number.isInteger(z) ? z : 0;
+  const cell = localToCell({
+    x,
+    y: y + (layer * LAYER_HEIGHT),
+    cameraYaw,
+    mapData
+  });
+  return cell && isValidCell(cell.x, cell.y, layer, mapData)
+    ? { ...cell, z: layer }
+    : null;
 };
 
 const createWallThicknessOffset = (wallBase) => {
