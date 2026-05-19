@@ -23,6 +23,7 @@ import {
 export const CITY_CHANNEL_SCENE_RENDER_BASE = 50000000;
 export const CITY_CHANNEL_DEPTH_ORDER_SCALE = 1000;
 export const CITY_CHANNEL_PHASE_ORDER_SCALE = 10;
+export const CITY_CHANNEL_LAYER_ORDER_STEP = 10000;
 
 export const normalizeCityChannelCameraYaw = (yaw = 0) => ((yaw % 360) + 360) % 360;
 
@@ -87,6 +88,10 @@ export const createPhysicalRenderOrder = (sortDepth, physicalLayer, subBias = 0)
   + subBias
 );
 
+export const getCityChannelLayerSortDepth = (cell = {}) => (
+  (Number(cell.z) || 0) * CITY_CHANNEL_LAYER_ORDER_STEP
+);
+
 export const compareCityChannelRenderItems = (a, b) => (
   (a.renderOrder - b.renderOrder)
   || String(a.part?.id || a.id || '').localeCompare(String(b.part?.id || b.id || ''))
@@ -132,7 +137,7 @@ export const createCityChannelRenderItems = ({
   const resolveDepthBias = getPartDepthBias || getCityChannelPartDepthBias;
   const hints = includeHints ? createHintCells(sourceMap, hoverCell).map((cell) => {
     const projection = project(cell, cameraYaw);
-    const sortDepth = projection.depth;
+    const sortDepth = projection.depth + getCityChannelLayerSortDepth(cell);
     return {
       id: `hint:${cell.z}:${cell.x}:${cell.y}`,
       kind: 'hint',
@@ -173,7 +178,7 @@ export const createCityChannelRenderItems = ({
         cameraYaw,
         mapData: sourceMap
       });
-      const sortDepth = projection.depth + depthBias;
+      const sortDepth = projection.depth + getCityChannelLayerSortDepth(cell) + depthBias;
       const sortBias = (Number(part.sortBias) || 0) + index;
       const subBias = Math.round(sortBias);
 

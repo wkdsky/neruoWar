@@ -9,6 +9,11 @@ import {
   createTileGeometry
 } from './CityChannelGeometry';
 
+export const TILE_TEXTURE_SUPERSAMPLE = 2;
+const TEXTURE_YAW_STEP = 2;
+const TEXTURE_RENDER_WIDTH = TILE_RENDER_WIDTH * TILE_TEXTURE_SUPERSAMPLE;
+const TEXTURE_RENDER_HEIGHT = TILE_RENDER_HEIGHT * TILE_TEXTURE_SUPERSAMPLE;
+
 const colorByPanelType = {
   basic_plate: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
   transmission_straight_plate: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
@@ -44,15 +49,23 @@ const colorByPanelType = {
   spring_plate: { top: 0x31514a, side: 0x0f2f3a, edge: 0x86efac }
 };
 
-const drawPolygon = (graphics, points, fill, alpha = 1, stroke = 0x0f172a, strokeAlpha = 0.55) => {
+const drawPolygonPath = (graphics, points = []) => {
   if (!Array.isArray(points) || points.length < 3) return;
-  graphics.fillStyle(fill, alpha);
-  graphics.lineStyle(1, stroke, strokeAlpha);
   graphics.beginPath();
   graphics.moveTo(points[0].x, points[0].y);
   points.slice(1).forEach((point) => graphics.lineTo(point.x, point.y));
   graphics.closePath();
+};
+
+const drawPolygon = (graphics, points, fill, alpha = 1, stroke = 0x0f172a, strokeAlpha = 0.55) => {
+  if (!Array.isArray(points) || points.length < 3) return;
+  graphics.fillStyle(fill, alpha);
+  graphics.lineStyle(1, stroke, strokeAlpha);
+  drawPolygonPath(graphics, points);
   graphics.fillPath();
+  graphics.strokePath();
+  graphics.lineStyle(2, 0x111827, 0.58);
+  drawPolygonPath(graphics, points);
   graphics.strokePath();
 };
 
@@ -88,6 +101,10 @@ const drawCanvasPolygon = (ctx, points, {
     ctx.setLineDash(lineDash);
     ctx.lineWidth = lineWidth;
     ctx.strokeStyle = stroke;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = lineWidth + 0.8;
+    ctx.strokeStyle = colorToRgba(0x111827, 0.62);
     ctx.stroke();
     ctx.restore();
   }
@@ -160,7 +177,7 @@ const drawBoxPart = (graphics, part, colors) => {
 
 export const getTextureYawBucket = (cameraYaw = 0) => {
   const normalized = ((cameraYaw % 360) + 360) % 360;
-  return Math.round(normalized / 10) * 10 % 360;
+  return Math.round(normalized / TEXTURE_YAW_STEP) * TEXTURE_YAW_STEP % 360;
 };
 
 export class CityChannelTextureCache {
@@ -187,6 +204,7 @@ export class CityChannelTextureCache {
     const material = getCityChannelMaterial(panelType);
     const colors = colorByPanelType[material.id] || colorByPanelType.basic_plate;
     const graphics = this.scene.make.graphics({ x: 0, y: 0, add: false });
+    graphics.scaleCanvas(TILE_TEXTURE_SUPERSAMPLE, TILE_TEXTURE_SUPERSAMPLE);
     const geometry = createTileGeometry(cameraYaw, rotation);
     const alpha = material.id === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
       ? (colors.alpha || 0.94)
@@ -209,7 +227,7 @@ export class CityChannelTextureCache {
       }
     }
 
-    graphics.generateTexture(key, TILE_RENDER_WIDTH, TILE_RENDER_HEIGHT);
+    graphics.generateTexture(key, TEXTURE_RENDER_WIDTH, TEXTURE_RENDER_HEIGHT);
     graphics.destroy();
     this.generatedKeys.add(key);
   }
@@ -225,6 +243,7 @@ export class CityChannelTextureCache {
     }
 
     const graphics = this.scene.make.graphics({ x: 0, y: 0, add: false });
+    graphics.scaleCanvas(TILE_TEXTURE_SUPERSAMPLE, TILE_TEXTURE_SUPERSAMPLE);
     const isPerspective = wallViewMode === 'perspective';
     const isSolid = wallViewMode === 'solid';
     const baseAlpha = panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL ? 0.42 : 1;
@@ -247,16 +266,17 @@ export class CityChannelTextureCache {
       this.drawGearIcon(graphics, center.x + 20, center.y - 8, 13, 10, 0xfacc15);
     }
 
-    graphics.generateTexture(key, TILE_RENDER_WIDTH, TILE_RENDER_HEIGHT);
+    graphics.generateTexture(key, TEXTURE_RENDER_WIDTH, TEXTURE_RENDER_HEIGHT);
     graphics.destroy();
     this.generatedKeys.add(key);
   }
 
   createSemiWallTexture(key, panelType, geometry, colors, rotation = 0) {
     const canvas = document.createElement('canvas');
-    canvas.width = TILE_RENDER_WIDTH;
-    canvas.height = TILE_RENDER_HEIGHT;
+    canvas.width = TEXTURE_RENDER_WIDTH;
+    canvas.height = TEXTURE_RENDER_HEIGHT;
     const ctx = canvas.getContext('2d');
+    ctx.scale(TILE_TEXTURE_SUPERSAMPLE, TILE_TEXTURE_SUPERSAMPLE);
     const baseAlpha = panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL ? 0.42 : 1;
 
     drawCanvasGradientPolygon(ctx, geometry.wall, colors.top, baseAlpha, geometry);
@@ -299,11 +319,6 @@ export class CityChannelTextureCache {
       ctx.lineWidth = 2;
       ports.forEach((port) => {
         const point = this.mapBoardPointOnWall(port.localPosition, rotation, geometry.wall);
-        const rotated = this.rotateLocalPoint(port.localPosition || {}, rotation);
-        const isHorizontalEdge = Math.abs(rotated.y || 0) >= Math.abs(rotated.x || 0);
-        ctx.beginPath();
-        ctx.ellipse(point.x, point.y, isHorizontalEdge ? 14 : 7, isHorizontalEdge ? 7 : 14, 0, 0, Math.PI * 2);
-        ctx.stroke();
         ctx.beginPath();
         ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
         ctx.fill();
@@ -452,11 +467,6 @@ export class CityChannelTextureCache {
     graphics.lineStyle(2, 0x78350f, 0.82);
     ports.forEach((port) => {
       const point = this.mapBoardPointOnTile(port.localPosition, rotation, geometry);
-      const rotated = this.rotateLocalPoint(port.localPosition || {}, rotation);
-      const isHorizontalEdge = Math.abs(rotated.y || 0) >= Math.abs(rotated.x || 0);
-      graphics.fillStyle(0xf8fafc, 0.2);
-      graphics.fillEllipse(point.x, point.y, isHorizontalEdge ? 28 : 14, isHorizontalEdge ? 14 : 28);
-      graphics.strokeEllipse(point.x, point.y, isHorizontalEdge ? 28 : 14, isHorizontalEdge ? 14 : 28);
       graphics.fillStyle(0xf8fafc, 0.95);
       graphics.fillCircle(point.x, point.y, 4);
     });
@@ -476,11 +486,6 @@ export class CityChannelTextureCache {
     graphics.lineStyle(2, 0x78350f, 0.82);
     ports.forEach((port) => {
       const point = this.mapBoardPointOnWall(port.localPosition, rotation, wallPolygon);
-      const rotated = this.rotateLocalPoint(port.localPosition || {}, rotation);
-      const isHorizontalEdge = Math.abs(rotated.y || 0) >= Math.abs(rotated.x || 0);
-      graphics.fillStyle(0xf8fafc, 0.2);
-      graphics.fillEllipse(point.x, point.y, isHorizontalEdge ? 28 : 14, isHorizontalEdge ? 14 : 28);
-      graphics.strokeEllipse(point.x, point.y, isHorizontalEdge ? 28 : 14, isHorizontalEdge ? 14 : 28);
       graphics.fillStyle(0xf8fafc, 0.95);
       graphics.fillCircle(point.x, point.y, 4);
     });

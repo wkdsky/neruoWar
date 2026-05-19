@@ -5,6 +5,8 @@ import {
 import { projectWorldOffset, TILE_HEIGHT } from '../../cityChannelGeometryUtils';
 import { projectCell } from './CityChannelGeometry';
 
+const LAYER_SORT_DEPTH_STEP = 10000;
+
 const edgeEndpointsByEdge = {
   north: [{ x: -0.5, y: -0.5 }, { x: 0.5, y: -0.5 }],
   south: [{ x: -0.5, y: 0.5 }, { x: 0.5, y: 0.5 }],
@@ -47,7 +49,8 @@ export const getPlacementDepth = ({
   ) {
     depthBias = getProjectedBias(getCellVerticalEndpoints(rotation), cameraYaw);
   }
-  const sortDepth = projection.depth + depthBias;
+  const layerDepth = (Number(cell?.z) || 0) * LAYER_SORT_DEPTH_STEP;
+  const sortDepth = projection.depth + layerDepth + depthBias;
   const phase = CITY_CHANNEL_SORT_PHASES[physicalLayer] ?? 0;
   return (sortDepth * 1000) + (phase * 10) + subBias;
 };

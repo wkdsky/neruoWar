@@ -18,6 +18,7 @@ import {
   Wand2
 } from 'lucide-react';
 import {
+  CITY_CHANNEL_TILE_TYPES,
   CITY_CHANNEL_LAYER_LABELS,
   CITY_CHANNEL_STORAGE_KEY,
   CITY_CHANNEL_TOOLS,
@@ -165,6 +166,7 @@ const CityChannelPhaserEditor = ({
     ? (mapData.tiles?.[mechanismPanel.key] || mapData.walls?.[mechanismPanel.key])
     : (selectedTile || selectedWall);
   const activePanelPanelType = mechanismPanel?.panelType || activePanelTile?.panelType || '';
+  const canRunActivePanel = activePanelPanelType === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE;
   const mechanismPanelParams = useMemo(() => (
     normalizeMechanismParams(mechanismParams[activePanelKey])
   ), [activePanelKey, mechanismParams]);
@@ -301,6 +303,10 @@ const CityChannelPhaserEditor = ({
   }, [activePanelKey]);
 
   const executeMechanismPanelAction = useCallback(() => {
+    if (!canRunActivePanel) {
+      addToast('只有齿轮压力板可以运行预览。', 'error');
+      return;
+    }
     const cell = mechanismPanel?.cell || selectedCells[0];
     if (!cell) return;
     const executed = sceneRef.current?.triggerMechanismAtCell?.(cell, mechanismPanelParams);
@@ -309,7 +315,7 @@ const CityChannelPhaserEditor = ({
       return;
     }
     addToast('运行预览已启动。', 'info');
-  }, [addToast, mechanismPanel?.cell, mechanismPanelParams, selectedCells]);
+  }, [addToast, canRunActivePanel, mechanismPanel?.cell, mechanismPanelParams, selectedCells]);
 
   const handleMechanismPreviewProgress = useCallback((payload = null) => {
     setMechanismPreviewState(payload);
@@ -426,6 +432,9 @@ const CityChannelPhaserEditor = ({
     onRotateActive: handleRotateActive,
     onTogglePanelPose: () => {
       setPanelPose((current) => (current === 'wall' ? 'floor' : 'wall'));
+    },
+    onSetPanelPose: (pose) => {
+      setPanelPose(pose === 'wall' ? 'wall' : 'floor');
     },
     onUndo: undo,
     onRedo: redo,
@@ -722,7 +731,7 @@ const CityChannelPhaserEditor = ({
         {activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE ? (
           <>
             <span>左键放置，右键或 Esc 取消</span>
-            <span>R 顺转，Shift+R 逆转，V/Tab 切换平放/竖放</span>
+            <span>R 顺转，Shift+R 逆转，Space 按当前吸附边切安装面</span>
           </>
         ) : (
           <>
@@ -790,7 +799,9 @@ const CityChannelPhaserEditor = ({
           <div className="city-channel-mechanism-params__head">
             <strong>{mechanismPanelMaterial?.shortName || mechanismPanelMaterial?.name || '机关参数'}</strong>
             <div className="city-channel-mechanism-params__actions">
-              <button type="button" onClick={executeMechanismPanelAction}>运行</button>
+              {canRunActivePanel ? (
+                <button type="button" onClick={executeMechanismPanelAction}>运行</button>
+              ) : null}
               {inspectMode?.active && (
                 <button
                   type="button"

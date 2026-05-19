@@ -24,6 +24,7 @@ import {
   screenToLocal
 } from './renderer/CityChannelGeometry';
 import { getPlacementDepth } from './renderer/CityChannelDepth';
+import { getCellVerticalEndpoints } from './renderer/CityChannelDepth';
 import CityChannelTextureCache, { getTextureYawBucket } from './renderer/CityChannelTextureCache';
 import CityChannelRuntimeIndex from './runtime/CityChannelRuntimeIndex';
 import { projectWorldOffset } from '../cityChannelGeometryUtils';
@@ -73,6 +74,13 @@ const OPPOSITE_EDGE = {
   east: 'west',
   west: 'east'
 };
+const WALL_EDGE_ENDPOINTS = {
+  north: [{ x: -0.5, y: -0.5 }, { x: 0.5, y: -0.5 }],
+  south: [{ x: -0.5, y: 0.5 }, { x: 0.5, y: 0.5 }],
+  west: [{ x: -0.5, y: -0.5 }, { x: -0.5, y: 0.5 }],
+  east: [{ x: 0.5, y: -0.5 }, { x: 0.5, y: 0.5 }]
+};
+const TRANSMISSION_SOCKET_EPSILON = 0.08;
 
 const normalizeCameraYaw = (yaw = 0) => ((yaw % 360) + 360) % 360;
 const normalizeAngleDelta = (delta = 0) => ((delta + 540) % 360) - 180;
@@ -98,6 +106,37 @@ const sameCell = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y && a.z === b
 
 const resolveMaterialName = (panelType) => getCityChannelMaterial(panelType)?.name || panelType || '未知物件';
 
+const getDirectionFromEndpoint = (point = {}) => (
+  Math.abs(point.x || 0) >= Math.abs(point.y || 0)
+    ? ((point.x || 0) < 0 ? 'west' : 'east')
+    : ((point.y || 0) < 0 ? 'north' : 'south')
+);
+
+const rotateDirectionByDegrees = (direction, rotation = 0) => {
+  const order = ['north', 'east', 'south', 'west'];
+  const index = order.indexOf(direction);
+  if (index < 0) return direction;
+  const steps = Math.round((((Number(rotation) || 0) % 360 + 360) % 360) / 90) % 4;
+  return order[(index + steps) % 4];
+};
+
+const formatAxisCoord = (value = 0) => Number(value || 0).toFixed(3);
+
+const sameAxisPoint = (a, b) => !!a && !!b
+  && Math.abs((a.x || 0) - (b.x || 0)) <= 0.001
+  && Math.abs((a.y || 0) - (b.y || 0)) <= 0.001;
+
+const sameAxisSegment = (a = [], b = []) => (
+  Array.isArray(a)
+  && Array.isArray(b)
+  && a.length >= 2
+  && b.length >= 2
+  && (
+    (sameAxisPoint(a[0], b[0]) && sameAxisPoint(a[1], b[1]))
+    || (sameAxisPoint(a[0], b[1]) && sameAxisPoint(a[1], b[0]))
+  )
+);
+
 const createLocalRect = ({ left, right, top, bottom } = {}) => ({
   left: Math.min(left, right),
   right: Math.max(left, right),
@@ -105,17 +144,18 @@ const createLocalRect = ({ left, right, top, bottom } = {}) => ({
   bottom: Math.max(top, bottom)
 });
 
-const rectsIntersect = (a, b) => !!a && !!b
-  && a.left <= b.right
-  && a.right >= b.left
-  && a.top <= b.bottom
-  && a.bottom >= b.top;
-
 const rectContainsPoint = (rect, point) => !!rect && !!point
   && point.x >= rect.left
   && point.x <= rect.right
   && point.y >= rect.top
   && point.y <= rect.bottom;
+
+const expandRect = (rect, padding = 0) => (rect ? ({
+  left: rect.left - padding,
+  right: rect.right + padding,
+  top: rect.top - padding,
+  bottom: rect.bottom + padding
+}) : null);
 
 const getPointBounds = (points = []) => {
   if (!points.length) return null;
@@ -237,63 +277,6 @@ const distancePointToSegmentSquared = (point, start, end) => {
   return (dx * dx) + (dy * dy);
 };
 
-const getRectCorners = (rect) => ([
-  { x: rect.left, y: rect.top },
-  { x: rect.right, y: rect.top },
-  { x: rect.right, y: rect.bottom },
-  { x: rect.left, y: rect.bottom }
-]);
-
-const getRectEdges = (rect) => {
-  const corners = getRectCorners(rect);
-  return [
-    [corners[0], corners[1]],
-    [corners[1], corners[2]],
-    [corners[2], corners[3]],
-    [corners[3], corners[0]]
-  ];
-};
-
-const getCross = (a, b, c) => ((b.x - a.x) * (c.y - a.y)) - ((b.y - a.y) * (c.x - a.x));
-
-const pointOnSegment = (point, start, end) => {
-  const epsilon = 0.001;
-  return Math.abs(getCross(start, end, point)) <= epsilon
-    && point.x >= Math.min(start.x, end.x) - epsilon
-    && point.x <= Math.max(start.x, end.x) + epsilon
-    && point.y >= Math.min(start.y, end.y) - epsilon
-    && point.y <= Math.max(start.y, end.y) + epsilon;
-};
-
-const segmentsIntersect = (a1, a2, b1, b2) => {
-  const d1 = getCross(a1, a2, b1);
-  const d2 = getCross(a1, a2, b2);
-  const d3 = getCross(b1, b2, a1);
-  const d4 = getCross(b1, b2, a2);
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
-    return true;
-  }
-  return pointOnSegment(b1, a1, a2)
-    || pointOnSegment(b2, a1, a2)
-    || pointOnSegment(a1, b1, b2)
-    || pointOnSegment(a2, b1, b2);
-};
-
-const polygonIntersectsRect = (polygon = [], rect = null) => {
-  if (!rect || !Array.isArray(polygon) || polygon.length < 3) return false;
-  const polygonBounds = getPointBounds(polygon);
-  if (!rectsIntersect(rect, polygonBounds)) return false;
-  if (polygon.some((point) => rectContainsPoint(rect, point))) return true;
-  if (getRectCorners(rect).some((point) => pointInPolygon(point, polygon))) return true;
-  const rectEdges = getRectEdges(rect);
-  for (let index = 0; index < polygon.length; index += 1) {
-    const start = polygon[index];
-    const end = polygon[(index + 1) % polygon.length];
-    if (rectEdges.some(([rectStart, rectEnd]) => segmentsIntersect(start, end, rectStart, rectEnd))) return true;
-  }
-  return false;
-};
-
 const getPortalPolygons = (cameraYaw = 0, rotation = 0) => {
   const portal = createPortalGeometry(cameraYaw, rotation);
   return [
@@ -360,6 +343,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       this.mechanicalGraphRevision = -1;
       this.mapRevision = 0;
       this.lastGhostLayerKey = '';
+      this.snapPlaneCycle = 0;
+      this.activeSnapAxisKey = '';
     }
 
     create() {
@@ -446,7 +431,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         }
       }
       if (next.activeTool !== undefined && next.activeTool !== this.activeTool) {
+        const wasPlacing = this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE;
         this.activeTool = next.activeTool;
+        if (wasPlacing !== (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE)) this.refreshWallTextures();
         this.drawGhostLayer();
       } else if (next.activeTool !== undefined) {
         this.activeTool = next.activeTool;
@@ -502,6 +489,21 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         && this.activeTileType
         && (isWallMaterial(this.activeTileType) || isBoardMaterial(this.activeTileType))
       );
+    }
+
+    getEffectiveWallViewMode() {
+      return this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE ? 'solid' : this.wallViewMode;
+    }
+
+    setPlacementPose(pose) {
+      const nextPose = pose === 'wall' ? 'wall' : 'floor';
+      if (this.panelPose === nextPose) return;
+      this.panelPose = nextPose;
+      if (this.config.onSetPanelPose) {
+        this.config.onSetPanelPose(nextPose);
+      } else {
+        this.config.onTogglePanelPose?.();
+      }
     }
 
     scheduleReactCommit(operations, meta) {
@@ -593,6 +595,17 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       this.removeRenderObject(`wall:${createWallKey(wall.x, wall.y, wall.z, wall.edge)}`);
     }
 
+    configureBoardImage(image) {
+      if (!image) return image;
+      return image.setDisplaySize(TILE_RENDER_WIDTH, TILE_RENDER_HEIGHT);
+    }
+
+    setBoardTexture(image, texture) {
+      if (!image) return;
+      image.setTexture(texture);
+      this.configureBoardImage(image);
+    }
+
     renderTileObject(tile) {
       if (!tile) return;
       const key = createCellKey(tile.x, tile.y, tile.z);
@@ -600,9 +613,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const cell = { x: tile.x, y: tile.y, z: tile.z };
       const projection = projectCell(cell, this.cameraState.yaw, this.mapData);
       const texture = this.textureCache.getTileTexture(tile.panelType, tile.rotation || 0, !!tile.flipped, this.cameraState.yaw);
-      const image = this.add.image(projection.x, projection.y, texture)
+      const image = this.configureBoardImage(this.add.image(projection.x, projection.y, texture)
         .setOrigin(0.5, 0.57)
-        .setAlpha(tile.transparent ? 0.72 : 1);
+        .setAlpha(tile.transparent ? 0.72 : 1));
       const isPortal = isPortalMaterial(tile.panelType);
       const depth = getPlacementDepth({
         cell,
@@ -643,8 +656,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       this.removeRenderObject(id);
       const cell = { x: wall.x, y: wall.y, z: wall.z };
       const projection = projectCell(cell, this.cameraState.yaw, this.mapData);
-      const texture = this.textureCache.getWallTexture(wall.panelType, wall.edge, this.wallViewMode, this.cameraState.yaw, wall.rotation || 0);
-      const image = this.add.image(projection.x, projection.y, texture).setOrigin(0.5, 0.57);
+      const texture = this.textureCache.getWallTexture(wall.panelType, wall.edge, this.getEffectiveWallViewMode(), this.cameraState.yaw, wall.rotation || 0);
+      const image = this.configureBoardImage(this.add.image(projection.x, projection.y, texture).setOrigin(0.5, 0.57));
       image.setData('placementId', id);
       image.setData('kind', 'wall');
       image.depth = getPlacementDepth({
@@ -1121,6 +1134,22 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       });
     }
 
+    refreshPointerStateAfterViewChange() {
+      const pointer = this.input?.activePointer;
+      if (!pointer) {
+        this.hoverTarget = null;
+        this.hoverCell = null;
+        this.hoverEdge = 'north';
+        this.activeSnapAxisKey = '';
+        this.snapPlaneCycle = 0;
+        return;
+      }
+      const hitInfo = this.hitTest(pointer, {
+        allowOutline: this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && !!this.activeTileType
+      });
+      this.updateHover(hitInfo);
+    }
+
     sortMapLayer() {
       this.mapLayer.list.sort((a, b) => (a.depth || 0) - (b.depth || 0));
     }
@@ -1139,13 +1168,13 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       Object.values(this.mapData.walls || {}).forEach((wall) => {
         const object = this.renderObjects.get(`wall:${createWallKey(wall.x, wall.y, wall.z, wall.edge)}`);
         if (!object) return;
-        object.setTexture(this.textureCache.getWallTexture(wall.panelType, wall.edge, this.wallViewMode, this.cameraState.yaw, wall.rotation || 0));
+        this.setBoardTexture(object, this.textureCache.getWallTexture(wall.panelType, wall.edge, this.getEffectiveWallViewMode(), this.cameraState.yaw, wall.rotation || 0));
       });
       Object.values(this.mapData.tiles || {}).forEach((tile) => {
         if (!tile.isVertical) return;
         const object = this.renderObjects.get(`tile:${createCellKey(tile.x, tile.y, tile.z)}`);
         if (!object) return;
-        object.setTexture(this.textureCache.getTileTexture(tile.panelType, tile.rotation || 0, !!tile.flipped, this.cameraState.yaw));
+        this.setBoardTexture(object, this.textureCache.getTileTexture(tile.panelType, tile.rotation || 0, !!tile.flipped, this.cameraState.yaw));
       });
     }
 
@@ -1162,7 +1191,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         const projection = projectCell(cell, this.cameraState.yaw, this.mapData);
         object.setPosition(projection.x, projection.y);
         if (shouldRefreshTextures) {
-          object.setTexture(this.textureCache.getTileTexture(tile.panelType, tile.rotation || 0, !!tile.flipped, this.cameraState.yaw));
+          this.setBoardTexture(object, this.textureCache.getTileTexture(tile.panelType, tile.rotation || 0, !!tile.flipped, this.cameraState.yaw));
         }
         const isPortal = isPortalMaterial(tile.panelType);
         const depth = getPlacementDepth({
@@ -1201,7 +1230,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         const projection = projectCell(cell, this.cameraState.yaw, this.mapData);
         object.setPosition(projection.x, projection.y);
         if (shouldRefreshTextures) {
-          object.setTexture(this.textureCache.getWallTexture(wall.panelType, wall.edge, this.wallViewMode, this.cameraState.yaw, wall.rotation || 0));
+          this.setBoardTexture(object, this.textureCache.getWallTexture(wall.panelType, wall.edge, this.getEffectiveWallViewMode(), this.cameraState.yaw, wall.rotation || 0));
         }
         object.depth = getPlacementDepth({
           cell,
@@ -1214,11 +1243,13 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         });
       });
       this.sortMapLayer();
-      this.scheduleMechanicalLayerRedraw(24);
+      this.refreshPointerStateAfterViewChange();
+      this.refreshMechanismVisuals();
+      this.drawMechanicalLayers();
       this.drawRouteLayer();
       this.drawHelperLayer();
       this.drawSelectionLayer();
-      this.drawGhostLayer();
+      this.drawGhostLayer(true);
       this.notifyCamera();
       this.updateDebugText();
     }
@@ -1257,6 +1288,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           this.cameraState.offsetX += dx;
           this.cameraState.offsetY += dy;
           this.updateCameraTransform();
+          this.refreshPointerStateAfterViewChange();
+          this.drawSelectionLayer();
+          this.drawGhostLayer(true);
         }
         if (this.keyState.has('q')) this.updateYaw(this.cameraState.yaw - (CAMERA_ROTATION_SPEED * seconds));
         if (this.keyState.has('e')) this.updateYaw(this.cameraState.yaw + (CAMERA_ROTATION_SPEED * seconds));
@@ -1370,20 +1404,27 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     }
 
     resolveWallPlacementTarget(hitInfo) {
+      if (this.isVerticalSurfaceHit(hitInfo?.hit)) {
+        const target = this.resolveVerticalSurfaceWallSnap(hitInfo);
+        return target?.valid ? target : null;
+      }
       const snapped = hitInfo?.wallSnap || this.resolveWallSnapTarget(hitInfo?.localPoint, hitInfo?.cell);
       if (snapped?.cell) return snapped;
       return null;
     }
 
     resolveWallGhostTarget(hitInfo) {
+      if (this.isVerticalSurfaceHit(hitInfo?.hit)) return this.resolveVerticalSurfaceWallSnap(hitInfo);
       const placementTarget = this.resolveWallPlacementTarget(hitInfo);
       if (placementTarget?.cell) return placementTarget;
-      const cell = hitInfo?.cell;
-      if (!cell) return null;
-      return {
-        cell,
-        edge: hitInfo.edge || 'north'
-      };
+      return null;
+    }
+
+    isVerticalSurfaceHit(hit) {
+      return !!hit && (
+        hit.type === 'wall'
+        || (hit.type === 'tile' && hit.tile?.isVertical)
+      );
     }
 
     hasTileSupport(cell) {
@@ -1392,9 +1433,230 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       return !!this.mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z - 1)];
     }
 
-    resolveVerticalSnapConnection(targetCell, support) {
+    hasFloorPlacementSupport(cell, anchorCell = null) {
+      if (this.hasTileSupport(cell)) return true;
+      if (!cell || !anchorCell || Number(cell.z) !== Number(anchorCell.z)) return false;
+      return Math.abs(Number(cell.x) - Number(anchorCell.x)) + Math.abs(Number(cell.y) - Number(anchorCell.y)) === 1
+        && !!this.mapData.tiles?.[createCellKey(anchorCell.x, anchorCell.y, anchorCell.z)];
+    }
+
+    resolveVerticalSnapConnection(targetCell, support, snap = {}) {
       if (!targetCell || !support?.placement) return { valid: false };
-      const activeTile = createTile({
+      const activeEdge = snap.activeEdge || null;
+      const activePlacement = activeEdge
+        ? createWall({
+          x: targetCell.x,
+          y: targetCell.y,
+          z: targetCell.z,
+          edge: activeEdge,
+          panelType: this.activeTileType,
+          rotation: this.activeRotation
+        })
+        : createTile({
+          x: targetCell.x,
+          y: targetCell.y,
+          z: targetCell.z,
+          panelType: this.activeTileType,
+          rotation: this.activeRotation
+        });
+      const activeKey = activeEdge
+        ? createWallKey(targetCell.x, targetCell.y, targetCell.z, activeEdge)
+        : createCellKey(targetCell.x, targetCell.y, targetCell.z);
+      const activePorts = getWorldTransmissionPorts(activePlacement, activeKey);
+      const supportPorts = getWorldTransmissionPorts(support.placement, support.key);
+      const endpointMode = snap.endpointMode || 'socket';
+      const activeDirection = snap.activeDirection || null;
+      const supportDirection = snap.supportDirection || null;
+      const activeCandidates = snap.activePortId
+        ? activePorts.filter((port) => port.id === snap.activePortId)
+        : endpointMode === 'socket'
+          ? activePorts
+          : activePorts.filter((port) => !activeDirection || port.worldDirection === activeDirection);
+      const supportCandidates = snap.supportPortId
+        ? supportPorts.filter((port) => port.id === snap.supportPortId)
+        : endpointMode === 'socket'
+          ? supportPorts
+          : supportPorts.filter((port) => !supportDirection || port.worldDirection === supportDirection);
+      let best = null;
+      activeCandidates.forEach((candidateActivePort) => {
+        const candidateActivePoint = this.getTransmissionSurfacePortPoint(activePlacement, candidateActivePort, activeEdge ? 'wall' : null);
+        const candidateActiveSocket = this.getTransmissionSocketPoint(activePlacement, candidateActivePort, activeEdge ? 'wall' : null);
+        if (!candidateActivePoint || !candidateActiveSocket) return;
+        supportCandidates.forEach((candidateSupportPort) => {
+          const candidateSupportPoint = this.getTransmissionSurfacePortPoint(support.placement, candidateSupportPort, support.kind === 'wall' ? 'wall' : null);
+          const candidateSupportSocket = this.getTransmissionSocketPoint(support.placement, candidateSupportPort, support.kind === 'wall' ? 'wall' : null);
+          if (!candidateSupportPoint || !candidateSupportSocket) return;
+          const socketDistance = Math.hypot(
+            candidateActiveSocket.x - candidateSupportSocket.x,
+            candidateActiveSocket.y - candidateSupportSocket.y,
+            candidateActiveSocket.z - candidateSupportSocket.z
+          );
+          const endpointDistance = Math.hypot(
+            candidateActivePoint.x - candidateSupportPoint.x,
+            candidateActivePoint.y - candidateSupportPoint.y
+          );
+          if (
+            best
+            && (
+              socketDistance > best.socketDistance
+              || (Math.abs(socketDistance - best.socketDistance) <= 1e-6 && endpointDistance >= best.endpointDistance)
+            )
+          ) return;
+          best = {
+            activePort: candidateActivePort,
+            activePoint: candidateActivePoint,
+            activeSocket: candidateActiveSocket,
+            supportPort: candidateSupportPort,
+            supportPoint: candidateSupportPoint,
+            supportSocket: candidateSupportSocket,
+            endpointDistance,
+            socketDistance
+          };
+        });
+      });
+      return {
+        valid: !!best && best.socketDistance <= TRANSMISSION_SOCKET_EPSILON,
+        activeTile: activePlacement,
+        activePort: best?.activePort || null,
+        activePoint: best?.activePoint || null,
+        activeSocket: best?.activeSocket || null,
+        support,
+        supportPort: best?.supportPort || null,
+        supportPoint: best?.supportPoint || null,
+        supportSocket: best?.supportSocket || null,
+        endpointDistance: best?.endpointDistance ?? Infinity,
+        socketDistance: best?.socketDistance ?? Infinity,
+        endpointMode
+      };
+    }
+
+    getVerticalSupportConnectionCandidates(targetCell, primarySupport = null) {
+      if (!targetCell) return primarySupport ? [primarySupport] : [];
+      const supports = this.getVerticalSupportEntries();
+      const seen = new Set();
+      const candidates = [];
+      const addSupport = (support) => {
+        if (!support?.key || seen.has(support.key)) return;
+        seen.add(support.key);
+        candidates.push(support);
+      };
+      addSupport(primarySupport);
+      supports.forEach((support) => {
+        if (!support?.cell) return;
+        const dz = Number(targetCell.z) - Number(support.cell.z);
+        if (dz < 0 || dz > 1) return;
+        if (Math.abs(Number(targetCell.x) - Number(support.cell.x)) > 1) return;
+        if (Math.abs(Number(targetCell.y) - Number(support.cell.y)) > 1) return;
+        addSupport(support);
+      });
+      return candidates;
+    }
+
+    resolveBestVerticalSnapConnection(targetCell, primarySupport, snap = {}) {
+      const primaryConnection = this.resolveVerticalSnapConnection(targetCell, primarySupport, snap);
+      let best = primaryConnection;
+      this.getVerticalSupportConnectionCandidates(targetCell, primarySupport).forEach((support) => {
+        const candidateSnap = support.key === primarySupport?.key
+          ? snap
+          : {
+            activeEdge: snap.activeEdge || null,
+            endpointMode: 'socket'
+          };
+        const connection = this.resolveVerticalSnapConnection(targetCell, support, candidateSnap);
+        if (
+          !best
+          || (connection.valid && !best.valid)
+          || (
+            connection.valid === best.valid
+            && connection.socketDistance < best.socketDistance
+          )
+          || (
+            connection.valid === best.valid
+            && Math.abs(connection.socketDistance - best.socketDistance) <= 1e-6
+            && connection.endpointDistance < best.endpointDistance
+          )
+        ) {
+          best = connection;
+        }
+      });
+      return best || primaryConnection;
+    }
+
+    resolveSingleFloorSnapConnection(targetCell, activePlacement, activePorts, supportTile) {
+      if (!targetCell || !activePlacement || !supportTile) return { valid: false };
+      const support = {
+        kind: 'tile',
+        key: createCellKey(supportTile.x, supportTile.y, supportTile.z),
+        cell: { x: supportTile.x, y: supportTile.y, z: supportTile.z },
+        placement: supportTile
+      };
+      const supportPorts = getWorldTransmissionPorts(supportTile, support.key);
+      if (activePorts.length <= 0) {
+        return {
+          valid: true,
+          activeTile: activePlacement,
+          support,
+          socketDistance: 0,
+          endpointDistance: 0,
+          endpointMode: 'socket'
+        };
+      }
+      let best = null;
+      activePorts.forEach((candidateActivePort) => {
+        const candidateActivePoint = this.getTransmissionSurfacePortPoint(activePlacement, candidateActivePort);
+        const candidateActiveSocket = this.getTransmissionSocketPoint(activePlacement, candidateActivePort);
+        if (!candidateActivePoint || !candidateActiveSocket) return;
+        supportPorts.forEach((candidateSupportPort) => {
+          const candidateSupportPoint = this.getTransmissionSurfacePortPoint(supportTile, candidateSupportPort);
+          const candidateSupportSocket = this.getTransmissionSocketPoint(supportTile, candidateSupportPort);
+          if (!candidateSupportPoint || !candidateSupportSocket) return;
+          const socketDistance = Math.hypot(
+            candidateActiveSocket.x - candidateSupportSocket.x,
+            candidateActiveSocket.y - candidateSupportSocket.y,
+            candidateActiveSocket.z - candidateSupportSocket.z
+          );
+          const endpointDistance = Math.hypot(
+            candidateActivePoint.x - candidateSupportPoint.x,
+            candidateActivePoint.y - candidateSupportPoint.y
+          );
+          if (
+            best
+            && (
+              socketDistance > best.socketDistance
+              || (Math.abs(socketDistance - best.socketDistance) <= 1e-6 && endpointDistance >= best.endpointDistance)
+            )
+          ) return;
+          best = {
+            activePort: candidateActivePort,
+            activePoint: candidateActivePoint,
+            activeSocket: candidateActiveSocket,
+            supportPort: candidateSupportPort,
+            supportPoint: candidateSupportPoint,
+            supportSocket: candidateSupportSocket,
+            endpointDistance,
+            socketDistance
+          };
+        });
+      });
+      return {
+        valid: !!best && best.socketDistance <= TRANSMISSION_SOCKET_EPSILON,
+        activeTile: activePlacement,
+        activePort: best?.activePort || null,
+        activePoint: best?.activePoint || null,
+        activeSocket: best?.activeSocket || null,
+        support,
+        supportPort: best?.supportPort || null,
+        supportPoint: best?.supportPoint || null,
+        supportSocket: best?.supportSocket || null,
+        endpointDistance: best?.endpointDistance ?? Infinity,
+        socketDistance: best?.socketDistance ?? Infinity,
+        endpointMode: 'socket'
+      };
+    }
+
+    resolveFloorSnapConnection(targetCell, supportTile = null) {
+      if (!targetCell) return { valid: false };
+      const activePlacement = createTile({
         x: targetCell.x,
         y: targetCell.y,
         z: targetCell.z,
@@ -1402,28 +1664,436 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         rotation: this.activeRotation
       });
       const activeKey = createCellKey(targetCell.x, targetCell.y, targetCell.z);
-      const activePorts = getWorldTransmissionPorts(activeTile, activeKey);
-      const supportPorts = getWorldTransmissionPorts(support.placement, support.key);
-      const preferredDirection = support.edge || null;
-      const oppositeDirection = preferredDirection ? OPPOSITE_EDGE[preferredDirection] : null;
-      const activePort = activePorts.find((port) => port.worldDirection === preferredDirection)
-        || activePorts.find((port) => port.worldDirection === oppositeDirection)
-        || activePorts[0]
-        || null;
-      const supportPort = supportPorts.find((port) => port.worldDirection === preferredDirection)
-        || supportPorts.find((port) => port.worldDirection === oppositeDirection)
-        || supportPorts[0]
-        || null;
-      return {
-        valid: !!activePort && !!supportPort,
-        activeTile,
-        activePort,
-        support,
-        supportPort
+      const activePorts = getWorldTransmissionPorts(activePlacement, activeKey);
+      const supportCandidates = [];
+      const seen = new Set();
+      const addSupport = (tile) => {
+        if (!tile || tile.isVertical || isPortalMaterial(tile.panelType)) return;
+        const key = createCellKey(tile.x, tile.y, tile.z);
+        if (seen.has(key)) return;
+        seen.add(key);
+        supportCandidates.push(tile);
+      };
+      addSupport(supportTile);
+      Object.values(EDGE_NEIGHBOR_OFFSETS).forEach((offset) => {
+        const tile = this.mapData.tiles?.[createCellKey(
+          targetCell.x + offset.x,
+          targetCell.y + offset.y,
+          targetCell.z
+        )];
+        addSupport(tile);
+      });
+      if (activePorts.length <= 0) {
+        const support = supportCandidates[0]
+          ? {
+            kind: 'tile',
+            key: createCellKey(supportCandidates[0].x, supportCandidates[0].y, supportCandidates[0].z),
+            cell: { x: supportCandidates[0].x, y: supportCandidates[0].y, z: supportCandidates[0].z },
+            placement: supportCandidates[0]
+          }
+          : null;
+        return {
+          valid: true,
+          activeTile: activePlacement,
+          support,
+          socketDistance: 0,
+          endpointDistance: 0,
+          endpointMode: 'socket'
+        };
+      }
+      let best = null;
+      supportCandidates.forEach((candidateSupportTile) => {
+        const connection = this.resolveSingleFloorSnapConnection(targetCell, activePlacement, activePorts, candidateSupportTile);
+        if (
+          !best
+          || (connection.valid && !best.valid)
+          || (
+            connection.valid === best.valid
+            && connection.socketDistance < best.socketDistance
+          )
+          || (
+            connection.valid === best.valid
+            && Math.abs(connection.socketDistance - best.socketDistance) <= 1e-6
+            && connection.endpointDistance < best.endpointDistance
+          )
+        ) {
+          best = connection;
+        }
+      });
+      return best || {
+        valid: false,
+        activeTile: activePlacement,
+        support: null,
+        endpointDistance: Infinity,
+        socketDistance: Infinity,
+        endpointMode: 'socket'
       };
     }
 
-    resolveVerticalTopSnap(hitInfo) {
+    getTransmissionSocketPoint(placement, port, forcedSurface = null) {
+      if (!placement || !port) return null;
+      const local = port.worldLocalPosition || rotateLocalPoint(port.localPosition || { x: 0, y: 0 }, placement.rotation || 0);
+      if (forcedSurface === 'wall' || placement.edge || placement.isVertical) {
+        const endpoints = placement.edge
+          ? (WALL_EDGE_ENDPOINTS[placement.edge] || WALL_EDGE_ENDPOINTS.north)
+          : getCellVerticalEndpoints(placement.rotation || 0);
+        const u = Math.max(0, Math.min(1, (local.x || 0) + 0.5));
+        const lerp = (a, b, t) => a + ((b - a) * t);
+        return {
+          x: (Number(placement.x) || 0) + lerp(endpoints[0].x, endpoints[1].x, u),
+          y: (Number(placement.y) || 0) + lerp(endpoints[0].y, endpoints[1].y, u),
+          z: (Number(placement.z) || 0) + 0.5 - (local.y || 0)
+        };
+      }
+      return {
+        x: (Number(placement.x) || 0) + (local.x || 0),
+        y: (Number(placement.y) || 0) + (local.y || 0),
+        z: Number(placement.z) || 0
+      };
+    }
+
+    getTransmissionSurfacePortPoint(placement, port, forcedSurface = null) {
+      if (!placement || !port) return null;
+      const projection = projectCell(placement, this.cameraState.yaw, this.mapData);
+      const offsetX = projection.x - (TILE_RENDER_WIDTH * 0.5);
+      const offsetY = projection.y - (TILE_RENDER_HEIGHT * 0.57);
+      if (forcedSurface === 'wall' || placement.edge) {
+        const geometry = placement.edge
+          ? createEdgeWallGeometry(this.cameraState.yaw, placement.edge)
+          : createTileGeometry(this.cameraState.yaw, placement.rotation || 0);
+        return this.getGhostBoardPoint(
+          geometry.wall,
+          port.localPosition,
+          placement.rotation || 0,
+          offsetX,
+          offsetY,
+          'wall'
+        );
+      }
+      const geometry = createTileGeometry(this.cameraState.yaw, placement.rotation || 0);
+      return this.getGhostBoardPoint(
+        placement.isVertical ? geometry.wall : geometry.top,
+        port.localPosition,
+        placement.rotation || 0,
+        offsetX,
+        offsetY,
+        placement.isVertical ? 'wall' : 'floor'
+      );
+    }
+
+    getVerticalTopSnapSpec(support) {
+      if (!support?.placement) return {};
+      const ports = getWorldTransmissionPorts(support.placement, support.key);
+      const topPort = ports
+        .map((port) => ({
+          port,
+          socket: this.getTransmissionSocketPoint(support.placement, port, support.kind === 'wall' ? 'wall' : null),
+          point: this.getTransmissionSurfacePortPoint(support.placement, port, support.kind === 'wall' ? 'wall' : null)
+        }))
+        .filter((entry) => entry.socket)
+        .sort((a, b) => (
+          (b.socket.z - a.socket.z)
+          || ((a.point?.y ?? 0) - (b.point?.y ?? 0))
+        ))[0]?.port || null;
+      return {
+        activeDirection: OPPOSITE_EDGE[topPort?.worldDirection],
+        supportDirection: topPort?.worldDirection,
+        supportPortId: topPort?.id,
+        endpointMode: 'socket'
+      };
+    }
+
+    getSupportPrimaryEdge(support) {
+      if (support?.kind === 'wall' && support.edge) return support.edge;
+      return rotateDirectionByDegrees('north', support?.placement?.rotation || 0);
+    }
+
+    getAbsoluteWallEdgeEndpoints(cell, edge = 'north') {
+      const endpoints = WALL_EDGE_ENDPOINTS[edge] || WALL_EDGE_ENDPOINTS.north;
+      return endpoints.map((point) => ({
+        x: (Number(cell?.x) || 0) + point.x,
+        y: (Number(cell?.y) || 0) + point.y
+      }));
+    }
+
+    getWallPhysicalKey(cell, edge = 'north') {
+      const endpoints = this.getAbsoluteWallEdgeEndpoints(cell, edge)
+        .map((point) => `${formatAxisCoord(point.x)},${formatAxisCoord(point.y)}`)
+        .sort();
+      return `${Number(cell?.z) || 0}:${endpoints.join('|')}`;
+    }
+
+    isWallPhysicalPlaneOccupied(cell, edge = 'north') {
+      const physicalKey = this.getWallPhysicalKey(cell, edge);
+      return Object.values(this.mapData.walls || {}).some((wall) => (
+        this.getWallPhysicalKey(wall, wall.edge) === physicalKey
+      ));
+    }
+
+    getSupportAxisSegment(support) {
+      if (!support?.placement) return null;
+      const localEndpoints = support.kind === 'wall'
+        ? (WALL_EDGE_ENDPOINTS[support.placement.edge] || WALL_EDGE_ENDPOINTS.north)
+        : getCellVerticalEndpoints(support.placement.rotation || 0);
+      return localEndpoints.map((point) => ({
+        x: (Number(support.placement.x) || 0) + point.x,
+        y: (Number(support.placement.y) || 0) + point.y
+      }));
+    }
+
+    getSupportAxisVertex(support, direction) {
+      const segment = this.getSupportAxisSegment(support);
+      if (!segment) return null;
+      const endpointDirections = support.kind === 'wall'
+        ? (WALL_EDGE_ENDPOINTS[support.placement.edge] || WALL_EDGE_ENDPOINTS.north).map(getDirectionFromEndpoint)
+        : getCellVerticalEndpoints(support.placement.rotation || 0).map(getDirectionFromEndpoint);
+      const index = endpointDirections.indexOf(direction);
+      return segment[index >= 0 ? index : 0] || null;
+    }
+
+    getNearbyAxisCells(points = [], z = 0, padding = 1) {
+      const xs = points.map((point) => point.x);
+      const ys = points.map((point) => point.y);
+      const minX = Math.floor(Math.min(...xs) - padding);
+      const maxX = Math.ceil(Math.max(...xs) + padding);
+      const minY = Math.floor(Math.min(...ys) - padding);
+      const maxY = Math.ceil(Math.max(...ys) + padding);
+      const cells = [];
+      for (let y = minY; y <= maxY; y += 1) {
+        for (let x = minX; x <= maxX; x += 1) {
+          if (isValidCell(x, y, z, this.mapData)) cells.push({ x, y, z });
+        }
+      }
+      return cells;
+    }
+
+    findWallCandidatesForSegment(segment, z = 0) {
+      if (!Array.isArray(segment) || segment.length < 2) return [];
+      const seen = new Set();
+      const candidates = [];
+      this.getNearbyAxisCells(segment, z, 1).forEach((cell) => {
+        Object.keys(EDGE_NEIGHBOR_OFFSETS).forEach((edge) => {
+          if (!sameAxisSegment(this.getAbsoluteWallEdgeEndpoints(cell, edge), segment)) return;
+          const physicalKey = this.getWallPhysicalKey(cell, edge);
+          if (seen.has(physicalKey)) return;
+          seen.add(physicalKey);
+          candidates.push({ cell, edge, physicalKey });
+        });
+      });
+      return candidates;
+    }
+
+    findFloorCandidatesForSegment(segment, z = 0) {
+      if (!Array.isArray(segment) || segment.length < 2) return [];
+      const seen = new Set();
+      const candidates = [];
+      this.getNearbyAxisCells(segment, z, 1).forEach((cell) => {
+        const hasSharedEdge = Object.keys(EDGE_NEIGHBOR_OFFSETS).some((edge) => (
+          sameAxisSegment(this.getAbsoluteWallEdgeEndpoints(cell, edge), segment)
+        ));
+        if (!hasSharedEdge) return;
+        const key = createCellKey(cell.x, cell.y, cell.z);
+        if (seen.has(key)) return;
+        seen.add(key);
+        candidates.push({ cell, key });
+      });
+      return candidates;
+    }
+
+    findWallCandidatesForVertex(vertex, z = 0) {
+      if (!vertex) return [];
+      const seen = new Set();
+      const candidates = [];
+      this.getNearbyAxisCells([vertex], z, 1).forEach((cell) => {
+        Object.keys(EDGE_NEIGHBOR_OFFSETS).forEach((edge) => {
+          if (!this.getAbsoluteWallEdgeEndpoints(cell, edge).some((point) => sameAxisPoint(point, vertex))) return;
+          const physicalKey = this.getWallPhysicalKey(cell, edge);
+          if (seen.has(physicalKey)) return;
+          seen.add(physicalKey);
+          candidates.push({ cell, edge, physicalKey });
+        });
+      });
+      return candidates;
+    }
+
+    getPreferredAxisPlacementIndex(options = []) {
+      if (!options.length) return 0;
+      const preferredKind = this.panelPose === 'wall' ? 'wall' : 'floor';
+      const preferredIndex = options.findIndex((option) => option.kind === preferredKind && option.valid !== false);
+      return preferredIndex >= 0 ? preferredIndex : 0;
+    }
+
+    getSnapAxisEdge(snap) {
+      if (!snap) return null;
+      if (snap.axisEdge) return snap.axisEdge;
+      if (snap.side === 'top') return this.getSupportPrimaryEdge(snap.support);
+      return OPPOSITE_EDGE[snap.direction] || snap.direction || 'north';
+    }
+
+    getSnapAxisKey(snap) {
+      if (!snap?.cell || !snap.support) return '';
+      const axisEdge = this.getSnapAxisEdge(snap);
+      return `${snap.support.key}:${snap.side || ''}:${snap.direction || ''}:${axisEdge || ''}:${createCellKey(snap.cell.x, snap.cell.y, snap.cell.z)}`;
+    }
+
+    getVerticalTopPortDirection(support) {
+      if (!support?.placement) return null;
+      if (support.kind === 'wall') return support.placement.edge || 'north';
+      return rotateDirectionByDegrees('north', support.placement.rotation || 0);
+    }
+
+    getVerticalSurfaceSnapEdge(hitInfo, support) {
+      if (!hitInfo?.localPoint || !support?.placement) return null;
+      const projection = projectCell(support.placement, this.cameraState.yaw, this.mapData);
+      const localPoint = {
+        x: hitInfo.localPoint.x - projection.x + (TILE_RENDER_WIDTH * 0.5),
+        y: hitInfo.localPoint.y - projection.y + (TILE_RENDER_HEIGHT * 0.57)
+      };
+      const geometry = support.kind === 'wall'
+        ? createEdgeWallGeometry(this.cameraState.yaw, support.placement.edge)
+        : createTileGeometry(this.cameraState.yaw, support.placement.rotation || 0);
+      const wall = geometry.wall;
+      if (!Array.isArray(wall) || wall.length < 4) return null;
+      const threshold = Math.max(14, 24 / Math.max(0.45, this.cameraState.zoom || 1));
+      const endpointDirections = support.kind === 'wall'
+        ? (WALL_EDGE_ENDPOINTS[support.placement.edge] || WALL_EDGE_ENDPOINTS.north).map(getDirectionFromEndpoint)
+        : getCellVerticalEndpoints(support.placement.rotation || 0).map(getDirectionFromEndpoint);
+      const edges = [
+        {
+          side: 'side',
+          direction: endpointDirections[0],
+          distanceSquared: distancePointToSegmentSquared(localPoint, wall[0], wall[3])
+        },
+        {
+          side: 'side',
+          direction: endpointDirections[1],
+          distanceSquared: distancePointToSegmentSquared(localPoint, wall[1], wall[2])
+        },
+        {
+          side: 'top',
+          direction: 'up',
+          distanceSquared: distancePointToSegmentSquared(localPoint, wall[2], wall[3])
+        }
+      ].sort((a, b) => a.distanceSquared - b.distanceSquared);
+      const best = edges[0];
+      return best && best.distanceSquared <= threshold * threshold ? best : null;
+    }
+
+    getFloorSurfaceSnapEdge(hitInfo, tile) {
+      if (!hitInfo?.localPoint || !tile || tile.isVertical || isPortalMaterial(tile.panelType)) return null;
+      const projection = projectCell(tile, this.cameraState.yaw, this.mapData);
+      const localPoint = {
+        x: hitInfo.localPoint.x - projection.x + (TILE_RENDER_WIDTH * 0.5),
+        y: hitInfo.localPoint.y - projection.y + (TILE_RENDER_HEIGHT * 0.57)
+      };
+      const geometry = createTileGeometry(this.cameraState.yaw, tile.rotation || 0);
+      if (!pointInPolygon(localPoint, geometry.top)) return null;
+      const threshold = Math.max(12, 22 / Math.max(0.45, this.cameraState.zoom || 1));
+      const edges = [
+        { direction: 'north', distanceSquared: distancePointToSegmentSquared(localPoint, geometry.top[0], geometry.top[1]) },
+        { direction: 'east', distanceSquared: distancePointToSegmentSquared(localPoint, geometry.top[1], geometry.top[2]) },
+        { direction: 'south', distanceSquared: distancePointToSegmentSquared(localPoint, geometry.top[2], geometry.top[3]) },
+        { direction: 'west', distanceSquared: distancePointToSegmentSquared(localPoint, geometry.top[3], geometry.top[0]) }
+      ].sort((a, b) => a.distanceSquared - b.distanceSquared);
+      const best = edges[0];
+      return best && best.distanceSquared <= threshold * threshold ? best : null;
+    }
+
+    getVisibleVerticalSurfaceDepth(localPoint) {
+      if (!localPoint) return null;
+      let blockerDepth = null;
+      const testPlacement = (placement, kind = 'tile') => {
+        if (!placement) return;
+        const projection = projectCell(placement, this.cameraState.yaw, this.mapData);
+        const point = {
+          x: localPoint.x - projection.x + (TILE_RENDER_WIDTH * 0.5),
+          y: localPoint.y - projection.y + (TILE_RENDER_HEIGHT * 0.57)
+        };
+        const geometry = kind === 'wall'
+          ? createEdgeWallGeometry(this.cameraState.yaw, placement.edge)
+          : createTileGeometry(this.cameraState.yaw, placement.rotation || 0);
+        const visiblePolygons = [
+          geometry.wall,
+          geometry.wallCap,
+          geometry.wallSideStart,
+          geometry.wallSideEnd
+        ];
+        if (!visiblePolygons.some((polygon) => pointInPolygon(point, polygon))) return;
+        const depth = getPlacementDepth({
+          cell: placement,
+          partType: 'wall_plane',
+          physicalLayer: 'wall_plane',
+          edge: kind === 'wall' ? placement.edge : null,
+          rotation: placement.rotation || 0,
+          cameraYaw: this.cameraState.yaw,
+          mapData: this.mapData
+        });
+        blockerDepth = blockerDepth === null ? depth : Math.max(blockerDepth, depth);
+      };
+      Object.values(this.mapData.tiles || {}).forEach((tile) => {
+        if (tile?.isVertical && !isPortalMaterial(tile.panelType)) testPlacement(tile, 'tile');
+      });
+      Object.values(this.mapData.walls || {}).forEach((wall) => testPlacement(wall, 'wall'));
+      return blockerDepth;
+    }
+
+    resolveFloorEdgePlacementTarget(hitInfo) {
+      if (!hitInfo?.localPoint || !isBoardMaterial(this.activeTileType) || isPortalMaterial(this.activeTileType)) return null;
+      const verticalBlockerDepth = this.getVisibleVerticalSurfaceDepth(hitInfo.localPoint);
+      let best = null;
+      Object.values(this.mapData.tiles || {}).forEach((tile) => {
+        if (!tile || tile.isVertical || isPortalMaterial(tile.panelType)) return;
+        const edgeHit = this.getFloorSurfaceSnapEdge(hitInfo, tile);
+        if (!edgeHit) return;
+        const offset = EDGE_NEIGHBOR_OFFSETS[edgeHit.direction];
+        const target = {
+          x: tile.x + (offset?.x || 0),
+          y: tile.y + (offset?.y || 0),
+          z: tile.z
+        };
+        if (!isValidCell(target.x, target.y, target.z, this.mapData)) return;
+        if (!this.hasFloorPlacementSupport(target, tile)) return;
+        const occupied = !!this.mapData.tiles?.[createCellKey(target.x, target.y, target.z)];
+        const connection = occupied ? { valid: false } : this.resolveFloorSnapConnection(target, tile);
+        const depth = getPlacementDepth({
+          cell: tile,
+          partType: 'floor_base',
+          rotation: tile.rotation || 0,
+          cameraYaw: this.cameraState.yaw,
+          mapData: this.mapData
+        });
+        if (verticalBlockerDepth !== null && depth <= verticalBlockerDepth) return;
+        const candidate = {
+          kind: 'floor',
+          cell: target,
+          valid: !occupied && connection.valid,
+          connection,
+          sourceSnap: {
+            side: 'floor',
+            direction: edgeHit.direction,
+            support: connection.support || {
+              kind: 'tile',
+              key: createCellKey(tile.x, tile.y, tile.z),
+              cell: { x: tile.x, y: tile.y, z: tile.z },
+              placement: tile
+            },
+            cell: target
+          },
+          depth,
+          distanceSquared: edgeHit.distanceSquared
+        };
+        if (
+          !best
+          || candidate.depth > best.depth
+          || (candidate.depth === best.depth && candidate.distanceSquared < best.distanceSquared)
+        ) {
+          best = candidate;
+        }
+      });
+      return best;
+    }
+
+    resolveVerticalSurfaceSnap(hitInfo) {
       const hit = hitInfo?.hit;
       if (!hit || !isBoardMaterial(this.activeTileType) || isPortalMaterial(this.activeTileType)) return null;
       let support = null;
@@ -1445,25 +2115,253 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         };
       }
       if (!support) return null;
+      const snapEdge = this.getVerticalSurfaceSnapEdge(hitInfo, support);
+      if (!snapEdge) return null;
+      const sideOffset = snapEdge.side === 'side' ? EDGE_NEIGHBOR_OFFSETS[snapEdge.direction] : null;
+      const axisEdge = snapEdge.side === 'top'
+        ? this.getSupportPrimaryEdge(support)
+        : (OPPOSITE_EDGE[snapEdge.direction] || snapEdge.direction || 'north');
+      const zCandidates = snapEdge.side === 'side'
+        ? [hit.cell.z, hit.cell.z + 1]
+        : [hit.cell.z + 1];
+      let best = null;
+      zCandidates.forEach((z) => {
+        const cell = {
+          x: hit.cell.x + (sideOffset?.x || 0),
+          y: hit.cell.y + (sideOffset?.y || 0),
+          z
+        };
+        if (!isValidCell(cell.x, cell.y, cell.z, this.mapData)) return;
+        const occupied = !!this.mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)];
+        const snapSpec = snapEdge.side === 'side'
+          ? {
+            activeDirection: OPPOSITE_EDGE[snapEdge.direction],
+            supportDirection: snapEdge.direction,
+            endpointMode: 'socket'
+          }
+          : this.getVerticalTopSnapSpec(support);
+        const connection = this.resolveBestVerticalSnapConnection(cell, support, snapSpec);
+        const candidate = {
+          cell,
+          occupied,
+          valid: !occupied && connection.valid,
+          connection,
+          support: connection.support || support,
+          axisEdge,
+          side: snapEdge.side,
+          direction: snapEdge.direction
+        };
+        if (
+          !best
+          || (candidate.valid && !best.valid)
+          || (candidate.valid === best.valid && candidate.connection.socketDistance < best.connection.socketDistance)
+        ) {
+          best = candidate;
+        }
+      });
+      return best;
+    }
+
+    getVerticalSupportEntries() {
+      const supports = [];
+      Object.values(this.mapData.tiles || {}).forEach((tile) => {
+        if (!tile?.isVertical || isPortalMaterial(tile.panelType)) return;
+        supports.push({
+          kind: 'tile',
+          key: createCellKey(tile.x, tile.y, tile.z),
+          cell: { x: tile.x, y: tile.y, z: tile.z },
+          placement: tile
+        });
+      });
+      Object.values(this.mapData.walls || {}).forEach((wall) => {
+        supports.push({
+          kind: 'wall',
+          key: createWallKey(wall.x, wall.y, wall.z, wall.edge),
+          cell: { x: wall.x, y: wall.y, z: wall.z },
+          edge: wall.edge,
+          placement: wall
+        });
+      });
+      return supports;
+    }
+
+    getVerticalGapCandidateCells(support) {
+      if (!support?.cell) return [];
+      const base = support.cell;
+      const cells = [
+        { x: base.x, y: base.y, z: base.z + 1, snapSide: 'top', direction: 'up' }
+      ];
+      Object.entries(EDGE_NEIGHBOR_OFFSETS).forEach(([direction, offset]) => {
+        cells.push({
+          x: base.x + offset.x,
+          y: base.y + offset.y,
+          z: base.z + 1,
+          snapSide: 'side',
+          direction
+        });
+      });
+      if (support.kind === 'wall' && support.edge) {
+        const offset = EDGE_NEIGHBOR_OFFSETS[support.edge];
+        if (offset) {
+          cells.push({
+            x: base.x + offset.x,
+            y: base.y + offset.y,
+            z: base.z + 1,
+            snapSide: 'side',
+            direction: support.edge
+          });
+        }
+      }
+      return cells;
+    }
+
+    resolveVerticalGapFloorSnap(hitInfo) {
+      if (!hitInfo?.localPoint || !isBoardMaterial(this.activeTileType) || isPortalMaterial(this.activeTileType)) return null;
+      const geometry = createTileGeometry(this.cameraState.yaw, this.activeRotation);
+      const hitSupportKey = hitInfo.hit?.type === 'wall'
+        ? createWallKey(hitInfo.hit.cell.x, hitInfo.hit.cell.y, hitInfo.hit.cell.z, hitInfo.hit.edge)
+        : hitInfo.hit?.type === 'tile' && hitInfo.hit.tile?.isVertical
+          ? createCellKey(hitInfo.hit.cell.x, hitInfo.hit.cell.y, hitInfo.hit.cell.z)
+          : null;
+      let best = null;
+      const seen = new Set();
+      this.getVerticalSupportEntries().forEach((support) => {
+        if (hitSupportKey && support.key !== hitSupportKey) return;
+        const supportSnapEdge = this.getVerticalSurfaceSnapEdge(hitInfo, support);
+        if (!supportSnapEdge) return;
+        this.getVerticalGapCandidateCells(support).forEach((candidate) => {
+          if (candidate.snapSide !== supportSnapEdge.side) return;
+          if (candidate.snapSide === 'side' && candidate.direction !== supportSnapEdge.direction) return;
+          if (!isValidCell(candidate.x, candidate.y, candidate.z, this.mapData)) return;
+          const key = `${createCellKey(candidate.x, candidate.y, candidate.z)}:${support.key}:${candidate.direction}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          const projection = projectCell(candidate, this.cameraState.yaw, this.mapData);
+          const point = {
+            x: hitInfo.localPoint.x - projection.x + (TILE_RENDER_WIDTH * 0.5),
+            y: hitInfo.localPoint.y - projection.y + (TILE_RENDER_HEIGHT * 0.57)
+          };
+          const bounds = expandRect(getPointBounds(geometry.top), 10);
+          if (!pointInPolygon(point, geometry.top) && !rectContainsPoint(bounds, point)) return;
+          const center = this.getGhostBoardPoint(
+            geometry.top,
+            { x: 0, y: 0 },
+            this.activeRotation,
+            projection.x - (TILE_RENDER_WIDTH * 0.5),
+            projection.y - (TILE_RENDER_HEIGHT * 0.57),
+            'floor'
+          );
+          const distanceSquared = center
+            ? ((hitInfo.localPoint.x - center.x) ** 2) + ((hitInfo.localPoint.y - center.y) ** 2)
+            : 0;
+          const snap = candidate.snapSide === 'side'
+            ? {
+              activeDirection: OPPOSITE_EDGE[candidate.direction],
+              supportDirection: candidate.direction,
+              endpointMode: 'socket'
+            }
+            : this.getVerticalTopSnapSpec(support);
+          const cell = { x: candidate.x, y: candidate.y, z: candidate.z };
+          const connection = this.resolveBestVerticalSnapConnection(cell, support, snap);
+          const occupied = !!this.mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)];
+          const candidateSnap = {
+            cell,
+            occupied,
+            valid: !occupied && connection.valid,
+            connection,
+            support: connection.support || support,
+            axisEdge: candidate.snapSide === 'top'
+              ? this.getSupportPrimaryEdge(support)
+              : (OPPOSITE_EDGE[candidate.direction] || candidate.direction || 'north'),
+            side: candidate.snapSide,
+            direction: candidate.direction,
+            distanceSquared
+          };
+          if (
+            !best
+            || (candidateSnap.valid && !best.valid)
+            || (candidateSnap.valid === best.valid && candidateSnap.distanceSquared < best.distanceSquared)
+          ) {
+            best = candidateSnap;
+          }
+        });
+      });
+      return best;
+    }
+
+    resolveVerticalSurfaceWallSnap(hitInfo) {
+      const hit = hitInfo?.hit;
+      if (!hit || !isBoardMaterial(this.activeTileType) || isPortalMaterial(this.activeTileType)) return null;
+      let support = null;
+      if (hit.type === 'wall') {
+        const wall = hit.wall || this.mapData.walls?.[createWallKey(hit.cell.x, hit.cell.y, hit.cell.z, hit.edge)];
+        if (!wall) return null;
+        support = {
+          kind: 'wall',
+          key: createWallKey(hit.cell.x, hit.cell.y, hit.cell.z, hit.edge),
+          edge: hit.edge,
+          placement: wall
+        };
+      } else if (hit.type === 'tile' && hit.tile?.isVertical) {
+        support = {
+          kind: 'tile',
+          key: createCellKey(hit.cell.x, hit.cell.y, hit.cell.z),
+          edge: null,
+          placement: hit.tile
+        };
+      }
+      if (!support) return null;
+      const snapEdge = this.getVerticalSurfaceSnapEdge(hitInfo, support);
+      if (!snapEdge) return null;
+      if (snapEdge.side === 'top') {
+        const cell = { x: hit.cell.x, y: hit.cell.y, z: hit.cell.z + 1 };
+        const edge = this.getSupportPrimaryEdge(support);
+        const connection = this.resolveBestVerticalSnapConnection(cell, support, {
+          activeEdge: edge,
+          ...this.getVerticalTopSnapSpec(support)
+        });
+        return {
+          cell,
+          edge,
+          valid: isValidCell(cell.x, cell.y, cell.z, this.mapData)
+            && !this.mapData.walls?.[createWallKey(cell.x, cell.y, cell.z, edge)]
+            && connection.valid,
+          connection
+        };
+      }
+      const sideOffset = EDGE_NEIGHBOR_OFFSETS[snapEdge.direction];
+      if (!sideOffset) return null;
       const cell = {
-        x: hit.cell.x,
-        y: hit.cell.y,
-        z: hit.cell.z + 1
+        x: hit.cell.x + sideOffset.x,
+        y: hit.cell.y + sideOffset.y,
+        z: hit.cell.z
       };
-      if (!isValidCell(cell.x, cell.y, cell.z, this.mapData)) return null;
-      const occupied = !!this.mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)];
-      const connection = this.resolveVerticalSnapConnection(cell, support);
+      const edge = OPPOSITE_EDGE[snapEdge.direction] || snapEdge.direction;
+      const connection = this.resolveBestVerticalSnapConnection(cell, support, {
+        activeEdge: edge,
+        activeDirection: OPPOSITE_EDGE[snapEdge.direction],
+        supportDirection: snapEdge.direction,
+        endpointMode: 'socket'
+      });
       return {
         cell,
-        occupied,
-        valid: !occupied && connection.valid,
+        edge,
+        valid: isValidCell(cell.x, cell.y, cell.z, this.mapData)
+          && !this.mapData.walls?.[createWallKey(cell.x, cell.y, cell.z, edge)]
+          && connection.valid,
         connection
       };
     }
 
     resolveFloorPlacementTarget(hitInfo) {
-      const verticalSnap = this.resolveVerticalTopSnap(hitInfo);
+      const floorEdgeTarget = this.resolveFloorEdgePlacementTarget(hitInfo);
+      if (floorEdgeTarget) return floorEdgeTarget;
+      const verticalSnap = this.resolveVerticalSurfaceSnap(hitInfo) || this.resolveVerticalGapFloorSnap(hitInfo);
       if (verticalSnap) return verticalSnap.valid ? verticalSnap.cell : null;
+      if (hitInfo?.hit?.type === 'wall' || (hitInfo?.hit?.type === 'tile' && hitInfo.hit.tile?.isVertical)) {
+        return null;
+      }
+      if (hitInfo?.hit?.type === 'tile' && hitInfo.hit.tile && !isPortalMaterial(hitInfo.hit.tile.panelType)) return hitInfo.hit.cell;
       const cell = hitInfo?.cell;
       if (!cell) return null;
       if (!isBoardMaterial(this.activeTileType) || isPortalMaterial(this.activeTileType)) return cell;
@@ -1473,32 +2371,238 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       return this.hasTileSupport(cell) ? cell : null;
     }
 
+    resolveAxisRotatedWallTarget(snap) {
+      if (!snap?.cell || !snap.support) return null;
+      const edge = this.getSnapAxisEdge(snap) || 'north';
+      const connection = this.resolveBestVerticalSnapConnection(snap.cell, snap.support, {
+        activeEdge: edge,
+        endpointMode: 'socket'
+      });
+      return {
+        cell: snap.cell,
+        edge,
+        valid: isValidCell(snap.cell.x, snap.cell.y, snap.cell.z, this.mapData)
+          && !this.mapData.walls?.[createWallKey(snap.cell.x, snap.cell.y, snap.cell.z, edge)]
+          && connection.valid,
+        connection,
+        sourceSnap: snap
+      };
+    }
+
+    createAxisFloorTarget(cell, snap) {
+      if (!cell || !snap?.support) return null;
+      if (!isValidCell(cell.x, cell.y, cell.z, this.mapData)) return null;
+      if (this.mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)]) return null;
+      const connection = this.resolveBestVerticalSnapConnection(cell, snap.support, snap.side === 'top'
+        ? this.getVerticalTopSnapSpec(snap.support)
+        : {
+          activeDirection: OPPOSITE_EDGE[snap.direction],
+          supportDirection: snap.direction,
+          endpointMode: 'socket'
+        });
+      return {
+        kind: 'floor',
+        cell: { x: cell.x, y: cell.y, z: cell.z },
+        valid: connection.valid,
+        connection,
+        sourceSnap: snap
+      };
+    }
+
+    createAxisWallTarget(cell, edge, snap) {
+      if (!cell || !edge || !snap?.support) return null;
+      if (!isValidCell(cell.x, cell.y, cell.z, this.mapData)) return null;
+      if (this.isWallPhysicalPlaneOccupied(cell, edge)) return null;
+      const connection = this.resolveBestVerticalSnapConnection(cell, snap.support, {
+        activeEdge: edge,
+        endpointMode: 'socket'
+      });
+      return {
+        kind: 'wall',
+        cell: { x: cell.x, y: cell.y, z: cell.z },
+        edge,
+        valid: connection.valid,
+        connection,
+        sourceSnap: snap
+      };
+    }
+
+    getAxisPlacementOptions(snap) {
+      if (!snap?.cell || !snap.support) return [];
+      const options = [];
+      const seen = new Set();
+      const addOption = (option) => {
+        if (!option?.cell) return;
+        const key = option.kind === 'wall'
+          ? `wall:${this.getWallPhysicalKey(option.cell, option.edge)}`
+          : `floor:${createCellKey(option.cell.x, option.cell.y, option.cell.z)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        options.push(option);
+      };
+
+      if (snap.side === 'top') {
+        const segment = this.getSupportAxisSegment(snap.support);
+        const z = snap.cell.z;
+        const floorCandidates = this.findFloorCandidatesForSegment(segment, z);
+        const wallCandidates = this.findWallCandidatesForSegment(segment, z);
+        const floorCells = floorCandidates.length > 0
+          ? floorCandidates.map((candidate) => candidate.cell)
+          : [snap.cell];
+        floorCells.forEach((cell) => addOption(this.createAxisFloorTarget(cell, snap)));
+        wallCandidates.forEach((candidate) => {
+          addOption(this.createAxisWallTarget(candidate.cell, candidate.edge, snap));
+        });
+        if (wallCandidates.length <= 0) {
+          const fallbackWall = this.resolveAxisRotatedWallTarget(snap);
+          addOption(fallbackWall ? { ...fallbackWall, kind: 'wall' } : null);
+        }
+        return options;
+      }
+
+      const vertex = this.getSupportAxisVertex(snap.support, snap.direction);
+      const wallCandidates = this.findWallCandidatesForVertex(vertex, snap.cell.z);
+      wallCandidates.forEach((candidate) => {
+        addOption(this.createAxisWallTarget(candidate.cell, candidate.edge, snap));
+      });
+      if (wallCandidates.length <= 0) {
+        const fallbackWall = this.resolveAxisRotatedWallTarget(snap);
+        addOption(fallbackWall ? { ...fallbackWall, kind: 'wall' } : null);
+      }
+      return options;
+    }
+
+    getAxisPlacementTarget(snap) {
+      const options = this.getAxisPlacementOptions(snap);
+      if (!options.length) return null;
+      const index = ((this.snapPlaneCycle || 0) % options.length + options.length) % options.length;
+      return options[index] || options[0];
+    }
+
+    getPlacementTargetKey(target) {
+      if (!target?.cell) return '';
+      const cellKey = createCellKey(target.cell.x, target.cell.y, target.cell.z);
+      return target.kind === 'wall'
+        ? `wall:${cellKey}:${target.edge || ''}`
+        : `floor:${cellKey}`;
+    }
+
+    getActivePointerPlacementHitInfo() {
+      const pointer = this.input?.activePointer;
+      return pointer
+        ? this.hitTest(pointer, { allowOutline: true })
+        : {
+          cell: this.hoverCell,
+          hit: this.hoverTarget?.hit,
+          edge: this.hoverEdge,
+          localPoint: this.hoverTarget?.localPoint
+        };
+    }
+
+    rotateActivePlacement(delta) {
+      const hitInfo = this.getActivePointerPlacementHitInfo();
+      const previousSnap = this.resolvePlacementEdgeSnap(hitInfo);
+      const previousTarget = this.resolveDynamicPlacementTarget(hitInfo, {
+        forGhost: true,
+        snap: previousSnap
+      });
+      const previousTargetKey = this.getPlacementTargetKey(previousTarget);
+      this.activeRotation = ((this.activeRotation + delta) % 360 + 360) % 360;
+      this.config.onRotateActive?.(delta);
+      if (previousTargetKey && previousSnap) {
+        const nextSnap = this.resolvePlacementEdgeSnap(hitInfo);
+        const nextSnapAxisKey = this.getSnapAxisKey(nextSnap);
+        const nextOptions = this.getAxisPlacementOptions(nextSnap);
+        const nextIndex = nextOptions.findIndex((option) => this.getPlacementTargetKey(option) === previousTargetKey);
+        if (nextIndex >= 0) {
+          this.activeSnapAxisKey = nextSnapAxisKey;
+          this.snapPlaneCycle = nextIndex;
+        }
+      }
+      this.drawGhostLayer(true);
+    }
+
+    resolvePlacementEdgeSnap(hitInfo) {
+      if (this.resolveFloorEdgePlacementTarget(hitInfo)) return null;
+      return this.resolveVerticalSurfaceSnap(hitInfo) || this.resolveVerticalGapFloorSnap(hitInfo);
+    }
+
+    resolveDynamicPlacementTarget(hitInfo, { forGhost = false, snap: suppliedSnap = undefined } = {}) {
+      const snap = suppliedSnap === undefined ? this.resolvePlacementEdgeSnap(hitInfo) : suppliedSnap;
+      if (snap) {
+        const axisTarget = this.getAxisPlacementTarget(snap);
+        if (axisTarget?.cell) return axisTarget;
+        return null;
+      }
+      if (!snap && this.isWallPlacementActive()) {
+        const wallTarget = forGhost ? this.resolveWallGhostTarget(hitInfo) : this.resolveWallPlacementTarget(hitInfo);
+        return wallTarget?.cell ? { ...wallTarget, kind: 'wall' } : null;
+      }
+      const floorTarget = this.resolveFloorPlacementTarget(hitInfo);
+      if (floorTarget?.cell) return {
+        kind: floorTarget.kind || 'floor',
+        cell: floorTarget.cell,
+        valid: floorTarget.valid !== false,
+        connection: floorTarget.valid === false ? null : (floorTarget.connection || null),
+        sourceSnap: floorTarget.sourceSnap || null
+      };
+      const cell = snap?.cell || floorTarget;
+      if (!cell) return null;
+      return {
+        kind: 'floor',
+        cell,
+        valid: snap ? snap.valid : true,
+        connection: snap?.valid ? snap.connection : null,
+        sourceSnap: snap || null
+      };
+    }
+
     hitTest(pointer, { allowOutline = false } = {}) {
       const { localPoint, cell } = this.getPointerCell(pointer);
       const portHit = this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE
         ? null
         : this.getMechanicalPortHit(localPoint);
+      const needsOcclusionCandidates = (
+        this.activeTool === CITY_CHANNEL_TOOLS.SELECT
+        || this.activeTool === CITY_CHANNEL_TOOLS.BROWSE
+      );
+      const needsVisibleSurfaceHit = needsOcclusionCandidates || this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE;
       const needsWallSnap = this.isWallPlacementActive();
-      if (!cell) {
-        return {
-          cell: null,
-          hit: portHit,
-          edge: 'north',
-          localPoint,
-          wallSnap: needsWallSnap ? this.resolveWallSnapTarget(localPoint, null) : null
-        };
-      }
-      const edge = detectNearestEdge({ localPoint, cell, cameraYaw: this.cameraState.yaw, mapData: this.mapData });
+      const edge = cell ? detectNearestEdge({ localPoint, cell, cameraYaw: this.cameraState.yaw, mapData: this.mapData }) : 'north';
       const wallSnap = needsWallSnap ? this.resolveWallSnapTarget(localPoint, cell) : null;
       const candidates = [];
-      getNeighborCells(cell, this.mapData).forEach((candidate) => {
+      const seenCandidates = new Set();
+      const addTileCandidate = (candidate, tile) => {
+        const key = `tile:${createCellKey(candidate.x, candidate.y, candidate.z)}`;
+        if (!tile || seenCandidates.has(key)) return;
+        seenCandidates.add(key);
+        candidates.push({ kind: 'tile', cell: candidate, tile });
+      };
+      const addWallCandidate = (candidate, wall, candidateEdge = wall?.edge) => {
+        const key = `wall:${createWallKey(candidate.x, candidate.y, candidate.z, candidateEdge)}`;
+        if (!wall || seenCandidates.has(key)) return;
+        seenCandidates.add(key);
+        candidates.push({ kind: 'wall', cell: candidate, wall, edge: candidateEdge });
+      };
+
+      if (cell) getNeighborCells(cell, this.mapData).forEach((candidate) => {
         const tile = this.mapData.tiles?.[createCellKey(candidate.x, candidate.y, candidate.z)];
-        if (tile) candidates.push({ kind: 'tile', cell: candidate, tile });
+        addTileCandidate(candidate, tile);
         ['north', 'south', 'east', 'west'].forEach((candidateEdge) => {
           const wall = this.mapData.walls?.[createWallKey(candidate.x, candidate.y, candidate.z, candidateEdge)];
-          if (wall) candidates.push({ kind: 'wall', cell: candidate, wall, edge: candidateEdge });
+          addWallCandidate(candidate, wall, candidateEdge);
         });
       });
+      if (allowOutline || this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE || needsOcclusionCandidates) {
+        Object.values(this.mapData.tiles || {}).forEach((tile) => {
+          if (needsOcclusionCandidates || this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE || tile?.isVertical || isPortalMaterial(tile?.panelType)) {
+            addTileCandidate({ x: tile.x, y: tile.y, z: tile.z }, tile);
+          }
+        });
+        Object.values(this.mapData.walls || {}).forEach((wall) => {
+          addWallCandidate({ x: wall.x, y: wall.y, z: wall.z }, wall, wall.edge);
+        });
+      }
 
       const hits = portHit ? [portHit] : [];
       candidates.forEach((candidate) => {
@@ -1509,16 +2613,33 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         };
         if (candidate.kind === 'wall') {
           const geometry = createEdgeWallGeometry(this.cameraState.yaw, candidate.wall.edge);
-          const inBase = pointInPolygon(point, geometry.wall) && point.y >= geometry.verticalBaseY;
+          const wallVisiblePolygons = [
+            geometry.wall,
+            geometry.wallCap,
+            geometry.wallSideStart,
+            geometry.wallSideEnd
+          ];
+          const inVisibleWall = wallVisiblePolygons.some((polygon) => pointInPolygon(point, polygon));
+          const inBase = needsVisibleSurfaceHit
+            ? inVisibleWall
+            : pointInPolygon(point, geometry.wall) && point.y >= geometry.verticalBaseY;
           const inOutline = pointInPolygon(point, geometry.wall) || pointInPolygon(point, geometry.wallCap);
-          if (!inBase && !(allowOutline && inOutline)) return;
+          const surfaceBounds = expandRect(getPointBounds([
+            ...geometry.wall,
+            ...geometry.wallCap,
+            ...geometry.wallSideStart,
+            ...geometry.wallSideEnd
+          ]), 10);
+          const inSurfaceBounds = allowOutline && this.activeTool !== CITY_CHANNEL_TOOLS.PLACE_TILE && rectContainsPoint(surfaceBounds, point);
+          if (!inBase && !(allowOutline && inOutline) && !inSurfaceBounds) return;
           hits.push({
             type: 'wall',
             cell: candidate.cell,
             edge: candidate.wall.edge,
             panelType: candidate.wall.panelType,
-            hitZone: inBase ? 'base' : 'outline',
+            hitZone: inBase ? 'base' : inSurfaceBounds ? 'surface' : 'outline',
             wall: candidate.wall,
+            snapPriority: 0,
             depth: getPlacementDepth({
               cell: candidate.cell,
               partType: 'wall_plane',
@@ -1532,17 +2653,43 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         }
 
         const geometry = createTileGeometry(this.cameraState.yaw, candidate.tile.rotation || 0);
-        const inTile = pointInPolygon(point, geometry.top) || geometry.sides.some((poly) => pointInPolygon(point, poly));
+        const inTopFace = pointInPolygon(point, geometry.top);
+        const inTile = inTopFace || geometry.sides.some((poly) => pointInPolygon(point, poly));
         const isPortal = isPortalMaterial(candidate.tile.panelType);
         const inPortal = isPortal && getPortalPolygons(this.cameraState.yaw, candidate.tile.rotation || 0)
           .some((polygon) => pointInPolygon(point, polygon));
+        const verticalVisiblePolygons = candidate.tile.isVertical
+          ? [
+            geometry.wall,
+            geometry.wallCap,
+            geometry.wallSideStart,
+            geometry.wallSideEnd
+          ]
+          : [];
+        const inVisibleVertical = candidate.tile.isVertical
+          && verticalVisiblePolygons.some((polygon) => pointInPolygon(point, polygon));
         const inVertical = isPortal
           ? inPortal
-          : candidate.tile.isVertical && (pointInPolygon(point, geometry.wall) || pointInPolygon(point, geometry.wallCap));
-        if (!inTile && !inVertical) return;
+          : needsVisibleSurfaceHit
+            ? inVisibleVertical
+            : candidate.tile.isVertical && (pointInPolygon(point, geometry.wall) || pointInPolygon(point, geometry.wallCap));
+        const verticalSurfaceBounds = candidate.tile.isVertical
+          ? expandRect(getPointBounds([
+            ...geometry.wall,
+            ...geometry.wallCap,
+            ...geometry.wallSideStart,
+            ...geometry.wallSideEnd
+          ]), 10)
+          : null;
+        const inVerticalSurfaceBounds = candidate.tile.isVertical
+          && allowOutline
+          && this.activeTool !== CITY_CHANNEL_TOOLS.PLACE_TILE
+          && rectContainsPoint(verticalSurfaceBounds, point);
+        if (!inTile && !inVertical && !inVerticalSurfaceBounds) return;
         const hitZone = isPortal && inPortal
           ? 'base'
-          : candidate.tile.isVertical && point.y < geometry.verticalBaseY && inVertical ? 'outline' : 'base';
+          : needsVisibleSurfaceHit && candidate.tile.isVertical && inVertical ? 'base'
+            : candidate.tile.isVertical && point.y < geometry.verticalBaseY && (inVertical || inVerticalSurfaceBounds) ? 'outline' : inVerticalSurfaceBounds ? 'surface' : 'base';
         if (hitZone === 'outline' && !allowOutline) return;
         hits.push({
           type: 'tile',
@@ -1550,6 +2697,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           panelType: candidate.tile.panelType,
           hitZone,
           tile: candidate.tile,
+          snapPriority: 0,
           depth: getPlacementDepth({
             cell: candidate.cell,
             partType: isPortal ? 'portal_body' : candidate.tile.isVertical ? 'wall_plane' : 'floor_base',
@@ -1560,7 +2708,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           })
         });
       });
-      hits.sort((a, b) => b.depth - a.depth);
+      hits.sort((a, b) => ((b.snapPriority || 0) - (a.snapPriority || 0)) || (b.depth - a.depth));
       return { cell, hit: hits[0] || null, edge, localPoint, wallSnap };
     }
 
@@ -1641,7 +2789,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       shadow.fillEllipse(0, 48, 126, 38);
       container.add(shadow);
       const texture = this.textureCache.getTileTexture(tile.panelType, tile.rotation || 0, !!tile.flipped, yaw);
-      const tileImage = this.add.image(0, 0, texture).setOrigin(0.5, 0.57);
+      const tileImage = this.configureBoardImage(this.add.image(0, 0, texture).setOrigin(0.5, 0.57));
       container.add(tileImage);
 
       let runtime = null;
@@ -1697,7 +2845,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         return;
       }
       state.tile = tile;
-      state.tileImage?.setTexture(this.textureCache.getTileTexture(tile.panelType, tile.rotation || 0, !!tile.flipped, state.yaw));
+      this.setBoardTexture(state.tileImage, this.textureCache.getTileTexture(tile.panelType, tile.rotation || 0, !!tile.flipped, state.yaw));
       if (state.runtime) {
         this.drawMechanismState(
           tile,
@@ -1898,7 +3046,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     }
 
     triggerMechanismFromHit(hit) {
-      if (!hit?.cell || !isTriggerMechanismTile(hit.panelType)) return false;
+      if (!hit?.cell || hit.panelType !== CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE) return false;
       if (!this.isSelectedHit(hit)) this.selectHit(hit, false);
       if (this.activeTool === CITY_CHANNEL_TOOLS.BROWSE) this.config.onRequestTool?.(CITY_CHANNEL_TOOLS.SELECT);
       const key = createCellKey(hit.cell.x, hit.cell.y, hit.cell.z);
@@ -1919,6 +3067,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const key = createCellKey(cell.x, cell.y, cell.z);
       const tile = this.mapData.tiles?.[key];
       if (!tile) return false;
+      if (tile.panelType !== CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE) return false;
       const params = normalizeMechanismParams(paramsOverride || this.mechanismParams?.[key]);
       if (isTriggerMechanismTile(tile.panelType)) {
         this.playMechanismAction(tile, key, params);
@@ -2113,7 +3262,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         this.handleContextAction(pointer);
         return;
       }
-      const hit = this.hitTest(pointer);
+      const hit = this.hitTest(pointer, {
+        allowOutline: this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && !!this.activeTileType
+      });
       const doubleClickHit = this.normalizeInspectableHit(hit.hit);
       if (
         (this.activeTool === CITY_CHANNEL_TOOLS.BROWSE || this.activeTool === CITY_CHANNEL_TOOLS.SELECT)
@@ -2224,7 +3375,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const hit = this.hitTest(pointer, { allowOutline: true });
       this.updateHover(hit);
       if (!this.dragState) {
-        this.drawGhostLayer();
+        this.drawGhostLayer(this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && !!this.activeTileType);
         return;
       }
 
@@ -2334,15 +3485,15 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       }
       if (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType) {
         const delta = deltaY < 0 ? 90 : 270;
-        this.activeRotation = ((this.activeRotation + delta) % 360 + 360) % 360;
-        this.config.onRotateActive?.(delta);
-        this.drawGhostLayer();
+        this.rotateActivePlacement(delta);
         return;
       }
       const nextZoom = Number(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.cameraState.zoom - (deltaY * 0.0014))).toFixed(2));
       this.cameraState.zoom = nextZoom;
       this.updateCameraTransform();
-      this.drawGhostLayer();
+      this.refreshPointerStateAfterViewChange();
+      this.drawSelectionLayer();
+      this.drawGhostLayer(true);
       this.updateDebugText();
     }
 
@@ -2371,6 +3522,45 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         this.config.onDeleteSelection?.();
         return;
       }
+      if (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType && event.code === 'Space') {
+        event.preventDefault();
+        const pointer = this.input?.activePointer;
+        const hitInfo = pointer
+          ? this.hitTest(pointer, { allowOutline: true })
+          : {
+            cell: this.hoverCell,
+            hit: this.hoverTarget?.hit,
+            edge: this.hoverEdge,
+            localPoint: this.hoverTarget?.localPoint
+          };
+        const snap = this.resolvePlacementEdgeSnap(hitInfo);
+        const snapAxisKey = this.getSnapAxisKey(snap);
+        if (!snapAxisKey) {
+          const nextPose = this.panelPose === 'wall' ? 'floor' : 'wall';
+          this.setPlacementPose(nextPose);
+          this.config.onHoverStatusChange?.(nextPose === 'wall' ? '放置预览：切换为竖放' : '放置预览：切换为平放');
+          this.updateHover(hitInfo);
+          this.drawGhostLayer(true);
+          return;
+        }
+        const options = this.getAxisPlacementOptions(snap);
+        if (options.length <= 0) {
+          this.config.onHoverStatusChange?.('放置预览：当前吸附轴周围没有空余安装面');
+          this.drawGhostLayer(true);
+          return;
+        }
+        if (snapAxisKey !== this.activeSnapAxisKey) {
+          this.activeSnapAxisKey = snapAxisKey;
+          this.snapPlaneCycle = this.getPreferredAxisPlacementIndex(options);
+        }
+        this.snapPlaneCycle = ((this.snapPlaneCycle || 0) + 1) % options.length;
+        const target = options[this.snapPlaneCycle] || options[0];
+        this.setPlacementPose(target.kind === 'wall' ? 'wall' : 'floor');
+        this.config.onHoverStatusChange?.('放置预览：围绕当前吸附边切换安装面');
+        this.updateHover(hitInfo);
+        this.drawGhostLayer(true);
+        return;
+      }
       if (event.code === 'Space') {
         event.preventDefault();
         if (this.selectedCells.length || this.selectedWalls.length) this.config.onFlipSelection?.();
@@ -2380,18 +3570,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         if (key === 'r') {
           event.preventDefault();
           const delta = event.shiftKey ? 270 : 90;
-          this.activeRotation = ((this.activeRotation + delta) % 360 + 360) % 360;
-          this.config.onRotateActive?.(delta);
+          this.rotateActivePlacement(delta);
           this.config.onHoverStatusChange?.(`放置预览：${event.shiftKey ? '逆时针' : '顺时针'}旋转 90°`);
-          this.drawGhostLayer();
-          return;
-        }
-        if (key === 'v' || key === 'tab') {
-          event.preventDefault();
-          this.panelPose = this.panelPose === 'wall' ? 'floor' : 'wall';
-          this.config.onTogglePanelPose?.();
-          this.config.onHoverStatusChange?.(this.panelPose === 'wall' ? '放置预览：切换为竖放' : '放置预览：切换为平放');
-          this.drawGhostLayer();
           return;
         }
       }
@@ -2424,25 +3604,41 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     }
 
     updateHover(hitInfo) {
-      const wallPlacementTarget = this.isWallPlacementActive()
-        ? this.resolveWallGhostTarget(hitInfo)
+      const isPlacingTile = this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType;
+      const placementSnap = isPlacingTile ? this.resolvePlacementEdgeSnap(hitInfo) : null;
+      const snapAxisKey = this.getSnapAxisKey(placementSnap);
+      if (snapAxisKey !== this.activeSnapAxisKey) {
+        this.activeSnapAxisKey = snapAxisKey;
+        this.snapPlaneCycle = snapAxisKey
+          ? this.getPreferredAxisPlacementIndex(this.getAxisPlacementOptions(placementSnap))
+          : 0;
+      }
+      const dynamicPlacementTarget = isPlacingTile
+        ? this.resolveDynamicPlacementTarget(hitInfo, { forGhost: true, snap: placementSnap })
         : null;
-      const effectiveCell = wallPlacementTarget?.cell || hitInfo.cell;
-      const effectiveEdge = wallPlacementTarget?.edge || hitInfo.edge;
+      const effectiveCell = dynamicPlacementTarget?.cell || hitInfo.cell;
+      const effectiveEdge = dynamicPlacementTarget?.edge || hitInfo.edge;
       const effectiveCellKey = effectiveCell ? createCellKey(effectiveCell.x, effectiveCell.y, effectiveCell.z) : '';
       const nextKey = hitInfo.hit
         ? `${hitInfo.hit.type}:${createCellKey(hitInfo.hit.cell.x, hitInfo.hit.cell.y, hitInfo.hit.cell.z)}:${hitInfo.hit.edge || ''}:${hitInfo.hit.hitZone}:${effectiveCellKey}:${effectiveEdge || ''}`
-        : (effectiveCell ? `cell:${effectiveCellKey}:${effectiveEdge || ''}` : '');
-      if (this.hoverTarget?.key === nextKey) return;
-      this.hoverTarget = { key: nextKey, hit: hitInfo.hit };
+        : (effectiveCell ? `cell:${effectiveCellKey}:${effectiveEdge || ''}:${dynamicPlacementTarget?.kind || ''}` : '');
+      if (this.hoverTarget?.key === nextKey) {
+        this.hoverTarget = { ...this.hoverTarget, localPoint: hitInfo.localPoint };
+        this.hoverCell = effectiveCell;
+        this.hoverEdge = effectiveEdge;
+        return;
+      }
+      this.hoverTarget = { key: nextKey, hit: hitInfo.hit, localPoint: hitInfo.localPoint };
       this.hoverCell = effectiveCell;
       this.hoverEdge = effectiveEdge;
       if (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType) {
         const material = resolveMaterialName(this.activeTileType);
-        const pose = this.isWallPlacementActive() ? '竖放' : '平放';
+        const pose = dynamicPlacementTarget
+          ? (dynamicPlacementTarget.kind === 'wall' ? '竖放' : '平放')
+          : (this.isWallPlacementActive() ? '竖放' : '平放');
         this.config.onHoverStatusChange?.(
           effectiveCell
-            ? `${material}｜${pose}｜${this.activeRotation}°｜R旋转 V切姿态`
+            ? `${material}｜${pose}｜${this.activeRotation}°｜R旋转 Space切安装面`
             : `${material}｜未指向通道`
         );
         return;
@@ -2466,12 +3662,20 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     }
 
     beginPaint(pointer, hitInfo) {
-      const isWall = this.isWallPlacementActive();
-      const wallPlacementTarget = isWall ? this.resolveWallPlacementTarget(hitInfo) : null;
-      const floorPlacementTarget = !isWall ? this.resolveFloorPlacementTarget(hitInfo) : null;
-      const cell = isWall ? wallPlacementTarget?.cell : floorPlacementTarget;
+      const placementSnap = this.resolvePlacementEdgeSnap(hitInfo);
+      const snapAxisKey = this.getSnapAxisKey(placementSnap);
+      if (snapAxisKey !== this.activeSnapAxisKey) {
+        this.activeSnapAxisKey = snapAxisKey;
+        this.snapPlaneCycle = snapAxisKey
+          ? this.getPreferredAxisPlacementIndex(this.getAxisPlacementOptions(placementSnap))
+          : 0;
+      }
+      const placementTarget = this.resolveDynamicPlacementTarget(hitInfo, { snap: placementSnap });
+      if (placementTarget?.valid === false) return;
+      const isWall = placementTarget?.kind === 'wall';
+      const cell = placementTarget?.cell;
       if (!cell) return;
-      const edge = isWall ? wallPlacementTarget?.edge : null;
+      const edge = isWall ? placementTarget?.edge : null;
       const existing = isWall
         ? this.mapData.walls?.[createWallKey(cell.x, cell.y, cell.z, edge)]
         : this.mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)];
@@ -2488,16 +3692,27 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
 
     applyPaint(pointer) {
       if (!this.paintStroke) return;
-      const hitInfo = this.hitTest(pointer);
-      const isWall = this.paintStroke.isWall;
-      const wallPlacementTarget = isWall ? this.resolveWallPlacementTarget(hitInfo) : null;
-      const floorPlacementTarget = !isWall ? this.resolveFloorPlacementTarget(hitInfo) : null;
-      const cell = isWall ? wallPlacementTarget?.cell : floorPlacementTarget;
+      const hitInfo = this.hitTest(pointer, { allowOutline: true });
+      const placementSnap = this.resolvePlacementEdgeSnap(hitInfo);
+      const snapAxisKey = this.getSnapAxisKey(placementSnap);
+      if (snapAxisKey !== this.activeSnapAxisKey) {
+        this.activeSnapAxisKey = snapAxisKey;
+        this.snapPlaneCycle = snapAxisKey
+          ? this.getPreferredAxisPlacementIndex(this.getAxisPlacementOptions(placementSnap))
+          : 0;
+      }
+      const placementTarget = this.resolveDynamicPlacementTarget(hitInfo, { snap: placementSnap });
+      const isWall = placementTarget?.kind === 'wall';
+      const cell = placementTarget?.cell;
       if (!cell) {
         this.drawGhostLayer();
         return;
       }
-      const edge = isWall ? wallPlacementTarget?.edge : null;
+      if (placementTarget?.valid === false) {
+        this.drawGhostLayer();
+        return;
+      }
+      const edge = isWall ? placementTarget?.edge : null;
       const key = isWall ? `${createCellKey(cell.x, cell.y, cell.z)}:${edge}` : createCellKey(cell.x, cell.y, cell.z);
       if (this.paintStroke.touched.has(key)) {
         this.drawGhostLayer();
@@ -2505,7 +3720,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       }
 
       if (isWall) {
-        if (!this.hasWallSupport(cell, edge)) {
+        if (placementTarget?.valid !== true && !this.hasWallSupport(cell, edge)) {
           this.drawGhostLayer();
           return;
         }
@@ -2884,33 +4099,17 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           if (edge.to?.componentKey && edge.to?.portId) connectedPortKeys.add(`${edge.to.componentKey}:${edge.to.portId}`);
         });
       });
-      const assemblyColor = [0x22d3ee, 0xa78bfa, 0x34d399, 0xfacc15, 0xfb7185];
-      assemblyGraph.assemblies.forEach((assembly, index) => {
-        const color = assemblyColor[index % assemblyColor.length];
-        assembly.edges.forEach((edge) => {
-          if (edge.componentKey > edge.key) return;
-          const fromTile = components[edge.from?.componentKey];
-          const toTile = components[edge.to?.componentKey];
-          const fromPort = (portsByComponentKey.get(edge.from?.componentKey) || []).find((port) => port.id === edge.from?.portId);
-          const toPort = (portsByComponentKey.get(edge.to?.componentKey) || []).find((port) => port.id === edge.to?.portId);
-          const fromPoint = this.getTransmissionPortPoint(fromTile, fromPort);
-          const toPoint = this.getTransmissionPortPoint(toTile, toPort);
-          if (!fromPoint || !toPoint) return;
-          this.mechanicalLinkLayer.lineStyle(5, color, 0.72);
-          this.mechanicalLinkLayer.lineBetween(fromPoint.x, fromPoint.y, toPoint.x, toPoint.y);
-        });
-      });
-
       Object.entries(components).forEach(([componentKey, tile]) => {
         (portsByComponentKey.get(componentKey) || []).forEach((port) => {
           const point = this.getTransmissionPortPoint(tile, port);
           if (!point) return;
           const assemblyId = assemblyGraph.assemblyByComponentKey?.[componentKey];
           const connected = !!assemblyById.get(assemblyId) && connectedPortKeys.has(`${componentKey}:${port.id}`);
-          this.mechanicalPortLayer.fillStyle(connected ? 0xfacc15 : 0x020617, connected ? 0.92 : 0.84);
-          this.mechanicalPortLayer.fillCircle(point.x, point.y, connected ? 6 : 5);
-          this.mechanicalPortLayer.lineStyle(2, connected ? 0xffffff : 0xfb7185, connected ? 0.92 : 0.78);
-          this.mechanicalPortLayer.strokeCircle(point.x, point.y, connected ? 8 : 7);
+          if (!connected) return;
+          this.mechanicalPortLayer.fillStyle(0xfacc15, 0.92);
+          this.mechanicalPortLayer.fillCircle(point.x, point.y, 6);
+          this.mechanicalPortLayer.lineStyle(2, 0xffffff, 0.92);
+          this.mechanicalPortLayer.strokeCircle(point.x, point.y, 8);
         });
         (tile.gearMounts || []).forEach((mount) => {
           const point = this.getGearMountPoint({ x: tile.x, y: tile.y, z: tile.z }, mount);
@@ -2992,24 +4191,71 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
 
     drawSelectionLayer() {
       this.selectionLayer.clear();
-      const drawCell = (cell, color = 0x67e8f9) => {
-        const projection = projectCell(cell, this.cameraState.yaw, this.mapData);
-        const geometry = createTileGeometry(this.cameraState.yaw, 0);
-        this.selectionLayer.lineStyle(3, color, 0.88);
-        this.selectionLayer.beginPath();
-        this.selectionLayer.moveTo(projection.x + geometry.top[0].x - 80, projection.y + geometry.top[0].y - 98);
-        geometry.top.slice(1).forEach((point) => this.selectionLayer.lineTo(projection.x + point.x - 80, projection.y + point.y - 98));
-        this.selectionLayer.closePath();
-        this.selectionLayer.strokePath();
+      const zoom = this.cameraState.zoom || 1;
+      const toScreenPointer = (point) => ({
+        x: this.worldLayer.x + (point.x * zoom),
+        y: this.worldLayer.y + (point.y * zoom)
+      });
+      const matchesSelectionHit = (hit, ref) => {
+        if (!hit || !ref) return false;
+        if (ref.edge) {
+          return hit.type === 'wall' && createWallSelectionKey({
+            x: hit.cell.x,
+            y: hit.cell.y,
+            z: hit.cell.z,
+            edge: hit.edge
+          }) === createWallSelectionKey(ref);
+        }
+        return hit.type === 'tile' && sameCell(hit.cell, ref);
       };
-      const strokePolygon = (points = [], color = 0xfacc15, alpha = 0.92) => {
+      const isSegmentVisible = (start, end, centroid, ref) => {
+        const mid = {
+          x: (start.x + end.x) * 0.5,
+          y: (start.y + end.y) * 0.5
+        };
+        const towardCenter = {
+          x: centroid.x - mid.x,
+          y: centroid.y - mid.y
+        };
+        const length = Math.max(1, Math.hypot(towardCenter.x, towardCenter.y));
+        const sample = {
+          x: mid.x + ((towardCenter.x / length) * 3),
+          y: mid.y + ((towardCenter.y / length) * 3)
+        };
+        const hitInfo = this.hitTest(toScreenPointer(sample), { allowOutline: false });
+        return matchesSelectionHit(this.normalizeInspectableHit(hitInfo.hit), ref);
+      };
+      const strokePolygon = (points = [], color = 0xfacc15, alpha = 0.92, ref = null) => {
         if (!Array.isArray(points) || points.length < 3) return;
+        const centroid = points.reduce((acc, point) => ({
+          x: acc.x + point.x,
+          y: acc.y + point.y
+        }), { x: 0, y: 0 });
+        centroid.x /= points.length;
+        centroid.y /= points.length;
         this.selectionLayer.lineStyle(3, color, alpha);
-        this.selectionLayer.beginPath();
-        this.selectionLayer.moveTo(points[0].x, points[0].y);
-        points.slice(1).forEach((point) => this.selectionLayer.lineTo(point.x, point.y));
-        this.selectionLayer.closePath();
-        this.selectionLayer.strokePath();
+        points.forEach((point, index) => {
+          const next = points[(index + 1) % points.length];
+          if (ref && !isSegmentVisible(point, next, centroid, ref)) return;
+          this.selectionLayer.lineBetween(point.x, point.y, next.x, next.y);
+        });
+      };
+      const getTileSelectionPolygons = (cell) => {
+        const tile = this.mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)];
+        const projection = projectCell(cell, this.cameraState.yaw, this.mapData);
+        const offsetX = projection.x - (TILE_RENDER_WIDTH * 0.5);
+        const offsetY = projection.y - (TILE_RENDER_HEIGHT * 0.57);
+        const geometry = createTileGeometry(this.cameraState.yaw, tile?.rotation || 0);
+        const polygons = tile?.isVertical
+          ? [geometry.wall, geometry.wallSideStart, geometry.wallSideEnd, geometry.wallCap]
+          : [geometry.top];
+        return polygons.map((polygon) => polygon.map((point) => ({
+          x: point.x + offsetX,
+          y: point.y + offsetY
+        })));
+      };
+      const drawCell = (cell, color = 0x67e8f9) => {
+        getTileSelectionPolygons(cell).forEach((points) => strokePolygon(points, color, 0.88, cell));
       };
       const drawWall = (wall, color = 0xfacc15) => {
         const projection = projectCell(wall, this.cameraState.yaw, this.mapData);
@@ -3025,12 +4271,14 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           strokePolygon(points.map((point) => ({
             x: point.x + offsetX,
             y: point.y + offsetY
-          })), color);
+          })), color, 0.92, wall);
         });
       };
       this.selectedCells.forEach((cell) => drawCell(cell));
       this.selectedWalls.forEach((wall) => drawWall(wall, 0xfacc15));
-      if (this.hoverCell && !this.hoverTarget?.hit) drawCell(this.hoverCell, 0x22d3ee);
+      if (this.hoverCell && !this.hoverTarget?.hit) {
+        getTileSelectionPolygons(this.hoverCell).forEach((points) => strokePolygon(points, 0x22d3ee, 0.88));
+      }
     }
 
     drawBoxSelect(pointer) {
@@ -3105,23 +4353,49 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const walls = dragState.shiftKey ? [...this.selectedWalls] : [];
       const seenCells = new Set(cells.map((cell) => createCellKey(cell.x, cell.y, cell.z)));
       const seenWalls = new Set(walls.map(createWallSelectionKey));
-      Object.values(this.mapData.tiles || {}).forEach((tile) => {
-        if (this.getTileLocalPolygons(tile).some((polygon) => polygonIntersectsRect(polygon, rect))) {
-          const key = createCellKey(tile.x, tile.y, tile.z);
-          if (!seenCells.has(key)) {
-            seenCells.add(key);
-            cells.push({ x: tile.x, y: tile.y, z: tile.z });
+      const zoom = Math.max(0.2, this.cameraState.zoom || 1);
+      const localStep = Math.max(8, 18 / zoom);
+      const sampleXs = [];
+      const sampleYs = [];
+      for (let x = rect.left; x <= rect.right + 0.001; x += localStep) sampleXs.push(x);
+      for (let y = rect.top; y <= rect.bottom + 0.001; y += localStep) sampleYs.push(y);
+      if (!sampleXs.some((x) => Math.abs(x - rect.right) <= 0.001)) sampleXs.push(rect.right);
+      if (!sampleYs.some((y) => Math.abs(y - rect.bottom) <= 0.001)) sampleYs.push(rect.bottom);
+      sampleXs.push((rect.left + rect.right) / 2);
+      sampleYs.push((rect.top + rect.bottom) / 2);
+      const seenSamples = new Set();
+      sampleXs.forEach((localX) => {
+        sampleYs.forEach((localY) => {
+          const sampleKey = `${Math.round(localX * 10)}:${Math.round(localY * 10)}`;
+          if (seenSamples.has(sampleKey)) return;
+          seenSamples.add(sampleKey);
+          const hitInfo = this.hitTest({
+            x: this.worldLayer.x + (localX * zoom),
+            y: this.worldLayer.y + (localY * zoom)
+          }, { allowOutline: false });
+          const hit = hitInfo.hit;
+          if (!hit) return;
+          if (hit.type === 'wall') {
+            const key = createWallSelectionKey({
+              x: hit.cell.x,
+              y: hit.cell.y,
+              z: hit.cell.z,
+              edge: hit.edge
+            });
+            if (!seenWalls.has(key)) {
+              seenWalls.add(key);
+              walls.push({ x: hit.cell.x, y: hit.cell.y, z: hit.cell.z, edge: hit.edge });
+            }
+            return;
           }
-        }
-      });
-      Object.values(this.mapData.walls || {}).forEach((wall) => {
-        if (this.getWallLocalPolygons(wall).some((polygon) => polygonIntersectsRect(polygon, rect))) {
-          const key = createWallSelectionKey(wall);
-          if (!seenWalls.has(key)) {
-            seenWalls.add(key);
-            walls.push({ x: wall.x, y: wall.y, z: wall.z, edge: wall.edge });
+          if (hit.type === 'tile') {
+            const key = createCellKey(hit.cell.x, hit.cell.y, hit.cell.z);
+            if (!seenCells.has(key)) {
+              seenCells.add(key);
+              cells.push({ x: hit.cell.x, y: hit.cell.y, z: hit.cell.z });
+            }
           }
-        }
+        });
       });
       this.setSelection(cells, walls);
     }
@@ -3140,6 +4414,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         this.activeTileType || '',
         this.panelPose || '',
         this.activeRotation || 0,
+        Math.round((this.cameraState.yaw || 0) * 10) / 10,
+        this.snapPlaneCycle || 0,
+        this.activeSnapAxisKey || '',
         hover,
         hoverTarget,
         carry
@@ -3161,30 +4438,32 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         return;
       }
       if (this.activeTool !== CITY_CHANNEL_TOOLS.PLACE_TILE || !this.activeTileType || !this.hoverCell) return;
-      if (this.isWallPlacementActive()) {
-        const hasSupport = this.hasWallSupport(this.hoverCell, this.hoverEdge);
+      const placementTarget = this.resolveDynamicPlacementTarget({
+        cell: this.hoverCell,
+        hit: this.hoverTarget?.hit,
+        edge: this.hoverEdge,
+        localPoint: this.hoverTarget?.localPoint
+      }, { forGhost: true });
+      if (!placementTarget?.cell) return;
+      if (placementTarget.kind === 'wall') {
+        const hasSupport = placementTarget.valid !== undefined
+          ? placementTarget.valid
+          : this.hasWallSupport(placementTarget.cell, placementTarget.edge);
         this.drawPlacementGhost({
-          ...this.hoverCell,
-          edge: this.hoverEdge || 'north',
+          ...placementTarget.cell,
+          edge: placementTarget.edge || 'north',
           panelType: this.activeTileType,
-          rotation: this.activeRotation
+          rotation: this.activeRotation,
+          snapConnection: hasSupport ? (placementTarget.connection || null) : null
         }, hasSupport ? 0x67e8f9 : 0xef4444, 0.2, false);
         return;
       }
-      const snap = this.resolveVerticalTopSnap({
-        cell: this.hoverCell,
-        hit: this.hoverTarget?.hit
-      });
-      const targetCell = snap?.cell || this.resolveFloorPlacementTarget({
-        cell: this.hoverCell,
-        hit: this.hoverTarget?.hit
-      });
       this.drawPlacementGhost({
-        ...(targetCell || this.hoverCell),
+        ...placementTarget.cell,
         panelType: this.activeTileType,
         rotation: this.activeRotation,
-        snapConnection: snap?.valid ? snap.connection : null
-      }, targetCell && (!snap || snap.valid) ? 0x67e8f9 : 0xef4444, 0.18, false);
+        snapConnection: placementTarget.valid === false ? null : (placementTarget.connection || null)
+      }, placementTarget.valid === false ? 0xef4444 : 0x67e8f9, 0.18, false);
     }
 
     hasWallSupport(cell, edge = 'north') {
@@ -3242,11 +4521,6 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         ports.forEach((port) => {
           const point = this.getGhostBoardPoint(polygon, port.localPosition, rotation, offsetX, offsetY, surface);
           if (!point) return;
-          const rotated = rotateLocalPoint(port.localPosition || {}, rotation);
-          const isHorizontalEdge = Math.abs(rotated.y || 0) >= Math.abs(rotated.x || 0);
-          this.ghostLayer.fillStyle(0xf8fafc, 0.18);
-          this.ghostLayer.fillEllipse(point.x, point.y, isHorizontalEdge ? 26 : 13, isHorizontalEdge ? 13 : 26);
-          this.ghostLayer.strokeEllipse(point.x, point.y, isHorizontalEdge ? 26 : 13, isHorizontalEdge ? 13 : 26);
           this.ghostLayer.fillStyle(0xf8fafc, 0.92);
           this.ghostLayer.fillCircle(point.x, point.y, 4);
         });
@@ -3270,13 +4544,15 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     drawGhostSnapConnection(placement, geometry, offsetX, offsetY) {
       const connection = placement?.snapConnection;
       if (!connection?.valid || !connection.activePort || !connection.supportPort || !connection.support?.placement) return;
+      const activePolygon = placement.edge ? geometry.wall : geometry.top;
+      const activeSurface = placement.edge ? 'wall' : 'floor';
       const activePoint = this.getGhostBoardPoint(
-        geometry.top,
+        activePolygon,
         connection.activePort.localPosition,
         placement.rotation || this.activeRotation,
         offsetX,
         offsetY,
-        'floor'
+        activeSurface
       );
       const supportPlacement = connection.support.placement;
       const supportProjection = projectCell(supportPlacement, this.cameraState.yaw, this.mapData);
@@ -3301,8 +4577,6 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         supportSurface
       );
       if (!activePoint || !supportPoint) return;
-      this.ghostLayer.lineStyle(4, 0x22d3ee, 0.9);
-      this.ghostLayer.lineBetween(activePoint.x, activePoint.y, supportPoint.x, supportPoint.y);
       [activePoint, supportPoint].forEach((point) => {
         this.ghostLayer.fillStyle(0xfacc15, 0.96);
         this.ghostLayer.fillCircle(point.x, point.y, 8);
@@ -3319,7 +4593,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const offsetX = projection.x - (TILE_RENDER_WIDTH * 0.5);
       const offsetY = projection.y - (TILE_RENDER_HEIGHT * 0.57);
       this.ghostLayer.lineStyle(fromMove ? 2 : 2, color, fromMove ? 0.92 : 0.78);
-      this.ghostLayer.fillStyle(color, alpha);
+      this.ghostLayer.fillStyle(color, placement.edge ? Math.max(alpha, 0.72) : alpha);
       if (placement.edge) {
         const geometry = createEdgeWallGeometry(this.cameraState.yaw, placement.edge);
         [geometry.wall, geometry.wallSideStart, geometry.wallSideEnd, geometry.wallCap].forEach((points) => {
@@ -3328,6 +4602,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         this.drawGhostBoardDetails({
           panelType: placement.panelType || this.activeTileType
         }, geometry.wall, offsetX, offsetY, placement.rotation || this.activeRotation, 'wall');
+        this.drawGhostSnapConnection(placement, geometry, offsetX, offsetY);
         return;
       }
 

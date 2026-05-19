@@ -178,7 +178,7 @@ const getInteractionHintConfig = ({
     return {
       mode: '放置',
       mouse: '左键放置 / 右键退出 / 滚轮旋转物件',
-      keyboard: 'Space 切换板材姿态 / WASD 平移 / Q E 旋转'
+      keyboard: 'R 旋转 / Space 按当前吸附边切安装面 / WASD 平移 / Q E 旋转'
     };
   }
   if (activeTool === CITY_CHANNEL_TOOLS.SELECT) {
