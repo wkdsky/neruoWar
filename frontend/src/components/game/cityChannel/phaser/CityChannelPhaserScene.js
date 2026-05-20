@@ -308,6 +308,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       this.activeTileType = initialConfig.activeTileType || null;
       this.activeRotation = initialConfig.activeRotation || 0;
       this.activeLayer = Number.isInteger(initialConfig.activeLayer) ? initialConfig.activeLayer : 0;
+      this.visibleLayerCutoff = Number.isInteger(initialConfig.visibleLayerCutoff)
+        ? initialConfig.visibleLayerCutoff
+        : null;
       this.wallViewMode = initialConfig.wallViewMode || 'semi';
       this.showHelperGrid = !!initialConfig.showHelperGrid;
       this.showCoordinates = !!initialConfig.showCoordinates;
@@ -454,6 +457,14 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         this.activeLayer = Number.isInteger(next.activeLayer) ? next.activeLayer : 0;
         this.drawGhostLayer();
       }
+      if (next.visibleLayerCutoff !== undefined) {
+        const nextCutoff = Number.isInteger(next.visibleLayerCutoff) ? next.visibleLayerCutoff : null;
+        if (nextCutoff !== this.visibleLayerCutoff) {
+          this.visibleLayerCutoff = nextCutoff;
+          this.renderMap({ full: true });
+          this.refreshPointerStateAfterViewChange();
+        }
+      }
       if (next.panelPose !== undefined) {
         this.panelPose = next.panelPose === 'wall' ? 'wall' : 'floor';
         this.drawGhostLayer();
@@ -493,6 +504,42 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
 
     getEffectiveWallViewMode() {
       return this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE ? 'solid' : this.wallViewMode;
+    }
+
+    isLayerVisible(cell = {}) {
+      return this.visibleLayerCutoff === null || (Number(cell.z) || 0) <= this.visibleLayerCutoff;
+    }
+
+    getPlaneLevels() {
+      const levels = new Set([0]);
+      Object.values(this.mapData.tiles || {}).forEach((tile) => {
+        if (tile && !tile.isVertical) levels.add(Number(tile.z) || 0);
+      });
+      return Array.from(levels).sort((a, b) => a - b);
+    }
+
+    getNextHiddenPlaneLevel() {
+      if (this.visibleLayerCutoff === null) return null;
+      const cutoff = Number(this.visibleLayerCutoff) || 0;
+      return this.getPlaneLevels().find((level) => level > cutoff) ?? null;
+    }
+
+    isVerticalAttachmentPlacement(placement = {}) {
+      if (!placement) return false;
+      if (placement.edge) return true;
+      return !!placement.isVertical;
+    }
+
+    isPlacementVisible(placement = {}) {
+      if (this.visibleLayerCutoff === null) return true;
+      const z = Number(placement?.z) || 0;
+      if (z <= this.visibleLayerCutoff) return true;
+      const nextHiddenPlaneLevel = this.getNextHiddenPlaneLevel();
+      return (
+        this.isVerticalAttachmentPlacement(placement)
+        && nextHiddenPlaneLevel !== null
+        && z < nextHiddenPlaneLevel
+      );
     }
 
     setPlacementPose(pose) {
@@ -608,6 +655,10 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
 
     renderTileObject(tile) {
       if (!tile) return;
+      if (!this.isPlacementVisible(tile)) {
+        this.removeTileObject(tile);
+        return;
+      }
       const key = createCellKey(tile.x, tile.y, tile.z);
       this.removeTileObject(tile);
       const cell = { x: tile.x, y: tile.y, z: tile.z };
@@ -653,6 +704,10 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     renderWallObject(wall) {
       if (!wall) return;
       const id = `wall:${createWallKey(wall.x, wall.y, wall.z, wall.edge)}`;
+      if (!this.isPlacementVisible(wall)) {
+        this.removeRenderObject(id);
+        return;
+      }
       this.removeRenderObject(id);
       const cell = { x: wall.x, y: wall.y, z: wall.z };
       const projection = projectCell(cell, this.cameraState.yaw, this.mapData);
@@ -1250,7 +1305,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       this.drawHelperLayer();
       this.drawSelectionLayer();
       this.drawGhostLayer(true);
-      this.notifyCamera();
+      this.notifyCamera({ force: true });
       this.updateDebugText();
     }
 
@@ -1263,13 +1318,13 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       this.notifyCamera();
     }
 
-    notifyCamera() {
+    notifyCamera({ force = false } = {}) {
       const now = this.time?.now || Date.now();
-      if (now - this.lastCameraNotifyAt < 100) return;
+      if (!force && now - this.lastCameraNotifyAt < 100) return;
       this.lastCameraNotifyAt = now;
       this.config.onCameraChange?.({
         zoom: this.cameraState.zoom,
-        yaw: Math.round(this.cameraState.yaw)
+        yaw: this.cameraState.yaw
       });
     }
 
@@ -2574,13 +2629,13 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const seenCandidates = new Set();
       const addTileCandidate = (candidate, tile) => {
         const key = `tile:${createCellKey(candidate.x, candidate.y, candidate.z)}`;
-        if (!tile || seenCandidates.has(key)) return;
+        if (!tile || seenCandidates.has(key) || !this.isPlacementVisible(tile)) return;
         seenCandidates.add(key);
         candidates.push({ kind: 'tile', cell: candidate, tile });
       };
       const addWallCandidate = (candidate, wall, candidateEdge = wall?.edge) => {
         const key = `wall:${createWallKey(candidate.x, candidate.y, candidate.z, candidateEdge)}`;
-        if (!wall || seenCandidates.has(key)) return;
+        if (!wall || seenCandidates.has(key) || !this.isPlacementVisible(wall)) return;
         seenCandidates.add(key);
         candidates.push({ kind: 'wall', cell: candidate, wall, edge: candidateEdge });
       };
@@ -4002,6 +4057,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
 
     getMechanicalEndpointPoint(endpoint) {
       const tile = this.mapData.tiles?.[endpoint?.componentKey];
+      if (!this.isPlacementVisible(tile)) return null;
       if (!tile) return null;
       const port = (tile.mechanicalPorts || []).find((item) => item.id === endpoint.portId);
       return this.getMechanicalPortPoint(tile, port);
@@ -4013,6 +4069,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const radiusSquared = radius * radius;
       let best = null;
       Object.entries(this.mapData.tiles || {}).forEach(([componentKey, tile]) => {
+        if (!this.isPlacementVisible(tile)) return;
         (tile.mechanicalPorts || []).forEach((port) => {
           const point = this.getMechanicalPortPoint(tile, port);
           if (!point) return;
@@ -4086,7 +4143,10 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       this.mechanicalLinkLayer.clear();
       this.mechanicalPortLayer.clear();
       const assemblyGraph = this.getMechanicalAssemblyGraph();
-      const components = { ...(this.mapData.tiles || {}), ...(this.mapData.walls || {}) };
+      const components = Object.fromEntries(
+        Object.entries({ ...(this.mapData.tiles || {}), ...(this.mapData.walls || {}) })
+          .filter(([, placement]) => this.isPlacementVisible(placement))
+      );
       const portsByComponentKey = new Map();
       Object.entries(components).forEach(([componentKey, tile]) => {
         portsByComponentKey.set(componentKey, getWorldTransmissionPorts(tile, componentKey));
@@ -4127,6 +4187,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         gear_mesh: 0xfb923c
       };
       (this.mapData.mechanicalLinks || []).forEach((link) => {
+        const fromTile = this.mapData.tiles?.[link.from?.componentKey];
+        const toTile = this.mapData.tiles?.[link.to?.componentKey];
+        if (!this.isPlacementVisible(fromTile) || !this.isPlacementVisible(toTile)) return;
         const from = this.getMechanicalEndpointPoint(link.from);
         const to = this.getMechanicalEndpointPoint(link.to);
         if (!from || !to) return;
@@ -4145,6 +4208,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       });
 
       Object.entries(this.mapData.tiles || {}).forEach(([componentKey, tile]) => {
+        if (!this.isPlacementVisible(tile)) return;
         (tile.mechanicalPorts || []).forEach((port) => {
           const point = this.getMechanicalPortPoint(tile, port);
           if (!point) return;
@@ -4166,6 +4230,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     drawRouteLayer() {
       this.routeLayer.clear();
       (this.mapData.safeRoute || []).forEach((cell) => {
+        if (!this.isLayerVisible(cell)) return;
         const projection = projectCell(cell, this.cameraState.yaw, this.mapData);
         this.routeLayer.fillStyle(0x22c55e, 0.28);
         this.routeLayer.fillCircle(projection.x, projection.y + 2, 9);

@@ -39,16 +39,20 @@ import {
 import useCityChannelEditorState from './useCityChannelEditorState';
 import CityChannelMaterialPalette from './CityChannelMaterialPalette';
 import CityChannelPressurePlateInspect3D from './CityChannelPressurePlateInspect3D';
+import {
+  TILE_RENDER_HEIGHT,
+  TILE_RENDER_WIDTH,
+  createEdgeWallGeometry,
+  createPortalGeometry,
+  createTileGeometry,
+  projectCell
+} from './phaser/renderer/CityChannelGeometry';
 import './CityChannelImmersiveEditor.css';
 import './CityChannelPhaserEditor.css';
 
 const TOOL_ITEMS = [
   { key: CITY_CHANNEL_TOOLS.BROWSE, label: '浏览', Icon: Hand },
   { key: CITY_CHANNEL_TOOLS.SELECT, label: '选择', Icon: MousePointer2 }
-];
-
-const FLOATING_PANELS = [
-  { key: 'layers', label: '图层', Icon: Layers }
 ];
 
 const WALL_VIEW_MODES = ['semi', 'perspective', 'solid'];
@@ -70,6 +74,74 @@ const WALL_VIEW_MODE_CONFIG = {
 
 const stopEditorPanelPointerEvent = (event) => {
   event.stopPropagation();
+};
+
+const THUMBNAIL_PADDING = 22;
+const THUMBNAIL_WIDTH = 236;
+const THUMBNAIL_HEIGHT = 180;
+const THUMBNAIL_LAYER_COLORS = [
+  { top: '#d9b36c', side: '#8b5f2f', edge: '#fff4c7' },
+  { top: '#70c1b3', side: '#257c75', edge: '#d7fff7' },
+  { top: '#8fa8ff', side: '#3e5aa8', edge: '#e0e7ff' },
+  { top: '#f08aa7', side: '#9a3d5a', edge: '#ffe1ea' },
+  { top: '#9ee37d', side: '#3f8f42', edge: '#eaffdc' }
+];
+
+const polygonPoints = (points = []) => (
+  points.map((point) => `${point.x},${point.y}`).join(' ')
+);
+
+const isFlatPlaneTile = (tile) => !!tile && !tile.isVertical;
+
+const getLayerLabel = (z) => CITY_CHANNEL_LAYER_LABELS[z] || `${z + 1}层`;
+
+const getThumbnailLayerColor = (z = 0) => (
+  THUMBNAIL_LAYER_COLORS[Math.abs(Number(z) || 0) % THUMBNAIL_LAYER_COLORS.length]
+);
+
+const getMapPlaneLevels = (mapData = {}) => {
+  const levels = new Set([0]);
+  Object.values(mapData.tiles || {}).forEach((tile) => {
+    if (isFlatPlaneTile(tile)) levels.add(Number(tile.z) || 0);
+  });
+  return Array.from(levels).sort((a, b) => a - b);
+};
+
+const getNextPlaneLevelAbove = (levels = [], z = 0) => (
+  levels.find((level) => level > z) ?? null
+);
+
+const isVerticalAttachment = (item = {}) => (
+  item.kind === 'wall' || !!item.tile?.isVertical
+);
+
+const isVisibleInLayerCut = ({ item, cutoff, nextPlaneLevel }) => {
+  if (cutoff === null) return true;
+  const z = Number(item?.cell?.z) || 0;
+  if (z <= cutoff) return true;
+  return isVerticalAttachment(item) && nextPlaneLevel !== null && z < nextPlaneLevel;
+};
+
+const getThumbnailBounds = (items = []) => {
+  if (items.length === 0) {
+    return {
+      left: -TILE_RENDER_WIDTH / 2,
+      right: TILE_RENDER_WIDTH / 2,
+      top: -TILE_RENDER_HEIGHT / 2,
+      bottom: TILE_RENDER_HEIGHT / 2
+    };
+  }
+  return items.reduce((bounds, item) => ({
+    left: Math.min(bounds.left, item.projection.x - (TILE_RENDER_WIDTH * 0.5)),
+    right: Math.max(bounds.right, item.projection.x + (TILE_RENDER_WIDTH * 0.5)),
+    top: Math.min(bounds.top, item.projection.y - (TILE_RENDER_HEIGHT * 0.62)),
+    bottom: Math.max(bounds.bottom, item.projection.y + (TILE_RENDER_HEIGHT * 0.46))
+  }), {
+    left: Infinity,
+    right: -Infinity,
+    top: Infinity,
+    bottom: -Infinity
+  });
 };
 
 const toolLabelByKey = {
@@ -134,8 +206,21 @@ const CityChannelPhaserEditor = ({
   const [mechanismPanel, setMechanismPanel] = useState(null);
   const [inspectMode, setInspectMode] = useState(null);
   const [mechanismPreviewState, setMechanismPreviewState] = useState(null);
+  const [isThumbnailOpen, setIsThumbnailOpen] = useState(true);
+  const [thumbnailHoverLayer, setThumbnailHoverLayer] = useState(null);
+  const [visibleLayerCutoff, setVisibleLayerCutoff] = useState(null);
 
-  const activeLayerLabel = CITY_CHANNEL_LAYER_LABELS[activeLayer] || `第 ${activeLayer + 1} 层`;
+  const planeLevels = useMemo(() => getMapPlaneLevels(mapData), [mapData]);
+  const highestPlaneLevel = planeLevels[planeLevels.length - 1] ?? 0;
+  const effectiveVisibleLayerCutoff = visibleLayerCutoff === null
+    ? highestPlaneLevel
+    : Math.max(0, Math.min(visibleLayerCutoff, highestPlaneLevel));
+  const nextHiddenPlaneLevel = visibleLayerCutoff === null
+    ? null
+    : getNextPlaneLevelAbove(planeLevels, effectiveVisibleLayerCutoff);
+  const activeLayerLabel = visibleLayerCutoff === null
+    ? (CITY_CHANNEL_LAYER_LABELS[activeLayer] || `第 ${activeLayer + 1} 层`)
+    : `显示至${getLayerLabel(effectiveVisibleLayerCutoff)}`;
   const wallViewModeConfig = WALL_VIEW_MODE_CONFIG[wallViewMode] || WALL_VIEW_MODE_CONFIG.semi;
   const selectedPlacements = useMemo(() => (
     [...selectedCells, ...selectedWalls]
@@ -414,6 +499,7 @@ const CityChannelPhaserEditor = ({
     wallViewMode,
     showHelperGrid,
     showCoordinates,
+    visibleLayerCutoff,
     selection: {
       cells: selectedCells,
       walls: selectedWalls
@@ -475,6 +561,7 @@ const CityChannelPhaserEditor = ({
     showCoordinates,
     showHelperGrid,
     undo,
+    visibleLayerCutoff,
     wallViewMode
   ]);
   const latestSceneConfigRef = useRef(sceneConfig);
@@ -571,6 +658,187 @@ const CityChannelPhaserEditor = ({
     }
   }, [canInspectSelectedTile, inspectMode, selectedTileKey]);
 
+  const thumbnailYaw = Number(cameraSummary.yaw) || 0;
+  const thumbnailItems = useMemo(() => {
+    const tileItems = Object.values(mapData.tiles || {}).map((tile) => ({
+      id: `tile:${createCellKey(tile.x, tile.y, tile.z)}`,
+      kind: 'tile',
+      cell: { x: tile.x, y: tile.y, z: tile.z },
+      tile,
+      projection: projectCell(tile, thumbnailYaw, mapData)
+    }));
+    const wallItems = Object.values(mapData.walls || {}).map((wall) => ({
+      id: `wall:${createWallKey(wall.x, wall.y, wall.z, wall.edge)}`,
+      kind: 'wall',
+      cell: { x: wall.x, y: wall.y, z: wall.z },
+      wall,
+      projection: projectCell(wall, thumbnailYaw, mapData)
+    }));
+    return [...tileItems, ...wallItems].sort((a, b) => (
+      ((a.cell.z || 0) - (b.cell.z || 0))
+      || ((a.projection.y || 0) - (b.projection.y || 0))
+      || String(a.id).localeCompare(String(b.id))
+    ));
+  }, [mapData, thumbnailYaw]);
+
+  const handleThumbnailLayerClick = useCallback((z) => {
+    setVisibleLayerCutoff(z);
+    switchLayer(z);
+  }, [switchLayer]);
+
+  const renderThumbnailItem = (item) => {
+    const z = Number(item.cell?.z) || 0;
+    const isHoveredLayer = thumbnailHoverLayer !== null && thumbnailHoverLayer === z;
+    const isHiddenByCutoff = !isVisibleInLayerCut({
+      item,
+      cutoff: visibleLayerCutoff,
+      nextPlaneLevel: nextHiddenPlaneLevel
+    });
+    const isCutoffLayer = visibleLayerCutoff !== null && z === effectiveVisibleLayerCutoff;
+    const layerColor = getThumbnailLayerColor(z);
+    const commonClass = [
+      'city-channel-thumbnail-item',
+      isHoveredLayer ? 'is-hovered-layer' : '',
+      isHiddenByCutoff ? 'is-above-cutoff' : '',
+      isCutoffLayer ? 'is-cutoff-layer' : ''
+    ].filter(Boolean).join(' ');
+    const commonStyle = {
+      left: `${item.projection.x}px`,
+      top: `${item.projection.y}px`,
+      zIndex: 1000 + (z * 100) + Math.round(item.projection.y || 0),
+      '--thumbnail-top': layerColor.top,
+      '--thumbnail-side': layerColor.side,
+      '--thumbnail-edge': layerColor.edge
+    };
+
+    if (item.kind === 'tile' && (item.tile?.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || item.tile?.panelType === CITY_CHANNEL_TILE_TYPES.EXIT)) {
+      const portal = createPortalGeometry(thumbnailYaw, item.tile.rotation || 0);
+      return (
+        <div key={`thumb:${item.id}`} className={`${commonClass} is-portal-outline`} style={commonStyle} aria-hidden="true">
+          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.threshold.top)} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.leftPillar.front)} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.rightPillar.front)} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.lintel.front)} />
+          </svg>
+        </div>
+      );
+    }
+
+    if (item.kind === 'tile' && item.tile?.isVertical) {
+      const geometry = createTileGeometry(thumbnailYaw, item.tile.rotation || 0);
+      return (
+        <div key={`thumb:${item.id}`} className={`${commonClass} is-wall-outline`} style={commonStyle} aria-hidden="true">
+          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
+            <polygon className="city-channel-thumbnail-surface is-wall" points={polygonPoints(geometry.wall)} />
+            <polygon className="city-channel-thumbnail-surface is-wall-side" points={polygonPoints(geometry.wallSideStart)} />
+            <polygon className="city-channel-thumbnail-surface is-wall-side" points={polygonPoints(geometry.wallSideEnd)} />
+            <polygon className="city-channel-thumbnail-surface is-wall-cap" points={polygonPoints(geometry.wallCap)} />
+          </svg>
+        </div>
+      );
+    }
+
+    if (item.kind === 'tile' && isFlatPlaneTile(item.tile)) {
+      const geometry = createTileGeometry(thumbnailYaw, item.tile.rotation || 0);
+      return (
+        <button
+          key={`thumb:${item.id}`}
+          type="button"
+          className={`${commonClass} is-plane`}
+          style={commonStyle}
+          onPointerEnter={() => setThumbnailHoverLayer(z)}
+          onFocus={() => setThumbnailHoverLayer(z)}
+          onClick={(event) => {
+            event.stopPropagation();
+            handleThumbnailLayerClick(z);
+          }}
+          title={getLayerLabel(z)}
+          aria-label={`缩略图${getLayerLabel(z)}`}
+        >
+          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`} aria-hidden="true">
+            {geometry.sides.map((points, index) => (
+              <polygon key={`side-${index}`} className="city-channel-thumbnail-surface is-side" points={polygonPoints(points)} />
+            ))}
+            <polygon className="city-channel-thumbnail-surface is-top" points={polygonPoints(geometry.top)} />
+          </svg>
+        </button>
+      );
+    }
+
+    if (item.kind === 'wall') {
+      const geometry = createEdgeWallGeometry(thumbnailYaw, item.wall.edge);
+      return (
+        <div key={`thumb:${item.id}`} className={`${commonClass} is-wall-outline`} style={commonStyle} aria-hidden="true">
+          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
+            <polygon className="city-channel-thumbnail-surface is-wall" points={polygonPoints(geometry.wall)} />
+            <polygon className="city-channel-thumbnail-surface is-wall-side" points={polygonPoints(geometry.wallSideStart)} />
+            <polygon className="city-channel-thumbnail-surface is-wall-side" points={polygonPoints(geometry.wallSideEnd)} />
+            <polygon className="city-channel-thumbnail-surface is-wall-cap" points={polygonPoints(geometry.wallCap)} />
+          </svg>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const renderThumbnail = () => {
+    const bounds = getThumbnailBounds(thumbnailItems);
+    const boundsWidth = Math.max(1, bounds.right - bounds.left);
+    const boundsHeight = Math.max(1, bounds.bottom - bounds.top);
+    const scale = Math.min(
+      0.36,
+      (THUMBNAIL_WIDTH - (THUMBNAIL_PADDING * 2)) / boundsWidth,
+      (THUMBNAIL_HEIGHT - (THUMBNAIL_PADDING * 2)) / boundsHeight
+    );
+    const centerX = (bounds.left + bounds.right) / 2;
+    const centerY = (bounds.top + bounds.bottom) / 2;
+    const stageTransform = `translate(${THUMBNAIL_WIDTH / 2}px, ${THUMBNAIL_HEIGHT / 2}px) scale(${scale}) translate(${-centerX}px, ${-centerY}px)`;
+
+    return (
+      <div
+        className={`city-channel-thumbnail ${isThumbnailOpen ? 'is-open' : 'is-closed'}`}
+        onPointerDown={stopEditorPanelPointerEvent}
+      >
+        {isThumbnailOpen ? (
+          <div className="city-channel-thumbnail__panel">
+            <div
+              className="city-channel-thumbnail__stage"
+              style={{
+                width: `${THUMBNAIL_WIDTH}px`,
+                height: `${THUMBNAIL_HEIGHT}px`
+              }}
+              onPointerLeave={() => setThumbnailHoverLayer(null)}
+            >
+              <div className="city-channel-thumbnail__world" style={{ transform: stageTransform }}>
+                {thumbnailItems.map(renderThumbnailItem)}
+              </div>
+            </div>
+            {visibleLayerCutoff !== null ? (
+              <button
+                type="button"
+                className="city-channel-thumbnail__restore"
+                onClick={() => setVisibleLayerCutoff(null)}
+              >
+                恢复全部
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        <button
+          type="button"
+          className="city-channel-thumbnail__toggle"
+          onClick={() => setIsThumbnailOpen((current) => !current)}
+          title={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
+          aria-label={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
+        >
+          <Layers size={16} />
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div
       className={[
@@ -618,6 +886,8 @@ const CityChannelPhaserEditor = ({
           </div>
         ) : null}
       </div>
+
+      {renderThumbnail()}
 
       {selectedCount > 0 && (
         <div className="city-channel-selection-actions" onPointerDown={stopEditorPanelPointerEvent}>
@@ -742,37 +1012,9 @@ const CityChannelPhaserEditor = ({
         {selectedCount > 0 ? <em>{selectedCount} 个选中</em> : null}
       </section>
 
-      <div className="city-channel-floating-tools" aria-label="悬浮工具">
-        {FLOATING_PANELS.map(({ key, label, Icon }) => (
-          <button
-            key={key}
-            type="button"
-            className={`city-channel-float-btn ${openPanel === key ? 'is-active' : ''}`}
-            onClick={() => setOpenPanel((current) => (current === key ? null : key))}
-            title={label}
-          >
-            <Icon size={16} />
-          </button>
-        ))}
-      </div>
-
       {openPanel && (
         <aside className="city-channel-popover">
-          <strong>{openPanel === 'settings' ? '设置' : FLOATING_PANELS.find((panel) => panel.key === openPanel)?.label}</strong>
-          {openPanel === 'layers' && (
-            <div className="city-channel-layer-list">
-              {CITY_CHANNEL_LAYER_LABELS.map((label, index) => (
-                <button
-                  key={label}
-                  type="button"
-                  className={activeLayer === index ? 'is-active' : ''}
-                  onClick={() => switchLayer(index)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
+          <strong>设置</strong>
           {openPanel === 'settings' && (
             <div className="city-channel-settings-list">
               <label>

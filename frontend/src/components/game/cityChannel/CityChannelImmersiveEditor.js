@@ -121,10 +121,6 @@ const TOOL_ITEMS = [
   { key: CITY_CHANNEL_TOOLS.SELECT, label: '选择', Icon: MousePointer2 }
 ];
 
-const FLOATING_PANELS = [
-  { key: 'layers', label: '图层', Icon: Layers }
-];
-
 const WALL_VIEW_MODES = ['semi', 'perspective', 'solid'];
 
 const WALL_VIEW_MODE_CONFIG = {
@@ -455,6 +451,56 @@ const polygonAverageY = (points = '') => {
   return parsed.reduce((sum, point) => sum + point.y, 0) / parsed.length;
 };
 
+const THUMBNAIL_LAYER_LIFT = 42;
+const THUMBNAIL_PADDING = 22;
+const THUMBNAIL_WIDTH = 236;
+const THUMBNAIL_HEIGHT = 180;
+
+const isFlatPlaneTile = (tile) => !!tile && !shouldUseVerticalOutline(tile);
+
+const getLayerLabel = (z) => CITY_CHANNEL_LAYER_LABELS[z] || `${z + 1}层`;
+
+const getMapPlaneLevels = (mapData = {}) => {
+  const levels = new Set([0]);
+  Object.values(mapData.tiles || {}).forEach((tile) => {
+    if (isFlatPlaneTile(tile)) {
+      levels.add(Number(tile.z) || 0);
+    }
+  });
+  return Array.from(levels).sort((a, b) => a - b);
+};
+
+const getProjectedThumbnailPosition = (item) => ({
+  left: item.projection.left,
+  top: item.projection.top - ((Number(item.cell?.z) || 0) * THUMBNAIL_LAYER_LIFT)
+});
+
+const getThumbnailBounds = (items = []) => {
+  const renderItems = items.filter((item) => item.kind !== 'hint');
+  if (renderItems.length === 0) {
+    return {
+      left: -TILE_RENDER_WIDTH / 2,
+      right: TILE_RENDER_WIDTH / 2,
+      top: -TILE_RENDER_HEIGHT / 2,
+      bottom: TILE_RENDER_HEIGHT / 2
+    };
+  }
+  return renderItems.reduce((bounds, item) => {
+    const projected = getProjectedThumbnailPosition(item);
+    return {
+      left: Math.min(bounds.left, projected.left - (TILE_RENDER_WIDTH * 0.5)),
+      right: Math.max(bounds.right, projected.left + (TILE_RENDER_WIDTH * 0.5)),
+      top: Math.min(bounds.top, projected.top - (TILE_RENDER_HEIGHT * 0.62)),
+      bottom: Math.max(bounds.bottom, projected.top + (TILE_RENDER_HEIGHT * 0.46))
+    };
+  }, {
+    left: Infinity,
+    right: -Infinity,
+    top: Infinity,
+    bottom: -Infinity
+  });
+};
+
 const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templateName, templateSource = 'local', onExit }) => {
   const editor = useCityChannelEditorState(initialMapData);
   const {
@@ -516,6 +562,9 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   const [isPanning, setIsPanning] = useState(false);
   const [isBrowseRotating, setIsBrowseRotating] = useState(false);
   const [openPanel, setOpenPanel] = useState(null);
+  const [isThumbnailOpen, setIsThumbnailOpen] = useState(true);
+  const [thumbnailHoverLayer, setThumbnailHoverLayer] = useState(null);
+  const [visibleLayerCutoff, setVisibleLayerCutoff] = useState(null);
   const [wallViewMode, setWallViewMode] = useState('semi');
   const [showHelperGrid, setShowHelperGrid] = useState(false);
   const [showCoordinates, setShowCoordinates] = useState(false);
@@ -532,6 +581,14 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   const isWallPerspectiveMode = wallViewMode === 'perspective';
   const isWallSolidMode = wallViewMode === 'solid';
   const wallViewModeConfig = WALL_VIEW_MODE_CONFIG[wallViewMode] || WALL_VIEW_MODE_CONFIG.semi;
+  const planeLevels = useMemo(() => getMapPlaneLevels(mapData), [mapData]);
+  const highestPlaneLevel = planeLevels[planeLevels.length - 1] ?? 0;
+  const effectiveVisibleLayerCutoff = visibleLayerCutoff === null
+    ? highestPlaneLevel
+    : Math.max(0, Math.min(visibleLayerCutoff, highestPlaneLevel));
+  const isLayerVisible = useCallback((cell) => (
+    !cell || visibleLayerCutoff === null || (Number(cell.z) || 0) <= effectiveVisibleLayerCutoff
+  ), [effectiveVisibleLayerCutoff, visibleLayerCutoff]);
 
   const addToast = useCallback((message, type = 'info') => {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -848,14 +905,23 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     };
   }, [clearSelection, redo, rotateCameraLeft, rotateCameraRight, selectedPlacements.length, setActiveTool, startCameraPan, stopCameraPan, stopCameraRotation, undo]);
 
+  const thumbnailItems = useMemo(() => (
+    createCityChannelRenderItems({
+      domainModel,
+      mapData,
+      cameraYaw,
+      includeHints: false
+    })
+  ), [cameraYaw, domainModel, mapData]);
+
   const visibleItems = useMemo(() => {
     return createCityChannelRenderItems({
       domainModel,
       mapData,
       cameraYaw,
       hoverCell
-    });
-  }, [cameraYaw, domainModel, hoverCell, mapData]);
+    }).filter((item) => isLayerVisible(item.cell));
+  }, [cameraYaw, domainModel, hoverCell, isLayerVisible, mapData]);
 
   const sceneContentBounds = useMemo(() => {
     const items = visibleItems.filter((item) => item.kind !== 'hint');
@@ -1128,7 +1194,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   movePreviewRef.current = movePreview;
 
   const ghostItems = useMemo(() => {
-    if (carryState) return movePreview.items;
+    if (carryState) return movePreview.items.filter((item) => isLayerVisible(item.cell));
     const shouldShowGhost = hoverCell && (isPlaceMode || activeTool === CITY_CHANNEL_TOOLS.FLOOR || !!carryState);
     if (!shouldShowGhost) return [];
     const isWallGhost = isWallMaterial(activeTileType) || (activeTool === CITY_CHANNEL_TOOLS.FLOOR && panelPose === 'wall');
@@ -1145,8 +1211,8 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       cameraYaw,
       valid: placementKind !== 'edge_wall' || hasFloor,
       mode: carryState ? 'move' : 'place'
-    });
-  }, [activeTileType, activeTool, activeRotation, cameraYaw, carryState, hoverCell, hoverEdge, isPlaceMode, mapData, movePreview.items, panelPose]);
+    }).filter((item) => isLayerVisible(item.cell));
+  }, [activeTileType, activeTool, activeRotation, cameraYaw, carryState, hoverCell, hoverEdge, isLayerVisible, isPlaceMode, mapData, movePreview.items, panelPose]);
 
   const sceneItems = useMemo(() => (
     [...visibleItems, ...ghostItems].sort((a, b) => (
@@ -2020,7 +2086,9 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   }, [activeTool, selectMaterial, selectionModeOrigin]);
 
 
-  const activeLayerLabel = CITY_CHANNEL_LAYER_LABELS[0] || '地面层';
+  const activeLayerLabel = visibleLayerCutoff === null
+    ? '全部层'
+    : `显示至${getLayerLabel(effectiveVisibleLayerCutoff)}`;
   const interactionHint = getInteractionHintConfig({
     activeTool,
     isPlaceMode,
@@ -2079,7 +2147,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   };
 
   const selectionAuraItems = useMemo(() => {
-    const tileItems = selectedCells.map((cell) => {
+    const tileItems = selectedCells.filter(isLayerVisible).map((cell) => {
       const cellKey = createCellKey(cell.x, cell.y, cell.z);
       const tile = mapData.tiles[cellKey];
       if (!tile) return null;
@@ -2092,7 +2160,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       };
     }).filter(Boolean);
 
-    const wallItems = selectedWalls.map((selectedWall) => {
+    const wallItems = selectedWalls.filter(isLayerVisible).map((selectedWall) => {
       const wallKey = createWallSelectionKey(selectedWall);
       const wall = mapData.walls?.[wallKey];
       if (!wall) return null;
@@ -2110,7 +2178,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     }).filter(Boolean);
 
     return [...tileItems, ...wallItems];
-  }, [cameraYaw, mapData.tiles, mapData.walls, selectedCells, selectedWalls]);
+  }, [cameraYaw, isLayerVisible, mapData.tiles, mapData.walls, selectedCells, selectedWalls]);
 
   const renderSelectionAura = (item) => {
     const tile = item.tile || null;
@@ -2220,6 +2288,163 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
             />
           ))}
         </svg>
+      </div>
+    );
+  };
+
+  const renderThumbnailItem = (item) => {
+    if (!item?.cell) return null;
+    const partType = item.part?.partType || '';
+    const tile = item.tile || null;
+    const wall = item.wall || null;
+    const z = Number(item.cell.z) || 0;
+    const projected = getProjectedThumbnailPosition(item);
+    const isHoveredLayer = thumbnailHoverLayer !== null && thumbnailHoverLayer === z;
+    const isHiddenByCutoff = visibleLayerCutoff !== null && z > effectiveVisibleLayerCutoff;
+    const isCutoffLayer = visibleLayerCutoff !== null && z === effectiveVisibleLayerCutoff;
+    const commonClass = [
+      'city-channel-thumbnail-item',
+      isHoveredLayer ? 'is-hovered-layer' : '',
+      isHiddenByCutoff ? 'is-above-cutoff' : '',
+      isCutoffLayer ? 'is-cutoff-layer' : ''
+    ].filter(Boolean).join(' ');
+    const commonStyle = {
+      left: `${projected.left}px`,
+      top: `${projected.top}px`,
+      zIndex: item.renderOrder
+    };
+
+    if (tile && partType === 'floor_base' && isFlatPlaneTile(tile)) {
+      const tileGeometry = getTileGeometry(cameraYaw, tile.rotation || 0);
+      return (
+        <button
+          key={`thumb:${item.id}`}
+          type="button"
+          className={`${commonClass} is-plane`}
+          style={commonStyle}
+          onPointerEnter={() => setThumbnailHoverLayer(z)}
+          onFocus={() => setThumbnailHoverLayer(z)}
+          onClick={(event) => {
+            event.stopPropagation();
+            setVisibleLayerCutoff(z);
+          }}
+          title={getLayerLabel(z)}
+          aria-label={`缩略图${getLayerLabel(z)}`}
+        >
+          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`} aria-hidden="true">
+            {tileGeometry.sides.map((points, index) => (
+              <polygon key={`side-${index}`} className="city-channel-thumbnail-surface is-side" points={points} />
+            ))}
+            <polygon className="city-channel-thumbnail-surface is-top" points={tileGeometry.top} />
+          </svg>
+        </button>
+      );
+    }
+
+    if (tile && partType === 'wall_plane' && shouldUseVerticalOutline(tile)) {
+      const tileGeometry = getTileGeometry(cameraYaw, tile.rotation || 0);
+      return (
+        <div key={`thumb:${item.id}`} className={`${commonClass} is-wall-outline`} style={commonStyle} aria-hidden="true">
+          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
+            <polygon className="city-channel-thumbnail-surface is-wall" points={tileGeometry.wall} />
+            <polygon className="city-channel-thumbnail-surface is-wall-side" points={tileGeometry.wallSideStart} />
+            <polygon className="city-channel-thumbnail-surface is-wall-side" points={tileGeometry.wallSideEnd} />
+            <polygon className="city-channel-thumbnail-surface is-wall-cap" points={tileGeometry.wallCap} />
+          </svg>
+        </div>
+      );
+    }
+
+    if (wall && partType === 'wall_plane') {
+      const wallGeometry = createEdgeWallGeometry(cameraYaw, wall.edge);
+      return (
+        <div key={`thumb:${item.id}`} className={`${commonClass} is-wall-outline`} style={commonStyle} aria-hidden="true">
+          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
+            <polygon className="city-channel-thumbnail-surface is-wall" points={wallGeometry.wall} />
+            <polygon className="city-channel-thumbnail-surface is-wall-side" points={wallGeometry.wallSideStart} />
+            <polygon className="city-channel-thumbnail-surface is-wall-side" points={wallGeometry.wallSideEnd} />
+            <polygon className="city-channel-thumbnail-surface is-wall-cap" points={wallGeometry.wallCap} />
+          </svg>
+        </div>
+      );
+    }
+
+    if (tile && partType === 'portal_body' && isPortalPanelType(tile.panelType)) {
+      const portalGeometry = getPortalGeometry(cameraYaw, tile.rotation || 0);
+      return (
+        <div key={`thumb:${item.id}`} className={`${commonClass} is-portal-outline`} style={commonStyle} aria-hidden="true">
+          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={portalGeometry.threshold.topFace} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={portalGeometry.leftPillar.frontFace} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={portalGeometry.rightPillar.frontFace} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={portalGeometry.lintel.frontFace} />
+            <polygon className="city-channel-thumbnail-surface is-attachment" points={portalGeometry.arch.frontFace} />
+            <ellipse className="city-channel-thumbnail-node" cx={portalGeometry.coreCenter.x} cy={portalGeometry.coreCenter.y} rx={portalGeometry.coreRx} ry={portalGeometry.coreRy} />
+          </svg>
+        </div>
+      );
+    }
+
+    if (tile?.mechanismModel && (partType === 'floor_attachment' || partType === 'wall_attachment' || partType === 'mechanism_connector')) {
+      const mechGeo = getMechanismGeometry(tile.mechanismModel, tile.connectors, tile.rotation || 0, cameraYaw);
+      return (
+        <div key={`thumb:${item.id}`} className={`${commonClass} is-mechanism-outline`} style={commonStyle} aria-hidden="true">
+          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
+            {mechGeo.polygons.map((poly, index) => (
+              <polygon key={`poly-${index}`} className="city-channel-thumbnail-surface is-attachment" points={poly.points} />
+            ))}
+            {mechGeo.connectorPositions.map((connector) => (
+              <circle key={connector.id} className="city-channel-thumbnail-node" cx={connector.screenX} cy={connector.screenY} r={3} />
+            ))}
+          </svg>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const renderThumbnail = () => {
+    const bounds = getThumbnailBounds(thumbnailItems);
+    const boundsWidth = Math.max(1, bounds.right - bounds.left);
+    const boundsHeight = Math.max(1, bounds.bottom - bounds.top);
+    const scale = Math.min(
+      0.36,
+      (THUMBNAIL_WIDTH - (THUMBNAIL_PADDING * 2)) / boundsWidth,
+      (THUMBNAIL_HEIGHT - (THUMBNAIL_PADDING * 2)) / boundsHeight
+    );
+    const centerX = (bounds.left + bounds.right) / 2;
+    const centerY = (bounds.top + bounds.bottom) / 2;
+    const stageTransform = `translate(${THUMBNAIL_WIDTH / 2}px, ${THUMBNAIL_HEIGHT / 2}px) scale(${scale}) translate(${-centerX}px, ${-centerY}px)`;
+
+    return (
+      <div
+        className={`city-channel-thumbnail ${isThumbnailOpen ? 'is-open' : 'is-closed'}`}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        {isThumbnailOpen ? (
+          <div
+            className="city-channel-thumbnail__stage"
+            style={{
+              width: `${THUMBNAIL_WIDTH}px`,
+              height: `${THUMBNAIL_HEIGHT}px`
+            }}
+            onPointerLeave={() => setThumbnailHoverLayer(null)}
+          >
+            <div className="city-channel-thumbnail__world" style={{ transform: stageTransform }}>
+              {thumbnailItems.map(renderThumbnailItem)}
+            </div>
+          </div>
+        ) : null}
+        <button
+          type="button"
+          className="city-channel-thumbnail__toggle"
+          onClick={() => setIsThumbnailOpen((current) => !current)}
+          title={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
+          aria-label={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
+        >
+          <Layers size={16} />
+        </button>
       </div>
     );
   };
@@ -2652,6 +2877,8 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
         />
       ) : null}
 
+      {renderThumbnail()}
+
       {selectedPlacements.length > 0 && (
         <div className="city-channel-selection-actions" onPointerDown={(e) => e.stopPropagation()}>
           <span className="city-channel-selection-actions__count">{selectedPlacements.length}</span>
@@ -2745,24 +2972,9 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       </section>
 
 
-      <div className="city-channel-floating-tools" aria-label="悬浮工具">
-        {FLOATING_PANELS.map(({ key, label, Icon }) => (
-          <button
-            key={key}
-            type="button"
-            className={`city-channel-float-btn ${openPanel === key ? 'is-active' : ''}`}
-            onClick={() => setOpenPanel((current) => (current === key ? null : key))}
-            title={label}
-          >
-            <Icon size={16} />
-          </button>
-        ))}
-      </div>
-
       {openPanel && (
         <aside className="city-channel-popover">
-          <strong>{openPanel === 'settings' ? '设置' : FLOATING_PANELS.find((p) => p.key === openPanel)?.label}</strong>
-          {openPanel === 'layers' && <p>当前 MVP 只开放 {activeLayerLabel}，后续再扩展多层通道。</p>}
+          <strong>设置</strong>
           {openPanel === 'settings' && (
             <div className="city-channel-settings-list">
               <label>
