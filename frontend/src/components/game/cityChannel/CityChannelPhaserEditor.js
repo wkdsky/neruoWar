@@ -72,6 +72,19 @@ const WALL_VIEW_MODE_CONFIG = {
   }
 };
 
+const GEAR_POSITION_LABELS = {
+  center: '中心',
+  corner_ne: '右上角',
+  corner_nw: '左上角',
+  corner_se: '右下角',
+  corner_sw: '左下角'
+};
+
+const GEAR_AXIS_LABELS = {
+  fixedAxis: '固定轴',
+  freeAxis: '活动轴'
+};
+
 const stopEditorPanelPointerEvent = (event) => {
   event.stopPropagation();
 };
@@ -148,7 +161,8 @@ const toolLabelByKey = {
   [CITY_CHANNEL_TOOLS.BROWSE]: '浏览',
   [CITY_CHANNEL_TOOLS.SELECT]: '选择',
   [CITY_CHANNEL_TOOLS.ERASE]: '擦除',
-  [CITY_CHANNEL_TOOLS.PLACE_TILE]: '放置'
+  [CITY_CHANNEL_TOOLS.PLACE_TILE]: '放置',
+  [CITY_CHANNEL_TOOLS.PLACE_COMPONENT]: '安装组件'
 };
 
 const CityChannelPhaserEditor = ({
@@ -164,6 +178,7 @@ const CityChannelPhaserEditor = ({
     activeLayer,
     activeTool,
     activeTileType,
+    activeComponentType,
     activeRotation,
     validationResult,
     statusMessage,
@@ -178,10 +193,12 @@ const CityChannelPhaserEditor = ({
     rotatePlacements,
     rotatePlacementsReverse,
     flipPlacements,
+    updatePlacement,
     markSavedMap,
     validateSafeRoute,
     switchLayer,
     selectMaterial,
+    selectComponent,
     selectOperationTool,
     undo,
     redo
@@ -198,6 +215,10 @@ const CityChannelPhaserEditor = ({
   const [showCoordinates, setShowCoordinates] = useState(false);
   const [selectedCells, setSelectedCells] = useState([]);
   const [selectedWalls, setSelectedWalls] = useState([]);
+  const [selectedGears, setSelectedGears] = useState([]);
+  const [selectionScope, setSelectionScope] = useState(null);
+  const [gearAxisPrompt, setGearAxisPrompt] = useState(null);
+  const gearAxisPromptRef = useRef(null);
   const [openPanel, setOpenPanel] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [hoverStatusLabel, setHoverStatusLabel] = useState('浏览模式');
@@ -225,7 +246,7 @@ const CityChannelPhaserEditor = ({
   const selectedPlacements = useMemo(() => (
     [...selectedCells, ...selectedWalls]
   ), [selectedCells, selectedWalls]);
-  const selectedCount = selectedPlacements.length;
+  const selectedCount = selectedPlacements.length + selectedGears.length;
   const selectedTileKey = selectedCells.length === 1 && selectedWalls.length === 0
     ? createCellKey(selectedCells[0].x, selectedCells[0].y, selectedCells[0].z)
     : '';
@@ -250,8 +271,41 @@ const CityChannelPhaserEditor = ({
   const activePanelTile = mechanismPanel?.key
     ? (mapData.tiles?.[mechanismPanel.key] || mapData.walls?.[mechanismPanel.key])
     : (selectedTile || selectedWall);
+  const selectedGear = selectedGears.length === 1 ? selectedGears[0] : null;
+  const selectedGearHost = selectedGear
+    ? (selectedGear.hostKind === 'wall' ? mapData.walls?.[selectedGear.hostKey] : mapData.tiles?.[selectedGear.hostKey])
+    : null;
+  const selectedGearMount = selectedGearHost?.gearMounts?.find((mount) => mount.id === selectedGear?.mountId) || null;
+  const selectedGearItems = useMemo(() => (
+    selectedGears.map((gear) => {
+      const host = gear.hostKind === 'wall' ? mapData.walls?.[gear.hostKey] : mapData.tiles?.[gear.hostKey];
+      const mount = host?.gearMounts?.find((item) => item.id === gear.mountId) || null;
+      return host && mount ? { gear, host, mount } : null;
+    }).filter(Boolean)
+  ), [mapData.tiles, mapData.walls, selectedGears]);
+  const activePanelPlacement = useMemo(() => (
+    activePanelTile
+      ? {
+        x: activePanelTile.x,
+        y: activePanelTile.y,
+        z: activePanelTile.z,
+        edge: activePanelTile.edge || null
+      }
+      : selectedGearHost
+        ? {
+          x: selectedGearHost.x,
+          y: selectedGearHost.y,
+          z: selectedGearHost.z,
+          edge: selectedGearHost.edge || null
+        }
+      : null
+  ), [activePanelTile, selectedGearHost]);
   const activePanelPanelType = mechanismPanel?.panelType || activePanelTile?.panelType || '';
   const canRunActivePanel = activePanelPanelType === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE;
+  const gearMountsForPanel = selectedGearMount
+    ? [selectedGearMount]
+    : Array.isArray(activePanelTile?.gearMounts) ? activePanelTile.gearMounts : [];
+  const canConfigureGearMounts = gearMountsForPanel.length > 0;
   const mechanismPanelParams = useMemo(() => (
     normalizeMechanismParams(mechanismParams[activePanelKey])
   ), [activePanelKey, mechanismParams]);
@@ -275,13 +329,19 @@ const CityChannelPhaserEditor = ({
   const clearSelection = useCallback(() => {
     setSelectedCells([]);
     setSelectedWalls([]);
+    setSelectedGears([]);
+    setSelectionScope(null);
+    setGearAxisPrompt(null);
     setSelectedCell(null);
     sceneRef.current?.setSelection?.([], []);
   }, [setSelectedCell]);
 
-  const handleSelectionChange = useCallback(({ cells = [], walls = [] } = {}) => {
+  const handleSelectionChange = useCallback(({ cells = [], walls = [], gears = [], scope = null } = {}) => {
     setSelectedCells(cells);
     setSelectedWalls(walls);
+    setSelectedGears(gears);
+    setSelectionScope(scope);
+    setGearAxisPrompt(null);
     setSelectedCell(cells[0] || walls[0] || null);
   }, [setSelectedCell]);
 
@@ -294,6 +354,16 @@ const CityChannelPhaserEditor = ({
     clearSelection();
     selectMaterial(panelType);
   }, [activeTool, clearSelection, selectMaterial]);
+
+  const handleComponentSelect = useCallback((componentType) => {
+    if (activeTool !== CITY_CHANNEL_TOOLS.PLACE_COMPONENT) {
+      placeReturnToolRef.current = activeTool === CITY_CHANNEL_TOOLS.SELECT
+        ? CITY_CHANNEL_TOOLS.SELECT
+        : CITY_CHANNEL_TOOLS.BROWSE;
+    }
+    clearSelection();
+    selectComponent(componentType);
+  }, [activeTool, clearSelection, selectComponent]);
 
   const handleRequestTool = useCallback((tool) => {
     if (tool === CITY_CHANNEL_TOOLS.BROWSE || tool === CITY_CHANNEL_TOOLS.SELECT) {
@@ -387,6 +457,91 @@ const CityChannelPhaserEditor = ({
     }));
   }, [activePanelKey]);
 
+  const updateGearMountConfig = useCallback((mountId, patch = {}) => {
+    if (!activePanelPlacement || !mountId) return;
+    updatePlacement(activePanelPlacement, (placement) => {
+      const mounts = Array.isArray(placement.gearMounts) ? placement.gearMounts : [];
+      const nextMounts = mounts.map((mount) => {
+        if (mount.id !== mountId) return mount;
+        const nextMount = { ...mount, ...patch };
+        if (!['fixedAxis', 'freeAxis'].includes(nextMount.axisType)) nextMount.axisType = 'freeAxis';
+        nextMount.followMode = 'none';
+        nextMount.followDelaySeconds = 0;
+        return nextMount;
+      });
+      return { gearMounts: nextMounts };
+    }, '齿轮承动配置已更新。');
+  }, [activePanelPlacement, updatePlacement]);
+
+  const updateSelectedGearAxis = useCallback((axisType) => {
+    if (selectedGearItems.length <= 0) return;
+    const nextAxisType = axisType === 'fixedAxis' ? 'fixedAxis' : 'freeAxis';
+    const groups = new Map();
+    selectedGearItems.forEach(({ gear, host }) => {
+      if (!groups.has(gear.hostKey)) {
+        groups.set(gear.hostKey, {
+          placement: {
+            x: host.x,
+            y: host.y,
+            z: host.z,
+            edge: host.edge || null
+          },
+          mountIds: new Set()
+        });
+      }
+      groups.get(gear.hostKey).mountIds.add(gear.mountId);
+    });
+    groups.forEach(({ placement, mountIds }) => {
+      updatePlacement(placement, (currentPlacement) => ({
+        gearMounts: (currentPlacement.gearMounts || []).map((mount) => (
+          mountIds.has(mount.id)
+            ? {
+              ...mount,
+              axisType: nextAxisType,
+              followMode: 'none',
+              followDelaySeconds: 0
+            }
+            : mount
+        ))
+      }), nextAxisType === 'fixedAxis' ? '已设为固定轴。' : '已设为活动轴。');
+    });
+  }, [selectedGearItems, updatePlacement]);
+
+  const updatePromptGearAxis = useCallback((axisType) => {
+    if (!gearAxisPrompt?.mountId || !gearAxisPrompt?.cell) return;
+    const placementRef = gearAxisPrompt.hostKind === 'wall'
+      ? { ...gearAxisPrompt.cell, edge: gearAxisPrompt.edge || 'north' }
+      : { ...gearAxisPrompt.cell };
+    updatePlacement(placementRef, (placement) => {
+      const mounts = Array.isArray(placement.gearMounts) ? placement.gearMounts : [];
+      return {
+        gearMounts: mounts.map((mount) => (
+          mount.id === gearAxisPrompt.mountId
+            ? {
+              ...mount,
+              axisType: axisType === 'fixedAxis' ? 'fixedAxis' : 'freeAxis',
+              followMode: 'none',
+              followDelaySeconds: 0
+            }
+            : mount
+        ))
+      };
+    }, axisType === 'fixedAxis' ? '已设为固定轴。' : '已设为活动轴。');
+    setGearAxisPrompt(null);
+  }, [gearAxisPrompt, updatePlacement]);
+
+  useEffect(() => {
+    if (!gearAxisPrompt) return undefined;
+    const handlePointerDown = (event) => {
+      if (gearAxisPromptRef.current?.contains(event.target)) return;
+      setGearAxisPrompt(null);
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true);
+  }, [gearAxisPrompt]);
+
   const executeMechanismPanelAction = useCallback(() => {
     if (!canRunActivePanel) {
       addToast('只有齿轮压力板可以运行预览。', 'error');
@@ -420,6 +575,31 @@ const CityChannelPhaserEditor = ({
   }, [addToast, inspectMode?.active]);
 
   const handleDeleteSelection = useCallback(() => {
+    if (selectionScope === 'component') {
+      if (selectedGearItems.length <= 0) return;
+      const groups = new Map();
+      selectedGearItems.forEach(({ gear, host }) => {
+        if (!groups.has(gear.hostKey)) {
+          groups.set(gear.hostKey, {
+            placement: {
+              x: host.x,
+              y: host.y,
+              z: host.z,
+              edge: host.edge || null
+            },
+            mountIds: new Set()
+          });
+        }
+        groups.get(gear.hostKey).mountIds.add(gear.mountId);
+      });
+      groups.forEach(({ placement, mountIds }) => {
+        updatePlacement(placement, (currentPlacement) => ({
+          gearMounts: (currentPlacement.gearMounts || []).filter((mount) => !mountIds.has(mount.id))
+        }), '已删除选中齿轮。');
+      });
+      clearSelection();
+      return;
+    }
     if (selectedPlacements.length <= 0) return;
     setMechanismParams((current) => {
       const next = { ...current };
@@ -430,7 +610,7 @@ const CityChannelPhaserEditor = ({
     });
     deletePlacements(selectedPlacements);
     clearSelection();
-  }, [clearSelection, deletePlacements, selectedCells, selectedPlacements]);
+  }, [clearSelection, deletePlacements, selectedCells, selectedGearItems, selectedPlacements, selectionScope, updatePlacement]);
 
   const handleRotateSelection = useCallback((direction = 'forward') => {
     if (selectedPlacements.length <= 0) return;
@@ -493,6 +673,7 @@ const CityChannelPhaserEditor = ({
     mapData,
     activeTool,
     activeTileType,
+    activeComponentType,
     activeRotation,
     activeLayer,
     panelPose,
@@ -502,7 +683,9 @@ const CityChannelPhaserEditor = ({
     visibleLayerCutoff,
     selection: {
       cells: selectedCells,
-      walls: selectedWalls
+      walls: selectedWalls,
+      gears: selectedGears,
+      scope: selectionScope
     },
     onSceneReady: (scene) => {
       sceneRef.current = scene;
@@ -528,6 +711,7 @@ const CityChannelPhaserEditor = ({
     onFlipSelection: handleFlipSelection,
     onMovePlacements: handleMovePlacements,
     onMechanismPanelRequest: handleMechanismPanelRequest,
+    onGearAxisPrompt: setGearAxisPrompt,
     onInspectChange: handleInspectChange,
     onMechanismPreviewProgress: handleMechanismPreviewProgress,
     externalInspectOverlay: true,
@@ -537,6 +721,7 @@ const CityChannelPhaserEditor = ({
     activeRotation,
     activeLayer,
     activeTileType,
+    activeComponentType,
     activeTool,
     addToast,
     handleCommitOperations,
@@ -557,7 +742,9 @@ const CityChannelPhaserEditor = ({
     handleExitPlaceMode,
     handleRequestTool,
     selectedCells,
+    selectedGears,
     selectedWalls,
+    selectionScope,
     showCoordinates,
     showHelperGrid,
     undo,
@@ -854,7 +1041,9 @@ const CityChannelPhaserEditor = ({
 
       <CityChannelMaterialPalette
         activeTileType={activeTileType}
+        activeComponentType={activeComponentType}
         onMaterialSelect={handleMaterialSelect}
+        onComponentSelect={handleComponentSelect}
       />
 
       <div className="city-channel-toast-container" aria-live="polite">
@@ -885,6 +1074,33 @@ const CityChannelPhaserEditor = ({
             {phaserStatus === 'error' ? 'Phaser 编辑器加载失败' : '正在加载 Phaser 编辑器'}
           </div>
         ) : null}
+        {gearAxisPrompt?.anchor ? (
+          <div
+            ref={gearAxisPromptRef}
+            className="city-channel-gear-axis-prompt"
+            style={{
+              left: `${Math.max(12, Math.min(gearAxisPrompt.anchor.left + 12, (typeof window !== 'undefined' ? window.innerWidth : 1280) - 176))}px`,
+              top: `${Math.max(76, Math.min(gearAxisPrompt.anchor.top - 18, (typeof window !== 'undefined' ? window.innerHeight : 720) - 84))}px`
+            }}
+            onPointerDown={stopEditorPanelPointerEvent}
+            onClick={stopEditorPanelPointerEvent}
+          >
+            <button
+              type="button"
+              className={gearAxisPrompt.axisType !== 'fixedAxis' ? 'is-active' : ''}
+              onClick={() => updatePromptGearAxis('freeAxis')}
+            >
+              活动轴
+            </button>
+            <button
+              type="button"
+              className={gearAxisPrompt.axisType === 'fixedAxis' ? 'is-active' : ''}
+              onClick={() => updatePromptGearAxis('fixedAxis')}
+            >
+              固定轴
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {renderThumbnail()}
@@ -892,37 +1108,70 @@ const CityChannelPhaserEditor = ({
       {selectedCount > 0 && (
         <div className="city-channel-selection-actions" onPointerDown={stopEditorPanelPointerEvent}>
           <span className="city-channel-selection-actions__count">{selectedCount}</span>
-          <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.startCarry?.()} title="移动 (M)">
-            <Move size={14} />
-            <span>移动</span>
-            <em className="city-channel-shortcut-hint">M</em>
-          </button>
-          <button type="button" className="city-channel-selection-action" onClick={() => handleRotateSelection('forward')} title="旋转 (滚轮↑)">
-            <RotateCw size={14} />
-            <span>旋转</span>
-            <em className="city-channel-shortcut-hint">滚轮</em>
-          </button>
-          <button type="button" className="city-channel-selection-action" onClick={handleFlipSelection} title="颠倒 (Space)">
-            <Replace size={14} />
-            <span>颠倒</span>
-            <em className="city-channel-shortcut-hint">Space</em>
-          </button>
-          {canInspectSelectedTile && (
-            <button
-              type="button"
-              className={`city-channel-selection-action ${inspectMode?.active ? 'is-active' : ''}`}
-              onClick={handleInspectSelected}
-              title={inspectMode?.active ? '放回' : '观察'}
-            >
-              <Eye size={14} />
-              <span>{inspectMode?.active ? '放回' : '观察'}</span>
-            </button>
+          {selectionScope !== 'component' ? (
+            <>
+              <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.startCarry?.()} title="移动 (M)">
+                <Move size={14} />
+                <span>移动</span>
+                <em className="city-channel-shortcut-hint">M</em>
+              </button>
+              <button type="button" className="city-channel-selection-action" onClick={() => handleRotateSelection('forward')} title="旋转 (滚轮↑)">
+                <RotateCw size={14} />
+                <span>旋转</span>
+                <em className="city-channel-shortcut-hint">滚轮</em>
+              </button>
+              <button type="button" className="city-channel-selection-action" onClick={handleFlipSelection} title="颠倒 (Space)">
+                <Replace size={14} />
+                <span>颠倒</span>
+                <em className="city-channel-shortcut-hint">Space</em>
+              </button>
+              {canInspectSelectedTile && (
+                <button
+                  type="button"
+                  className={`city-channel-selection-action ${inspectMode?.active ? 'is-active' : ''}`}
+                  onClick={handleInspectSelected}
+                  title={inspectMode?.active ? '放回' : '观察'}
+                >
+                  <Eye size={14} />
+                  <span>{inspectMode?.active ? '放回' : '观察'}</span>
+                </button>
+              )}
+              <button type="button" className="city-channel-selection-action is-danger" onClick={handleDeleteSelection} title="删除 (Del)">
+                <Trash2 size={14} />
+                <span>删除</span>
+                <em className="city-channel-shortcut-hint">Del</em>
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="city-channel-selection-action"
+                onClick={() => updateSelectedGearAxis('freeAxis')}
+                title="设为活动轴"
+              >
+                <span>活动轴</span>
+              </button>
+              <button
+                type="button"
+                className="city-channel-selection-action"
+                onClick={() => updateSelectedGearAxis('fixedAxis')}
+                title="设为固定轴"
+              >
+                <span>固定轴</span>
+              </button>
+              <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.startCarry?.()} title="移动 (M)">
+                <Move size={14} />
+                <span>移动</span>
+                <em className="city-channel-shortcut-hint">M</em>
+              </button>
+              <button type="button" className="city-channel-selection-action is-danger" onClick={handleDeleteSelection} title="删除 (Del)">
+                <Trash2 size={14} />
+                <span>删除</span>
+                <em className="city-channel-shortcut-hint">Del</em>
+              </button>
+            </>
           )}
-          <button type="button" className="city-channel-selection-action is-danger" onClick={handleDeleteSelection} title="删除 (Del)">
-            <Trash2 size={14} />
-            <span>删除</span>
-            <em className="city-channel-shortcut-hint">Del</em>
-          </button>
         </div>
       )}
 
@@ -997,11 +1246,22 @@ const CityChannelPhaserEditor = ({
       </div>
 
       <section className="city-channel-interaction-hints" aria-live="polite">
-        <strong>{activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE ? '放置模式' : toolLabelByKey[activeTool] || activeTool}</strong>
+        <strong>{
+          activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE
+            ? '放置模式'
+            : activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT
+              ? '组件安装'
+              : toolLabelByKey[activeTool] || activeTool
+        }</strong>
         {activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE ? (
           <>
             <span>左键放置，右键或 Esc 取消</span>
             <span>R 顺转，Shift+R 逆转，Space 按当前吸附边切安装面</span>
+          </>
+        ) : activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT ? (
+          <>
+            <span>左键安装，右键或 Esc 取消</span>
+            <span>齿轮会吸附到板材中心或四角</span>
           </>
         ) : (
           <>
@@ -1030,7 +1290,7 @@ const CityChannelPhaserEditor = ({
         </aside>
       )}
 
-      {(mechanismPanel || selectedTile || selectedWall) && (
+      {(mechanismPanel || selectedTile || selectedWall || selectedGearMount) && (
         <aside
           className={`city-channel-mechanism-params ${inspectMode?.active ? 'is-inspect-docked' : ''}`}
           style={mechanismPanelStyle}
@@ -1039,7 +1299,7 @@ const CityChannelPhaserEditor = ({
           onClick={stopEditorPanelPointerEvent}
         >
           <div className="city-channel-mechanism-params__head">
-            <strong>{mechanismPanelMaterial?.shortName || mechanismPanelMaterial?.name || '机关参数'}</strong>
+            <strong>{selectedGearMount ? '齿轮组件' : mechanismPanelMaterial?.shortName || mechanismPanelMaterial?.name || '机关参数'}</strong>
             <div className="city-channel-mechanism-params__actions">
               {canRunActivePanel ? (
                 <button type="button" onClick={executeMechanismPanelAction}>运行</button>
@@ -1057,119 +1317,151 @@ const CityChannelPhaserEditor = ({
               )}
             </div>
           </div>
-          <div className="city-channel-mechanism-summary">
-            <span>{`所属整体：${selectedAssembly?.id || '未连接'}`}</span>
-            <span>{`端点：${activePanelTile?.transmissionSkeleton?.ports?.length || 0}`}</span>
-            <span>{`齿轮：${activePanelTile?.gearMounts?.length || 0}`}</span>
-          </div>
+          {selectedGearMount ? (
+            <div className="city-channel-mechanism-summary">
+              <span>{`宿主：${selectedGear?.hostKey || '未知'}`}</span>
+              <span>{`位置：${GEAR_POSITION_LABELS[selectedGearMount.position] || selectedGearMount.position}`}</span>
+              <span>{`安装面：${selectedGearMount.surface === 'back' ? '背面' : '正面'}`}</span>
+            </div>
+          ) : (
+            <div className="city-channel-mechanism-summary">
+              <span>{`所属整体：${selectedAssembly?.id || '未连接'}`}</span>
+              <span>{`端点：${activePanelTile?.transmissionSkeleton?.ports?.length || 0}`}</span>
+              <span>{`齿轮：${activePanelTile?.gearMounts?.length || 0}`}</span>
+            </div>
+          )}
           {activePanelTile?.transmissionSkeleton ? (
             <div className="city-channel-mechanism-summary is-detail">
               <span>{`传动骨骼：${activePanelTile.transmissionSkeleton.type}`}</span>
               <span>{(activePanelTile.transmissionSkeleton.ports || []).map((port) => port.direction).join(' / ')}</span>
             </div>
           ) : null}
-          {activePanelTile?.gearMounts?.length > 0 ? (
-            <div className="city-channel-mechanism-summary is-detail">
-              {activePanelTile.gearMounts.map((mount) => (
-                <span key={mount.id}>{`${mount.position}｜${mount.axisType === 'fixedAxis' ? '固定轴' : '活动轴'}｜${mount.followMode === 'sameDirection' ? '同向跟随' : mount.followMode === 'oppositeDirection' ? '反向跟随' : '不跟随'}`}</span>
+          {selectedAssembly?.warnings?.length > 0 ? (
+            <div className="city-channel-mechanism-summary is-warning">
+              {selectedAssembly.warnings.map((warning) => <span key={warning}>{warning}</span>)}
+            </div>
+          ) : null}
+          {canConfigureGearMounts ? (
+            <div className="city-channel-gear-config">
+              {gearMountsForPanel.map((mount, index) => (
+                <section key={mount.id || `gear-${index}`} className="city-channel-gear-config__item">
+                  <header>
+                    <strong>{GEAR_POSITION_LABELS[mount.position] || mount.position || `齿轮 ${index + 1}`}</strong>
+                    <span>{GEAR_AXIS_LABELS[mount.axisType] || '活动轴'}</span>
+                  </header>
+                  <label>
+                    <span>轴类型</span>
+                    <select
+                      value={mount.axisType === 'fixedAxis' ? 'fixedAxis' : 'freeAxis'}
+                      onChange={(event) => updateGearMountConfig(mount.id, { axisType: event.target.value })}
+                    >
+                      <option value="fixedAxis">固定轴</option>
+                      <option value="freeAxis">活动轴</option>
+                    </select>
+                  </label>
+                </section>
               ))}
             </div>
           ) : null}
-          <label className="city-channel-mechanism-param">
-            <span>转动角度</span>
-            <div className="city-channel-mechanism-param__row">
-              <input
-                type="range"
-                min={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.min}
-                max={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.max}
-                step={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.step}
-                value={mechanismPanelParams.rotationAngle}
-                onChange={(event) => updateMechanismParam('rotationAngle', event.target.value)}
-              />
-              <input
-                type="number"
-                min={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.min}
-                max={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.max}
-                step={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.step}
-                value={mechanismPanelParams.rotationAngle}
-                onChange={(event) => updateMechanismParam('rotationAngle', event.target.value)}
-                aria-label="转动角度"
-              />
-              <em>度</em>
-            </div>
-          </label>
-          <label className="city-channel-mechanism-param">
-            <span>转动速度</span>
-            <div className="city-channel-mechanism-param__row">
-              <input
-                type="range"
-                min={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.min}
-                max={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.max}
-                step={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.step}
-                value={mechanismPanelParams.rotationSpeedDegPerSec}
-                onChange={(event) => updateMechanismParam('rotationSpeedDegPerSec', event.target.value)}
-              />
-              <input
-                type="number"
-                min={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.min}
-                max={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.max}
-                step={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.step}
-                value={mechanismPanelParams.rotationSpeedDegPerSec}
-                onChange={(event) => updateMechanismParam('rotationSpeedDegPerSec', event.target.value)}
-                aria-label="转动速度"
-              />
-              <em>度/秒</em>
-            </div>
-          </label>
-          <label className="city-channel-mechanism-param">
-            <span>转动方向</span>
-            <select
-              value={mechanismPanelParams.rotationDirection}
-              onChange={(event) => updateMechanismParam('rotationDirection', event.target.value)}
-            >
-              <option value="right">右</option>
-              <option value="left">左</option>
-            </select>
-          </label>
-          <label className="city-channel-mechanism-param">
-            <span>延迟触发</span>
-            <div className="city-channel-mechanism-param__row">
-              <input
-                type="number"
-                min={CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds.min}
-                max={CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds.max}
-                step={CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds.step}
-                value={mechanismPanelParams.triggerDelaySeconds}
-                onChange={(event) => updateMechanismParam('triggerDelaySeconds', event.target.value)}
-                aria-label="延迟触发秒数"
-              />
-              <em>秒</em>
-            </div>
-          </label>
-          <label className="city-channel-mechanism-param is-inline">
-            <input
-              type="checkbox"
-              checked={mechanismPanelParams.autoReturn}
-              onChange={(event) => updateMechanismParam('autoReturn', event.target.checked)}
-            />
-            <span>自动转回</span>
-          </label>
-          {mechanismPanelParams.autoReturn ? (
-            <label className="city-channel-mechanism-param">
-              <span>自动转回延迟</span>
-              <div className="city-channel-mechanism-param__row">
+          {canRunActivePanel ? (
+            <>
+              <label className="city-channel-mechanism-param">
+                <span>转动角度</span>
+                <div className="city-channel-mechanism-param__row">
+                  <input
+                    type="range"
+                    min={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.min}
+                    max={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.max}
+                    step={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.step}
+                    value={mechanismPanelParams.rotationAngle}
+                    onChange={(event) => updateMechanismParam('rotationAngle', event.target.value)}
+                  />
+                  <input
+                    type="number"
+                    min={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.min}
+                    max={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.max}
+                    step={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.step}
+                    value={mechanismPanelParams.rotationAngle}
+                    onChange={(event) => updateMechanismParam('rotationAngle', event.target.value)}
+                    aria-label="转动角度"
+                  />
+                  <em>度</em>
+                </div>
+              </label>
+              <label className="city-channel-mechanism-param">
+                <span>转动速度</span>
+                <div className="city-channel-mechanism-param__row">
+                  <input
+                    type="range"
+                    min={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.min}
+                    max={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.max}
+                    step={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.step}
+                    value={mechanismPanelParams.rotationSpeedDegPerSec}
+                    onChange={(event) => updateMechanismParam('rotationSpeedDegPerSec', event.target.value)}
+                  />
+                  <input
+                    type="number"
+                    min={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.min}
+                    max={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.max}
+                    step={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.step}
+                    value={mechanismPanelParams.rotationSpeedDegPerSec}
+                    onChange={(event) => updateMechanismParam('rotationSpeedDegPerSec', event.target.value)}
+                    aria-label="转动速度"
+                  />
+                  <em>度/秒</em>
+                </div>
+              </label>
+              <label className="city-channel-mechanism-param">
+                <span>转动方向</span>
+                <select
+                  value={mechanismPanelParams.rotationDirection}
+                  onChange={(event) => updateMechanismParam('rotationDirection', event.target.value)}
+                >
+                  <option value="right">右</option>
+                  <option value="left">左</option>
+                </select>
+              </label>
+              <label className="city-channel-mechanism-param">
+                <span>延迟触发</span>
+                <div className="city-channel-mechanism-param__row">
+                  <input
+                    type="number"
+                    min={CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds.min}
+                    max={CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds.max}
+                    step={CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds.step}
+                    value={mechanismPanelParams.triggerDelaySeconds}
+                    onChange={(event) => updateMechanismParam('triggerDelaySeconds', event.target.value)}
+                    aria-label="延迟触发秒数"
+                  />
+                  <em>秒</em>
+                </div>
+              </label>
+              <label className="city-channel-mechanism-param is-inline">
                 <input
-                  type="number"
-                  min={CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds.min}
-                  max={CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds.max}
-                  step={CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds.step}
-                  value={mechanismPanelParams.autoReturnDelaySeconds}
-                  onChange={(event) => updateMechanismParam('autoReturnDelaySeconds', event.target.value)}
-                  aria-label="自动转回延迟秒数"
+                  type="checkbox"
+                  checked={mechanismPanelParams.autoReturn}
+                  onChange={(event) => updateMechanismParam('autoReturn', event.target.checked)}
                 />
-                <em>秒</em>
-              </div>
-            </label>
+                <span>自动转回</span>
+              </label>
+              {mechanismPanelParams.autoReturn ? (
+                <label className="city-channel-mechanism-param">
+                  <span>自动转回延迟</span>
+                  <div className="city-channel-mechanism-param__row">
+                    <input
+                      type="number"
+                      min={CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds.min}
+                      max={CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds.max}
+                      step={CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds.step}
+                      value={mechanismPanelParams.autoReturnDelaySeconds}
+                      onChange={(event) => updateMechanismParam('autoReturnDelaySeconds', event.target.value)}
+                      aria-label="自动转回延迟秒数"
+                    />
+                    <em>秒</em>
+                  </div>
+                </label>
+              ) : null}
+            </>
           ) : null}
         </aside>
       )}

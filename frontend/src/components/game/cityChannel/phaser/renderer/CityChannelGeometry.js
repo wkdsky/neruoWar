@@ -12,6 +12,13 @@ export const TILE_RENDER_CENTER = { x: 80, y: 98 };
 export const FLOOR_THICKNESS = 8;
 export const WALL_HEIGHT = 62;
 export const LAYER_HEIGHT = WALL_HEIGHT;
+const WALL_THICKNESS_WORLD = 0.12;
+const EDGE_NORMALS = {
+  north: { x: 0, y: -1 },
+  south: { x: 0, y: 1 },
+  west: { x: -1, y: 0 },
+  east: { x: 1, y: 0 }
+};
 
 export const getMapCenter = (mapData = {}) => ({
   x: Math.floor((Number.isInteger(mapData.width) ? mapData.width : CITY_CHANNEL_WIDTH) / 2),
@@ -60,21 +67,14 @@ export const localToCellAtLayer = ({ x, y, z = 0, cameraYaw = 0, mapData = {} })
     : null;
 };
 
-const createWallThicknessOffset = (wallBase) => {
-  const dx = wallBase[1].x - wallBase[0].x;
-  const dy = wallBase[1].y - wallBase[0].y;
-  const length = Math.max(1, Math.hypot(dx, dy));
-  let offset = {
-    x: (-dy / length) * 9,
-    y: (dx / length) * 9
-  };
-  if (offset.y > 0) offset = { x: -offset.x, y: -offset.y };
-  return offset;
-};
-
 const offsetPoint = (point, offset) => ({
   x: point.x + offset.x,
   y: point.y + offset.y
+});
+
+const scaleOffset = (offset, scale = 1) => ({
+  x: offset.x * scale,
+  y: offset.y * scale
 });
 
 const rotateWorldPoint = (point, degrees = 0) => {
@@ -158,17 +158,21 @@ export const createTileGeometry = (cameraYaw = 0, tileRotation = 0) => {
   const wallWorldEndpoints = normalizedRotation === 90
     ? [{ x: 0, y: -0.5 }, { x: 0, y: 0.5 }]
     : [{ x: -0.5, y: 0 }, { x: 0.5, y: 0 }];
-  const wallBase = wallWorldEndpoints.map((point) => {
+  const wallBaseCenter = wallWorldEndpoints.map((point) => {
     const projected = projectWorldOffset(point.x, point.y, cameraYaw);
     return {
       x: TILE_RENDER_CENTER.x + projected.x,
       y: TILE_RENDER_CENTER.y + projected.y - 4
     };
   });
+  const wallNormal = normalizedRotation === 90 ? { x: 1, y: 0 } : { x: 0, y: 1 };
+  const wallThicknessOffset = projectWorldOffset(wallNormal.x * WALL_THICKNESS_WORLD, wallNormal.y * WALL_THICKNESS_WORLD, cameraYaw);
+  const frontOffset = scaleOffset(wallThicknessOffset, 0.5);
+  const backOffset = scaleOffset(wallThicknessOffset, -0.5);
+  const wallBase = wallBaseCenter.map((point) => offsetPoint(point, frontOffset));
+  const rearBase = wallBaseCenter.map((point) => offsetPoint(point, backOffset));
   const wallTop = wallBase.map((point) => ({ x: point.x, y: point.y - WALL_HEIGHT }));
-  const wallThicknessOffset = createWallThicknessOffset(wallBase);
-  const rearBase = wallBase.map((point) => offsetPoint(point, wallThicknessOffset));
-  const rearTop = wallTop.map((point) => offsetPoint(point, wallThicknessOffset));
+  const rearTop = rearBase.map((point) => ({ x: point.x, y: point.y - WALL_HEIGHT }));
   const wallBaseMaxY = Math.max(wallBase[0].y, wallBase[1].y);
   const wallTopMinY = Math.min(wallTop[0].y, wallTop[1].y);
   const wallHeightSpan = wallBaseMaxY - wallTopMinY;
@@ -177,6 +181,8 @@ export const createTileGeometry = (cameraYaw = 0, tileRotation = 0) => {
     top,
     sides,
     wall: [wallBase[0], wallBase[1], wallTop[1], wallTop[0]],
+    wallFront: [wallBase[0], wallBase[1], wallTop[1], wallTop[0]],
+    wallBack: [rearBase[1], rearBase[0], rearTop[0], rearTop[1]],
     wallCap: [wallTop[0], wallTop[1], rearTop[1], rearTop[0]],
     wallSideStart: [wallBase[0], wallTop[0], rearTop[0], rearBase[0]],
     wallSideEnd: [wallBase[1], rearBase[1], rearTop[1], wallTop[1]],
@@ -286,7 +292,7 @@ export const createPortalGeometry = (cameraYaw = 0, tileRotation = 0) => {
   };
 };
 
-export const createEdgeWallGeometry = (cameraYaw = 0, edge = 'north') => {
+export const createEdgeWallGeometry = (cameraYaw = 0, edge = 'north', miter = null) => {
   const edgeEndpoints = {
     north: [{ x: -0.5, y: -0.5 }, { x: 0.5, y: -0.5 }],
     south: [{ x: -0.5, y: 0.5 }, { x: 0.5, y: 0.5 }],
@@ -294,22 +300,45 @@ export const createEdgeWallGeometry = (cameraYaw = 0, edge = 'north') => {
     east: [{ x: 0.5, y: -0.5 }, { x: 0.5, y: 0.5 }]
   };
   const endpoints = edgeEndpoints[edge] || edgeEndpoints.north;
-  const wallBase = endpoints.map((point) => {
-    const projected = projectWorldOffset(point.x, point.y, cameraYaw);
+  const normal = EDGE_NORMALS[edge] || EDGE_NORMALS.north;
+  const tangentLength = Math.max(1, Math.hypot(endpoints[1].x - endpoints[0].x, endpoints[1].y - endpoints[0].y));
+  const tangent = {
+    x: (endpoints[1].x - endpoints[0].x) / tangentLength,
+    y: (endpoints[1].y - endpoints[0].y) / tangentLength
+  };
+  const createMiteredPoint = (endpoint, side = 'front', sign = 0) => {
+    const normalScale = side === 'front' ? 0.5 : -0.5;
+    const tangentScale = side === 'front' ? sign * 0.5 : -sign * 0.5;
+    const projected = projectWorldOffset(
+      endpoint.x + (normal.x * WALL_THICKNESS_WORLD * normalScale) + (tangent.x * WALL_THICKNESS_WORLD * tangentScale),
+      endpoint.y + (normal.y * WALL_THICKNESS_WORLD * normalScale) + (tangent.y * WALL_THICKNESS_WORLD * tangentScale),
+      cameraYaw
+    );
     return {
       x: TILE_RENDER_CENTER.x + projected.x,
       y: TILE_RENDER_CENTER.y + projected.y
     };
-  });
+  };
+  const startSign = Math.max(-1, Math.min(1, Number(miter?.start) || 0));
+  const endSign = Math.max(-1, Math.min(1, Number(miter?.end) || 0));
+  const wallBase = [
+    createMiteredPoint(endpoints[0], 'front', startSign),
+    createMiteredPoint(endpoints[1], 'front', endSign)
+  ];
+  const rearBase = [
+    createMiteredPoint(endpoints[0], 'back', startSign),
+    createMiteredPoint(endpoints[1], 'back', endSign)
+  ];
   const wallTop = wallBase.map((point) => ({ x: point.x, y: point.y - WALL_HEIGHT }));
-  const wallThicknessOffset = createWallThicknessOffset(wallBase);
-  const rearBase = wallBase.map((point) => offsetPoint(point, wallThicknessOffset));
-  const rearTop = wallTop.map((point) => offsetPoint(point, wallThicknessOffset));
+  const rearTop = rearBase.map((point) => ({ x: point.x, y: point.y - WALL_HEIGHT }));
   const wallBaseMaxY = Math.max(wallBase[0].y, wallBase[1].y);
   const wallTopMinY = Math.min(wallTop[0].y, wallTop[1].y);
   const wallHeightSpan = wallBaseMaxY - wallTopMinY;
   return {
+    miter: { start: startSign, end: endSign },
     wall: [wallBase[0], wallBase[1], wallTop[1], wallTop[0]],
+    wallFront: [wallBase[0], wallBase[1], wallTop[1], wallTop[0]],
+    wallBack: [rearBase[1], rearBase[0], rearTop[0], rearTop[1]],
     wallCap: [wallTop[0], wallTop[1], rearTop[1], rearTop[0]],
     wallSideStart: [wallBase[0], wallTop[0], rearTop[0], rearBase[0]],
     wallSideEnd: [wallBase[1], rearBase[1], rearTop[1], wallTop[1]],

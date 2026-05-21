@@ -39,6 +39,31 @@
   font-weight: 700;
 }
 
+.city-channel-material-palette__tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.32rem;
+  padding: 0.44rem 0.52rem 0;
+}
+
+.city-channel-material-palette__tabs button {
+  min-height: 28px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.58);
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.7rem;
+  font-weight: 900;
+}
+
+.city-channel-material-palette__tabs button:hover,
+.city-channel-material-palette__tabs button.is-active {
+  border-color: rgba(103, 232, 249, 0.44);
+  background: rgba(14, 116, 144, 0.38);
+  color: #ecfeff;
+}
+
 .city-channel-material-palette__body {
   overflow-y: auto;
   padding: 0.52rem;
@@ -117,6 +142,17 @@
   box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.16), 0 0 20px rgba(45, 212, 191, 0.14);
 }
 
+.city-channel-material-item.is-component {
+  border-color: rgba(250, 204, 21, 0.24);
+}
+
+.city-channel-material-item.is-component:hover,
+.city-channel-material-item.is-component.is-active {
+  border-color: rgba(250, 204, 21, 0.7);
+  background: rgba(113, 63, 18, 0.34);
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.16), 0 0 20px rgba(250, 204, 21, 0.12);
+}
+
 .city-channel-material-item__preview {
   width: 30px;
   height: 30px;
@@ -166,6 +202,14 @@
     linear-gradient(135deg, #d8d2c4 0%, #b8b1a4 52%, #756f64 100%);
   border-color: rgba(250, 204, 21, 0.5);
   color: #111827;
+}
+
+.city-channel-material-item__preview.is-component-gear {
+  background:
+    radial-gradient(circle, #facc15 0 3px, transparent 3.5px),
+    repeating-conic-gradient(from 0deg, #020617 0 12deg, #111827 12deg 24deg);
+  border-color: rgba(250, 204, 21, 0.58);
+  color: #facc15;
 }
 
 .city-channel-material-item__text {

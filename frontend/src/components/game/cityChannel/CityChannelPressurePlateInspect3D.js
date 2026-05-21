@@ -114,8 +114,10 @@ const addTransmissionLine = (group, start, end, material) => {
   );
 };
 
-const createBoardModel = (panelType) => {
+const createBoardModel = (panelType, tile = null) => {
   const material = getCityChannelMaterial(panelType);
+  const transmissionSkeleton = tile?.transmissionSkeleton || material.transmissionSkeleton;
+  const gearMounts = Array.isArray(tile?.gearMounts) ? tile.gearMounts : (material.gearMounts || []);
   const root = new THREE.Group();
   const stone = createMaterial(0xb8b1a4, { metalness: 0.08, roughness: 0.74 });
   const side = createMaterial(0x756f64, { metalness: 0.1, roughness: 0.8 });
@@ -128,7 +130,7 @@ const createBoardModel = (panelType) => {
   addBox(root, '石材板体', { x: 3.02, y: 0.12, z: 2.08 }, { x: 0, y: 0.02, z: 0 }, stone);
 
   const center = { x: 0, z: 0 };
-  (material.transmissionSkeleton?.ports || []).forEach((port) => {
+  (transmissionSkeleton?.ports || []).forEach((port) => {
     addTransmissionLine(root, center, { x: (port.localPosition?.x || 0) * 2.7, z: (port.localPosition?.y || 0) * 1.8 }, skeleton);
     addCylinder(root, '连接端点', 0.07, 0.05, {
       x: (port.localPosition?.x || 0) * 2.7,
@@ -143,9 +145,9 @@ const createBoardModel = (panelType) => {
     root.add(icon);
   }
 
-  (material.gearMounts || []).forEach((mount) => {
+  gearMounts.forEach((mount) => {
     const local = getGearMountLocalPosition(mount.position);
-    const gearGroup = createGear(gear, mount.position === 'center' ? 0.26 : 0.19, 10);
+    const gearGroup = createGear(gear, 0.22, 12);
     gearGroup.position.set(local.x * 2.7, 0.28, local.y * 1.8);
     root.add(gearGroup);
     addCylinder(root, mount.axisType === 'fixedAxis' ? '固定轴' : '活动轴', 0.07, 0.12, {
@@ -161,7 +163,7 @@ const createBoardModel = (panelType) => {
   return root;
 };
 
-const createModel = (panelType) => {
+const createModel = (panelType, tile = null) => {
   const kind = getMechanismTemplateKind(panelType);
   const material = getCityChannelMaterial(panelType);
   if (
@@ -169,7 +171,7 @@ const createModel = (panelType) => {
     || kind === CITY_CHANNEL_MECHANISM_KINDS.TRANSMISSION_BOARD
     || kind === CITY_CHANNEL_MECHANISM_KINDS.ACTUATOR_BOARD
   ) {
-    return createBoardModel(panelType);
+    return createBoardModel(panelType, tile);
   }
   const root = new THREE.Group();
   const refs = { kind };
@@ -302,7 +304,7 @@ const CityChannelPressurePlateInspect3D = ({
     fill.position.set(-4, 2, -2);
     scene.add(fill);
 
-    const model = createModel(inspectMode.panelType);
+    const model = createModel(inspectMode.panelType, inspectMode.tile);
     model.scale.setScalar(1);
     model.position.y = -0.04;
     modelRef.current = model;
@@ -342,7 +344,7 @@ const CityChannelPressurePlateInspect3D = ({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [inspectMode?.active, inspectMode?.panelType]);
+  }, [inspectMode?.active, inspectMode?.panelType, inspectMode?.tile]);
 
   useEffect(() => {
     if (!modelRef.current || !inspectMode?.active) return;

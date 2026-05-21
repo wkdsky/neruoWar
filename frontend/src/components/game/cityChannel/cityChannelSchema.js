@@ -34,7 +34,8 @@ export const CITY_CHANNEL_TOOLS = {
   STAIR: 'stair',
   ENTRANCE: 'entrance',
   EXIT: 'exit',
-  SAFE_MARKER: 'safe_marker'
+  SAFE_MARKER: 'safe_marker',
+  PLACE_COMPONENT: 'placeComponent'
 };
 
 export const CITY_CHANNEL_TILE_TYPES = {

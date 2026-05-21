@@ -88,11 +88,6 @@ export const CITY_CHANNEL_MATERIAL_GROUPS = [
     id: 'power_board',
     label: '力源板材',
     categories: ['power_board']
-  },
-  {
-    id: 'actuator_board',
-    label: '齿轮承动预设',
-    categories: ['actuator_board']
   }
 ];
 
@@ -362,7 +357,7 @@ export const getCityChannelMaterial = (panelType) => (
 );
 
 export const getPaletteCityChannelMaterials = () => CITY_CHANNEL_MATERIAL_CATALOG.filter((material) => (
-  material.placeable !== false && !material.hiddenFromPalette
+  material.placeable !== false && !material.hiddenFromPalette && material.category !== 'actuator_board'
 ));
 
 export const isMechanicalMaterial = (materialOrCategory) => {

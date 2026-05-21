@@ -193,10 +193,11 @@ export class CityChannelTextureCache {
     return key;
   }
 
-  getWallTexture(panelType, edge = 'north', wallViewMode = 'semi', cameraYaw = 0, rotation = 0) {
+  getWallTexture(panelType, edge = 'north', wallViewMode = 'semi', cameraYaw = 0, rotation = 0, miter = null) {
     const textureYaw = getTextureYawBucket(cameraYaw);
-    const key = `cc:wall:${panelType}:${edge}:r${rotation}:${wallViewMode}:y${textureYaw}`;
-    if (!this.generatedKeys.has(key)) this.createWallTexture(key, panelType, edge, wallViewMode, textureYaw, rotation);
+    const miterKey = miter ? `:m${Number(miter.start) || 0}_${Number(miter.end) || 0}` : ':m0_0';
+    const key = `cc:wall:${panelType}:${edge}:r${rotation}:${wallViewMode}:y${textureYaw}${miterKey}`;
+    if (!this.generatedKeys.has(key)) this.createWallTexture(key, panelType, edge, wallViewMode, textureYaw, rotation, miter);
     return key;
   }
 
@@ -232,10 +233,10 @@ export class CityChannelTextureCache {
     this.generatedKeys.add(key);
   }
 
-  createWallTexture(key, panelType, edge, wallViewMode, cameraYaw, rotation = 0) {
+  createWallTexture(key, panelType, edge, wallViewMode, cameraYaw, rotation = 0, miter = null) {
     const material = getCityChannelMaterial(panelType);
     const colors = colorByPanelType[material.id] || colorByPanelType.basic_plate;
-    const geometry = createEdgeWallGeometry(cameraYaw, edge);
+    const geometry = createEdgeWallGeometry(cameraYaw, edge, miter);
     const isSemi = wallViewMode === 'semi';
     if (isSemi) {
       this.createSemiWallTexture(key, panelType, geometry, colors, rotation);
@@ -249,20 +250,19 @@ export class CityChannelTextureCache {
     const baseAlpha = panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL ? 0.42 : 1;
     const wallAlpha = isPerspective ? 0.34 : baseAlpha;
     const outlineAlpha = isSolid ? 0 : (isPerspective ? 0.16 : 0.28);
+    const hasStartMiter = !!geometry.miter?.start;
+    const hasEndMiter = !!geometry.miter?.end;
 
-    drawPolygon(graphics, geometry.wall, colors.top, wallAlpha, colors.edge, 0.76);
-    drawPolygon(graphics, geometry.wallSideStart, colors.side, wallAlpha * 0.86, 0xe2e8f0, 0.32);
-    drawPolygon(graphics, geometry.wallSideEnd, colors.side, wallAlpha * 0.74, 0xe2e8f0, 0.28);
-    this.drawStoneSurface(graphics, geometry.wall, material.id);
-    if (isSolid) {
-      drawPolygon(graphics, geometry.wallCap, 0x334155, baseAlpha, 0xe2e8f0, 0.5);
-    } else if (outlineAlpha > 0) {
-      drawPolygon(graphics, geometry.wallCap, 0xe0f2fe, outlineAlpha, colors.edge, 0.68);
-    }
-    this.drawWallTransmissionSkeleton(graphics, material, geometry.wall, rotation);
-    this.drawWallGearMounts(graphics, material, geometry.wall, rotation);
+    drawPolygon(graphics, geometry.wallBack || geometry.wall, colors.side, wallAlpha * 0.96, colors.edge, 0.42);
+    if (!hasStartMiter) drawPolygon(graphics, geometry.wallSideStart, colors.side, wallAlpha * 0.9, 0xe2e8f0, 0.32);
+    if (!hasEndMiter) drawPolygon(graphics, geometry.wallSideEnd, colors.side, wallAlpha * 0.78, 0xe2e8f0, 0.28);
+    drawPolygon(graphics, geometry.wallCap, 0x334155, isSolid ? baseAlpha : Math.max(outlineAlpha, 0.22), 0xe2e8f0, 0.5);
+    drawPolygon(graphics, geometry.wallFront || geometry.wall, colors.top, wallAlpha, colors.edge, 0.76);
+    this.drawStoneSurface(graphics, geometry.wallFront || geometry.wall, material.id);
+    this.drawWallTransmissionSkeleton(graphics, material, geometry.wallFront || geometry.wall, rotation);
+    this.drawWallGearMounts(graphics, material, geometry.wallFront || geometry.wall, rotation);
     if (material.gearIcon) {
-      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, rotation, geometry.wall);
+      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, rotation, geometry.wallFront || geometry.wall);
       this.drawGearIcon(graphics, center.x + 20, center.y - 8, 13, 10, 0xfacc15);
     }
 
@@ -278,20 +278,24 @@ export class CityChannelTextureCache {
     const ctx = canvas.getContext('2d');
     ctx.scale(TILE_TEXTURE_SUPERSAMPLE, TILE_TEXTURE_SUPERSAMPLE);
     const baseAlpha = panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL ? 0.42 : 1;
+    const hasStartMiter = !!geometry.miter?.start;
+    const hasEndMiter = !!geometry.miter?.end;
 
-    drawCanvasGradientPolygon(ctx, geometry.wall, colors.top, baseAlpha, geometry);
-    drawCanvasGradientPolygon(ctx, geometry.wallSideStart, colors.side, baseAlpha * 0.86, geometry);
-    drawCanvasGradientPolygon(ctx, geometry.wallSideEnd, colors.side, baseAlpha * 0.74, geometry);
-    drawCanvasStoneSurface(ctx, geometry.wall, panelType);
+    drawCanvasGradientPolygon(ctx, geometry.wallBack || geometry.wall, colors.side, baseAlpha * 0.94, geometry);
+    if (!hasStartMiter) drawCanvasGradientPolygon(ctx, geometry.wallSideStart, colors.side, baseAlpha * 0.86, geometry);
+    if (!hasEndMiter) drawCanvasGradientPolygon(ctx, geometry.wallSideEnd, colors.side, baseAlpha * 0.74, geometry);
+    drawCanvasGradientPolygon(ctx, geometry.wallFront || geometry.wall, colors.top, baseAlpha, geometry);
+    drawCanvasStoneSurface(ctx, geometry.wallFront || geometry.wall, panelType);
 
     const outline = colorToRgba(colors.edge, 0.72);
     const sideOutline = colorToRgba(0xe2e8f0, 0.46);
     [
-      geometry.wall,
-      geometry.wallSideStart,
-      geometry.wallSideEnd,
+      geometry.wallFront || geometry.wall,
+      hasStartMiter ? null : geometry.wallSideStart,
+      hasEndMiter ? null : geometry.wallSideEnd,
       geometry.wallCap
     ].forEach((points, index) => {
+      if (!points) return;
       drawCanvasPolygon(ctx, points, {
         fill: index === 3 ? colorToRgba(0xe0f2fe, 0.18) : null,
         stroke: index === 0 ? outline : sideOutline,
@@ -306,9 +310,9 @@ export class CityChannelTextureCache {
       ctx.strokeStyle = colorToRgba(0xfacc15, 0.92);
       ctx.lineWidth = 7;
       ctx.lineCap = 'round';
-      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, rotation, geometry.wall);
+      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, rotation, geometry.wallFront || geometry.wall);
       ports.forEach((port) => {
-        const point = this.mapBoardPointOnWall(port.localPosition, rotation, geometry.wall);
+        const point = this.mapBoardPointOnWall(port.localPosition, rotation, geometry.wallFront || geometry.wall);
         ctx.beginPath();
         ctx.moveTo(center.x, center.y);
         ctx.lineTo(point.x, point.y);
@@ -318,7 +322,7 @@ export class CityChannelTextureCache {
       ctx.fillStyle = colorToRgba(0xf8fafc, 0.96);
       ctx.lineWidth = 2;
       ports.forEach((port) => {
-        const point = this.mapBoardPointOnWall(port.localPosition, rotation, geometry.wall);
+        const point = this.mapBoardPointOnWall(port.localPosition, rotation, geometry.wallFront || geometry.wall);
         ctx.beginPath();
         ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
         ctx.fill();

@@ -1,12 +1,9 @@
 import React, { useState } from 'react';
 import {
-  Box,
   ChevronDown,
   ChevronRight,
-  CircleDot,
   Gauge,
-  Hexagon,
-  PanelTop,
+  Cog,
   Square,
   Workflow
 } from 'lucide-react';
@@ -26,31 +23,52 @@ const iconByPanelType = {
   transmission_l_plate: Workflow,
   transmission_endpoint_plate: Workflow,
   gear_pressure_plate: Gauge,
-  actuator_center_gear_plate: CircleDot,
-  actuator_single_corner_gear_plate: Hexagon,
-  actuator_same_side_gear_plate: Box,
-  actuator_opposite_corner_gear_plate: Box,
-  actuator_triangle_gear_plate: PanelTop,
-  actuator_four_corner_gear_plate: Hexagon
 };
+
+export const CITY_CHANNEL_COMPONENT_CATALOG = [
+  {
+    id: 'gear',
+    name: '齿轮',
+    description: '安装到板材正面或背面的五个轴点上。'
+  }
+];
 
 const CityChannelMaterialPalette = ({
   activeTileType,
-  onMaterialSelect
+  activeComponentType,
+  onMaterialSelect,
+  onComponentSelect
 }) => {
+  const [activeTab, setActiveTab] = useState('materials');
   const [collapsedGroups, setCollapsedGroups] = useState({});
 
   return (
-    <aside className="city-channel-material-palette" aria-label="板材库">
+    <aside className="city-channel-material-palette" aria-label="工坊库">
       <header className="city-channel-material-palette__header">
         <div>
-          <strong>板材库</strong>
-          <span>选择后进入放置状态</span>
+          <strong>{activeTab === 'components' ? '组件库' : '板材库'}</strong>
+          <span>{activeTab === 'components' ? '选择后安装到板材' : '选择后进入放置状态'}</span>
         </div>
       </header>
+      <div className="city-channel-material-palette__tabs" role="tablist" aria-label="工坊库类别">
+        <button
+          type="button"
+          className={activeTab === 'materials' ? 'is-active' : ''}
+          onClick={() => setActiveTab('materials')}
+        >
+          板材库
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'components' ? 'is-active' : ''}
+          onClick={() => setActiveTab('components')}
+        >
+          组件库
+        </button>
+      </div>
 
       <div className="city-channel-material-palette__body">
-        {CITY_CHANNEL_MATERIAL_GROUPS.map((group) => {
+        {activeTab === 'materials' ? CITY_CHANNEL_MATERIAL_GROUPS.map((group) => {
           const materials = getPaletteCityChannelMaterials(CITY_CHANNEL_MATERIAL_CATALOG).filter((material) => (
             group.categories.includes(material.category)
           ));
@@ -101,7 +119,33 @@ const CityChannelMaterialPalette = ({
               ) : null}
             </section>
           );
-        })}
+        }) : (
+          <section className="city-channel-material-group">
+            <div className="city-channel-material-group__items">
+              {CITY_CHANNEL_COMPONENT_CATALOG.map((component) => (
+                <button
+                  key={component.id}
+                  type="button"
+                  className={[
+                    'city-channel-material-item',
+                    'is-component',
+                    activeComponentType === component.id ? 'is-active' : ''
+                  ].filter(Boolean).join(' ')}
+                  onClick={() => onComponentSelect?.(component.id)}
+                  title={component.description}
+                >
+                  <span className={`city-channel-material-item__preview is-component-${component.id}`}>
+                    <Cog size={16} />
+                  </span>
+                  <span className="city-channel-material-item__text">
+                    <strong>{component.name}</strong>
+                    <em>{component.description}</em>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     </aside>
   );

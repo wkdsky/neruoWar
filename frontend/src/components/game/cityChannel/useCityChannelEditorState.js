@@ -159,6 +159,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
   const [activeLayer, setActiveLayer] = useState(0);
   const [activeTool, setActiveTool] = useState(CITY_CHANNEL_TOOLS.BROWSE);
   const [activeTileType, setActiveTileType] = useState(null);
+  const [activeComponentType, setActiveComponentType] = useState(null);
   const [activeRotation, setActiveRotation] = useState(0);
   const [selectedCell, setSelectedCell] = useState(null);
   const [validationResult, setValidationResult] = useState(createInitialValidation);
@@ -289,6 +290,30 @@ const useCityChannelEditorState = (initialMapData = null) => {
       let nextMechanicalLinks = current.mechanicalLinks || [];
 
       cleanOperations.forEach((operation) => {
+        if (operation.kind === 'gearMount') {
+          if (!operation.hostKey || !operation.mount) return;
+          const targetMap = operation.hostKind === 'wall' ? nextWalls : nextTiles;
+          const existing = targetMap[operation.hostKey];
+          if (!existing) return;
+          if (operation.action === 'erase') {
+            targetMap[operation.hostKey] = {
+              ...existing,
+              gearMounts: (existing.gearMounts || []).filter((mount) => mount.id !== operation.mount.id)
+            };
+            return;
+          }
+          const duplicate = (existing.gearMounts || []).some((mount) => (
+            mount.position === operation.mount.position
+            && (mount.surface || 'front') === (operation.mount.surface || 'front')
+          ));
+          if (!duplicate) {
+            targetMap[operation.hostKey] = {
+              ...existing,
+              gearMounts: [...(existing.gearMounts || []), operation.mount]
+            };
+          }
+          return;
+        }
         if (operation.kind === 'mechanicalLink') {
           if (operation.action === 'erase' && operation.id) {
             nextMechanicalLinks = nextMechanicalLinks.filter((link) => link.id !== operation.id);
@@ -590,6 +615,52 @@ const useCityChannelEditorState = (initialMapData = null) => {
     }, '已颠倒选中板材。');
   }, [applyMapMutation]);
 
+  const updatePlacement = useCallback((placement, updater, message = '板材配置已更新。') => {
+    if (!placement || typeof updater !== 'function') return;
+    applyMapMutation((current) => {
+      if (placement.edge) {
+        const key = createWallKey(placement.x, placement.y, placement.z, placement.edge);
+        const existingWall = current.walls?.[key];
+        if (!existingWall) return current;
+        const nextWall = updater(existingWall);
+        if (!nextWall) return current;
+        return {
+          ...current,
+          walls: {
+            ...(current.walls || {}),
+            [key]: {
+              ...existingWall,
+              ...nextWall,
+              x: existingWall.x,
+              y: existingWall.y,
+              z: existingWall.z,
+              edge: existingWall.edge
+            }
+          }
+        };
+      }
+
+      const key = createCellKey(placement.x, placement.y, placement.z);
+      const existingTile = current.tiles?.[key];
+      if (!existingTile) return current;
+      const nextTile = updater(existingTile);
+      if (!nextTile) return current;
+      return {
+        ...current,
+        tiles: {
+          ...(current.tiles || {}),
+          [key]: {
+            ...existingTile,
+            ...nextTile,
+            x: existingTile.x,
+            y: existingTile.y,
+            z: existingTile.z
+          }
+        }
+      };
+    }, message);
+  }, [applyMapMutation]);
+
   const setEntrance = useCallback((cell) => {
     if (!cell) return;
     movePortalTile(cell, CITY_CHANNEL_TILE_TYPES.ENTRANCE);
@@ -821,9 +892,18 @@ const useCityChannelEditorState = (initialMapData = null) => {
   const selectMaterial = useCallback((panelType) => {
     const material = getCityChannelMaterial(panelType);
     setActiveTileType(material.id);
+    setActiveComponentType(null);
     setActiveTool(CITY_CHANNEL_TOOLS.PLACE_TILE);
     setSelectedCell(null);
     setStatusMessage(`当前板材：${material.name}。`);
+  }, []);
+
+  const selectComponent = useCallback((componentType) => {
+    setActiveComponentType(componentType);
+    setActiveTileType(null);
+    setActiveTool(CITY_CHANNEL_TOOLS.PLACE_COMPONENT);
+    setSelectedCell(null);
+    setStatusMessage(componentType === 'gear' ? '当前组件：齿轮。' : `当前组件：${componentType}。`);
   }, []);
 
   const selectOperationTool = useCallback((tool) => {
@@ -834,6 +914,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
       || tool === CITY_CHANNEL_TOOLS.ERASE
     ) {
       setActiveTileType(null);
+      setActiveComponentType(null);
     }
     if (tool === CITY_CHANNEL_TOOLS.BROWSE) {
       setStatusMessage('浏览模式：拖拽查看通道，滚轮缩放。');
@@ -871,6 +952,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
     activeLayer,
     activeTool,
     activeTileType,
+    activeComponentType,
     activeRotation,
     selectedCell,
     validationResult,
@@ -881,6 +963,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
     routeKeySet,
     setActiveTool,
     setActiveTileType,
+    setActiveComponentType,
     setActiveRotation,
     setSelectedCell,
     placeTile,
@@ -893,6 +976,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
     rotatePlacements,
     rotatePlacementsReverse,
     flipPlacements,
+    updatePlacement,
     setEntrance,
     setExit,
     rotateTileAtCell,
@@ -907,6 +991,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
     handleCellAction,
     rotateActiveItem,
     selectMaterial,
+    selectComponent,
     selectOperationTool,
     undo,
     redo
