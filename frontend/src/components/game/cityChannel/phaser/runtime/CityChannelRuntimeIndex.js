@@ -1,6 +1,7 @@
 import {
   createCellKey,
-  createWallKey
+  createWallKey,
+  wallEdgeToRotation
 } from '../../cityChannelSchema';
 
 export class CityChannelRuntimeIndex {
@@ -27,7 +28,7 @@ export class CityChannelRuntimeIndex {
         z: tile.z,
         panelType: tile.panelType,
         rotation: tile.rotation || 0,
-        flipped: !!tile.flipped,
+        flipped: false,
         tile
       };
       this.placementIndex.set(placementId, info);
@@ -48,8 +49,8 @@ export class CityChannelRuntimeIndex {
         z: wall.z,
         edge: wall.edge,
         panelType: wall.panelType,
-        rotation: wall.rotation || 0,
-        flipped: !!wall.flipped,
+        rotation: wallEdgeToRotation(wall.edge),
+        flipped: false,
         wall
       };
       this.placementIndex.set(placementId, info);

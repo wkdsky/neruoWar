@@ -8,7 +8,6 @@ import {
   MousePointer2,
   Move,
   Redo2,
-  Replace,
   RotateCw,
   Save,
   Settings,
@@ -27,7 +26,8 @@ import {
   createWallKey,
   isValidCell,
   normalizeTemplateMeta,
-  serializeCityChannelMap
+  serializeCityChannelMap,
+  wallEdgeToRotation
 } from './cityChannelSchema';
 import useCityChannelEditorState from './useCityChannelEditorState';
 import { getCityChannelMaterial } from './cityChannelCatalog';
@@ -529,7 +529,6 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     movePlacements,
     rotatePlacements,
     rotatePlacementsReverse,
-    flipPlacements,
     selectOperationTool,
     undo,
     redo
@@ -808,11 +807,6 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     commitPlacementsMove(origins, targetCell);
   }, [carryState, commitPlacementsMove]);
 
-  const flipSelectedWalls = useCallback(() => {
-    if (selectedWalls.length === 0) return;
-    flipPlacements(selectedWalls);
-  }, [flipPlacements, selectedWalls]);
-
   keyboardActionsRef.current = {
     deleteSelection: () => {
       if (selectedPlacements.length === 0) return;
@@ -827,11 +821,6 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       if (selectedPlacements.length === 0) return;
       rotatePlacementsReverse(selectedPlacements);
     },
-    flipSelection: () => {
-      if (selectedPlacements.length === 0) return;
-      flipPlacements(selectedPlacements);
-    },
-    flipWall: selectedWalls.length > 0 ? flipSelectedWalls : null,
     startCarry,
     commitCarry
   };
@@ -861,15 +850,9 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       }
       if (event.code === 'Space') {
         event.preventDefault();
-        if (selectedPlacements.length > 0) {
-          keyboardActionsRef.current.flipSelection();
-        } else if (keyboardActionsRef.current.flipWall) {
-          keyboardActionsRef.current.flipWall();
-        } else {
-          setPanelPose((current) => (current === 'floor' ? 'wall' : 'floor'));
-          setSelectionModeOrigin(null);
-          setActiveTool(CITY_CHANNEL_TOOLS.FLOOR);
-        }
+        setPanelPose((current) => (current === 'floor' ? 'wall' : 'floor'));
+        setSelectionModeOrigin(null);
+        setActiveTool(CITY_CHANNEL_TOOLS.FLOOR);
         return;
       }
       if (key === 'm') {
@@ -2694,7 +2677,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
                     ].filter(Boolean).join(' ')}
                     style={{
                       ...commonStyle,
-                      '--tile-rotation': `${wall.rotation || 0}deg`
+                      '--tile-rotation': `${wallEdgeToRotation(wall.edge)}deg`
                     }}
                     aria-label={isGhost ? undefined : `墙板 ${item.cell.x},${item.cell.y} ${wall.edge}`}
                     aria-hidden={isGhost ? 'true' : undefined}
@@ -2891,11 +2874,6 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
             <RotateCw size={14} />
             <span>旋转</span>
             <em className="city-channel-shortcut-hint">滚轮</em>
-          </button>
-          <button type="button" className="city-channel-selection-action" onClick={() => flipPlacements(selectedPlacements)} title="颠倒 (Space)">
-            <Replace size={14} />
-            <span>颠倒</span>
-            <em className="city-channel-shortcut-hint">Space</em>
           </button>
           <button type="button" className="city-channel-selection-action is-danger" onClick={() => { deletePlacements(selectedPlacements); clearSelection(); }} title="删除 (Del)">
             <Trash2 size={14} />

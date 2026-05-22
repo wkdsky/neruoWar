@@ -159,6 +159,26 @@ export const decodeUserIdFromToken = (token = '') => {
     }
 };
 
+export const decodeJwtPayload = (token = '') => {
+    if (!token || typeof token !== 'string') return null;
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    try {
+        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const normalized = `${base64}${'='.repeat((4 - (base64.length % 4)) % 4)}`;
+        return JSON.parse(atob(normalized));
+    } catch (_error) {
+        return null;
+    }
+};
+
+export const isJwtTokenExpired = (token = '', skewSeconds = 30) => {
+    const payload = decodeJwtPayload(token);
+    const exp = Number(payload?.exp);
+    if (!Number.isFinite(exp)) return false;
+    return exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+};
+
 export const isValidObjectId = (value) => /^[0-9a-fA-F]{24}$/.test(normalizeObjectId(value));
 export const createHomeNavigationPath = () => ([
     { type: 'home', label: '首页' }

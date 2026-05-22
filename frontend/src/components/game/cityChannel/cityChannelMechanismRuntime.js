@@ -2,7 +2,9 @@ import {
   CITY_CHANNEL_TILE_TYPES,
   createCellKey,
   createWallKey,
-  parseCellKey
+  normalizeRotation,
+  parseCellKey,
+  wallEdgeToRotation
 } from './cityChannelSchema';
 
 export const CITY_CHANNEL_TRIGGER_MECHANISM_TYPES = new Set([
@@ -147,11 +149,14 @@ const rotateLocalPosition = (position = {}, rotation = 0, flipped = false) => {
 
 export const getWorldTransmissionPorts = (tile = {}, componentKey = '') => {
   const ports = Array.isArray(tile.transmissionSkeleton?.ports) ? tile.transmissionSkeleton.ports : [];
+  const baseRotation = tile.edge ? wallEdgeToRotation(tile.edge) : 0;
+  const localRotation = normalizeRotation(tile.transmissionRotation ?? tile.rotation ?? 0);
+  const directionRotation = normalizeRotation(baseRotation + localRotation);
   return ports.map((port) => ({
     ...port,
     componentKey: componentKey || createCellKey(tile.x, tile.y, tile.z),
-    worldDirection: rotateDirection(port.direction, tile.rotation || 0, !!tile.flipped),
-    worldLocalPosition: rotateLocalPosition(port.localPosition, tile.rotation || 0, !!tile.flipped)
+    worldDirection: rotateDirection(port.direction, directionRotation, false),
+    worldLocalPosition: rotateLocalPosition(port.localPosition, localRotation, false)
   }));
 };
 
@@ -190,6 +195,62 @@ const addEdge = (graph, a, b, meta) => {
   graph.get(b).push({ key: a, ...meta, from: meta.to, to: meta.from });
 };
 
+const pushUnique = (list, value) => {
+  if (value && !list.includes(value)) list.push(value);
+};
+
+const getWallAdjacentFloorKeys = (wall = {}) => {
+  if (!wall?.edge) return [];
+  const offset = directionVector[wall.edge];
+  const keys = [createCellKey(wall.x, wall.y, wall.z)];
+  if (offset) keys.push(createCellKey(wall.x + offset.x, wall.y + offset.y, wall.z));
+  return keys;
+};
+
+const getCandidateComponentKeysForPort = (component = {}, port = {}, connectableKeys = new Set()) => {
+  const candidateKeys = [];
+  const addIfConnectable = (key) => {
+    if (key && connectableKeys.has(key)) pushUnique(candidateKeys, key);
+  };
+
+  const targetKey = getNeighborKeyForPort(component, port);
+  addIfConnectable(targetKey);
+
+  if (component.edge) {
+    addIfConnectable(createWallKey(component.x, component.y, component.z - 1, component.edge));
+    addIfConnectable(createWallKey(component.x, component.y, component.z + 1, component.edge));
+    getWallAdjacentFloorKeys(component).forEach(addIfConnectable);
+    return candidateKeys;
+  }
+
+  if (port.worldDirection) {
+    const ownWallKey = createWallKey(component.x, component.y, component.z, port.worldDirection);
+    const neighbor = directionVector[port.worldDirection];
+    const neighborWallKey = neighbor
+      ? createWallKey(component.x + neighbor.x, component.y + neighbor.y, component.z, oppositeDirection[port.worldDirection])
+      : '';
+    [ownWallKey, neighborWallKey].forEach(addIfConnectable);
+  }
+
+  return candidateKeys;
+};
+
+const areComponentsPhysicallyAdjacentForTransmission = (from = {}, to = {}) => {
+  if (!from || !to) return false;
+  if (from.edge && to.edge) {
+    if (from.edge === to.edge && from.x === to.x && from.y === to.y && Math.abs((from.z || 0) - (to.z || 0)) === 1) {
+      return true;
+    }
+    return false;
+  }
+
+  const wall = from.edge ? from : to.edge ? to : null;
+  const floor = from.edge ? to : to.edge ? from : null;
+  if (!wall || !floor) return false;
+  if ((wall.z || 0) !== (floor.z || 0)) return false;
+  return getWallAdjacentFloorKeys(wall).includes(createCellKey(floor.x, floor.y, floor.z));
+};
+
 export const buildMechanicalAssemblies = (mapData = {}) => {
   const tiles = mapData.tiles || {};
   const walls = mapData.walls || {};
@@ -213,28 +274,20 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
     const tile = components[key];
     const ports = portByTileKey.get(key) || [];
     ports.forEach((port) => {
-      const targetKey = getNeighborKeyForPort(tile, port);
-      const candidateKeys = [];
-      if (targetKey && connectableKeys.has(targetKey)) candidateKeys.push(targetKey);
-      if (!tile.edge && port.worldDirection) {
-        const ownWallKey = createWallKey(tile.x, tile.y, tile.z, port.worldDirection);
-        const neighbor = directionVector[port.worldDirection];
-        const neighborWallKey = neighbor
-          ? createWallKey(tile.x + neighbor.x, tile.y + neighbor.y, tile.z, oppositeDirection[port.worldDirection])
-          : '';
-        [ownWallKey, neighborWallKey].forEach((wallKey) => {
-          if (wallKey && connectableKeys.has(wallKey)) candidateKeys.push(wallKey);
-        });
-      }
+      const candidateKeys = getCandidateComponentKeysForPort(tile, port, connectableKeys);
       candidateKeys.forEach((candidateKey) => {
         if (candidateKey === key) return;
         const targetPorts = portByTileKey.get(candidateKey) || [];
         const targetPort = targetPorts.find((item) => arePortsAligned(port, item));
-        if (!targetPort) return;
+        const looseSurfaceConnection = !targetPort
+          && targetPorts.length > 0
+          && areComponentsPhysicallyAdjacentForTransmission(tile, components[candidateKey]);
+        if (!targetPort && !looseSurfaceConnection) return;
         if (key < candidateKey) {
           addEdge(graph, key, candidateKey, {
             from: { componentKey: key, portId: port.id },
-            to: { componentKey: candidateKey, portId: targetPort.id }
+            to: { componentKey: candidateKey, portId: targetPort?.id || targetPorts[0]?.id || 'surface' },
+            looseSurfaceConnection
           });
         }
       });
@@ -317,8 +370,8 @@ export const findFixedAxisForTrigger = (mapData = {}, cell) => {
   if (sourceTile?.boardRole === 'power_source' && !fixedAxis) {
     return {
       ok: false,
-      reason: 'no_connected_fixed_axis',
-      message: '齿轮压力板没有连接到带固定轴的机械整体。',
+      reason: 'no_connected_actuator',
+      message: '齿轮压力板没有连接到可驱动的承动组件。',
       assemblyGraph
     };
   }
@@ -328,8 +381,8 @@ export const findFixedAxisForTrigger = (mapData = {}, cell) => {
   if (!fallbackFixedAxis) {
     return {
       ok: false,
-      reason: 'no_fixed_axis',
-      message: '当前传动网络中没有可驱动的固定轴。',
+      reason: 'no_actuator',
+      message: '当前传动网络中没有可驱动的承动组件。',
       assemblyGraph
     };
   }

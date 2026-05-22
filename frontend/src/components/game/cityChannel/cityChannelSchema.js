@@ -378,7 +378,8 @@ export const createTile = ({
   z,
   panelType = CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
   marker = null,
-  rotation = 0
+  rotation = 0,
+  transmissionRotation = null
 } = {}) => {
   const normalizedPanelType = normalizeCityChannelPanelType(panelType);
   const definition = getTileDefinition(normalizedPanelType);
@@ -392,6 +393,7 @@ export const createTile = ({
     boardRole: catalogItem.boardRole || 'basic',
     category: definition.category || catalogItem.category || 'structure',
     rotation: normalizeRotation(rotation),
+    transmissionRotation: normalizeRotation(transmissionRotation === null || transmissionRotation === undefined ? rotation : transmissionRotation),
     walkable: !!definition.walkable,
     solid: !!definition.solid,
     transparent: !!definition.transparent,
@@ -417,6 +419,7 @@ export const createWall = ({
   edge = CITY_CHANNEL_WALL_EDGES.NORTH,
   panelType = CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
   rotation = null,
+  transmissionRotation = 0,
   marker = null,
   flipped = false
 } = {}) => {
@@ -432,9 +435,10 @@ export const createWall = ({
     panelType: safePanelType,
     boardRole: catalogItem.boardRole || 'basic',
     category: definition.category || catalogItem.category || 'structure',
-    rotation: rotation === null || rotation === undefined ? wallEdgeToRotation(normalizedEdge) : normalizeRotation(rotation),
+    rotation: wallEdgeToRotation(normalizedEdge),
+    transmissionRotation: normalizeRotation(transmissionRotation),
     marker: marker === 'highlight' ? 'highlight' : null,
-    flipped: !!flipped,
+    flipped: false,
     walkable: false,
     solid: true,
     transparent: !!definition.transparent,
@@ -544,6 +548,7 @@ export const normalizeTile = (tile = {}, bounds = null) => {
     boardRole: catalogItem.boardRole || tile.boardRole || 'basic',
     category: definition.category || catalogItem.category || tile.category || 'structure',
     rotation: normalizeRotation(tile.rotation),
+    transmissionRotation: normalizeRotation(tile.transmissionRotation !== undefined ? tile.transmissionRotation : tile.rotation),
     walkable: !!definition.walkable,
     solid: !!definition.solid,
     transparent: !!definition.transparent,
@@ -551,7 +556,7 @@ export const normalizeTile = (tile = {}, bounds = null) => {
     marker: ['safe', 'highlight', 'entrance', 'exit'].includes(tile.marker)
       ? tile.marker
       : (catalogItem.markerType || null),
-    flipped: !!tile.flipped,
+    flipped: false,
     hiddenModule: tile.hiddenModule && typeof tile.hiddenModule === 'object'
       ? cloneHiddenModule(tile.hiddenModule)
       : cloneHiddenModule(catalogItem.hiddenModule),
@@ -588,6 +593,7 @@ export const normalizeWall = (wall = {}, bounds = null) => {
   const z = clampLayer(wall.z, bounds?.layers);
   if (!isValidCell(x, y, z, bounds)) return null;
   const edge = normalizeWallEdge(wall.edge || rotationToWallEdge(wall.rotation));
+  const edgeRotation = wallEdgeToRotation(edge);
   const panelType = normalizeCityChannelPanelType(wall.panelType);
   const definition = getTileDefinition(panelType);
   const catalogItem = getCityChannelMaterial(panelType);
@@ -599,9 +605,14 @@ export const normalizeWall = (wall = {}, bounds = null) => {
     panelType,
     boardRole: catalogItem.boardRole || wall.boardRole || 'basic',
     category: definition.category || catalogItem.category || 'structure',
-    rotation: normalizeRotation(wall.rotation !== undefined ? wall.rotation : wallEdgeToRotation(edge)),
+    rotation: edgeRotation,
+    transmissionRotation: normalizeRotation(
+      wall.transmissionRotation !== undefined
+        ? wall.transmissionRotation
+        : normalizeRotation((wall.rotation || edgeRotation) - edgeRotation)
+    ),
     marker: wall.marker === 'highlight' ? 'highlight' : null,
-    flipped: !!wall.flipped,
+    flipped: false,
     walkable: false,
     solid: true,
     transparent: !!definition.transparent,

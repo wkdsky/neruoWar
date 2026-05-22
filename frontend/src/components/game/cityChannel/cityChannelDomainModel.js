@@ -3,7 +3,8 @@ import {
   createCellKey,
   createWallKey,
   getPortalPassAxis,
-  normalizeCityChannelMap
+  normalizeCityChannelMap,
+  wallEdgeToRotation
 } from './cityChannelSchema';
 import { getCityChannelMaterial, isMechanicalMaterial } from './cityChannelCatalog';
 
@@ -297,7 +298,7 @@ const buildWallPlacement = (wall, mapData) => {
     category: wall.category || material.category,
     cell,
     edge: wall.edge,
-    rotation: wall.rotation || 0,
+    rotation: wallEdgeToRotation(wall.edge),
     anchor,
     occupancy: {
       cells: [],

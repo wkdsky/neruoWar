@@ -69,6 +69,11 @@ const upsertTile = (mapData, cell, tilePatch = {}) => {
       panelType,
       category: definition.category || catalogItem.category || 'structure',
       rotation: normalizeRotation(tilePatch.rotation !== undefined ? tilePatch.rotation : existing.rotation),
+      transmissionRotation: normalizeRotation(
+        tilePatch.transmissionRotation !== undefined
+          ? tilePatch.transmissionRotation
+          : (existing.transmissionRotation ?? tilePatch.rotation ?? existing.rotation)
+      ),
       walkable: !!definition.walkable,
       solid: !!definition.solid,
       transparent: !!definition.transparent,
@@ -124,8 +129,9 @@ const resetPortalTiles = (tiles = {}, marker) => (
       x: tile.x,
       y: tile.y,
       z: tile.z,
-        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
-      rotation: tile.rotation
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+      rotation: tile.rotation,
+      transmissionRotation: tile.transmissionRotation ?? tile.rotation
     });
     return nextTiles;
   }, {})
@@ -359,7 +365,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
             z: cell.z,
             edge,
             panelType: operation.panelType,
-            rotation: operation.rotation
+            transmissionRotation: operation.transmissionRotation
           });
           return;
         }
@@ -458,6 +464,8 @@ const useCityChannelEditorState = (initialMapData = null) => {
       let nextExits = current.exits || [];
       const tileMoves = [];
       const wallMoves = [];
+      const tileToWallMoves = [];
+      const wallToTileMoves = [];
 
       moves.forEach(({ from, to }) => {
         if (!from || !to) return;
@@ -465,6 +473,10 @@ const useCityChannelEditorState = (initialMapData = null) => {
           const fromKey = createWallKey(from.x, from.y, from.z, from.edge);
           const existingWall = nextWalls[fromKey];
           if (!existingWall) return;
+          if (!to.edge) {
+            wallToTileMoves.push({ from, to, wall: existingWall });
+            return;
+          }
           wallMoves.push({ from, to, wall: existingWall });
           return;
         }
@@ -472,13 +484,23 @@ const useCityChannelEditorState = (initialMapData = null) => {
         const fromKey = createCellKey(from.x, from.y, from.z);
         const existingTile = nextTiles[fromKey];
         if (!existingTile) return;
+        if (to.edge) {
+          tileToWallMoves.push({ from, to, tile: existingTile });
+          return;
+        }
         tileMoves.push({ from, to, tile: existingTile });
       });
 
       wallMoves.forEach(({ from }) => {
         delete nextWalls[createWallKey(from.x, from.y, from.z, from.edge)];
       });
+      wallToTileMoves.forEach(({ from }) => {
+        delete nextWalls[createWallKey(from.x, from.y, from.z, from.edge)];
+      });
       tileMoves.forEach(({ from }) => {
+        delete nextTiles[createCellKey(from.x, from.y, from.z)];
+      });
+      tileToWallMoves.forEach(({ from }) => {
         delete nextTiles[createCellKey(from.x, from.y, from.z)];
       });
 
@@ -492,12 +514,51 @@ const useCityChannelEditorState = (initialMapData = null) => {
           edge
         });
       });
+      wallToTileMoves.forEach(({ from, to, wall }) => {
+        const tile = createTile({
+          x: to.x,
+          y: to.y,
+          z: to.z,
+          panelType: wall.panelType,
+          rotation: 0,
+          transmissionRotation: wall.transmissionRotation || 0
+        });
+        nextTiles[createCellKey(to.x, to.y, to.z)] = {
+          ...tile,
+          gearMounts: wall.gearMounts || [],
+          gearConfigs: wall.gearConfigs || tile.gearConfigs,
+          triggerConfig: wall.triggerConfig || tile.triggerConfig,
+          motionConfig: wall.motionConfig || tile.motionConfig
+        };
+        nextEntrances = movePointsAtCell(nextEntrances, from, to);
+        nextExits = movePointsAtCell(nextExits, from, to);
+      });
       tileMoves.forEach(({ from, to, tile }) => {
         nextTiles[createCellKey(to.x, to.y, to.z)] = {
           ...tile,
           x: to.x,
           y: to.y,
           z: to.z
+        };
+        nextEntrances = movePointsAtCell(nextEntrances, from, to);
+        nextExits = movePointsAtCell(nextExits, from, to);
+      });
+      tileToWallMoves.forEach(({ from, to, tile }) => {
+        const edge = normalizeWallEdge(to.edge);
+        const wall = createWall({
+          x: to.x,
+          y: to.y,
+          z: to.z,
+          edge,
+          panelType: tile.panelType,
+          transmissionRotation: tile.transmissionRotation ?? tile.rotation ?? 0
+        });
+        nextWalls[createWallKey(to.x, to.y, to.z, edge)] = {
+          ...wall,
+          gearMounts: tile.gearMounts || [],
+          gearConfigs: tile.gearConfigs || wall.gearConfigs,
+          triggerConfig: tile.triggerConfig || wall.triggerConfig,
+          motionConfig: tile.motionConfig || wall.motionConfig
         };
         nextEntrances = movePointsAtCell(nextEntrances, from, to);
         nextExits = movePointsAtCell(nextExits, from, to);
@@ -528,7 +589,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
           if (!existingWall) return;
           nextWalls[key] = {
             ...existingWall,
-            rotation: normalizeRotation((existingWall.rotation || 0) + 180)
+            transmissionRotation: normalizeRotation((existingWall.transmissionRotation || 0) + 90)
           };
           return;
         }
@@ -538,7 +599,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
         if (!existingTile) return;
         nextTiles[key] = {
           ...existingTile,
-          rotation: normalizeRotation((existingTile.rotation || 0) + 90)
+          transmissionRotation: normalizeRotation((existingTile.transmissionRotation ?? existingTile.rotation ?? 0) + 90)
         };
       });
 
@@ -547,7 +608,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
         tiles: nextTiles,
         walls: nextWalls
       };
-    }, '已旋转选中板材。');
+    }, '已旋转选中板材的传动骨骼。');
   }, [applyMapMutation]);
 
   const rotatePlacementsReverse = useCallback((placements = []) => {
@@ -564,7 +625,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
           if (!existingWall) return;
           nextWalls[key] = {
             ...existingWall,
-            rotation: normalizeRotation((existingWall.rotation || 0) - 180)
+            transmissionRotation: normalizeRotation((existingWall.transmissionRotation || 0) - 90)
           };
           return;
         }
@@ -574,7 +635,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
         if (!existingTile) return;
         nextTiles[key] = {
           ...existingTile,
-          rotation: normalizeRotation((existingTile.rotation || 0) - 90)
+          transmissionRotation: normalizeRotation((existingTile.transmissionRotation ?? existingTile.rotation ?? 0) - 90)
         };
       });
 
@@ -583,36 +644,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
         tiles: nextTiles,
         walls: nextWalls
       };
-    }, '已反向旋转选中板材。');
-  }, [applyMapMutation]);
-
-  const flipPlacements = useCallback((placements = []) => {
-    if (!Array.isArray(placements) || placements.length <= 0) return;
-    applyMapMutation((current) => {
-      const nextTiles = { ...(current.tiles || {}) };
-      const nextWalls = { ...(current.walls || {}) };
-
-      placements.forEach((placement) => {
-        if (!placement) return;
-        if (placement.edge) {
-          const key = createWallKey(placement.x, placement.y, placement.z, placement.edge);
-          const existing = nextWalls[key];
-          if (!existing) return;
-          nextWalls[key] = { ...existing, flipped: !existing.flipped };
-          return;
-        }
-        const key = createCellKey(placement.x, placement.y, placement.z);
-        const existing = nextTiles[key];
-        if (!existing) return;
-        nextTiles[key] = { ...existing, flipped: !existing.flipped };
-      });
-
-      return {
-        ...current,
-        tiles: nextTiles,
-        walls: nextWalls
-      };
-    }, '已颠倒选中板材。');
+    }, '已反向旋转选中板材的传动骨骼。');
   }, [applyMapMutation]);
 
   const updatePlacement = useCallback((placement, updater, message = '板材配置已更新。') => {
@@ -700,7 +732,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
             ...(current.walls || {}),
             [key]: {
               ...existingWall,
-              rotation: normalizeRotation((existingWall.rotation || 0) + 180)
+              transmissionRotation: normalizeRotation((existingWall.transmissionRotation || 0) + 90)
             }
           }
         };
@@ -714,11 +746,11 @@ const useCityChannelEditorState = (initialMapData = null) => {
           ...current.tiles,
           [key]: {
             ...existing,
-            rotation: normalizeRotation((existing.rotation || 0) + 90)
+            transmissionRotation: normalizeRotation((existing.transmissionRotation ?? existing.rotation ?? 0) + 90)
           }
         }
       };
-    }, '已旋转选中板材。');
+    }, '已旋转选中板材的传动骨骼。');
   }, [applyMapMutation]);
 
   const toggleTileHighlight = useCallback((cell) => {
@@ -975,7 +1007,6 @@ const useCityChannelEditorState = (initialMapData = null) => {
     movePlacements,
     rotatePlacements,
     rotatePlacementsReverse,
-    flipPlacements,
     updatePlacement,
     setEntrance,
     setExit,

@@ -64,7 +64,7 @@ describe('cityChannelDomainModel', () => {
     expect(model.conflicts[0].type).toBe('missing_wall_support');
   });
 
-  it('preserves edge wall flipped state through normalization', () => {
+  it('drops legacy edge wall flipped state during normalization', () => {
     const wallKey = createWallKey(8, 8, 0, 'east');
     const mapData = normalizeCityChannelMap({
       ...createBaseCityChannelMap({ name: 'flipped wall test' }),
@@ -76,6 +76,6 @@ describe('cityChannelDomainModel', () => {
       }
     });
 
-    expect(mapData.walls[wallKey].flipped).toBe(true);
+    expect(mapData.walls[wallKey].flipped).toBe(false);
   });
 });

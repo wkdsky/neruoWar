@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
 import { SOCKET_ENDPOINT } from '../../runtimeConfig';
+import { isJwtTokenExpired } from '../../app/appShared';
 
 const SOCKET_OPTIONS = {
   transports: ['websocket', 'polling'],
@@ -34,12 +35,15 @@ const useAppSocket = ({
 
   const initializeSocket = useCallback((token = null) => {
     cleanupSocket();
+    const authToken = token || localStorage.getItem('token');
+    if (!authToken || isJwtTokenExpired(authToken)) {
+      return null;
+    }
 
     const nextSocket = io(SOCKET_ENDPOINT, SOCKET_OPTIONS);
 
     nextSocket.on('connect', () => {
       console.log('WebSocket 连接成功:', nextSocket.id);
-      const authToken = token || localStorage.getItem('token');
       if (authToken) {
         nextSocket.emit('authenticate', authToken);
         setTimeout(() => {

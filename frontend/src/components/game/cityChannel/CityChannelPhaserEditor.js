@@ -9,7 +9,6 @@ import {
   Move,
   PanelTop,
   Redo2,
-  Replace,
   RotateCw,
   Save,
   Settings,
@@ -192,7 +191,6 @@ const CityChannelPhaserEditor = ({
     movePlacements,
     rotatePlacements,
     rotatePlacementsReverse,
-    flipPlacements,
     updatePlacement,
     markSavedMap,
     validateSafeRoute,
@@ -612,16 +610,15 @@ const CityChannelPhaserEditor = ({
     clearSelection();
   }, [clearSelection, deletePlacements, selectedCells, selectedGearItems, selectedPlacements, selectionScope, updatePlacement]);
 
-  const handleRotateSelection = useCallback((direction = 'forward') => {
-    if (selectedPlacements.length <= 0) return;
-    if (direction === 'reverse') rotatePlacementsReverse(selectedPlacements);
-    else rotatePlacements(selectedPlacements);
+  const handleRotateSelection = useCallback((direction = 'forward', meta = null) => {
+    const targetPlacements = selectedPlacements.length > 0 ? selectedPlacements : (meta?.placements || []);
+    if (targetPlacements.length <= 0) return;
+    if (!meta?.alreadyPreviewed) {
+      sceneRef.current?.rotateTransmissionForPlacements?.(targetPlacements, direction);
+    }
+    if (direction === 'reverse') rotatePlacementsReverse(targetPlacements);
+    else rotatePlacements(targetPlacements);
   }, [rotatePlacements, rotatePlacementsReverse, selectedPlacements]);
-
-  const handleFlipSelection = useCallback(() => {
-    if (selectedPlacements.length <= 0) return;
-    flipPlacements(selectedPlacements);
-  }, [flipPlacements, selectedPlacements]);
 
   const handleRotateActive = useCallback((delta = 90) => {
     setActiveRotation((current) => normalizeRotation(current + delta));
@@ -708,7 +705,6 @@ const CityChannelPhaserEditor = ({
     onUndo: undo,
     onRedo: redo,
     onDeleteSelection: handleDeleteSelection,
-    onFlipSelection: handleFlipSelection,
     onMovePlacements: handleMovePlacements,
     onMechanismPanelRequest: handleMechanismPanelRequest,
     onGearAxisPrompt: setGearAxisPrompt,
@@ -726,7 +722,6 @@ const CityChannelPhaserEditor = ({
     addToast,
     handleCommitOperations,
     handleDeleteSelection,
-    handleFlipSelection,
     handleMovePlacements,
     handleMechanismPanelRequest,
     handleInspectChange,
@@ -1115,15 +1110,10 @@ const CityChannelPhaserEditor = ({
                 <span>移动</span>
                 <em className="city-channel-shortcut-hint">M</em>
               </button>
-              <button type="button" className="city-channel-selection-action" onClick={() => handleRotateSelection('forward')} title="旋转 (滚轮↑)">
+              <button type="button" className="city-channel-selection-action" onClick={() => handleRotateSelection('forward')} title="传动骨骼朝向 (滚轮)">
                 <RotateCw size={14} />
-                <span>旋转</span>
+                <span>传动朝向</span>
                 <em className="city-channel-shortcut-hint">滚轮</em>
-              </button>
-              <button type="button" className="city-channel-selection-action" onClick={handleFlipSelection} title="颠倒 (Space)">
-                <Replace size={14} />
-                <span>颠倒</span>
-                <em className="city-channel-shortcut-hint">Space</em>
               </button>
               {canInspectSelectedTile && (
                 <button

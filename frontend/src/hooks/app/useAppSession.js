@@ -8,6 +8,7 @@ import {
   clearStoredAuthState,
   clearStoredLocalhostRuntimeState,
   decodeUserIdFromToken,
+  isJwtTokenExpired,
   normalizeObjectId
 } from '../../app/appShared';
 
@@ -160,6 +161,10 @@ const useAppSession = ({
     if (!token || !storedUsername) {
       return;
     }
+    if (isJwtTokenExpired(token)) {
+      resetStoredSessionState();
+      return;
+    }
 
     const resolvedUserId = storedUserId || decodeUserIdFromToken(token);
     setAuthenticatedState(true);
@@ -184,12 +189,16 @@ const useAppSession = ({
     if (storedUserRole === 'admin') {
       runAdminCheck();
     }
-  }, []);
+  }, [resetStoredSessionState]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     const storedUsername = localStorage.getItem('username');
     if (!token || !storedUsername) return undefined;
+    if (isJwtTokenExpired(token)) {
+      resetStoredSessionState();
+      return undefined;
+    }
 
     let cancelled = false;
     const validateStoredSession = async () => {

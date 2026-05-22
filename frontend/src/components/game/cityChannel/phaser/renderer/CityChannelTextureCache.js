@@ -186,22 +186,22 @@ export class CityChannelTextureCache {
     this.generatedKeys = new Set();
   }
 
-  getTileTexture(panelType, rotation = 0, flipped = false, cameraYaw = 0) {
+  getTileTexture(panelType, rotation = 0, flipped = false, cameraYaw = 0, transmissionRotation = rotation) {
     const textureYaw = getTextureYawBucket(cameraYaw);
-    const key = `cc:tile:${panelType}:r${rotation}:f${flipped ? 1 : 0}:y${textureYaw}`;
-    if (!this.generatedKeys.has(key)) this.createTileTexture(key, panelType, rotation, textureYaw);
+    const key = `cc:tile:${panelType}:r${rotation}:tr${transmissionRotation}:y${textureYaw}`;
+    if (!this.generatedKeys.has(key)) this.createTileTexture(key, panelType, rotation, textureYaw, transmissionRotation);
     return key;
   }
 
-  getWallTexture(panelType, edge = 'north', wallViewMode = 'semi', cameraYaw = 0, rotation = 0, miter = null) {
+  getWallTexture(panelType, edge = 'north', wallViewMode = 'semi', cameraYaw = 0, rotation = 0, miter = null, transmissionRotation = rotation) {
     const textureYaw = getTextureYawBucket(cameraYaw);
     const miterKey = miter ? `:m${Number(miter.start) || 0}_${Number(miter.end) || 0}` : ':m0_0';
-    const key = `cc:wall:${panelType}:${edge}:r${rotation}:${wallViewMode}:y${textureYaw}${miterKey}`;
-    if (!this.generatedKeys.has(key)) this.createWallTexture(key, panelType, edge, wallViewMode, textureYaw, rotation, miter);
+    const key = `cc:wall:v2:${panelType}:${edge}:r${rotation}:tr${transmissionRotation}:${wallViewMode}:y${textureYaw}${miterKey}`;
+    if (!this.generatedKeys.has(key)) this.createWallTexture(key, panelType, edge, wallViewMode, textureYaw, rotation, miter, transmissionRotation);
     return key;
   }
 
-  createTileTexture(key, panelType, rotation, cameraYaw) {
+  createTileTexture(key, panelType, rotation, cameraYaw, transmissionRotation = rotation) {
     const material = getCityChannelMaterial(panelType);
     const colors = colorByPanelType[material.id] || colorByPanelType.basic_plate;
     const graphics = this.scene.make.graphics({ x: 0, y: 0, add: false });
@@ -220,8 +220,8 @@ export class CityChannelTextureCache {
     if (panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || panelType === CITY_CHANNEL_TILE_TYPES.EXIT) {
       this.drawPortalModel(graphics, panelType, rotation, cameraYaw);
     } else {
-      this.drawTransmissionSkeleton(graphics, material, rotation, geometry);
-      this.drawGearMounts(graphics, material, rotation);
+      this.drawTransmissionSkeleton(graphics, material, transmissionRotation, geometry);
+      this.drawGearMounts(graphics, material, transmissionRotation);
       if (material.gearIcon) this.drawGearIcon(graphics, 80, 91, 16, 10, 0xfacc15);
       else if (isMechanicalMaterial(material) && !material.transmissionSkeleton && !material.gearMounts?.length) {
         this.drawMechanismGlyph(graphics, panelType);
@@ -233,13 +233,13 @@ export class CityChannelTextureCache {
     this.generatedKeys.add(key);
   }
 
-  createWallTexture(key, panelType, edge, wallViewMode, cameraYaw, rotation = 0, miter = null) {
+  createWallTexture(key, panelType, edge, wallViewMode, cameraYaw, rotation = 0, miter = null, transmissionRotation = rotation) {
     const material = getCityChannelMaterial(panelType);
     const colors = colorByPanelType[material.id] || colorByPanelType.basic_plate;
     const geometry = createEdgeWallGeometry(cameraYaw, edge, miter);
     const isSemi = wallViewMode === 'semi';
     if (isSemi) {
-      this.createSemiWallTexture(key, panelType, geometry, colors, rotation);
+      this.createSemiWallTexture(key, panelType, geometry, colors, transmissionRotation);
       return;
     }
 
@@ -259,10 +259,10 @@ export class CityChannelTextureCache {
     drawPolygon(graphics, geometry.wallCap, 0x334155, isSolid ? baseAlpha : Math.max(outlineAlpha, 0.22), 0xe2e8f0, 0.5);
     drawPolygon(graphics, geometry.wallFront || geometry.wall, colors.top, wallAlpha, colors.edge, 0.76);
     this.drawStoneSurface(graphics, geometry.wallFront || geometry.wall, material.id);
-    this.drawWallTransmissionSkeleton(graphics, material, geometry.wallFront || geometry.wall, rotation);
-    this.drawWallGearMounts(graphics, material, geometry.wallFront || geometry.wall, rotation);
+    this.drawWallTransmissionSkeleton(graphics, material, geometry.wallFront || geometry.wall, transmissionRotation);
+    this.drawWallGearMounts(graphics, material, geometry.wallFront || geometry.wall, transmissionRotation);
     if (material.gearIcon) {
-      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, rotation, geometry.wallFront || geometry.wall);
+      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, transmissionRotation, geometry.wallFront || geometry.wall);
       this.drawGearIcon(graphics, center.x + 20, center.y - 8, 13, 10, 0xfacc15);
     }
 
