@@ -46,6 +46,10 @@ import {
   isTriggerMechanismTile,
   normalizeMechanismParams
 } from '../cityChannelMechanismRuntime';
+import {
+  computeCityChannelMovePreviewModel,
+  isPortalMaterial
+} from '../cityChannelMovePreview';
 
 const MIN_ZOOM = 0.55;
 const MAX_ZOOM = 1.8;
@@ -121,10 +125,6 @@ const isBoardMaterial = (panelType) => {
   const material = getCityChannelMaterial(panelType);
   return !!material && material.placeable !== false && !isPortalMaterial(panelType);
 };
-
-const isPortalMaterial = (panelType) => (
-  panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || panelType === CITY_CHANNEL_TILE_TYPES.EXIT
-);
 
 const createWallSelectionKey = (wall) => (
   wall ? createWallKey(wall.x, wall.y, wall.z, wall.edge) : ''
@@ -3511,7 +3511,35 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
 
     getAssemblyGearNodes(assembly) {
       if (!assembly?.gearMounts?.length) return [];
-      return assembly.gearMounts.map((mount) => {
+      return this.getGearNodesForMounts(assembly.gearMounts);
+    }
+
+    getGearSurfaceKey(placement, mount = {}) {
+      const surface = mount.surface || 'front';
+      if (!placement) return `unknown:${surface}`;
+      if (placement.edge) return `edge:${placement.z || 0}:${placement.edge}:${surface}`;
+      if (placement.isVertical) {
+        const axis = normalizeRotation(placement.rotation || 0) % 180;
+        return `vertical:${placement.z || 0}:${axis}:${surface}`;
+      }
+      return `floor:${placement.z || 0}:${surface}`;
+    }
+
+    getGearPitchRadiusAtPoint(placement, mount = {}, point = null) {
+      if (!placement || !mount || !point) return 24;
+      const local = getGearMountLocalPosition(mount.position);
+      const edgePoint = this.mapGearLocalPointToSurface(
+        placement,
+        { x: (local.x || 0) + GEAR_PITCH_RADIUS_LOCAL, y: local.y || 0 },
+        { surface: mount.surface || 'front', allowOverflow: true }
+      );
+      if (!edgePoint) return 24;
+      return Math.max(14, Math.min(34, Math.hypot(edgePoint.x - point.x, edgePoint.y - point.y)));
+    }
+
+    getGearNodesForMounts(mounts = []) {
+      if (!Array.isArray(mounts) || mounts.length <= 0) return [];
+      return mounts.map((mount) => {
         const { hostKind, placement } = this.getGearHostKindAndPlacement(mount.componentKey);
         if (!hostKind || !placement) return null;
         const liveMount = (placement.gearMounts || []).find((item) => item.id === mount.id) || mount;
@@ -3525,13 +3553,29 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           mountId: liveMount.id,
           mount: liveMount,
           point,
+          pitchRadius: this.getGearPitchRadiusAtPoint(placement, liveMount, point),
+          surfaceKey: this.getGearSurfaceKey(placement, liveMount),
+          driveRatio: 0,
           direction: 0
         };
       }).filter(Boolean);
     }
 
+    getAllGearNodes({ visibleOnly = false } = {}) {
+      const mounts = [];
+      Object.entries(this.mapData.tiles || {}).forEach(([componentKey, tile]) => {
+        if (visibleOnly && !this.isPlacementVisible(tile)) return;
+        (tile.gearMounts || []).forEach((mount) => mounts.push({ ...mount, componentKey }));
+      });
+      Object.entries(this.mapData.walls || {}).forEach(([componentKey, wall]) => {
+        if (visibleOnly && !this.isPlacementVisible(wall)) return;
+        (wall.gearMounts || []).forEach((mount) => mounts.push({ ...mount, componentKey }));
+      });
+      return this.getGearNodesForMounts(mounts);
+    }
+
     getGearContactThreshold() {
-      return Math.max(30, Math.min(52, 42 / Math.max(0.75, this.cameraState.zoom || 1)));
+      return 56;
     }
 
     buildGearContactGraph(nodes = []) {
@@ -3541,10 +3585,14 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         for (let j = i + 1; j < nodes.length; j += 1) {
           const a = nodes[i];
           const b = nodes[j];
+          if (a.surfaceKey !== b.surfaceKey) continue;
           const distance = Math.hypot(a.point.x - b.point.x, a.point.y - b.point.y);
-          if (distance > threshold) continue;
-          graph.get(a.id)?.push(b.id);
-          graph.get(b.id)?.push(a.id);
+          const pitchContact = (a.pitchRadius || 24) + (b.pitchRadius || 24);
+          const contactDistance = Math.max(18, Math.min(threshold, pitchContact * 1.18));
+          if (distance > contactDistance) continue;
+          if (distance < Math.max(8, pitchContact * 0.28)) continue;
+          graph.get(a.id)?.push({ id: b.id, ratio: -((a.pitchRadius || 1) / (b.pitchRadius || 1)) });
+          graph.get(b.id)?.push({ id: a.id, ratio: -((b.pitchRadius || 1) / (a.pitchRadius || 1)) });
         }
       }
       return graph;
@@ -3587,33 +3635,45 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     }
 
     resolveDrivenGearNodes(assembly, sourceComponentKey = '') {
-      const nodes = this.getAssemblyGearNodes(assembly);
-      if (nodes.length <= 0) return [];
-      const byId = new Map(nodes.map((node) => [node.id, node]));
-      const contactGraph = this.buildGearContactGraph(nodes);
-      const roots = this.getDrivenGearRoots(assembly, nodes, sourceComponentKey);
+      const assemblyNodes = this.getAssemblyGearNodes(assembly);
+      if (assemblyNodes.length <= 0) return [];
+      const allNodes = this.getAllGearNodes();
+      const byId = new Map(allNodes.map((node) => [node.id, node]));
+      const contactGraph = this.buildGearContactGraph(allNodes);
+      const roots = this.getDrivenGearRoots(assembly, assemblyNodes, sourceComponentKey);
       const visited = new Set();
       const queue = [];
       roots.forEach((root) => {
         if (!root?.id || visited.has(root.id)) return;
-        root.direction = 1;
+        const liveRoot = byId.get(root.id);
+        if (!liveRoot) return;
+        liveRoot.driveRatio = 1;
+        liveRoot.direction = 1;
         visited.add(root.id);
         queue.push(root.id);
       });
       while (queue.length > 0) {
         const currentId = queue.shift();
         const current = byId.get(currentId);
-        (contactGraph.get(currentId) || []).forEach((nextId) => {
+        (contactGraph.get(currentId) || []).forEach((edge) => {
+          const nextId = edge.id;
           if (visited.has(nextId)) return;
           const next = byId.get(nextId);
           if (!next || !current) return;
-          next.direction = -current.direction;
+          next.driveRatio = (current.driveRatio || 1) * (edge.ratio || -1);
+          next.direction = next.driveRatio >= 0 ? 1 : -1;
           visited.add(nextId);
           queue.push(nextId);
         });
       }
-      const driven = nodes.filter((node) => visited.has(node.id));
-      return driven.length > 0 ? driven : nodes.map((node, index) => ({ ...node, direction: index % 2 === 0 ? 1 : -1 }));
+      const driven = allNodes.filter((node) => visited.has(node.id));
+      return driven.length > 0
+        ? driven
+        : assemblyNodes.map((node, index) => ({
+          ...node,
+          driveRatio: index % 2 === 0 ? 1 : -1,
+          direction: index % 2 === 0 ? 1 : -1
+        }));
     }
 
     setGearMountPhases(nodes = [], angle = 0, basePhases = new Map()) {
@@ -3624,7 +3684,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         const mount = placement.gearMounts.find((item) => item.id === node.mountId);
         if (!mount) return;
         const base = basePhases.get(node.id) || 0;
-        mount.phase = normalizeRotation(base + ((node.direction || 1) * angle));
+        mount.phase = normalizeRotation(base + ((node.driveRatio || node.direction || 1) * angle));
         dirtyHosts.set(node.componentKey, { hostKind, placement });
       });
       dirtyHosts.forEach(({ hostKind, placement }, hostKey) => {
@@ -4794,92 +4854,35 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     computeMovePreview(targetCell) {
       const origins = this.carryState?.origins || [];
       if (origins.length <= 0 || !targetCell) return { valid: true, moves: [], conflicts: [], conflictKeys: new Set() };
-      const anchor = origins[0];
-      const dx = targetCell.x - anchor.x;
-      const dy = targetCell.y - anchor.y;
-      const movingTileKeys = new Set(origins.filter((item) => !item.edge).map((item) => createCellKey(item.x, item.y, item.z)));
-      const movingWallKeys = new Set(origins.filter((item) => item.edge).map(createWallSelectionKey));
-      const targetTileKeys = new Set();
-      const targetWallKeys = new Set();
-      const conflicts = [];
-      const conflictKeys = new Set();
       const explicitSurfaceTarget = origins.length === 1
         ? (this.carryState?.axisTarget || (targetCell.edge ? targetCell : null))
         : null;
-      const moves = origins.map((origin) => ({
-        from: origin,
-        to: {
-          x: origin.x + dx,
-          y: origin.y + dy,
-          z: origin.z,
-          ...(explicitSurfaceTarget
-            ? (explicitSurfaceTarget.edge ? { edge: explicitSurfaceTarget.edge } : {})
-            : (origin.edge ? { edge: origin.edge } : {}))
-        }
-      }));
-      const movedTilePlacements = [];
-      const movedWallPlacements = [];
+      const preview = computeCityChannelMovePreviewModel({
+        mapData: this.mapData,
+        origins,
+        targetCell,
+        explicitSurfaceTarget,
+        includeConflictKeys: true,
+        unsupportedWallReason: 'wall_without_support'
+      });
+      const {
+        moves,
+        conflicts,
+        conflictKeys,
+        movedTilePlacements,
+        previewTiles,
+        previewWalls
+      } = preview;
       const addConflict = (reason, to) => {
-        conflicts.push(reason);
+        conflicts.push({
+          key: `${to?.z}:${to?.x}:${to?.y}:${to?.edge || 'cell'}:${reason}`,
+          cell: to,
+          edge: to?.edge || null,
+          reason
+        });
         if (to?.edge) conflictKeys.add(createWallSelectionKey(to));
         else if (to) conflictKeys.add(createCellKey(to.x, to.y, to.z));
       };
-      moves.forEach(({ from, to }) => {
-        if (!isValidCell(to.x, to.y, to.z, this.mapData)) addConflict('out_of_bounds', to);
-        if (to.edge) {
-          const key = createWallSelectionKey(to);
-          const sourceWall = from.edge ? this.mapData.walls?.[createWallSelectionKey(from)] : null;
-          const sourceTile = !from.edge ? this.mapData.tiles?.[createCellKey(from.x, from.y, from.z)] : null;
-          if (sourceWall) movedWallPlacements.push({ ...sourceWall, x: to.x, y: to.y, z: to.z, edge: to.edge });
-          if (sourceTile) movedWallPlacements.push(createWall({
-            x: to.x,
-            y: to.y,
-            z: to.z,
-            edge: to.edge,
-            panelType: sourceTile.panelType,
-            transmissionRotation: sourceTile.transmissionRotation ?? sourceTile.rotation ?? 0
-          }));
-          if (targetWallKeys.has(key)) addConflict('wall_overlap', to);
-          targetWallKeys.add(key);
-          if (this.mapData.walls?.[key] && !movingWallKeys.has(key)) addConflict('wall_occupied', to);
-          const ownCellKey = createCellKey(to.x, to.y, to.z);
-          const neighborOffset = EDGE_NEIGHBOR_OFFSETS[to.edge] || EDGE_NEIGHBOR_OFFSETS.north;
-          const neighbor = { x: to.x + neighborOffset.x, y: to.y + neighborOffset.y, z: to.z };
-          const neighborKey = createCellKey(neighbor.x, neighbor.y, neighbor.z);
-          if (
-            !explicitSurfaceTarget
-            && !this.mapData.tiles?.[ownCellKey]
-            && !this.mapData.tiles?.[neighborKey]
-            && !targetTileKeys.has(ownCellKey)
-            && !targetTileKeys.has(neighborKey)
-          ) {
-            addConflict('wall_without_support', to);
-          }
-          return;
-        }
-        const key = createCellKey(to.x, to.y, to.z);
-        const sourceTile = !from.edge ? this.mapData.tiles?.[createCellKey(from.x, from.y, from.z)] : null;
-        const sourceWall = from.edge ? this.mapData.walls?.[createWallSelectionKey(from)] : null;
-        if (sourceTile) movedTilePlacements.push({ ...sourceTile, x: to.x, y: to.y, z: to.z });
-        if (sourceWall) movedTilePlacements.push(createTile({
-          x: to.x,
-          y: to.y,
-          z: to.z,
-          panelType: sourceWall.panelType,
-          transmissionRotation: sourceWall.transmissionRotation || 0
-        }));
-        if (targetTileKeys.has(key)) addConflict('tile_overlap', to);
-        targetTileKeys.add(key);
-        if (this.mapData.tiles?.[key] && !movingTileKeys.has(key)) addConflict('tile_occupied', to);
-      });
-      const previewTiles = new Map(Object.entries(this.mapData.tiles || {}).filter(([key]) => !movingTileKeys.has(key)));
-      const previewWalls = new Map(Object.entries(this.mapData.walls || {}).filter(([key]) => !movingWallKeys.has(key)));
-      movedTilePlacements.forEach((tile) => {
-        previewTiles.set(createCellKey(tile.x, tile.y, tile.z), tile);
-      });
-      movedWallPlacements.forEach((wall) => {
-        previewWalls.set(createWallKey(wall.x, wall.y, wall.z, wall.edge), wall);
-      });
       const previewTileAt = (cell) => previewTiles.get(createCellKey(cell.x, cell.y, cell.z)) || null;
       const previewVerticalSupports = [
         ...Array.from(previewTiles.entries())
@@ -4990,14 +4993,48 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
 
     getTransmissionPortPoint(tile, port) {
       if (!tile || !port) return null;
-      const cell = { x: tile.x, y: tile.y, z: tile.z };
-      const projection = projectCell(cell, this.cameraState.yaw, this.mapData);
-      const local = port.worldLocalPosition || port.localPosition || { x: 0, y: 0, z: 0 };
-      const offset = projectWorldOffset(local.x || 0, local.y || 0, this.cameraState.yaw);
+      const context = this.getGearSurfaceContext(tile, 'front');
+      if (!context) return null;
+      const local = port.localPosition || port.worldLocalPosition || { x: 0, y: 0, z: 0 };
+      const point = this.getGhostBoardPoint(
+        context.polygon,
+        local,
+        getTransmissionSurfaceRotation(tile),
+        context.offsetX,
+        context.offsetY,
+        context.surface
+      );
+      if (!point) return null;
       return {
-        x: projection.x + offset.x,
-        y: projection.y + offset.y - ((Number(local.z) || 0) * 52)
+        x: point.x,
+        y: point.y - ((Number(local.z) || 0) * 52)
       };
+    }
+
+    drawTransmissionPortSocket(graphics, tile, port, connected = false) {
+      const point = this.getTransmissionPortPoint(tile, port);
+      if (!graphics || !point) return;
+      const center = this.mapGearLocalPointToSurface(tile, { x: 0, y: 0 }, { surface: 'front' });
+      const dx = (center?.x || point.x) - point.x;
+      const dy = (center?.y || point.y) - point.y;
+      const length = Math.max(1, Math.hypot(dx, dy));
+      const ux = dx / length;
+      const uy = dy / length;
+      const inner = {
+        x: point.x + (ux * (connected ? 13 : 9)),
+        y: point.y + (uy * (connected ? 13 : 9))
+      };
+      const cross = { x: -uy, y: ux };
+      const baseAlpha = connected ? 0.92 : 0.54;
+      graphics.lineStyle(7, 0x78350f, baseAlpha * 0.58);
+      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
+      graphics.lineStyle(3, connected ? 0xfacc15 : 0xb45309, baseAlpha);
+      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
+      graphics.fillStyle(0x451a03, baseAlpha * 0.72);
+      graphics.fillCircle(point.x, point.y, connected ? 4.5 : 3.5);
+      graphics.fillStyle(connected ? 0xfef3c7 : 0xfacc15, connected ? 0.88 : 0.52);
+      graphics.fillCircle(point.x + (cross.x * 2), point.y + (cross.y * 2), connected ? 1.6 : 1.2);
+      graphics.fillCircle(point.x - (cross.x * 2), point.y - (cross.y * 2), connected ? 1.6 : 1.2);
     }
 
     getScreenAnchorForLocalPoint(point) {
@@ -5543,15 +5580,10 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       });
       Object.entries(components).forEach(([componentKey, tile]) => {
         (portsByComponentKey.get(componentKey) || []).forEach((port) => {
-          const point = this.getTransmissionPortPoint(tile, port);
-          if (!point) return;
           const assemblyId = assemblyGraph.assemblyByComponentKey?.[componentKey];
           const connected = !!assemblyById.get(assemblyId) && connectedPortKeys.has(`${componentKey}:${port.id}`);
           if (!connected) return;
-          this.mechanicalPortLayer.fillStyle(0xfacc15, 0.92);
-          this.mechanicalPortLayer.fillCircle(point.x, point.y, 6);
-          this.mechanicalPortLayer.lineStyle(2, 0xffffff, 0.92);
-          this.mechanicalPortLayer.strokeCircle(point.x, point.y, 8);
+          this.drawTransmissionPortSocket(this.mechanicalPortLayer, tile, port, true);
         });
       });
       const mediumColor = {
@@ -6418,8 +6450,19 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         ports.forEach((port) => {
           const point = this.getGhostBoardPoint(polygon, port.localPosition, rotation, offsetX, offsetY, surface);
           if (!point) return;
-          this.ghostLayer.fillStyle(0xf8fafc, 0.92);
-          this.ghostLayer.fillCircle(point.x, point.y, 4);
+          const dx = center.x - point.x;
+          const dy = center.y - point.y;
+          const length = Math.max(1, Math.hypot(dx, dy));
+          const inner = {
+            x: point.x + ((dx / length) * 9),
+            y: point.y + ((dy / length) * 9)
+          };
+          this.ghostLayer.lineStyle(5, 0x78350f, 0.62);
+          this.ghostLayer.lineBetween(point.x, point.y, inner.x, inner.y);
+          this.ghostLayer.lineStyle(2, 0xfacc15, 0.82);
+          this.ghostLayer.lineBetween(point.x, point.y, inner.x, inner.y);
+          this.ghostLayer.fillStyle(0x451a03, 0.74);
+          this.ghostLayer.fillCircle(point.x, point.y, 3.5);
         });
       }
 

@@ -42,6 +42,11 @@ import {
   normalizeCityChannelCameraYaw
 } from './cityChannelRenderModel';
 import {
+  computeCityChannelMovePreviewModel,
+  createMoveGhostMapData,
+  getCityChannelMovePreviewPlacementKey
+} from './cityChannelMovePreview';
+import {
   rotateWorldPoint,
   projectWorldOffset,
   projectLocalPoint,
@@ -66,14 +71,13 @@ const MAP_CENTER = {
 const CAMERA_PAN_SPEED = 520;
 const CAMERA_ROTATION_SPEED = 96;
 const SELECTED_MOVE_HOLD_DELAY = 260;
+const normalizeCameraYaw = normalizeCityChannelCameraYaw;
 const EDGE_NEIGHBOR_OFFSETS = {
   north: { x: 0, y: -1 },
   south: { x: 0, y: 1 },
   west: { x: -1, y: 0 },
   east: { x: 1, y: 0 }
 };
-
-const normalizeCameraYaw = normalizeCityChannelCameraYaw;
 
 const createWallSelectionKey = (wall) => (
   wall ? createWallKey(wall.x, wall.y, wall.z, wall.edge) : ''
@@ -1020,129 +1024,136 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       return { items: [], conflicts: [], valid: true, targetKey: '' };
     }
 
-    const anchor = origins[0];
-    const dx = hoverCell.x - anchor.x;
-    const dy = hoverCell.y - anchor.y;
-    const movingTileOriginKeys = new Set(
-      origins
-        .filter((placement) => !placement.edge)
-        .map((placement) => createCellKey(placement.x, placement.y, placement.z))
-    );
-    const movingWallOriginKeys = new Set(
-      origins
-        .filter((placement) => !!placement.edge)
-        .map(createWallSelectionKey)
-    );
-
-    const previewTiles = {};
-    const previewWalls = {};
-    const targetTileKeys = new Set();
-    const targetWallKeys = new Set();
-    const targetPlacements = [];
-    const conflicts = [];
-    const seenConflictKeys = new Set();
-    const addConflict = ({ cell, edge = null, reason }) => {
-      if (!cell) return;
-      const key = `${cell.z}:${cell.x}:${cell.y}:${edge || 'cell'}:${reason}`;
-      if (seenConflictKeys.has(key)) return;
-      seenConflictKeys.add(key);
-      conflicts.push({
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins,
+      targetCell: hoverCell,
+      unsupportedWallReason: 'wall_without_floor_support'
+    });
+    const conflicts = preview.conflicts.map((conflict) => ({
+      ...conflict,
+      projection: projectCell(conflict.cell, cameraYaw)
+    }));
+    const ghostMapData = createMoveGhostMapData({
+      mapData,
+      previewTiles: preview.previewTiles,
+      previewWalls: preview.previewWalls
+    });
+    const previewTiles = preview.previewTiles;
+    const previewWalls = preview.previewWalls;
+    const previewTileAt = (cell) => previewTiles.get(createCellKey(cell.x, cell.y, cell.z)) || null;
+    const previewVerticalSupports = [
+      ...Array.from(previewTiles.entries())
+        .filter(([, tile]) => tile?.isVertical && tile.panelType !== CITY_CHANNEL_TILE_TYPES.ENTRANCE && tile.panelType !== CITY_CHANNEL_TILE_TYPES.EXIT)
+        .map(([key, tile]) => ({
+          kind: 'tile',
+          key,
+          cell: { x: tile.x, y: tile.y, z: tile.z },
+          placement: tile
+        })),
+      ...Array.from(previewWalls.entries()).map(([key, wall]) => ({
+        kind: 'wall',
         key,
-        cell,
-        edge,
-        reason,
-        projection: projectCell(cell, cameraYaw)
+        cell: { x: wall.x, y: wall.y, z: wall.z },
+        edge: wall.edge,
+        placement: wall
+      }))
+    ];
+    const resolvePreviewVerticalConnection = (activePlacement, activeKey, support, snap = {}) => {
+      if (!activePlacement || !support?.placement) return { valid: false };
+      const activePorts = getWorldTransmissionPorts(activePlacement, activeKey);
+      const supportPorts = getWorldTransmissionPorts(support.placement, support.key);
+      const activeDirection = snap.activeDirection || null;
+      const supportDirection = snap.supportDirection || null;
+      const activeCandidates = snap.activePortId
+        ? activePorts.filter((port) => port.id === snap.activePortId)
+        : activePorts.filter((port) => !activeDirection || port.worldDirection === activeDirection);
+      const supportCandidates = snap.supportPortId
+        ? supportPorts.filter((port) => port.id === snap.supportPortId)
+        : supportPorts.filter((port) => !supportDirection || port.worldDirection === supportDirection);
+      let best = null;
+      activeCandidates.forEach((activePort) => {
+        const activeSocket = this.getTransmissionSocketPoint(activePlacement, activePort);
+        if (!activeSocket) return;
+        supportCandidates.forEach((supportPort) => {
+          const supportSocket = this.getTransmissionSocketPoint(support.placement, supportPort, support.kind === 'wall' ? 'wall' : null);
+          if (!supportSocket) return;
+          const socketDistance = Math.hypot(
+            activeSocket.x - supportSocket.x,
+            activeSocket.y - supportSocket.y,
+            activeSocket.z - supportSocket.z
+          );
+          if (!best || socketDistance < best.socketDistance) best = { socketDistance };
+        });
       });
+      return { valid: !!best && best.socketDistance <= TRANSMISSION_SOCKET_EPSILON };
     };
-
-    origins.forEach((placement) => {
-      const target = {
-        x: placement.x + dx,
-        y: placement.y + dy,
-        z: placement.z,
-        ...(placement.edge ? { edge: placement.edge } : {})
-      };
-      targetPlacements.push({ from: placement, to: target });
-
-      if (!isValidCell(target.x, target.y, target.z, mapData)) {
-        addConflict({ cell: target, edge: target.edge || null, reason: 'out_of_bounds' });
-        return;
+    const hasTransmissionPorts = (tile, key = '') => getWorldTransmissionPorts(tile, key).length > 0;
+    const hasPreviewVerticalSupport = (tile) => previewVerticalSupports.some((support) => (
+      this.getVerticalGapCandidateCells(support).some((candidate) => {
+        if (candidate.x !== tile.x || candidate.y !== tile.y || candidate.z !== tile.z) return false;
+        const tileKey = createCellKey(tile.x, tile.y, tile.z);
+        if (!hasTransmissionPorts(tile, tileKey)) return true;
+        const snap = candidate.snapSide === 'top'
+          ? this.getVerticalTopSnapSpec(support)
+          : {
+            activeDirection: OPPOSITE_EDGE[candidate.direction],
+            supportDirection: candidate.direction,
+            endpointMode: 'socket'
+          };
+        return resolvePreviewVerticalConnection(tile, tileKey, support, snap).valid;
+      })
+    ));
+    const highFloorTiles = Array.from(previewTiles.entries()).filter(([, tile]) => (
+      tile && !tile.isVertical && tile.panelType !== CITY_CHANNEL_TILE_TYPES.ENTRANCE && tile.panelType !== CITY_CHANNEL_TILE_TYPES.EXIT && (Number(tile.z) || 0) > 0
+    ));
+    const floorGraph = new Map(highFloorTiles.map(([key]) => [key, new Set()]));
+    const supportedFloorKeys = new Set();
+    highFloorTiles.forEach(([key, tile]) => {
+      if (hasPreviewVerticalSupport(tile)) {
+        supportedFloorKeys.add(key);
       }
-
-      if (placement.edge) {
-        const originKey = createWallSelectionKey(placement);
-        const sourceWall = mapData.walls?.[originKey];
-        if (!sourceWall) return;
-        const targetKey = createWallSelectionKey(target);
-        if (targetWallKeys.has(targetKey)) {
-          addConflict({ cell: target, edge: target.edge, reason: 'wall_overlap' });
+      const activePorts = getWorldTransmissionPorts(tile, key);
+      Object.values(EDGE_NEIGHBOR_OFFSETS).forEach((offset) => {
+        const neighbor = previewTileAt({ x: tile.x + offset.x, y: tile.y + offset.y, z: tile.z });
+        if (!neighbor || neighbor.isVertical || neighbor.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || neighbor.panelType === CITY_CHANNEL_TILE_TYPES.EXIT) return;
+        const neighborKey = createCellKey(neighbor.x, neighbor.y, neighbor.z);
+        if (!floorGraph.has(neighborKey)) return;
+        const neighborPorts = getWorldTransmissionPorts(neighbor, neighborKey);
+        let connected = activePorts.length <= 0 && neighborPorts.length <= 0;
+        if (!connected && activePorts.length > 0) {
+          connected = this.resolveSingleFloorSnapConnection(tile, tile, activePorts, neighbor).valid;
         }
-        targetWallKeys.add(targetKey);
-        if (mapData.walls?.[targetKey] && !movingWallOriginKeys.has(targetKey)) {
-          addConflict({ cell: target, edge: target.edge, reason: 'wall_occupied' });
+        if (!connected && neighborPorts.length > 0) {
+          connected = this.resolveSingleFloorSnapConnection(neighbor, neighbor, neighborPorts, tile).valid;
         }
-        previewWalls[targetKey] = {
-          ...sourceWall,
-          x: target.x,
-          y: target.y,
-          z: target.z,
-          edge: target.edge
-        };
-        return;
-      }
-
-      const originKey = createCellKey(placement.x, placement.y, placement.z);
-      const sourceTile = mapData.tiles?.[originKey];
-      if (!sourceTile) return;
-      const targetKey = createCellKey(target.x, target.y, target.z);
-      if (targetTileKeys.has(targetKey)) {
-        addConflict({ cell: target, reason: 'tile_overlap' });
-      }
-      targetTileKeys.add(targetKey);
-      if (mapData.tiles?.[targetKey] && !movingTileOriginKeys.has(targetKey)) {
-        addConflict({ cell: target, reason: 'tile_occupied' });
-      }
-      previewTiles[targetKey] = {
-        ...sourceTile,
-        x: target.x,
-        y: target.y,
-        z: target.z
-      };
+        if (!connected) return;
+        floorGraph.get(key)?.add(neighborKey);
+        floorGraph.get(neighborKey)?.add(key);
+      });
     });
-
-    targetPlacements.forEach(({ to }) => {
-      if (!to.edge || !isValidCell(to.x, to.y, to.z, mapData)) return;
-      const ownCellKey = createCellKey(to.x, to.y, to.z);
-      const neighborOffset = EDGE_NEIGHBOR_OFFSETS[to.edge] || EDGE_NEIGHBOR_OFFSETS.north;
-      const neighborCell = {
-        x: to.x + neighborOffset.x,
-        y: to.y + neighborOffset.y,
-        z: to.z
-      };
-      const neighborValid = isValidCell(neighborCell.x, neighborCell.y, neighborCell.z, mapData);
-      const neighborCellKey = neighborValid
-        ? createCellKey(neighborCell.x, neighborCell.y, neighborCell.z)
-        : '';
-      const hasOwnSupport = targetTileKeys.has(ownCellKey)
-        || (!!mapData.tiles?.[ownCellKey] && !movingTileOriginKeys.has(ownCellKey));
-      const hasNeighborSupport = neighborValid && (
-        targetTileKeys.has(neighborCellKey)
-        || (!!mapData.tiles?.[neighborCellKey] && !movingTileOriginKeys.has(neighborCellKey))
-      );
-      if (!hasOwnSupport && !hasNeighborSupport) {
-        addConflict({ cell: to, edge: to.edge, reason: 'wall_without_floor_support' });
+    const queue = Array.from(supportedFloorKeys);
+    for (let index = 0; index < queue.length; index += 1) {
+      const current = queue[index];
+      (floorGraph.get(current) || []).forEach((nextKey) => {
+        if (supportedFloorKeys.has(nextKey)) return;
+        supportedFloorKeys.add(nextKey);
+        queue.push(nextKey);
+      });
+    }
+    preview.movedTilePlacements.forEach((tile) => {
+      if (tile.isVertical || tile.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || tile.panelType === CITY_CHANNEL_TILE_TYPES.EXIT || (Number(tile.z) || 0) <= 0) return;
+      const key = createCellKey(tile.x, tile.y, tile.z);
+      if (!supportedFloorKeys.has(key)) {
+        conflicts.push({
+          key: `${tile.z}:${tile.x}:${tile.y}:cell:floor_without_structural_support`,
+          cell: tile,
+          edge: null,
+          reason: 'floor_without_structural_support',
+          projection: projectCell(tile, cameraYaw)
+        });
       }
     });
-
-    const ghostMapData = {
-      ...mapData,
-      tiles: previewTiles,
-      walls: previewWalls,
-      entrances: [],
-      exits: [],
-      safeRoute: [],
-      mechanisms: []
-    };
     const valid = conflicts.length === 0;
     const conflictPlacementKeys = new Set(conflicts.map((conflict) => (
       conflict.edge
@@ -1158,9 +1169,11 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       id: `move-ghost:${item.id}`,
       isGhost: true,
       ghost: {
-        valid: item.kind === 'wall'
-          ? !conflictPlacementKeys.has(createWallKey(item.cell.x, item.cell.y, item.cell.z, item.wall?.edge))
-          : !conflictPlacementKeys.has(createCellKey(item.cell.x, item.cell.y, item.cell.z)),
+        valid: !conflictPlacementKeys.has(getCityChannelMovePreviewPlacementKey(
+          item.kind === 'wall'
+            ? { x: item.cell.x, y: item.cell.y, z: item.cell.z, edge: item.wall?.edge }
+            : { x: item.cell.x, y: item.cell.y, z: item.cell.z }
+        )),
         mode: 'move',
         placementKind: item.kind,
         conflictCount: conflicts.length

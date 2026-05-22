@@ -319,12 +319,35 @@ export class CityChannelTextureCache {
         ctx.stroke();
       });
       ctx.strokeStyle = colorToRgba(0x78350f, 0.82);
-      ctx.fillStyle = colorToRgba(0xf8fafc, 0.96);
       ctx.lineWidth = 2;
       ports.forEach((port) => {
         const point = this.mapBoardPointOnWall(port.localPosition, rotation, geometry.wallFront || geometry.wall);
+        const dx = center.x - point.x;
+        const dy = center.y - point.y;
+        const length = Math.max(1, Math.hypot(dx, dy));
+        const inner = {
+          x: point.x + ((dx / length) * 9),
+          y: point.y + ((dy / length) * 9)
+        };
+        ctx.strokeStyle = colorToRgba(0x78350f, 0.72);
+        ctx.lineWidth = 5;
         ctx.beginPath();
-        ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+        ctx.moveTo(point.x, point.y);
+        ctx.lineTo(inner.x, inner.y);
+        ctx.stroke();
+        ctx.strokeStyle = colorToRgba(0xfacc15, 0.92);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(point.x, point.y);
+        ctx.lineTo(inner.x, inner.y);
+        ctx.stroke();
+        ctx.fillStyle = colorToRgba(0x451a03, 0.76);
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = colorToRgba(0xfef3c7, 0.72);
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 1.4, 0, Math.PI * 2);
         ctx.fill();
       });
       ctx.restore();
@@ -471,8 +494,21 @@ export class CityChannelTextureCache {
     graphics.lineStyle(2, 0x78350f, 0.82);
     ports.forEach((port) => {
       const point = this.mapBoardPointOnTile(port.localPosition, rotation, geometry);
-      graphics.fillStyle(0xf8fafc, 0.95);
-      graphics.fillCircle(point.x, point.y, 4);
+      const dx = center.x - point.x;
+      const dy = center.y - point.y;
+      const length = Math.max(1, Math.hypot(dx, dy));
+      const inner = {
+        x: point.x + ((dx / length) * 9),
+        y: point.y + ((dy / length) * 9)
+      };
+      graphics.lineStyle(5, 0x78350f, 0.72);
+      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
+      graphics.lineStyle(2, 0xfacc15, 0.92);
+      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
+      graphics.fillStyle(0x451a03, 0.76);
+      graphics.fillCircle(point.x, point.y, 3.5);
+      graphics.fillStyle(0xfef3c7, 0.72);
+      graphics.fillCircle(point.x, point.y, 1.4);
     });
     graphics.fillStyle(0xfacc15, 0.95);
     graphics.fillCircle(center.x, center.y, ports.length > 1 ? 6 : 0);
@@ -490,8 +526,21 @@ export class CityChannelTextureCache {
     graphics.lineStyle(2, 0x78350f, 0.82);
     ports.forEach((port) => {
       const point = this.mapBoardPointOnWall(port.localPosition, rotation, wallPolygon);
-      graphics.fillStyle(0xf8fafc, 0.95);
-      graphics.fillCircle(point.x, point.y, 4);
+      const dx = center.x - point.x;
+      const dy = center.y - point.y;
+      const length = Math.max(1, Math.hypot(dx, dy));
+      const inner = {
+        x: point.x + ((dx / length) * 9),
+        y: point.y + ((dy / length) * 9)
+      };
+      graphics.lineStyle(5, 0x78350f, 0.72);
+      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
+      graphics.lineStyle(2, 0xfacc15, 0.92);
+      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
+      graphics.fillStyle(0x451a03, 0.76);
+      graphics.fillCircle(point.x, point.y, 3.5);
+      graphics.fillStyle(0xfef3c7, 0.72);
+      graphics.fillCircle(point.x, point.y, 1.4);
     });
     graphics.fillStyle(0xfacc15, 0.95);
     graphics.fillCircle(center.x, center.y, ports.length > 1 ? 6 : 0);
