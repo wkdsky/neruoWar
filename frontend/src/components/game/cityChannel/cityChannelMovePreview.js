@@ -23,9 +23,239 @@ const isPortalMaterial = (panelType) => (
   panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || panelType === CITY_CHANNEL_TILE_TYPES.EXIT
 );
 
+const isFloorSupportPlacement = (placement) => (
+  !!placement
+  && !placement.edge
+  && !placement.isVertical
+  && !isPortalMaterial(placement.panelType)
+);
+
+const sameCell = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y && a.z === b.z;
+
+export const collectSupportedFloorKeys = ({
+  previewTiles = new Map(),
+  isVerticalSupport = () => false,
+  isSameLevelConnected = () => false
+} = {}) => {
+  const floorTiles = Array.from(previewTiles.entries()).filter(([, tile]) => (
+    tile && !tile.isVertical && !isPortalMaterial(tile.panelType)
+  ));
+  const floorTileKeys = new Set(floorTiles.map(([key]) => key));
+  const floorGraph = new Map(floorTiles.map(([key]) => [key, new Set()]));
+  const supportedFloorKeys = new Set();
+
+  floorTiles.forEach(([key, tile]) => {
+    if ((Number(tile.z) || 0) <= 0 || isVerticalSupport(tile, key)) {
+      supportedFloorKeys.add(key);
+    }
+
+    Object.values(EDGE_NEIGHBOR_OFFSETS).forEach((offset) => {
+      const neighborKey = createCellKey(tile.x + offset.x, tile.y + offset.y, tile.z);
+      if (!floorTileKeys.has(neighborKey)) return;
+      const neighbor = previewTiles.get(neighborKey);
+      if (!neighbor || neighbor.isVertical || isPortalMaterial(neighbor.panelType)) return;
+      if (!isSameLevelConnected(tile, key, neighbor, neighborKey)) return;
+      floorGraph.get(key)?.add(neighborKey);
+      floorGraph.get(neighborKey)?.add(key);
+    });
+
+    const upperKey = createCellKey(tile.x, tile.y, tile.z + 1);
+    if (floorTileKeys.has(upperKey)) {
+      floorGraph.get(key)?.add(upperKey);
+    }
+  });
+
+  const queue = Array.from(supportedFloorKeys);
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    (floorGraph.get(current) || []).forEach((nextKey) => {
+      if (supportedFloorKeys.has(nextKey)) return;
+      supportedFloorKeys.add(nextKey);
+      queue.push(nextKey);
+    });
+  }
+
+  return supportedFloorKeys;
+};
+
 const createWallSelectionKey = (wall) => (
   wall ? createWallKey(wall.x, wall.y, wall.z, wall.edge) : ''
 );
+
+const getSelectionPlacementKey = (placement) => (
+  placement?.edge
+    ? createWallSelectionKey(placement)
+    : createCellKey(placement.x, placement.y, placement.z)
+);
+
+const getMovingPlacementKey = (placement) => (
+  placement?.edge
+    ? createWallKey(placement.x, placement.y, placement.z, placement.edge)
+    : createCellKey(placement.x, placement.y, placement.z)
+);
+
+const areWallAndFloorConnected = (wall, floor) => {
+  if (!wall?.edge || !floor || floor.edge) return false;
+  if ((Number(wall.z) || 0) !== (Number(floor.z) || 0)) return false;
+  const ownCellKey = createCellKey(wall.x, wall.y, wall.z);
+  const neighborOffset = EDGE_NEIGHBOR_OFFSETS[wall.edge] || EDGE_NEIGHBOR_OFFSETS.north;
+  const neighborCellKey = createCellKey(wall.x + neighborOffset.x, wall.y + neighborOffset.y, wall.z);
+  const floorKey = createCellKey(floor.x, floor.y, floor.z);
+  return floorKey === ownCellKey || floorKey === neighborCellKey;
+};
+
+const areSelectionPlacementsConnected = (a, b) => {
+  if (!a || !b) return false;
+  if (sameCell(a, b) && a.edge === b.edge) return true;
+
+  const aWall = !!a.edge;
+  const bWall = !!b.edge;
+  const aVertical = !!a.isVertical && !aWall;
+  const bVertical = !!b.isVertical && !bWall;
+
+  if (aWall && bWall) {
+    return a.edge === b.edge
+      && a.x === b.x
+      && a.y === b.y
+      && Math.abs((Number(a.z) || 0) - (Number(b.z) || 0)) === 1;
+  }
+
+  if (aWall && !bWall) return areWallAndFloorConnected(a, b) || (aVertical && sameCell(a, b));
+  if (bWall && !aWall) return areWallAndFloorConnected(b, a) || (bVertical && sameCell(a, b));
+
+  if (aVertical || bVertical) {
+    return sameCell(a, b);
+  }
+
+  if (isPortalMaterial(a.panelType) || isPortalMaterial(b.panelType)) {
+    return sameCell(a, b);
+  }
+
+  return Number(a.z) === Number(b.z)
+    && Math.abs((Number(a.x) || 0) - (Number(b.x) || 0)) + Math.abs((Number(a.y) || 0) - (Number(b.y) || 0)) === 1;
+};
+
+const getSelectionSupportCells = (support = {}) => {
+  if (!support?.edge && !support?.isVertical) return [];
+  const base = {
+    x: Number(support.x) || 0,
+    y: Number(support.y) || 0,
+    z: Number(support.z) || 0
+  };
+  const cells = [
+    { x: base.x, y: base.y, z: base.z + 1 }
+  ];
+  Object.values(EDGE_NEIGHBOR_OFFSETS).forEach((offset) => {
+    cells.push({
+      x: base.x + offset.x,
+      y: base.y + offset.y,
+      z: base.z + 1
+    });
+  });
+  if (support.edge) {
+    const offset = EDGE_NEIGHBOR_OFFSETS[support.edge];
+    if (offset) {
+      cells.push({
+        x: base.x + offset.x,
+        y: base.y + offset.y,
+        z: base.z + 1
+      });
+    }
+  }
+  return cells;
+};
+
+const areSelectionPlacementsStructurallyConnected = (a, b) => {
+  if (!a || !b) return false;
+  const target = { x: Number(b.x) || 0, y: Number(b.y) || 0, z: Number(b.z) || 0 };
+  return getSelectionSupportCells(a).some((cell) => sameCell(cell, target));
+};
+
+const areSelectionPlacementsConnectedInMap = (a, b) => (
+  areSelectionPlacementsConnected(a, b)
+  || areSelectionPlacementsStructurallyConnected(a, b)
+  || areSelectionPlacementsStructurallyConnected(b, a)
+);
+
+const getSelectionPlacement = (mapData = {}, origin = {}) => (
+  origin.edge
+    ? mapData.walls?.[createWallSelectionKey(origin)]
+    : mapData.tiles?.[createCellKey(origin.x, origin.y, origin.z)]
+);
+
+const getSelectionPlacementForGraph = (mapData = {}, origin = {}) => {
+  const placement = getSelectionPlacement(mapData, origin);
+  return placement
+    ? {
+      ...placement,
+      ...(origin.edge ? { edge: origin.edge } : {})
+    }
+    : { ...origin };
+};
+
+const buildSelectionComponents = (mapData = {}, origins = []) => {
+  const nodes = origins.map((origin, index) => ({
+    index,
+    origin,
+    key: getSelectionPlacementKey(origin),
+    placement: getSelectionPlacementForGraph(mapData, origin)
+  }));
+  const graph = new Map(nodes.map((node) => [node.index, []]));
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      if (!areSelectionPlacementsConnectedInMap(nodes[i].placement, nodes[j].placement)) continue;
+      graph.get(i)?.push(j);
+      graph.get(j)?.push(i);
+    }
+  }
+
+  const visited = new Set();
+  const components = [];
+  nodes.forEach((node) => {
+    if (visited.has(node.index)) return;
+    const queue = [node.index];
+    const indices = [];
+    visited.add(node.index);
+    while (queue.length > 0) {
+      const current = queue.shift();
+      indices.push(current);
+      (graph.get(current) || []).forEach((next) => {
+        if (visited.has(next)) return;
+        visited.add(next);
+        queue.push(next);
+      });
+    }
+    const id = `component_${components.length}`;
+    components.push({
+      id,
+      indices,
+      originKeys: new Set(indices.map((index) => nodes[index].key)),
+      placementKeys: new Set()
+    });
+  });
+  return components;
+};
+
+const createComponentResult = (component) => ({
+  id: component.id,
+  indices: component.indices,
+  originKeys: new Set(component.originKeys),
+  placementKeys: new Set(),
+  invalidPlacementKeys: new Set(),
+  conflictReasons: new Set(),
+  hasConnection: false,
+  valid: true
+});
+
+const markComponentPlacementInvalid = (state, placementKey, componentId, reason) => {
+  if (!placementKey) return;
+  state.invalidPlacementKeys?.add(placementKey);
+  const component = componentId ? state.componentResults?.get(componentId) : state.componentByPlacementKey?.get(placementKey);
+  if (!component) return;
+  component.invalidPlacementKeys.add(placementKey);
+  if (reason) component.conflictReasons.add(reason);
+  component.valid = false;
+};
 
 const rotatePoint = (point, degrees = 0) => {
   const radians = (degrees * Math.PI) / 180;
@@ -146,6 +376,25 @@ const getPlacementKey = (placement) => (
     : createCellKey(placement.x, placement.y, placement.z)
 );
 
+export const getSelectionAnchor = (origins = []) => {
+  if (!Array.isArray(origins) || origins.length === 0) return null;
+  return origins.reduce((best, origin) => {
+    if (!best) return origin;
+    const bestZ = Number(best.z) || 0;
+    const originZ = Number(origin.z) || 0;
+    if (originZ !== bestZ) return originZ < bestZ ? origin : best;
+    const bestY = Number(best.y) || 0;
+    const originY = Number(origin.y) || 0;
+    if (originY !== bestY) return originY < bestY ? origin : best;
+    const bestX = Number(best.x) || 0;
+    const originX = Number(origin.x) || 0;
+    if (originX !== bestX) return originX < bestX ? origin : best;
+    const bestEdge = String(best.edge || '');
+    const originEdge = String(origin.edge || '');
+    return originEdge.localeCompare(bestEdge) < 0 ? origin : best;
+  }, null);
+};
+
 const createCollisionEntry = ({ placement, key, origin = null, moving = false }) => ({
   key,
   placement,
@@ -157,20 +406,22 @@ const createCollisionEntry = ({ placement, key, origin = null, moving = false })
 const addConflict = (state, reason, to, edge = null) => {
   if (!to) return;
   const conflictEdge = edge ?? to.edge ?? null;
-  const key = `${to.z}:${to.x}:${to.y}:${conflictEdge || 'cell'}:${reason}`;
+  const placementKey = conflictEdge
+    ? createWallKey(to.x, to.y, to.z, conflictEdge)
+    : createCellKey(to.x, to.y, to.z);
+  const key = `${placementKey}:${reason}`;
   if (state.seenConflictKeys?.has(key)) return;
   state.seenConflictKeys?.add(key);
   state.conflicts.push({
     key,
     cell: to,
     edge: conflictEdge,
-    reason
+    reason,
+    placementKey
   });
-  state.conflictKeys?.add(
-    conflictEdge
-      ? createWallKey(to.x, to.y, to.z, conflictEdge)
-      : createCellKey(to.x, to.y, to.z)
-  );
+  state.conflictKeys?.add(placementKey);
+  const componentId = state.componentIdByPlacementKey?.get(placementKey);
+  markComponentPlacementInvalid(state, placementKey, componentId, reason);
 };
 
 const addCollisionConflicts = (state, leftEntry, rightEntry) => {
@@ -204,44 +455,89 @@ const collectStaticCollisionEntries = ({
   return entries;
 };
 
+const getWallSupportCellKeys = (placement = {}) => {
+  if (!placement?.edge) return [];
+  const offset = EDGE_NEIGHBOR_OFFSETS[placement.edge] || EDGE_NEIGHBOR_OFFSETS.north;
+  return [
+    createCellKey(placement.x, placement.y, placement.z),
+    createCellKey(placement.x + offset.x, placement.y + offset.y, placement.z)
+  ];
+};
+
+const isSupportCollisionExempt = (movingPlacement = {}, staticPlacement = {}) => {
+  if (!movingPlacement || !staticPlacement) return false;
+  if (!isFloorSupportPlacement(staticPlacement)) return false;
+  if (movingPlacement.edge) {
+    return getWallSupportCellKeys(movingPlacement).includes(
+      createCellKey(staticPlacement.x, staticPlacement.y, staticPlacement.z)
+    );
+  }
+  return movingPlacement.isVertical && sameCell(movingPlacement, staticPlacement);
+};
+
 export const computeCityChannelMovePreviewModel = ({
   mapData = {},
   origins = [],
   targetCell = null,
+  anchor = null,
   explicitSurfaceTarget = null,
-  includeConflictKeys = false,
-  unsupportedWallReason = 'wall_without_support'
+  includeConflictKeys = false
 } = {}) => {
+  const emptyComponents = [];
+  const emptyComponentResults = new Map();
   if (!Array.isArray(origins) || origins.length <= 0 || !targetCell) {
     return {
       valid: true,
       moves: [],
       conflicts: [],
       conflictKeys: includeConflictKeys ? new Set() : undefined,
+      invalidPlacementKeys: new Set(),
+      componentResults: emptyComponentResults,
+      components: emptyComponents,
+      componentByPlacementKey: new Map(),
+      componentIdByPlacementKey: new Map(),
       movedTilePlacements: [],
       movedWallPlacements: [],
+      movingTileKeys: new Set(),
+      movingWallKeys: new Set(),
+      anchor: null,
       previewTiles: new Map(Object.entries(mapData.tiles || {})),
       previewWalls: new Map(Object.entries(mapData.walls || {})),
       targetKey: targetCell ? createCellKey(targetCell.x, targetCell.y, targetCell.z) : ''
     };
   }
 
-  const anchor = origins[0];
-  const dx = targetCell.x - anchor.x;
-  const dy = targetCell.y - anchor.y;
+  const resolvedAnchor = anchor || getSelectionAnchor(origins) || origins[0];
+  const dx = targetCell.x - resolvedAnchor.x;
+  const dy = targetCell.y - resolvedAnchor.y;
+  const dz = (Number(targetCell.z) || 0) - (Number(resolvedAnchor.z) || 0);
+  const components = buildSelectionComponents(mapData, origins);
+  const componentIdByOriginKey = new Map();
+  components.forEach((component) => {
+    component.originKeys.forEach((key) => componentIdByOriginKey.set(key, component.id));
+  });
+  const componentResults = new Map(components.map((component) => [component.id, createComponentResult(component)]));
+  const componentByPlacementKey = new Map();
+  const componentIdByPlacementKey = new Map();
+  const invalidPlacementKeys = new Set();
   const movingTileKeys = new Set(origins.filter((item) => !item.edge).map((item) => createCellKey(item.x, item.y, item.z)));
   const movingWallKeys = new Set(origins.filter((item) => item.edge).map(createWallSelectionKey));
   const state = {
     conflicts: [],
     conflictKeys: includeConflictKeys ? new Set() : null,
-    seenConflictKeys: new Set()
+    seenConflictKeys: new Set(),
+    componentResults,
+    componentByPlacementKey,
+    componentIdByPlacementKey,
+    invalidPlacementKeys
   };
   const moves = origins.map((origin) => ({
     from: origin,
+    componentId: componentIdByOriginKey.get(getSelectionPlacementKey(origin)) || null,
     to: {
       x: origin.x + dx,
       y: origin.y + dy,
-      z: origin.z,
+      z: origin.z + dz,
       ...(explicitSurfaceTarget
         ? (explicitSurfaceTarget.edge ? { edge: explicitSurfaceTarget.edge } : {})
         : (origin.edge ? { edge: origin.edge } : {}))
@@ -250,8 +546,26 @@ export const computeCityChannelMovePreviewModel = ({
   const movedTilePlacements = [];
   const movedWallPlacements = [];
   const movingEntries = [];
+  const previewTiles = new Map(Object.entries(mapData.tiles || {}).filter(([key]) => !movingTileKeys.has(key)));
+  const previewWalls = new Map(Object.entries(mapData.walls || {}).filter(([key]) => !movingWallKeys.has(key)));
+  const movedTilePlacementKeys = new Set();
+  const registerPlacementKey = (placementKey, componentId) => {
+    componentIdByPlacementKey.set(placementKey, componentId);
+    const componentResult = componentResults.get(componentId);
+    if (componentResult) {
+      componentResult.placementKeys.add(placementKey);
+      componentByPlacementKey.set(placementKey, componentResult);
+    }
+  };
 
-  moves.forEach(({ from, to }) => {
+  const registerMovedPlacement = (placement, componentId) => {
+    const placementKey = getMovingPlacementKey(placement);
+    registerPlacementKey(placementKey, componentId);
+    return placementKey;
+  };
+
+  moves.forEach(({ from, to, componentId }) => {
+    registerPlacementKey(getMovingPlacementKey(to), componentId);
     if (!isValidCell(to.x, to.y, to.z, mapData)) {
       addConflict(state, 'out_of_bounds', to, to.edge || null);
       return;
@@ -274,9 +588,11 @@ export const computeCityChannelMovePreviewModel = ({
           : null;
       if (!placement) return;
       movedWallPlacements.push(placement);
+      const placementKey = registerMovedPlacement(placement, componentId);
+      previewWalls.set(placementKey, placement);
       movingEntries.push(createCollisionEntry({
         placement,
-        key: createWallSelectionKey(to),
+        key: placementKey,
         origin: from,
         moving: true
       }));
@@ -298,57 +614,54 @@ export const computeCityChannelMovePreviewModel = ({
         : null;
     if (!placement) return;
     movedTilePlacements.push(placement);
+    const placementKey = registerMovedPlacement(placement, componentId);
+    movedTilePlacementKeys.add(placementKey);
+    previewTiles.set(placementKey, placement);
     movingEntries.push(createCollisionEntry({
       placement,
-      key: createCellKey(to.x, to.y, to.z),
+      key: placementKey,
       origin: from,
       moving: true
     }));
   });
 
   const staticEntries = collectStaticCollisionEntries({ mapData, movingTileKeys, movingWallKeys });
+
+  // 新规则1: 检查遮挡（碰撞）
+  // 移动物体之间的碰撞（选中物体内部碰撞）
   for (let i = 0; i < movingEntries.length; i += 1) {
     for (let j = i + 1; j < movingEntries.length; j += 1) {
       if (boxSetsIntersect(movingEntries[i].boxes, movingEntries[j].boxes)) {
         addCollisionConflicts(state, movingEntries[i], movingEntries[j]);
       }
     }
-    staticEntries.forEach((staticEntry) => {
-      if (boxSetsIntersect(movingEntries[i].boxes, staticEntry.boxes)) {
-        addCollisionConflicts(state, movingEntries[i], staticEntry);
-      }
-    });
   }
 
-  const previewTiles = new Map(Object.entries(mapData.tiles || {}).filter(([key]) => !movingTileKeys.has(key)));
-  const previewWalls = new Map(Object.entries(mapData.walls || {}).filter(([key]) => !movingWallKeys.has(key)));
-  movedTilePlacements.forEach((tile) => {
-    previewTiles.set(createCellKey(tile.x, tile.y, tile.z), tile);
-  });
-  movedWallPlacements.forEach((wall) => {
-    previewWalls.set(createWallKey(wall.x, wall.y, wall.z, wall.edge), wall);
-  });
-
-  moves.forEach(({ to }) => {
-    if (!to.edge || !isValidCell(to.x, to.y, to.z, mapData)) return;
-    const ownCellKey = createCellKey(to.x, to.y, to.z);
-    const neighborOffset = EDGE_NEIGHBOR_OFFSETS[to.edge] || EDGE_NEIGHBOR_OFFSETS.north;
-    const neighbor = { x: to.x + neighborOffset.x, y: to.y + neighborOffset.y, z: to.z };
-    const neighborKey = createCellKey(neighbor.x, neighbor.y, neighbor.z);
-    const hasOwnSupport = !!previewTiles.get(ownCellKey);
-    const hasNeighborSupport = !!previewTiles.get(neighborKey);
-    if (!explicitSurfaceTarget && !hasOwnSupport && !hasNeighborSupport) {
-      addConflict(state, unsupportedWallReason, to, to.edge);
-    }
+  // 移动物体与静态物体的碰撞
+  movingEntries.forEach((movingEntry) => {
+    staticEntries.forEach((staticEntry) => {
+      if (boxSetsIntersect(movingEntry.boxes, staticEntry.boxes)) {
+        // 支撑关系豁免：墙体可以穿过其支撑的地板
+        if (isSupportCollisionExempt(movingEntry.placement, staticEntry.placement)) return;
+        addCollisionConflicts(state, movingEntry, staticEntry);
+      }
+    });
   });
 
   return {
     valid: state.conflicts.length === 0,
-    moves,
+    moves: moves.map(({ componentId, ...move }) => move),
     conflicts: state.conflicts,
     conflictKeys: state.conflictKeys || undefined,
+    invalidPlacementKeys,
+    componentResults,
+    components,
+    componentByPlacementKey,
+    componentIdByPlacementKey,
     movedTilePlacements,
     movedWallPlacements,
+    anchor: resolvedAnchor,
+    translation: { dx, dy, dz },
     previewTiles,
     previewWalls,
     movingTileKeys,

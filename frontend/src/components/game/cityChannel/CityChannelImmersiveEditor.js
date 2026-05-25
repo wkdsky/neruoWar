@@ -43,6 +43,7 @@ import {
 } from './cityChannelRenderModel';
 import {
   computeCityChannelMovePreviewModel,
+  getSelectionAnchor,
   createMoveGhostMapData,
   getCityChannelMovePreviewPlacementKey
 } from './cityChannelMovePreview';
@@ -72,12 +73,6 @@ const CAMERA_PAN_SPEED = 520;
 const CAMERA_ROTATION_SPEED = 96;
 const SELECTED_MOVE_HOLD_DELAY = 260;
 const normalizeCameraYaw = normalizeCityChannelCameraYaw;
-const EDGE_NEIGHBOR_OFFSETS = {
-  north: { x: 0, y: -1 },
-  south: { x: 0, y: 1 },
-  west: { x: -1, y: 0 },
-  east: { x: 1, y: 0 }
-};
 
 const createWallSelectionKey = (wall) => (
   wall ? createWallKey(wall.x, wall.y, wall.z, wall.edge) : ''
@@ -418,6 +413,29 @@ const screenToCell = ({ clientX, clientY, rect, offset, zoom, cameraYaw }) => {
     height: CITY_CHANNEL_HEIGHT,
     layers: 1
   }) ? { x, y, z: 0 } : null;
+};
+
+const cellToScreen = ({ x, y, rect, offset, zoom, cameraYaw }) => {
+  const dx = x - MAP_CENTER.x;
+  const dy = y - MAP_CENTER.y;
+  const radians = (cameraYaw * Math.PI) / 180;
+  const rx = (dx * Math.cos(-radians)) + (dy * Math.sin(-radians));
+  const ry = (-dx * Math.sin(-radians)) + (dy * Math.cos(-radians));
+  const localX = (rx - ry) * (TILE_WIDTH / 2);
+  const localY = (rx + ry) * (TILE_HEIGHT / 2);
+  const clientX = localX * zoom + rect.left + (rect.width / 2) + offset.x;
+  const clientY = localY * zoom + rect.top + (rect.height / 2) + offset.y;
+  return { clientX, clientY };
+};
+
+const getSelectionGeometricCenter = (placements) => {
+  if (!placements || placements.length === 0) return null;
+  const sumX = placements.reduce((sum, p) => sum + (Number(p.x) || 0), 0);
+  const sumY = placements.reduce((sum, p) => sum + (Number(p.y) || 0), 0);
+  return {
+    x: sumX / placements.length,
+    y: sumY / placements.length
+  };
 };
 
 const isWallMaterial = (tileType) => (
@@ -776,10 +794,25 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       addToast('目标位置存在冲突，无法完成移动。', 'error');
       return false;
     }
-    const anchor = origins[0];
+    const anchor = movePreviewRef.current?.anchor || origins[0];
+    const previewTranslation = movePreviewRef.current?.translation || null;
+    const previewMoves = Array.isArray(movePreviewRef.current?.moves) ? movePreviewRef.current.moves : [];
+    if (previewTranslation && previewTranslation.dx === 0 && previewTranslation.dy === 0 && previewTranslation.dz === 0) {
+      setCarryState(null);
+      return true;
+    }
+    if (previewMoves.length > 0) {
+      movePlacements(previewMoves);
+      setSelectedCells(previewMoves.filter((move) => !move.to.edge).map((move) => move.to));
+      setSelectedWalls(previewMoves.filter((move) => !!move.to.edge).map((move) => move.to));
+      setSelectedCell(previewMoves.find((move) => !move.to.edge)?.to || null);
+      setCarryState(null);
+      return true;
+    }
     const dx = targetCell.x - anchor.x;
     const dy = targetCell.y - anchor.y;
-    if (dx === 0 && dy === 0) {
+    const dz = (Number(targetCell.z) || 0) - (Number(anchor.z) || 0);
+    if (dx === 0 && dy === 0 && dz === 0) {
       setCarryState(null);
       return true;
     }
@@ -788,7 +821,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       to: {
         x: placement.x + dx,
         y: placement.y + dy,
-        z: placement.z,
+        z: placement.z + dz,
         ...(placement.edge ? { edge: placement.edge } : {})
       }
     }));
@@ -802,7 +835,11 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
 
   const startCarry = useCallback(() => {
     if (selectedPlacements.length === 0) return;
-    setCarryState({ origins: selectedPlacements.map((placement) => ({ ...placement })) });
+    const origins = selectedPlacements.map((placement) => ({ ...placement }));
+    setCarryState({
+      origins,
+      anchor: getSelectionAnchor(origins) || origins[0] || null
+    });
   }, [selectedPlacements]);
 
   const commitCarry = useCallback((targetCell) => {
@@ -1015,19 +1052,30 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     new Set(selectedWalls.map(createWallSelectionKey))
   ), [selectedWalls]);
 
+  const movePreviewCacheRef = useRef({ targetKey: '', result: null });
+
   const movePreview = useMemo(() => {
     if (!carryState || !hoverCell) {
-      return { items: [], conflicts: [], valid: true, targetKey: '' };
+      movePreviewCacheRef.current = { targetKey: '', result: null };
+      return { items: [], moves: [], conflicts: [], valid: true, targetKey: '', anchor: null };
     }
     const origins = Array.isArray(carryState.origins) ? carryState.origins : [];
     if (origins.length === 0) {
-      return { items: [], conflicts: [], valid: true, targetKey: '' };
+      movePreviewCacheRef.current = { targetKey: '', result: null };
+      return { items: [], moves: [], conflicts: [], valid: true, targetKey: '', anchor: null };
+    }
+
+    // 使用 targetKey 作为缓存键，避免重复计算
+    const targetKey = createCellKey(hoverCell.x, hoverCell.y, hoverCell.z);
+    if (movePreviewCacheRef.current.targetKey === targetKey && movePreviewCacheRef.current.result) {
+      return movePreviewCacheRef.current.result;
     }
 
     const preview = computeCityChannelMovePreviewModel({
       mapData,
       origins,
       targetCell: hoverCell,
+      anchor: carryState.anchor || null,
       unsupportedWallReason: 'wall_without_floor_support'
     });
     const conflicts = preview.conflicts.map((conflict) => ({
@@ -1041,152 +1089,49 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     });
     const previewTiles = preview.previewTiles;
     const previewWalls = preview.previewWalls;
-    const previewTileAt = (cell) => previewTiles.get(createCellKey(cell.x, cell.y, cell.z)) || null;
-    const previewVerticalSupports = [
-      ...Array.from(previewTiles.entries())
-        .filter(([, tile]) => tile?.isVertical && tile.panelType !== CITY_CHANNEL_TILE_TYPES.ENTRANCE && tile.panelType !== CITY_CHANNEL_TILE_TYPES.EXIT)
-        .map(([key, tile]) => ({
-          kind: 'tile',
-          key,
-          cell: { x: tile.x, y: tile.y, z: tile.z },
-          placement: tile
-        })),
-      ...Array.from(previewWalls.entries()).map(([key, wall]) => ({
-        kind: 'wall',
-        key,
-        cell: { x: wall.x, y: wall.y, z: wall.z },
-        edge: wall.edge,
-        placement: wall
-      }))
-    ];
-    const resolvePreviewVerticalConnection = (activePlacement, activeKey, support, snap = {}) => {
-      if (!activePlacement || !support?.placement) return { valid: false };
-      const activePorts = getWorldTransmissionPorts(activePlacement, activeKey);
-      const supportPorts = getWorldTransmissionPorts(support.placement, support.key);
-      const activeDirection = snap.activeDirection || null;
-      const supportDirection = snap.supportDirection || null;
-      const activeCandidates = snap.activePortId
-        ? activePorts.filter((port) => port.id === snap.activePortId)
-        : activePorts.filter((port) => !activeDirection || port.worldDirection === activeDirection);
-      const supportCandidates = snap.supportPortId
-        ? supportPorts.filter((port) => port.id === snap.supportPortId)
-        : supportPorts.filter((port) => !supportDirection || port.worldDirection === supportDirection);
-      let best = null;
-      activeCandidates.forEach((activePort) => {
-        const activeSocket = this.getTransmissionSocketPoint(activePlacement, activePort);
-        if (!activeSocket) return;
-        supportCandidates.forEach((supportPort) => {
-          const supportSocket = this.getTransmissionSocketPoint(support.placement, supportPort, support.kind === 'wall' ? 'wall' : null);
-          if (!supportSocket) return;
-          const socketDistance = Math.hypot(
-            activeSocket.x - supportSocket.x,
-            activeSocket.y - supportSocket.y,
-            activeSocket.z - supportSocket.z
-          );
-          if (!best || socketDistance < best.socketDistance) best = { socketDistance };
-        });
-      });
-      return { valid: !!best && best.socketDistance <= TRANSMISSION_SOCKET_EPSILON };
-    };
-    const hasTransmissionPorts = (tile, key = '') => getWorldTransmissionPorts(tile, key).length > 0;
-    const hasPreviewVerticalSupport = (tile) => previewVerticalSupports.some((support) => (
-      this.getVerticalGapCandidateCells(support).some((candidate) => {
-        if (candidate.x !== tile.x || candidate.y !== tile.y || candidate.z !== tile.z) return false;
-        const tileKey = createCellKey(tile.x, tile.y, tile.z);
-        if (!hasTransmissionPorts(tile, tileKey)) return true;
-        const snap = candidate.snapSide === 'top'
-          ? this.getVerticalTopSnapSpec(support)
-          : {
-            activeDirection: OPPOSITE_EDGE[candidate.direction],
-            supportDirection: candidate.direction,
-            endpointMode: 'socket'
-          };
-        return resolvePreviewVerticalConnection(tile, tileKey, support, snap).valid;
-      })
-    ));
-    const highFloorTiles = Array.from(previewTiles.entries()).filter(([, tile]) => (
-      tile && !tile.isVertical && tile.panelType !== CITY_CHANNEL_TILE_TYPES.ENTRANCE && tile.panelType !== CITY_CHANNEL_TILE_TYPES.EXIT && (Number(tile.z) || 0) > 0
-    ));
-    const floorGraph = new Map(highFloorTiles.map(([key]) => [key, new Set()]));
-    const supportedFloorKeys = new Set();
-    highFloorTiles.forEach(([key, tile]) => {
-      if (hasPreviewVerticalSupport(tile)) {
-        supportedFloorKeys.add(key);
-      }
-      const activePorts = getWorldTransmissionPorts(tile, key);
-      Object.values(EDGE_NEIGHBOR_OFFSETS).forEach((offset) => {
-        const neighbor = previewTileAt({ x: tile.x + offset.x, y: tile.y + offset.y, z: tile.z });
-        if (!neighbor || neighbor.isVertical || neighbor.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || neighbor.panelType === CITY_CHANNEL_TILE_TYPES.EXIT) return;
-        const neighborKey = createCellKey(neighbor.x, neighbor.y, neighbor.z);
-        if (!floorGraph.has(neighborKey)) return;
-        const neighborPorts = getWorldTransmissionPorts(neighbor, neighborKey);
-        let connected = activePorts.length <= 0 && neighborPorts.length <= 0;
-        if (!connected && activePorts.length > 0) {
-          connected = this.resolveSingleFloorSnapConnection(tile, tile, activePorts, neighbor).valid;
-        }
-        if (!connected && neighborPorts.length > 0) {
-          connected = this.resolveSingleFloorSnapConnection(neighbor, neighbor, neighborPorts, tile).valid;
-        }
-        if (!connected) return;
-        floorGraph.get(key)?.add(neighborKey);
-        floorGraph.get(neighborKey)?.add(key);
-      });
-    });
-    const queue = Array.from(supportedFloorKeys);
-    for (let index = 0; index < queue.length; index += 1) {
-      const current = queue[index];
-      (floorGraph.get(current) || []).forEach((nextKey) => {
-        if (supportedFloorKeys.has(nextKey)) return;
-        supportedFloorKeys.add(nextKey);
-        queue.push(nextKey);
-      });
-    }
-    preview.movedTilePlacements.forEach((tile) => {
-      if (tile.isVertical || tile.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || tile.panelType === CITY_CHANNEL_TILE_TYPES.EXIT || (Number(tile.z) || 0) <= 0) return;
-      const key = createCellKey(tile.x, tile.y, tile.z);
-      if (!supportedFloorKeys.has(key)) {
-        conflicts.push({
-          key: `${tile.z}:${tile.x}:${tile.y}:cell:floor_without_structural_support`,
-          cell: tile,
-          edge: null,
-          reason: 'floor_without_structural_support',
-          projection: projectCell(tile, cameraYaw)
-        });
-      }
-    });
+    const movedPlacementKeys = new Set([
+      ...preview.movedTilePlacements.map((tile) => createCellKey(tile.x, tile.y, tile.z)),
+      ...preview.movedWallPlacements.map((wall) => createWallKey(wall.x, wall.y, wall.z, wall.edge))
+    ]);
     const valid = conflicts.length === 0;
-    const conflictPlacementKeys = new Set(conflicts.map((conflict) => (
-      conflict.edge
-        ? createWallKey(conflict.cell.x, conflict.cell.y, conflict.cell.z, conflict.edge)
-        : createCellKey(conflict.cell.x, conflict.cell.y, conflict.cell.z)
-    )));
     const items = createCityChannelRenderItems({
       mapData: ghostMapData,
       cameraYaw,
       includeHints: false
-    }).map((item) => ({
-      ...item,
-      id: `move-ghost:${item.id}`,
-      isGhost: true,
-      ghost: {
-        valid: !conflictPlacementKeys.has(getCityChannelMovePreviewPlacementKey(
-          item.kind === 'wall'
-            ? { x: item.cell.x, y: item.cell.y, z: item.cell.z, edge: item.wall?.edge }
-            : { x: item.cell.x, y: item.cell.y, z: item.cell.z }
-        )),
-        mode: 'move',
-        placementKind: item.kind,
-        conflictCount: conflicts.length
-      }
-    }));
+    }).map((item) => {
+      const placementKey = getCityChannelMovePreviewPlacementKey(
+        item.kind === 'wall'
+          ? { x: item.cell.x, y: item.cell.y, z: item.cell.z, edge: item.wall?.edge || item.placement?.edge || null }
+          : { x: item.cell.x, y: item.cell.y, z: item.cell.z }
+      );
+      return {
+        ...item,
+        id: `move-ghost:${item.id}`,
+        isGhost: true,
+        ghost: {
+          valid: !preview.invalidPlacementKeys?.has(placementKey),
+          mode: 'move',
+          placementKind: item.kind,
+          conflictCount: conflicts.length,
+          movedSelection: movedPlacementKeys.has(placementKey)
+        }
+      };
+    }).filter((item) => item.ghost.movedSelection && isLayerVisible(item.cell));
 
-    return {
+    const result = {
       items,
+      moves: preview.moves,
       conflicts,
       valid,
-      targetKey: createCellKey(hoverCell.x, hoverCell.y, hoverCell.z)
+      anchor: preview.anchor,
+      targetKey
     };
-  }, [cameraYaw, carryState, hoverCell, mapData]);
+
+    // 缓存结果
+    movePreviewCacheRef.current = { targetKey, result };
+
+    return result;
+  }, [cameraYaw, carryState, hoverCell, mapData, isLayerVisible]);
   movePreviewRef.current = movePreview;
 
   const ghostItems = useMemo(() => {
@@ -1244,8 +1189,11 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       };
     };
 
+    // 遍历 visibleItems（静态物体），不包含幽灵物体
+    // 这样可以吸附到静态物体上，而不会吸附到移动中的幽灵物体
     visibleItems.forEach((item) => {
       if (item.kind === 'hint') return;
+
       const partType = item.part?.partType || 'body';
       if (
         partType === 'floor_attachment'
@@ -1839,15 +1787,51 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     if (shouldStartHoldMove) {
       if (selectedMoveHoldTimerRef.current) clearTimeout(selectedMoveHoldTimerRef.current);
       const origins = selectedPlacements.map((placement) => ({ ...placement }));
+
+      // 计算选中物体的几何中心
+      const geometricCenter = getSelectionGeometricCenter(origins);
+
       selectedMoveHoldTimerRef.current = setTimeout(() => {
         selectedMoveHoldTimerRef.current = null;
         const currentDrag = dragRef.current;
         if (!currentDrag || currentDrag.pointerId !== event.pointerId || currentDrag.moved) return;
+
+        // 如果有几何中心，调整拖拽起始位置为几何中心的屏幕坐标
+        if (geometricCenter) {
+          const rect = viewportRef.current?.getBoundingClientRect();
+          if (rect) {
+            const centerScreen = cellToScreen({
+              x: geometricCenter.x,
+              y: geometricCenter.y,
+              rect,
+              offset: viewportOffsetRef.current,
+              zoom: viewportZoomRef.current,
+              cameraYaw: cameraYawRef.current
+            });
+
+            // 调整拖拽状态，使其相对于几何中心
+            currentDrag.startX = centerScreen.clientX;
+            currentDrag.startY = centerScreen.clientY;
+            currentDrag.lastX = centerScreen.clientX;
+            currentDrag.lastY = centerScreen.clientY;
+          }
+        }
+
         currentDrag.longPressCarryStarted = true;
         currentDrag.longPressOrigins = origins;
         currentDrag.selectionMode = false;
         setSelectionBox(null);
-        setCarryState({ origins });
+        setCarryState({
+          origins,
+          anchor: dragState.hit
+            ? {
+              x: dragState.hit.cell.x,
+              y: dragState.hit.cell.y,
+              z: dragState.hit.cell.z,
+              ...(dragState.hit.edge ? { edge: dragState.hit.edge } : {})
+            }
+            : (getSelectionAnchor(origins) || origins[0] || null)
+        });
       }, SELECTED_MOVE_HOLD_DELAY);
     }
   }, [activeTool, applyPlaceModeAction, buildHitStackFromEvent, carryState, getPointerOrbitAngle, isPlaceMode, isSelectedPlacementHit, resolveActionHit, selectedPlacements, updateHoverFromEvent]);
@@ -1899,7 +1883,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   const handlePointerMove = useCallback((event) => {
     const dragState = dragRef.current;
     if (!dragState) {
-      updateHoverFromEvent(event, { hitTest: !carryState });
+      updateHoverFromEvent(event, { hitTest: true });
       return;
     }
     if (dragState.pointerId !== event.pointerId) return;
@@ -1938,7 +1922,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
     const totalDx = event.clientX - dragState.startX;
     const totalDy = event.clientY - dragState.startY;
     if (dragState.longPressCarryStarted) {
-      updateHoverFromEvent(event, { hitTest: false });
+      updateHoverFromEvent(event, { hitTest: true });
       if (Math.hypot(totalDx, totalDy) > 4) {
         dragState.moved = true;
       }
@@ -1990,7 +1974,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       return;
     }
     if (dragState.longPressCarryStarted) {
-      const cell = updateHoverFromEvent(event, { hitTest: false });
+      const cell = updateHoverFromEvent(event, { hitTest: true });
       if (cell) {
         commitPlacementsMove(dragState.longPressOrigins || [], cell);
       } else {
