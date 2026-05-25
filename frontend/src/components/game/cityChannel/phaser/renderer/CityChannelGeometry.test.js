@@ -1,6 +1,13 @@
 import { createBaseCityChannelMap } from '../../cityChannelSchema';
 import { getPlacementDepth } from './CityChannelDepth';
-import { localToCellAtLayer, projectCell } from './CityChannelGeometry';
+import {
+  FLOOR_THICKNESS,
+  createEdgeWallGeometry,
+  createTileGeometry,
+  getTransmissionMidPlane,
+  localToCellAtLayer,
+  projectCell
+} from './CityChannelGeometry';
 
 describe('CityChannelGeometry', () => {
   it('maps a projected upper-layer point back to the same x/y on that layer', () => {
@@ -31,5 +38,27 @@ describe('CityChannelGeometry', () => {
     });
 
     expect(upperBackground).toBeGreaterThan(lowerForeground);
+  });
+
+  it('places floor transmission geometry on the board thickness mid-plane', () => {
+    const geometry = createTileGeometry(0, 0);
+    const midPlane = getTransmissionMidPlane(geometry, 'floor');
+
+    expect(midPlane).toHaveLength(4);
+    midPlane.forEach((point, index) => {
+      expect(point.x).toBeCloseTo(geometry.top[index].x);
+      expect(point.y).toBeCloseTo(geometry.top[index].y + (FLOOR_THICKNESS * 0.5));
+    });
+  });
+
+  it('places wall transmission geometry halfway between front and back faces', () => {
+    const geometry = createEdgeWallGeometry(0, 'south');
+    const midPlane = getTransmissionMidPlane(geometry, 'wall');
+
+    expect(midPlane).toHaveLength(4);
+    expect(midPlane[0].x).toBeCloseTo((geometry.wallFront[0].x + geometry.wallBack[1].x) * 0.5);
+    expect(midPlane[1].x).toBeCloseTo((geometry.wallFront[1].x + geometry.wallBack[0].x) * 0.5);
+    expect(midPlane[2].y).toBeCloseTo((geometry.wallFront[2].y + geometry.wallBack[3].y) * 0.5);
+    expect(midPlane[3].y).toBeCloseTo((geometry.wallFront[3].y + geometry.wallBack[2].y) * 0.5);
   });
 });

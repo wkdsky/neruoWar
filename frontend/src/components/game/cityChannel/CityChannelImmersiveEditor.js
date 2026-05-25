@@ -54,6 +54,11 @@ import {
   formatPolygonPoints,
   createBox
 } from './cityChannelGeometryUtils';
+import {
+  getCityChannelThumbnailClassName,
+  isCityChannelThumbnailInteractionLocked,
+  isPointerNearThumbnail
+} from './cityChannelThumbnailUi';
 import './CityChannelImmersiveEditor.css';
 
 const TILE_WIDTH = 120;
@@ -172,7 +177,7 @@ const getInteractionHintConfig = ({
   if (isPlaceMode || activeTool === CITY_CHANNEL_TOOLS.FLOOR) {
     return {
       mode: '放置',
-      mouse: '左键放置 / 右键退出 / 滚轮旋转物件',
+      mouse: '左键放置 / 右键退出 / 滚轮缩放 / Shift+滚轮旋转物件',
       keyboard: 'R 旋转 / Space 按当前吸附边切安装面 / WASD 平移 / Q E 旋转'
     };
   }
@@ -585,6 +590,8 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   const [openPanel, setOpenPanel] = useState(null);
   const [isThumbnailOpen, setIsThumbnailOpen] = useState(true);
   const [thumbnailHoverLayer, setThumbnailHoverLayer] = useState(null);
+  const thumbnailRef = useRef(null);
+  const [isThumbnailNearCursor, setIsThumbnailNearCursor] = useState(false);
   const [visibleLayerCutoff, setVisibleLayerCutoff] = useState(null);
   const [wallViewMode, setWallViewMode] = useState('semi');
   const [showHelperGrid, setShowHelperGrid] = useState(false);
@@ -599,6 +606,13 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   const [toasts, setToasts] = useState([]);
   const domainModel = useMemo(() => buildCityChannelDomainModel(mapData), [mapData]);
   const isPlaceMode = activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && !!activeTileType;
+  const isThumbnailInteractionLocked = useMemo(() => (
+    isCityChannelThumbnailInteractionLocked({
+      activeTool,
+      activeTileType,
+      carryActive: !!carryState
+    })
+  ), [activeTool, activeTileType, carryState]);
   const isWallPerspectiveMode = wallViewMode === 'perspective';
   const isWallSolidMode = wallViewMode === 'solid';
   const wallViewModeConfig = WALL_VIEW_MODE_CONFIG[wallViewMode] || WALL_VIEW_MODE_CONFIG.semi;
@@ -610,6 +624,19 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
   const isLayerVisible = useCallback((cell) => (
     !cell || visibleLayerCutoff === null || (Number(cell.z) || 0) <= effectiveVisibleLayerCutoff
   ), [effectiveVisibleLayerCutoff, visibleLayerCutoff]);
+
+  useEffect(() => {
+    if (!isThumbnailInteractionLocked) {
+      setIsThumbnailNearCursor(false);
+      return undefined;
+    }
+    const handlePointerMove = (event) => {
+      const rect = thumbnailRef.current?.getBoundingClientRect();
+      setIsThumbnailNearCursor(isPointerNearThumbnail(event.clientX, event.clientY, rect));
+    };
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    return () => window.removeEventListener('pointermove', handlePointerMove);
+  }, [isThumbnailInteractionLocked]);
 
   const addToast = useCallback((message, type = 'info') => {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -1426,23 +1453,8 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
 
   const handleWheel = useCallback((event) => {
     event.preventDefault();
-    if (activeTool === CITY_CHANNEL_TOOLS.BROWSE) {
-      const rect = viewportRef.current?.getBoundingClientRect();
-      const nextZoom = Number(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom - (event.deltaY * 0.0014))).toFixed(2));
-      if (rect) {
-        const pointerX = event.clientX - rect.left - (rect.width / 2);
-        const pointerY = event.clientY - rect.top - (rect.height / 2);
-        const worldX = (pointerX - offset.x) / zoom;
-        const worldY = (pointerY - offset.y) / zoom;
-        setOffset(clampOffsetToVisibleContent({
-          x: pointerX - (worldX * nextZoom),
-          y: pointerY - (worldY * nextZoom)
-        }, nextZoom));
-      }
-      setZoom(nextZoom);
-      return;
-    }
-    if (selectedPlacements.length > 0) {
+    const shiftHeld = event.shiftKey;
+    if (shiftHeld && selectedPlacements.length > 0) {
       if (event.deltaY < 0) {
         keyboardActionsRef.current.rotateSelection();
       } else {
@@ -1450,7 +1462,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       }
       return;
     }
-    if (isPlaceMode) {
+    if (shiftHeld && isPlaceMode) {
       setActiveRotation((current) => (current + (event.deltaY < 0 ? 90 : 270)) % 360);
       return;
     }
@@ -1467,7 +1479,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
       }, nextZoom));
     }
     setZoom(nextZoom);
-  }, [activeTool, clampOffsetToVisibleContent, isPlaceMode, offset, selectedPlacements.length, setActiveRotation, zoom]);
+  }, [clampOffsetToVisibleContent, isPlaceMode, offset, selectedPlacements.length, setActiveRotation, zoom]);
 
   const detectNearestEdge = useCallback((clientX, clientY, cell) => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -2296,6 +2308,26 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
 
     if (tile && partType === 'floor_base' && isFlatPlaneTile(tile)) {
       const tileGeometry = getTileGeometry(cameraYaw, tile.rotation || 0);
+      const planeSvg = (
+        <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`} aria-hidden="true">
+          {tileGeometry.sides.map((points, index) => (
+            <polygon key={`side-${index}`} className="city-channel-thumbnail-surface is-side" points={points} />
+          ))}
+          <polygon className="city-channel-thumbnail-surface is-top" points={tileGeometry.top} />
+        </svg>
+      );
+      if (isThumbnailInteractionLocked) {
+        return (
+          <div
+            key={`thumb:${item.id}`}
+            className={`${commonClass} is-plane`}
+            style={commonStyle}
+            aria-hidden="true"
+          >
+            {planeSvg}
+          </div>
+        );
+      }
       return (
         <button
           key={`thumb:${item.id}`}
@@ -2311,12 +2343,7 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
           title={getLayerLabel(z)}
           aria-label={`缩略图${getLayerLabel(z)}`}
         >
-          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`} aria-hidden="true">
-            {tileGeometry.sides.map((points, index) => (
-              <polygon key={`side-${index}`} className="city-channel-thumbnail-surface is-side" points={points} />
-            ))}
-            <polygon className="city-channel-thumbnail-surface is-top" points={tileGeometry.top} />
-          </svg>
+          {planeSvg}
         </button>
       );
     }
@@ -2399,8 +2426,13 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
 
     return (
       <div
-        className={`city-channel-thumbnail ${isThumbnailOpen ? 'is-open' : 'is-closed'}`}
-        onPointerDown={(event) => event.stopPropagation()}
+        ref={thumbnailRef}
+        className={getCityChannelThumbnailClassName({
+          isOpen: isThumbnailOpen,
+          isLocked: isThumbnailInteractionLocked,
+          isNearCursor: isThumbnailNearCursor
+        })}
+        onPointerDown={isThumbnailInteractionLocked ? undefined : (event) => event.stopPropagation()}
       >
         {isThumbnailOpen ? (
           <div
@@ -2419,7 +2451,11 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
         <button
           type="button"
           className="city-channel-thumbnail__toggle"
-          onClick={() => setIsThumbnailOpen((current) => !current)}
+          disabled={isThumbnailInteractionLocked}
+          onClick={() => {
+            if (isThumbnailInteractionLocked) return;
+            setIsThumbnailOpen((current) => !current);
+          }}
           title={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
           aria-label={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
         >
@@ -2867,10 +2903,10 @@ const CityChannelImmersiveEditor = ({ initialMapData, templateId = null, templat
             <span>移动</span>
             <em className="city-channel-shortcut-hint">M</em>
           </button>
-          <button type="button" className="city-channel-selection-action" onClick={() => rotatePlacements(selectedPlacements)} title="旋转 (滚轮↑)">
+          <button type="button" className="city-channel-selection-action" onClick={() => rotatePlacements(selectedPlacements)} title="旋转 (Shift+滚轮)">
             <RotateCw size={14} />
             <span>旋转</span>
-            <em className="city-channel-shortcut-hint">滚轮</em>
+            <em className="city-channel-shortcut-hint">Shift+滚轮</em>
           </button>
           <button type="button" className="city-channel-selection-action is-danger" onClick={() => { deletePlacements(selectedPlacements); clearSelection(); }} title="删除 (Del)">
             <Trash2 size={14} />

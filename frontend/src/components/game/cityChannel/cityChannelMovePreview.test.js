@@ -89,6 +89,144 @@ describe('cityChannelMovePreview', () => {
     expect(preview.invalidPlacementKeys).toEqual(new Set());
   });
 
+  it('lays a moved vertical board flat when the target cell carries layFlat intent', () => {
+    const mapData = createMapWithTiles({
+      [createCellKey(10, 10, 0)]: createTile({
+        x: 10,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+      })
+    });
+    mapData.tiles[createCellKey(10, 10, 0)].isVertical = true;
+
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins: [{ x: 10, y: 10, z: 0 }],
+      targetCell: { x: 12, y: 10, z: 0, layFlat: true }
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.conflicts).toEqual([]);
+    expect(preview.movedTilePlacements).toHaveLength(1);
+    expect(preview.movedTilePlacements[0].isVertical).toBe(false);
+    expect(preview.moves[0].to.layFlat).toBe(true);
+  });
+
+  it('lays a moved wall placement flat when the target cell carries layFlat intent', () => {
+    const wall = createWall({
+      x: 10,
+      y: 10,
+      z: 0,
+      edge: 'north',
+      panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'wall lay flat regression' }),
+      tiles: {},
+      walls: {
+        '0:10:10:north': wall
+      }
+    };
+
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins: [{ x: 10, y: 10, z: 0, edge: 'north' }],
+      targetCell: { x: 12, y: 10, z: 0, layFlat: true }
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.moves[0].to.edge).toBeUndefined();
+    expect(preview.moves[0].to.layFlat).toBe(true);
+    expect(preview.movedWallPlacements).toHaveLength(0);
+    expect(preview.movedTilePlacements).toHaveLength(1);
+    expect(preview.movedTilePlacements[0].isVertical).toBe(false);
+  });
+
+  it('raises a moved flat board into a wall when the target carries an edge', () => {
+    const mapData = createMapWithTiles({
+      [createCellKey(10, 10, 0)]: createTile({
+        x: 10,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+        rotation: 90
+      })
+    });
+
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins: [{ x: 10, y: 10, z: 0 }],
+      targetCell: { x: 12, y: 10, z: 0, edge: 'east' }
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.moves[0].to.edge).toBe('east');
+    expect(preview.movedTilePlacements).toHaveLength(0);
+    expect(preview.movedWallPlacements).toHaveLength(1);
+    expect(preview.movedWallPlacements[0].edge).toBe('east');
+  });
+
+  it('keeps a moved vertical board vertical when the target cell has no layFlat intent', () => {
+    const mapData = createMapWithTiles({
+      [createCellKey(10, 10, 0)]: createTile({
+        x: 10,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+      }),
+      [createCellKey(12, 10, 0)]: createTile({
+        x: 12,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      })
+    });
+    mapData.tiles[createCellKey(10, 10, 0)].isVertical = true;
+
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins: [{ x: 10, y: 10, z: 0 }],
+      targetCell: { x: 12, y: 10, z: 0 }
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.movedTilePlacements).toHaveLength(1);
+    expect(preview.movedTilePlacements[0].isVertical).toBe(true);
+    expect(preview.moves[0].to.layFlat).toBeUndefined();
+  });
+
+  it('rejects laying a moved vertical board flat onto a static horizontal floor', () => {
+    // 复现：竖直板被搬运（carry）到一个已有水平地板的格子上。
+    // 此时 resolver 会给出 layFlat 目标，move preview 应当把它视为水平板，
+    // 与原地板碰撞、标红，而不是悄悄覆盖。
+    const mapData = createMapWithTiles({
+      [createCellKey(10, 10, 0)]: createTile({
+        x: 10,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      }),
+      [createCellKey(12, 10, 0)]: createTile({
+        x: 12,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+      })
+    });
+    mapData.tiles[createCellKey(10, 10, 0)].isVertical = true;
+
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins: [{ x: 10, y: 10, z: 0 }],
+      targetCell: { x: 12, y: 10, z: 0, layFlat: true }
+    });
+
+    expect(preview.valid).toBe(false);
+    expect(preview.conflicts.map((conflict) => conflict.reason)).toContain('placement_occupied');
+    expect(preview.invalidPlacementKeys.has(createCellKey(12, 10, 0))).toBe(true);
+  });
+
   it('allows moved vertical boards to stand on a static floor tile', () => {
     const mapData = createMapWithTiles({
       [createCellKey(10, 10, 0)]: createTile({

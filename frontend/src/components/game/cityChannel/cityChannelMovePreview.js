@@ -1,5 +1,6 @@
 import {
   CITY_CHANNEL_TILE_TYPES,
+  cloneGearMounts,
   createCellKey,
   createTile,
   createWall,
@@ -531,6 +532,7 @@ export const computeCityChannelMovePreviewModel = ({
     componentIdByPlacementKey,
     invalidPlacementKeys
   };
+  const layFlatTarget = !!targetCell?.layFlat && !targetCell?.edge;
   const moves = origins.map((origin) => ({
     from: origin,
     componentId: componentIdByOriginKey.get(getSelectionPlacementKey(origin)) || null,
@@ -540,7 +542,15 @@ export const computeCityChannelMovePreviewModel = ({
       z: origin.z + dz,
       ...(explicitSurfaceTarget
         ? (explicitSurfaceTarget.edge ? { edge: explicitSurfaceTarget.edge } : {})
-        : (origin.edge ? { edge: origin.edge } : {}))
+        : (
+          targetCell.edge && origins.length === 1
+            ? { edge: targetCell.edge }
+            : (origin.edge && !layFlatTarget ? { edge: origin.edge } : {})
+        )),
+      ...(targetCell.rotation !== undefined ? { rotation: normalizeRotation(targetCell.rotation) } : {}),
+      // 当 carry resolver 判定要 lay flat（将竖直板放平到空地）时，
+      // 把这个意图沿着 move 一起传下去，便于下游覆盖 isVertical。
+      ...(layFlatTarget ? { layFlat: true } : {})
     }
   }));
   const movedTilePlacements = [];
@@ -575,16 +585,26 @@ export const computeCityChannelMovePreviewModel = ({
       const sourceWall = from.edge ? mapData.walls?.[createWallSelectionKey(from)] : null;
       const sourceTile = !from.edge ? mapData.tiles?.[createCellKey(from.x, from.y, from.z)] : null;
       const placement = sourceWall
-        ? { ...sourceWall, x: to.x, y: to.y, z: to.z, edge: to.edge }
+        ? {
+          ...sourceWall,
+          x: to.x,
+          y: to.y,
+          z: to.z,
+          edge: to.edge,
+          gearMounts: cloneGearMounts(sourceWall.gearMounts || [])
+        }
         : sourceTile
-          ? createWall({
-            x: to.x,
-            y: to.y,
-            z: to.z,
-            edge: to.edge,
-            panelType: sourceTile.panelType,
-            transmissionRotation: sourceTile.transmissionRotation ?? sourceTile.rotation ?? 0
-          })
+          ? {
+            ...createWall({
+              x: to.x,
+              y: to.y,
+              z: to.z,
+              edge: to.edge,
+              panelType: sourceTile.panelType,
+              transmissionRotation: sourceTile.transmissionRotation ?? sourceTile.rotation ?? 0
+            }),
+            gearMounts: cloneGearMounts(sourceTile.gearMounts || [])
+          }
           : null;
       if (!placement) return;
       movedWallPlacements.push(placement);
@@ -602,15 +622,28 @@ export const computeCityChannelMovePreviewModel = ({
     const sourceTile = !from.edge ? mapData.tiles?.[createCellKey(from.x, from.y, from.z)] : null;
     const sourceWall = from.edge ? mapData.walls?.[createWallSelectionKey(from)] : null;
     const placement = sourceTile
-      ? { ...sourceTile, x: to.x, y: to.y, z: to.z }
+      ? {
+        ...sourceTile,
+        x: to.x,
+        y: to.y,
+        z: to.z,
+        ...(to.rotation !== undefined ? { rotation: normalizeRotation(to.rotation) } : {}),
+        ...(to.layFlat ? { isVertical: false } : {}),
+        gearMounts: cloneGearMounts(sourceTile.gearMounts || [])
+      }
       : sourceWall
-        ? createTile({
-          x: to.x,
-          y: to.y,
-          z: to.z,
-          panelType: sourceWall.panelType,
-          transmissionRotation: sourceWall.transmissionRotation || 0
-        })
+        ? {
+          ...createTile({
+            x: to.x,
+            y: to.y,
+            z: to.z,
+            panelType: sourceWall.panelType,
+            rotation: to.rotation ?? sourceWall.rotation ?? 0,
+            transmissionRotation: sourceWall.transmissionRotation || 0
+          }),
+          gearMounts: cloneGearMounts(sourceWall.gearMounts || []),
+          isVertical: to.layFlat ? false : sourceWall.isVertical
+        }
         : null;
     if (!placement) return;
     movedTilePlacements.push(placement);

@@ -77,6 +77,38 @@ const scaleOffset = (offset, scale = 1) => ({
   y: offset.y * scale
 });
 
+const midpoint = (a, b) => ({
+  x: ((a?.x || 0) + (b?.x || 0)) * 0.5,
+  y: ((a?.y || 0) + (b?.y || 0)) * 0.5
+});
+
+export const getFloorTransmissionMidPlane = (geometry = {}) => (
+  Array.isArray(geometry.top)
+    ? geometry.top.map((point) => ({ x: point.x, y: point.y + (FLOOR_THICKNESS * 0.5) }))
+    : []
+);
+
+export const getWallTransmissionMidPlane = (geometry = {}) => {
+  const front = geometry.wallFront || geometry.wall;
+  const back = geometry.wallBack;
+  if (!Array.isArray(front) || front.length < 4) return [];
+  if (!Array.isArray(back) || back.length < 4) return front;
+  return [
+    midpoint(front[0], back[1]),
+    midpoint(front[1], back[0]),
+    midpoint(front[2], back[3]),
+    midpoint(front[3], back[2])
+  ];
+};
+
+export const getTransmissionMidPlane = (geometry = {}, surface = 'floor') => (
+  surface === 'wall' ? getWallTransmissionMidPlane(geometry) : getFloorTransmissionMidPlane(geometry)
+);
+
+export const getTransmissionPortPlane = (geometry = {}, surface = 'floor') => (
+  getTransmissionMidPlane(geometry, surface)
+);
+
 const rotateWorldPoint = (point, degrees = 0) => {
   const radians = (degrees * Math.PI) / 180;
   return {

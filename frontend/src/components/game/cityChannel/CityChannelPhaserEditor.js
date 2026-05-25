@@ -46,6 +46,11 @@ import {
   createTileGeometry,
   projectCell
 } from './phaser/renderer/CityChannelGeometry';
+import {
+  getCityChannelThumbnailClassName,
+  isCityChannelThumbnailInteractionLocked,
+  isPointerNearThumbnail
+} from './cityChannelThumbnailUi';
 import './CityChannelImmersiveEditor.css';
 import './CityChannelPhaserEditor.css';
 
@@ -227,6 +232,9 @@ const CityChannelPhaserEditor = ({
   const [mechanismPreviewState, setMechanismPreviewState] = useState(null);
   const [isThumbnailOpen, setIsThumbnailOpen] = useState(true);
   const [thumbnailHoverLayer, setThumbnailHoverLayer] = useState(null);
+  const thumbnailRef = useRef(null);
+  const [carryActive, setCarryActive] = useState(false);
+  const [isThumbnailNearCursor, setIsThumbnailNearCursor] = useState(false);
   const [visibleLayerCutoff, setVisibleLayerCutoff] = useState(null);
 
   const planeLevels = useMemo(() => getMapPlaneLevels(mapData), [mapData]);
@@ -712,7 +720,8 @@ const CityChannelPhaserEditor = ({
     onMechanismPreviewProgress: handleMechanismPreviewProgress,
     externalInspectOverlay: true,
     mechanismParams,
-    onToast: addToast
+    onToast: addToast,
+    onCarryStateChange: setCarryActive
   }), [
     activeRotation,
     activeLayer,
@@ -820,6 +829,28 @@ const CityChannelPhaserEditor = ({
     sceneRef.current?.updateConfig?.(sceneConfig);
   }, [sceneConfig]);
 
+  const isThumbnailInteractionLocked = useMemo(() => (
+    isCityChannelThumbnailInteractionLocked({
+      activeTool,
+      activeTileType,
+      activeComponentType,
+      carryActive
+    })
+  ), [activeTool, activeTileType, activeComponentType, carryActive]);
+
+  useEffect(() => {
+    if (!isThumbnailInteractionLocked) {
+      setIsThumbnailNearCursor(false);
+      return undefined;
+    }
+    const handlePointerMove = (event) => {
+      const rect = thumbnailRef.current?.getBoundingClientRect();
+      setIsThumbnailNearCursor(isPointerNearThumbnail(event.clientX, event.clientY, rect));
+    };
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    return () => window.removeEventListener('pointermove', handlePointerMove);
+  }, [isThumbnailInteractionLocked]);
+
   useEffect(() => {
     if (!mechanismPanel?.cell) return;
     const selectedKey = selectedCells.length === 1 && selectedWalls.length === 0
@@ -923,6 +954,26 @@ const CityChannelPhaserEditor = ({
 
     if (item.kind === 'tile' && isFlatPlaneTile(item.tile)) {
       const geometry = createTileGeometry(thumbnailYaw, item.tile.rotation || 0);
+      const planeSvg = (
+        <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`} aria-hidden="true">
+          {geometry.sides.map((points, index) => (
+            <polygon key={`side-${index}`} className="city-channel-thumbnail-surface is-side" points={polygonPoints(points)} />
+          ))}
+          <polygon className="city-channel-thumbnail-surface is-top" points={polygonPoints(geometry.top)} />
+        </svg>
+      );
+      if (isThumbnailInteractionLocked) {
+        return (
+          <div
+            key={`thumb:${item.id}`}
+            className={`${commonClass} is-plane`}
+            style={commonStyle}
+            aria-hidden="true"
+          >
+            {planeSvg}
+          </div>
+        );
+      }
       return (
         <button
           key={`thumb:${item.id}`}
@@ -938,12 +989,7 @@ const CityChannelPhaserEditor = ({
           title={getLayerLabel(z)}
           aria-label={`缩略图${getLayerLabel(z)}`}
         >
-          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`} aria-hidden="true">
-            {geometry.sides.map((points, index) => (
-              <polygon key={`side-${index}`} className="city-channel-thumbnail-surface is-side" points={polygonPoints(points)} />
-            ))}
-            <polygon className="city-channel-thumbnail-surface is-top" points={polygonPoints(geometry.top)} />
-          </svg>
+          {planeSvg}
         </button>
       );
     }
@@ -980,8 +1026,13 @@ const CityChannelPhaserEditor = ({
 
     return (
       <div
-        className={`city-channel-thumbnail ${isThumbnailOpen ? 'is-open' : 'is-closed'}`}
-        onPointerDown={stopEditorPanelPointerEvent}
+        ref={thumbnailRef}
+        className={getCityChannelThumbnailClassName({
+          isOpen: isThumbnailOpen,
+          isLocked: isThumbnailInteractionLocked,
+          isNearCursor: isThumbnailNearCursor
+        })}
+        onPointerDown={isThumbnailInteractionLocked ? undefined : stopEditorPanelPointerEvent}
       >
         {isThumbnailOpen ? (
           <div className="city-channel-thumbnail__panel">
@@ -997,7 +1048,7 @@ const CityChannelPhaserEditor = ({
                 {thumbnailItems.map(renderThumbnailItem)}
               </div>
             </div>
-            {visibleLayerCutoff !== null ? (
+            {visibleLayerCutoff !== null && !isThumbnailInteractionLocked ? (
               <button
                 type="button"
                 className="city-channel-thumbnail__restore"
@@ -1011,7 +1062,11 @@ const CityChannelPhaserEditor = ({
         <button
           type="button"
           className="city-channel-thumbnail__toggle"
-          onClick={() => setIsThumbnailOpen((current) => !current)}
+          disabled={isThumbnailInteractionLocked}
+          onClick={() => {
+            if (isThumbnailInteractionLocked) return;
+            setIsThumbnailOpen((current) => !current);
+          }}
           title={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
           aria-label={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
         >
@@ -1110,11 +1165,25 @@ const CityChannelPhaserEditor = ({
                 <span>移动</span>
                 <em className="city-channel-shortcut-hint">M</em>
               </button>
-              <button type="button" className="city-channel-selection-action" onClick={() => handleRotateSelection('forward')} title="传动骨骼朝向 (滚轮)">
+              <button type="button" className="city-channel-selection-action" onClick={() => handleRotateSelection('forward')} title="传动骨骼朝向 (Shift+滚轮)">
                 <RotateCw size={14} />
                 <span>传动朝向</span>
-                <em className="city-channel-shortcut-hint">滚轮</em>
+                <em className="city-channel-shortcut-hint">Shift+滚轮</em>
               </button>
+              {carryActive && selectedPlacements.length === 1 && (
+                <>
+                  <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.rotateCarryPlacementSurface?.()} title="移动预览表面朝向 (R / Shift+R)">
+                    <RotateCw size={14} />
+                    <span>表面朝向</span>
+                    <em className="city-channel-shortcut-hint">R</em>
+                  </button>
+                  <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.cycleCarryPlacementSurface?.({ allowMultiple: false })} title="未吸附切默认姿态，吸附后切安装面 (Space)">
+                    <PanelTop size={14} />
+                    <span>姿态/吸附面</span>
+                    <em className="city-channel-shortcut-hint">Space</em>
+                  </button>
+                </>
+              )}
               {canInspectSelectedTile && (
                 <button
                   type="button"
@@ -1246,7 +1315,8 @@ const CityChannelPhaserEditor = ({
         {activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE ? (
           <>
             <span>左键放置，右键或 Esc 取消</span>
-            <span>R 顺转，Shift+R 逆转，Space 按当前吸附边切安装面</span>
+            <span>滚轮缩放；Shift+滚轮 / R / Shift+R 旋转预览</span>
+            <span>Space 按当前吸附边切换安装面</span>
           </>
         ) : activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT ? (
           <>
@@ -1256,7 +1326,7 @@ const CityChannelPhaserEditor = ({
         ) : (
           <>
             <span>拖拽平移，双击后拖拽或 Q/E 旋转视角</span>
-            <span>滚轮缩放；选中后 M 移动、Del 删除</span>
+            <span>滚轮缩放；M 移动，移动预览中 R 转表面、Space 切姿态/吸附面、Del 删除</span>
           </>
         )}
         {selectedCount > 0 ? <em>{selectedCount} 个选中</em> : null}

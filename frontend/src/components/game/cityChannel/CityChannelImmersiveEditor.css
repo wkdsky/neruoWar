@@ -1123,6 +1123,21 @@ body.city-channel-immersive-active .home-location-dock {
   align-items: center;
   gap: 0.42rem;
   pointer-events: auto;
+  transition: opacity 140ms ease;
+}
+
+/* 放置/移动时整块穿透，让画布 ghost 可继续跟随鼠标 */
+.city-channel-thumbnail.is-interaction-locked {
+  pointer-events: none;
+  cursor: default;
+}
+
+.city-channel-thumbnail.is-interaction-locked .city-channel-thumbnail__toggle:disabled {
+  opacity: 0.55;
+}
+
+.city-channel-thumbnail.is-interaction-locked.is-near-cursor {
+  opacity: 0.42;
 }
 
 .city-channel-thumbnail__stage {

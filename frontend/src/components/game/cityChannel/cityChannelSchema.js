@@ -563,9 +563,11 @@ export const normalizeTile = (tile = {}, bounds = null) => {
     mechanismModel: tile.mechanismModel && typeof tile.mechanismModel === 'object'
       ? tile.mechanismModel
       : (catalogItem.mechanismModel || null),
-    transmissionSkeleton: tile.transmissionSkeleton && typeof tile.transmissionSkeleton === 'object'
-      ? cloneTransmissionSkeleton(tile.transmissionSkeleton)
-      : cloneTransmissionSkeleton(catalogItem.transmissionSkeleton),
+    transmissionSkeleton: catalogItem.transmissionSkeleton
+      ? (tile.transmissionSkeleton && typeof tile.transmissionSkeleton === 'object'
+        ? cloneTransmissionSkeleton(tile.transmissionSkeleton)
+        : cloneTransmissionSkeleton(catalogItem.transmissionSkeleton))
+      : null,
     gearMounts: Array.isArray(tile.gearMounts) && tile.gearMounts.length > 0
       ? cloneGearMounts(tile.gearMounts)
       : cloneGearMounts(catalogItem.gearMounts),
@@ -623,9 +625,11 @@ export const normalizeWall = (wall = {}, bounds = null) => {
     mechanismModel: wall.mechanismModel && typeof wall.mechanismModel === 'object'
       ? wall.mechanismModel
       : (catalogItem.mechanismModel || null),
-    transmissionSkeleton: wall.transmissionSkeleton && typeof wall.transmissionSkeleton === 'object'
-      ? cloneTransmissionSkeleton(wall.transmissionSkeleton)
-      : cloneTransmissionSkeleton(catalogItem.transmissionSkeleton),
+    transmissionSkeleton: catalogItem.transmissionSkeleton
+      ? (wall.transmissionSkeleton && typeof wall.transmissionSkeleton === 'object'
+        ? cloneTransmissionSkeleton(wall.transmissionSkeleton)
+        : cloneTransmissionSkeleton(catalogItem.transmissionSkeleton))
+      : null,
     gearMounts: Array.isArray(wall.gearMounts) && wall.gearMounts.length > 0
       ? cloneGearMounts(wall.gearMounts)
       : cloneGearMounts(catalogItem.gearMounts),

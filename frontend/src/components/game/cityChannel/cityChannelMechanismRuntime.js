@@ -1,3 +1,4 @@
+import { getCityChannelMaterial } from './cityChannelCatalog';
 import {
   CITY_CHANNEL_TILE_TYPES,
   createCellKey,
@@ -55,6 +56,13 @@ const directionVector = {
   east: { x: 1, y: 0 },
   south: { x: 0, y: 1 },
   west: { x: -1, y: 0 }
+};
+
+const edgeEndpointsByEdge = {
+  north: [{ x: -0.5, y: -0.5 }, { x: 0.5, y: -0.5 }],
+  south: [{ x: -0.5, y: 0.5 }, { x: 0.5, y: 0.5 }],
+  west: [{ x: -0.5, y: -0.5 }, { x: -0.5, y: 0.5 }],
+  east: [{ x: 0.5, y: -0.5 }, { x: 0.5, y: 0.5 }]
 };
 
 const oppositeDirection = {
@@ -148,7 +156,10 @@ const rotateLocalPosition = (position = {}, rotation = 0, flipped = false) => {
 };
 
 export const getWorldTransmissionPorts = (tile = {}, componentKey = '') => {
-  const ports = Array.isArray(tile.transmissionSkeleton?.ports) ? tile.transmissionSkeleton.ports : [];
+  const catalogPorts = getCityChannelMaterial(tile.panelType)?.transmissionSkeleton?.ports;
+  const ports = Array.isArray(catalogPorts) && catalogPorts.length > 0
+    ? catalogPorts
+    : [];
   const baseRotation = tile.edge ? wallEdgeToRotation(tile.edge) : 0;
   const localRotation = normalizeRotation(tile.transmissionRotation ?? tile.rotation ?? 0);
   const directionRotation = normalizeRotation(baseRotation + localRotation);
@@ -188,12 +199,58 @@ const arePortsAligned = (fromPort, toPort) => {
   return Math.abs((fromPos.y || 0) - (toPos.y || 0)) <= 0.08;
 };
 
+const getCellVerticalEndpoints = (rotation = 0) => {
+  const normalized = ((Number.parseInt(rotation, 10) || 0) % 180 + 180) % 180;
+  return normalized === 90
+    ? [{ x: 0, y: -0.5 }, { x: 0, y: 0.5 }]
+    : [{ x: -0.5, y: 0 }, { x: 0.5, y: 0 }];
+};
+
+const lerp = (a, b, t) => a + ((b - a) * t);
+
+const getTransmissionSocketPosition = (component = {}, port = {}) => {
+  if (!component || !port) return null;
+  const local = port.worldLocalPosition || rotateLocalPosition(
+    port.localPosition || { x: 0, y: 0, z: 0 },
+    normalizeRotation(component.transmissionRotation ?? component.rotation ?? 0),
+    false
+  );
+
+  if (component.edge || component.isVertical) {
+    const endpoints = component.edge
+      ? (edgeEndpointsByEdge[component.edge] || edgeEndpointsByEdge.north)
+      : getCellVerticalEndpoints(component.rotation || 0);
+    const u = Math.max(0, Math.min(1, (local.x || 0) + 0.5));
+    return {
+      x: (Number(component.x) || 0) + lerp(endpoints[0].x, endpoints[1].x, u),
+      y: (Number(component.y) || 0) + lerp(endpoints[0].y, endpoints[1].y, u),
+      z: (Number(component.z) || 0) + 0.5 - (local.y || 0)
+    };
+  }
+
+  return {
+    x: (Number(component.x) || 0) + (local.x || 0),
+    y: (Number(component.y) || 0) + (local.y || 0),
+    z: Number(component.z) || 0
+  };
+};
+
+const getSocketKey = (socket = {}) => [
+  Math.round((Number(socket.x) || 0) * 1000),
+  Math.round((Number(socket.y) || 0) * 1000),
+  Math.round((Number(socket.z) || 0) * 1000)
+].join(':');
+
 const addEdge = (graph, a, b, meta) => {
   graph.set(a, graph.get(a) || []);
   graph.set(b, graph.get(b) || []);
   graph.get(a).push({ key: b, ...meta });
   graph.get(b).push({ key: a, ...meta, from: meta.to, to: meta.from });
 };
+
+const hasGraphEdge = (graph, a, b) => (
+  (graph.get(a) || []).some((edge) => edge.key === b)
+);
 
 const pushUnique = (list, value) => {
   if (value && !list.includes(value)) list.push(value);
@@ -292,6 +349,35 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
         }
       });
     });
+  });
+
+  const portsBySocketKey = new Map();
+  connectableKeys.forEach((componentKey) => {
+    const component = components[componentKey];
+    (portByTileKey.get(componentKey) || []).forEach((port) => {
+      const socket = getTransmissionSocketPosition(component, port);
+      if (!socket) return;
+      const socketKey = getSocketKey(socket);
+      portsBySocketKey.set(socketKey, portsBySocketKey.get(socketKey) || []);
+      portsBySocketKey.get(socketKey).push({ componentKey, port });
+    });
+  });
+
+  portsBySocketKey.forEach((entries) => {
+    for (let fromIndex = 0; fromIndex < entries.length; fromIndex += 1) {
+      for (let toIndex = fromIndex + 1; toIndex < entries.length; toIndex += 1) {
+        const fromEntry = entries[fromIndex];
+        const toEntry = entries[toIndex];
+        if (fromEntry.componentKey === toEntry.componentKey) continue;
+        if (hasGraphEdge(graph, fromEntry.componentKey, toEntry.componentKey)) continue;
+        addEdge(graph, fromEntry.componentKey, toEntry.componentKey, {
+          from: { componentKey: fromEntry.componentKey, portId: fromEntry.port.id },
+          to: { componentKey: toEntry.componentKey, portId: toEntry.port.id },
+          looseSurfaceConnection: false,
+          socketConnection: true
+        });
+      }
+    }
   });
 
   const assemblies = [];

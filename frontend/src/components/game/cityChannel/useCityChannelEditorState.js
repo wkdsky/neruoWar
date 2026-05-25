@@ -6,6 +6,8 @@ import {
   cloneConnectors,
   cloneHiddenModule,
   cloneMechanicalPorts,
+  clonePlainObject,
+  cloneTransmissionSkeleton,
   clampLayer,
   createCellKey,
   createDefaultCityChannelMap,
@@ -17,6 +19,7 @@ import {
   normalizeRotation,
   normalizeWallEdge,
   normalizeCityChannelMap,
+  cloneGearMounts,
   serializeCityChannelMap
 } from './cityChannelSchema';
 import { getCityChannelMaterial } from './cityChannelCatalog';
@@ -57,16 +60,18 @@ const upsertTile = (mapData, cell, tilePatch = {}) => {
   const catalogItem = getCityChannelMaterial(panelType);
   const key = createCellKey(cell.x, cell.y, cell.z);
   const existing = mapData.tiles[key] || {};
+  const baseTile = createTile({ x: cell.x, y: cell.y, z: cell.z, panelType });
   return {
     ...mapData.tiles,
     [key]: {
-      ...createTile({ x: cell.x, y: cell.y, z: cell.z, panelType }),
+      ...baseTile,
       ...existing,
       ...tilePatch,
       x: cell.x,
       y: cell.y,
       z: cell.z,
       panelType,
+      boardRole: catalogItem.boardRole || baseTile.boardRole || 'basic',
       category: definition.category || catalogItem.category || 'structure',
       rotation: normalizeRotation(tilePatch.rotation !== undefined ? tilePatch.rotation : existing.rotation),
       transmissionRotation: normalizeRotation(
@@ -77,6 +82,23 @@ const upsertTile = (mapData, cell, tilePatch = {}) => {
       walkable: !!definition.walkable,
       solid: !!definition.solid,
       transparent: !!definition.transparent,
+      transmissionSkeleton: tilePatch.transmissionSkeleton !== undefined
+        ? cloneTransmissionSkeleton(tilePatch.transmissionSkeleton)
+        : cloneTransmissionSkeleton(catalogItem.transmissionSkeleton),
+      gearMounts: tilePatch.gearMounts !== undefined
+        ? cloneGearMounts(tilePatch.gearMounts)
+        : (Array.isArray(existing.gearMounts) && existing.gearMounts.length > 0
+          ? cloneGearMounts(existing.gearMounts)
+          : cloneGearMounts(catalogItem.gearMounts)),
+      gearConfigs: tilePatch.gearConfigs !== undefined
+        ? clonePlainObject(tilePatch.gearConfigs)
+        : clonePlainObject(catalogItem.gearConfigs),
+      triggerConfig: tilePatch.triggerConfig !== undefined
+        ? clonePlainObject(tilePatch.triggerConfig)
+        : clonePlainObject(catalogItem.triggerConfig),
+      motionConfig: tilePatch.motionConfig !== undefined
+        ? clonePlainObject(tilePatch.motionConfig)
+        : clonePlainObject(catalogItem.motionConfig),
       marker: tilePatch.marker !== undefined
         ? tilePatch.marker
         : (catalogItem.markerType || existing.marker || null),
@@ -91,7 +113,7 @@ const upsertTile = (mapData, cell, tilePatch = {}) => {
         : cloneConnectors(catalogItem.connectors || catalogItem.hiddenModule?.connectorPoints || definition.connectors || []),
       mechanicalPorts: Array.isArray(tilePatch.mechanicalPorts)
         ? cloneMechanicalPorts(tilePatch.mechanicalPorts, catalogItem)
-        : cloneMechanicalPorts(catalogItem.mechanicalPorts || createTile({ x: cell.x, y: cell.y, z: cell.z, panelType }).mechanicalPorts || [], catalogItem)
+        : cloneMechanicalPorts(catalogItem.mechanicalPorts || baseTile.mechanicalPorts || [], catalogItem)
     }
   };
 };
@@ -506,13 +528,24 @@ const useCityChannelEditorState = (initialMapData = null) => {
 
       wallMoves.forEach(({ from, to, wall }) => {
         const edge = normalizeWallEdge(to.edge || from.edge);
-        nextWalls[createWallKey(to.x, to.y, to.z, edge)] = createWall({
-          ...wall,
-          x: to.x,
-          y: to.y,
-          z: to.z,
-          edge
-        });
+        nextWalls[createWallKey(to.x, to.y, to.z, edge)] = {
+          ...createWall({
+            x: to.x,
+            y: to.y,
+            z: to.z,
+            edge,
+            panelType: wall.panelType,
+            transmissionRotation: wall.transmissionRotation || 0,
+            marker: wall.marker
+          }),
+          gearMounts: cloneGearMounts(wall.gearMounts || []),
+          gearConfigs: wall.gearConfigs || {},
+          triggerConfig: wall.triggerConfig || {},
+          motionConfig: wall.motionConfig || {},
+          hiddenModule: wall.hiddenModule,
+          transmissionSkeleton: wall.transmissionSkeleton,
+          mechanismModel: wall.mechanismModel
+        };
       });
       wallToTileMoves.forEach(({ from, to, wall }) => {
         const tile = createTile({
@@ -520,12 +553,13 @@ const useCityChannelEditorState = (initialMapData = null) => {
           y: to.y,
           z: to.z,
           panelType: wall.panelType,
-          rotation: 0,
+          rotation: to.rotation ?? wall.rotation ?? 0,
           transmissionRotation: wall.transmissionRotation || 0
         });
         nextTiles[createCellKey(to.x, to.y, to.z)] = {
           ...tile,
-          gearMounts: wall.gearMounts || [],
+          ...(to.layFlat ? { isVertical: false } : {}),
+          gearMounts: cloneGearMounts(wall.gearMounts || []),
           gearConfigs: wall.gearConfigs || tile.gearConfigs,
           triggerConfig: wall.triggerConfig || tile.triggerConfig,
           motionConfig: wall.motionConfig || tile.motionConfig
@@ -538,7 +572,10 @@ const useCityChannelEditorState = (initialMapData = null) => {
           ...tile,
           x: to.x,
           y: to.y,
-          z: to.z
+          z: to.z,
+          ...(to.rotation !== undefined ? { rotation: normalizeRotation(to.rotation) } : {}),
+          ...(to.layFlat ? { isVertical: false } : {}),
+          gearMounts: cloneGearMounts(tile.gearMounts || [])
         };
         nextEntrances = movePointsAtCell(nextEntrances, from, to);
         nextExits = movePointsAtCell(nextExits, from, to);
@@ -555,7 +592,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
         });
         nextWalls[createWallKey(to.x, to.y, to.z, edge)] = {
           ...wall,
-          gearMounts: tile.gearMounts || [],
+          gearMounts: cloneGearMounts(tile.gearMounts || []),
           gearConfigs: tile.gearConfigs || wall.gearConfigs,
           triggerConfig: tile.triggerConfig || wall.triggerConfig,
           motionConfig: tile.motionConfig || wall.motionConfig

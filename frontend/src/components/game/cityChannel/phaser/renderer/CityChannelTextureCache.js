@@ -6,13 +6,18 @@ import {
   TILE_RENDER_WIDTH,
   createEdgeWallGeometry,
   createPortalGeometry,
-  createTileGeometry
+  createTileGeometry,
+  getTransmissionMidPlane
 } from './CityChannelGeometry';
+import { isGearPressurePlatePanel } from '../../cityChannelGearPressurePlateRender';
 
 export const TILE_TEXTURE_SUPERSAMPLE = 2;
 const TEXTURE_YAW_STEP = 2;
 const TEXTURE_RENDER_WIDTH = TILE_RENDER_WIDTH * TILE_TEXTURE_SUPERSAMPLE;
 const TEXTURE_RENDER_HEIGHT = TILE_RENDER_HEIGHT * TILE_TEXTURE_SUPERSAMPLE;
+const TRANSMISSION_TRACE_ALPHA = 0.28;
+const TRANSMISSION_STUB_ALPHA = 0.9;
+const TRANSMISSION_STUB_LENGTH = 15;
 
 const colorByPanelType = {
   basic_plate: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
@@ -74,6 +79,72 @@ const colorToRgba = (color, alpha = 1) => {
   const g = (color >> 8) & 255;
   const b = color & 255;
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+const getInsetPoint = (start, end, distance = 0) => {
+  if (!start || !end) return end || start || { x: 0, y: 0 };
+  const dx = start.x - end.x;
+  const dy = start.y - end.y;
+  const length = Math.max(1, Math.hypot(dx, dy));
+  return {
+    x: end.x + ((dx / length) * distance),
+    y: end.y + ((dy / length) * distance)
+  };
+};
+
+const drawCanvasTransmissionTrace = (ctx, center, point) => {
+  const traceEnd = getInsetPoint(center, point, TRANSMISSION_STUB_LENGTH + 2);
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = colorToRgba(0x78350f, 0.2);
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(center.x, center.y);
+  ctx.lineTo(traceEnd.x, traceEnd.y);
+  ctx.stroke();
+  ctx.strokeStyle = colorToRgba(0xfacc15, TRANSMISSION_TRACE_ALPHA);
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(center.x, center.y);
+  ctx.lineTo(traceEnd.x, traceEnd.y);
+  ctx.stroke();
+  ctx.restore();
+};
+
+const drawCanvasTransmissionSocket = (ctx, center, point, connected = false) => {
+  const inner = getInsetPoint(center, point, connected ? TRANSMISSION_STUB_LENGTH + 4 : TRANSMISSION_STUB_LENGTH);
+  const dx = center.x - point.x;
+  const dy = center.y - point.y;
+  const length = Math.max(1, Math.hypot(dx, dy));
+  const cross = { x: -(dy / length), y: dx / length };
+  const alpha = connected ? 0.94 : TRANSMISSION_STUB_ALPHA;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = colorToRgba(0x78350f, alpha * 0.72);
+  ctx.lineWidth = connected ? 6 : 5;
+  ctx.beginPath();
+  ctx.moveTo(point.x, point.y);
+  ctx.lineTo(inner.x, inner.y);
+  ctx.stroke();
+  ctx.strokeStyle = colorToRgba(0xfacc15, alpha);
+  ctx.lineWidth = connected ? 3 : 2;
+  ctx.beginPath();
+  ctx.moveTo(point.x, point.y);
+  ctx.lineTo(inner.x, inner.y);
+  ctx.stroke();
+  ctx.fillStyle = colorToRgba(0x451a03, alpha * 0.82);
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, connected ? 4.5 : 3.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = colorToRgba(connected ? 0xfef3c7 : 0xfacc15, connected ? 0.88 : 0.62);
+  ctx.beginPath();
+  ctx.arc(point.x + (cross.x * 2), point.y + (cross.y * 2), connected ? 1.6 : 1.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(point.x - (cross.x * 2), point.y - (cross.y * 2), connected ? 1.6 : 1.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 };
 
 const traceCanvasPolygon = (ctx, points = []) => {
@@ -219,6 +290,9 @@ export class CityChannelTextureCache {
 
     if (panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || panelType === CITY_CHANNEL_TILE_TYPES.EXIT) {
       this.drawPortalModel(graphics, panelType, rotation, cameraYaw);
+    } else if (isGearPressurePlatePanel(panelType)) {
+      this.drawTransmissionSkeleton(graphics, material, transmissionRotation, geometry);
+      this.drawGearPressurePlateCornerHint(graphics, geometry, 0.24);
     } else {
       this.drawTransmissionSkeleton(graphics, material, transmissionRotation, geometry);
       this.drawGearMounts(graphics, material, transmissionRotation);
@@ -259,7 +333,8 @@ export class CityChannelTextureCache {
     drawPolygon(graphics, geometry.wallCap, 0x334155, isSolid ? baseAlpha : Math.max(outlineAlpha, 0.22), 0xe2e8f0, 0.5);
     drawPolygon(graphics, geometry.wallFront || geometry.wall, colors.top, wallAlpha, colors.edge, 0.76);
     this.drawStoneSurface(graphics, geometry.wallFront || geometry.wall, material.id);
-    this.drawWallTransmissionSkeleton(graphics, material, geometry.wallFront || geometry.wall, transmissionRotation);
+    const transmissionPlane = getTransmissionMidPlane(geometry, 'wall');
+    this.drawWallTransmissionSkeleton(graphics, material, transmissionPlane, transmissionRotation);
     this.drawWallGearMounts(graphics, material, geometry.wallFront || geometry.wall, transmissionRotation);
     if (material.gearIcon) {
       const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, transmissionRotation, geometry.wallFront || geometry.wall);
@@ -307,49 +382,22 @@ export class CityChannelTextureCache {
     const ports = material.transmissionSkeleton?.ports || [];
     if (ports.length > 0) {
       ctx.save();
-      ctx.strokeStyle = colorToRgba(0xfacc15, 0.92);
-      ctx.lineWidth = 7;
-      ctx.lineCap = 'round';
-      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, rotation, geometry.wallFront || geometry.wall);
+      const transmissionPlane = getTransmissionMidPlane(geometry, 'wall');
+      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, rotation, transmissionPlane);
       ports.forEach((port) => {
-        const point = this.mapBoardPointOnWall(port.localPosition, rotation, geometry.wallFront || geometry.wall);
-        ctx.beginPath();
-        ctx.moveTo(center.x, center.y);
-        ctx.lineTo(point.x, point.y);
-        ctx.stroke();
+        const point = this.mapBoardPointOnWall(port.localPosition, rotation, transmissionPlane);
+        drawCanvasTransmissionTrace(ctx, center, point);
       });
-      ctx.strokeStyle = colorToRgba(0x78350f, 0.82);
-      ctx.lineWidth = 2;
       ports.forEach((port) => {
-        const point = this.mapBoardPointOnWall(port.localPosition, rotation, geometry.wallFront || geometry.wall);
-        const dx = center.x - point.x;
-        const dy = center.y - point.y;
-        const length = Math.max(1, Math.hypot(dx, dy));
-        const inner = {
-          x: point.x + ((dx / length) * 9),
-          y: point.y + ((dy / length) * 9)
-        };
-        ctx.strokeStyle = colorToRgba(0x78350f, 0.72);
-        ctx.lineWidth = 5;
-        ctx.beginPath();
-        ctx.moveTo(point.x, point.y);
-        ctx.lineTo(inner.x, inner.y);
-        ctx.stroke();
-        ctx.strokeStyle = colorToRgba(0xfacc15, 0.92);
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(point.x, point.y);
-        ctx.lineTo(inner.x, inner.y);
-        ctx.stroke();
-        ctx.fillStyle = colorToRgba(0x451a03, 0.76);
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, 3.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = colorToRgba(0xfef3c7, 0.72);
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, 1.4, 0, Math.PI * 2);
-        ctx.fill();
+        const point = this.mapBoardPointOnWall(port.localPosition, rotation, transmissionPlane);
+        drawCanvasTransmissionSocket(ctx, center, point);
       });
+      if (ports.length > 1) {
+        ctx.fillStyle = colorToRgba(0xfacc15, 0.62);
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
     }
 
@@ -482,68 +530,128 @@ export class CityChannelTextureCache {
     };
   }
 
+  drawGearPressurePlateCornerHint(graphics, geometry = {}, alpha = 0.24) {
+    const top = geometry.top;
+    if (!Array.isArray(top) || top.length < 4) return;
+    let cornerIndex = 0;
+    let maxY = -Infinity;
+    top.forEach((point, index) => {
+      if (point.y > maxY) {
+        maxY = point.y;
+        cornerIndex = index;
+      }
+    });
+    const corner = top[cornerIndex];
+    const next = top[(cornerIndex + 1) % top.length];
+    const prev = top[(cornerIndex + top.length - 1) % top.length];
+    const inset = 0.3;
+    const alongNext = {
+      x: corner.x + ((next.x - corner.x) * inset),
+      y: corner.y + ((next.y - corner.y) * inset)
+    };
+    const alongPrev = {
+      x: corner.x + ((prev.x - corner.x) * inset),
+      y: corner.y + ((prev.y - corner.y) * inset)
+    };
+    const inner = {
+      x: (alongNext.x + alongPrev.x) * 0.5,
+      y: (alongNext.y + alongPrev.y) * 0.5
+    };
+
+    graphics.fillStyle(0x0c4a6e, alpha);
+    graphics.lineStyle(1, 0x67e8f9, Math.min(0.72, alpha + 0.22));
+    graphics.fillTriangle(corner.x, corner.y, alongNext.x, alongNext.y, alongPrev.x, alongPrev.y);
+    graphics.strokeTriangle(corner.x, corner.y, alongNext.x, alongNext.y, alongPrev.x, alongPrev.y);
+
+    graphics.fillStyle(0x172033, alpha + 0.18);
+    graphics.fillTriangle(alongNext.x, alongNext.y, alongPrev.x, alongPrev.y, inner.x, inner.y);
+
+    const gearX = inner.x;
+    const gearY = inner.y + 1;
+    const points = [];
+    const teeth = 6;
+    const outer = 4.5;
+    const innerR = 3.2;
+    for (let index = 0; index < teeth * 2; index += 1) {
+      const angle = (Math.PI * 2 * index) / (teeth * 2);
+      const radius = index % 2 === 0 ? outer : innerR;
+      points.push({
+        x: gearX + (Math.cos(angle) * radius),
+        y: gearY + (Math.sin(angle) * radius)
+      });
+    }
+    graphics.fillStyle(0x020617, Math.min(0.82, alpha + 0.34));
+    graphics.beginPath();
+    graphics.moveTo(points[0].x, points[0].y);
+    points.slice(1).forEach((point) => graphics.lineTo(point.x, point.y));
+    graphics.closePath();
+    graphics.fillPath();
+    graphics.fillStyle(0xf59e0b, Math.min(0.7, alpha + 0.28));
+    graphics.fillCircle(gearX, gearY, 1.4);
+  }
+
   drawTransmissionSkeleton(graphics, material, rotation = 0, geometry = null) {
     const ports = material.transmissionSkeleton?.ports || [];
     if (ports.length <= 0) return;
-    const center = this.mapBoardPointOnTile({ x: 0, y: 0 }, rotation, geometry);
-    graphics.lineStyle(8, 0xfacc15, 0.94);
+    const transmissionGeometry = { top: getTransmissionMidPlane(geometry, 'floor') };
+    const center = this.mapBoardPointOnTile({ x: 0, y: 0 }, rotation, transmissionGeometry);
     ports.forEach((port) => {
-      const point = this.mapBoardPointOnTile(port.localPosition, rotation, geometry);
-      graphics.lineBetween(center.x, center.y, point.x, point.y);
+      const point = this.mapBoardPointOnTile(port.localPosition, rotation, transmissionGeometry);
+      this.drawTransmissionTrace(graphics, center, point);
     });
-    graphics.lineStyle(2, 0x78350f, 0.82);
     ports.forEach((port) => {
-      const point = this.mapBoardPointOnTile(port.localPosition, rotation, geometry);
-      const dx = center.x - point.x;
-      const dy = center.y - point.y;
-      const length = Math.max(1, Math.hypot(dx, dy));
-      const inner = {
-        x: point.x + ((dx / length) * 9),
-        y: point.y + ((dy / length) * 9)
-      };
-      graphics.lineStyle(5, 0x78350f, 0.72);
-      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
-      graphics.lineStyle(2, 0xfacc15, 0.92);
-      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
-      graphics.fillStyle(0x451a03, 0.76);
-      graphics.fillCircle(point.x, point.y, 3.5);
-      graphics.fillStyle(0xfef3c7, 0.72);
-      graphics.fillCircle(point.x, point.y, 1.4);
+      const point = this.mapBoardPointOnTile(port.localPosition, rotation, transmissionGeometry);
+      this.drawTransmissionSocket(graphics, center, point);
     });
-    graphics.fillStyle(0xfacc15, 0.95);
-    graphics.fillCircle(center.x, center.y, ports.length > 1 ? 6 : 0);
+    if (ports.length > 1) {
+      graphics.fillStyle(0xfacc15, 0.62);
+      graphics.fillCircle(center.x, center.y, 4.5);
+    }
   }
 
   drawWallTransmissionSkeleton(graphics, material, wallPolygon, rotation = 0) {
     const ports = material.transmissionSkeleton?.ports || [];
     if (ports.length <= 0) return;
     const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, rotation, wallPolygon);
-    graphics.lineStyle(8, 0xfacc15, 0.94);
     ports.forEach((port) => {
       const point = this.mapBoardPointOnWall(port.localPosition, rotation, wallPolygon);
-      graphics.lineBetween(center.x, center.y, point.x, point.y);
+      this.drawTransmissionTrace(graphics, center, point);
     });
-    graphics.lineStyle(2, 0x78350f, 0.82);
     ports.forEach((port) => {
       const point = this.mapBoardPointOnWall(port.localPosition, rotation, wallPolygon);
-      const dx = center.x - point.x;
-      const dy = center.y - point.y;
-      const length = Math.max(1, Math.hypot(dx, dy));
-      const inner = {
-        x: point.x + ((dx / length) * 9),
-        y: point.y + ((dy / length) * 9)
-      };
-      graphics.lineStyle(5, 0x78350f, 0.72);
-      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
-      graphics.lineStyle(2, 0xfacc15, 0.92);
-      graphics.lineBetween(point.x, point.y, inner.x, inner.y);
-      graphics.fillStyle(0x451a03, 0.76);
-      graphics.fillCircle(point.x, point.y, 3.5);
-      graphics.fillStyle(0xfef3c7, 0.72);
-      graphics.fillCircle(point.x, point.y, 1.4);
+      this.drawTransmissionSocket(graphics, center, point);
     });
-    graphics.fillStyle(0xfacc15, 0.95);
-    graphics.fillCircle(center.x, center.y, ports.length > 1 ? 6 : 0);
+    if (ports.length > 1) {
+      graphics.fillStyle(0xfacc15, 0.62);
+      graphics.fillCircle(center.x, center.y, 4.5);
+    }
+  }
+
+  drawTransmissionTrace(graphics, center, point) {
+    const traceEnd = getInsetPoint(center, point, TRANSMISSION_STUB_LENGTH + 2);
+    graphics.lineStyle(7, 0x78350f, 0.2);
+    graphics.lineBetween(center.x, center.y, traceEnd.x, traceEnd.y);
+    graphics.lineStyle(3, 0xfacc15, TRANSMISSION_TRACE_ALPHA);
+    graphics.lineBetween(center.x, center.y, traceEnd.x, traceEnd.y);
+  }
+
+  drawTransmissionSocket(graphics, center, point, connected = false) {
+    const inner = getInsetPoint(center, point, connected ? TRANSMISSION_STUB_LENGTH + 4 : TRANSMISSION_STUB_LENGTH);
+    const dx = center.x - point.x;
+    const dy = center.y - point.y;
+    const length = Math.max(1, Math.hypot(dx, dy));
+    const cross = { x: -(dy / length), y: dx / length };
+    const alpha = connected ? 0.94 : TRANSMISSION_STUB_ALPHA;
+
+    graphics.lineStyle(connected ? 6 : 5, 0x78350f, alpha * 0.72);
+    graphics.lineBetween(point.x, point.y, inner.x, inner.y);
+    graphics.lineStyle(connected ? 3 : 2, 0xfacc15, alpha);
+    graphics.lineBetween(point.x, point.y, inner.x, inner.y);
+    graphics.fillStyle(0x451a03, alpha * 0.82);
+    graphics.fillCircle(point.x, point.y, connected ? 4.5 : 3.5);
+    graphics.fillStyle(connected ? 0xfef3c7 : 0xfacc15, connected ? 0.88 : 0.62);
+    graphics.fillCircle(point.x + (cross.x * 2), point.y + (cross.y * 2), connected ? 1.6 : 1.2);
+    graphics.fillCircle(point.x - (cross.x * 2), point.y - (cross.y * 2), connected ? 1.6 : 1.2);
   }
 
   drawGearIcon(graphics, cx, cy, radius = 16, teeth = 10, hubColor = 0x67e8f9) {
