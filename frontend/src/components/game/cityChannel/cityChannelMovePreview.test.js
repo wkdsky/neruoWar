@@ -167,6 +167,58 @@ describe('cityChannelMovePreview', () => {
     expect(preview.movedWallPlacements[0].edge).toBe('east');
   });
 
+  it('applies target rotation to moved wall transmission surface', () => {
+    const wall = createWall({
+      x: 10,
+      y: 10,
+      z: 0,
+      edge: 'north',
+      panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+      transmissionRotation: 0
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'wall move rotate regression' }),
+      tiles: {},
+      walls: {
+        '0:10:10:north': wall
+      }
+    };
+
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins: [{ x: 10, y: 10, z: 0, edge: 'north' }],
+      targetCell: { x: 12, y: 10, z: 0, edge: 'north', rotation: 90 }
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.movedWallPlacements).toHaveLength(1);
+    expect(preview.movedWallPlacements[0].transmissionRotation).toBe(90);
+  });
+
+  it('applies target rotation to moved floor transmission surface', () => {
+    const mapData = createMapWithTiles({
+      [createCellKey(10, 10, 0)]: createTile({
+        x: 10,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+        rotation: 0,
+        transmissionRotation: 0
+      })
+    });
+
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins: [{ x: 10, y: 10, z: 0 }],
+      targetCell: { x: 10, y: 10, z: 0, rotation: 90 }
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.movedTilePlacements).toHaveLength(1);
+    expect(preview.movedTilePlacements[0].rotation).toBe(90);
+    expect(preview.movedTilePlacements[0].transmissionRotation).toBe(90);
+  });
+
   it('keeps a moved vertical board vertical when the target cell has no layFlat intent', () => {
     const mapData = createMapWithTiles({
       [createCellKey(10, 10, 0)]: createTile({

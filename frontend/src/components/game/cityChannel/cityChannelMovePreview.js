@@ -591,6 +591,7 @@ export const computeCityChannelMovePreviewModel = ({
           y: to.y,
           z: to.z,
           edge: to.edge,
+          ...(to.rotation !== undefined ? { transmissionRotation: normalizeRotation(to.rotation) } : {}),
           gearMounts: cloneGearMounts(sourceWall.gearMounts || [])
         }
         : sourceTile
@@ -601,7 +602,7 @@ export const computeCityChannelMovePreviewModel = ({
               z: to.z,
               edge: to.edge,
               panelType: sourceTile.panelType,
-              transmissionRotation: sourceTile.transmissionRotation ?? sourceTile.rotation ?? 0
+              transmissionRotation: to.rotation ?? sourceTile.transmissionRotation ?? sourceTile.rotation ?? 0
             }),
             gearMounts: cloneGearMounts(sourceTile.gearMounts || [])
           }
@@ -628,6 +629,7 @@ export const computeCityChannelMovePreviewModel = ({
         y: to.y,
         z: to.z,
         ...(to.rotation !== undefined ? { rotation: normalizeRotation(to.rotation) } : {}),
+        ...(to.rotation !== undefined ? { transmissionRotation: normalizeRotation(to.rotation) } : {}),
         ...(to.layFlat ? { isVertical: false } : {}),
         gearMounts: cloneGearMounts(sourceTile.gearMounts || [])
       }
@@ -639,7 +641,7 @@ export const computeCityChannelMovePreviewModel = ({
             z: to.z,
             panelType: sourceWall.panelType,
             rotation: to.rotation ?? sourceWall.rotation ?? 0,
-            transmissionRotation: sourceWall.transmissionRotation || 0
+            transmissionRotation: to.rotation ?? sourceWall.transmissionRotation ?? sourceWall.rotation ?? 0
           }),
           gearMounts: cloneGearMounts(sourceWall.gearMounts || []),
           isVertical: to.layFlat ? false : sourceWall.isVertical

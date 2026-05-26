@@ -8,7 +8,6 @@ import {
   isValidCell,
   normalizeCityChannelMap,
   normalizeRotation,
-  rotationToWallEdge,
   wallEdgeToRotation
 } from '../cityChannelSchema';
 import { getCityChannelMaterial } from '../cityChannelCatalog';
@@ -4398,6 +4397,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           if (!this.dragState || this.dragState.moved) return;
           this.startCarry(hit.hit || null);
           this.dragState.mode = 'carry';
+          this.dragState.skipCarryCommitOnRelease = true;
           this.longPressTimer = null;
         }, SELECTED_MOVE_HOLD_DELAY);
       }
@@ -4501,6 +4501,12 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       }
 
       if (this.carryState || dragState.mode === 'carry' || dragState.mode === 'carryConfirm') {
+        if (dragState.skipCarryCommitOnRelease) {
+          const hitInfo = this.hitTest(pointer, { allowOutline: true });
+          this.updateCarrySelectionPreview(hitInfo);
+          this.drawGhostLayer(true);
+          return;
+        }
         const hitInfo = this.hitTest(pointer, { allowOutline: true });
         const isRightClick = pointer?.event?.button === 2 || pointer?.rightButtonDown?.();
         if (!isRightClick && this.carryState?.kind === 'placement') {
@@ -4572,18 +4578,15 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     handleWheel(pointer, gameObjects, deltaX, deltaY) {
       if (this.inspectState) return;
       const shiftHeld = !!pointer?.event?.shiftKey;
-      if (!shiftHeld && this.carryState?.kind === 'placement') {
-        this.cycleCarryPlacementSurface({ allowMultiple: false });
-        return;
-      }
-      if (shiftHeld && (this.selectedCells.length || this.selectedWalls.length)) {
+      const isCarryPlacement = this.carryState?.kind === 'placement';
+      if (!isCarryPlacement && shiftHeld && (this.selectedCells.length || this.selectedWalls.length)) {
         const direction = deltaY < 0 ? 'forward' : 'reverse';
         const placements = [...this.selectedCells, ...this.selectedWalls].map((placement) => ({ ...placement }));
         this.rotateTransmissionForPlacements(placements, direction);
         this.config.onRotateSelection?.(direction, { alreadyPreviewed: true, placements });
         return;
       }
-      if (shiftHeld && this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType) {
+      if (!isCarryPlacement && shiftHeld && this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType) {
         const delta = deltaY < 0 ? 90 : 270;
         this.rotateActivePlacement(delta);
         this.config.onHoverStatusChange?.(`放置预览：${delta === 90 ? '顺时针' : '逆时针'}旋转 90°`);
@@ -4596,6 +4599,63 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       this.drawSelectionLayer();
       this.drawGhostLayer(true);
       this.updateDebugText();
+    }
+
+    handleSpaceSurfaceToggle() {
+      if (this.carryState?.kind === 'placement') {
+        this.cycleCarryPlacementSurface({ allowMultiple: true });
+        return true;
+      }
+      if (!(this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType)) return false;
+      const pointer = this.input?.activePointer;
+      const hitInfo = pointer
+        ? this.hitTest(pointer, { allowOutline: true })
+        : {
+          cell: this.hoverCell,
+          hit: this.hoverTarget?.hit,
+          edge: this.hoverEdge,
+          localPoint: this.hoverTarget?.localPoint
+        };
+      const snap = this.resolvePlacementEdgeSnap(hitInfo);
+      const snapAxisKey = this.getSnapAxisKey(snap);
+      if (!snapAxisKey) {
+        const nextPose = this.panelPose === 'wall' ? 'floor' : 'wall';
+        this.setPlacementPose(nextPose);
+        this.config.onHoverStatusChange?.(nextPose === 'wall' ? '放置预览：切换为竖放' : '放置预览：切换为平放');
+        this.updateHover(hitInfo);
+        this.drawGhostLayer(true);
+        return true;
+      }
+      const options = this.getAxisPlacementOptions(snap);
+      if (options.length <= 0) {
+        this.config.onHoverStatusChange?.('放置预览：当前吸附轴周围没有空余安装面');
+        this.drawGhostLayer(true);
+        return true;
+      }
+      if (snapAxisKey !== this.activeSnapAxisKey) {
+        this.activeSnapAxisKey = snapAxisKey;
+        this.snapPlaneCycle = this.getPreferredAxisPlacementIndex(options);
+      }
+      this.snapPlaneCycle = ((this.snapPlaneCycle || 0) + 1) % options.length;
+      const target = options[this.snapPlaneCycle] || options[0];
+      this.setPlacementPose(target.kind === 'wall' ? 'wall' : 'floor');
+      this.config.onHoverStatusChange?.('放置预览：围绕当前吸附边切换安装面');
+      this.updateHover(hitInfo);
+      this.drawGhostLayer(true);
+      return true;
+    }
+
+    handleRotateSurface() {
+      if (this.carryState?.kind === 'placement') {
+        this.rotateCarryPlacementSurface('forward');
+        return true;
+      }
+      if (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType) {
+        this.rotateActivePlacement(90);
+        this.config.onHoverStatusChange?.('放置预览：顺时针旋转 90°');
+        return true;
+      }
+      return false;
     }
 
     handleKeyDown(event) {
@@ -4623,63 +4683,13 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         this.config.onDeleteSelection?.();
         return;
       }
-      if (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType && event.code === 'Space') {
-        event.preventDefault();
-        const pointer = this.input?.activePointer;
-        const hitInfo = pointer
-          ? this.hitTest(pointer, { allowOutline: true })
-          : {
-            cell: this.hoverCell,
-            hit: this.hoverTarget?.hit,
-            edge: this.hoverEdge,
-            localPoint: this.hoverTarget?.localPoint
-          };
-        const snap = this.resolvePlacementEdgeSnap(hitInfo);
-        const snapAxisKey = this.getSnapAxisKey(snap);
-        if (!snapAxisKey) {
-          const nextPose = this.panelPose === 'wall' ? 'floor' : 'wall';
-          this.setPlacementPose(nextPose);
-          this.config.onHoverStatusChange?.(nextPose === 'wall' ? '放置预览：切换为竖放' : '放置预览：切换为平放');
-          this.updateHover(hitInfo);
-          this.drawGhostLayer(true);
-          return;
-        }
-        const options = this.getAxisPlacementOptions(snap);
-        if (options.length <= 0) {
-          this.config.onHoverStatusChange?.('放置预览：当前吸附轴周围没有空余安装面');
-          this.drawGhostLayer(true);
-          return;
-        }
-        if (snapAxisKey !== this.activeSnapAxisKey) {
-          this.activeSnapAxisKey = snapAxisKey;
-          this.snapPlaneCycle = this.getPreferredAxisPlacementIndex(options);
-        }
-        this.snapPlaneCycle = ((this.snapPlaneCycle || 0) + 1) % options.length;
-        const target = options[this.snapPlaneCycle] || options[0];
-        this.setPlacementPose(target.kind === 'wall' ? 'wall' : 'floor');
-        this.config.onHoverStatusChange?.('放置预览：围绕当前吸附边切换安装面');
-        this.updateHover(hitInfo);
-        this.drawGhostLayer(true);
-        return;
-      }
       if (event.code === 'Space') {
         event.preventDefault();
-        if (this.carryState?.kind === 'placement') this.cycleCarryPlacementSurface({ allowMultiple: true });
-        return;
+        if (this.handleSpaceSurfaceToggle()) return;
       }
-      if (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType) {
-        if (key === 'r') {
-          event.preventDefault();
-          const delta = event.shiftKey ? 270 : 90;
-          this.rotateActivePlacement(delta);
-          this.config.onHoverStatusChange?.(`放置预览：${event.shiftKey ? '逆时针' : '顺时针'}旋转 90°`);
-          return;
-        }
-      }
-      if (this.carryState?.kind === 'placement' && key === 'r') {
+      if (key === 'r') {
         event.preventDefault();
-        this.rotateCarryPlacementSurface(event.shiftKey ? 'reverse' : 'forward');
-        return;
+        if (this.handleRotateSurface()) return;
       }
       if (key === 'm') {
         event.preventDefault();
@@ -4958,7 +4968,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
             action: 'place',
             cell,
             panelType: this.activeTileType,
-            rotation: this.activeRotation
+            rotation: this.activeRotation,
+            transmissionRotation: this.activeRotation
           });
           this.mapData.tiles[tileKey] = tile;
           this.renderTileObject(tile);
@@ -4978,7 +4989,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
             action: 'place',
             cell,
             panelType: this.activeTileType,
-            rotation: this.activeRotation
+            rotation: this.activeRotation,
+            transmissionRotation: this.activeRotation
           });
           this.mapData.tiles[tileKey] = tile;
           this.renderTileObject(tile);
@@ -5284,6 +5296,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const source = placement || this.getCarryPrimaryPlacement();
       return normalizeRotation(
         this.carryState?.surfaceRotation
+          ?? source?.transmissionRotation
           ?? source?.rotation
           ?? (source?.edge ? wallEdgeToRotation(source.edge) : 0)
       );
@@ -5296,11 +5309,11 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const surfaceRotation = this.getCarrySurfaceRotation(placement);
       const targetPose = target.edge ? 'wall' : (target.layFlat ? 'floor' : pose);
       if (targetPose === 'wall') {
-        const edge = target.edge || placement?.edge || rotationToWallEdge(surfaceRotation);
+        const edge = target.edge || placement?.edge || this.hoverEdge || 'north';
         return {
           ...target,
           edge,
-          rotation: wallEdgeToRotation(edge)
+          rotation: surfaceRotation
         };
       }
       return {
@@ -5571,6 +5584,14 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const placementTarget = this.withCarryActivePanel(() => this.resolveCarryPlacementLikePlace(placementHitInfo));
       if (placementTarget?.blocked) return placementTarget;
       if (placementTarget) return this.applyCarryGhostPoseToTarget(placementTarget);
+      if (effectiveHit?.cell) {
+        return this.applyCarryGhostPoseToTarget({
+          x: effectiveHit.cell.x,
+          y: effectiveHit.cell.y,
+          z: effectiveHit.cell.z,
+          ...(effectiveHit.edge ? { edge: effectiveHit.edge } : {})
+        });
+      }
       return this.applyCarryGhostPoseToTarget(this.getCarryOriginTargetCell());
     }
 
@@ -5603,7 +5624,16 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const targetCell = this.getCarryPlacementTarget(hitInfo) || hitInfo?.cell || hitInfo;
       if (targetCell?.blocked) return;
       if (!targetCell) return;
+      if (targetCell.edge && !this.hasWallSupport(targetCell, targetCell.edge)) {
+        this.config.onToast?.('竖直板缺少支撑，无法放置在该位置。', 'error');
+        return;
+      }
       const { valid, moves, previewTiles, previewWalls } = this.computeMovePreview(targetCell);
+      const unsupportedWallMove = moves.find((move) => move?.to?.edge && !this.hasWallSupport(move.to, move.to.edge));
+      if (unsupportedWallMove) {
+        this.config.onToast?.('竖直板缺少支撑，无法放置在该位置。', 'error');
+        return;
+      }
       if (!valid) {
         this.config.onToast?.('目标位置存在冲突，无法完成移动。', 'error');
         return;
@@ -6866,7 +6896,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           const placementKey = to.edge
             ? createWallSelectionKey(to)
             : createCellKey(to.x, to.y, to.z);
-          const color = invalidPlacementKeys?.has(placementKey) ? 0xef4444 : 0x22c55e;
+          const unsupportedWall = !!to.edge && !this.hasWallSupport(to, to.edge);
+          const color = (invalidPlacementKeys?.has(placementKey) || unsupportedWall) ? 0xef4444 : 0x22c55e;
           const sourcePlacement = from.edge
             ? this.mapData.walls?.[createWallSelectionKey(from)]
             : this.mapData.tiles?.[createCellKey(from.x, from.y, from.z)];
@@ -6875,7 +6906,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
             source: from,
             panelType: sourcePlacement?.panelType,
             rotation: to.edge ? wallEdgeToRotation(to.edge) : (to.rotation ?? sourcePlacement?.rotation ?? 0),
-            transmissionRotation: sourcePlacement?.transmissionRotation ?? sourcePlacement?.rotation ?? 0
+            transmissionRotation: to.edge
+              ? (to.rotation ?? sourcePlacement?.transmissionRotation ?? sourcePlacement?.rotation ?? 0)
+              : (to.rotation ?? sourcePlacement?.transmissionRotation ?? sourcePlacement?.rotation ?? 0)
           }, color, 0.22, true);
         });
         return;
@@ -6898,7 +6931,27 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         edge: this.hoverEdge,
         localPoint: this.hoverTarget?.localPoint
       }, { forGhost: true, allowReplacement: true });
-      if (!placementTarget?.cell) return;
+      if (!placementTarget?.cell) {
+        if (this.isWallPlacementActive()) {
+          const fallbackEdge = this.hoverEdge || 'north';
+          const hasSupport = this.hasWallSupport(this.hoverCell, fallbackEdge);
+          this.drawPlacementGhost({
+            ...this.hoverCell,
+            edge: fallbackEdge,
+            panelType: this.activeTileType,
+            rotation: wallEdgeToRotation(fallbackEdge),
+            transmissionRotation: this.activeRotation
+          }, hasSupport ? 0x67e8f9 : 0xef4444, 0.2, false);
+          return;
+        }
+        const hasSupport = this.hasTileSupport(this.hoverCell);
+        this.drawPlacementGhost({
+          ...this.hoverCell,
+          panelType: this.activeTileType,
+          rotation: this.activeRotation
+        }, hasSupport ? 0x67e8f9 : 0xef4444, 0.18, false);
+        return;
+      }
       if (placementTarget.kind === 'wall') {
         const hasSupport = placementTarget.valid !== undefined
           ? placementTarget.valid
@@ -6921,6 +6974,11 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       }, placementTarget.valid === false ? 0xef4444 : 0x67e8f9, 0.18, false);
     }
 
+    isSupportingFloorTile(tile = null) {
+      if (!tile || this.isCarryMovingPlacement(tile)) return false;
+      return !tile.isVertical && !isPortalMaterial(tile.panelType);
+    }
+
     hasWallSupport(cell, edge = 'north') {
       if (!cell) return false;
       const ownCellKey = createCellKey(cell.x, cell.y, cell.z);
@@ -6929,10 +6987,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const neighborKey = createCellKey(neighbor.x, neighbor.y, neighbor.z);
       const ownTile = this.mapData.tiles?.[ownCellKey];
       const neighborTile = this.mapData.tiles?.[neighborKey];
-      if (
-        (ownTile && !this.isCarryMovingPlacement(ownTile))
-        || (neighborTile && !this.isCarryMovingPlacement(neighborTile))
-      ) return true;
+      if (this.isSupportingFloorTile(ownTile) || this.isSupportingFloorTile(neighborTile)) return true;
       if (cell.z <= 0) return false;
       const belowOwn = createCellKey(cell.x, cell.y, cell.z - 1);
       const belowNeighbor = createCellKey(neighbor.x, neighbor.y, neighbor.z - 1);
@@ -6940,8 +6995,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const belowOwnTile = this.mapData.tiles?.[belowOwn];
       const belowNeighborTile = this.mapData.tiles?.[belowNeighbor];
       const belowWallPlacement = this.mapData.walls?.[belowWall];
-      return !!(belowOwnTile && !this.isCarryMovingPlacement(belowOwnTile))
-        || !!(belowNeighborTile && !this.isCarryMovingPlacement(belowNeighborTile))
+      return this.isSupportingFloorTile(belowOwnTile)
+        || this.isSupportingFloorTile(belowNeighborTile)
         || !!(belowWallPlacement && !this.isCarryMovingPlacement(belowWallPlacement));
     }
 
