@@ -86,4 +86,14 @@ describe('vertical snap structural support', () => {
     const diagonal = segmentCandidates.find((item) => item.cell.x === 1 && item.cell.y === 1);
     expect(diagonal).toBeFalsy();
   });
+
+  it('keeps only edge-aligned candidates for stacked multi-wall continuation', () => {
+    const lowerWallCell = { x: 3, y: 4, z: 0 };
+    const segment = getAbsoluteWallEdgeEndpoints(lowerWallCell, 'east');
+    const segmentCandidates = findWallCandidatesForSegment(segment, 1);
+    const aligned = segmentCandidates.find((item) => item.cell.x === 3 && item.cell.y === 4 && item.edge === 'east');
+    const diagonal = segmentCandidates.find((item) => item.cell.x === 4 && item.cell.y === 5);
+    expect(aligned).toBeTruthy();
+    expect(diagonal).toBeFalsy();
+  });
 });

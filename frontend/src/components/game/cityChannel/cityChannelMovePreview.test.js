@@ -3,13 +3,15 @@ import {
   createBaseCityChannelMap,
   createCellKey,
   createTile,
-  createWall
+  createWall,
+  createWallKey
 } from './cityChannelSchema';
 import {
   computeCityChannelMovePreviewModel,
   getCityChannelPlacementCollisionBoxes,
   getSelectionAnchor
 } from './cityChannelMovePreview';
+import { buildMechanicalAssemblies } from './cityChannelMechanismRuntime';
 
 const createMapWithTiles = (tiles = {}) => ({
   ...createBaseCityChannelMap({ name: 'move preview regression' }),
@@ -34,7 +36,7 @@ describe('cityChannelMovePreview', () => {
     expect(preview.conflicts.map((conflict) => conflict.reason)).toContain('placement_occupied');
   });
 
-  it('keeps cross-layer floor previews valid when their volumes do not intersect', () => {
+  it('keeps cross-layer floor previews valid when moved boxes do not collide', () => {
     const mapData = createMapWithTiles({
       [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
       [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
@@ -48,7 +50,6 @@ describe('cityChannelMovePreview', () => {
 
     expect(preview.valid).toBe(true);
     expect(preview.conflicts).toEqual([]);
-    expect(preview.invalidPlacementKeys).toEqual(new Set());
   });
 
   it('keeps multi-select movement across layers valid when moved boxes do not intersect', () => {
@@ -69,10 +70,9 @@ describe('cityChannelMovePreview', () => {
 
     expect(preview.valid).toBe(true);
     expect(preview.conflicts).toEqual([]);
-    expect(preview.invalidPlacementKeys).toEqual(new Set());
   });
 
-  it('keeps stacked upper floor previews valid when the lower floor provides structural support', () => {
+  it('keeps stacked upper floor previews valid under group collision-only legality', () => {
     const mapData = createMapWithTiles({
       [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
       [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
@@ -86,7 +86,6 @@ describe('cityChannelMovePreview', () => {
 
     expect(preview.valid).toBe(true);
     expect(preview.conflicts).toEqual([]);
-    expect(preview.invalidPlacementKeys).toEqual(new Set());
   });
 
   it('lays a moved vertical board flat when the target cell carries layFlat intent', () => {
@@ -465,6 +464,247 @@ describe('cityChannelMovePreview', () => {
     expect(boxes[0].maxY - boxes[0].minY).toBeLessThan(0.2);
   });
 
+  it('applies groupRotationSteps to multi-select relative offsets', () => {
+    const mapData = createMapWithTiles({
+      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
+      [createCellKey(11, 10, 0)]: createTile({ x: 11, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+    });
+    const origins = [
+      { x: 10, y: 10, z: 0 },
+      { x: 11, y: 10, z: 0 }
+    ];
+    const anchor = getSelectionAnchor(origins);
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins,
+      anchor,
+      targetCell: { x: 20, y: 20, z: 0 },
+      groupRotationSteps: 1
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.moves.map((move) => move.to)).toEqual([
+      { x: 20, y: 20, z: 0, rotation: 90, transmissionRotation: 90 },
+      { x: 20, y: 21, z: 0, rotation: 90, transmissionRotation: 90 }
+    ]);
+  });
+
+  it('rotates multi-select wall edges as one rigid yaw group', () => {
+    const firstWall = createWall({
+      x: 10,
+      y: 10,
+      z: 0,
+      edge: 'north',
+      panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+    });
+    const secondWall = createWall({
+      x: 11,
+      y: 10,
+      z: 0,
+      edge: 'north',
+      panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'wall rigid yaw regression' }),
+      tiles: {},
+      walls: {
+        [createWallKey(10, 10, 0, 'north')]: firstWall,
+        [createWallKey(11, 10, 0, 'north')]: secondWall
+      }
+    };
+    const origins = [
+      { x: 10, y: 10, z: 0, edge: 'north' },
+      { x: 11, y: 10, z: 0, edge: 'north' }
+    ];
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins,
+      anchor: getSelectionAnchor(origins),
+      targetCell: { x: 20, y: 20, z: 0, edge: 'east' },
+      groupRotationSteps: 1
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.moves.map((move) => move.to)).toEqual([
+      { x: 20, y: 20, z: 0, rotation: 90, transmissionRotation: 0, edge: 'east' },
+      { x: 20, y: 21, z: 0, rotation: 90, transmissionRotation: 0, edge: 'east' }
+    ]);
+  });
+
+  it('keeps straight transmission ports connected after rigid yaw rotation', () => {
+    const mapData = createMapWithTiles({
+      [createCellKey(10, 10, 0)]: createTile({
+        x: 10,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        transmissionRotation: 0
+      }),
+      [createCellKey(10, 11, 0)]: createTile({
+        x: 10,
+        y: 11,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        transmissionRotation: 0
+      })
+    });
+    const origins = [
+      { x: 10, y: 10, z: 0 },
+      { x: 10, y: 11, z: 0 }
+    ];
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins,
+      anchor: getSelectionAnchor(origins),
+      targetCell: { x: 20, y: 20, z: 0 },
+      groupRotationSteps: 1
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.moves.map((move) => move.to)).toEqual([
+      { x: 20, y: 20, z: 0, rotation: 90, transmissionRotation: 90 },
+      { x: 19, y: 20, z: 0, rotation: 90, transmissionRotation: 90 }
+    ]);
+    const graph = buildMechanicalAssemblies({
+      tiles: Object.fromEntries(preview.previewTiles),
+      walls: Object.fromEntries(preview.previewWalls)
+    });
+    expect(graph.assemblies).toHaveLength(1);
+  });
+
+  it('tumbles stacked multi-select forward while preserving relative offsets', () => {
+    const mapData = createMapWithTiles({
+      [createCellKey(10, 10, 0)]: createTile({
+        x: 10,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+      }),
+      [createCellKey(10, 10, 1)]: createTile({
+        x: 10,
+        y: 10,
+        z: 1,
+        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+      })
+    });
+    mapData.tiles[createCellKey(10, 10, 0)].isVertical = true;
+    mapData.tiles[createCellKey(10, 10, 1)].isVertical = true;
+    const origins = [
+      { x: 10, y: 10, z: 0 },
+      { x: 10, y: 10, z: 1 }
+    ];
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins,
+      anchor: getSelectionAnchor(origins),
+      targetCell: { x: 20, y: 20, z: 0 },
+      groupPoseSteps: 1
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.moves.map((move) => move.to)).toEqual([
+      { x: 20, y: 20, z: 0, rotation: 0, transmissionRotation: 0, layFlat: true },
+      { x: 20, y: 19, z: 0, rotation: 0, transmissionRotation: 0, layFlat: true }
+    ]);
+  });
+
+  it('keeps an L-shaped multi-select rigid when tumbling forward one quarter turn', () => {
+    const mapData = createMapWithTiles({
+      [createCellKey(10, 10, 0)]: createTile({
+        x: 10,
+        y: 10,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        transmissionRotation: 0
+      }),
+      [createCellKey(10, 10, 1)]: createTile({
+        x: 10,
+        y: 10,
+        z: 1,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        transmissionRotation: 0
+      }),
+      [createCellKey(11, 10, 1)]: createTile({
+        x: 11,
+        y: 10,
+        z: 1,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+        transmissionRotation: 90
+      })
+    });
+    mapData.tiles[createCellKey(10, 10, 0)].isVertical = true;
+    mapData.tiles[createCellKey(10, 10, 1)].isVertical = true;
+    const origins = [
+      { x: 10, y: 10, z: 0 },
+      { x: 10, y: 10, z: 1 },
+      { x: 11, y: 10, z: 1 }
+    ];
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins,
+      anchor: getSelectionAnchor(origins),
+      targetCell: { x: 20, y: 20, z: 0 },
+      groupPoseSteps: 1
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.moves.map((move) => move.to)).toEqual([
+      { x: 20, y: 20, z: 0, rotation: 0, transmissionRotation: 0, layFlat: true },
+      { x: 20, y: 19, z: 0, rotation: 0, transmissionRotation: 0, layFlat: true },
+      { x: 21, y: 19, z: 0, rotation: 0, transmissionRotation: 90, isVertical: true }
+    ]);
+    expect(preview.moves.some((move) => move.to.layFlat)).toBe(true);
+    expect(preview.moves.some((move) => move.to.isVertical)).toBe(true);
+    expect(new Set(preview.moves.map((move) => `${move.to.x}:${move.to.y}:${move.to.z}`)).size).toBe(3);
+  });
+
+  it('uses the selected wall direction as the rigid tumble axis', () => {
+    const lowerWall = createWall({
+      x: 10,
+      y: 10,
+      z: 0,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const upperWall = createWall({
+      x: 10,
+      y: 10,
+      z: 1,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'wall rigid pose axis regression' }),
+      tiles: {},
+      walls: {
+        [createWallKey(10, 10, 0, 'east')]: lowerWall,
+        [createWallKey(10, 10, 1, 'east')]: upperWall
+      }
+    };
+    const origins = [
+      { x: 10, y: 10, z: 0, edge: 'east' },
+      { x: 10, y: 10, z: 1, edge: 'east' }
+    ];
+    const preview = computeCityChannelMovePreviewModel({
+      mapData,
+      origins,
+      anchor: getSelectionAnchor(origins),
+      targetCell: { x: 20, y: 20, z: 0 },
+      groupPoseSteps: 1
+    });
+
+    expect(preview.valid).toBe(true);
+    expect(preview.moves.map((move) => move.to)).toEqual([
+      { x: 20, y: 20, z: 0, rotation: 0, transmissionRotation: 90, layFlat: true },
+      { x: 21, y: 20, z: 0, rotation: 0, transmissionRotation: 90, layFlat: true }
+    ]);
+    const graph = buildMechanicalAssemblies({
+      tiles: Object.fromEntries(preview.previewTiles),
+      walls: Object.fromEntries(preview.previewWalls)
+    });
+    expect(graph.assemblies).toHaveLength(1);
+  });
+
   describe('新的多选移动合法性规则', () => {
     it('允许多选物体移动到空地', () => {
       const mapData = createMapWithTiles({
@@ -485,7 +725,7 @@ describe('cityChannelMovePreview', () => {
       expect(preview.conflicts).toEqual([]);
     });
 
-    it('允许多选物体贴近静态物体移动', () => {
+    it('多选贴近静态物体且不重叠时应判定通过', () => {
       const mapData = createMapWithTiles({
         [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
         [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR }),
@@ -505,7 +745,7 @@ describe('cityChannelMovePreview', () => {
       expect(preview.conflicts).toEqual([]);
     });
 
-    it('允许多选物体混合移动，不再要求传动连接点', () => {
+    it('多选混合移动在无重叠情况下应判定通过', () => {
       const mapData = createMapWithTiles({
         [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
         [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
@@ -522,7 +762,6 @@ describe('cityChannelMovePreview', () => {
 
       expect(preview.valid).toBe(true);
       expect(preview.conflicts).toEqual([]);
-      expect(preview.invalidPlacementKeys.size).toBe(0);
     });
 
     it('保留间断选中分量信息但不要求传动连接', () => {
@@ -585,6 +824,70 @@ describe('cityChannelMovePreview', () => {
 
       expect(preview.valid).toBe(false);
       expect(preview.conflicts.map((c) => c.reason)).toContain('placement_occupied');
+    });
+
+    it('复制模式会把原位置物体视为静态遮挡', () => {
+      const mapData = createMapWithTiles({
+        [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR })
+      });
+
+      const preview = computeCityChannelMovePreviewModel({
+        mapData,
+        origins: [{ x: 10, y: 10, z: 0 }],
+        targetCell: { x: 10, y: 10, z: 0 },
+        preserveOrigins: true
+      });
+
+      expect(preview.valid).toBe(false);
+      expect(preview.conflicts.map((c) => c.reason)).toContain('placement_occupied');
+    });
+
+    it('多选中局部无支撑但无重叠时按组级规则判定通过', () => {
+      const mapData = createMapWithTiles({
+        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
+        [createCellKey(14, 10, 1)]: createTile({ x: 14, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR }),
+        [createCellKey(20, 20, 0)]: createTile({ x: 20, y: 20, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.IRON_FLOOR })
+      });
+
+      const preview = computeCityChannelMovePreviewModel({
+        mapData,
+        origins: [
+          { x: 10, y: 10, z: 1 },
+          { x: 14, y: 10, z: 1 }
+        ],
+        targetCell: { x: 20, y: 20, z: 1 }
+      });
+
+      expect(preview.valid).toBe(true);
+      expect(preview.conflicts).toEqual([]);
+    });
+
+    it('墙板在同层存在合法支撑时可通过多选预览校验', () => {
+      const wall = createWall({
+        x: 10,
+        y: 10,
+        z: 1,
+        edge: 'north',
+        panelType: CITY_CHANNEL_TILE_TYPES.WALL
+      });
+      const mapData = {
+        ...createBaseCityChannelMap({ name: 'wall support preview' }),
+        tiles: {
+          [createCellKey(20, 20, 1)]: createTile({ x: 20, y: 20, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR })
+        },
+        walls: {
+          [createCellKey(10, 10, 1) + ':north']: wall
+        }
+      };
+
+      const preview = computeCityChannelMovePreviewModel({
+        mapData,
+        origins: [{ x: 10, y: 10, z: 1, edge: 'north' }],
+        targetCell: { x: 20, y: 20, z: 1, edge: 'north' }
+      });
+
+      expect(preview.valid).toBe(true);
+      expect(preview.conflicts).toEqual([]);
     });
   });
 });

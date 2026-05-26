@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Copy,
   Eye,
   EyeOff,
   Hand,
@@ -618,6 +619,19 @@ const CityChannelPhaserEditor = ({
     clearSelection();
   }, [clearSelection, deletePlacements, selectedCells, selectedGearItems, selectedPlacements, selectionScope, updatePlacement]);
 
+  const handleCopySelection = useCallback(() => {
+    if (selectionScope === 'component' || selectedPlacements.length <= 0) {
+      addToast('请先选择一个或多个板材再复制。', 'error');
+      return false;
+    }
+    const started = sceneRef.current?.startCopyCarry?.();
+    if (!started) {
+      addToast('当前状态无法启动复制预览。', 'error');
+      return false;
+    }
+    return true;
+  }, [addToast, selectedPlacements.length, selectionScope]);
+
   const handleRotateSelection = useCallback((direction = 'forward', meta = null) => {
     const targetPlacements = selectedPlacements.length > 0 ? selectedPlacements : (meta?.placements || []);
     if (targetPlacements.length <= 0) return;
@@ -713,6 +727,7 @@ const CityChannelPhaserEditor = ({
     onUndo: undo,
     onRedo: redo,
     onDeleteSelection: handleDeleteSelection,
+    onCopySelection: handleCopySelection,
     onMovePlacements: handleMovePlacements,
     onMechanismPanelRequest: handleMechanismPanelRequest,
     onGearAxisPrompt: setGearAxisPrompt,
@@ -731,6 +746,7 @@ const CityChannelPhaserEditor = ({
     addToast,
     handleCommitOperations,
     handleDeleteSelection,
+    handleCopySelection,
     handleMovePlacements,
     handleMechanismPanelRequest,
     handleInspectChange,
@@ -1165,6 +1181,11 @@ const CityChannelPhaserEditor = ({
                 <span>移动</span>
                 <em className="city-channel-shortcut-hint">M</em>
               </button>
+              <button type="button" className="city-channel-selection-action" onClick={handleCopySelection} title="复制 (Ctrl+C)">
+                <Copy size={14} />
+                <span>复制</span>
+                <em className="city-channel-shortcut-hint">Ctrl+C</em>
+              </button>
               <button type="button" className="city-channel-selection-action" onClick={() => handleRotateSelection('forward')} title="传动骨骼朝向 (Shift+滚轮)">
                 <RotateCw size={14} />
                 <span>传动朝向</span>
@@ -1179,7 +1200,7 @@ const CityChannelPhaserEditor = ({
                   </button>
                   <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.cycleCarryPlacementSurface?.({ allowMultiple: false })} title="未吸附切默认姿态，吸附后切安装面 (Space)">
                     <PanelTop size={14} />
-                    <span>姿态/吸附面</span>
+                    <span>姿态翻滚</span>
                     <em className="city-channel-shortcut-hint">Space</em>
                   </button>
                 </>
@@ -1326,7 +1347,7 @@ const CityChannelPhaserEditor = ({
         ) : (
           <>
             <span>拖拽平移，双击后拖拽或 Q/E 旋转视角</span>
-            <span>滚轮缩放；M 移动，移动预览中 R 转表面、Space 切姿态/吸附面、Del 删除</span>
+            <span>滚轮缩放；M 移动，移动预览中 R 转表面、Space 整体翻滚/切吸附面、Del 删除</span>
           </>
         )}
         {selectedCount > 0 ? <em>{selectedCount} 个选中</em> : null}

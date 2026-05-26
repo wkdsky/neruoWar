@@ -389,6 +389,13 @@ const useCityChannelEditorState = (initialMapData = null) => {
             panelType: operation.panelType,
             transmissionRotation: operation.transmissionRotation
           });
+          const tileKey = createCellKey(cell.x, cell.y, cell.z);
+          if (nextTiles[tileKey]?.isVertical) {
+            delete nextTiles[tileKey];
+            nextMechanicalLinks = removeMechanicalLinksForComponents(nextMechanicalLinks, new Set([tileKey]));
+            nextEntrances = removePointsAtCell(nextEntrances, cell);
+            nextExits = removePointsAtCell(nextExits, cell);
+          }
           return;
         }
 
@@ -537,7 +544,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
             z: to.z,
             edge,
             panelType: wall.panelType,
-            transmissionRotation: to.rotation ?? wall.transmissionRotation ?? wall.rotation ?? 0,
+            transmissionRotation: to.transmissionRotation ?? to.rotation ?? wall.transmissionRotation ?? wall.rotation ?? 0,
             marker: wall.marker
           }),
           gearMounts: cloneGearMounts(wall.gearMounts || []),
@@ -556,11 +563,11 @@ const useCityChannelEditorState = (initialMapData = null) => {
           z: to.z,
           panelType: wall.panelType,
           rotation: to.rotation ?? wall.rotation ?? 0,
-          transmissionRotation: to.rotation ?? wall.transmissionRotation ?? wall.rotation ?? 0
+          transmissionRotation: to.transmissionRotation ?? to.rotation ?? wall.transmissionRotation ?? wall.rotation ?? 0
         });
         nextTiles[createCellKey(to.x, to.y, to.z)] = {
           ...tile,
-          ...(to.layFlat ? { isVertical: false } : {}),
+          ...(to.layFlat ? { isVertical: false } : (to.isVertical ? { isVertical: true } : {})),
           gearMounts: cloneGearMounts(wall.gearMounts || []),
           gearConfigs: wall.gearConfigs || tile.gearConfigs,
           triggerConfig: wall.triggerConfig || tile.triggerConfig,
@@ -576,8 +583,10 @@ const useCityChannelEditorState = (initialMapData = null) => {
           y: to.y,
           z: to.z,
           ...(to.rotation !== undefined ? { rotation: normalizeRotation(to.rotation) } : {}),
-          ...(to.rotation !== undefined ? { transmissionRotation: normalizeRotation(to.rotation) } : {}),
-          ...(to.layFlat ? { isVertical: false } : {}),
+          ...(to.transmissionRotation !== undefined || to.rotation !== undefined
+            ? { transmissionRotation: normalizeRotation(to.transmissionRotation ?? to.rotation) }
+            : {}),
+          ...(to.layFlat ? { isVertical: false } : (to.isVertical ? { isVertical: true } : {})),
           gearMounts: cloneGearMounts(tile.gearMounts || [])
         };
         nextEntrances = movePointsAtCell(nextEntrances, from, to);
@@ -591,7 +600,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
           z: to.z,
           edge,
           panelType: tile.panelType,
-          transmissionRotation: to.rotation ?? tile.transmissionRotation ?? tile.rotation ?? 0
+          transmissionRotation: to.transmissionRotation ?? to.rotation ?? tile.transmissionRotation ?? tile.rotation ?? 0
         });
         nextWalls[createWallKey(to.x, to.y, to.z, edge)] = {
           ...wall,

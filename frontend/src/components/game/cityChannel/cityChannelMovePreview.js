@@ -6,7 +6,8 @@ import {
   createWall,
   createWallKey,
   isValidCell,
-  normalizeRotation
+  normalizeRotation,
+  wallEdgeToRotation
 } from './cityChannelSchema';
 
 const EDGE_NEIGHBOR_OFFSETS = {
@@ -476,12 +477,324 @@ const isSupportCollisionExempt = (movingPlacement = {}, staticPlacement = {}) =>
   return movingPlacement.isVertical && sameCell(movingPlacement, staticPlacement);
 };
 
+const rotateOffsetBySteps = (dx = 0, dy = 0, steps = 0) => {
+  const normalized = ((steps % 4) + 4) % 4;
+  if (normalized === 1) return { x: -dy, y: dx };
+  if (normalized === 2) return { x: -dx, y: -dy };
+  if (normalized === 3) return { x: dy, y: -dx };
+  return { x: dx, y: dy };
+};
+
+const rotateVectorYawBySteps = ({ x = 0, y = 0, z = 0 } = {}, steps = 0) => {
+  const rotated = rotateOffsetBySteps(x, y, steps);
+  return {
+    x: rotated.x,
+    y: rotated.y,
+    z
+  };
+};
+
+const rotateVectorPitchByQuarter = ({ x = 0, y = 0, z = 0 } = {}, quarterTurns = 0) => {
+  const normalized = ((quarterTurns % 4) + 4) % 4;
+  if (normalized === 1) {
+    // Roll forward 90° around the local X axis.
+    return { x, y: -z, z: y };
+  }
+  if (normalized === 2) return { x, y: -y, z: -z };
+  if (normalized === 3) return { x, y: z, z: -y };
+  return { x, y, z };
+};
+
+const roundGrid = (value = 0) => Math.round(Number(value) || 0);
+
+const rotationToWallEdge = (rotation = 0) => {
+  const normalized = ((Number(rotation) || 0) % 360 + 360) % 360;
+  if (normalized === 90) return 'east';
+  if (normalized === 180) return 'south';
+  if (normalized === 270) return 'west';
+  return 'north';
+};
+
+const getEdgeCenterOffset = (edge = 'north') => {
+  const offset = EDGE_NEIGHBOR_OFFSETS[edge] || EDGE_NEIGHBOR_OFFSETS.north;
+  return {
+    x: offset.x * 0.5,
+    y: offset.y * 0.5
+  };
+};
+
+const getPlacementRigidPoint = (origin = {}, placement = null) => {
+  const edge = origin.edge || placement?.edge || null;
+  const edgeOffset = edge ? getEdgeCenterOffset(edge) : { x: 0, y: 0 };
+  return {
+    x: (Number(origin.x) || 0) + edgeOffset.x,
+    y: (Number(origin.y) || 0) + edgeOffset.y,
+    z: Number(origin.z) || 0
+  };
+};
+
+const getPlacementShapeRotation = (origin = {}, placement = null) => normalizeRotation(
+  placement?.rotation
+    ?? (origin.edge ? wallEdgeToRotation(origin.edge) : 0)
+);
+
+const getPlacementBaseRotation = (origin = {}, placement = null) => (
+  origin.edge || placement?.edge ? wallEdgeToRotation(origin.edge || placement?.edge) : 0
+);
+
+const getPlacementSurfaceRotation = (origin = {}, placement = null) => normalizeRotation(
+  placement?.transmissionRotation
+    ?? placement?.rotation
+    ?? (origin.edge ? wallEdgeToRotation(origin.edge) : 0)
+);
+
+const getPlacementWorldSurfaceRotation = (origin = {}, placement = null) => normalizeRotation(
+  getPlacementBaseRotation(origin, placement) + getPlacementSurfaceRotation(origin, placement)
+);
+
+const rotateRotationBySteps = (rotation = 0, steps = 0) => normalizeRotation(rotation + (steps * 90));
+
+const getRotationSteps = (rotation = 0) => Math.round(normalizeRotation(rotation) / 90) % 4;
+
+const rotateVectorPitchAroundYawByQuarter = (vector, axisSteps = 0, quarterTurns = 0) => {
+  const normalizedQuarterTurns = ((quarterTurns % 4) + 4) % 4;
+  if (normalizedQuarterTurns === 0) return vector;
+  const local = rotateVectorYawBySteps(vector, -axisSteps);
+  const pitched = rotateVectorPitchByQuarter(local, normalizedQuarterTurns);
+  return rotateVectorYawBySteps(pitched, axisSteps);
+};
+
+const createRigidTransform = ({
+  sourceCenterPoint,
+  normalizedRotationSteps,
+  poseQuarterTurns,
+  basisRotationSteps
+}) => {
+  const axisSteps = (basisRotationSteps + normalizedRotationSteps + 4) % 4;
+  return (point = {}) => {
+    const offset = {
+      x: (Number(point.x) || 0) - sourceCenterPoint.x,
+      y: (Number(point.y) || 0) - sourceCenterPoint.y,
+      z: (Number(point.z) || 0) - sourceCenterPoint.z
+    };
+    const yawed = rotateVectorYawBySteps(offset, normalizedRotationSteps);
+    const transformed = rotateVectorPitchAroundYawByQuarter(yawed, axisSteps, poseQuarterTurns);
+    return {
+      x: sourceCenterPoint.x + transformed.x,
+      y: sourceCenterPoint.y + transformed.y,
+      z: sourceCenterPoint.z + transformed.z
+    };
+  };
+};
+
+const rotateVectorWithRigidParams = (
+  vector,
+  normalizedRotationSteps = 0,
+  poseQuarterTurns = 0,
+  basisRotationSteps = 0
+) => {
+  const axisSteps = (basisRotationSteps + normalizedRotationSteps + 4) % 4;
+  const yawed = rotateVectorYawBySteps(vector, normalizedRotationSteps);
+  return rotateVectorPitchAroundYawByQuarter(yawed, axisSteps, poseQuarterTurns);
+};
+
+const vectorToWallEdge = (vector = {}) => {
+  const absX = Math.abs(Number(vector.x) || 0);
+  const absY = Math.abs(Number(vector.y) || 0);
+  if (absX >= absY) {
+    return (Number(vector.x) || 0) >= 0 ? 'east' : 'west';
+  }
+  return (Number(vector.y) || 0) >= 0 ? 'south' : 'north';
+};
+
+const vectorToShapeRotation = (vector = {}) => normalizeRotation(
+  Math.round((Math.atan2(Number(vector.y) || 0, Number(vector.x) || 0) * 180) / Math.PI / 90) * 90
+);
+
+const getPlacementLocalBasis = (origin = {}, placement = null) => {
+  const surfaceSteps = getRotationSteps(getPlacementSurfaceRotation(origin, placement));
+  const tangent = rotateOffsetBySteps(1, 0, surfaceSteps);
+
+  if (origin.edge || placement?.edge) {
+    const edge = origin.edge || placement.edge;
+    const offset = EDGE_NEIGHBOR_OFFSETS[edge] || EDGE_NEIGHBOR_OFFSETS.north;
+    return {
+      normal: { x: offset.x, y: offset.y, z: 0 },
+      tangent: { x: tangent.x, y: tangent.y, z: 0 },
+      sourceKind: 'wall'
+    };
+  }
+
+  if (placement?.isVertical) {
+    const faceSteps = getRotationSteps(getPlacementShapeRotation(origin, placement));
+    const normal = rotateOffsetBySteps(0, -1, faceSteps);
+    return {
+      normal: { x: normal.x, y: normal.y, z: 0 },
+      tangent: { x: tangent.x, y: tangent.y, z: 0 },
+      sourceKind: 'vertical'
+    };
+  }
+
+  return {
+    normal: { x: 0, y: 0, z: 1 },
+    tangent: { x: tangent.x, y: tangent.y, z: 0 },
+    sourceKind: 'floor'
+  };
+};
+
+const withLocalSurfaceRotation = (shape) => ({
+  ...shape,
+  surfaceRotation: normalizeRotation(
+    shape.worldSurfaceRotation - (shape.edge ? wallEdgeToRotation(shape.edge) : 0)
+  )
+});
+
+const deriveShapeFromRigidTransform = ({
+  origin,
+  sourcePlacement,
+  normalizedRotationSteps,
+  normalizedGroupPoseSteps,
+  basisRotationSteps
+}) => {
+  const basis = getPlacementLocalBasis(origin, sourcePlacement);
+  const transformedNormal = rotateVectorWithRigidParams(
+    basis.normal,
+    normalizedRotationSteps,
+    normalizedGroupPoseSteps,
+    basisRotationSteps
+  );
+  const transformedTangent = rotateVectorWithRigidParams(
+    basis.tangent,
+    normalizedRotationSteps,
+    normalizedGroupPoseSteps,
+    basisRotationSteps
+  );
+  const absX = Math.abs(transformedNormal.x);
+  const absY = Math.abs(transformedNormal.y);
+  const absZ = Math.abs(transformedNormal.z);
+  const sourceWorldSurfaceRotation = getPlacementWorldSurfaceRotation(origin, sourcePlacement);
+  const rotatedWorldSurfaceRotation = rotateRotationBySteps(sourceWorldSurfaceRotation, normalizedRotationSteps);
+  const shapeRotationFromTangent = vectorToShapeRotation(transformedTangent);
+  const target = {
+    shapeRotation: shapeRotationFromTangent,
+    worldSurfaceRotation: rotatedWorldSurfaceRotation,
+    includeRotation: true
+  };
+
+  if (absZ >= absX && absZ >= absY) {
+    if (basis.sourceKind === 'wall' || origin.edge) {
+      return withLocalSurfaceRotation({ ...target, layFlat: true });
+    }
+    if (basis.sourceKind === 'vertical') {
+      return withLocalSurfaceRotation({ ...target, layFlat: true });
+    }
+    return withLocalSurfaceRotation(target);
+  }
+
+  const edge = vectorToWallEdge(transformedNormal);
+  if (basis.sourceKind === 'wall' || origin.edge) {
+    return withLocalSurfaceRotation({
+      ...target,
+      edge,
+      shapeRotation: wallEdgeToRotation(edge)
+    });
+  }
+  if (basis.sourceKind === 'vertical') {
+    return withLocalSurfaceRotation({
+      ...target,
+      isVertical: true,
+      shapeRotation: shapeRotationFromTangent
+    });
+  }
+  return withLocalSurfaceRotation({
+    ...target,
+    isVertical: true,
+    shapeRotation: shapeRotationFromTangent
+  });
+};
+
+const getPlacementTargetShape = ({
+  origin,
+  sourcePlacement,
+  targetCell,
+  originsLength,
+  normalizedGroupPoseSteps,
+  normalizedRotationSteps,
+  basisRotationSteps,
+  layFlatTarget
+}) => {
+  const normalizedPoseSteps = ((normalizedGroupPoseSteps % 4) + 4) % 4;
+  const hasGroupTransform = originsLength > 1 && (normalizedRotationSteps !== 0 || normalizedPoseSteps !== 0);
+
+  if (hasGroupTransform) {
+    return deriveShapeFromRigidTransform({
+      origin,
+      sourcePlacement,
+      normalizedRotationSteps,
+      normalizedGroupPoseSteps: normalizedPoseSteps,
+      basisRotationSteps
+    });
+  }
+
+  const sourceShapeRotation = getPlacementShapeRotation(origin, sourcePlacement);
+  const sourceWorldSurfaceRotation = getPlacementWorldSurfaceRotation(origin, sourcePlacement);
+  const rotatedShapeRotation = rotateRotationBySteps(sourceShapeRotation, normalizedRotationSteps);
+  const rotatedWorldSurfaceRotation = rotateRotationBySteps(sourceWorldSurfaceRotation, normalizedRotationSteps);
+  const target = {
+    shapeRotation: targetCell.rotation !== undefined
+      ? normalizeRotation(targetCell.rotation)
+      : rotatedShapeRotation,
+    worldSurfaceRotation: targetCell.rotation !== undefined
+      ? normalizeRotation(targetCell.rotation)
+      : rotatedWorldSurfaceRotation,
+    includeRotation: targetCell.rotation !== undefined
+  };
+
+  if (targetCell.edge && originsLength === 1) {
+    return withLocalSurfaceRotation({
+      ...target,
+      edge: targetCell.edge
+    });
+  }
+  if (origin.edge && !layFlatTarget) {
+    return withLocalSurfaceRotation({
+      ...target,
+      edge: rotationToWallEdge(rotateRotationBySteps(wallEdgeToRotation(origin.edge), normalizedRotationSteps))
+    });
+  }
+  if (layFlatTarget) {
+    return withLocalSurfaceRotation({
+      ...target,
+      layFlat: true
+    });
+  }
+  return withLocalSurfaceRotation(target);
+};
+
+const createPlacementTargetCell = ({
+  transformedPoint,
+  targetShape,
+  dx,
+  dy,
+  dz
+}) => {
+  const edgeOffset = targetShape.edge ? getEdgeCenterOffset(targetShape.edge) : { x: 0, y: 0 };
+  return {
+    x: roundGrid(transformedPoint.x + dx - edgeOffset.x),
+    y: roundGrid(transformedPoint.y + dy - edgeOffset.y),
+    z: roundGrid(transformedPoint.z + dz)
+  };
+};
+
 export const computeCityChannelMovePreviewModel = ({
   mapData = {},
   origins = [],
   targetCell = null,
   anchor = null,
   explicitSurfaceTarget = null,
+  preserveOrigins = false,
+  groupRotationSteps = 0,
+  groupPoseSteps = 0,
   includeConflictKeys = false
 } = {}) => {
   const emptyComponents = [];
@@ -509,9 +822,65 @@ export const computeCityChannelMovePreviewModel = ({
   }
 
   const resolvedAnchor = anchor || getSelectionAnchor(origins) || origins[0];
-  const dx = targetCell.x - resolvedAnchor.x;
-  const dy = targetCell.y - resolvedAnchor.y;
-  const dz = (Number(targetCell.z) || 0) - (Number(resolvedAnchor.z) || 0);
+  const sourcePlacementByOriginKey = new Map(
+    origins.map((origin) => {
+      const originKey = getSelectionPlacementKey(origin);
+      const sourcePlacement = getSelectionPlacement(mapData, origin);
+      return [originKey, sourcePlacement || null];
+    })
+  );
+  const sourceRigidPointByOriginKey = new Map(
+    origins.map((origin) => {
+      const originKey = getSelectionPlacementKey(origin);
+      return [originKey, getPlacementRigidPoint(origin, sourcePlacementByOriginKey.get(originKey))];
+    })
+  );
+  const sourceCenter = Array.from(sourceRigidPointByOriginKey.values()).reduce((acc, point) => ({
+    x: acc.x + point.x,
+    y: acc.y + point.y,
+    z: acc.z + point.z
+  }), { x: 0, y: 0, z: 0 });
+  const sourceCenterPoint = {
+    x: sourceCenter.x / origins.length,
+    y: sourceCenter.y / origins.length,
+    z: sourceCenter.z / origins.length
+  };
+  const normalizedGroupPoseSteps = ((groupPoseSteps % 4) + 4) % 4;
+  const poseQuarterTurns = origins.length > 1 ? normalizedGroupPoseSteps : 0;
+  const normalizedRotationSteps = ((groupRotationSteps % 4) + 4) % 4;
+  const resolvedAnchorKey = getSelectionPlacementKey(resolvedAnchor);
+  const anchorSourcePlacement = sourcePlacementByOriginKey.get(resolvedAnchorKey);
+  const basisRotationSteps = getRotationSteps(getPlacementShapeRotation(resolvedAnchor, anchorSourcePlacement));
+  const transformRigidPoint = createRigidTransform({
+    sourceCenterPoint,
+    normalizedRotationSteps,
+    poseQuarterTurns,
+    basisRotationSteps
+  });
+  const rotatedAnchorPoint = transformRigidPoint(
+    sourceRigidPointByOriginKey.get(resolvedAnchorKey) || getPlacementRigidPoint(resolvedAnchor, anchorSourcePlacement)
+  );
+  const anchorTargetShape = getPlacementTargetShape({
+    origin: resolvedAnchor,
+    sourcePlacement: anchorSourcePlacement,
+    targetCell,
+    originsLength: origins.length,
+    normalizedGroupPoseSteps,
+    normalizedRotationSteps,
+    basisRotationSteps,
+    layFlatTarget: false
+  });
+  const anchorTargetOffset = anchorTargetShape.edge ? getEdgeCenterOffset(anchorTargetShape.edge) : { x: 0, y: 0 };
+  const targetAnchorPoint = anchorTargetShape.edge
+    ? getPlacementRigidPoint({ ...targetCell, edge: anchorTargetShape.edge }, null)
+    : {
+      x: (Number(targetCell.x) || 0) + anchorTargetOffset.x,
+      y: (Number(targetCell.y) || 0) + anchorTargetOffset.y,
+      z: Number(targetCell.z) || 0
+    };
+  const dx = targetAnchorPoint.x - rotatedAnchorPoint.x;
+  const dy = targetAnchorPoint.y - rotatedAnchorPoint.y;
+  const dz = targetAnchorPoint.z - (Number(rotatedAnchorPoint.z) || 0);
   const components = buildSelectionComponents(mapData, origins);
   const componentIdByOriginKey = new Map();
   components.forEach((component) => {
@@ -523,6 +892,8 @@ export const computeCityChannelMovePreviewModel = ({
   const invalidPlacementKeys = new Set();
   const movingTileKeys = new Set(origins.filter((item) => !item.edge).map((item) => createCellKey(item.x, item.y, item.z)));
   const movingWallKeys = new Set(origins.filter((item) => item.edge).map(createWallSelectionKey));
+  const movableTileKeys = preserveOrigins ? new Set() : movingTileKeys;
+  const movableWallKeys = preserveOrigins ? new Set() : movingWallKeys;
   const state = {
     conflicts: [],
     conflictKeys: includeConflictKeys ? new Set() : null,
@@ -532,32 +903,52 @@ export const computeCityChannelMovePreviewModel = ({
     componentIdByPlacementKey,
     invalidPlacementKeys
   };
-  const layFlatTarget = !!targetCell?.layFlat && !targetCell?.edge;
+  const layFlatTarget = origins.length === 1 && !!targetCell?.layFlat && !targetCell?.edge;
   const moves = origins.map((origin) => ({
     from: origin,
     componentId: componentIdByOriginKey.get(getSelectionPlacementKey(origin)) || null,
-    to: {
-      x: origin.x + dx,
-      y: origin.y + dy,
-      z: origin.z + dz,
-      ...(explicitSurfaceTarget
-        ? (explicitSurfaceTarget.edge ? { edge: explicitSurfaceTarget.edge } : {})
-        : (
-          targetCell.edge && origins.length === 1
-            ? { edge: targetCell.edge }
-            : (origin.edge && !layFlatTarget ? { edge: origin.edge } : {})
-        )),
-      ...(targetCell.rotation !== undefined ? { rotation: normalizeRotation(targetCell.rotation) } : {}),
-      // 当 carry resolver 判定要 lay flat（将竖直板放平到空地）时，
-      // 把这个意图沿着 move 一起传下去，便于下游覆盖 isVertical。
-      ...(layFlatTarget ? { layFlat: true } : {})
-    }
+    to: (() => {
+      const originKey = getSelectionPlacementKey(origin);
+      const sourcePlacement = sourcePlacementByOriginKey.get(originKey);
+      const targetShape = getPlacementTargetShape({
+        origin,
+        sourcePlacement,
+        targetCell,
+        originsLength: origins.length,
+        normalizedGroupPoseSteps,
+        normalizedRotationSteps,
+        basisRotationSteps,
+        layFlatTarget
+      });
+      const rotatedOriginPoint = transformRigidPoint(sourceRigidPointByOriginKey.get(originKey));
+      const to = createPlacementTargetCell({
+        transformedPoint: rotatedOriginPoint,
+        targetShape,
+        dx,
+        dy,
+        dz
+      });
+      if (targetShape.includeRotation) {
+        to.rotation = normalizeRotation(targetShape.shapeRotation);
+        to.transmissionRotation = normalizeRotation(targetShape.surfaceRotation);
+      }
+      if (explicitSurfaceTarget) {
+        if (explicitSurfaceTarget.edge) to.edge = explicitSurfaceTarget.edge;
+      } else if (targetShape.edge) {
+        to.edge = targetShape.edge;
+      } else if (targetShape.layFlat) {
+        to.layFlat = true;
+      } else if (targetShape.isVertical) {
+        to.isVertical = true;
+      }
+      return to;
+    })()
   }));
   const movedTilePlacements = [];
   const movedWallPlacements = [];
   const movingEntries = [];
-  const previewTiles = new Map(Object.entries(mapData.tiles || {}).filter(([key]) => !movingTileKeys.has(key)));
-  const previewWalls = new Map(Object.entries(mapData.walls || {}).filter(([key]) => !movingWallKeys.has(key)));
+  const previewTiles = new Map(Object.entries(mapData.tiles || {}).filter(([key]) => !movableTileKeys.has(key)));
+  const previewWalls = new Map(Object.entries(mapData.walls || {}).filter(([key]) => !movableWallKeys.has(key)));
   const movedTilePlacementKeys = new Set();
   const registerPlacementKey = (placementKey, componentId) => {
     componentIdByPlacementKey.set(placementKey, componentId);
@@ -591,7 +982,9 @@ export const computeCityChannelMovePreviewModel = ({
           y: to.y,
           z: to.z,
           edge: to.edge,
-          ...(to.rotation !== undefined ? { transmissionRotation: normalizeRotation(to.rotation) } : {}),
+          ...(to.transmissionRotation !== undefined || to.rotation !== undefined
+            ? { transmissionRotation: normalizeRotation(to.transmissionRotation ?? to.rotation) }
+            : {}),
           gearMounts: cloneGearMounts(sourceWall.gearMounts || [])
         }
         : sourceTile
@@ -602,7 +995,7 @@ export const computeCityChannelMovePreviewModel = ({
               z: to.z,
               edge: to.edge,
               panelType: sourceTile.panelType,
-              transmissionRotation: to.rotation ?? sourceTile.transmissionRotation ?? sourceTile.rotation ?? 0
+              transmissionRotation: to.transmissionRotation ?? to.rotation ?? sourceTile.transmissionRotation ?? sourceTile.rotation ?? 0
             }),
             gearMounts: cloneGearMounts(sourceTile.gearMounts || [])
           }
@@ -629,8 +1022,10 @@ export const computeCityChannelMovePreviewModel = ({
         y: to.y,
         z: to.z,
         ...(to.rotation !== undefined ? { rotation: normalizeRotation(to.rotation) } : {}),
-        ...(to.rotation !== undefined ? { transmissionRotation: normalizeRotation(to.rotation) } : {}),
-        ...(to.layFlat ? { isVertical: false } : {}),
+        ...(to.transmissionRotation !== undefined || to.rotation !== undefined
+          ? { transmissionRotation: normalizeRotation(to.transmissionRotation ?? to.rotation) }
+          : {}),
+        ...(to.layFlat ? { isVertical: false } : (to.isVertical ? { isVertical: true } : {})),
         gearMounts: cloneGearMounts(sourceTile.gearMounts || [])
       }
       : sourceWall
@@ -641,7 +1036,7 @@ export const computeCityChannelMovePreviewModel = ({
             z: to.z,
             panelType: sourceWall.panelType,
             rotation: to.rotation ?? sourceWall.rotation ?? 0,
-            transmissionRotation: to.rotation ?? sourceWall.transmissionRotation ?? sourceWall.rotation ?? 0
+            transmissionRotation: to.transmissionRotation ?? to.rotation ?? sourceWall.transmissionRotation ?? sourceWall.rotation ?? 0
           }),
           gearMounts: cloneGearMounts(sourceWall.gearMounts || []),
           isVertical: to.layFlat ? false : sourceWall.isVertical
@@ -660,7 +1055,11 @@ export const computeCityChannelMovePreviewModel = ({
     }));
   });
 
-  const staticEntries = collectStaticCollisionEntries({ mapData, movingTileKeys, movingWallKeys });
+  const staticEntries = collectStaticCollisionEntries({
+    mapData,
+    movingTileKeys: movableTileKeys,
+    movingWallKeys: movableWallKeys
+  });
 
   // 新规则1: 检查遮挡（碰撞）
   // 移动物体之间的碰撞（选中物体内部碰撞）
