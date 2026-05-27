@@ -63,6 +63,7 @@ import {
   buildPlacementGhostAtTarget,
   getMovingHostKeysFromOrigins
 } from '../cityChannelAttachedComponents';
+import { shouldStartPaintDrag } from './cityChannelPaintInteraction';
 
 const MIN_ZOOM = 0.55;
 const MAX_ZOOM = 1.8;
@@ -131,10 +132,6 @@ const GEAR_TOOTH_COUNT = 18;
 
 const normalizeCameraYaw = (yaw = 0) => ((yaw % 360) + 360) % 360;
 const normalizeAngleDelta = (delta = 0) => ((delta + 540) % 360) - 180;
-
-const isWallMaterial = (panelType) => (
-  panelType === CITY_CHANNEL_TILE_TYPES.WALL || panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL
-);
 
 const isBoardMaterial = (panelType) => {
   const material = getCityChannelMaterial(panelType);
@@ -575,7 +572,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE
         && this.panelPose === 'wall'
         && this.activeTileType
-        && (isWallMaterial(this.activeTileType) || isBoardMaterial(this.activeTileType))
+        && isBoardMaterial(this.activeTileType)
       );
     }
 
@@ -981,10 +978,6 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const signal = mapLayoutToScreen(layout.outputPorts.signal);
       graphics.fillStyle(layoutColor.port, 0.9);
       graphics.fillCircle(signal.x, signal.y + 10, 5);
-      if (tile.panelType === CITY_CHANNEL_TILE_TYPES.DIRECTIONAL_PRESSURE_PLATE) {
-        const directional = mapLayoutToScreen(layout.outputPorts.directional);
-        graphics.fillCircle(directional.x, directional.y + 10, 5);
-      }
     }
 
     drawTransmissionCore(graphics, progress = 0) {
@@ -1106,148 +1099,6 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       graphics.fillEllipse(0, 29, 112, 38);
     }
 
-    drawMechanismBasePlate(graphics, flags = {}) {
-      this.drawMechanismSelectionGlow(graphics, flags);
-      graphics.fillStyle(0x020617, 0.58);
-      graphics.fillEllipse(0, 32, 100, 34);
-      graphics.fillStyle(0x172033, 0.92);
-      graphics.lineStyle(2, flags.isSelected ? 0x67e8f9 : 0x334155, flags.isSelected ? 0.78 : 0.62);
-      graphics.fillRoundedRect(-43, 4, 86, 38, 7);
-      graphics.strokeRoundedRect(-43, 4, 86, 38, 7);
-      graphics.fillStyle(0x263241, 0.95);
-      graphics.fillRoundedRect(-36, 0, 72, 22, 6);
-      graphics.lineStyle(1, flags.isHover ? 0x93c5fd : 0x475569, flags.isHover ? 0.72 : 0.42);
-      graphics.strokeRoundedRect(-36, 0, 72, 22, 6);
-    }
-
-    drawDirectionDash(graphics, start, direction, length, progress, color = 0x38bdf8) {
-      const normal = { x: -direction.y, y: direction.x };
-      for (let index = 0; index < 3; index += 1) {
-        const t = (progress * 0.7 + (index * 0.28)) % 1;
-        const center = {
-          x: start.x + (direction.x * length * t),
-          y: start.y + (direction.y * length * t)
-        };
-        graphics.lineStyle(2, color, 0.18 + (0.5 * progress));
-        graphics.lineBetween(
-          center.x - (normal.x * 5),
-          center.y - (normal.y * 5),
-          center.x + (normal.x * 5),
-          center.y + (normal.y * 5)
-        );
-      }
-    }
-
-    getMechanismOutputDirection(tile, cameraYaw = this.cameraState.yaw) {
-      const projected = projectWorldOffset(
-        Math.cos(((tile.rotation || 0) * Math.PI) / 180),
-        Math.sin(((tile.rotation || 0) * Math.PI) / 180),
-        cameraYaw
-      );
-      return normalizeVector(projected);
-    }
-
-    drawVerticalPopPlateMechanism(graphics, tile, progress = 0, params = {}, cameraYaw = this.cameraState.yaw, flags = {}) {
-      const p = Math.max(0, Math.min(1, progress));
-      const plateDrop = PRESS_TRAVEL * 0.78 * p;
-      const travel = Math.max(8, (params.verticalExtensionLength || 70) * 0.28) * p;
-      const gearAngle = p * (params.rotationAngle || 90);
-      this.drawMechanismBasePlate(graphics, flags);
-
-      drawCoilSpring(graphics, -24, 12 + (plateDrop * 0.4), 36, p);
-      drawCoilSpring(graphics, 24, 12 + (plateDrop * 0.4), 36, p);
-      graphics.fillStyle(0x8bb6c7, 0.92);
-      graphics.lineStyle(1, 0xcbd5e1, 0.42);
-      graphics.fillRoundedRect(-30, -4 + plateDrop, 60, 18, 5);
-      graphics.strokeRoundedRect(-30, -4 + plateDrop, 60, 18, 5);
-      graphics.fillStyle(0xcbd5e1, 0.86);
-      graphics.fillRoundedRect(-6, 10 + plateDrop, 12, 24, 4);
-      graphics.fillStyle(0xd97706, 0.9);
-      graphics.lineStyle(2, 0xfef3c7, 0.58);
-      drawGearShape(graphics, -23, 30, 13, 9, 8, -gearAngle);
-      const crankEnd = rotateLocalPoint({ x: 17, y: 0 }, gearAngle);
-      drawLink(graphics, { x: -23, y: 30 }, { x: -23 + crankEnd.x, y: 30 + crankEnd.y }, 0xfde68a, 3, 0.84);
-      drawJoint(graphics, -23, 30, 3, 0xfbbf24);
-
-      graphics.fillStyle(0x0f766e, 0.9);
-      graphics.lineStyle(1, 0x67e8f9, 0.46);
-      graphics.strokeRoundedRect(15, 27, 24, 20 + travel, 6);
-      graphics.fillRoundedRect(20, 32, 14, 10 + travel, 5);
-      graphics.fillStyle(0xa5f3fc, 0.84);
-      graphics.fillEllipse(27, 32 + travel, 22, 7);
-      this.drawDirectionDash(graphics, { x: 27, y: 28 }, { x: 0, y: 1 }, 38, p);
-    }
-
-    drawHorizontalPopPlateMechanism(graphics, tile, progress = 0, params = {}, cameraYaw = this.cameraState.yaw, flags = {}) {
-      const p = Math.max(0, Math.min(1, progress));
-      const plateDrop = PRESS_TRAVEL * 0.72 * p;
-      const travel = Math.max(8, (params.horizontalExtensionLength || 80) * 0.34) * p;
-      const direction = this.getMechanismOutputDirection(tile, cameraYaw);
-      const normal = { x: -direction.y, y: direction.x };
-      const gearAngle = p * (params.rotationAngle || 90);
-      this.drawMechanismBasePlate(graphics, flags);
-
-      graphics.fillStyle(0x8bb6c7, 0.92);
-      graphics.lineStyle(1, 0xcbd5e1, 0.42);
-      graphics.fillRoundedRect(-28, -4 + plateDrop, 56, 17, 5);
-      graphics.strokeRoundedRect(-28, -4 + plateDrop, 56, 17, 5);
-      drawCoilSpring(graphics, -18, 12 + (plateDrop * 0.4), 34, p);
-      graphics.fillStyle(0xcbd5e1, 0.86);
-      graphics.fillRoundedRect(-5, 9 + plateDrop, 10, 25, 4);
-      graphics.fillStyle(0xd97706, 0.9);
-      graphics.lineStyle(2, 0xfef3c7, 0.58);
-      drawGearShape(graphics, -7, 30, 13, 9, 8, gearAngle);
-      const crank = rotateLocalPoint({ x: 16, y: 0 }, gearAngle);
-      const crankPoint = { x: -7 + crank.x, y: 30 + crank.y };
-      const base = { x: 16, y: 30 };
-      const tip = { x: base.x + (direction.x * travel), y: base.y + (direction.y * travel) };
-      drawLink(graphics, crankPoint, base, 0xfde68a, 3, 0.86);
-      drawJoint(graphics, crankPoint.x, crankPoint.y, 3, 0xfbbf24);
-
-      const sleeveLength = 33;
-      const width = 8;
-      const sleeveStart = { x: base.x - (direction.x * 5), y: base.y - (direction.y * 5) };
-      const sleeveEnd = { x: base.x + (direction.x * sleeveLength), y: base.y + (direction.y * sleeveLength) };
-      graphics.fillStyle(0x172033, 0.92);
-      graphics.lineStyle(1, 0x67e8f9, 0.36);
-      drawLocalPolygon(graphics, [
-        { x: sleeveStart.x + (normal.x * (width + 4)), y: sleeveStart.y + (normal.y * (width + 4)) },
-        { x: sleeveEnd.x + (normal.x * (width + 4)), y: sleeveEnd.y + (normal.y * (width + 4)) },
-        { x: sleeveEnd.x - (normal.x * (width + 4)), y: sleeveEnd.y - (normal.y * (width + 4)) },
-        { x: sleeveStart.x - (normal.x * (width + 4)), y: sleeveStart.y - (normal.y * (width + 4)) }
-      ]);
-      graphics.fillStyle(0xa5f3fc, 0.86);
-      drawLocalPolygon(graphics, [
-        { x: base.x + (normal.x * width), y: base.y + (normal.y * width) },
-        { x: tip.x + (normal.x * width), y: tip.y + (normal.y * width) },
-        { x: tip.x - (normal.x * width), y: tip.y - (normal.y * width) },
-        { x: base.x - (normal.x * width), y: base.y - (normal.y * width) }
-      ]);
-      graphics.fillCircle(tip.x, tip.y, 5);
-      this.drawDirectionDash(graphics, sleeveEnd, direction, 40, p);
-    }
-
-    drawAsymmetricCrossWheel(graphics, cx, cy, longRadius = 23, shortRadius = 15, armWidth = 8, angle = 0) {
-      const arms = [
-        { length: longRadius, rotation: 0 },
-        { length: shortRadius, rotation: 90 },
-        { length: longRadius, rotation: 180 },
-        { length: shortRadius, rotation: 270 }
-      ];
-      arms.forEach((arm) => {
-        const a = ((angle + arm.rotation) * Math.PI) / 180;
-        const dir = { x: Math.cos(a), y: Math.sin(a) };
-        const normal = { x: -dir.y, y: dir.x };
-        drawLocalPolygon(graphics, [
-          { x: cx + (normal.x * armWidth), y: cy + (normal.y * armWidth) },
-          { x: cx + (dir.x * arm.length) + (normal.x * armWidth), y: cy + (dir.y * arm.length) + (normal.y * armWidth) },
-          { x: cx + (dir.x * arm.length) - (normal.x * armWidth), y: cy + (dir.y * arm.length) - (normal.y * armWidth) },
-          { x: cx - (normal.x * armWidth), y: cy - (normal.y * armWidth) }
-        ]);
-      });
-      graphics.fillCircle(cx, cy, 10);
-    }
-
     drawGearPressurePlateMechanism(graphics, tile, progress = 0, params = {}, cameraYaw = this.cameraState.yaw, flags = {}) {
       const p = Math.max(0, Math.min(1, Number(progress) || 0));
       this.drawMechanismSelectionGlow(graphics, flags);
@@ -1260,38 +1111,6 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       this.textureCache.drawGearPressurePlateCornerHint(graphics, { top }, 0.26 + (p * 0.34));
     }
 
-    drawRotaryButtonPlateMechanism(graphics, tile, progress = 0, params = {}, cameraYaw = this.cameraState.yaw, flags = {}) {
-      const p = Math.max(0, Math.min(1, progress));
-      const buttonDrop = 6 * Math.sin(p * Math.PI);
-      const wheelAngle = p * (params.rotationAngle || 90);
-      this.drawMechanismSelectionGlow(graphics, flags);
-      graphics.fillStyle(0x020617, 0.62);
-      graphics.fillEllipse(0, 32, 102, 36);
-      graphics.fillStyle(0x172033, 0.94);
-      graphics.lineStyle(2, flags.isSelected ? 0x67e8f9 : 0x334155, flags.isSelected ? 0.78 : 0.62);
-      graphics.fillEllipse(0, 17, 84, 48);
-      graphics.strokeEllipse(0, 17, 84, 48);
-      graphics.lineStyle(1, 0x67e8f9, 0.28);
-      for (let index = 0; index < 12; index += 1) {
-        const a = (index / 12) * Math.PI * 2;
-        graphics.lineBetween(Math.cos(a) * 35, 17 + (Math.sin(a) * 19), Math.cos(a) * 39, 17 + (Math.sin(a) * 22));
-      }
-      graphics.fillStyle(0x8bb6c7, 0.9);
-      graphics.fillEllipse(0, 4 + buttonDrop, 54, 20);
-      graphics.fillStyle(0xf59e0b, 0.94);
-      graphics.lineStyle(2, 0xfef3c7, 0.58);
-      this.drawAsymmetricCrossWheel(graphics, 0, 18, 25, 15, 6, wheelAngle);
-      drawJoint(graphics, 0, 18, 4, 0xfbbf24);
-      const pawlPush = Math.sin(Math.min(1, p * 1.3) * Math.PI) * 9;
-      drawLink(graphics, { x: -38 + pawlPush, y: 28 }, { x: -16 + pawlPush, y: 22 }, 0xfde68a, 3, 0.84);
-      const latchBounce = p > 0.82 ? Math.sin((p - 0.82) / 0.18 * Math.PI) * 5 : 0;
-      drawLink(graphics, { x: 36, y: 24 - latchBounce }, { x: 20, y: 19 }, 0xcbd5e1, 3, 0.8);
-      graphics.lineStyle(2, 0x38bdf8, 0.22 + (0.46 * p));
-      graphics.beginPath();
-      graphics.arc(0, 18, 34, -0.9 + (p * 1.2), 0.2 + (p * 1.2), false);
-      graphics.strokePath();
-    }
-
     applyMechanismPose(tile, runtime, progress = 0, params = {}, cameraYaw = this.cameraState.yaw) {
       const graphics = runtime.graphics;
       if (!graphics) return;
@@ -1301,12 +1120,6 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       graphics.clear();
       if (kind === CITY_CHANNEL_MECHANISM_KINDS.GEAR_PRESSURE_PLATE) {
         this.drawGearPressurePlateMechanism(graphics, tile, p, params, cameraYaw, flags);
-      } else if (kind === CITY_CHANNEL_MECHANISM_KINDS.HORIZONTAL_POP_PLATE) {
-        this.drawHorizontalPopPlateMechanism(graphics, tile, p, params, cameraYaw, flags);
-      } else if (kind === CITY_CHANNEL_MECHANISM_KINDS.ROTARY_BUTTON_PLATE) {
-        this.drawRotaryButtonPlateMechanism(graphics, tile, p, params, cameraYaw, flags);
-      } else {
-        this.drawVerticalPopPlateMechanism(graphics, tile, p, params, cameraYaw, flags);
       }
     }
 
@@ -1835,13 +1648,19 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         if ((Number(cell.z) || 0) !== supportCell.z + 1) return false;
         const dx = Math.abs((Number(cell.x) || 0) - supportCell.x);
         const dy = Math.abs((Number(cell.y) || 0) - supportCell.y);
-        if (dx === 0 && dy === 0) return false;
-        if (dx + dy !== 1) return false;
+        const sameSupportCell = dx === 0 && dy === 0;
+        if (sameSupportCell && snap.support?.kind !== 'wall') return false;
+        if (!sameSupportCell && dx + dy !== 1) return false;
         return Object.keys(EDGE_NEIGHBOR_OFFSETS).some((direction) => (
           sameAxisSegment(this.getAbsoluteWallEdgeEndpoints(cell, direction), segment)
         ));
       }
       if (snap.side === 'side' && edge && snap.direction) {
+        if (snap.support?.kind === 'wall') {
+          const vertex = this.getSupportAxisVertex(snap.support, snap.direction);
+          return this.getAbsoluteWallEdgeEndpoints(cell, edge)
+            .some((point) => sameAxisPoint(point, vertex));
+        }
         return sameAxisSegment(
           this.getAbsoluteWallEdgeEndpoints(cell, edge),
           this.getVerticalSnapSupportEdgeSegment(snap.support, snap.direction)
@@ -3175,9 +2994,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const seen = new Set();
       const addOption = (option) => {
         if (!option?.cell) return;
-        const key = option.kind === 'wall'
-          ? `wall:${this.getWallPhysicalKey(option.cell, option.edge)}`
-          : `floor:${createCellKey(option.cell.x, option.cell.y, option.cell.z)}`;
+        const key = this.getAxisOptionKey(option);
         if (seen.has(key)) return;
         seen.add(key);
         options.push(option);
@@ -3203,9 +3020,16 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       }
 
       const sideSegment = this.getVerticalSnapSupportEdgeSegment(snap.support, snap.direction);
-      const wallCandidates = sideSegment
-        ? this.findWallCandidatesForSegment(sideSegment, snap.cell.z)
-        : [];
+      const wallCandidates = [];
+      if (sideSegment) {
+        wallCandidates.push(...this.findWallCandidatesForSegment(sideSegment, snap.cell.z));
+      }
+      if (snap.support?.kind === 'wall') {
+        const vertex = this.getSupportAxisVertex(snap.support, snap.direction);
+        if (vertex) {
+          wallCandidates.push(...this.findWallCandidatesForVertex(vertex, snap.cell.z));
+        }
+      }
       wallCandidates.forEach((candidate) => {
         addOption(this.createAxisWallTarget(candidate.cell, candidate.edge, snap));
       });
@@ -3216,6 +3040,32 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         }
       }
       return options;
+    }
+
+    getAxisOptionKey(target) {
+      if (!target?.cell) return '';
+      const isWall = target.kind === 'wall' || !!target.edge;
+      return isWall
+        ? `wall:${this.getWallPhysicalKey(target.cell, target.edge)}`
+        : `floor:${createCellKey(target.cell.x, target.cell.y, target.cell.z)}`;
+    }
+
+    getAxisOptionKindForPose(pose = 'floor') {
+      return pose === 'wall' ? 'wall' : 'floor';
+    }
+
+    getAxisOptionIndex(options = [], target = null) {
+      const key = this.getAxisOptionKey(target);
+      return key
+        ? options.findIndex((option) => this.getAxisOptionKey(option) === key)
+        : -1;
+    }
+
+    getAxisOptionIndexInAllOptions(allOptions = [], target = null) {
+      const key = this.getAxisOptionKey(target);
+      return key
+        ? allOptions.findIndex((option) => this.getAxisOptionKey(option) === key)
+        : -1;
     }
 
     getAxisPlacementTarget(snap) {
@@ -3470,7 +3320,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
             wall: candidate.wall,
             localSurfacePoint: point,
             snapPriority: verticalSnapEdge ? 2 : 0,
-            selectionPriority: needsVisibleSurfaceHit && inVisibleWall ? 1 : 0,
+            selectionPriority: needsVisibleSurfaceHit && (inVisibleWall || inSurfaceBounds) ? 1 : 0,
             snapDistanceSquared: verticalSnapEdge?.distanceSquared ?? Infinity,
             depth: getPlacementDepth({
               cell: candidate.cell,
@@ -3525,7 +3375,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
             ...geometry.wallSideEnd
           ]), 10)
           : null;
-          const inVerticalSurfaceBounds = candidate.tile.isVertical
+        const inVerticalSurfaceBounds = candidate.tile.isVertical
           && (allowOutline || needsVisibleSurfaceHit)
           && rectContainsPoint(verticalSurfaceBounds, point);
         if (!inTile && !inVertical && !inVerticalSurfaceBounds) return;
@@ -3558,7 +3408,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           tile: candidate.tile,
           localSurfacePoint: point,
           snapPriority: verticalSnapEdge ? 2 : 0,
-          selectionPriority: needsVisibleSurfaceHit && candidate.tile.isVertical && inVertical ? 1 : 0,
+          selectionPriority: needsVisibleSurfaceHit && candidate.tile.isVertical && (inVertical || inVerticalSurfaceBounds) ? 1 : 0,
           snapDistanceSquared: verticalSnapEdge?.distanceSquared ?? Infinity,
           depth: getPlacementDepth({
             cell: candidate.cell,
@@ -4531,6 +4381,15 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         return;
       }
 
+      if (this.dragState?.mode === 'paint') {
+        if (!this.dragState.moved && !shouldStartPaintDrag(this.dragState, pointer)) return;
+        this.dragState.moved = true;
+        const hit = this.hitTest(pointer, { allowOutline: true });
+        this.updateHover(hit);
+        this.applyPaint(pointer, hit);
+        return;
+      }
+
       const hit = this.hitTest(pointer, { allowOutline: true });
       this.updateHover(hit);
       if (!this.dragState) {
@@ -4538,11 +4397,6 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && !!this.activeTileType)
           || (this.activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT && !!this.activeComponentType)
         );
-        return;
-      }
-
-      if (this.dragState.mode === 'paint') {
-        this.applyPaint(pointer);
         return;
       }
 
@@ -4664,6 +4518,11 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       if (this.inspectState) return;
       const shiftHeld = !!pointer?.event?.shiftKey;
       const isCarryPlacement = this.carryState?.kind === 'placement';
+      if (isCarryPlacement && shiftHeld) {
+        const direction = deltaY < 0 ? 'forward' : 'reverse';
+        this.rotateCarryPlacementSurface(direction);
+        return;
+      }
       if (!isCarryPlacement && shiftHeld && (this.selectedCells.length || this.selectedWalls.length)) {
         const direction = deltaY < 0 ? 'forward' : 'reverse';
         const placements = [...this.selectedCells, ...this.selectedWalls].map((placement) => ({ ...placement }));
@@ -4732,6 +4591,59 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const target = options[this.snapPlaneCycle] || options[0];
       this.setPlacementPose(target.kind === 'wall' ? 'wall' : 'floor');
       this.config.onHoverStatusChange?.('放置预览：围绕当前吸附边切换安装面');
+      this.updateHover(hitInfo);
+      this.drawGhostLayer(true);
+      return true;
+    }
+
+    cycleActivePlacementSnapAxis() {
+      if (!(this.activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && this.activeTileType)) return false;
+      const hitInfo = this.getActivePointerPlacementHitInfo();
+      const snap = this.resolvePlacementEdgeSnap(hitInfo);
+      const snapAxisKey = this.getSnapAxisKey(snap);
+      if (!snapAxisKey) {
+        this.config.onHoverStatusChange?.('放置预览：当前没有可旋转的吸附轴');
+        this.drawGhostLayer(true);
+        return true;
+      }
+      const allOptions = this.getAxisPlacementOptions(snap).filter((option) => option?.valid !== false);
+      const poseKind = this.getAxisOptionKindForPose(this.panelPose);
+      const options = allOptions.filter((option) => option.kind === poseKind);
+      const currentTarget = snapAxisKey === this.activeSnapAxisKey
+        ? this.resolveDynamicPlacementTarget(hitInfo, { forGhost: true, snap, allowReplacement: false })
+        : null;
+      let currentIndex = this.getAxisOptionIndex(options, currentTarget);
+      if (options.length <= 1) {
+        if (options.length === 1 && currentIndex < 0) {
+          this.activeSnapAxisKey = snapAxisKey;
+          const target = options[0];
+          const targetIndex = this.getAxisOptionIndexInAllOptions(allOptions, target);
+          this.snapPlaneCycle = targetIndex >= 0 ? targetIndex : 0;
+          this.config.onHoverStatusChange?.('放置预览：沿当前吸附轴旋转到空位');
+          this.updateHover(hitInfo);
+          this.drawGhostLayer(true);
+          return true;
+        }
+        this.config.onHoverStatusChange?.('放置预览：当前吸附轴没有其他空余方向');
+        this.drawGhostLayer(true);
+        return true;
+      }
+      if (snapAxisKey !== this.activeSnapAxisKey) {
+        this.activeSnapAxisKey = snapAxisKey;
+        const preferredTarget = allOptions[this.getPreferredAxisPlacementIndex(allOptions)];
+        currentIndex = this.getAxisOptionIndex(options, preferredTarget);
+      } else if (currentIndex < 0 && allOptions.length > 0) {
+        const cycleIndex = (((this.snapPlaneCycle || 0) % allOptions.length) + allOptions.length) % allOptions.length;
+        currentIndex = this.getAxisOptionIndex(options, allOptions[cycleIndex]);
+      } else if (currentIndex >= 0) {
+        const currentAllIndex = this.getAxisOptionIndexInAllOptions(allOptions, options[currentIndex]);
+        if (currentAllIndex >= 0) this.snapPlaneCycle = currentAllIndex;
+      }
+      if (currentIndex < 0) currentIndex = 0;
+      const target = options[((currentIndex + 1) % options.length + options.length) % options.length] || options[0];
+      const targetIndex = this.getAxisOptionIndexInAllOptions(allOptions, target);
+      this.snapPlaneCycle = targetIndex >= 0 ? targetIndex : 0;
+      this.config.onHoverStatusChange?.('放置预览：沿当前吸附轴旋转到下一个空位');
       this.updateHover(hitInfo);
       this.drawGhostLayer(true);
       return true;
@@ -4874,7 +4786,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           : (this.isWallPlacementActive() ? '竖放' : '平放');
         this.config.onHoverStatusChange?.(
           effectiveCell
-            ? `${material}｜${pose}｜${this.activeRotation}°｜R旋转 Space切安装面`
+            ? `${material}｜${pose}｜${this.activeRotation}°｜R旋转 Space切吸附位`
             : `${material}｜未指向通道`
         );
         return;
@@ -4906,8 +4818,13 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           operations: [],
           label: '安装齿轮'
         };
-        this.dragState = { mode: 'paint' };
-        this.applyPaint(pointer);
+        this.dragState = {
+          mode: 'paint',
+          startX: pointer.x,
+          startY: pointer.y,
+          moved: false
+        };
+        this.applyPaint(pointer, hitInfo);
         return;
       }
       const placementSnap = this.resolvePlacementEdgeSnap(hitInfo);
@@ -4929,13 +4846,18 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         touched: new Set(),
         operations: []
       };
-      this.dragState = { mode: 'paint' };
-      this.applyPaint(pointer);
+      this.dragState = {
+        mode: 'paint',
+        startX: pointer.x,
+        startY: pointer.y,
+        moved: false
+      };
+      this.applyPaint(pointer, hitInfo);
     }
 
-    applyPaint(pointer) {
+    applyPaint(pointer, suppliedHitInfo = null) {
       if (!this.paintStroke) return;
-      const hitInfo = this.hitTest(pointer, { allowOutline: true });
+      const hitInfo = suppliedHitInfo || this.hitTest(pointer, { allowOutline: true });
       if (this.paintStroke.isComponent) {
         const target = this.getGearInstallTarget(hitInfo);
         if (!target?.valid) {
@@ -5856,6 +5778,83 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           : '移动预览：围绕当前吸附边切换安装面'
       );
       this.drawGhostLayer(true);
+    }
+
+    cycleCarrySnapAxisRotation() {
+      if (this.carryState?.kind !== 'placement') return false;
+      const origins = this.carryState.origins || [];
+      if (origins.length !== 1) {
+        this.config.onHoverStatusChange?.('移动预览：仅单选可沿吸附轴旋转');
+        this.drawGhostLayer(true);
+        return true;
+      }
+      const result = this.getCarryAxisOptions();
+      if (!result?.axisKey) {
+        this.config.onHoverStatusChange?.('移动预览：当前没有可旋转的吸附轴');
+        this.drawGhostLayer(true);
+        return true;
+      }
+      const allOptions = result.options;
+      const poseKind = this.getAxisOptionKindForPose(this.getCarryDefaultPose());
+      const options = allOptions.filter((option) => option.kind === poseKind);
+      let currentIndex = this.getAxisOptionIndex(options, this.carryState.axisTarget);
+      if (
+        currentIndex < 0
+        && this.carryState.snapAxisKey === result.axisKey
+        && allOptions.length > 0
+      ) {
+        const cycleIndex = (((this.carryState.snapPlaneCycle || 0) % allOptions.length) + allOptions.length) % allOptions.length;
+        currentIndex = this.getAxisOptionIndex(options, allOptions[cycleIndex]);
+      }
+      if (options.length <= 1) {
+        if (options.length === 1 && currentIndex < 0) {
+          this.carryState.snapAxisKey = result.axisKey;
+          const target = options[0];
+          const targetIndex = this.getAxisOptionIndexInAllOptions(allOptions, target);
+          this.carryState.snapPlaneCycle = targetIndex >= 0 ? targetIndex : 0;
+          this.carryState.axisTarget = {
+            x: target.cell.x,
+            y: target.cell.y,
+            z: target.cell.z,
+            ...(target.kind === 'wall' ? { edge: target.edge } : {}),
+            ...(target.kind !== 'wall'
+              ? { layFlat: this.getCarryDefaultPose() === 'floor' }
+              : {})
+          };
+          this.carryState.manualSurfaceTarget = false;
+          this.config.onHoverStatusChange?.('移动预览：沿当前吸附轴旋转到空位');
+          this.drawGhostLayer(true);
+          return true;
+        }
+        this.config.onHoverStatusChange?.('移动预览：当前吸附轴没有其他空余方向');
+        this.drawGhostLayer(true);
+        return true;
+      }
+      if (this.carryState.snapAxisKey !== result.axisKey) {
+        this.carryState.snapAxisKey = result.axisKey;
+        const preferredTarget = allOptions[this.getPreferredAxisPlacementIndex(allOptions)];
+        currentIndex = this.getAxisOptionIndex(options, preferredTarget);
+      } else if (currentIndex >= 0) {
+        const currentAllIndex = this.getAxisOptionIndexInAllOptions(allOptions, options[currentIndex]);
+        if (currentAllIndex >= 0) this.carryState.snapPlaneCycle = currentAllIndex;
+      }
+      if (currentIndex < 0) currentIndex = 0;
+      const target = options[((currentIndex + 1) % options.length + options.length) % options.length] || options[0];
+      const targetIndex = this.getAxisOptionIndexInAllOptions(allOptions, target);
+      this.carryState.snapPlaneCycle = targetIndex >= 0 ? targetIndex : 0;
+      this.carryState.axisTarget = {
+        x: target.cell.x,
+        y: target.cell.y,
+        z: target.cell.z,
+        ...(target.kind === 'wall' ? { edge: target.edge } : {}),
+        ...(target.kind !== 'wall'
+          ? { layFlat: this.getCarryDefaultPose() === 'floor' }
+          : {})
+      };
+      this.carryState.manualSurfaceTarget = false;
+      this.config.onHoverStatusChange?.('移动预览：沿当前吸附轴旋转到下一个空位');
+      this.drawGhostLayer(true);
+      return true;
     }
 
     getCarryPlacementTarget(hitInfo = null) {

@@ -83,6 +83,70 @@ describe('city channel mechanism runtime', () => {
     ]));
   });
 
+  it('does not connect adjacent wall and floor transmissions when their sockets do not meet', () => {
+    const wall = createWall({
+      x: 0,
+      y: 0,
+      z: 0,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 0
+    });
+    const floor = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 0
+    });
+    const wallKey = createWallKey(wall.x, wall.y, wall.z, wall.edge);
+    const floorKey = createCellKey(floor.x, floor.y, floor.z);
+
+    const graph = buildMechanicalAssemblies({
+      tiles: { [floorKey]: floor },
+      walls: { [wallKey]: wall }
+    });
+
+    expect(graph.assemblyByComponentKey[wallKey]).not.toBe(graph.assemblyByComponentKey[floorKey]);
+    expect(graph.assemblies).toHaveLength(2);
+  });
+
+  it('splits an assembly when a transmission surface rotation no longer aligns ports', () => {
+    const left = createTile({
+      x: 0,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 90
+    });
+    const right = createTile({
+      x: 1,
+      y: 0,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
+      transmissionRotation: 90
+    });
+    const leftKey = createCellKey(left.x, left.y, left.z);
+    const rightKey = createCellKey(right.x, right.y, right.z);
+    const connected = buildMechanicalAssemblies({
+      tiles: { [leftKey]: left, [rightKey]: right },
+      walls: {}
+    });
+    const disconnected = buildMechanicalAssemblies({
+      tiles: {
+        [leftKey]: left,
+        [rightKey]: {
+          ...right,
+          transmissionRotation: 0
+        }
+      },
+      walls: {}
+    });
+
+    expect(connected.assemblyByComponentKey[leftKey]).toBe(connected.assemblyByComponentKey[rightKey]);
+    expect(disconnected.assemblyByComponentKey[leftKey]).not.toBe(disconnected.assemblyByComponentKey[rightKey]);
+  });
+
   it('ignores stale transmission skeleton data on basic plates when building assemblies', () => {
     const endpoint = createTile({
       x: 1,

@@ -95,14 +95,6 @@ const createGear = (material, radius = 0.34, teeth = 12) => {
   return group;
 };
 
-const createCrossWheel = (material) => {
-  const group = new THREE.Group();
-  addBox(group, 'long-x', { x: 1.52, y: 0.18, z: 0.22 }, { x: 0, y: 0, z: 0 }, material);
-  addBox(group, 'short-z', { x: 0.24, y: 0.18, z: 0.92 }, { x: 0, y: 0, z: 0 }, material);
-  addCylinder(group, 'hub', 0.18, 0.22, { x: 0, y: 0, z: 0 }, material, 28);
-  return group;
-};
-
 const addTransmissionLine = (group, start, end, material) => {
   addRodBetween(
     group,
@@ -198,31 +190,10 @@ const createModel = (panelType, tile = null) => {
   refs.gear.position.set(-0.18, -0.16, 0.08);
   root.add(refs.gear);
 
-  if (kind === CITY_CHANNEL_MECHANISM_KINDS.HORIZONTAL_POP_PLATE) {
-    refs.crank = addRodBetween(root, 'crank', new THREE.Vector3(-0.18, -0.16, 0.08), new THREE.Vector3(0.4, -0.16, 0.08), 0.035, brass);
-    refs.link = addRodBetween(root, 'link', new THREE.Vector3(0.4, -0.16, 0.08), new THREE.Vector3(0.92, -0.18, 0.08), 0.035, rod);
-    refs.sleeve = addBox(root, 'side-sleeve', { x: 1.08, y: 0.34, z: 0.4 }, { x: 1.08, y: -0.2, z: 0.08 }, metal);
-    refs.output = addBox(root, 'side-output-rod', { x: 0.9, y: 0.2, z: 0.24 }, { x: 1.2, y: -0.2, z: 0.08 }, cyan);
-    refs.arrow = addBox(root, 'side-energy-line', { x: 0.8, y: 0.03, z: 0.04 }, { x: 1.72, y: 0.22, z: 0.08 }, cyan);
-  } else if (kind === CITY_CHANNEL_MECHANISM_KINDS.ROTARY_BUTTON_PLATE) {
-    refs.detentRing = new THREE.Group();
-    for (let index = 0; index < 12; index += 1) {
-      const notch = addBox(refs.detentRing, 'detent', { x: 0.06, y: 0.08, z: 0.24 }, { x: 0, y: 0, z: -0.82 }, metal);
-      notch.rotation.y = (index / 12) * Math.PI * 2;
-    }
-    refs.detentRing.position.y = -0.1;
-    root.add(refs.detentRing);
-    refs.crossWheel = createCrossWheel(brass);
-    refs.crossWheel.position.set(0, 0.08, 0);
-    root.add(refs.crossWheel);
-    refs.pawl = addRodBetween(root, 'drive-pawl', new THREE.Vector3(-1.12, -0.18, -0.3), new THREE.Vector3(-0.42, -0.08, -0.12), 0.035, brass);
-    refs.latch = addRodBetween(root, 'lock-pawl', new THREE.Vector3(1.08, -0.08, 0.28), new THREE.Vector3(0.42, 0.02, 0.08), 0.035, rod);
-  } else {
-    refs.crank = addRodBetween(root, 'crank', new THREE.Vector3(-0.18, -0.16, 0.08), new THREE.Vector3(0.45, -0.18, 0.08), 0.035, brass);
-    refs.link = addRodBetween(root, 'link', new THREE.Vector3(0.45, -0.18, 0.08), new THREE.Vector3(0.58, -0.46, 0.08), 0.035, rod);
-    refs.sleeve = addCylinder(root, 'bottom-guide-sleeve', 0.24, 0.42, { x: 0.58, y: -0.54, z: 0.08 }, metal, 24);
-    refs.output = addCylinder(root, 'down-output-rod', 0.16, 0.62, { x: 0.58, y: -0.82, z: 0.08 }, cyan, 24);
-  }
+  refs.crank = addRodBetween(root, 'crank', new THREE.Vector3(-0.18, -0.16, 0.08), new THREE.Vector3(0.45, -0.18, 0.08), 0.035, brass);
+  refs.link = addRodBetween(root, 'link', new THREE.Vector3(0.45, -0.18, 0.08), new THREE.Vector3(0.58, -0.46, 0.08), 0.035, rod);
+  refs.sleeve = addCylinder(root, 'bottom-guide-sleeve', 0.24, 0.42, { x: 0.58, y: -0.54, z: 0.08 }, metal, 24);
+  refs.output = addCylinder(root, 'down-output-rod', 0.16, 0.62, { x: 0.58, y: -0.82, z: 0.08 }, cyan, 24);
 
   root.userData.refs = refs;
   root.rotation.x = -0.26;
@@ -249,26 +220,11 @@ const applyPose = (model, progress, params) => {
   const angle = THREE.MathUtils.degToRad(normalized.rotationAngle * p);
   refs.gear.rotation.z = -angle;
 
-  if (refs.kind === CITY_CHANNEL_MECHANISM_KINDS.HORIZONTAL_POP_PLATE) {
-    const travel = (normalized.horizontalExtensionLength / 160) * 1.12 * p;
-    refs.output.position.x = 1.2 + travel;
-    refs.arrow.position.x = 1.72 + (travel * 0.55);
-    refs.arrow.material.opacity = 0.24 + (p * 0.56);
-    refs.crank.rotation.z = angle;
-    refs.link.rotation.z = -angle * 0.38;
-  } else if (refs.kind === CITY_CHANNEL_MECHANISM_KINDS.ROTARY_BUTTON_PLATE) {
-    const detent = p > 0.82 ? Math.sin(((p - 0.82) / 0.18) * Math.PI) * 0.08 : 0;
-    refs.crossWheel.rotation.y = angle;
-    refs.detentRing.rotation.y = angle * 0.16;
-    refs.pawl.position.x = -0.18 + (Math.sin(Math.min(1, p * 1.4) * Math.PI) * 0.16);
-    refs.latch.position.y = detent;
-  } else {
-    const travel = (normalized.verticalExtensionLength / 140) * 1.08 * p;
-    refs.output.position.y = -0.82 - travel;
-    refs.sleeve.scale.y = 1 + (travel * 0.3);
-    refs.crank.rotation.z = angle;
-    refs.link.rotation.z = angle * 0.36;
-  }
+  const travel = (normalized.verticalExtensionLength / 140) * 1.08 * p;
+  refs.output.position.y = -0.82 - travel;
+  refs.sleeve.scale.y = 1 + (travel * 0.3);
+  refs.crank.rotation.z = angle;
+  refs.link.rotation.z = angle * 0.36;
 };
 
 const CityChannelPressurePlateInspect3D = ({

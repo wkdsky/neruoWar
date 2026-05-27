@@ -33,25 +33,8 @@ const colorByPanelType = {
   actuator_opposite_corner_gear_plate: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
   actuator_triangle_gear_plate: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
   actuator_four_corner_gear_plate: { top: 0xb8b1a4, side: 0x756f64, edge: 0xd8d2c4 },
-  wood_floor: { top: 0x87643f, side: 0x4b321f, edge: 0xfbbf24 },
-  stone_floor: { top: 0x64748b, side: 0x334155, edge: 0xcbd5e1 },
-  iron_floor: { top: 0x293445, side: 0x111827, edge: 0x94a3b8 },
-  glass_floor: { top: 0x7dd3fc, side: 0x0e7490, edge: 0xbae6fd, alpha: 0.45 },
-  wall: { top: 0x172232, side: 0x0f1726, edge: 0xe2e8f0 },
-  glass_wall: { top: 0x7dd3fc, side: 0x0e7490, edge: 0xbae6fd, alpha: 0.38 },
   entrance: { top: 0x0e7490, side: 0x08304a, edge: 0x67e8f9 },
-  exit: { top: 0xa16207, side: 0x451a03, edge: 0xfacc15 },
-  pressure_plate: { top: 0x7dd3fc, side: 0x0f2f3a, edge: 0x8b5cf6, alpha: 0.42 },
-  directional_pressure_plate: { top: 0x7dd3fc, side: 0x0f2f3a, edge: 0x8b5cf6, alpha: 0.42 },
-  vertical_push_button: { top: 0x64748b, side: 0x334155, edge: 0xcbd5e1 },
-  horizontal_push_button: { top: 0x64748b, side: 0x334155, edge: 0xcbd5e1 },
-  rotary_button: { top: 0x64748b, side: 0x334155, edge: 0xcbd5e1 },
-  external_gear_plate: { top: 0x284653, side: 0x102a34, edge: 0x5eead4 },
-  internal_gear_plate: { top: 0x284653, side: 0x102a34, edge: 0x5eead4 },
-  peg_gear_plate: { top: 0x284653, side: 0x102a34, edge: 0x5eead4 },
-  trapdoor_plate: { top: 0x45505c, side: 0x272f3a, edge: 0xa1a1aa },
-  side_pusher_plate: { top: 0x334155, side: 0x111827, edge: 0xef4444 },
-  spring_plate: { top: 0x31514a, side: 0x0f2f3a, edge: 0x86efac }
+  exit: { top: 0xa16207, side: 0x451a03, edge: 0xfacc15 }
 };
 
 const drawPolygonPath = (graphics, points = []) => {
@@ -321,7 +304,7 @@ export class CityChannelTextureCache {
     graphics.scaleCanvas(TILE_TEXTURE_SUPERSAMPLE, TILE_TEXTURE_SUPERSAMPLE);
     const isPerspective = wallViewMode === 'perspective';
     const isSolid = wallViewMode === 'solid';
-    const baseAlpha = panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL ? 0.42 : 1;
+    const baseAlpha = colors.alpha || 1;
     const wallAlpha = isPerspective ? 0.34 : baseAlpha;
     const outlineAlpha = isSolid ? 0 : (isPerspective ? 0.16 : 0.28);
     const hasStartMiter = !!geometry.miter?.start;
@@ -352,7 +335,7 @@ export class CityChannelTextureCache {
     canvas.height = TEXTURE_RENDER_HEIGHT;
     const ctx = canvas.getContext('2d');
     ctx.scale(TILE_TEXTURE_SUPERSAMPLE, TILE_TEXTURE_SUPERSAMPLE);
-    const baseAlpha = panelType === CITY_CHANNEL_TILE_TYPES.GLASS_WALL ? 0.42 : 1;
+    const baseAlpha = colors.alpha || 1;
     const hasStartMiter = !!geometry.miter?.start;
     const hasEndMiter = !!geometry.miter?.end;
 

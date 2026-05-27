@@ -9,12 +9,7 @@ import {
 } from './cityChannelSchema';
 
 export const CITY_CHANNEL_TRIGGER_MECHANISM_TYPES = new Set([
-  CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE,
-  CITY_CHANNEL_TILE_TYPES.PRESSURE_PLATE,
-  CITY_CHANNEL_TILE_TYPES.DIRECTIONAL_PRESSURE_PLATE,
-  CITY_CHANNEL_TILE_TYPES.VERTICAL_PUSH_BUTTON,
-  CITY_CHANNEL_TILE_TYPES.HORIZONTAL_PUSH_BUTTON,
-  CITY_CHANNEL_TILE_TYPES.ROTARY_BUTTON
+  CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
 ]);
 
 export const DEFAULT_CITY_CHANNEL_MECHANISM_PARAMS = {
@@ -43,10 +38,7 @@ export const CITY_CHANNEL_MECHANISM_KINDS = {
   GEAR_PRESSURE_PLATE: 'gearPressurePlate',
   FIXED_AXIS_ASSEMBLY: 'fixedAxisAssembly',
   TRANSMISSION_BOARD: 'transmissionBoard',
-  ACTUATOR_BOARD: 'actuatorBoard',
-  VERTICAL_POP_PLATE: 'verticalPopPlate',
-  HORIZONTAL_POP_PLATE: 'horizontalPopPlate',
-  ROTARY_BUTTON_PLATE: 'rotaryButtonPlate'
+  ACTUATOR_BOARD: 'actuatorBoard'
 };
 
 const DIRECTIONS = ['north', 'east', 'south', 'west'];
@@ -118,13 +110,7 @@ export const getMechanismTemplateKind = (panelType) => {
   if (panelType === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE) return CITY_CHANNEL_MECHANISM_KINDS.GEAR_PRESSURE_PLATE;
   if (String(panelType || '').startsWith('transmission_')) return CITY_CHANNEL_MECHANISM_KINDS.TRANSMISSION_BOARD;
   if (String(panelType || '').startsWith('actuator_')) return CITY_CHANNEL_MECHANISM_KINDS.ACTUATOR_BOARD;
-  if (panelType === CITY_CHANNEL_TILE_TYPES.HORIZONTAL_PUSH_BUTTON || panelType === CITY_CHANNEL_TILE_TYPES.DIRECTIONAL_PRESSURE_PLATE) {
-    return CITY_CHANNEL_MECHANISM_KINDS.HORIZONTAL_POP_PLATE;
-  }
-  if (panelType === CITY_CHANNEL_TILE_TYPES.ROTARY_BUTTON) {
-    return CITY_CHANNEL_MECHANISM_KINDS.ROTARY_BUTTON_PLATE;
-  }
-  return CITY_CHANNEL_MECHANISM_KINDS.VERTICAL_POP_PLATE;
+  return null;
 };
 
 export const getMechanismParamKey = (cell) => (
@@ -292,22 +278,6 @@ const getCandidateComponentKeysForPort = (component = {}, port = {}, connectable
   return candidateKeys;
 };
 
-const areComponentsPhysicallyAdjacentForTransmission = (from = {}, to = {}) => {
-  if (!from || !to) return false;
-  if (from.edge && to.edge) {
-    if (from.edge === to.edge && from.x === to.x && from.y === to.y && Math.abs((from.z || 0) - (to.z || 0)) === 1) {
-      return true;
-    }
-    return false;
-  }
-
-  const wall = from.edge ? from : to.edge ? to : null;
-  const floor = from.edge ? to : to.edge ? from : null;
-  if (!wall || !floor) return false;
-  if ((wall.z || 0) !== (floor.z || 0)) return false;
-  return getWallAdjacentFloorKeys(wall).includes(createCellKey(floor.x, floor.y, floor.z));
-};
-
 export const buildMechanicalAssemblies = (mapData = {}) => {
   const tiles = mapData.tiles || {};
   const walls = mapData.walls || {};
@@ -336,15 +306,11 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
         if (candidateKey === key) return;
         const targetPorts = portByTileKey.get(candidateKey) || [];
         const targetPort = targetPorts.find((item) => arePortsAligned(port, item));
-        const looseSurfaceConnection = !targetPort
-          && targetPorts.length > 0
-          && areComponentsPhysicallyAdjacentForTransmission(tile, components[candidateKey]);
-        if (!targetPort && !looseSurfaceConnection) return;
+        if (!targetPort) return;
         if (key < candidateKey) {
           addEdge(graph, key, candidateKey, {
             from: { componentKey: key, portId: port.id },
-            to: { componentKey: candidateKey, portId: targetPort?.id || targetPorts[0]?.id || 'surface' },
-            looseSurfaceConnection
+            to: { componentKey: candidateKey, portId: targetPort.id }
           });
         }
       });
@@ -373,7 +339,6 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
         addEdge(graph, fromEntry.componentKey, toEntry.componentKey, {
           from: { componentKey: fromEntry.componentKey, portId: fromEntry.port.id },
           to: { componentKey: toEntry.componentKey, portId: toEntry.port.id },
-          looseSurfaceConnection: false,
           socketConnection: true
         });
       }

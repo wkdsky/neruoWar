@@ -84,13 +84,13 @@ describe('cityChannelAttachedComponents', () => {
           x: 10,
           y: 10,
           z: 1,
-          panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+          panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
         }),
         [createCellKey(11, 10, 1)]: createTile({
           x: 11,
           y: 10,
           z: 1,
-          panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR
+          panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
         })
       },
       walls: {}

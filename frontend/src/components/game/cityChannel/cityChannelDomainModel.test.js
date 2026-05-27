@@ -24,8 +24,8 @@ describe('cityChannelDomainModel', () => {
     const mapData = {
       ...createBaseCityChannelMap({ name: 'domain model test' }),
       tiles: {
-        [floorKey]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-        [pressureKey]: createTile({ x: 11, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.PRESSURE_PLATE }),
+        [floorKey]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+        [pressureKey]: createTile({ x: 11, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE }),
         [portalKey]: createTile({ x: 12, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.ENTRANCE })
       },
       walls: {

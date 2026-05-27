@@ -315,26 +315,6 @@ export const CITY_CHANNEL_MATERIAL_CATALOG = [
   }
 ];
 
-export const CITY_CHANNEL_LEGACY_PANEL_TYPE_MAP = {
-  wood_floor: 'basic_plate',
-  stone_floor: 'basic_plate',
-  iron_floor: 'basic_plate',
-  glass_floor: 'basic_plate',
-  wall: 'basic_plate',
-  glass_wall: 'basic_plate',
-  pressure_plate: 'gear_pressure_plate',
-  directional_pressure_plate: 'gear_pressure_plate',
-  vertical_push_button: 'gear_pressure_plate',
-  horizontal_push_button: 'gear_pressure_plate',
-  rotary_button: 'gear_pressure_plate',
-  external_gear_plate: 'actuator_center_gear_plate',
-  internal_gear_plate: 'actuator_center_gear_plate',
-  peg_gear_plate: 'actuator_single_corner_gear_plate',
-  trapdoor_plate: 'actuator_center_gear_plate',
-  side_pusher_plate: 'actuator_single_corner_gear_plate',
-  spring_plate: 'actuator_center_gear_plate'
-};
-
 export const CITY_CHANNEL_MATERIAL_BY_ID = CITY_CHANNEL_MATERIAL_CATALOG.reduce((lookup, material) => ({
   ...lookup,
   [material.id]: material
@@ -349,7 +329,7 @@ export const CITY_CHANNEL_MECHANICAL_CATEGORIES = new Set([
 export const normalizeCityChannelPanelType = (panelType) => (
   CITY_CHANNEL_MATERIAL_BY_ID[panelType]
     ? panelType
-    : (CITY_CHANNEL_LEGACY_PANEL_TYPE_MAP[panelType] || 'basic_plate')
+    : 'basic_plate'
 );
 
 export const getCityChannelMaterial = (panelType) => (

@@ -1,6 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
-  CITY_CHANNEL_STORAGE_KEY,
   CITY_CHANNEL_TILE_TYPES,
   CITY_CHANNEL_TOOLS,
   cloneConnectors,
@@ -19,8 +18,7 @@ import {
   normalizeRotation,
   normalizeWallEdge,
   normalizeCityChannelMap,
-  cloneGearMounts,
-  serializeCityChannelMap
+  cloneGearMounts
 } from './cityChannelSchema';
 import { getCityChannelMaterial } from './cityChannelCatalog';
 import { validateCityChannelSafeRoute } from './cityChannelValidation';
@@ -189,16 +187,11 @@ const useCityChannelEditorState = (initialMapData = null) => {
   const [activeTileType, setActiveTileType] = useState(null);
   const [activeComponentType, setActiveComponentType] = useState(null);
   const [activeRotation, setActiveRotation] = useState(0);
-  const [selectedCell, setSelectedCell] = useState(null);
   const [validationResult, setValidationResult] = useState(createInitialValidation);
   const [statusMessage, setStatusMessage] = useState('浏览模式：拖拽查看通道，滚轮缩放。');
   const [isDirty, setIsDirty] = useState(false);
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
-
-  const routeKeySet = useMemo(() => (
-    new Set((mapData.safeRoute || []).map((point) => createCellKey(point.x, point.y, point.z)))
-  ), [mapData.safeRoute]);
 
   const applyMapMutation = useCallback((producer, message) => {
     setMapData((current) => {
@@ -211,101 +204,6 @@ const useCityChannelEditorState = (initialMapData = null) => {
     setValidationResult(createInitialValidation());
     if (message) setStatusMessage(message);
   }, []);
-
-  const movePortalTile = useCallback((cell, portalType) => {
-    if (!cell) return;
-    const isEntrance = portalType === CITY_CHANNEL_TILE_TYPES.ENTRANCE;
-    const marker = isEntrance ? 'entrance' : 'exit';
-    const message = isEntrance
-      ? '入口已放置，旧入口已还原为木质地板。'
-      : '出口已放置，旧出口已还原为木质地板。';
-    applyMapMutation((current) => {
-      const withoutOldPortal = resetPortalTiles(current.tiles, marker);
-      const tempMap = { ...current, tiles: withoutOldPortal };
-      return {
-        ...current,
-        tiles: upsertTile(tempMap, cell, {
-          panelType: portalType,
-          rotation: activeRotation,
-          marker
-        }),
-        entrances: isEntrance
-          ? [{ id: createPointId('entrance', cell), x: cell.x, y: cell.y, z: cell.z }]
-          : removePointsAtCell(current.entrances, cell),
-        exits: isEntrance
-          ? removePointsAtCell(current.exits, cell)
-          : [{ id: createPointId('exit', cell), x: cell.x, y: cell.y, z: cell.z }]
-      };
-    }, message);
-  }, [activeRotation, applyMapMutation]);
-
-  const placeTile = useCallback((cell, panelType) => {
-    if (!cell) return;
-    if (panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || panelType === CITY_CHANNEL_TILE_TYPES.EXIT) {
-      movePortalTile(cell, panelType);
-      return;
-    }
-    applyMapMutation((current) => {
-      const existingMarker = current.tiles[createCellKey(cell.x, cell.y, cell.z)]?.marker || null;
-      const nextTiles = upsertTile(current, cell, {
-        panelType: panelType === CITY_CHANNEL_TOOLS.FLOOR ? CITY_CHANNEL_TILE_TYPES.BASIC_PLATE : panelType,
-        rotation: activeRotation,
-        marker: existingMarker === 'safe' || existingMarker === 'highlight' ? existingMarker : null
-      });
-      return {
-        ...current,
-        tiles: nextTiles,
-        entrances: removePointsAtCell(current.entrances, cell),
-        exits: removePointsAtCell(current.exits, cell)
-      };
-    }, '板材已放置，白线验证结果已重置。');
-  }, [activeRotation, applyMapMutation, movePortalTile]);
-
-  const placeWall = useCallback((wallPlacement, panelType = CITY_CHANNEL_TILE_TYPES.BASIC_PLATE) => {
-    if (!wallPlacement) return;
-    const edge = normalizeWallEdge(wallPlacement.edge);
-    applyMapMutation((current) => ({
-      ...current,
-      walls: {
-        ...(current.walls || {}),
-        [createWallKey(wallPlacement.x, wallPlacement.y, wallPlacement.z, edge)]: createWall({
-          x: wallPlacement.x,
-          y: wallPlacement.y,
-          z: wallPlacement.z,
-          edge,
-          panelType
-        })
-      }
-    }), '墙壁已吸附到边缘。');
-  }, [applyMapMutation]);
-
-  const eraseTile = useCallback((cell) => {
-    if (!cell) return;
-    applyMapMutation((current) => {
-      const key = createCellKey(cell.x, cell.y, cell.z);
-      const nextTiles = { ...current.tiles };
-      delete nextTiles[key];
-      return {
-        ...current,
-        tiles: nextTiles,
-        entrances: removePointsAtCell(current.entrances, cell),
-        exits: removePointsAtCell(current.exits, cell)
-      };
-    }, '格子内容已清除。');
-  }, [applyMapMutation]);
-
-  const eraseWall = useCallback((wallPlacement) => {
-    if (!wallPlacement) return;
-    applyMapMutation((current) => {
-      const key = createWallKey(wallPlacement.x, wallPlacement.y, wallPlacement.z, wallPlacement.edge);
-      const nextWalls = { ...(current.walls || {}) };
-      delete nextWalls[key];
-      return {
-        ...current,
-        walls: nextWalls
-      };
-    }, '墙壁已移除。');
-  }, [applyMapMutation]);
 
   const applyPlacementOperations = useCallback((operations = []) => {
     const cleanOperations = Array.isArray(operations) ? operations.filter(Boolean) : [];
@@ -431,9 +329,7 @@ const useCityChannelEditorState = (initialMapData = null) => {
 
         const tempMap = { ...current, tiles: nextTiles };
         nextTiles = upsertTile(tempMap, cell, {
-          panelType: operation.panelType === CITY_CHANNEL_TOOLS.FLOOR
-            ? CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
-            : operation.panelType,
+          panelType: operation.panelType,
           rotation: operation.rotation,
           transmissionRotation: operation.transmissionRotation,
           marker: existingMarker === 'safe' || existingMarker === 'highlight' ? existingMarker : null
@@ -742,176 +638,19 @@ const useCityChannelEditorState = (initialMapData = null) => {
     }, message);
   }, [applyMapMutation]);
 
-  const setEntrance = useCallback((cell) => {
-    if (!cell) return;
-    movePortalTile(cell, CITY_CHANNEL_TILE_TYPES.ENTRANCE);
-  }, [movePortalTile]);
-
-  const setExit = useCallback((cell) => {
-    if (!cell) return;
-    movePortalTile(cell, CITY_CHANNEL_TILE_TYPES.EXIT);
-  }, [movePortalTile]);
-
-  const setSafeMarker = useCallback((cell) => {
-    if (!cell) return;
-    applyMapMutation((current) => {
-      const key = createCellKey(cell.x, cell.y, cell.z);
-      const existing = current.tiles[key];
-      const nextMarker = existing?.marker === 'safe' ? null : 'safe';
-      return {
-        ...current,
-        tiles: upsertTile(current, cell, {
-          panelType: existing?.panelType || CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
-          marker: nextMarker
-        })
-      };
-    }, '安全标记已更新。');
-  }, [applyMapMutation]);
-
-  const rotateTileAtCell = useCallback((cell) => {
-    if (!cell) return;
-    applyMapMutation((current) => {
-      if (cell.edge) {
-        const key = createWallKey(cell.x, cell.y, cell.z, cell.edge);
-        const existingWall = current.walls?.[key];
-        if (!existingWall) return current;
-        return {
-          ...current,
-          walls: {
-            ...(current.walls || {}),
-            [key]: {
-              ...existingWall,
-              transmissionRotation: normalizeRotation((existingWall.transmissionRotation || 0) + 90)
-            }
-          }
-        };
-      }
-      const key = createCellKey(cell.x, cell.y, cell.z);
-      const existing = current.tiles[key];
-      if (!existing) return current;
-      return {
-        ...current,
-        tiles: {
-          ...current.tiles,
-          [key]: {
-            ...existing,
-            transmissionRotation: normalizeRotation((existing.transmissionRotation ?? existing.rotation ?? 0) + 90)
-          }
-        }
-      };
-    }, '已旋转选中板材的传动骨骼。');
-  }, [applyMapMutation]);
-
-  const toggleTileHighlight = useCallback((cell) => {
-    if (!cell) return;
-    applyMapMutation((current) => {
-      if (cell.edge) {
-        const key = createWallKey(cell.x, cell.y, cell.z, cell.edge);
-        const existingWall = current.walls?.[key];
-        if (!existingWall) return current;
-        return {
-          ...current,
-          walls: {
-            ...(current.walls || {}),
-            [key]: {
-              ...existingWall,
-              marker: existingWall.marker === 'highlight' ? null : 'highlight'
-            }
-          }
-        };
-      }
-      const key = createCellKey(cell.x, cell.y, cell.z);
-      const existing = current.tiles[key];
-      if (!existing) return current;
-      return {
-        ...current,
-        tiles: {
-          ...current.tiles,
-          [key]: {
-            ...existing,
-            marker: existing.marker === 'highlight' ? null : 'highlight'
-          }
-        }
-      };
-    }, '编辑标记已更新。');
-  }, [applyMapMutation]);
-
   const switchLayer = useCallback((layer) => {
     const nextLayer = clampLayer(layer);
     setActiveLayer(nextLayer);
-    setSelectedCell(null);
     setStatusMessage(`已切换到第 ${nextLayer + 1} 层。`);
-  }, []);
-
-  const resetMap = useCallback(() => {
-    setMapData((current) => {
-      setUndoStack((stack) => [...stack, createHistorySnapshot(current)].slice(-MAX_HISTORY_STEPS));
-      setRedoStack([]);
-      return createDefaultCityChannelMap();
-    });
-    setActiveLayer(0);
-    setSelectedCell(null);
-    setValidationResult(createInitialValidation());
-    setIsDirty(true);
-    setStatusMessage('地图已重置。');
-  }, []);
-
-  const loadMap = useCallback((nextMapData, message = '地图已加载。') => {
-    const normalized = normalizeCityChannelMap(nextMapData || createDefaultCityChannelMap());
-    setMapData(normalized);
-    setActiveLayer(0);
-    setSelectedCell(null);
-    setValidationResult(createInitialValidation());
-    setIsDirty(false);
-    setUndoStack([]);
-    setRedoStack([]);
-    setStatusMessage(message);
   }, []);
 
   const markSavedMap = useCallback((nextMapData, validation, message = '保存成功，草稿已更新。') => {
     const normalized = normalizeCityChannelMap(nextMapData || mapData);
     setMapData(normalized);
-    setSelectedCell(null);
     setValidationResult(validation || createInitialValidation());
     setIsDirty(false);
     setStatusMessage(message);
   }, [mapData]);
-
-  const saveToLocal = useCallback(() => {
-    try {
-      localStorage.setItem(CITY_CHANNEL_STORAGE_KEY, JSON.stringify(serializeCityChannelMap(mapData)));
-      setIsDirty(false);
-      setStatusMessage('草稿已保存到本地。');
-      return true;
-    } catch (error) {
-      setStatusMessage(`保存草稿失败：${error.message}`);
-      return false;
-    }
-  }, [mapData]);
-
-  const loadFromLocal = useCallback(() => {
-    try {
-      const raw = localStorage.getItem(CITY_CHANNEL_STORAGE_KEY);
-      if (!raw) {
-        setStatusMessage('没有找到本地草稿。');
-        return false;
-      }
-      const parsed = JSON.parse(raw);
-      const normalized = normalizeCityChannelMap(parsed);
-      setMapData(normalized);
-      setActiveLayer(0);
-      setSelectedCell(null);
-      setValidationResult(createInitialValidation());
-      setIsDirty(false);
-      setUndoStack([]);
-      setRedoStack([]);
-      setStatusMessage('本地草稿已加载。');
-      return true;
-    } catch (error) {
-      setStatusMessage(`加载草稿失败：${error.message}`);
-      return false;
-    }
-  }, []);
 
   const validateSafeRoute = useCallback(() => {
     const result = validateCityChannelSafeRoute(mapData);
@@ -924,58 +663,11 @@ const useCityChannelEditorState = (initialMapData = null) => {
     return result;
   }, [mapData]);
 
-  const handleCellAction = useCallback((cell) => {
-    if (!cell) return;
-    if (activeTool === CITY_CHANNEL_TOOLS.BROWSE) {
-      return;
-    }
-    setSelectedCell(cell);
-    if (activeTool === CITY_CHANNEL_TOOLS.SELECT) {
-      setStatusMessage('已选中格子。');
-      return;
-    }
-    if (activeTool === CITY_CHANNEL_TOOLS.ERASE) {
-      eraseTile(cell);
-      return;
-    }
-    if (activeTool === CITY_CHANNEL_TOOLS.ENTRANCE) {
-      setEntrance(cell);
-      return;
-    }
-    if (activeTool === CITY_CHANNEL_TOOLS.EXIT) {
-      setExit(cell);
-      return;
-    }
-    if (activeTool === CITY_CHANNEL_TOOLS.SAFE_MARKER) {
-      setSafeMarker(cell);
-      return;
-    }
-    if (activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE && activeTileType) {
-      placeTile(cell, activeTileType);
-      return;
-    }
-    placeTile(cell, activeTool === CITY_CHANNEL_TOOLS.FLOOR ? CITY_CHANNEL_TILE_TYPES.BASIC_PLATE : activeTool);
-  }, [
-    activeTileType,
-    activeTool,
-    eraseTile,
-    placeTile,
-    setEntrance,
-    setExit,
-    setSafeMarker
-  ]);
-
-  const rotateActiveItem = useCallback(() => {
-    setActiveRotation((current) => normalizeRotation(current + 90));
-    setStatusMessage('物品方向已旋转 90°。');
-  }, []);
-
   const selectMaterial = useCallback((panelType) => {
     const material = getCityChannelMaterial(panelType);
     setActiveTileType(material.id);
     setActiveComponentType(null);
     setActiveTool(CITY_CHANNEL_TOOLS.PLACE_TILE);
-    setSelectedCell(null);
     setStatusMessage(`当前板材：${material.name}。`);
   }, []);
 
@@ -983,7 +675,6 @@ const useCityChannelEditorState = (initialMapData = null) => {
     setActiveComponentType(componentType);
     setActiveTileType(null);
     setActiveTool(CITY_CHANNEL_TOOLS.PLACE_COMPONENT);
-    setSelectedCell(null);
     setStatusMessage(componentType === 'gear' ? '当前组件：齿轮。' : `当前组件：${componentType}。`);
   }, []);
 
@@ -1010,7 +701,6 @@ const useCityChannelEditorState = (initialMapData = null) => {
     setUndoStack((stack) => stack.slice(0, -1));
     setRedoStack((stack) => [...stack, createHistorySnapshot(mapData)].slice(-MAX_HISTORY_STEPS));
     setMapData(normalizeCityChannelMap(previous));
-    setSelectedCell(null);
     setValidationResult(createInitialValidation());
     setIsDirty(true);
     setStatusMessage('已撤销上一步，白线通路需要重新验证。');
@@ -1022,7 +712,6 @@ const useCityChannelEditorState = (initialMapData = null) => {
     setRedoStack((stack) => stack.slice(0, -1));
     setUndoStack((stack) => [...stack, createHistorySnapshot(mapData)].slice(-MAX_HISTORY_STEPS));
     setMapData(normalizeCityChannelMap(next));
-    setSelectedCell(null);
     setValidationResult(createInitialValidation());
     setIsDirty(true);
     setStatusMessage('已重做一步，白线通路需要重新验证。');
@@ -1035,41 +724,21 @@ const useCityChannelEditorState = (initialMapData = null) => {
     activeTileType,
     activeComponentType,
     activeRotation,
-    selectedCell,
     validationResult,
     statusMessage,
     isDirty,
     canUndo: undoStack.length > 0,
     canRedo: redoStack.length > 0,
-    routeKeySet,
-    setActiveTool,
-    setActiveTileType,
-    setActiveComponentType,
     setActiveRotation,
-    setSelectedCell,
-    placeTile,
-    placeWall,
-    eraseTile,
-    eraseWall,
     applyPlacementOperations,
     deletePlacements,
     movePlacements,
     rotatePlacements,
     rotatePlacementsReverse,
     updatePlacement,
-    setEntrance,
-    setExit,
-    rotateTileAtCell,
-    toggleTileHighlight,
     switchLayer,
-    resetMap,
-    loadMap,
     markSavedMap,
-    saveToLocal,
-    loadFromLocal,
     validateSafeRoute,
-    handleCellAction,
-    rotateActiveItem,
     selectMaterial,
     selectComponent,
     selectOperationTool,

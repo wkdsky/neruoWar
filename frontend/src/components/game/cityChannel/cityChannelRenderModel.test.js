@@ -39,7 +39,7 @@ describe('cityChannelRenderModel', () => {
     const floorKey = createCellKey(16, 16, 0);
     const wallKey = createWallKey(16, 16, 0, 'south');
     const mapData = createMapWithTiles({
-      [floorKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR })
+      [floorKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE })
     }, {
       [wallKey]: createWall({ x: 16, y: 16, z: 0, edge: 'south' })
     });
@@ -59,8 +59,8 @@ describe('cityChannelRenderModel', () => {
     const foregroundFloorKey = createCellKey(16, 17, 0);
     const wallKey = createWallKey(16, 16, 0, 'north');
     const mapData = createMapWithTiles({
-      [wallFloorKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-      [foregroundFloorKey]: createTile({ x: 16, y: 17, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+      [wallFloorKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+      [foregroundFloorKey]: createTile({ x: 16, y: 17, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
     }, {
       [wallKey]: createWall({ x: 16, y: 16, z: 0, edge: 'north' })
     });
@@ -78,7 +78,7 @@ describe('cityChannelRenderModel', () => {
     const cellKey = createCellKey(16, 16, 0);
     const wallKey = createWallKey(16, 16, 0, 'south');
     const mapData = createMapWithTiles({
-      [cellKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.PRESSURE_PLATE })
+      [cellKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE })
     }, {
       [wallKey]: createWall({ x: 16, y: 16, z: 0, edge: 'south' })
     });
@@ -95,7 +95,16 @@ describe('cityChannelRenderModel', () => {
   it('keeps wall attachments above their owning wall plane', () => {
     const cellKey = createCellKey(16, 16, 0);
     const mapData = createMapWithTiles({
-      [cellKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.SIDE_PUSHER_PLATE, rotation: 0 })
+      [cellKey]: {
+        ...createTile({
+          x: 16,
+          y: 16,
+          z: 0,
+          panelType: CITY_CHANNEL_TILE_TYPES.ACTUATOR_SINGLE_CORNER_GEAR_PLATE,
+          rotation: 0
+        }),
+        isVertical: true
+      }
     });
     const items = createCityChannelRenderItems({ mapData, cameraYaw: 0, includeHints: false });
 
@@ -127,7 +136,7 @@ describe('cityChannelRenderModel', () => {
     const foregroundFloorKey = createCellKey(16, 17, 0);
     const mapData = createMapWithTiles({
       [portalKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.ENTRANCE, rotation: 90 }),
-      [foregroundFloorKey]: createTile({ x: 16, y: 17, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.IRON_FLOOR })
+      [foregroundFloorKey]: createTile({ x: 16, y: 17, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE })
     });
     const items = createCityChannelRenderItems({ mapData, cameraYaw: 0, includeHints: false });
 
@@ -144,7 +153,7 @@ describe('cityChannelRenderModel', () => {
     const foregroundCell = { x: 16, y: 17, z: 0 };
     const wallKey = createWallKey(16, 16, 0, 'north');
     const mapData = createMapWithTiles({
-      [wallFloorKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR })
+      [wallFloorKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE })
     }, {
       [wallKey]: createWall({ x: 16, y: 16, z: 0, edge: 'north' })
     });
@@ -153,7 +162,7 @@ describe('cityChannelRenderModel', () => {
       ...createCityChannelGhostRenderItems({
         mapData,
         cell: foregroundCell,
-        panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR,
+        panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE,
         cameraYaw: 0
       })
     ].sort((a, b) => a.renderOrder - b.renderOrder);
@@ -169,12 +178,12 @@ describe('cityChannelRenderModel', () => {
   it('splits wall ghosts into wall-plane render items', () => {
     const cell = { x: 16, y: 16, z: 0 };
     const mapData = createMapWithTiles({
-      [createCellKey(cell.x, cell.y, cell.z)]: createTile({ ...cell, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR })
+      [createCellKey(cell.x, cell.y, cell.z)]: createTile({ ...cell, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE })
     });
     const ghostItems = createCityChannelGhostRenderItems({
       mapData,
       cell,
-      panelType: CITY_CHANNEL_TILE_TYPES.WALL,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
       edge: 'south',
       placementKind: 'edge_wall',
       cameraYaw: 0,
@@ -192,7 +201,7 @@ describe('cityChannelRenderModel', () => {
     const cellKey = createCellKey(16, 16, 0);
     const wallKey = createWallKey(16, 16, 0, 'east');
     const mapData = createMapWithTiles({
-      [cellKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.PRESSURE_PLATE })
+      [cellKey]: createTile({ x: 16, y: 16, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE })
     }, {
       [wallKey]: createWall({ x: 16, y: 16, z: 0, edge: 'east' })
     });

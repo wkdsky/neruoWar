@@ -48,6 +48,7 @@ import {
   projectCell
 } from './phaser/renderer/CityChannelGeometry';
 import {
+  buildThumbnailAssemblyColorMap,
   getCityChannelThumbnailClassName,
   isCityChannelThumbnailInteractionLocked,
   isPointerNearThumbnail
@@ -104,6 +105,20 @@ const THUMBNAIL_LAYER_COLORS = [
   { top: '#f08aa7', side: '#9a3d5a', edge: '#ffe1ea' },
   { top: '#9ee37d', side: '#3f8f42', edge: '#eaffdc' }
 ];
+const THUMBNAIL_ASSEMBLY_COLORS = [
+  { top: '#7dd3fc', side: '#0369a1', edge: '#e0f2fe' },
+  { top: '#f9a8d4', side: '#be185d', edge: '#fce7f3' },
+  { top: '#a7f3d0', side: '#047857', edge: '#ecfdf5' },
+  { top: '#fde68a', side: '#b45309', edge: '#fffbeb' },
+  { top: '#c4b5fd', side: '#6d28d9', edge: '#f5f3ff' },
+  { top: '#fca5a5', side: '#b91c1c', edge: '#fff1f2' }
+];
+const THUMBNAIL_NEIGHBOR_OFFSETS = {
+  north: { x: 0, y: -1 },
+  south: { x: 0, y: 1 },
+  west: { x: -1, y: 0 },
+  east: { x: 1, y: 0 }
+};
 
 const polygonPoints = (points = []) => (
   points.map((point) => `${point.x},${point.y}`).join(' ')
@@ -116,6 +131,25 @@ const getLayerLabel = (z) => CITY_CHANNEL_LAYER_LABELS[z] || `${z + 1}层`;
 const getThumbnailLayerColor = (z = 0) => (
   THUMBNAIL_LAYER_COLORS[Math.abs(Number(z) || 0) % THUMBNAIL_LAYER_COLORS.length]
 );
+
+const getThumbnailAdjacentComponentKeys = (item) => {
+  if (!item?.cell) return [];
+  const { x, y, z } = item.cell;
+  if (item.kind === 'wall') {
+    const offset = THUMBNAIL_NEIGHBOR_OFFSETS[item.wall?.edge] || THUMBNAIL_NEIGHBOR_OFFSETS.north;
+    return [
+      createCellKey(x, y, z),
+      createCellKey(x + offset.x, y + offset.y, z),
+      createWallKey(x, y, z - 1, item.wall?.edge),
+      createWallKey(x, y, z + 1, item.wall?.edge)
+    ];
+  }
+  return Object.entries(THUMBNAIL_NEIGHBOR_OFFSETS).flatMap(([edge, offset]) => [
+    createCellKey(x + offset.x, y + offset.y, z),
+    createWallKey(x, y, z, edge),
+    createWallKey(x + offset.x, y + offset.y, z, edge === 'north' ? 'south' : edge === 'south' ? 'north' : edge === 'east' ? 'west' : 'east')
+  ]);
+};
 
 const getMapPlaneLevels = (mapData = {}) => {
   const levels = new Set([0]);
@@ -191,7 +225,6 @@ const CityChannelPhaserEditor = ({
     canUndo,
     canRedo,
     setActiveRotation,
-    setSelectedCell,
     applyPlacementOperations,
     deletePlacements,
     movePlacements,
@@ -263,10 +296,9 @@ const CityChannelPhaserEditor = ({
   const selectedTile = selectedTileKey ? mapData.tiles?.[selectedTileKey] : null;
   const selectedWall = selectedWallKey ? mapData.walls?.[selectedWallKey] : null;
   const canInspectSelectedTile = !!selectedTile;
-  const shouldBuildAssemblyGraph = !!(selectedTileKey || selectedWallKey || mechanismPanel?.key);
   const assemblyGraph = useMemo(() => (
-    shouldBuildAssemblyGraph ? buildMechanicalAssemblies(mapData) : null
-  ), [mapData, shouldBuildAssemblyGraph]);
+    buildMechanicalAssemblies(mapData)
+  ), [mapData]);
   const selectedAssembly = useMemo(() => (
     selectedTileKey || selectedWallKey ? getAssemblyForCell(assemblyGraph, selectedTileKey || selectedWallKey) : null
   ), [assemblyGraph, selectedTileKey, selectedWallKey]);
@@ -339,9 +371,8 @@ const CityChannelPhaserEditor = ({
     setSelectedGears([]);
     setSelectionScope(null);
     setGearAxisPrompt(null);
-    setSelectedCell(null);
     sceneRef.current?.setSelection?.([], []);
-  }, [setSelectedCell]);
+  }, []);
 
   const handleSelectionChange = useCallback(({ cells = [], walls = [], gears = [], scope = null } = {}) => {
     setSelectedCells(cells);
@@ -349,8 +380,7 @@ const CityChannelPhaserEditor = ({
     setSelectedGears(gears);
     setSelectionScope(scope);
     setGearAxisPrompt(null);
-    setSelectedCell(cells[0] || walls[0] || null);
-  }, [setSelectedCell]);
+  }, []);
 
   const handleMaterialSelect = useCallback((panelType) => {
     if (activeTool !== CITY_CHANNEL_TOOLS.PLACE_TILE) {
@@ -434,11 +464,9 @@ const CityChannelPhaserEditor = ({
     if (payload.edge) {
       setSelectedCells([]);
       setSelectedWalls([{ ...payload.cell, edge: payload.edge }]);
-      setSelectedCell({ ...payload.cell, edge: payload.edge });
     } else {
       setSelectedCells([payload.cell]);
       setSelectedWalls([]);
-      setSelectedCell(payload.cell);
     }
     setMechanismParams((current) => ({
       ...current,
@@ -451,7 +479,7 @@ const CityChannelPhaserEditor = ({
       panelType: payload.panelType,
       anchor: payload.anchor || null
     });
-  }, [setSelectedCell]);
+  }, []);
 
   const updateMechanismParam = useCallback((field, value) => {
     if (!activePanelKey) return;
@@ -890,6 +918,7 @@ const CityChannelPhaserEditor = ({
   const thumbnailYaw = Number(cameraSummary.yaw) || 0;
   const thumbnailItems = useMemo(() => {
     const tileItems = Object.values(mapData.tiles || {}).map((tile) => ({
+      componentKey: createCellKey(tile.x, tile.y, tile.z),
       id: `tile:${createCellKey(tile.x, tile.y, tile.z)}`,
       kind: 'tile',
       cell: { x: tile.x, y: tile.y, z: tile.z },
@@ -897,6 +926,7 @@ const CityChannelPhaserEditor = ({
       projection: projectCell(tile, thumbnailYaw, mapData)
     }));
     const wallItems = Object.values(mapData.walls || {}).map((wall) => ({
+      componentKey: createWallKey(wall.x, wall.y, wall.z, wall.edge),
       id: `wall:${createWallKey(wall.x, wall.y, wall.z, wall.edge)}`,
       kind: 'wall',
       cell: { x: wall.x, y: wall.y, z: wall.z },
@@ -909,6 +939,23 @@ const CityChannelPhaserEditor = ({
       || String(a.id).localeCompare(String(b.id))
     ));
   }, [mapData, thumbnailYaw]);
+  const thumbnailAssemblyColorMap = useMemo(() => {
+    const componentKeys = thumbnailItems.map((item) => item.componentKey).filter(Boolean);
+    const componentKeySet = new Set(componentKeys);
+    const adjacentPairs = [];
+    thumbnailItems.forEach((item) => {
+      getThumbnailAdjacentComponentKeys(item).forEach((adjacentKey) => {
+        if (!componentKeySet.has(adjacentKey)) return;
+        adjacentPairs.push([item.componentKey, adjacentKey]);
+      });
+    });
+    return buildThumbnailAssemblyColorMap({
+      assemblyGraph,
+      componentKeys,
+      adjacentPairs,
+      palette: THUMBNAIL_ASSEMBLY_COLORS
+    });
+  }, [assemblyGraph, thumbnailItems]);
 
   const handleThumbnailLayerClick = useCallback((z) => {
     setVisibleLayerCutoff(z);
@@ -924,9 +971,11 @@ const CityChannelPhaserEditor = ({
       nextPlaneLevel: nextHiddenPlaneLevel
     });
     const isCutoffLayer = visibleLayerCutoff !== null && z === effectiveVisibleLayerCutoff;
-    const layerColor = getThumbnailLayerColor(z);
+    const assemblyId = assemblyGraph?.assemblyByComponentKey?.[item.componentKey];
+    const layerColor = thumbnailAssemblyColorMap[assemblyId] || getThumbnailLayerColor(z);
     const commonClass = [
       'city-channel-thumbnail-item',
+      assemblyId ? 'is-mechanical-assembly' : '',
       isHoveredLayer ? 'is-hovered-layer' : '',
       isHiddenByCutoff ? 'is-above-cutoff' : '',
       isCutoffLayer ? 'is-cutoff-layer' : ''
@@ -1193,15 +1242,14 @@ const CityChannelPhaserEditor = ({
               </button>
               {carryActive && selectedPlacements.length === 1 && (
                 <>
-                  <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.rotateCarryPlacementSurface?.()} title="移动预览表面朝向 (R / Shift+R)">
+                  <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.rotateCarryPlacementSurface?.()} title="移动预览表面朝向 (R / Shift+滚轮)">
                     <RotateCw size={14} />
                     <span>表面朝向</span>
                     <em className="city-channel-shortcut-hint">R</em>
                   </button>
-                  <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.cycleCarryPlacementSurface?.({ allowMultiple: false })} title="未吸附切默认姿态，吸附后切安装面 (Space)">
+                  <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.cycleCarrySnapAxisRotation?.()} title="吸附时沿当前轴切换到其他空位">
                     <PanelTop size={14} />
-                    <span>姿态翻滚</span>
-                    <em className="city-channel-shortcut-hint">Space</em>
+                    <span>沿轴切换</span>
                   </button>
                 </>
               )}
@@ -1336,8 +1384,8 @@ const CityChannelPhaserEditor = ({
         {activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE ? (
           <>
             <span>左键放置，右键或 Esc 取消</span>
-            <span>滚轮缩放；Shift+滚轮 / R / Shift+R 旋转预览</span>
-            <span>Space 按当前吸附边切换安装面</span>
+            <span>滚轮缩放；Shift+滚轮 / R 旋转预览</span>
+            <span>Space 吸附时切换安装位或安装面</span>
           </>
         ) : activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT ? (
           <>
@@ -1347,7 +1395,7 @@ const CityChannelPhaserEditor = ({
         ) : (
           <>
             <span>拖拽平移，双击后拖拽或 Q/E 旋转视角</span>
-            <span>滚轮缩放；M 移动，移动预览中 R 转表面、Space 整体翻滚/切吸附面、Del 删除</span>
+            <span>滚轮缩放；M 移动，移动预览中 R / Shift+滚轮 转表面、Del 删除</span>
           </>
         )}
         {selectedCount > 0 ? <em>{selectedCount} 个选中</em> : null}

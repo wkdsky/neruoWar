@@ -27,10 +27,6 @@ const isWalkableTile = (mapData, point) => {
   return !!tile && tile.walkable !== false && tile.solid !== true;
 };
 
-const isStairTile = (mapData, point) => (
-  mapData.tiles[createCellKey(point.x, point.y, point.z)]?.panelType === CITY_CHANNEL_TILE_TYPES.STAIR
-);
-
 const getEdgeBetween = (from, to) => {
   if (to.x === from.x + 1 && to.y === from.y) return CITY_CHANNEL_WALL_EDGES.EAST;
   if (to.x === from.x - 1 && to.y === from.y) return CITY_CHANNEL_WALL_EDGES.WEST;
@@ -73,18 +69,10 @@ const getNeighbors = (mapData, point) => {
     { x: point.x, y: point.y - 1, z: point.z }
   ];
 
-  if (isStairTile(mapData, point)) {
-    candidates.push(
-      { x: point.x, y: point.y, z: point.z + 1 },
-      { x: point.x, y: point.y, z: point.z - 1 }
-    );
-  }
-
   return candidates.filter((candidate) => {
     if (!isValidCell(candidate.x, candidate.y, candidate.z, mapData)) return false;
     if (!isWalkableTile(mapData, candidate)) return false;
     if (isBlockedByWall(mapData, point, candidate)) return false;
-    if (candidate.z !== point.z && !isStairTile(mapData, candidate)) return false;
 
     const dx = candidate.x - point.x;
     const dy = candidate.y - point.y;

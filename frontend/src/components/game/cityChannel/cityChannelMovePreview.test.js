@@ -22,8 +22,8 @@ const createMapWithTiles = (tiles = {}) => ({
 describe('cityChannelMovePreview', () => {
   it('marks same-layer moved tiles invalid when their volumes overlap a static tile', () => {
     const mapData = createMapWithTiles({
-      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-      [createCellKey(11, 10, 0)]: createTile({ x: 11, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+      [createCellKey(11, 10, 0)]: createTile({ x: 11, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
     });
 
     const preview = computeCityChannelMovePreviewModel({
@@ -38,8 +38,8 @@ describe('cityChannelMovePreview', () => {
 
   it('keeps cross-layer floor previews valid when moved boxes do not collide', () => {
     const mapData = createMapWithTiles({
-      [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+      [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
     });
 
     const preview = computeCityChannelMovePreviewModel({
@@ -54,9 +54,9 @@ describe('cityChannelMovePreview', () => {
 
   it('keeps multi-select movement across layers valid when moved boxes do not intersect', () => {
     const mapData = createMapWithTiles({
-      [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-      [createCellKey(10, 11, 1)]: createTile({ x: 10, y: 11, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR }),
-      [createCellKey(12, 10, 1)]: createTile({ x: 12, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.IRON_FLOOR })
+      [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+      [createCellKey(10, 11, 1)]: createTile({ x: 10, y: 11, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE }),
+      [createCellKey(12, 10, 1)]: createTile({ x: 12, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE })
     });
 
     const preview = computeCityChannelMovePreviewModel({
@@ -74,8 +74,8 @@ describe('cityChannelMovePreview', () => {
 
   it('keeps stacked upper floor previews valid under group collision-only legality', () => {
     const mapData = createMapWithTiles({
-      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-      [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+      [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
     });
 
     const preview = computeCityChannelMovePreviewModel({
@@ -94,7 +94,7 @@ describe('cityChannelMovePreview', () => {
         x: 10,
         y: 10,
         z: 0,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
       })
     });
     mapData.tiles[createCellKey(10, 10, 0)].isVertical = true;
@@ -118,7 +118,7 @@ describe('cityChannelMovePreview', () => {
       y: 10,
       z: 0,
       edge: 'north',
-      panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
     });
     const mapData = {
       ...createBaseCityChannelMap({ name: 'wall lay flat regression' }),
@@ -148,7 +148,7 @@ describe('cityChannelMovePreview', () => {
         x: 10,
         y: 10,
         z: 0,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
         rotation: 90
       })
     });
@@ -172,7 +172,7 @@ describe('cityChannelMovePreview', () => {
       y: 10,
       z: 0,
       edge: 'north',
-      panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
       transmissionRotation: 0
     });
     const mapData = {
@@ -200,7 +200,7 @@ describe('cityChannelMovePreview', () => {
         x: 10,
         y: 10,
         z: 0,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
         rotation: 0,
         transmissionRotation: 0
       })
@@ -224,7 +224,7 @@ describe('cityChannelMovePreview', () => {
         x: 10,
         y: 10,
         z: 0,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
       }),
       [createCellKey(12, 10, 0)]: createTile({
         x: 12,
@@ -262,7 +262,7 @@ describe('cityChannelMovePreview', () => {
         x: 12,
         y: 10,
         z: 0,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
       })
     });
     mapData.tiles[createCellKey(10, 10, 0)].isVertical = true;
@@ -309,8 +309,8 @@ describe('cityChannelMovePreview', () => {
 
   it('anchors multi-select movement to the stable selection origin rather than input order', () => {
     const mapData = createMapWithTiles({
-      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-      [createCellKey(11, 10, 0)]: createTile({ x: 11, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+      [createCellKey(11, 10, 0)]: createTile({ x: 11, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
     });
 
     const preview = computeCityChannelMovePreviewModel({
@@ -337,8 +337,8 @@ describe('cityChannelMovePreview', () => {
 
   it('splits disconnected selections into independent components', () => {
     const mapData = createMapWithTiles({
-      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-      [createCellKey(14, 10, 0)]: createTile({ x: 14, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+      [createCellKey(14, 10, 0)]: createTile({ x: 14, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
     });
 
     const preview = computeCityChannelMovePreviewModel({
@@ -366,7 +366,7 @@ describe('cityChannelMovePreview', () => {
         x: 10,
         y: 10,
         z: 1,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
       }),
       [createCellKey(12, 10, 0)]: createTile({
         x: 12,
@@ -403,7 +403,7 @@ describe('cityChannelMovePreview', () => {
         x: 10,
         y: 10,
         z: 1,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
       }),
       [createCellKey(12, 10, 0)]: createTile({
         x: 12,
@@ -456,7 +456,7 @@ describe('cityChannelMovePreview', () => {
       y: 10,
       z: 0,
       edge: 'south',
-      panelType: CITY_CHANNEL_TILE_TYPES.WALL
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
     }));
 
     expect(boxes).toHaveLength(1);
@@ -466,8 +466,8 @@ describe('cityChannelMovePreview', () => {
 
   it('applies groupRotationSteps to multi-select relative offsets', () => {
     const mapData = createMapWithTiles({
-      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-      [createCellKey(11, 10, 0)]: createTile({ x: 11, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+      [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+      [createCellKey(11, 10, 0)]: createTile({ x: 11, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
     });
     const origins = [
       { x: 10, y: 10, z: 0 },
@@ -495,14 +495,14 @@ describe('cityChannelMovePreview', () => {
       y: 10,
       z: 0,
       edge: 'north',
-      panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
     });
     const secondWall = createWall({
       x: 11,
       y: 10,
       z: 0,
       edge: 'north',
-      panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE
     });
     const mapData = {
       ...createBaseCityChannelMap({ name: 'wall rigid yaw regression' }),
@@ -578,13 +578,13 @@ describe('cityChannelMovePreview', () => {
         x: 10,
         y: 10,
         z: 0,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
       }),
       [createCellKey(10, 10, 1)]: createTile({
         x: 10,
         y: 10,
         z: 1,
-        panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
       })
     });
     mapData.tiles[createCellKey(10, 10, 0)].isVertical = true;
@@ -708,8 +708,8 @@ describe('cityChannelMovePreview', () => {
   describe('新的多选移动合法性规则', () => {
     it('允许多选物体移动到空地', () => {
       const mapData = createMapWithTiles({
-        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-        [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+        [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
       });
 
       const preview = computeCityChannelMovePreviewModel({
@@ -727,9 +727,9 @@ describe('cityChannelMovePreview', () => {
 
     it('多选贴近静态物体且不重叠时应判定通过', () => {
       const mapData = createMapWithTiles({
-        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-        [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR }),
-        [createCellKey(20, 20, 1)]: createTile({ x: 20, y: 20, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.IRON_FLOOR })
+        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+        [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE }),
+        [createCellKey(20, 20, 1)]: createTile({ x: 20, y: 20, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE })
       });
 
       const preview = computeCityChannelMovePreviewModel({
@@ -747,8 +747,8 @@ describe('cityChannelMovePreview', () => {
 
     it('多选混合移动在无重叠情况下应判定通过', () => {
       const mapData = createMapWithTiles({
-        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-        [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+        [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
       });
 
       const preview = computeCityChannelMovePreviewModel({
@@ -766,8 +766,8 @@ describe('cityChannelMovePreview', () => {
 
     it('保留间断选中分量信息但不要求传动连接', () => {
       const mapData = createMapWithTiles({
-        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-        [createCellKey(20, 20, 1)]: createTile({ x: 20, y: 20, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+        [createCellKey(20, 20, 1)]: createTile({ x: 20, y: 20, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
       });
 
       const preview = computeCityChannelMovePreviewModel({
@@ -785,8 +785,8 @@ describe('cityChannelMovePreview', () => {
 
     it('仍然标记间断选中里的越界分量', () => {
       const mapData = createMapWithTiles({
-        [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-        [createCellKey(20, 20, 5)]: createTile({ x: 20, y: 20, z: 5, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR })
+        [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+        [createCellKey(20, 20, 5)]: createTile({ x: 20, y: 20, z: 5, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE })
       });
 
       const preview = computeCityChannelMovePreviewModel({
@@ -808,9 +808,9 @@ describe('cityChannelMovePreview', () => {
 
     it('仍然在目标有遮挡时标记遮挡部分为红色', () => {
       const mapData = createMapWithTiles({
-        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-        [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR }),
-        [createCellKey(21, 20, 0)]: createTile({ x: 21, y: 20, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.IRON_FLOOR })
+        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+        [createCellKey(11, 10, 1)]: createTile({ x: 11, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE }),
+        [createCellKey(21, 20, 0)]: createTile({ x: 21, y: 20, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE })
       });
 
       const preview = computeCityChannelMovePreviewModel({
@@ -828,7 +828,7 @@ describe('cityChannelMovePreview', () => {
 
     it('复制模式会把原位置物体视为静态遮挡', () => {
       const mapData = createMapWithTiles({
-        [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR })
+        [createCellKey(10, 10, 0)]: createTile({ x: 10, y: 10, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE })
       });
 
       const preview = computeCityChannelMovePreviewModel({
@@ -844,9 +844,9 @@ describe('cityChannelMovePreview', () => {
 
     it('多选中局部无支撑但无重叠时按组级规则判定通过', () => {
       const mapData = createMapWithTiles({
-        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR }),
-        [createCellKey(14, 10, 1)]: createTile({ x: 14, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.STONE_FLOOR }),
-        [createCellKey(20, 20, 0)]: createTile({ x: 20, y: 20, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.IRON_FLOOR })
+        [createCellKey(10, 10, 1)]: createTile({ x: 10, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE }),
+        [createCellKey(14, 10, 1)]: createTile({ x: 14, y: 10, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_STRAIGHT_PLATE }),
+        [createCellKey(20, 20, 0)]: createTile({ x: 20, y: 20, z: 0, panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE })
       });
 
       const preview = computeCityChannelMovePreviewModel({
@@ -868,12 +868,12 @@ describe('cityChannelMovePreview', () => {
         y: 10,
         z: 1,
         edge: 'north',
-        panelType: CITY_CHANNEL_TILE_TYPES.WALL
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
       });
       const mapData = {
         ...createBaseCityChannelMap({ name: 'wall support preview' }),
         tiles: {
-          [createCellKey(20, 20, 1)]: createTile({ x: 20, y: 20, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR })
+          [createCellKey(20, 20, 1)]: createTile({ x: 20, y: 20, z: 1, panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE })
         },
         walls: {
           [createCellKey(10, 10, 1) + ':north']: wall

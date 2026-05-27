@@ -26,15 +26,6 @@ export const CITY_CHANNEL_TOOLS = {
   SELECT: 'select',
   ERASE: 'erase',
   PLACE_TILE: 'placeTile',
-  FLOOR: 'floor',
-  WOOD_FLOOR: 'wood_floor',
-  STONE_FLOOR: 'stone_floor',
-  IRON_FLOOR: 'iron_floor',
-  WALL: 'wall',
-  STAIR: 'stair',
-  ENTRANCE: 'entrance',
-  EXIT: 'exit',
-  SAFE_MARKER: 'safe_marker',
   PLACE_COMPONENT: 'placeComponent'
 };
 
@@ -52,26 +43,8 @@ export const CITY_CHANNEL_TILE_TYPES = {
   ACTUATOR_OPPOSITE_CORNER_GEAR_PLATE: 'actuator_opposite_corner_gear_plate',
   ACTUATOR_TRIANGLE_GEAR_PLATE: 'actuator_triangle_gear_plate',
   ACTUATOR_FOUR_CORNER_GEAR_PLATE: 'actuator_four_corner_gear_plate',
-  WOOD_FLOOR: 'wood_floor',
-  STONE_FLOOR: 'stone_floor',
-  IRON_FLOOR: 'iron_floor',
-  GLASS_FLOOR: 'glass_floor',
-  WALL: 'wall',
-  GLASS_WALL: 'glass_wall',
   ENTRANCE: 'entrance',
-  EXIT: 'exit',
-  PRESSURE_PLATE: 'pressure_plate',
-  DIRECTIONAL_PRESSURE_PLATE: 'directional_pressure_plate',
-  VERTICAL_PUSH_BUTTON: 'vertical_push_button',
-  HORIZONTAL_PUSH_BUTTON: 'horizontal_push_button',
-  ROTARY_BUTTON: 'rotary_button',
-  EXTERNAL_GEAR_PLATE: 'external_gear_plate',
-  INTERNAL_GEAR_PLATE: 'internal_gear_plate',
-  PEG_GEAR_PLATE: 'peg_gear_plate',
-  TRAPDOOR_PLATE: 'trapdoor_plate',
-  SIDE_PUSHER_PLATE: 'side_pusher_plate',
-  SPRING_PLATE: 'spring_plate',
-  STAIR: 'stair'
+  EXIT: 'exit'
 };
 
 export const CITY_CHANNEL_WALL_EDGES = {
@@ -95,13 +68,7 @@ export const CITY_CHANNEL_TILE_DEFINITIONS = {
       hiddenModule: material.hiddenModule || null,
       connectors: material.hiddenModule?.connectorPoints || []
     }
-  }), {}),
-  [CITY_CHANNEL_TILE_TYPES.STAIR]: {
-    label: '楼梯',
-    walkable: true,
-    solid: false,
-    category: 'structure'
-  }
+  }), {})
 };
 
 export const createCellKey = (x, y, z) => `${z}:${x}:${y}`;
@@ -379,7 +346,8 @@ export const createTile = ({
   panelType = CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
   marker = null,
   rotation = 0,
-  transmissionRotation = null
+  transmissionRotation = null,
+  isVertical = false
 } = {}) => {
   const normalizedPanelType = normalizeCityChannelPanelType(panelType);
   const definition = getTileDefinition(normalizedPanelType);
@@ -397,7 +365,7 @@ export const createTile = ({
     walkable: !!definition.walkable,
     solid: !!definition.solid,
     transparent: !!definition.transparent,
-    isVertical: !!definition.isVertical,
+    isVertical: !!definition.isVertical || !!isVertical,
     marker: marker || markerType,
     flipped: false,
     hiddenModule: cloneHiddenModule(catalogItem.hiddenModule),
@@ -552,7 +520,7 @@ export const normalizeTile = (tile = {}, bounds = null) => {
     walkable: !!definition.walkable,
     solid: !!definition.solid,
     transparent: !!definition.transparent,
-    isVertical: !!definition.isVertical,
+    isVertical: !!definition.isVertical || !!tile.isVertical,
     marker: ['safe', 'highlight', 'entrance', 'exit'].includes(tile.marker)
       ? tile.marker
       : (catalogItem.markerType || null),

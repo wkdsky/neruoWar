@@ -212,7 +212,7 @@ export const findCityChannelRenderItem = (renderItems, predicate) => (
 export const createCityChannelGhostRenderItems = ({
   mapData = {},
   cell = null,
-  panelType = CITY_CHANNEL_TILE_TYPES.WOOD_FLOOR,
+  panelType = CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
   rotation = 0,
   edge = 'north',
   placementKind = 'tile',
