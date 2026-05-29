@@ -78,6 +78,10 @@ import {
   getMovingHostKeysFromOrigins
 } from '../cityChannelAttachedComponents';
 import {
+  canSelectBoardPlacement,
+  canSelectComponentPlacement
+} from '../cityChannelSelectionRules';
+import {
   isLayerVisible as isCityChannelLayerVisible,
   isPlacementVisible as isCityChannelPlacementVisible
 } from './cityChannelPhaserVisibility';
@@ -104,7 +108,6 @@ import {
   getAxisOptionIndex,
   getAxisOptionIndexInAllOptions,
   getAxisOptionKey,
-  getAxisOptionKindForPose,
   getAxisPlacementOptions as getAxisPlacementOptionsForMap,
   getAxisPlacementTarget as getAxisPlacementTargetFromOptions,
   getSnapAxisEdge,
@@ -1060,6 +1063,24 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         if (edge) {
           return sameAxisSegment(getAbsoluteWallEdgeEndpoints(cell, edge), segment);
         }
+        if (snap.forceVerticalAxis) {
+          // 竖直向上选项：板的竖直轴与支撑顶边轴共面即视为有结构支撑（不依赖当前 panelPose）。
+          const supportRotation = snap.support?.kind === 'wall'
+            ? wallEdgeToRotation(snap.support.placement?.edge || 'north')
+            : (snap.support?.placement?.rotation || 0);
+          const verticalSegment = getCellVerticalEndpoints(supportRotation).map((point) => ({
+            x: (Number(cell.x) || 0) + point.x,
+            y: (Number(cell.y) || 0) + point.y
+          }));
+          return sameAxisSegment(verticalSegment, segment);
+        }
+        if (snap.forcePerpendicularFloor) {
+          // 前/后水平平放：邻格落在竖板顶边的紧邻格（同高 z+1）即视为受顶边支撑。
+          if ((Number(cell.z) || 0) !== supportCell.z + 1) return false;
+          const dxPerp = Math.abs((Number(cell.x) || 0) - supportCell.x);
+          const dyPerp = Math.abs((Number(cell.y) || 0) - supportCell.y);
+          return dxPerp + dyPerp === 1;
+        }
         const activeVerticalSegment = this.getActiveVerticalPlacementAxisSegment(cell);
         if (activeVerticalSegment) {
           return sameAxisSegment(activeVerticalSegment, segment);
@@ -1198,10 +1219,20 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       });
     }
 
+    matchesAxisOptionPose(option, pose = 'floor') {
+      if (!option) return false;
+      // 竖放姿态匹配「竖直」朝向（wall 墙面 或 isVertical 竖直向上的 floor）；
+      // 水平姿态匹配平放 floor（排除竖直向上的 isVertical floor）。
+      return pose === 'wall'
+        ? (option.kind === 'wall' || !!option.isVertical)
+        : (option.kind === 'floor' && !option.isVertical);
+    }
+
     getPreferredAxisPlacementIndex(options = []) {
       if (!options.length) return 0;
-      const preferredKind = this.panelPose === 'wall' ? 'wall' : 'floor';
-      const preferredIndex = options.findIndex((option) => option.kind === preferredKind && option.valid !== false);
+      const preferredIndex = options.findIndex((option) => (
+        this.matchesAxisOptionPose(option, this.panelPose) && option.valid !== false
+      ));
       return preferredIndex >= 0 ? preferredIndex : 0;
     }
 
@@ -1939,9 +1970,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     getPlacementTargetKey(target) {
       if (!target?.cell) return '';
       const cellKey = createCellKey(target.cell.x, target.cell.y, target.cell.z);
-      return target.kind === 'wall'
-        ? `wall:${cellKey}:${target.edge || ''}`
-        : `floor:${cellKey}`;
+      if (target.kind === 'wall') return `wall:${cellKey}:${target.edge || ''}`;
+      return target.isVertical ? `vfloor:${cellKey}` : `floor:${cellKey}`;
     }
 
     getActivePointerPlacementHitInfo() {
@@ -1983,8 +2013,11 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
     resolvePlacementEdgeSnap(hitInfo) {
       const floorEdgeTarget = this.resolveFloorEdgePlacementTarget(hitInfo);
       if (floorEdgeTarget?.valid && !this.isWallPlacementActive()) return null;
-      if (!this.isWallPlacementActive() && this.isVerticalSurfaceHit(hitInfo?.hit)) return null;
-      return this.resolveVerticalSurfaceSnap(hitInfo) || this.resolveVerticalGapFloorSnap(hitInfo);
+      const verticalSurfaceSnap = this.resolveVerticalSurfaceSnap(hitInfo);
+      if (!this.isWallPlacementActive() && this.isVerticalSurfaceHit(hitInfo?.hit)) {
+        return verticalSurfaceSnap?.side === 'top' ? verticalSurfaceSnap : null;
+      }
+      return verticalSurfaceSnap || this.resolveVerticalGapFloorSnap(hitInfo);
     }
 
     isPlacementCellOccupiedForSnap(cell) {
@@ -2632,6 +2665,10 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           this.drawGhostLayer(true);
           return true;
         }
+        const origins = this.carryState.origins || [];
+        if (origins.length === 1 && this.getCarryAxisOptions()?.axisKey) {
+          return this.cycleCarrySnapAxisRotation();
+        }
         this.toggleCarryDefaultPose();
         return true;
       }
@@ -2653,35 +2690,13 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         };
       const snap = this.resolvePlacementEdgeSnap(hitInfo);
       const snapAxisKey = getSnapAxisKey(snap);
-      if (!snapAxisKey) {
-        const nextPose = this.panelPose === 'wall' ? 'floor' : 'wall';
-        this.setPlacementPose(nextPose);
-        this.config.onHoverStatusChange?.(nextPose === 'wall' ? '放置预览：切换为竖放' : '放置预览：切换为平放');
-        this.updateHover(hitInfo);
-        this.drawGhostLayer(true);
-        return true;
+      if (snapAxisKey) {
+        // 存在吸附轴：统一走 cycleActivePlacementSnapAxis 沿轴轮询可拼接方向。
+        return this.cycleActivePlacementSnapAxis();
       }
-      const options = this.getAxisPlacementOptions(snap);
-      if (options.length <= 0) {
-        const nextPose = this.panelPose === 'wall' ? 'floor' : 'wall';
-        this.setPlacementPose(nextPose);
-        this.config.onHoverStatusChange?.(
-          nextPose === 'wall'
-            ? '放置预览：吸附轴无空位，切换为默认竖放'
-            : '放置预览：吸附轴无空位，切换为默认平放'
-        );
-        this.updateHover(hitInfo);
-        this.drawGhostLayer(true);
-        return true;
-      }
-      if (snapAxisKey !== this.activeSnapAxisKey) {
-        this.activeSnapAxisKey = snapAxisKey;
-        this.snapPlaneCycle = this.getPreferredAxisPlacementIndex(options);
-      }
-      this.snapPlaneCycle = ((this.snapPlaneCycle || 0) + 1) % options.length;
-      const target = options[this.snapPlaneCycle] || options[0];
-      this.setPlacementPose(target.kind === 'wall' ? 'wall' : 'floor');
-      this.config.onHoverStatusChange?.('放置预览：围绕当前吸附边切换安装面');
+      const nextPose = this.panelPose === 'wall' ? 'floor' : 'wall';
+      this.setPlacementPose(nextPose);
+      this.config.onHoverStatusChange?.(nextPose === 'wall' ? '放置预览：切换为竖放' : '放置预览：切换为平放');
       this.updateHover(hitInfo);
       this.drawGhostLayer(true);
       return true;
@@ -2698,8 +2713,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         return true;
       }
       const allOptions = this.getAxisPlacementOptions(snap).filter((option) => option?.valid !== false);
-      const poseKind = getAxisOptionKindForPose(this.panelPose);
-      const options = allOptions.filter((option) => option.kind === poseKind);
+      // 吸附轮询按当前姿态分组：水平姿态只在平放方向间轮询，竖直姿态只在竖直/墙面方向间轮询。
+      // 上边沿吸附时，竖直方向仅「向上」一个，故竖放姿态下按 Space 不切换（与离开吸附后切姿态的逻辑互补）。
+      const options = allOptions.filter((option) => this.matchesAxisOptionPose(option, this.panelPose));
       const currentTarget = snapAxisKey === this.activeSnapAxisKey
         ? this.resolveDynamicPlacementTarget(hitInfo, { forGhost: true, snap, allowReplacement: false })
         : null;
@@ -3253,6 +3269,16 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           layFlat: true
         };
       }
+      if (target.isVertical) {
+        // 竖直向上：占自身格但竖直绘制，不挂到边沿。
+        return {
+          ...target,
+          edge: undefined,
+          isVertical: true,
+          layFlat: false,
+          rotation: surfaceRotation
+        };
+      }
       const targetPose = target.edge ? 'wall' : (target.layFlat ? 'floor' : pose);
       if (targetPose === 'wall') {
         const edge = target.edge || placement?.edge || this.hoverEdge || 'north';
@@ -3546,8 +3572,9 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         return true;
       }
       const allOptions = result.options;
-      const poseKind = getAxisOptionKindForPose(this.getCarryDefaultPose());
-      const options = allOptions.filter((option) => option.kind === poseKind);
+      // 与新放置一致：按当前默认姿态分组轮询。上边沿吸附时竖直方向仅「向上」一个，
+      // 故竖放姿态下按 Space 不切换（用户离开吸附后再用 Space 切换姿态）。
+      const options = allOptions.filter((option) => this.matchesAxisOptionPose(option, this.getCarryDefaultPose()));
       let currentIndex = getAxisOptionIndex(options, this.carryState.axisTarget);
       if (
         currentIndex < 0
@@ -3563,15 +3590,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           const target = options[0];
           const targetIndex = getAxisOptionIndexInAllOptions(allOptions, target);
           this.carryState.snapPlaneCycle = targetIndex >= 0 ? targetIndex : 0;
-          this.carryState.axisTarget = {
-            x: target.cell.x,
-            y: target.cell.y,
-            z: target.cell.z,
-            ...(target.kind === 'wall' ? { edge: target.edge } : {}),
-            ...(target.kind !== 'wall'
-              ? { layFlat: this.getCarryDefaultPose() === 'floor' }
-              : {})
-          };
+          this.carryState.axisTarget = this.buildCarryAxisTarget(target);
           this.carryState.manualSurfaceTarget = false;
           this.config.onHoverStatusChange?.('移动预览：沿当前吸附轴旋转到空位');
           this.drawGhostLayer(true);
@@ -3593,19 +3612,20 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const target = options[((currentIndex + 1) % options.length + options.length) % options.length] || options[0];
       const targetIndex = getAxisOptionIndexInAllOptions(allOptions, target);
       this.carryState.snapPlaneCycle = targetIndex >= 0 ? targetIndex : 0;
-      this.carryState.axisTarget = {
-        x: target.cell.x,
-        y: target.cell.y,
-        z: target.cell.z,
-        ...(target.kind === 'wall' ? { edge: target.edge } : {}),
-        ...(target.kind !== 'wall'
-          ? { layFlat: this.getCarryDefaultPose() === 'floor' }
-          : {})
-      };
+      this.carryState.axisTarget = this.buildCarryAxisTarget(target);
       this.carryState.manualSurfaceTarget = false;
       this.config.onHoverStatusChange?.('移动预览：沿当前吸附轴旋转到下一个空位');
       this.drawGhostLayer(true);
       return true;
+    }
+
+    buildCarryAxisTarget(target) {
+      if (!target?.cell) return null;
+      const base = { x: target.cell.x, y: target.cell.y, z: target.cell.z };
+      if (target.kind === 'wall') return { ...base, edge: target.edge };
+      // 竖直向上：竖直占位（不平放）；否则按平放处理。
+      if (target.isVertical) return { ...base, isVertical: true, layFlat: false };
+      return { ...base, layFlat: true };
     }
 
     getCarryPlacementTarget(hitInfo = null) {
@@ -4790,6 +4810,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         ...placementTarget.cell,
         panelType: this.activeTileType,
         rotation: this.activeRotation,
+        isVertical: !!placementTarget.isVertical,
         snapConnection: placementTarget.valid === false ? null : (placementTarget.connection || null)
       }, placementTarget.valid === false ? 0xef4444 : 0x67e8f9, 0.18, false);
     }
@@ -5140,7 +5161,8 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
           z: placement.z,
           panelType: placement.panelType || this.activeTileType,
           rotation: placement.rotation || this.activeRotation,
-          transmissionRotation: placement.transmissionRotation ?? placement.rotation ?? this.activeRotation
+          transmissionRotation: placement.transmissionRotation ?? placement.rotation ?? this.activeRotation,
+          isVertical: !!placement.isVertical
         });
       const geometry = createTileGeometry(this.cameraState.yaw, ghostTile.rotation || 0);
       [...geometry.sides, geometry.top].forEach((points) => {

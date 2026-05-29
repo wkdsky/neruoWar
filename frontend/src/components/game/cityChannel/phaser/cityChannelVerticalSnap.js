@@ -57,6 +57,28 @@ export const getSupportAxisSegment = (support) => {
   }));
 };
 
+// 给定竖直板支撑物及其正上方格，返回与竖板平面垂直（前/后）的两个水平邻格。
+// 竖板轴段沿其朝向延伸，平放方向为该轴的法线方向。
+export const getPerpendicularNeighborCells = (support, cell) => {
+  if (!support?.placement || !cell) return [];
+  const endpoints = support.kind === 'wall'
+    ? (WALL_EDGE_ENDPOINTS[support.placement.edge] || WALL_EDGE_ENDPOINTS.north)
+    : getCellVerticalEndpoints(support.placement.rotation || 0);
+  if (!Array.isArray(endpoints) || endpoints.length < 2) return [];
+  // 轴向量（沿竖板延伸）→ 取其法线作为前/后偏移。
+  const axis = {
+    x: (endpoints[1].x || 0) - (endpoints[0].x || 0),
+    y: (endpoints[1].y || 0) - (endpoints[0].y || 0)
+  };
+  const normal = Math.abs(axis.x) >= Math.abs(axis.y)
+    ? { x: 0, y: 1 }
+    : { x: 1, y: 0 };
+  return [
+    { x: cell.x + normal.x, y: cell.y + normal.y, z: cell.z },
+    { x: cell.x - normal.x, y: cell.y - normal.y, z: cell.z }
+  ];
+};
+
 export const getSupportAxisVertex = (support, direction) => {
   const segment = getSupportAxisSegment(support);
   if (!segment) return null;
@@ -676,9 +698,10 @@ export const getVerticalTopSnapSpec = ({
 export const getAxisOptionKey = (target) => {
   if (!target?.cell) return '';
   const isWall = target.kind === 'wall' || !!target.edge;
-  return isWall
-    ? `wall:${getWallPhysicalKey(target.cell, target.edge)}`
-    : `floor:${createCellKey(target.cell.x, target.cell.y, target.cell.z)}`;
+  if (isWall) return `wall:${getWallPhysicalKey(target.cell, target.edge)}`;
+  const cellKey = createCellKey(target.cell.x, target.cell.y, target.cell.z);
+  // 竖直向上选项与同格平放选项共用同一格，需用前缀区分，否则会被去重/无法独立轮询。
+  return target.isVertical ? `vfloor:${cellKey}` : `floor:${cellKey}`;
 };
 
 export const getAxisOptionKindForPose = (pose = 'floor') => (pose === 'wall' ? 'wall' : 'floor');
@@ -727,6 +750,8 @@ export const createAxisFloorTarget = ({
   cell,
   snap,
   activeVerticalBoardPlacement = false,
+  markVertical = false,
+  markPerpendicular = false,
   resolveVerticalSnapConnection,
   hasVerticalSnapStructuralEdgeSupport,
   isPlacementCellOccupiedForSnap
@@ -734,7 +759,9 @@ export const createAxisFloorTarget = ({
   if (!cell || !snap?.support) return null;
   if (!isValidCell(cell.x, cell.y, cell.z, mapData)) return null;
   if (isPlacementCellOccupiedForSnap(cell)) return null;
-  if (activeVerticalBoardPlacement) {
+  // 竖直向上的板在自身格不需要已存在的水平地板支撑（其结构支撑由轴段校验保证），
+  // 仅对平放选项要求该格已有水平地板。
+  if (activeVerticalBoardPlacement && !markVertical && !markPerpendicular) {
     const floorTile = mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)];
     if (!floorTile || floorTile.isVertical || isPortalMaterial(floorTile.panelType)) return null;
   }
@@ -749,13 +776,19 @@ export const createAxisFloorTarget = ({
       supportDirection: snap.direction,
       endpointMode: 'socket'
     });
-  if (!hasVerticalSnapStructuralEdgeSupport(cell, null, snap)) return null;
+  // markVertical 的「竖直向上」板天然是竖直姿态，结构校验需按竖直轴比对（而非看当前 panelPose）。
+  // markPerpendicular 的前/后水平平放邻格，靠与竖板顶边相邻支撑，需放宽到「邻接支撑格」校验。
+  let structuralSnap = snap;
+  if (markVertical) structuralSnap = { ...snap, forceVerticalAxis: true };
+  else if (markPerpendicular) structuralSnap = { ...snap, forcePerpendicularFloor: true };
+  if (!hasVerticalSnapStructuralEdgeSupport(cell, null, structuralSnap)) return null;
   return {
     kind: 'floor',
     cell: { x: cell.x, y: cell.y, z: cell.z },
     valid: true,
     connection,
-    sourceSnap: snap
+    sourceSnap: snap,
+    ...(markVertical ? { isVertical: true, layFlat: false } : { layFlat: true })
   };
 };
 
@@ -812,11 +845,13 @@ export const getAxisPlacementOptions = ({
     seen.add(key);
     options.push(option);
   };
-  const createFloor = (cell) => createAxisFloorTarget({
+  const createFloor = (cell, { markVertical = false, markPerpendicular = false } = {}) => createAxisFloorTarget({
     mapData,
     cell,
     snap: enrichedSnap,
     activeVerticalBoardPlacement,
+    markVertical,
+    markPerpendicular,
     resolveVerticalSnapConnection,
     hasVerticalSnapStructuralEdgeSupport,
     isPlacementCellOccupiedForSnap
@@ -843,17 +878,25 @@ export const getAxisPlacementOptions = ({
     const z = snap.cell.z;
     const floorCandidates = findFloorCandidatesForSegment({ mapData, segment, z });
     const wallCandidates = findWallCandidatesForSegment({ mapData, segment, z });
-    const floorCells = floorCandidates.length > 0
-      ? floorCandidates.map((candidate) => candidate.cell)
-      : [snap.cell];
-    floorCells.forEach((cell) => addOption(createFloor(cell)));
-    wallCandidates.forEach((candidate) => {
-      addOption(createWall(candidate.cell, candidate.edge));
-    });
-    if (wallCandidates.length <= 0) {
-      const fallbackWall = resolveFallbackWall();
-      addOption(fallbackWall ? { ...fallbackWall, kind: 'wall' } : null);
+    if (floorCandidates.length > 0 || wallCandidates.length > 0) {
+      // 墙体支撑：轴段落在真实 cell 边界上，沿用既有的边界共享候选。
+      floorCandidates.forEach((candidate) => addOption(createFloor(candidate.cell)));
+      wallCandidates.forEach((candidate) => {
+        addOption(createWall(candidate.cell, candidate.edge));
+      });
+      if (wallCandidates.length <= 0) {
+        const fallbackWall = resolveFallbackWall();
+        addOption(fallbackWall ? { ...fallbackWall, kind: 'wall' } : null);
+      }
+      return options;
     }
+    // 竖直板（tile）支撑：轴段过格心、匹配不到 cell 边，需手动给出三个可拼接方向：
+    //   1) 竖直向上（同格 z 的竖直板，markVertical）
+    //   2/3) 与竖板垂直的前/后两个水平平放邻格。
+    addOption(createFloor(snap.cell, { markVertical: true }));
+    getPerpendicularNeighborCells(snap.support, snap.cell).forEach((cell) => {
+      addOption(createFloor(cell, { markPerpendicular: true }));
+    });
     return options;
   }
 

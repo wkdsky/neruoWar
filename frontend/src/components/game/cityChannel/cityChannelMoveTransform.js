@@ -295,6 +295,13 @@ export const getPlacementTargetShape = ({
       layFlat: true
     });
   }
+  if (targetCell.isVertical && !targetCell.edge && originsLength === 1) {
+    // 沿上边沿竖直向上搭：目标格竖直占位，ghost 竖直渲染。
+    return withLocalSurfaceRotation({
+      ...target,
+      isVertical: true
+    });
+  }
   return withLocalSurfaceRotation(target);
 };
 

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 像素风格抽象男性头像3 - 紫色棱角风格 -->
+  <rect width="64" height="64" fill="#2c2c54"/>
+  <!-- 脸部 - 菱形像素 -->
+  <rect x="28" y="4" width="8" height="4" fill="#9b59b6"/>
+  <rect x="24" y="8" width="16" height="4" fill="#9b59b6"/>
+  <rect x="20" y="12" width="24" height="4" fill="#9b59b6"/>
+  <rect x="16" y="16" width="32" height="4" fill="#9b59b6"/>
+  <rect x="12" y="20" width="40" height="20" fill="#9b59b6"/>
+  <rect x="16" y="40" width="32" height="4" fill="#9b59b6"/>
+  <rect x="20" y="44" width="24" height="4" fill="#9b59b6"/>
+  <rect x="24" y="48" width="16" height="4" fill="#9b59b6"/>
+  <rect x="28" y="52" width="8" height="4" fill="#9b59b6"/>
+  <!-- 眼睛 - 三角形风格 -->
+  <rect x="18" y="24" width="8" height="8" fill="#2c2c54"/>
+  <rect x="38" y="24" width="8" height="8" fill="#2c2c54"/>
+  <rect x="20" y="26" width="4" height="4" fill="#e74c3c"/>
+  <rect x="40" y="26" width="4" height="4" fill="#e74c3c"/>
+  <!-- 嘴巴 -->
+  <rect x="28" y="36" width="8" height="4" fill="#2c2c54"/>
+  <!-- 头顶装饰 -->
+  <rect x="30" y="0" width="4" height="4" fill="#8e44ad"/>
+</svg>

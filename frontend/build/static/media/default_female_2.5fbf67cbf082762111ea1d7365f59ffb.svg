@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 像素风格抽象女性头像2 - 橙色活力风格 -->
+  <rect width="64" height="64" fill="#1e3799"/>
+  <!-- 头发 - 短发风格 -->
+  <rect x="12" y="4" width="40" height="12" fill="#e55039"/>
+  <rect x="8" y="8" width="8" height="20" fill="#e55039"/>
+  <rect x="48" y="8" width="8" height="20" fill="#e55039"/>
+  <!-- 脸部 -->
+  <rect x="16" y="16" width="32" height="36" fill="#fad390"/>
+  <rect x="12" y="20" width="4" height="28" fill="#fad390"/>
+  <rect x="48" y="20" width="4" height="28" fill="#fad390"/>
+  <!-- 眼睛 - 大眼睛风格 -->
+  <rect x="20" y="26" width="10" height="10" fill="#1e3799"/>
+  <rect x="34" y="26" width="10" height="10" fill="#1e3799"/>
+  <rect x="22" y="28" width="6" height="6" fill="#f39c12"/>
+  <rect x="36" y="28" width="6" height="6" fill="#f39c12"/>
+  <rect x="24" y="30" width="2" height="2" fill="#1e3799"/>
+  <rect x="38" y="30" width="2" height="2" fill="#1e3799"/>
+  <!-- 嘴巴 - 微笑 -->
+  <rect x="26" y="42" width="12" height="4" fill="#e55039"/>
+  <!-- 发饰 -->
+  <rect x="46" y="4" width="8" height="8" fill="#f1c40f"/>
+</svg>

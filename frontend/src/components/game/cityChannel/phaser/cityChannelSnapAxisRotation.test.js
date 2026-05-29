@@ -300,7 +300,7 @@ describe('cityChannel snap axis rotation', () => {
     expect(scene.drawGhostLayer).not.toHaveBeenCalled();
   });
 
-  it('keeps Space cycling through snap-axis placement options', () => {
+  it('routes Space to cycleActivePlacementSnapAxis when a snap axis exists', () => {
     const scene = createScene(createMap());
     const hitInfo = { cell: { x: 10, y: 10, z: 0 }, hit: null, edge: 'north', localPoint: { x: 0, y: 0 } };
     const snap = { cell: { x: 10, y: 10, z: 0 }, support: { key: 'support' }, axisEdge: 'north' };
@@ -309,13 +309,7 @@ describe('cityChannel snap axis rotation', () => {
     scene.hoverEdge = hitInfo.edge;
     scene.hoverTarget = { hit: hitInfo.hit, localPoint: hitInfo.localPoint };
     scene.resolvePlacementEdgeSnap = jest.fn(() => snap);
-    scene.getAxisPlacementOptions = jest.fn(() => [
-      { kind: 'floor', cell: { x: 10, y: 11, z: 0 }, valid: true },
-      { kind: 'wall', cell: { x: 10, y: 10, z: 0 }, edge: 'east', valid: true }
-    ]);
-    scene.getPreferredAxisPlacementIndex = jest.fn(() => 0);
-    scene.activeSnapAxisKey = getSnapAxisKey(snap);
-    scene.snapPlaneCycle = 0;
+    scene.cycleActivePlacementSnapAxis = jest.fn(() => true);
     const event = {
       key: ' ',
       code: 'Space',
@@ -326,9 +320,7 @@ describe('cityChannel snap axis rotation', () => {
     scene.handleKeyDown(event);
 
     expect(event.preventDefault).toHaveBeenCalled();
-    expect(scene.snapPlaneCycle).toBe(1);
-    expect(scene.panelPose).toBe('wall');
-    expect(scene.drawGhostLayer).toHaveBeenCalledWith(true);
+    expect(scene.cycleActivePlacementSnapAxis).toHaveBeenCalled();
   });
 
   it('rotates a new floor placement to the next free floor snap-axis target', () => {
@@ -434,6 +426,219 @@ describe('cityChannel snap axis rotation', () => {
       layFlat: true
     });
     expect(scene.drawGhostLayer).toHaveBeenCalledWith(true);
+  });
+
+  it('offers vertical-up plus two perpendicular floors on a vertical-tile top axis', () => {
+    const support = createVerticalTileSupport({ rotation: 0 });
+    const mapData = createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    });
+    const scene = createScene(mapData);
+    const snap = {
+      cell: { x: 10, y: 10, z: 1 },
+      support,
+      side: 'top',
+      direction: 'up',
+      axisEdge: 'south'
+    };
+
+    const options = scene.getAxisPlacementOptions(snap);
+    const keys = options.map((option) => getAxisOptionKey(option));
+
+    // 竖直向上落在自身格（vfloor 前缀区分于同格平放）。
+    expect(keys).toContain(`vfloor:${createCellKey(10, 10, 1)}`);
+    // rot0 东西向竖板 → 前/后水平平放落到北/南邻格。
+    expect(keys).toContain(`floor:${createCellKey(10, 9, 1)}`);
+    expect(keys).toContain(`floor:${createCellKey(10, 11, 1)}`);
+    // 不应把平放误落到竖板正上方格。
+    expect(keys).not.toContain(`floor:${createCellKey(10, 10, 1)}`);
+  });
+
+  it('cycles only the two perpendicular floors on a top axis while horizontal', () => {
+    const support = createVerticalTileSupport({ rotation: 0 });
+    const scene = createScene(createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    }));
+    const hitInfo = { cell: { x: 10, y: 10, z: 1 }, hit: null, edge: 'south', localPoint: { x: 0, y: 0 } };
+    const snap = {
+      cell: { x: 10, y: 10, z: 1 },
+      support,
+      side: 'top',
+      direction: 'up',
+      axisEdge: 'south'
+    };
+    // 选项顺序：竖直向上(vfloor) / 前(floor) / 后(floor)。
+    const options = [
+      { kind: 'floor', cell: { x: 10, y: 10, z: 1 }, isVertical: true, valid: true },
+      { kind: 'floor', cell: { x: 10, y: 9, z: 1 }, layFlat: true, valid: true },
+      { kind: 'floor', cell: { x: 10, y: 11, z: 1 }, layFlat: true, valid: true }
+    ];
+    scene.getActivePointerPlacementHitInfo = jest.fn(() => hitInfo);
+    scene.resolvePlacementEdgeSnap = jest.fn(() => snap);
+    scene.getAxisPlacementOptions = jest.fn(() => options);
+    scene.resolveDynamicPlacementTarget = jest.fn(() => options[1]);
+    scene.panelPose = 'floor';
+    scene.activeSnapAxisKey = getSnapAxisKey(snap);
+    scene.snapPlaneCycle = 1;
+
+    // 水平姿态：从「前」推进到「后」，不会落到竖直向上(index 0)。
+    expect(scene.cycleActivePlacementSnapAxis()).toBe(true);
+    expect(scene.snapPlaneCycle).toBe(2);
+    expect(scene.panelPose).toBe('floor');
+    expect(scene.drawGhostLayer).toHaveBeenCalledWith(true);
+  });
+
+  it('keeps a vertical top snap axis available while placing horizontally', () => {
+    const support = createVerticalTileSupport({ rotation: 0 });
+    const scene = createScene(createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    }));
+    const hitInfo = {
+      cell: { x: 10, y: 10, z: 0 },
+      hit: {
+        type: 'tile',
+        tile: support.placement,
+        cell: { x: 10, y: 10, z: 0 }
+      },
+      localPoint: { x: 0, y: 0 }
+    };
+    const snap = {
+      cell: { x: 10, y: 10, z: 1 },
+      support,
+      side: 'top',
+      direction: 'up',
+      axisEdge: 'south'
+    };
+    scene.panelPose = 'floor';
+    scene.isWallPlacementActive = jest.fn(() => false);
+    scene.isVerticalSurfaceHit = jest.fn(() => true);
+    scene.resolveVerticalSurfaceSnap = jest.fn(() => snap);
+    scene.resolveVerticalGapFloorSnap = jest.fn(() => null);
+    scene.resolveFloorEdgePlacementTarget = jest.fn(() => null);
+
+    expect(scene.resolvePlacementEdgeSnap(hitInfo)).toBe(snap);
+  });
+
+  it('cycles a moving vertical board between perpendicular top floors while horizontal', () => {
+    const support = createVerticalTileSupport({ rotation: 0 });
+    const scene = createScene(createMap({
+      tiles: {
+        [support.key]: support.placement,
+        [createCellKey(12, 10, 0)]: createTile({
+          x: 12,
+          y: 10,
+          z: 0,
+          panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+          isVertical: true
+        })
+      }
+    }), {
+      activeTool: CITY_CHANNEL_TOOLS.BROWSE
+    });
+    const snap = {
+      cell: { x: 10, y: 10, z: 1 },
+      support,
+      side: 'top',
+      direction: 'up',
+      axisEdge: 'south'
+    };
+    const options = [
+      { kind: 'floor', cell: { x: 10, y: 10, z: 1 }, isVertical: true, valid: true },
+      { kind: 'floor', cell: { x: 10, y: 9, z: 1 }, layFlat: true, valid: true },
+      { kind: 'floor', cell: { x: 10, y: 11, z: 1 }, layFlat: true, valid: true }
+    ];
+    scene.carryState = {
+      kind: 'placement',
+      origins: [{ x: 12, y: 10, z: 0 }],
+      snapAxisKey: getSnapAxisKey(snap),
+      snapPlaneCycle: 1,
+      axisTarget: { x: 10, y: 9, z: 1, layFlat: true },
+      defaultPose: 'floor'
+    };
+    scene.getCarryDefaultPose = jest.fn(() => 'floor');
+    scene.getCarryAxisOptions = jest.fn(() => ({
+      axisKey: getSnapAxisKey(snap),
+      options
+    }));
+
+    const handled = scene.cycleCarrySnapAxisRotation();
+
+    expect(handled).toBe(true);
+    expect(scene.carryState.snapPlaneCycle).toBe(2);
+    expect(scene.carryState.axisTarget).toEqual({
+      x: 10,
+      y: 11,
+      z: 1,
+      layFlat: true
+    });
+    expect(scene.drawGhostLayer).toHaveBeenCalledWith(true);
+  });
+
+  it('does not switch direction on a top axis while vertical (only one upward target)', () => {
+    const support = createVerticalTileSupport({ rotation: 0 });
+    const scene = createScene(createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    }));
+    const hitInfo = { cell: { x: 10, y: 10, z: 1 }, hit: null, edge: 'south', localPoint: { x: 0, y: 0 } };
+    const snap = {
+      cell: { x: 10, y: 10, z: 1 },
+      support,
+      side: 'top',
+      direction: 'up',
+      axisEdge: 'south'
+    };
+    const verticalOption = { kind: 'floor', cell: { x: 10, y: 10, z: 1 }, isVertical: true, valid: true };
+    const options = [
+      verticalOption,
+      { kind: 'floor', cell: { x: 10, y: 9, z: 1 }, layFlat: true, valid: true },
+      { kind: 'floor', cell: { x: 10, y: 11, z: 1 }, layFlat: true, valid: true }
+    ];
+    scene.getActivePointerPlacementHitInfo = jest.fn(() => hitInfo);
+    scene.resolvePlacementEdgeSnap = jest.fn(() => snap);
+    scene.getAxisPlacementOptions = jest.fn(() => options);
+    scene.resolveDynamicPlacementTarget = jest.fn(() => verticalOption);
+    scene.panelPose = 'wall';
+    scene.activeSnapAxisKey = getSnapAxisKey(snap);
+    scene.snapPlaneCycle = 0;
+
+    // 竖放姿态：竖直方向只有「向上」一个，Space 不切换方向。
+    expect(scene.cycleActivePlacementSnapAxis()).toBe(true);
+    expect(scene.snapPlaneCycle).toBe(0);
+    expect(scene.panelPose).toBe('wall');
+  });
+
+  it('routes carry Space to cycleCarrySnapAxisRotation when an axis exists', () => {
+    const scene = createScene(createMap(), { activeTool: CITY_CHANNEL_TOOLS.BROWSE });
+    scene.carryState = { kind: 'placement', origins: [{ x: 10, y: 10, z: 0 }] };
+    scene.isCarryForcedHorizontal = jest.fn(() => false);
+    scene.getCarryAxisOptions = jest.fn(() => ({ axisKey: 'axis-a', options: [] }));
+    scene.cycleCarrySnapAxisRotation = jest.fn(() => true);
+    scene.toggleCarryDefaultPose = jest.fn(() => true);
+
+    expect(scene.handleSpaceSurfaceToggle()).toBe(true);
+    expect(scene.cycleCarrySnapAxisRotation).toHaveBeenCalled();
+    expect(scene.toggleCarryDefaultPose).not.toHaveBeenCalled();
+  });
+
+  it('routes carry Space to toggleCarryDefaultPose when no axis exists', () => {
+    const scene = createScene(createMap(), { activeTool: CITY_CHANNEL_TOOLS.BROWSE });
+    scene.carryState = { kind: 'placement', origins: [{ x: 10, y: 10, z: 0 }] };
+    scene.isCarryForcedHorizontal = jest.fn(() => false);
+    scene.getCarryAxisOptions = jest.fn(() => ({ axisKey: null, options: [] }));
+    scene.cycleCarrySnapAxisRotation = jest.fn(() => true);
+    scene.toggleCarryDefaultPose = jest.fn(() => true);
+
+    expect(scene.handleSpaceSurfaceToggle()).toBe(true);
+    expect(scene.toggleCarryDefaultPose).toHaveBeenCalled();
+    expect(scene.cycleCarrySnapAxisRotation).not.toHaveBeenCalled();
   });
 
   it('uses Shift+wheel to rotate a moving placement surface instead of zooming', () => {
