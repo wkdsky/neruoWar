@@ -50,6 +50,7 @@ LOCAL_BIND_HOST="${LOCAL_BIND_HOST:-127.0.0.1}"
 FORCE_RESET_ADMIN=false
 CLEAR_DOMAINS=false
 INIT_DB=false
+SKIP_FRONTEND=false
 
 print_usage() {
     cat <<'EOF'
@@ -59,12 +60,14 @@ print_usage() {
   --init-db             仅在数据库为空时注入基础数据
   --force-reset-admin   强制重置 admin 用户（密码恢复为 123456）
   --clear-domains       清空所有知识域数据（保留用户/熵盟/目录配置）
+  --skip-frontend       跳过前端开发服务器启动（使用 Nginx serve 静态文件）
   -h, --help            显示帮助
 
 说明:
   - 默认无参数启动时，只重启 MongoDB / 前端 / 后端服务，不修改数据库内容。
   - `start.sh` 仅用于本机访问：前后端默认绑定 `127.0.0.1`，不开放公网入口。
   - 仅当传入 --init-db 时，才会在数据库为空时执行基础注入（目录配置 + 管理员 + 用户字段初始化）。
+  - 使用 --skip-frontend 时，前端将由 Nginx serve 静态文件，不启动开发服务器。
 EOF
 }
 
@@ -79,6 +82,9 @@ parse_args() {
                 ;;
             --clear-domains|clear-domains|clear-domain-data)
                 CLEAR_DOMAINS=true
+                ;;
+            --skip-frontend|skip-frontend)
+                SKIP_FRONTEND=true
                 ;;
             -h|--help|help)
                 print_usage
@@ -517,6 +523,13 @@ FRONTEND_LOCALHOST_ORIGIN="http://localhost:${FRONTEND_PORT}"
 FRONTEND_LOOPBACK_ORIGIN="http://127.0.0.1:${FRONTEND_PORT}"
 FRONTEND_ALLOWED_ORIGINS="${FRONTEND_LOCALHOST_ORIGIN},${FRONTEND_LOOPBACK_ORIGIN}"
 
+if [ -n "${CORS_ORIGINS:-}" ]; then
+    FRONTEND_ALLOWED_ORIGINS="${FRONTEND_ALLOWED_ORIGINS},${CORS_ORIGINS}"
+fi
+if [ -n "${FRONTEND_ORIGIN:-}" ]; then
+    FRONTEND_ALLOWED_ORIGINS="${FRONTEND_ALLOWED_ORIGINS},${FRONTEND_ORIGIN}"
+fi
+
 if [ "$BACKEND_PORT" != "$BACKEND_DEFAULT_PORT" ]; then
     echo "后端默认端口 ${BACKEND_DEFAULT_PORT} 已占用，切换为 ${BACKEND_PORT}"
 fi
@@ -537,13 +550,18 @@ pm2 start server.js --name neurowar-backend >/dev/null
 
 sleep 3
 
-echo "启动前端服务..."
-cd "$FRONTEND_DIR"
-PORT="$FRONTEND_PORT" \
-HOST="$LOCAL_BIND_HOST" \
-BACKEND_PROXY_TARGET="$BACKEND_PUBLIC_ORIGIN" \
-REACT_APP_BACKEND_ORIGIN="$BACKEND_PUBLIC_ORIGIN" \
-pm2 start npm --name neurowar-frontend -- start >/dev/null
+if [ "$SKIP_FRONTEND" = true ]; then
+    echo "跳过前端开发服务器启动（使用 Nginx serve 静态文件）"
+    echo "请确保 Nginx 已配置并指向: $FRONTEND_DIR/build"
+else
+    echo "启动前端服务..."
+    cd "$FRONTEND_DIR"
+    PORT="$FRONTEND_PORT" \
+    HOST="$LOCAL_BIND_HOST" \
+    BACKEND_PROXY_TARGET="$BACKEND_PUBLIC_ORIGIN" \
+    REACT_APP_BACKEND_ORIGIN="$BACKEND_PUBLIC_ORIGIN" \
+    pm2 start npm --name neurowar-frontend -- start >/dev/null
+fi
 
 echo "========================================="
 pm2 list
@@ -558,6 +576,8 @@ echo "MongoDB:   mongodb://localhost:${MONGO_PORT}/strategy-game"
 echo "========================================="
 echo "查看日志:"
 echo "  后端: pm2 logs neurowar-backend"
-echo "  前端: pm2 logs neurowar-frontend"
+if [ "$SKIP_FRONTEND" != true ]; then
+    echo "  前端: pm2 logs neurowar-frontend"
+fi
 echo "  Mongo: pm2 logs ${MONGO_PM2_NAME}"
 echo "========================================="

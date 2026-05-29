@@ -1,23 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Copy,
-  Eye,
-  EyeOff,
-  Hand,
-  Layers,
-  LogOut,
-  MousePointer2,
-  Move,
-  PanelTop,
-  Redo2,
-  RotateCw,
-  Save,
-  Settings,
-  Trash2,
-  Undo2,
-  Wand2
-} from 'lucide-react';
-import {
   CITY_CHANNEL_TILE_TYPES,
   CITY_CHANNEL_LAYER_LABELS,
   CITY_CHANNEL_STORAGE_KEY,
@@ -28,9 +10,7 @@ import {
   normalizeTemplateMeta,
   serializeCityChannelMap
 } from './cityChannelSchema';
-import { getCityChannelMaterial } from './cityChannelCatalog';
 import {
-  CITY_CHANNEL_MECHANISM_LIMITS,
   buildMechanicalAssemblies,
   getAssemblyForCell,
   getMechanismParamKey,
@@ -38,170 +18,27 @@ import {
 } from './cityChannelMechanismRuntime';
 import useCityChannelEditorState from './useCityChannelEditorState';
 import CityChannelMaterialPalette from './CityChannelMaterialPalette';
+import CityChannelMechanismPanel, { CityChannelGearAxisPrompt } from './CityChannelMechanismPanel';
 import CityChannelPressurePlateInspect3D from './CityChannelPressurePlateInspect3D';
 import {
-  TILE_RENDER_HEIGHT,
-  TILE_RENDER_WIDTH,
-  createEdgeWallGeometry,
-  createPortalGeometry,
-  createTileGeometry,
-  projectCell
-} from './phaser/renderer/CityChannelGeometry';
+  CityChannelEditorTopbar,
+  CityChannelHotbar,
+  CityChannelInteractionHints,
+  CityChannelSelectionActions,
+  CityChannelSettingsPopover,
+  CityChannelStatusBar,
+  CityChannelToastStack
+} from './CityChannelEditorChrome';
 import {
-  buildThumbnailAssemblyColorMap,
-  getCityChannelThumbnailClassName,
-  isCityChannelThumbnailInteractionLocked,
-  isPointerNearThumbnail
-} from './cityChannelThumbnailUi';
+  getCityChannelLayerLabel,
+  getCityChannelMapPlaneLevels
+} from './CityChannelThumbnail';
+import CityChannelThumbnail from './CityChannelThumbnail';
 import './CityChannelImmersiveEditor.css';
 import './CityChannelPhaserEditor.css';
 
-const TOOL_ITEMS = [
-  { key: CITY_CHANNEL_TOOLS.BROWSE, label: '浏览', Icon: Hand },
-  { key: CITY_CHANNEL_TOOLS.SELECT, label: '选择', Icon: MousePointer2 }
-];
-
-const WALL_VIEW_MODES = ['semi', 'perspective', 'solid'];
-
-const WALL_VIEW_MODE_CONFIG = {
-  semi: {
-    label: '半透视',
-    toast: '墙板显示：半透视'
-  },
-  perspective: {
-    label: '透视',
-    toast: '墙板显示：透视'
-  },
-  solid: {
-    label: '不透视',
-    toast: '墙板显示：不透视'
-  }
-};
-
-const GEAR_POSITION_LABELS = {
-  center: '中心',
-  corner_ne: '右上角',
-  corner_nw: '左上角',
-  corner_se: '右下角',
-  corner_sw: '左下角'
-};
-
-const GEAR_AXIS_LABELS = {
-  fixedAxis: '固定轴',
-  freeAxis: '活动轴'
-};
-
 const stopEditorPanelPointerEvent = (event) => {
   event.stopPropagation();
-};
-
-const THUMBNAIL_PADDING = 22;
-const THUMBNAIL_WIDTH = 236;
-const THUMBNAIL_HEIGHT = 180;
-const THUMBNAIL_LAYER_COLORS = [
-  { top: '#d9b36c', side: '#8b5f2f', edge: '#fff4c7' },
-  { top: '#70c1b3', side: '#257c75', edge: '#d7fff7' },
-  { top: '#8fa8ff', side: '#3e5aa8', edge: '#e0e7ff' },
-  { top: '#f08aa7', side: '#9a3d5a', edge: '#ffe1ea' },
-  { top: '#9ee37d', side: '#3f8f42', edge: '#eaffdc' }
-];
-const THUMBNAIL_ASSEMBLY_COLORS = [
-  { top: '#7dd3fc', side: '#0369a1', edge: '#e0f2fe' },
-  { top: '#f9a8d4', side: '#be185d', edge: '#fce7f3' },
-  { top: '#a7f3d0', side: '#047857', edge: '#ecfdf5' },
-  { top: '#fde68a', side: '#b45309', edge: '#fffbeb' },
-  { top: '#c4b5fd', side: '#6d28d9', edge: '#f5f3ff' },
-  { top: '#fca5a5', side: '#b91c1c', edge: '#fff1f2' }
-];
-const THUMBNAIL_NEIGHBOR_OFFSETS = {
-  north: { x: 0, y: -1 },
-  south: { x: 0, y: 1 },
-  west: { x: -1, y: 0 },
-  east: { x: 1, y: 0 }
-};
-
-const polygonPoints = (points = []) => (
-  points.map((point) => `${point.x},${point.y}`).join(' ')
-);
-
-const isFlatPlaneTile = (tile) => !!tile && !tile.isVertical;
-
-const getLayerLabel = (z) => CITY_CHANNEL_LAYER_LABELS[z] || `${z + 1}层`;
-
-const getThumbnailLayerColor = (z = 0) => (
-  THUMBNAIL_LAYER_COLORS[Math.abs(Number(z) || 0) % THUMBNAIL_LAYER_COLORS.length]
-);
-
-const getThumbnailAdjacentComponentKeys = (item) => {
-  if (!item?.cell) return [];
-  const { x, y, z } = item.cell;
-  if (item.kind === 'wall') {
-    const offset = THUMBNAIL_NEIGHBOR_OFFSETS[item.wall?.edge] || THUMBNAIL_NEIGHBOR_OFFSETS.north;
-    return [
-      createCellKey(x, y, z),
-      createCellKey(x + offset.x, y + offset.y, z),
-      createWallKey(x, y, z - 1, item.wall?.edge),
-      createWallKey(x, y, z + 1, item.wall?.edge)
-    ];
-  }
-  return Object.entries(THUMBNAIL_NEIGHBOR_OFFSETS).flatMap(([edge, offset]) => [
-    createCellKey(x + offset.x, y + offset.y, z),
-    createWallKey(x, y, z, edge),
-    createWallKey(x + offset.x, y + offset.y, z, edge === 'north' ? 'south' : edge === 'south' ? 'north' : edge === 'east' ? 'west' : 'east')
-  ]);
-};
-
-const getMapPlaneLevels = (mapData = {}) => {
-  const levels = new Set([0]);
-  Object.values(mapData.tiles || {}).forEach((tile) => {
-    if (isFlatPlaneTile(tile)) levels.add(Number(tile.z) || 0);
-  });
-  return Array.from(levels).sort((a, b) => a - b);
-};
-
-const getNextPlaneLevelAbove = (levels = [], z = 0) => (
-  levels.find((level) => level > z) ?? null
-);
-
-const isVerticalAttachment = (item = {}) => (
-  item.kind === 'wall' || !!item.tile?.isVertical
-);
-
-const isVisibleInLayerCut = ({ item, cutoff, nextPlaneLevel }) => {
-  if (cutoff === null) return true;
-  const z = Number(item?.cell?.z) || 0;
-  if (z <= cutoff) return true;
-  return isVerticalAttachment(item) && nextPlaneLevel !== null && z < nextPlaneLevel;
-};
-
-const getThumbnailBounds = (items = []) => {
-  if (items.length === 0) {
-    return {
-      left: -TILE_RENDER_WIDTH / 2,
-      right: TILE_RENDER_WIDTH / 2,
-      top: -TILE_RENDER_HEIGHT / 2,
-      bottom: TILE_RENDER_HEIGHT / 2
-    };
-  }
-  return items.reduce((bounds, item) => ({
-    left: Math.min(bounds.left, item.projection.x - (TILE_RENDER_WIDTH * 0.5)),
-    right: Math.max(bounds.right, item.projection.x + (TILE_RENDER_WIDTH * 0.5)),
-    top: Math.min(bounds.top, item.projection.y - (TILE_RENDER_HEIGHT * 0.62)),
-    bottom: Math.max(bounds.bottom, item.projection.y + (TILE_RENDER_HEIGHT * 0.46))
-  }), {
-    left: Infinity,
-    right: -Infinity,
-    top: Infinity,
-    bottom: -Infinity
-  });
-};
-
-const toolLabelByKey = {
-  [CITY_CHANNEL_TOOLS.BROWSE]: '浏览',
-  [CITY_CHANNEL_TOOLS.SELECT]: '选择',
-  [CITY_CHANNEL_TOOLS.ERASE]: '擦除',
-  [CITY_CHANNEL_TOOLS.PLACE_TILE]: '放置',
-  [CITY_CHANNEL_TOOLS.PLACE_COMPONENT]: '安装组件'
 };
 
 const CityChannelPhaserEditor = ({
@@ -255,7 +92,6 @@ const CityChannelPhaserEditor = ({
   const [selectedGears, setSelectedGears] = useState([]);
   const [selectionScope, setSelectionScope] = useState(null);
   const [gearAxisPrompt, setGearAxisPrompt] = useState(null);
-  const gearAxisPromptRef = useRef(null);
   const [openPanel, setOpenPanel] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [hoverStatusLabel, setHoverStatusLabel] = useState('浏览模式');
@@ -264,25 +100,17 @@ const CityChannelPhaserEditor = ({
   const [mechanismPanel, setMechanismPanel] = useState(null);
   const [inspectMode, setInspectMode] = useState(null);
   const [mechanismPreviewState, setMechanismPreviewState] = useState(null);
-  const [isThumbnailOpen, setIsThumbnailOpen] = useState(true);
-  const [thumbnailHoverLayer, setThumbnailHoverLayer] = useState(null);
-  const thumbnailRef = useRef(null);
   const [carryActive, setCarryActive] = useState(false);
-  const [isThumbnailNearCursor, setIsThumbnailNearCursor] = useState(false);
   const [visibleLayerCutoff, setVisibleLayerCutoff] = useState(null);
 
-  const planeLevels = useMemo(() => getMapPlaneLevels(mapData), [mapData]);
+  const planeLevels = useMemo(() => getCityChannelMapPlaneLevels(mapData), [mapData]);
   const highestPlaneLevel = planeLevels[planeLevels.length - 1] ?? 0;
   const effectiveVisibleLayerCutoff = visibleLayerCutoff === null
     ? highestPlaneLevel
     : Math.max(0, Math.min(visibleLayerCutoff, highestPlaneLevel));
-  const nextHiddenPlaneLevel = visibleLayerCutoff === null
-    ? null
-    : getNextPlaneLevelAbove(planeLevels, effectiveVisibleLayerCutoff);
   const activeLayerLabel = visibleLayerCutoff === null
     ? (CITY_CHANNEL_LAYER_LABELS[activeLayer] || `第 ${activeLayer + 1} 层`)
-    : `显示至${getLayerLabel(effectiveVisibleLayerCutoff)}`;
-  const wallViewModeConfig = WALL_VIEW_MODE_CONFIG[wallViewMode] || WALL_VIEW_MODE_CONFIG.semi;
+    : `显示至${getCityChannelLayerLabel(effectiveVisibleLayerCutoff)}`;
   const selectedPlacements = useMemo(() => (
     [...selectedCells, ...selectedWalls]
   ), [selectedCells, selectedWalls]);
@@ -344,21 +172,9 @@ const CityChannelPhaserEditor = ({
   const gearMountsForPanel = selectedGearMount
     ? [selectedGearMount]
     : Array.isArray(activePanelTile?.gearMounts) ? activePanelTile.gearMounts : [];
-  const canConfigureGearMounts = gearMountsForPanel.length > 0;
   const mechanismPanelParams = useMemo(() => (
     normalizeMechanismParams(mechanismParams[activePanelKey])
   ), [activePanelKey, mechanismParams]);
-  const mechanismPanelMaterial = activePanelPanelType
-    ? getCityChannelMaterial(activePanelPanelType)
-    : null;
-  const mechanismPanelStyle = useMemo(() => {
-    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
-    return {
-      right: viewportWidth <= 760 ? '12px' : 'max(18px, env(safe-area-inset-right))',
-      top: inspectMode?.active ? '50%' : '74px',
-      transform: inspectMode?.active ? 'translateY(-50%)' : 'none'
-    };
-  }, [inspectMode?.active]);
 
   const addToast = useCallback((message, type = 'info') => {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -565,17 +381,9 @@ const CityChannelPhaserEditor = ({
     setGearAxisPrompt(null);
   }, [gearAxisPrompt, updatePlacement]);
 
-  useEffect(() => {
-    if (!gearAxisPrompt) return undefined;
-    const handlePointerDown = (event) => {
-      if (gearAxisPromptRef.current?.contains(event.target)) return;
-      setGearAxisPrompt(null);
-      event.preventDefault();
-      event.stopPropagation();
-    };
-    document.addEventListener('pointerdown', handlePointerDown, true);
-    return () => document.removeEventListener('pointerdown', handlePointerDown, true);
-  }, [gearAxisPrompt]);
+  const dismissGearAxisPrompt = useCallback(() => {
+    setGearAxisPrompt(null);
+  }, []);
 
   const executeMechanismPanelAction = useCallback(() => {
     if (!canRunActivePanel) {
@@ -873,28 +681,6 @@ const CityChannelPhaserEditor = ({
     sceneRef.current?.updateConfig?.(sceneConfig);
   }, [sceneConfig]);
 
-  const isThumbnailInteractionLocked = useMemo(() => (
-    isCityChannelThumbnailInteractionLocked({
-      activeTool,
-      activeTileType,
-      activeComponentType,
-      carryActive
-    })
-  ), [activeTool, activeTileType, activeComponentType, carryActive]);
-
-  useEffect(() => {
-    if (!isThumbnailInteractionLocked) {
-      setIsThumbnailNearCursor(false);
-      return undefined;
-    }
-    const handlePointerMove = (event) => {
-      const rect = thumbnailRef.current?.getBoundingClientRect();
-      setIsThumbnailNearCursor(isPointerNearThumbnail(event.clientX, event.clientY, rect));
-    };
-    window.addEventListener('pointermove', handlePointerMove, { passive: true });
-    return () => window.removeEventListener('pointermove', handlePointerMove);
-  }, [isThumbnailInteractionLocked]);
-
   useEffect(() => {
     if (!mechanismPanel?.cell) return;
     const selectedKey = selectedCells.length === 1 && selectedWalls.length === 0
@@ -914,232 +700,6 @@ const CityChannelPhaserEditor = ({
       sceneRef.current?.closeInspectMode?.({ animate: false });
     }
   }, [canInspectSelectedTile, inspectMode, selectedTileKey]);
-
-  const thumbnailYaw = Number(cameraSummary.yaw) || 0;
-  const thumbnailItems = useMemo(() => {
-    const tileItems = Object.values(mapData.tiles || {}).map((tile) => ({
-      componentKey: createCellKey(tile.x, tile.y, tile.z),
-      id: `tile:${createCellKey(tile.x, tile.y, tile.z)}`,
-      kind: 'tile',
-      cell: { x: tile.x, y: tile.y, z: tile.z },
-      tile,
-      projection: projectCell(tile, thumbnailYaw, mapData)
-    }));
-    const wallItems = Object.values(mapData.walls || {}).map((wall) => ({
-      componentKey: createWallKey(wall.x, wall.y, wall.z, wall.edge),
-      id: `wall:${createWallKey(wall.x, wall.y, wall.z, wall.edge)}`,
-      kind: 'wall',
-      cell: { x: wall.x, y: wall.y, z: wall.z },
-      wall,
-      projection: projectCell(wall, thumbnailYaw, mapData)
-    }));
-    return [...tileItems, ...wallItems].sort((a, b) => (
-      ((a.cell.z || 0) - (b.cell.z || 0))
-      || ((a.projection.y || 0) - (b.projection.y || 0))
-      || String(a.id).localeCompare(String(b.id))
-    ));
-  }, [mapData, thumbnailYaw]);
-  const thumbnailAssemblyColorMap = useMemo(() => {
-    const componentKeys = thumbnailItems.map((item) => item.componentKey).filter(Boolean);
-    const componentKeySet = new Set(componentKeys);
-    const adjacentPairs = [];
-    thumbnailItems.forEach((item) => {
-      getThumbnailAdjacentComponentKeys(item).forEach((adjacentKey) => {
-        if (!componentKeySet.has(adjacentKey)) return;
-        adjacentPairs.push([item.componentKey, adjacentKey]);
-      });
-    });
-    return buildThumbnailAssemblyColorMap({
-      assemblyGraph,
-      componentKeys,
-      adjacentPairs,
-      palette: THUMBNAIL_ASSEMBLY_COLORS
-    });
-  }, [assemblyGraph, thumbnailItems]);
-
-  const handleThumbnailLayerClick = useCallback((z) => {
-    setVisibleLayerCutoff(z);
-    switchLayer(z);
-  }, [switchLayer]);
-
-  const renderThumbnailItem = (item) => {
-    const z = Number(item.cell?.z) || 0;
-    const isHoveredLayer = thumbnailHoverLayer !== null && thumbnailHoverLayer === z;
-    const isHiddenByCutoff = !isVisibleInLayerCut({
-      item,
-      cutoff: visibleLayerCutoff,
-      nextPlaneLevel: nextHiddenPlaneLevel
-    });
-    const isCutoffLayer = visibleLayerCutoff !== null && z === effectiveVisibleLayerCutoff;
-    const assemblyId = assemblyGraph?.assemblyByComponentKey?.[item.componentKey];
-    const layerColor = thumbnailAssemblyColorMap[assemblyId] || getThumbnailLayerColor(z);
-    const commonClass = [
-      'city-channel-thumbnail-item',
-      assemblyId ? 'is-mechanical-assembly' : '',
-      isHoveredLayer ? 'is-hovered-layer' : '',
-      isHiddenByCutoff ? 'is-above-cutoff' : '',
-      isCutoffLayer ? 'is-cutoff-layer' : ''
-    ].filter(Boolean).join(' ');
-    const commonStyle = {
-      left: `${item.projection.x}px`,
-      top: `${item.projection.y}px`,
-      zIndex: 1000 + (z * 100) + Math.round(item.projection.y || 0),
-      '--thumbnail-top': layerColor.top,
-      '--thumbnail-side': layerColor.side,
-      '--thumbnail-edge': layerColor.edge
-    };
-
-    if (item.kind === 'tile' && (item.tile?.panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || item.tile?.panelType === CITY_CHANNEL_TILE_TYPES.EXIT)) {
-      const portal = createPortalGeometry(thumbnailYaw, item.tile.rotation || 0);
-      return (
-        <div key={`thumb:${item.id}`} className={`${commonClass} is-portal-outline`} style={commonStyle} aria-hidden="true">
-          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
-            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.threshold.top)} />
-            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.leftPillar.front)} />
-            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.rightPillar.front)} />
-            <polygon className="city-channel-thumbnail-surface is-attachment" points={polygonPoints(portal.lintel.front)} />
-          </svg>
-        </div>
-      );
-    }
-
-    if (item.kind === 'tile' && item.tile?.isVertical) {
-      const geometry = createTileGeometry(thumbnailYaw, item.tile.rotation || 0);
-      return (
-        <div key={`thumb:${item.id}`} className={`${commonClass} is-wall-outline`} style={commonStyle} aria-hidden="true">
-          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
-            <polygon className="city-channel-thumbnail-surface is-wall" points={polygonPoints(geometry.wall)} />
-            <polygon className="city-channel-thumbnail-surface is-wall-side" points={polygonPoints(geometry.wallSideStart)} />
-            <polygon className="city-channel-thumbnail-surface is-wall-side" points={polygonPoints(geometry.wallSideEnd)} />
-            <polygon className="city-channel-thumbnail-surface is-wall-cap" points={polygonPoints(geometry.wallCap)} />
-          </svg>
-        </div>
-      );
-    }
-
-    if (item.kind === 'tile' && isFlatPlaneTile(item.tile)) {
-      const geometry = createTileGeometry(thumbnailYaw, item.tile.rotation || 0);
-      const planeSvg = (
-        <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`} aria-hidden="true">
-          {geometry.sides.map((points, index) => (
-            <polygon key={`side-${index}`} className="city-channel-thumbnail-surface is-side" points={polygonPoints(points)} />
-          ))}
-          <polygon className="city-channel-thumbnail-surface is-top" points={polygonPoints(geometry.top)} />
-        </svg>
-      );
-      if (isThumbnailInteractionLocked) {
-        return (
-          <div
-            key={`thumb:${item.id}`}
-            className={`${commonClass} is-plane`}
-            style={commonStyle}
-            aria-hidden="true"
-          >
-            {planeSvg}
-          </div>
-        );
-      }
-      return (
-        <button
-          key={`thumb:${item.id}`}
-          type="button"
-          className={`${commonClass} is-plane`}
-          style={commonStyle}
-          onPointerEnter={() => setThumbnailHoverLayer(z)}
-          onFocus={() => setThumbnailHoverLayer(z)}
-          onClick={(event) => {
-            event.stopPropagation();
-            handleThumbnailLayerClick(z);
-          }}
-          title={getLayerLabel(z)}
-          aria-label={`缩略图${getLayerLabel(z)}`}
-        >
-          {planeSvg}
-        </button>
-      );
-    }
-
-    if (item.kind === 'wall') {
-      const geometry = createEdgeWallGeometry(thumbnailYaw, item.wall.edge);
-      return (
-        <div key={`thumb:${item.id}`} className={`${commonClass} is-wall-outline`} style={commonStyle} aria-hidden="true">
-          <svg className="city-channel-thumbnail-item__svg" viewBox={`0 0 ${TILE_RENDER_WIDTH} ${TILE_RENDER_HEIGHT}`}>
-            <polygon className="city-channel-thumbnail-surface is-wall" points={polygonPoints(geometry.wall)} />
-            <polygon className="city-channel-thumbnail-surface is-wall-side" points={polygonPoints(geometry.wallSideStart)} />
-            <polygon className="city-channel-thumbnail-surface is-wall-side" points={polygonPoints(geometry.wallSideEnd)} />
-            <polygon className="city-channel-thumbnail-surface is-wall-cap" points={polygonPoints(geometry.wallCap)} />
-          </svg>
-        </div>
-      );
-    }
-
-    return null;
-  };
-
-  const renderThumbnail = () => {
-    const bounds = getThumbnailBounds(thumbnailItems);
-    const boundsWidth = Math.max(1, bounds.right - bounds.left);
-    const boundsHeight = Math.max(1, bounds.bottom - bounds.top);
-    const scale = Math.min(
-      0.36,
-      (THUMBNAIL_WIDTH - (THUMBNAIL_PADDING * 2)) / boundsWidth,
-      (THUMBNAIL_HEIGHT - (THUMBNAIL_PADDING * 2)) / boundsHeight
-    );
-    const centerX = (bounds.left + bounds.right) / 2;
-    const centerY = (bounds.top + bounds.bottom) / 2;
-    const stageTransform = `translate(${THUMBNAIL_WIDTH / 2}px, ${THUMBNAIL_HEIGHT / 2}px) scale(${scale}) translate(${-centerX}px, ${-centerY}px)`;
-
-    return (
-      <div
-        ref={thumbnailRef}
-        className={getCityChannelThumbnailClassName({
-          isOpen: isThumbnailOpen,
-          isLocked: isThumbnailInteractionLocked,
-          isNearCursor: isThumbnailNearCursor
-        })}
-        onPointerDown={isThumbnailInteractionLocked ? undefined : stopEditorPanelPointerEvent}
-      >
-        {isThumbnailOpen ? (
-          <div className="city-channel-thumbnail__panel">
-            <div
-              className="city-channel-thumbnail__stage"
-              style={{
-                width: `${THUMBNAIL_WIDTH}px`,
-                height: `${THUMBNAIL_HEIGHT}px`
-              }}
-              onPointerLeave={() => setThumbnailHoverLayer(null)}
-            >
-              <div className="city-channel-thumbnail__world" style={{ transform: stageTransform }}>
-                {thumbnailItems.map(renderThumbnailItem)}
-              </div>
-            </div>
-            {visibleLayerCutoff !== null && !isThumbnailInteractionLocked ? (
-              <button
-                type="button"
-                className="city-channel-thumbnail__restore"
-                onClick={() => setVisibleLayerCutoff(null)}
-              >
-                恢复全部
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-        <button
-          type="button"
-          className="city-channel-thumbnail__toggle"
-          disabled={isThumbnailInteractionLocked}
-          onClick={() => {
-            if (isThumbnailInteractionLocked) return;
-            setIsThumbnailOpen((current) => !current);
-          }}
-          title={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
-          aria-label={isThumbnailOpen ? '收起缩略图' : '展开缩略图'}
-        >
-          <Layers size={16} />
-        </button>
-      </div>
-    );
-  };
 
   return (
     <div
@@ -1161,26 +721,16 @@ const CityChannelPhaserEditor = ({
         onComponentSelect={handleComponentSelect}
       />
 
-      <div className="city-channel-toast-container" aria-live="polite">
-        {toasts.map((toast) => (
-          <div key={toast.id} className={`city-channel-toast is-${toast.type}`}>{toast.message}</div>
-        ))}
-      </div>
+      <CityChannelToastStack toasts={toasts} />
 
-      <div className="city-channel-immersive__topbar">
-        <button type="button" className="city-channel-glass-btn" onClick={handleExit}>
-          <LogOut size={16} /> 退出
-        </button>
-        <button type="button" className="city-channel-glass-btn is-primary" onClick={handleSave}>
-          <Save size={16} /> 保存
-        </button>
-        <button type="button" className="city-channel-glass-btn" onClick={undo} disabled={!canUndo}>
-          <Undo2 size={16} /> 撤销
-        </button>
-        <button type="button" className="city-channel-glass-btn" onClick={redo} disabled={!canRedo}>
-          <Redo2 size={16} /> 重做
-        </button>
-      </div>
+      <CityChannelEditorTopbar
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onExit={handleExit}
+        onSave={handleSave}
+        onUndo={undo}
+        onRedo={redo}
+      />
 
       <div className="city-channel-viewport city-channel-phaser-viewport">
         <div ref={containerRef} className="city-channel-phaser-stage" />
@@ -1189,119 +739,43 @@ const CityChannelPhaserEditor = ({
             {phaserStatus === 'error' ? 'Phaser 编辑器加载失败' : '正在加载 Phaser 编辑器'}
           </div>
         ) : null}
-        {gearAxisPrompt?.anchor ? (
-          <div
-            ref={gearAxisPromptRef}
-            className="city-channel-gear-axis-prompt"
-            style={{
-              left: `${Math.max(12, Math.min(gearAxisPrompt.anchor.left + 12, (typeof window !== 'undefined' ? window.innerWidth : 1280) - 176))}px`,
-              top: `${Math.max(76, Math.min(gearAxisPrompt.anchor.top - 18, (typeof window !== 'undefined' ? window.innerHeight : 720) - 84))}px`
-            }}
-            onPointerDown={stopEditorPanelPointerEvent}
-            onClick={stopEditorPanelPointerEvent}
-          >
-            <button
-              type="button"
-              className={gearAxisPrompt.axisType !== 'fixedAxis' ? 'is-active' : ''}
-              onClick={() => updatePromptGearAxis('freeAxis')}
-            >
-              活动轴
-            </button>
-            <button
-              type="button"
-              className={gearAxisPrompt.axisType === 'fixedAxis' ? 'is-active' : ''}
-              onClick={() => updatePromptGearAxis('fixedAxis')}
-            >
-              固定轴
-            </button>
-          </div>
-        ) : null}
+        <CityChannelGearAxisPrompt
+          prompt={gearAxisPrompt}
+          onDismiss={dismissGearAxisPrompt}
+          onUpdateAxis={updatePromptGearAxis}
+        />
       </div>
 
-      {renderThumbnail()}
+      <CityChannelThumbnail
+        mapData={mapData}
+        assemblyGraph={assemblyGraph}
+        cameraYaw={cameraSummary.yaw}
+        activeTool={activeTool}
+        activeTileType={activeTileType}
+        activeComponentType={activeComponentType}
+        carryActive={carryActive}
+        visibleLayerCutoff={visibleLayerCutoff}
+        onVisibleLayerCutoffChange={setVisibleLayerCutoff}
+        onSwitchLayer={switchLayer}
+      />
 
-      {selectedCount > 0 && (
-        <div className="city-channel-selection-actions" onPointerDown={stopEditorPanelPointerEvent}>
-          <span className="city-channel-selection-actions__count">{selectedCount}</span>
-          {selectionScope !== 'component' ? (
-            <>
-              <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.startCarry?.()} title="移动 (M)">
-                <Move size={14} />
-                <span>移动</span>
-                <em className="city-channel-shortcut-hint">M</em>
-              </button>
-              <button type="button" className="city-channel-selection-action" onClick={handleCopySelection} title="复制 (Ctrl+C)">
-                <Copy size={14} />
-                <span>复制</span>
-                <em className="city-channel-shortcut-hint">Ctrl+C</em>
-              </button>
-              <button type="button" className="city-channel-selection-action" onClick={() => handleRotateSelection('forward')} title="传动骨骼朝向 (Shift+滚轮)">
-                <RotateCw size={14} />
-                <span>传动朝向</span>
-                <em className="city-channel-shortcut-hint">Shift+滚轮</em>
-              </button>
-              {carryActive && selectedPlacements.length === 1 && (
-                <>
-                  <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.rotateCarryPlacementSurface?.()} title="移动预览表面朝向 (R / Shift+滚轮)">
-                    <RotateCw size={14} />
-                    <span>表面朝向</span>
-                    <em className="city-channel-shortcut-hint">R</em>
-                  </button>
-                  <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.cycleCarrySnapAxisRotation?.()} title="吸附时沿当前轴切换到其他空位">
-                    <PanelTop size={14} />
-                    <span>沿轴切换</span>
-                  </button>
-                </>
-              )}
-              {canInspectSelectedTile && (
-                <button
-                  type="button"
-                  className={`city-channel-selection-action ${inspectMode?.active ? 'is-active' : ''}`}
-                  onClick={handleInspectSelected}
-                  title={inspectMode?.active ? '放回' : '观察'}
-                >
-                  <Eye size={14} />
-                  <span>{inspectMode?.active ? '放回' : '观察'}</span>
-                </button>
-              )}
-              <button type="button" className="city-channel-selection-action is-danger" onClick={handleDeleteSelection} title="删除 (Del)">
-                <Trash2 size={14} />
-                <span>删除</span>
-                <em className="city-channel-shortcut-hint">Del</em>
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                className="city-channel-selection-action"
-                onClick={() => updateSelectedGearAxis('freeAxis')}
-                title="设为活动轴"
-              >
-                <span>活动轴</span>
-              </button>
-              <button
-                type="button"
-                className="city-channel-selection-action"
-                onClick={() => updateSelectedGearAxis('fixedAxis')}
-                title="设为固定轴"
-              >
-                <span>固定轴</span>
-              </button>
-              <button type="button" className="city-channel-selection-action" onClick={() => sceneRef.current?.startCarry?.()} title="移动 (M)">
-                <Move size={14} />
-                <span>移动</span>
-                <em className="city-channel-shortcut-hint">M</em>
-              </button>
-              <button type="button" className="city-channel-selection-action is-danger" onClick={handleDeleteSelection} title="删除 (Del)">
-                <Trash2 size={14} />
-                <span>删除</span>
-                <em className="city-channel-shortcut-hint">Del</em>
-              </button>
-            </>
-          )}
-        </div>
-      )}
+      <CityChannelSelectionActions
+        selectedCount={selectedCount}
+        selectionScope={selectionScope}
+        selectedPlacementCount={selectedPlacements.length}
+        carryActive={carryActive}
+        canInspectSelectedTile={canInspectSelectedTile}
+        isInspectActive={!!inspectMode?.active}
+        onPointerDown={stopEditorPanelPointerEvent}
+        onStartCarry={() => sceneRef.current?.startCarry?.()}
+        onCopySelection={handleCopySelection}
+        onRotateSelection={handleRotateSelection}
+        onRotateCarrySurface={() => sceneRef.current?.rotateCarryPlacementSurface?.()}
+        onCycleCarrySnapAxisRotation={() => sceneRef.current?.cycleCarrySnapAxisRotation?.()}
+        onInspectSelected={handleInspectSelected}
+        onDeleteSelection={handleDeleteSelection}
+        onSetSelectedGearAxis={updateSelectedGearAxis}
+      />
 
       <CityChannelPressurePlateInspect3D
         inspectMode={inspectMode}
@@ -1309,301 +783,59 @@ const CityChannelPhaserEditor = ({
         previewState={mechanismPreviewState}
       />
 
-      <div className="city-channel-hotbar" aria-label="物品栏">
-        {TOOL_ITEMS.map(({ key, label, Icon }) => (
-          <button
-            key={key}
-            type="button"
-            className={`city-channel-hotbar__item ${activeTool === key ? 'is-active' : ''}`}
-            onClick={() => {
-              clearSelection();
-              handleRequestTool(key);
-            }}
-            title={label}
-          >
-            <Icon size={18} />
-            <span>{label}</span>
-          </button>
-        ))}
-        <span className="city-channel-hotbar__divider" aria-hidden="true" />
-        <button
-          type="button"
-          className={`city-channel-hotbar__item ${panelPose === 'wall' ? 'is-active' : ''}`}
-          onClick={() => {
-            setPanelPose((current) => (current === 'wall' ? 'floor' : 'wall'));
-            addToast(panelPose === 'wall' ? '板材平放：作为地板放置' : '板材竖放：作为墙板放置', 'info');
-          }}
-          title={panelPose === 'wall' ? '当前：竖放为墙板' : '当前：平放为地板'}
-        >
-          <PanelTop size={18} />
-          <span>{panelPose === 'wall' ? '竖放' : '平放'}</span>
-        </button>
-        <button
-          type="button"
-          className={[
-            'city-channel-hotbar__item',
-            wallViewMode === 'perspective' ? 'is-active' : '',
-            `is-wall-view-${wallViewMode}`
-          ].filter(Boolean).join(' ')}
-          onClick={() => {
-            setWallViewMode((current) => {
-              const currentIndex = WALL_VIEW_MODES.indexOf(current);
-              const next = WALL_VIEW_MODES[(Math.max(0, currentIndex) + 1) % WALL_VIEW_MODES.length];
-              addToast(WALL_VIEW_MODE_CONFIG[next].toast, 'info');
-              return next;
-            });
-          }}
-          title={`墙板显示：${wallViewModeConfig.label}`}
-        >
-          {wallViewMode === 'perspective' ? <EyeOff size={18} /> : <Eye size={18} />}
-          <span>{wallViewModeConfig.label}</span>
-        </button>
-        <button type="button" className="city-channel-hotbar__item" onClick={runValidation} title="验证白通路">
-          <Wand2 size={18} />
-          <span>验证</span>
-        </button>
-        <button
-          type="button"
-          className={`city-channel-hotbar__item ${openPanel === 'settings' ? 'is-active' : ''}`}
-          onClick={() => setOpenPanel((current) => (current === 'settings' ? null : 'settings'))}
-          title="设置"
-        >
-          <Settings size={18} />
-          <span>设置</span>
-        </button>
-      </div>
+      <CityChannelHotbar
+        activeTool={activeTool}
+        panelPose={panelPose}
+        wallViewMode={wallViewMode}
+        openPanel={openPanel}
+        onClearSelection={clearSelection}
+        onRequestTool={handleRequestTool}
+        onSetPanelPose={setPanelPose}
+        onSetWallViewMode={setWallViewMode}
+        onRunValidation={runValidation}
+        onSetOpenPanel={setOpenPanel}
+        onToast={addToast}
+      />
 
-      <section className="city-channel-interaction-hints" aria-live="polite">
-        <strong>{
-          activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE
-            ? '放置模式'
-            : activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT
-              ? '组件安装'
-              : toolLabelByKey[activeTool] || activeTool
-        }</strong>
-        {activeTool === CITY_CHANNEL_TOOLS.PLACE_TILE ? (
-          <>
-            <span>左键放置，右键或 Esc 取消</span>
-            <span>滚轮缩放；Shift+滚轮 / R 旋转预览</span>
-            <span>Space 吸附时切换安装位或安装面</span>
-          </>
-        ) : activeTool === CITY_CHANNEL_TOOLS.PLACE_COMPONENT ? (
-          <>
-            <span>左键安装，右键或 Esc 取消</span>
-            <span>齿轮会吸附到板材中心或四角</span>
-          </>
-        ) : (
-          <>
-            <span>拖拽平移，双击后拖拽或 Q/E 旋转视角</span>
-            <span>滚轮缩放；M 移动，移动预览中 R / Shift+滚轮 转表面、Del 删除</span>
-          </>
-        )}
-        {selectedCount > 0 ? <em>{selectedCount} 个选中</em> : null}
-      </section>
+      <CityChannelInteractionHints
+        activeTool={activeTool}
+        selectedCount={selectedCount}
+      />
 
-      {openPanel && (
-        <aside className="city-channel-popover">
-          <strong>设置</strong>
-          {openPanel === 'settings' && (
-            <div className="city-channel-settings-list">
-              <label>
-                <input type="checkbox" checked={showHelperGrid} onChange={(event) => setShowHelperGrid(event.target.checked)} />
-                显示辅助网格
-              </label>
-              <label>
-                <input type="checkbox" checked={showCoordinates} onChange={(event) => setShowCoordinates(event.target.checked)} />
-                显示坐标
-              </label>
-            </div>
-          )}
-        </aside>
-      )}
+      <CityChannelSettingsPopover
+        openPanel={openPanel}
+        showHelperGrid={showHelperGrid}
+        showCoordinates={showCoordinates}
+        onShowHelperGridChange={setShowHelperGrid}
+        onShowCoordinatesChange={setShowCoordinates}
+      />
 
-      {(mechanismPanel || selectedTile || selectedWall || selectedGearMount) && (
-        <aside
-          className={`city-channel-mechanism-params ${inspectMode?.active ? 'is-inspect-docked' : ''}`}
-          style={mechanismPanelStyle}
-          onPointerDown={stopEditorPanelPointerEvent}
-          onPointerMove={stopEditorPanelPointerEvent}
-          onClick={stopEditorPanelPointerEvent}
-        >
-          <div className="city-channel-mechanism-params__head">
-            <strong>{selectedGearMount ? '齿轮组件' : mechanismPanelMaterial?.shortName || mechanismPanelMaterial?.name || '机关参数'}</strong>
-            <div className="city-channel-mechanism-params__actions">
-              {canRunActivePanel ? (
-                <button type="button" onClick={executeMechanismPanelAction}>运行</button>
-              ) : null}
-              {inspectMode?.active && (
-                <button
-                  type="button"
-                  className="city-channel-mechanism-params__close"
-                  onClick={handleInspectSelected}
-                  aria-label="关闭观察"
-                  title="关闭观察"
-                >
-                  X
-                </button>
-              )}
-            </div>
-          </div>
-          {selectedGearMount ? (
-            <div className="city-channel-mechanism-summary">
-              <span>{`宿主：${selectedGear?.hostKey || '未知'}`}</span>
-              <span>{`位置：${GEAR_POSITION_LABELS[selectedGearMount.position] || selectedGearMount.position}`}</span>
-              <span>{`安装面：${selectedGearMount.surface === 'back' ? '背面' : '正面'}`}</span>
-            </div>
-          ) : (
-            <div className="city-channel-mechanism-summary">
-              <span>{`所属整体：${selectedAssembly?.id || '未连接'}`}</span>
-              <span>{`端点：${activePanelTile?.transmissionSkeleton?.ports?.length || 0}`}</span>
-              <span>{`齿轮：${activePanelTile?.gearMounts?.length || 0}`}</span>
-            </div>
-          )}
-          {activePanelTile?.transmissionSkeleton ? (
-            <div className="city-channel-mechanism-summary is-detail">
-              <span>{`传动骨骼：${activePanelTile.transmissionSkeleton.type}`}</span>
-              <span>{(activePanelTile.transmissionSkeleton.ports || []).map((port) => port.direction).join(' / ')}</span>
-            </div>
-          ) : null}
-          {selectedAssembly?.warnings?.length > 0 ? (
-            <div className="city-channel-mechanism-summary is-warning">
-              {selectedAssembly.warnings.map((warning) => <span key={warning}>{warning}</span>)}
-            </div>
-          ) : null}
-          {canConfigureGearMounts ? (
-            <div className="city-channel-gear-config">
-              {gearMountsForPanel.map((mount, index) => (
-                <section key={mount.id || `gear-${index}`} className="city-channel-gear-config__item">
-                  <header>
-                    <strong>{GEAR_POSITION_LABELS[mount.position] || mount.position || `齿轮 ${index + 1}`}</strong>
-                    <span>{GEAR_AXIS_LABELS[mount.axisType] || '活动轴'}</span>
-                  </header>
-                  <label>
-                    <span>轴类型</span>
-                    <select
-                      value={mount.axisType === 'fixedAxis' ? 'fixedAxis' : 'freeAxis'}
-                      onChange={(event) => updateGearMountConfig(mount.id, { axisType: event.target.value })}
-                    >
-                      <option value="fixedAxis">固定轴</option>
-                      <option value="freeAxis">活动轴</option>
-                    </select>
-                  </label>
-                </section>
-              ))}
-            </div>
-          ) : null}
-          {canRunActivePanel ? (
-            <>
-              <label className="city-channel-mechanism-param">
-                <span>转动角度</span>
-                <div className="city-channel-mechanism-param__row">
-                  <input
-                    type="range"
-                    min={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.min}
-                    max={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.max}
-                    step={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.step}
-                    value={mechanismPanelParams.rotationAngle}
-                    onChange={(event) => updateMechanismParam('rotationAngle', event.target.value)}
-                  />
-                  <input
-                    type="number"
-                    min={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.min}
-                    max={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.max}
-                    step={CITY_CHANNEL_MECHANISM_LIMITS.rotationAngle.step}
-                    value={mechanismPanelParams.rotationAngle}
-                    onChange={(event) => updateMechanismParam('rotationAngle', event.target.value)}
-                    aria-label="转动角度"
-                  />
-                  <em>度</em>
-                </div>
-              </label>
-              <label className="city-channel-mechanism-param">
-                <span>转动速度</span>
-                <div className="city-channel-mechanism-param__row">
-                  <input
-                    type="range"
-                    min={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.min}
-                    max={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.max}
-                    step={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.step}
-                    value={mechanismPanelParams.rotationSpeedDegPerSec}
-                    onChange={(event) => updateMechanismParam('rotationSpeedDegPerSec', event.target.value)}
-                  />
-                  <input
-                    type="number"
-                    min={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.min}
-                    max={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.max}
-                    step={CITY_CHANNEL_MECHANISM_LIMITS.rotationSpeedDegPerSec.step}
-                    value={mechanismPanelParams.rotationSpeedDegPerSec}
-                    onChange={(event) => updateMechanismParam('rotationSpeedDegPerSec', event.target.value)}
-                    aria-label="转动速度"
-                  />
-                  <em>度/秒</em>
-                </div>
-              </label>
-              <label className="city-channel-mechanism-param">
-                <span>转动方向</span>
-                <select
-                  value={mechanismPanelParams.rotationDirection}
-                  onChange={(event) => updateMechanismParam('rotationDirection', event.target.value)}
-                >
-                  <option value="right">右</option>
-                  <option value="left">左</option>
-                </select>
-              </label>
-              <label className="city-channel-mechanism-param">
-                <span>延迟触发</span>
-                <div className="city-channel-mechanism-param__row">
-                  <input
-                    type="number"
-                    min={CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds.min}
-                    max={CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds.max}
-                    step={CITY_CHANNEL_MECHANISM_LIMITS.triggerDelaySeconds.step}
-                    value={mechanismPanelParams.triggerDelaySeconds}
-                    onChange={(event) => updateMechanismParam('triggerDelaySeconds', event.target.value)}
-                    aria-label="延迟触发秒数"
-                  />
-                  <em>秒</em>
-                </div>
-              </label>
-              <label className="city-channel-mechanism-param is-inline">
-                <input
-                  type="checkbox"
-                  checked={mechanismPanelParams.autoReturn}
-                  onChange={(event) => updateMechanismParam('autoReturn', event.target.checked)}
-                />
-                <span>自动转回</span>
-              </label>
-              {mechanismPanelParams.autoReturn ? (
-                <label className="city-channel-mechanism-param">
-                  <span>自动转回延迟</span>
-                  <div className="city-channel-mechanism-param__row">
-                    <input
-                      type="number"
-                      min={CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds.min}
-                      max={CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds.max}
-                      step={CITY_CHANNEL_MECHANISM_LIMITS.autoReturnDelaySeconds.step}
-                      value={mechanismPanelParams.autoReturnDelaySeconds}
-                      onChange={(event) => updateMechanismParam('autoReturnDelaySeconds', event.target.value)}
-                      aria-label="自动转回延迟秒数"
-                    />
-                    <em>秒</em>
-                  </div>
-                </label>
-              ) : null}
-            </>
-          ) : null}
-        </aside>
-      )}
+      <CityChannelMechanismPanel
+        isOpen={!!(mechanismPanel || selectedTile || selectedWall || selectedGearMount)}
+        inspectActive={!!inspectMode?.active}
+        selectedGear={selectedGear}
+        selectedGearMount={selectedGearMount}
+        selectedAssembly={selectedAssembly}
+        activePanelTile={activePanelTile}
+        activePanelPanelType={activePanelPanelType}
+        canRunActivePanel={canRunActivePanel}
+        gearMountsForPanel={gearMountsForPanel}
+        mechanismPanelParams={mechanismPanelParams}
+        onCloseInspect={handleInspectSelected}
+        onExecute={executeMechanismPanelAction}
+        onUpdateGearMountConfig={updateGearMountConfig}
+        onUpdateMechanismParam={updateMechanismParam}
+      />
 
-      <footer className={`city-channel-immersive-status ${validationResult.ok ? 'is-ok' : ''}`}>
-        <span>{toolLabelByKey[activeTool] || activeTool}</span>
-        <span>{activeLayerLabel}</span>
-        <span title={statusMessage}>{hoverStatusLabel}</span>
-        <span>{`${Math.round((cameraSummary.zoom || 1) * 100)}%`}</span>
-        <span>{`${Math.round(cameraSummary.yaw || 0)}°`}</span>
-        <span>{`${objectCounts.tiles + objectCounts.walls}物件`}</span>
-        <span>{validationResult.ok ? '白通路✓' : '未验证'}</span>
-      </footer>
+      <CityChannelStatusBar
+        activeTool={activeTool}
+        activeLayerLabel={activeLayerLabel}
+        statusMessage={statusMessage}
+        hoverStatusLabel={hoverStatusLabel}
+        cameraSummary={cameraSummary}
+        objectCount={objectCounts.tiles + objectCounts.walls}
+        validationOk={validationResult.ok}
+      />
 
     </div>
   );

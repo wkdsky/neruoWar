@@ -240,7 +240,7 @@ export class CityChannelTextureCache {
     this.generatedKeys = new Set();
   }
 
-  getTileTexture(panelType, rotation = 0, flipped = false, cameraYaw = 0, transmissionRotation = rotation) {
+  getTileTexture(panelType, rotation = 0, cameraYaw = 0, transmissionRotation = rotation) {
     const textureYaw = getTextureYawBucket(cameraYaw);
     const key = `cc:tile:${panelType}:r${rotation}:tr${transmissionRotation}:y${textureYaw}`;
     if (!this.generatedKeys.has(key)) this.createTileTexture(key, panelType, rotation, textureYaw, transmissionRotation);

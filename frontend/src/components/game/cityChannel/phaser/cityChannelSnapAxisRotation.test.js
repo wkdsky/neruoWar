@@ -8,6 +8,11 @@ import {
   createWallKey
 } from '../cityChannelSchema';
 import { createCityChannelPhaserScene } from './CityChannelPhaserScene';
+import {
+  getAxisOptionKey,
+  getSnapAxisKey,
+  getWallPhysicalKey
+} from './cityChannelVerticalSnap';
 
 const PhaserStub = {
   Scene: class Scene {
@@ -104,7 +109,7 @@ describe('cityChannel snap axis rotation', () => {
     };
 
     const keys = scene.getAxisPlacementOptions(snap)
-      .map((option) => scene.getAxisOptionKey(option));
+      .map((option) => getAxisOptionKey(option));
 
     expect(keys).toContain(`floor:${createCellKey(10, 10, 1)}`);
     expect(keys).toContain(`floor:${createCellKey(10, 11, 1)}`);
@@ -169,13 +174,13 @@ describe('cityChannel snap axis rotation', () => {
       direction: 'east',
       axisEdge: 'west'
     };
-    const occupiedPhysicalKey = scene.getWallPhysicalKey({ x: 10, y: 10, z: 0 }, 'east');
+    const occupiedPhysicalKey = getWallPhysicalKey({ x: 10, y: 10, z: 0 }, 'east');
 
     const options = scene.getAxisPlacementOptions(snap);
 
     expect(options.some((option) => (
       option.kind === 'wall'
-      && scene.getWallPhysicalKey(option.cell, option.edge) === occupiedPhysicalKey
+      && getWallPhysicalKey(option.cell, option.edge) === occupiedPhysicalKey
     ))).toBe(false);
   });
 
@@ -197,11 +202,11 @@ describe('cityChannel snap axis rotation', () => {
       direction: 'east',
       axisEdge: 'west'
     };
-    const currentSideKey = scene.getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'west');
-    const perpendicularKey = scene.getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'south');
+    const currentSideKey = getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'west');
+    const perpendicularKey = getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'south');
 
     const keys = scene.getAxisPlacementOptions(snap)
-      .map((option) => scene.getAxisOptionKey(option));
+      .map((option) => getAxisOptionKey(option));
 
     expect(keys).toContain(`wall:${currentSideKey}`);
     expect(keys).toContain(`wall:${perpendicularKey}`);
@@ -241,12 +246,12 @@ describe('cityChannel snap axis rotation', () => {
       direction: 'east',
       axisEdge: 'west'
     };
-    const freePerpendicularKey = scene.getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'south');
-    const occupiedNorthKey = scene.getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'west');
-    const occupiedSouthKey = scene.getWallPhysicalKey({ x: 11, y: 11, z: 0 }, 'west');
+    const freePerpendicularKey = getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'south');
+    const occupiedNorthKey = getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'west');
+    const occupiedSouthKey = getWallPhysicalKey({ x: 11, y: 11, z: 0 }, 'west');
 
     const keys = scene.getAxisPlacementOptions(snap)
-      .map((option) => scene.getAxisOptionKey(option));
+      .map((option) => getAxisOptionKey(option));
 
     expect(keys).toContain(`wall:${freePerpendicularKey}`);
     expect(keys).not.toContain(`wall:${occupiedNorthKey}`);
@@ -268,13 +273,13 @@ describe('cityChannel snap axis rotation', () => {
       direction: 'east',
       axisEdge: 'west'
     };
-    const axisPhysicalKey = scene.getWallPhysicalKey({ x: 10, y: 10, z: 0 }, 'east');
+    const axisPhysicalKey = getWallPhysicalKey({ x: 10, y: 10, z: 0 }, 'east');
 
     const options = scene.getAxisPlacementOptions(snap);
 
     expect(options.some((option) => (
       option.kind === 'wall'
-      && scene.getWallPhysicalKey(option.cell, option.edge) === axisPhysicalKey
+      && getWallPhysicalKey(option.cell, option.edge) === axisPhysicalKey
     ))).toBe(true);
   });
 
@@ -298,19 +303,18 @@ describe('cityChannel snap axis rotation', () => {
   it('keeps Space cycling through snap-axis placement options', () => {
     const scene = createScene(createMap());
     const hitInfo = { cell: { x: 10, y: 10, z: 0 }, hit: null, edge: 'north', localPoint: { x: 0, y: 0 } };
-    const snap = { cell: { x: 10, y: 10, z: 0 }, support: { key: 'support' } };
+    const snap = { cell: { x: 10, y: 10, z: 0 }, support: { key: 'support' }, axisEdge: 'north' };
     scene.input = { activePointer: null };
     scene.hoverCell = hitInfo.cell;
     scene.hoverEdge = hitInfo.edge;
     scene.hoverTarget = { hit: hitInfo.hit, localPoint: hitInfo.localPoint };
     scene.resolvePlacementEdgeSnap = jest.fn(() => snap);
-    scene.getSnapAxisKey = jest.fn(() => 'axis-a');
     scene.getAxisPlacementOptions = jest.fn(() => [
       { kind: 'floor', cell: { x: 10, y: 11, z: 0 }, valid: true },
       { kind: 'wall', cell: { x: 10, y: 10, z: 0 }, edge: 'east', valid: true }
     ]);
     scene.getPreferredAxisPlacementIndex = jest.fn(() => 0);
-    scene.activeSnapAxisKey = 'axis-a';
+    scene.activeSnapAxisKey = getSnapAxisKey(snap);
     scene.snapPlaneCycle = 0;
     const event = {
       key: ' ',
@@ -330,23 +334,22 @@ describe('cityChannel snap axis rotation', () => {
   it('rotates a new floor placement to the next free floor snap-axis target', () => {
     const scene = createScene(createMap());
     const hitInfo = { cell: { x: 10, y: 10, z: 0 }, hit: null, edge: 'north', localPoint: { x: 0, y: 0 } };
-    const snap = { cell: { x: 10, y: 10, z: 0 }, support: { key: 'support' } };
+    const snap = { cell: { x: 10, y: 10, z: 0 }, support: { key: 'support' }, axisEdge: 'north' };
     scene.getActivePointerPlacementHitInfo = jest.fn(() => hitInfo);
     scene.resolvePlacementEdgeSnap = jest.fn(() => snap);
-    scene.getSnapAxisKey = jest.fn(() => 'axis-a');
     scene.getAxisPlacementOptions = jest.fn(() => [
       { kind: 'floor', cell: { x: 10, y: 11, z: 0 }, valid: true },
       { kind: 'wall', cell: { x: 10, y: 10, z: 0 }, edge: 'east', valid: true },
       { kind: 'floor', cell: { x: 9, y: 10, z: 0 }, valid: true }
     ]);
     scene.getPreferredAxisPlacementIndex = jest.fn(() => 0);
-    scene.activeSnapAxisKey = 'axis-a';
+    scene.activeSnapAxisKey = getSnapAxisKey(snap);
     scene.snapPlaneCycle = 0;
 
     const handled = scene.cycleActivePlacementSnapAxis();
 
     expect(handled).toBe(true);
-    expect(scene.activeSnapAxisKey).toBe('axis-a');
+    expect(scene.activeSnapAxisKey).toBe(getSnapAxisKey(snap));
     expect(scene.snapPlaneCycle).toBe(2);
     expect(scene.panelPose).toBe('floor');
     expect(scene.drawGhostLayer).toHaveBeenCalledWith(true);
@@ -378,15 +381,15 @@ describe('cityChannel snap axis rotation', () => {
       direction: 'east',
       axisEdge: 'west'
     };
-    const currentSideKey = `wall:${scene.getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'west')}`;
-    const perpendicularKey = `wall:${scene.getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'south')}`;
+    const currentSideKey = `wall:${getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'west')}`;
+    const perpendicularKey = `wall:${getWallPhysicalKey({ x: 11, y: 10, z: 0 }, 'south')}`;
     const options = scene.getAxisPlacementOptions(snap);
-    const currentIndex = options.findIndex((option) => scene.getAxisOptionKey(option) === currentSideKey);
-    const perpendicularIndex = options.findIndex((option) => scene.getAxisOptionKey(option) === perpendicularKey);
+    const currentIndex = options.findIndex((option) => getAxisOptionKey(option) === currentSideKey);
+    const perpendicularIndex = options.findIndex((option) => getAxisOptionKey(option) === perpendicularKey);
     scene.getActivePointerPlacementHitInfo = jest.fn(() => hitInfo);
     scene.resolvePlacementEdgeSnap = jest.fn(() => snap);
     scene.panelPose = 'wall';
-    scene.activeSnapAxisKey = scene.getSnapAxisKey(snap);
+    scene.activeSnapAxisKey = getSnapAxisKey(snap);
     scene.snapPlaneCycle = currentIndex;
 
     const handled = scene.cycleActivePlacementSnapAxis();
