@@ -1241,8 +1241,11 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
       const best = edges[0];
       if (!best) return null;
       if (best.distanceSquared <= threshold * threshold) return best;
-      // 鼠标已命中竖直可见面时，允许退化到“最近边”吸附，避免穿透到背后。
-      if (hitInfo?.hit?.gearSurfacePlane) return best;
+      if (hitInfo?.hit?.gearSurfacePlane) {
+        const bottomDistanceSquared = distancePointToSegmentSquared(localPoint, wall[0], wall[1]);
+        if (bottomDistanceSquared < best.distanceSquared) return null;
+        return best;
+      }
       return null;
     }
 
@@ -1299,7 +1302,7 @@ export const createCityChannelPhaserScene = (Phaser, initialConfig = {}) => {
         return this.getCarryDefaultPose(primaryPlacement) === 'wall';
       }
       const material = getCityChannelMaterial(this.activeTileType);
-      return !!(primaryPlacement?.isVertical || material?.isVertical);
+      return !!(primaryPlacement?.isVertical || material?.isVertical || this.panelPose === 'wall');
     }
 
     findHorizontalFloorTileUnderPointer(hitInfo) {
