@@ -4,6 +4,7 @@ import {
   FLOOR_THICKNESS,
   createEdgeWallGeometry,
   createTileGeometry,
+  createVerticalTileWallGeometry,
   getTransmissionMidPlane,
   localToCellAtLayer,
   projectCell
@@ -60,5 +61,13 @@ describe('CityChannelGeometry', () => {
     expect(midPlane[1].x).toBeCloseTo((geometry.wallFront[1].x + geometry.wallBack[0].x) * 0.5);
     expect(midPlane[2].y).toBeCloseTo((geometry.wallFront[2].y + geometry.wallBack[3].y) * 0.5);
     expect(midPlane[3].y).toBeCloseTo((geometry.wallFront[3].y + geometry.wallBack[2].y) * 0.5);
+  });
+
+  it('rotates vertical tile wall geometry in its own surface plane', () => {
+    const base = createVerticalTileWallGeometry(0, 0, 0);
+    const rotated = createVerticalTileWallGeometry(0, 0, 90);
+
+    expect(rotated.wallFront[0].y).not.toBeCloseTo(base.wallFront[0].y);
+    expect((rotated.wallFront[2].y - rotated.wallFront[0].y)).not.toBeCloseTo(base.wallFront[2].y - base.wallFront[0].y);
   });
 });

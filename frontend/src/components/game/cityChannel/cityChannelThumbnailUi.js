@@ -69,14 +69,25 @@ export const buildThumbnailAssemblyColorMap = ({
     addAssemblyNeighbor(toAssemblyId, fromAssemblyId);
   });
 
+  const assignedColors = new Set();
+  const createOverflowColor = (index) => {
+    const hue = (index * 137.508) % 360;
+    return {
+      top: `hsl(${hue.toFixed(1)} 78% 72%)`,
+      side: `hsl(${hue.toFixed(1)} 72% 34%)`,
+      edge: `hsl(${hue.toFixed(1)} 90% 94%)`
+    };
+  };
+
   assemblyIds.forEach((assemblyId, index) => {
     const blockedColors = new Set(
       Array.from(adjacentAssemblyIds.get(assemblyId) || [])
         .map((neighborAssemblyId) => colors[neighborAssemblyId]?.top)
         .filter(Boolean)
     );
-    colors[assemblyId] = palette.find((color) => !blockedColors.has(color.top))
-      || palette[index % palette.length];
+    colors[assemblyId] = palette.find((color) => !assignedColors.has(color.top) && !blockedColors.has(color.top))
+      || createOverflowColor(index);
+    assignedColors.add(colors[assemblyId].top);
   });
   return colors;
 };

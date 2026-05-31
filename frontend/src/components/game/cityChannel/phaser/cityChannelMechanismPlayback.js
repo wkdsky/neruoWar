@@ -12,7 +12,6 @@ import {
   isTriggerMechanismTile,
   normalizeMechanismParams
 } from '../cityChannelMechanismRuntime';
-import { projectCell } from './renderer/CityChannelGeometry';
 import { isPlacementVisible as isCityChannelPlacementVisible } from './cityChannelPhaserVisibility';
 import { getMechanismScreenAnchor } from './cityChannelInspection';
 import {
@@ -25,6 +24,16 @@ import {
   resolveDrivenGearNodes as resolveDrivenGearNodesModel
 } from './cityChannelGears';
 import { GEAR_PITCH_RADIUS_LOCAL } from './cityChannelPhaserSceneUtils';
+import {
+  createAxisBindingRuntimeEntryFromGearNode,
+  createMechanismRuntimeSnapshot,
+  findRotationObstruction,
+  getAllowedRotationAngle,
+  getAxisBindingForMount,
+  getFixedAxisWorldAnchor,
+  getGearTeeth,
+  getGearWorldPosition
+} from '../cityChannelMechanismSimulation';
 
 export const triggerMechanismFromHit = (scene, hit) => {
   if (!hit?.cell || !isTriggerMechanismTile(hit.panelType)) return false;
@@ -115,13 +124,41 @@ export const playPreviewAnimation = (scene, cell, paramsOverride = null) => (
   triggerMechanismAtCell(scene, cell, paramsOverride)
 );
 
+const getBasePlacementsForAssembly = (scene, assembly) => (
+  (assembly?.componentKeys || []).reduce((placements, componentKey) => {
+    const placement = scene.mapData.tiles?.[componentKey] || scene.mapData.walls?.[componentKey];
+    if (placement) placements[componentKey] = placement;
+    return placements;
+  }, {})
+);
+
+const createFixedAxisRuntimeEntry = (scene, assembly, fixedMount, {
+  pivotWorld = null,
+  driveRatio = 1
+} = {}) => {
+  if (!assembly || !fixedMount) return null;
+  const basePlacement = scene.mapData.tiles?.[fixedMount.componentKey] || scene.mapData.walls?.[fixedMount.componentKey] || null;
+  const resolvedPivot = pivotWorld || getGearWorldPosition(basePlacement, fixedMount) || getFixedAxisWorldAnchor(scene.mapData, fixedMount);
+  return {
+    assembly,
+    componentKey: fixedMount.componentKey,
+    fixedAxis: fixedMount,
+    fixedMount,
+    pivotWorld: resolvedPivot,
+    anchor: resolvedPivot,
+    anchorLocal: getGearMountLocalPosition(fixedMount.position),
+    basePlacement,
+    basePlacements: getBasePlacementsForAssembly(scene, assembly),
+    baseRotation: basePlacement?.edge ? 0 : (Number(basePlacement?.rotation) || 0),
+    driveRatio: Number(driveRatio) || 1,
+    phase: Number(fixedMount.phase) || 0
+  };
+};
+
 export const playAssemblyRotation = (scene, assembly, fixedAxis, params) => {
   if (!assembly || !fixedAxis) return false;
-  const axisCell = fixedAxis.cell || { x: 0, y: 0, z: 0 };
-  const axisHost = fixedAxis.componentKey
-    ? (scene.mapData.tiles?.[fixedAxis.componentKey] || scene.mapData.walls?.[fixedAxis.componentKey])
-    : (scene.mapData.tiles?.[createCellKey(axisCell.x, axisCell.y, axisCell.z)] || null);
-  const anchor = scene.getGearMountPoint(axisHost, fixedAxis) || projectCell(axisCell, scene.cameraState.yaw, scene.mapData);
+  const runtimeEntry = createFixedAxisRuntimeEntry(scene, assembly, fixedAxis);
+  const anchorWorld = runtimeEntry?.pivotWorld || getFixedAxisWorldAnchor(scene.mapData, fixedAxis);
   const members = assembly.componentKeys.flatMap((componentKey) => ([
     scene.renderObjects.get(`tile:${componentKey}`),
     scene.renderObjects.get(`wall:${componentKey}`),
@@ -139,33 +176,39 @@ export const playAssemblyRotation = (scene, assembly, fixedAxis, params) => {
   const normalized = normalizeMechanismParams(params);
   const sign = normalized.rotationDirection === 'left' ? -1 : 1;
   const targetAngle = sign * normalized.rotationAngle;
+  const obstruction = findRotationObstruction({
+    mapData: scene.mapData,
+    assembly,
+    anchor: anchorWorld,
+    targetAngle
+  });
+  const allowedRotation = getAllowedRotationAngle({ targetAngle, obstruction });
+  if (!allowedRotation.canRotate) {
+    scene.clearMechanismRuntimeSnapshot?.();
+    scene.config.onToast?.('旁边有遮挡物，当前结构没有足够转动空间。', 'error');
+    return false;
+  }
+  const blockedTargetAngle = allowedRotation.angle;
   const duration = Math.max(120, Math.round((Math.max(1, normalized.rotationAngle) / Math.max(1, normalized.rotationSpeedDegPerSec)) * 1000));
+  const forwardDuration = Math.max(80, Math.round(duration * (Math.abs(blockedTargetAngle) / Math.max(1, Math.abs(targetAngle)))));
   const delay = Math.round(normalized.triggerDelaySeconds * 1000);
-  const originals = members.map((object) => ({
-    object,
-    x: object.x,
-    y: object.y,
-    angle: object.angle || 0
-  }));
   const applyAngle = (degrees) => {
-    const radians = (degrees * Math.PI) / 180;
-    originals.forEach((item) => {
-      const dx = item.x - anchor.x;
-      const dy = item.y - anchor.y;
-      item.object.setPosition(
-        anchor.x + (dx * Math.cos(radians)) - (dy * Math.sin(radians)),
-        anchor.y + (dx * Math.sin(radians)) + (dy * Math.cos(radians))
-      );
-      item.object.setAngle(item.angle + degrees);
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData: scene.mapData,
+      assemblyEntries: [runtimeEntry || { assembly, fixedAxis, anchor: anchorWorld }],
+      sourceAngle: degrees,
+      obstruction
     });
+    scene.setMechanismRuntimeSnapshot?.(snapshot);
+    scene.applyMechanismRuntimePlacementTransforms?.(assembly, runtimeEntry || fixedAxis, degrees);
   };
   const motion = { angle: 0 };
   scene.tweens.killTweensOf(motion);
   scene.tweens.add({
     targets: motion,
-    angle: targetAngle,
+    angle: blockedTargetAngle,
     delay,
-    duration,
+    duration: forwardDuration,
     ease: 'sine.inout',
     onUpdate: () => {
       applyAngle(motion.angle);
@@ -179,16 +222,21 @@ export const playAssemblyRotation = (scene, assembly, fixedAxis, params) => {
       });
     },
     onComplete: () => {
+      if (obstruction && !normalized.autoReturn) {
+        scene.config.onToast?.(`转动受阻，已停在 ${Math.abs(blockedTargetAngle).toFixed(1)} 度。`, 'error');
+        return;
+      }
       if (!normalized.autoReturn) return;
       scene.time.delayedCall(Math.round(normalized.autoReturnDelaySeconds * 1000), () => {
         scene.tweens.add({
           targets: motion,
           angle: 0,
-          duration,
+          duration: forwardDuration,
           ease: 'sine.inout',
           onUpdate: () => applyAngle(motion.angle),
           onComplete: () => {
             applyAngle(0);
+            scene.clearMechanismRuntimeSnapshot?.();
             scene.config.onMechanismPreviewProgress?.(null);
           }
         });
@@ -226,6 +274,10 @@ export const getGearPitchRadiusAtPoint = (scene, placement, mount = {}, point = 
   return Math.max(14, Math.min(34, Math.hypot(edgePoint.x - point.x, edgePoint.y - point.y)));
 };
 
+export const getGearRatioRadiusForMount = (mount = {}) => (
+  Math.max(1, getGearTeeth(mount))
+);
+
 export const getGearNodesForMounts = (scene, mounts = []) => {
   if (!Array.isArray(mounts) || mounts.length <= 0) return [];
   return mounts.map((mount) => {
@@ -240,9 +292,20 @@ export const getGearNodesForMounts = (scene, mounts = []) => {
       hostKind,
       placement,
       mountId: liveMount.id,
-      mount: liveMount,
+      mount: {
+        ...liveMount,
+        axisBinding: getAxisBindingForMount({
+          mapData: scene.mapData,
+          mount: liveMount,
+          componentKey: mount.componentKey,
+          placement
+        })
+      },
       point,
+      worldPoint: getGearWorldPosition(placement, liveMount),
       pitchRadius: getGearPitchRadiusAtPoint(scene, placement, liveMount, point),
+      pitchRadiusWorld: GEAR_PITCH_RADIUS_LOCAL,
+      gearRatioRadius: getGearRatioRadiusForMount(liveMount),
       surfaceKey: getGearSurfaceKey(placement, liveMount),
       driveRatio: 0,
       direction: 0
@@ -297,7 +360,8 @@ export const resolveDrivenGearNodes = (scene, assembly, sourceComponentKey = '')
   });
 };
 
-export const setGearMountPhases = (scene, nodes = [], angle = 0, basePhases = new Map()) => {
+export const setGearMountPhases = (scene, nodes = [], angle = 0, basePhases = new Map(), options = {}) => {
+  const runtimeGearStates = {};
   const dirtyHosts = new Map();
   nodes.forEach((node) => {
     const { hostKind, placement } = getGearHostKindAndPlacement(scene, node.componentKey);
@@ -305,9 +369,36 @@ export const setGearMountPhases = (scene, nodes = [], angle = 0, basePhases = ne
     const mount = placement.gearMounts.find((item) => item.id === node.mountId);
     if (!mount) return;
     const base = basePhases.get(node.id) || 0;
-    mount.phase = getGearPhase(node, angle, base);
+    const axisBinding = getAxisBindingForMount({
+      mapData: scene.mapData,
+      mount,
+      componentKey: node.componentKey,
+      placement
+    });
+    runtimeGearStates[node.id] = {
+      componentKey: node.componentKey,
+      mountId: node.mountId,
+      axisType: axisBinding ? 'bound' : (mount.axisType || 'freeAxis'),
+      socketKind: node.mount?.socketKind,
+      axisBinding,
+      phase: getGearPhase(node, angle, base),
+      speedRatio: Number(node.driveRatio) || 1,
+      torqueRatio: Number(node.driveRatio) ? 1 / Math.abs(node.driveRatio) : 1,
+      teeth: getGearTeeth(mount)
+    };
     dirtyHosts.set(node.componentKey, { hostKind, placement });
   });
+  if (options.publish !== false) {
+    scene.setMechanismRuntimeSnapshot?.({
+      sourceAngle: angle,
+      placements: {},
+      gears: runtimeGearStates,
+      sync: [],
+      obstruction: null
+    });
+  } else {
+    scene.mergeMechanismRuntimeGearStates?.(runtimeGearStates);
+  }
   dirtyHosts.forEach(({ hostKind, placement }, hostKey) => {
     scene.redrawMountedGearHostLayers(hostKind, hostKey, placement);
   });
@@ -317,22 +408,150 @@ export const setGearMountPhases = (scene, nodes = [], angle = 0, basePhases = ne
 export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, params) => {
   const nodes = resolveDrivenGearNodes(scene, assembly, sourceComponentKey);
   if (nodes.length <= 0) return false;
+  const graph = scene.getMechanicalAssemblyGraph?.();
+  const seenAxisBindings = new Set();
+  const fixedNodes = nodes.filter((node) => !!node.mount?.axisBinding);
+  const assemblyEntries = fixedNodes.map((node) => {
+    const axisBinding = getAxisBindingForMount({
+      mapData: scene.mapData,
+      mount: node.mount,
+      componentKey: node.componentKey,
+      placement: node.placement,
+      pivotWorld: getGearWorldPosition(node.placement, node.mount)
+    });
+    if (!axisBinding) return null;
+    const entryKey = `${axisBinding.componentKey}:${axisBinding.socket}:${node.componentKey}:${node.mountId}`;
+    if (seenAxisBindings.has(entryKey)) return null;
+    seenAxisBindings.add(entryKey);
+    return createAxisBindingRuntimeEntryFromGearNode({
+      mapData: scene.mapData,
+      assemblyGraph: graph,
+      gearNode: node,
+      axisBinding,
+      pivotWorld: getGearWorldPosition(node.placement, node.mount),
+      driveRatio: node.driveRatio || 1
+    });
+  }).filter(Boolean);
+  if (assemblyEntries.length <= 0) {
+    const normalized = normalizeMechanismParams(params);
+    const sign = normalized.rotationDirection === 'left' ? -1 : 1;
+    const targetAngle = sign * normalized.rotationAngle;
+    const duration = Math.max(120, Math.round((Math.max(1, normalized.rotationAngle) / Math.max(1, normalized.rotationSpeedDegPerSec)) * 1000));
+    const delay = Math.round(normalized.triggerDelaySeconds * 1000);
+    const basePhases = new Map(nodes.map((node) => [node.id, Number(node.mount?.phase) || 0]));
+    const motion = { angle: 0 };
+    scene.tweens.killTweensOf(motion);
+    scene.tweens.add({
+      targets: motion,
+      angle: targetAngle,
+      delay,
+      duration,
+      ease: 'sine.inout',
+      onUpdate: () => {
+        setGearMountPhases(scene, nodes, motion.angle, basePhases);
+        scene.config.onMechanismPreviewProgress?.({
+          key: sourceComponentKey,
+          panelType: scene.mapData.tiles?.[sourceComponentKey]?.panelType,
+          progress: Math.min(1, Math.abs(motion.angle) / Math.max(1, normalized.rotationAngle)),
+          params: normalized,
+          kind: CITY_CHANNEL_MECHANISM_KINDS.FIXED_AXIS_ASSEMBLY,
+          assemblyId: assembly.id
+        });
+      },
+      onComplete: () => {
+        setGearMountPhases(scene, nodes, targetAngle, basePhases);
+        if (!normalized.autoReturn) return;
+        scene.time.delayedCall(Math.round(normalized.autoReturnDelaySeconds * 1000), () => {
+          scene.tweens.add({
+            targets: motion,
+            angle: 0,
+            duration,
+            ease: 'sine.inout',
+            onUpdate: () => setGearMountPhases(scene, nodes, motion.angle, basePhases),
+            onComplete: () => {
+              setGearMountPhases(scene, nodes, 0, basePhases);
+              scene.clearMechanismRuntimeSnapshot?.();
+              scene.config.onMechanismPreviewProgress?.(null);
+            }
+          });
+        });
+      }
+    });
+    scene.config.onToast?.(`${assembly.id} 齿轮传动预览：${nodes.length} 个齿轮转动。`, 'success');
+    return true;
+  }
   const normalized = normalizeMechanismParams(params);
   const sign = normalized.rotationDirection === 'left' ? -1 : 1;
   const targetAngle = sign * normalized.rotationAngle;
+  const sourceExcludedKeys = new Set(assembly.componentKeys || []);
+  const obstructions = assemblyEntries.map((entry) => {
+    const driveRatio = Number(entry.driveRatio) || 1;
+    const excludedComponentKeys = entry.assembly === assembly
+      ? new Set()
+      : sourceExcludedKeys;
+    const obstruction = findRotationObstruction({
+      mapData: scene.mapData,
+      assembly: entry.assembly,
+      anchor: entry.anchor,
+      targetAngle: targetAngle * driveRatio,
+      excludedComponentKeys
+    });
+    if (!obstruction) return null;
+    return {
+      ...obstruction,
+      assemblyId: entry.assembly?.id,
+      fixedAxisId: entry.fixedAxis?.id,
+      assemblyAngle: obstruction.angle,
+      sourceAngle: obstruction.angle / driveRatio
+    };
+  }).filter(Boolean);
+  const obstruction = obstructions.sort((a, b) => Math.abs(a.sourceAngle) - Math.abs(b.sourceAngle))[0] || null;
+  const limitingObstruction = obstruction
+    ? { ...obstruction, angle: obstruction.sourceAngle }
+    : null;
+  const allowedRotation = getAllowedRotationAngle({
+    targetAngle,
+    obstruction: limitingObstruction
+  });
+  if (!allowedRotation.canRotate) {
+    scene.clearMechanismRuntimeSnapshot?.();
+    scene.config.onToast?.('旁边有遮挡物，当前齿轮组没有足够转动空间。', 'error');
+    return false;
+  }
+  const blockedTargetAngle = allowedRotation.angle;
   const duration = Math.max(120, Math.round((Math.max(1, normalized.rotationAngle) / Math.max(1, normalized.rotationSpeedDegPerSec)) * 1000));
+  const forwardDuration = Math.max(80, Math.round(duration * (Math.abs(blockedTargetAngle) / Math.max(1, Math.abs(targetAngle)))));
   const delay = Math.round(normalized.triggerDelaySeconds * 1000);
   const basePhases = new Map(nodes.map((node) => [node.id, Number(node.mount?.phase) || 0]));
+  const applyRuntimeState = (angle) => {
+    const snapshot = createMechanismRuntimeSnapshot({
+      mapData: scene.mapData,
+      assemblyEntries,
+      gearNodes: nodes,
+      sourceAngle: angle,
+      basePhases,
+      obstruction: limitingObstruction
+    });
+    scene.setMechanismRuntimeSnapshot?.(snapshot);
+    setGearMountPhases(scene, nodes, angle, basePhases, { publish: false });
+    assemblyEntries.forEach((entry) => {
+      scene.applyMechanismRuntimePlacementTransforms?.(
+        entry.assembly,
+        entry,
+        (Number(entry.driveRatio) || 1) * angle
+      );
+    });
+  };
   const motion = { angle: 0 };
   scene.tweens.killTweensOf(motion);
   scene.tweens.add({
     targets: motion,
-    angle: targetAngle,
+    angle: blockedTargetAngle,
     delay,
-    duration,
+    duration: forwardDuration,
     ease: 'sine.inout',
     onUpdate: () => {
-      setGearMountPhases(scene, nodes, motion.angle, basePhases);
+      applyRuntimeState(motion.angle);
       scene.config.onMechanismPreviewProgress?.({
         key: sourceComponentKey,
         panelType: scene.mapData.tiles?.[sourceComponentKey]?.panelType,
@@ -343,17 +562,22 @@ export const playAssemblyGearRotation = (scene, assembly, sourceComponentKey, pa
       });
     },
     onComplete: () => {
-      setGearMountPhases(scene, nodes, targetAngle, basePhases);
+      applyRuntimeState(blockedTargetAngle);
+      if (limitingObstruction && !normalized.autoReturn) {
+        scene.config.onToast?.(`齿轮传动受阻，已停在 ${Math.abs(blockedTargetAngle).toFixed(1)} 度。`, 'error');
+        return;
+      }
       if (!normalized.autoReturn) return;
       scene.time.delayedCall(Math.round(normalized.autoReturnDelaySeconds * 1000), () => {
         scene.tweens.add({
           targets: motion,
           angle: 0,
-          duration,
+          duration: forwardDuration,
           ease: 'sine.inout',
-          onUpdate: () => setGearMountPhases(scene, nodes, motion.angle, basePhases),
+          onUpdate: () => applyRuntimeState(motion.angle),
           onComplete: () => {
-            setGearMountPhases(scene, nodes, 0, basePhases);
+            applyRuntimeState(0);
+            scene.clearMechanismRuntimeSnapshot?.();
             scene.config.onMechanismPreviewProgress?.(null);
           }
         });

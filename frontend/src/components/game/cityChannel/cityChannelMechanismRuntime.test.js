@@ -1,4 +1,8 @@
-import { buildMechanicalAssemblies, getWorldTransmissionPorts } from './cityChannelMechanismRuntime';
+import {
+  buildMechanicalAssemblies,
+  getGearMountLocalPosition,
+  getWorldTransmissionPorts
+} from './cityChannelMechanismRuntime';
 import {
   CITY_CHANNEL_TILE_TYPES,
   createCellKey,
@@ -9,6 +13,11 @@ import {
 } from './cityChannelSchema';
 
 describe('city channel mechanism runtime', () => {
+  it('uses true board corners for gear mounts', () => {
+    expect(getGearMountLocalPosition('corner_ne')).toEqual({ x: 0.5, y: -0.5, z: 0 });
+    expect(getGearMountLocalPosition('corner_sw')).toEqual({ x: -0.5, y: 0.5, z: 0 });
+  });
+
   it('connects a wall transmission socket to a floor socket on the layer above', () => {
     const wall = createWall({
       x: 0,
@@ -199,5 +208,33 @@ describe('city channel mechanism runtime', () => {
 
     expect(tile.gearMounts).toHaveLength(1);
     expect(tile.gearMounts[0].id).toBe('gear_test');
+  });
+
+  it('does not create a mechanical assembly from gears without transmission skeletons', () => {
+    const tile = {
+      ...createTile({
+        x: 4,
+        y: 4,
+        z: 0,
+        panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+      }),
+      gearMounts: [{
+        id: 'gear_free',
+        componentType: 'gear',
+        position: 'center',
+        surface: 'front',
+        axisType: 'freeAxis'
+      }]
+    };
+
+    const graph = buildMechanicalAssemblies({
+      tiles: {
+        [createCellKey(tile.x, tile.y, tile.z)]: tile
+      },
+      walls: {}
+    });
+
+    expect(graph.assemblies).toHaveLength(0);
+    expect(graph.assemblyByComponentKey[createCellKey(tile.x, tile.y, tile.z)]).toBeUndefined();
   });
 });

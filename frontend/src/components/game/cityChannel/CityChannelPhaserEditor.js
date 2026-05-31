@@ -14,6 +14,7 @@ import {
   buildMechanicalAssemblies,
   getAssemblyForCell,
   getMechanismParamKey,
+  isCornerGearSocket,
   normalizeMechanismParams
 } from './cityChannelMechanismRuntime';
 import useCityChannelEditorState from './useCityChannelEditorState';
@@ -100,6 +101,7 @@ const CityChannelPhaserEditor = ({
   const [mechanismPanel, setMechanismPanel] = useState(null);
   const [inspectMode, setInspectMode] = useState(null);
   const [mechanismPreviewState, setMechanismPreviewState] = useState(null);
+  const [mechanismRuntimeSnapshot, setMechanismRuntimeSnapshot] = useState(null);
   const [carryActive, setCarryActive] = useState(false);
   const [visibleLayerCutoff, setVisibleLayerCutoff] = useState(null);
 
@@ -315,7 +317,8 @@ const CityChannelPhaserEditor = ({
       const nextMounts = mounts.map((mount) => {
         if (mount.id !== mountId) return mount;
         const nextMount = { ...mount, ...patch };
-        if (!['fixedAxis', 'freeAxis'].includes(nextMount.axisType)) nextMount.axisType = 'freeAxis';
+        nextMount.socketKind = isCornerGearSocket(nextMount.position) ? 'corner' : 'center';
+        if (nextMount.axisBinding === undefined) nextMount.axisBinding = mount.axisBinding || null;
         nextMount.followMode = 'none';
         nextMount.followDelaySeconds = 0;
         return nextMount;
@@ -324,9 +327,8 @@ const CityChannelPhaserEditor = ({
     }, '齿轮承动配置已更新。');
   }, [activePanelPlacement, updatePlacement]);
 
-  const updateSelectedGearAxis = useCallback((axisType) => {
+  const clearSelectedGearBindings = useCallback(() => {
     if (selectedGearItems.length <= 0) return;
-    const nextAxisType = axisType === 'fixedAxis' ? 'fixedAxis' : 'freeAxis';
     const groups = new Map();
     selectedGearItems.forEach(({ gear, host }) => {
       if (!groups.has(gear.hostKey)) {
@@ -348,38 +350,20 @@ const CityChannelPhaserEditor = ({
           mountIds.has(mount.id)
             ? {
               ...mount,
-              axisType: nextAxisType,
+              axisBinding: null,
+              socketKind: isCornerGearSocket(mount.position) ? 'corner' : 'center',
               followMode: 'none',
               followDelaySeconds: 0
             }
             : mount
         ))
-      }), nextAxisType === 'fixedAxis' ? '已设为固定轴。' : '已设为活动轴。');
+      }), '已取消选中齿轮的连轴绑定。');
     });
   }, [selectedGearItems, updatePlacement]);
 
-  const updatePromptGearAxis = useCallback((axisType) => {
-    if (!gearAxisPrompt?.mountId || !gearAxisPrompt?.cell) return;
-    const placementRef = gearAxisPrompt.hostKind === 'wall'
-      ? { ...gearAxisPrompt.cell, edge: gearAxisPrompt.edge || 'north' }
-      : { ...gearAxisPrompt.cell };
-    updatePlacement(placementRef, (placement) => {
-      const mounts = Array.isArray(placement.gearMounts) ? placement.gearMounts : [];
-      return {
-        gearMounts: mounts.map((mount) => (
-          mount.id === gearAxisPrompt.mountId
-            ? {
-              ...mount,
-              axisType: axisType === 'fixedAxis' ? 'fixedAxis' : 'freeAxis',
-              followMode: 'none',
-              followDelaySeconds: 0
-            }
-            : mount
-        ))
-      };
-    }, axisType === 'fixedAxis' ? '已设为固定轴。' : '已设为活动轴。');
+  const updatePromptGearAxis = useCallback(() => {
     setGearAxisPrompt(null);
-  }, [gearAxisPrompt, updatePlacement]);
+  }, []);
 
   const dismissGearAxisPrompt = useCallback(() => {
     setGearAxisPrompt(null);
@@ -569,6 +553,7 @@ const CityChannelPhaserEditor = ({
     onGearAxisPrompt: setGearAxisPrompt,
     onInspectChange: handleInspectChange,
     onMechanismPreviewProgress: handleMechanismPreviewProgress,
+    onMechanismRuntimeSnapshot: setMechanismRuntimeSnapshot,
     externalInspectOverlay: true,
     mechanismParams,
     onToast: addToast,
@@ -588,6 +573,7 @@ const CityChannelPhaserEditor = ({
     handleInspectChange,
     handleMechanismPreviewProgress,
     handleRotateActive,
+    setMechanismRuntimeSnapshot,
     setPanelPose,
     handleRotateSelection,
     handleSelectionChange,
@@ -749,6 +735,7 @@ const CityChannelPhaserEditor = ({
       <CityChannelThumbnail
         mapData={mapData}
         assemblyGraph={assemblyGraph}
+        runtimeSnapshot={mechanismRuntimeSnapshot}
         cameraYaw={cameraSummary.yaw}
         activeTool={activeTool}
         activeTileType={activeTileType}
@@ -774,7 +761,7 @@ const CityChannelPhaserEditor = ({
         onCycleCarrySnapAxisRotation={() => sceneRef.current?.cycleCarrySnapAxisRotation?.()}
         onInspectSelected={handleInspectSelected}
         onDeleteSelection={handleDeleteSelection}
-        onSetSelectedGearAxis={updateSelectedGearAxis}
+        onSetSelectedGearAxis={clearSelectedGearBindings}
       />
 
       <CityChannelPressurePlateInspect3D

@@ -156,18 +156,10 @@ export const CityChannelSelectionActions = ({
           <button
             type="button"
             className="city-channel-selection-action"
-            onClick={() => onSetSelectedGearAxis?.('freeAxis')}
-            title="设为活动轴"
+            onClick={() => onSetSelectedGearAxis?.()}
+            title="取消连轴绑定"
           >
-            <span>活动轴</span>
-          </button>
-          <button
-            type="button"
-            className="city-channel-selection-action"
-            onClick={() => onSetSelectedGearAxis?.('fixedAxis')}
-            title="设为固定轴"
-          >
-            <span>固定轴</span>
+            <span>取消连轴</span>
           </button>
           <button type="button" className="city-channel-selection-action" onClick={onStartCarry} title="移动 (M)">
             <Move size={14} />

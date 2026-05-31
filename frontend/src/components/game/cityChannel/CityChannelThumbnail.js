@@ -150,6 +150,25 @@ const createThumbnailItems = (mapData = {}, thumbnailYaw = 0) => {
   ));
 };
 
+const applyRuntimeThumbnailSnapshot = (items = [], runtimeSnapshot = null) => {
+  const placements = runtimeSnapshot?.placements || {};
+  if (!runtimeSnapshot || Object.keys(placements).length <= 0) return items;
+  return items.map((item) => {
+    const runtimePlacement = placements[item.componentKey];
+    if (!runtimePlacement) return item;
+    return {
+      ...item,
+      cell: {
+        x: runtimePlacement.x,
+        y: runtimePlacement.y,
+        z: runtimePlacement.z
+      },
+      tile: item.tile ? { ...item.tile, ...runtimePlacement } : item.tile,
+      wall: item.wall ? { ...item.wall, ...runtimePlacement } : item.wall
+    };
+  });
+};
+
 const CityChannelThumbnail = ({
   mapData,
   assemblyGraph,
@@ -158,6 +177,7 @@ const CityChannelThumbnail = ({
   activeTileType,
   activeComponentType,
   carryActive,
+  runtimeSnapshot,
   visibleLayerCutoff,
   onVisibleLayerCutoffChange,
   onSwitchLayer
@@ -184,8 +204,17 @@ const CityChannelThumbnail = ({
     ? null
     : getNextCityChannelPlaneLevelAbove(planeLevels, effectiveVisibleLayerCutoff);
   const thumbnailItems = useMemo(() => (
-    createThumbnailItems(mapData, thumbnailYaw)
-  ), [mapData, thumbnailYaw]);
+    applyRuntimeThumbnailSnapshot(createThumbnailItems(mapData, thumbnailYaw), runtimeSnapshot)
+      .map((item) => ({
+        ...item,
+        projection: projectCell(item.tile || item.wall || item.cell, thumbnailYaw, mapData)
+      }))
+      .sort((a, b) => (
+        ((a.cell.z || 0) - (b.cell.z || 0))
+        || ((a.projection.y || 0) - (b.projection.y || 0))
+        || String(a.id).localeCompare(String(b.id))
+      ))
+  ), [mapData, runtimeSnapshot, thumbnailYaw]);
   const thumbnailAssemblyColorMap = useMemo(() => {
     const componentKeys = thumbnailItems.map((item) => item.componentKey).filter(Boolean);
     const componentKeySet = new Set(componentKeys);

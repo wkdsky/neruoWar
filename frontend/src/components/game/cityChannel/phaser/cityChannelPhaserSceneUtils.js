@@ -44,8 +44,7 @@ export const GEAR_SOCKET_BLOCKED_BY_EDGE = {
   south: new Set(['corner_se', 'corner_sw']),
   west: new Set(['corner_nw', 'corner_sw'])
 };
-const GEAR_SOCKET_CORNER_OFFSET = 0.32;
-export const GEAR_PITCH_RADIUS_LOCAL = (Math.SQRT2 * GEAR_SOCKET_CORNER_OFFSET) / 2;
+export const GEAR_PITCH_RADIUS_LOCAL = Math.SQRT2 / 4;
 export const GEAR_ROOT_RADIUS_LOCAL = GEAR_PITCH_RADIUS_LOCAL * 0.78;
 export const GEAR_OUTER_RADIUS_LOCAL = GEAR_PITCH_RADIUS_LOCAL * 1.08;
 export const GEAR_HUB_RADIUS_LOCAL = GEAR_PITCH_RADIUS_LOCAL * 0.32;
@@ -78,7 +77,8 @@ export { EDGE_NEIGHBOR_OFFSETS, sameCell };
 export const getWallSurfaceRotation = (placement = {}) => wallEdgeToRotation(placement?.edge || 'north');
 
 export const getTransmissionSurfaceRotation = (placement = {}) => normalizeRotation(
-  placement?.transmissionRotation ?? placement?.rotation ?? 0
+  (placement?.transmissionRotation ?? placement?.rotation ?? 0)
+  + (Number(placement?.runtimeSurfaceRotation) || 0)
 );
 
 export const normalizeCameraYaw = (yaw = 0) => ((yaw % 360) + 360) % 360;

@@ -7,6 +7,7 @@ import {
   createEdgeWallGeometry,
   createPortalGeometry,
   createTileGeometry,
+  createVerticalTileWallGeometry,
   getTransmissionMidPlane
 } from './CityChannelGeometry';
 import { isGearPressurePlatePanel } from '../../cityChannelGearPressurePlateRender';
@@ -240,10 +241,11 @@ export class CityChannelTextureCache {
     this.generatedKeys = new Set();
   }
 
-  getTileTexture(panelType, rotation = 0, cameraYaw = 0, transmissionRotation = rotation) {
+  getTileTexture(panelType, rotation = 0, cameraYaw = 0, transmissionRotation = rotation, options = {}) {
     const textureYaw = getTextureYawBucket(cameraYaw);
-    const key = `cc:tile:${panelType}:r${rotation}:tr${transmissionRotation}:y${textureYaw}`;
-    if (!this.generatedKeys.has(key)) this.createTileTexture(key, panelType, rotation, textureYaw, transmissionRotation);
+    const verticalKey = options?.isVertical ? ':v1' : '';
+    const key = `cc:tile:${panelType}:r${rotation}:tr${transmissionRotation}:y${textureYaw}${verticalKey}`;
+    if (!this.generatedKeys.has(key)) this.createTileTexture(key, panelType, rotation, textureYaw, transmissionRotation, options);
     return key;
   }
 
@@ -255,30 +257,52 @@ export class CityChannelTextureCache {
     return key;
   }
 
-  createTileTexture(key, panelType, rotation, cameraYaw, transmissionRotation = rotation) {
+  createTileTexture(key, panelType, rotation, cameraYaw, transmissionRotation = rotation, options = {}) {
     const material = getCityChannelMaterial(panelType);
     const colors = colorByPanelType[material.id] || colorByPanelType.basic_plate;
     const graphics = this.scene.make.graphics({ x: 0, y: 0, add: false });
     graphics.scaleCanvas(TILE_TEXTURE_SUPERSAMPLE, TILE_TEXTURE_SUPERSAMPLE);
-    const geometry = createTileGeometry(cameraYaw, rotation);
+    const geometry = options?.isVertical
+      ? createVerticalTileWallGeometry(cameraYaw, rotation, transmissionRotation)
+      : createTileGeometry(cameraYaw, rotation);
     const alpha = material.id === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
       ? (colors.alpha || 0.94)
       : (isTriggerMechanismTile(panelType) ? 0.38 : (colors.alpha || 1));
 
-    geometry.sides.forEach((side, index) => {
-      drawPolygon(graphics, side, colors.side, index === 0 ? 0.92 : 0.72, 0x0f172a, 0.5);
-    });
-    drawPolygon(graphics, geometry.top, colors.top, alpha, colors.edge, 0.72);
-    this.drawStoneSurface(graphics, geometry.top, material.id);
+    if (options?.isVertical) {
+      drawPolygon(graphics, geometry.wallBack || geometry.wall, colors.side, alpha * 0.82, colors.edge, 0.34);
+      drawPolygon(graphics, geometry.wallSideStart, colors.side, alpha * 0.76, 0xe2e8f0, 0.24);
+      drawPolygon(graphics, geometry.wallSideEnd, colors.side, alpha * 0.68, 0xe2e8f0, 0.22);
+      drawPolygon(graphics, geometry.wallCap, 0x334155, alpha * 0.5, 0xe2e8f0, 0.32);
+      drawPolygon(graphics, geometry.wallFront || geometry.wall, colors.top, alpha, colors.edge, 0.72);
+      this.drawStoneSurface(graphics, geometry.wallFront || geometry.wall, material.id);
+    } else {
+      geometry.sides.forEach((side, index) => {
+        drawPolygon(graphics, side, colors.side, index === 0 ? 0.92 : 0.72, 0x0f172a, 0.5);
+      });
+      drawPolygon(graphics, geometry.top, colors.top, alpha, colors.edge, 0.72);
+      this.drawStoneSurface(graphics, geometry.top, material.id);
+    }
 
     if (panelType === CITY_CHANNEL_TILE_TYPES.ENTRANCE || panelType === CITY_CHANNEL_TILE_TYPES.EXIT) {
       this.drawPortalModel(graphics, panelType, rotation, cameraYaw);
     } else if (isGearPressurePlatePanel(panelType)) {
-      this.drawTransmissionSkeleton(graphics, material, transmissionRotation, geometry);
-      this.drawGearPressurePlateCornerHint(graphics, geometry, 0.24);
+      if (options?.isVertical) {
+        const transmissionPlane = getTransmissionMidPlane(geometry, 'wall');
+        this.drawWallTransmissionSkeleton(graphics, material, transmissionPlane, 0);
+      } else {
+        this.drawTransmissionSkeleton(graphics, material, transmissionRotation, geometry);
+        this.drawGearPressurePlateCornerHint(graphics, geometry, 0.24);
+      }
     } else {
-      this.drawTransmissionSkeleton(graphics, material, transmissionRotation, geometry);
-      this.drawGearMounts(graphics, material, transmissionRotation);
+      if (options?.isVertical) {
+        const transmissionPlane = getTransmissionMidPlane(geometry, 'wall');
+        this.drawWallTransmissionSkeleton(graphics, material, transmissionPlane, 0);
+        this.drawWallGearMounts(graphics, material, geometry.wallFront || geometry.wall, 0);
+      } else {
+        this.drawTransmissionSkeleton(graphics, material, transmissionRotation, geometry);
+        this.drawGearMounts(graphics, material, transmissionRotation);
+      }
       if (material.gearIcon) this.drawGearIcon(graphics, 80, 91, 16, 10, 0xfacc15);
       else if (isMechanicalMaterial(material) && !material.transmissionSkeleton && !material.gearMounts?.length) {
         this.drawMechanismGlyph(graphics, panelType);
@@ -296,7 +320,8 @@ export class CityChannelTextureCache {
     const geometry = createEdgeWallGeometry(cameraYaw, edge, miter);
     const isSemi = wallViewMode === 'semi';
     if (isSemi) {
-      this.createSemiWallTexture(key, panelType, geometry, colors, transmissionRotation);
+      const runtimeGeometry = createEdgeWallGeometry(cameraYaw, edge, miter, transmissionRotation);
+      this.createSemiWallTexture(key, panelType, runtimeGeometry, colors, 0);
       return;
     }
 
@@ -316,11 +341,12 @@ export class CityChannelTextureCache {
     drawPolygon(graphics, geometry.wallCap, 0x334155, isSolid ? baseAlpha : Math.max(outlineAlpha, 0.22), 0xe2e8f0, 0.5);
     drawPolygon(graphics, geometry.wallFront || geometry.wall, colors.top, wallAlpha, colors.edge, 0.76);
     this.drawStoneSurface(graphics, geometry.wallFront || geometry.wall, material.id);
-    const transmissionPlane = getTransmissionMidPlane(geometry, 'wall');
-    this.drawWallTransmissionSkeleton(graphics, material, transmissionPlane, transmissionRotation);
-    this.drawWallGearMounts(graphics, material, geometry.wallFront || geometry.wall, transmissionRotation);
+    const runtimeGeometry = createEdgeWallGeometry(cameraYaw, edge, miter, transmissionRotation);
+    const transmissionPlane = getTransmissionMidPlane(runtimeGeometry, 'wall');
+    this.drawWallTransmissionSkeleton(graphics, material, transmissionPlane, 0);
+    this.drawWallGearMounts(graphics, material, runtimeGeometry.wallFront || runtimeGeometry.wall, 0);
     if (material.gearIcon) {
-      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, transmissionRotation, geometry.wallFront || geometry.wall);
+      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, 0, runtimeGeometry.wallFront || runtimeGeometry.wall);
       this.drawGearIcon(graphics, center.x + 20, center.y - 8, 13, 10, 0xfacc15);
     }
 
@@ -664,9 +690,9 @@ export class CityChannelTextureCache {
         graphics,
         point.x,
         point.y,
-        mount.position === 'center' ? 18 : 13,
+        mount.position === 'center' ? 18 : 16,
         10,
-        mount.axisType === 'fixedAxis' ? 0x22d3ee : 0xf8fafc
+        mount.axisBinding ? 0xff8a3d : 0xf8fafc
       );
     });
   }
@@ -679,9 +705,9 @@ export class CityChannelTextureCache {
         graphics,
         point.x,
         point.y,
-        mount.position === 'center' ? 18 : 13,
+        mount.position === 'center' ? 18 : 16,
         10,
-        mount.axisType === 'fixedAxis' ? 0x22d3ee : 0xf8fafc
+        mount.axisBinding ? 0xff8a3d : 0xf8fafc
       );
     });
   }

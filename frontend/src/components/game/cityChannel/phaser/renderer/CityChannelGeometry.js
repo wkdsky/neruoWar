@@ -13,7 +13,7 @@ export const FLOOR_THICKNESS = 8;
 export const WALL_HEIGHT = 62;
 export const LAYER_HEIGHT = WALL_HEIGHT;
 const WALL_THICKNESS_WORLD = 0.12;
-const EDGE_NORMALS = {
+export const EDGE_NORMALS = {
   north: { x: 0, y: -1 },
   south: { x: 0, y: 1 },
   west: { x: -1, y: 0 },
@@ -66,16 +66,6 @@ export const localToCellAtLayer = ({ x, y, z = 0, cameraYaw = 0, mapData = {} })
     ? { ...cell, z: layer }
     : null;
 };
-
-const offsetPoint = (point, offset) => ({
-  x: point.x + offset.x,
-  y: point.y + offset.y
-});
-
-const scaleOffset = (offset, scale = 1) => ({
-  x: offset.x * scale,
-  y: offset.y * scale
-});
 
 const midpoint = (a, b) => ({
   x: ((a?.x || 0) + (b?.x || 0)) * 0.5,
@@ -166,7 +156,7 @@ export const createTileGeometry = (cameraYaw = 0, tileRotation = 0) => {
     { x: 0.5, y: -0.5 },
     { x: 0.5, y: 0.5 },
     { x: -0.5, y: 0.5 }
-  ];
+  ].map((corner) => rotateWorldPoint(corner, tileRotation));
   const top = topWorldCorners.map((corner) => {
     const projected = projectWorldOffset(corner.x, corner.y, cameraYaw);
     return {
@@ -186,42 +176,95 @@ export const createTileGeometry = (cameraYaw = 0, tileRotation = 0) => {
     top[start], top[end], bottom[end], bottom[start]
   ]);
 
-  const normalizedRotation = ((Number.parseInt(tileRotation, 10) || 0) % 180 + 180) % 180;
-  const wallWorldEndpoints = normalizedRotation === 90
-    ? [{ x: 0, y: -0.5 }, { x: 0, y: 0.5 }]
-    : [{ x: -0.5, y: 0 }, { x: 0.5, y: 0 }];
-  const wallBaseCenter = wallWorldEndpoints.map((point) => {
-    const projected = projectWorldOffset(point.x, point.y, cameraYaw);
-    return {
-      x: TILE_RENDER_CENTER.x + projected.x,
-      y: TILE_RENDER_CENTER.y + projected.y - 4
-    };
-  });
-  const wallNormal = normalizedRotation === 90 ? { x: 1, y: 0 } : { x: 0, y: 1 };
-  const wallThicknessOffset = projectWorldOffset(wallNormal.x * WALL_THICKNESS_WORLD, wallNormal.y * WALL_THICKNESS_WORLD, cameraYaw);
-  const frontOffset = scaleOffset(wallThicknessOffset, 0.5);
-  const backOffset = scaleOffset(wallThicknessOffset, -0.5);
-  const wallBase = wallBaseCenter.map((point) => offsetPoint(point, frontOffset));
-  const rearBase = wallBaseCenter.map((point) => offsetPoint(point, backOffset));
-  const wallTop = wallBase.map((point) => ({ x: point.x, y: point.y - WALL_HEIGHT }));
-  const rearTop = rearBase.map((point) => ({ x: point.x, y: point.y - WALL_HEIGHT }));
-  const wallBaseMaxY = Math.max(wallBase[0].y, wallBase[1].y);
-  const wallTopMinY = Math.min(wallTop[0].y, wallTop[1].y);
-  const wallHeightSpan = wallBaseMaxY - wallTopMinY;
+  const verticalWall = createVerticalTileWallGeometry(cameraYaw, tileRotation);
 
   return {
     top,
     sides,
-    wall: [wallBase[0], wallBase[1], wallTop[1], wallTop[0]],
-    wallFront: [wallBase[0], wallBase[1], wallTop[1], wallTop[0]],
-    wallBack: [rearBase[1], rearBase[0], rearTop[0], rearTop[1]],
-    wallCap: [wallTop[0], wallTop[1], rearTop[1], rearTop[0]],
-    wallSideStart: [wallBase[0], wallTop[0], rearTop[0], rearBase[0]],
-    wallSideEnd: [wallBase[1], rearBase[1], rearTop[1], wallTop[1]],
-    verticalBaseY: wallTopMinY + (wallHeightSpan * 0.6),
-    wallFadeStartY: wallTopMinY + (wallHeightSpan * 0.34),
-    wallFadeEndY: wallBaseMaxY
+    ...verticalWall
   };
+};
+
+const createVerticalWallGeometryFromFrame = ({
+  cameraYaw = 0,
+  endpoints = [],
+  normal = { x: 0, y: 1 },
+  miter = null,
+  bottomLift = 4,
+  surfaceRotation = 0
+} = {}) => {
+  const safeEndpoints = endpoints.length >= 2 ? endpoints : [{ x: -0.5, y: 0 }, { x: 0.5, y: 0 }];
+  const center = midpoint(safeEndpoints[0], safeEndpoints[1]);
+  const tangentLength = Math.max(1, Math.hypot(safeEndpoints[1].x - safeEndpoints[0].x, safeEndpoints[1].y - safeEndpoints[0].y));
+  const tangent = {
+    x: (safeEndpoints[1].x - safeEndpoints[0].x) / tangentLength,
+    y: (safeEndpoints[1].y - safeEndpoints[0].y) / tangentLength
+  };
+  const createMiteredPoint = (local, side = 'front', sign = 0) => {
+    const rotated = rotateWorldPoint(local, surfaceRotation);
+    const normalScale = side === 'front' ? 0.5 : -0.5;
+    const tangentScale = side === 'front' ? sign * 0.5 : -sign * 0.5;
+    const projected = projectWorldOffset(
+      center.x + (tangent.x * rotated.x) + (normal.x * WALL_THICKNESS_WORLD * normalScale) + (tangent.x * WALL_THICKNESS_WORLD * tangentScale),
+      center.y + (tangent.y * rotated.x) + (normal.y * WALL_THICKNESS_WORLD * normalScale) + (tangent.y * WALL_THICKNESS_WORLD * tangentScale),
+      cameraYaw
+    );
+    return {
+      x: TILE_RENDER_CENTER.x + projected.x,
+      y: TILE_RENDER_CENTER.y + projected.y - bottomLift - ((0.5 - rotated.y) * WALL_HEIGHT)
+    };
+  };
+  const startSign = Math.max(-1, Math.min(1, Number(miter?.start) || 0));
+  const endSign = Math.max(-1, Math.min(1, Number(miter?.end) || 0));
+  const corners = [
+    { x: -0.5, y: 0.5, sign: startSign },
+    { x: 0.5, y: 0.5, sign: endSign },
+    { x: 0.5, y: -0.5, sign: endSign },
+    { x: -0.5, y: -0.5, sign: startSign }
+  ];
+  const wallBase = [
+    createMiteredPoint(corners[0], 'front', corners[0].sign),
+    createMiteredPoint(corners[1], 'front', corners[1].sign),
+    createMiteredPoint(corners[2], 'front', corners[2].sign),
+    createMiteredPoint(corners[3], 'front', corners[3].sign)
+  ];
+  const rearBase = [
+    createMiteredPoint(corners[0], 'back', corners[0].sign),
+    createMiteredPoint(corners[1], 'back', corners[1].sign),
+    createMiteredPoint(corners[2], 'back', corners[2].sign),
+    createMiteredPoint(corners[3], 'back', corners[3].sign)
+  ];
+  const allY = [...wallBase, ...rearBase].map((point) => point.y);
+  const wallMaxY = Math.max(...allY);
+  const wallMinY = Math.min(...allY);
+  const wallHeightSpan = wallMaxY - wallMinY;
+  return {
+    miter: { start: startSign, end: endSign },
+    wall: wallBase,
+    wallFront: wallBase,
+    wallBack: [rearBase[1], rearBase[0], rearBase[3], rearBase[2]],
+    wallCap: [wallBase[3], wallBase[2], rearBase[2], rearBase[3]],
+    wallSideStart: [wallBase[0], wallBase[3], rearBase[3], rearBase[0]],
+    wallSideEnd: [wallBase[1], rearBase[1], rearBase[2], wallBase[2]],
+    verticalBaseY: wallMinY + (wallHeightSpan * 0.6),
+    wallFadeStartY: wallMinY + (wallHeightSpan * 0.34),
+    wallFadeEndY: wallMaxY
+  };
+};
+
+export const createVerticalTileWallGeometry = (cameraYaw = 0, tileRotation = 0, surfaceRotation = 0) => {
+  const endpoints = [
+    rotateWorldPoint({ x: -0.5, y: 0 }, tileRotation),
+    rotateWorldPoint({ x: 0.5, y: 0 }, tileRotation)
+  ];
+  const normal = rotateWorldPoint({ x: 0, y: 1 }, tileRotation);
+  return createVerticalWallGeometryFromFrame({
+    cameraYaw,
+    endpoints,
+    normal,
+    bottomLift: 4,
+    surfaceRotation
+  });
 };
 
 export const createPortalGeometry = (cameraYaw = 0, tileRotation = 0) => {
@@ -324,60 +367,21 @@ export const createPortalGeometry = (cameraYaw = 0, tileRotation = 0) => {
   };
 };
 
-export const createEdgeWallGeometry = (cameraYaw = 0, edge = 'north', miter = null) => {
+export const createEdgeWallGeometry = (cameraYaw = 0, edge = 'north', miter = null, surfaceRotation = 0) => {
   const edgeEndpoints = {
     north: [{ x: -0.5, y: -0.5 }, { x: 0.5, y: -0.5 }],
     south: [{ x: -0.5, y: 0.5 }, { x: 0.5, y: 0.5 }],
     west: [{ x: -0.5, y: -0.5 }, { x: -0.5, y: 0.5 }],
     east: [{ x: 0.5, y: -0.5 }, { x: 0.5, y: 0.5 }]
   };
-  const endpoints = edgeEndpoints[edge] || edgeEndpoints.north;
-  const normal = EDGE_NORMALS[edge] || EDGE_NORMALS.north;
-  const tangentLength = Math.max(1, Math.hypot(endpoints[1].x - endpoints[0].x, endpoints[1].y - endpoints[0].y));
-  const tangent = {
-    x: (endpoints[1].x - endpoints[0].x) / tangentLength,
-    y: (endpoints[1].y - endpoints[0].y) / tangentLength
-  };
-  const createMiteredPoint = (endpoint, side = 'front', sign = 0) => {
-    const normalScale = side === 'front' ? 0.5 : -0.5;
-    const tangentScale = side === 'front' ? sign * 0.5 : -sign * 0.5;
-    const projected = projectWorldOffset(
-      endpoint.x + (normal.x * WALL_THICKNESS_WORLD * normalScale) + (tangent.x * WALL_THICKNESS_WORLD * tangentScale),
-      endpoint.y + (normal.y * WALL_THICKNESS_WORLD * normalScale) + (tangent.y * WALL_THICKNESS_WORLD * tangentScale),
-      cameraYaw
-    );
-    return {
-      x: TILE_RENDER_CENTER.x + projected.x,
-      y: TILE_RENDER_CENTER.y + projected.y
-    };
-  };
-  const startSign = Math.max(-1, Math.min(1, Number(miter?.start) || 0));
-  const endSign = Math.max(-1, Math.min(1, Number(miter?.end) || 0));
-  const wallBase = [
-    createMiteredPoint(endpoints[0], 'front', startSign),
-    createMiteredPoint(endpoints[1], 'front', endSign)
-  ];
-  const rearBase = [
-    createMiteredPoint(endpoints[0], 'back', startSign),
-    createMiteredPoint(endpoints[1], 'back', endSign)
-  ];
-  const wallTop = wallBase.map((point) => ({ x: point.x, y: point.y - WALL_HEIGHT }));
-  const rearTop = rearBase.map((point) => ({ x: point.x, y: point.y - WALL_HEIGHT }));
-  const wallBaseMaxY = Math.max(wallBase[0].y, wallBase[1].y);
-  const wallTopMinY = Math.min(wallTop[0].y, wallTop[1].y);
-  const wallHeightSpan = wallBaseMaxY - wallTopMinY;
-  return {
-    miter: { start: startSign, end: endSign },
-    wall: [wallBase[0], wallBase[1], wallTop[1], wallTop[0]],
-    wallFront: [wallBase[0], wallBase[1], wallTop[1], wallTop[0]],
-    wallBack: [rearBase[1], rearBase[0], rearTop[0], rearTop[1]],
-    wallCap: [wallTop[0], wallTop[1], rearTop[1], rearTop[0]],
-    wallSideStart: [wallBase[0], wallTop[0], rearTop[0], rearBase[0]],
-    wallSideEnd: [wallBase[1], rearBase[1], rearTop[1], wallTop[1]],
-    verticalBaseY: wallTopMinY + (wallHeightSpan * 0.6),
-    wallFadeStartY: wallTopMinY + (wallHeightSpan * 0.34),
-    wallFadeEndY: wallBaseMaxY
-  };
+  return createVerticalWallGeometryFromFrame({
+    cameraYaw,
+    endpoints: edgeEndpoints[edge] || edgeEndpoints.north,
+    normal: EDGE_NORMALS[edge] || EDGE_NORMALS.north,
+    miter,
+    bottomLift: 0,
+    surfaceRotation
+  });
 };
 
 export const pointInPolygon = (point, polygon = []) => {

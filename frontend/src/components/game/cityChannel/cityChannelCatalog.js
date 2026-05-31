@@ -38,38 +38,38 @@ const createTransmissionSkeleton = (type) => ({
 const gearMount = ({
   id,
   position,
-  axisType = 'fixedAxis',
   followMode = 'none',
   followDelaySeconds = 0
 }) => ({
   id,
   position,
-  axisType,
+  socketKind: position === 'center' ? 'center' : 'corner',
+  axisBinding: null,
   followMode,
   followDelaySeconds
 });
 
 const mountPresets = {
-  center: [gearMount({ id: 'gear_center', position: 'center', axisType: 'fixedAxis' })],
-  singleCorner: [gearMount({ id: 'gear_corner_ne', position: 'corner_ne', axisType: 'fixedAxis' })],
+  center: [gearMount({ id: 'gear_center', position: 'center' })],
+  singleCorner: [gearMount({ id: 'gear_corner_ne', position: 'corner_ne' })],
   sameSide: [
-    gearMount({ id: 'gear_corner_nw', position: 'corner_nw', axisType: 'fixedAxis' }),
-    gearMount({ id: 'gear_corner_sw', position: 'corner_sw', axisType: 'freeAxis', followMode: 'sameDirection', followDelaySeconds: 0.15 })
+    gearMount({ id: 'gear_corner_nw', position: 'corner_nw' }),
+    gearMount({ id: 'gear_corner_sw', position: 'corner_sw', followMode: 'sameDirection', followDelaySeconds: 0.15 })
   ],
   oppositeCorner: [
-    gearMount({ id: 'gear_corner_nw', position: 'corner_nw', axisType: 'fixedAxis' }),
-    gearMount({ id: 'gear_corner_se', position: 'corner_se', axisType: 'freeAxis', followMode: 'oppositeDirection', followDelaySeconds: 0.15 })
+    gearMount({ id: 'gear_corner_nw', position: 'corner_nw' }),
+    gearMount({ id: 'gear_corner_se', position: 'corner_se', followMode: 'oppositeDirection', followDelaySeconds: 0.15 })
   ],
   triangle: [
-    gearMount({ id: 'gear_corner_nw', position: 'corner_nw', axisType: 'fixedAxis' }),
-    gearMount({ id: 'gear_corner_ne', position: 'corner_ne', axisType: 'freeAxis', followMode: 'oppositeDirection', followDelaySeconds: 0.12 }),
-    gearMount({ id: 'gear_corner_sw', position: 'corner_sw', axisType: 'freeAxis', followMode: 'sameDirection', followDelaySeconds: 0.24 })
+    gearMount({ id: 'gear_corner_nw', position: 'corner_nw' }),
+    gearMount({ id: 'gear_corner_ne', position: 'corner_ne', followMode: 'oppositeDirection', followDelaySeconds: 0.12 }),
+    gearMount({ id: 'gear_corner_sw', position: 'corner_sw', followMode: 'sameDirection', followDelaySeconds: 0.24 })
   ],
   fourCorner: [
-    gearMount({ id: 'gear_corner_nw', position: 'corner_nw', axisType: 'fixedAxis' }),
-    gearMount({ id: 'gear_corner_ne', position: 'corner_ne', axisType: 'freeAxis', followMode: 'oppositeDirection', followDelaySeconds: 0.12 }),
-    gearMount({ id: 'gear_corner_sw', position: 'corner_sw', axisType: 'freeAxis', followMode: 'sameDirection', followDelaySeconds: 0.24 }),
-    gearMount({ id: 'gear_corner_se', position: 'corner_se', axisType: 'freeAxis', followMode: 'oppositeDirection', followDelaySeconds: 0.36 })
+    gearMount({ id: 'gear_corner_nw', position: 'corner_nw' }),
+    gearMount({ id: 'gear_corner_ne', position: 'corner_ne', followMode: 'oppositeDirection', followDelaySeconds: 0.12 }),
+    gearMount({ id: 'gear_corner_sw', position: 'corner_sw', followMode: 'sameDirection', followDelaySeconds: 0.24 }),
+    gearMount({ id: 'gear_corner_se', position: 'corner_se', followMode: 'oppositeDirection', followDelaySeconds: 0.36 })
   ]
 };
 
@@ -201,7 +201,7 @@ export const CITY_CHANNEL_MATERIAL_CATALOG = [
     rotatable: true,
     transmissionSkeleton: createTransmissionSkeleton('cross'),
     gearMounts: mountPresets.center,
-    description: '中心固定轴齿轮，受驱动时带动所属机械整体旋转。'
+    description: '中心齿轮位，用于齿轮啮合传动；默认不绑定板材。'
   },
   {
     id: 'actuator_single_corner_gear_plate',
@@ -217,7 +217,7 @@ export const CITY_CHANNEL_MATERIAL_CATALOG = [
     rotatable: true,
     transmissionSkeleton: createTransmissionSkeleton('l'),
     gearMounts: mountPresets.singleCorner,
-    description: '单角固定轴齿轮，适合制作斜开门转轴。'
+    description: '单角齿轮位，可在选中后通过虚线选择连轴板材。'
   },
   {
     id: 'actuator_same_side_gear_plate',

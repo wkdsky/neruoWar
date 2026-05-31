@@ -42,6 +42,13 @@ export const CITY_CHANNEL_MECHANISM_KINDS = {
 };
 
 const DIRECTIONS = ['north', 'east', 'south', 'west'];
+export const CITY_CHANNEL_GEAR_CENTER_SOCKET = 'center';
+export const CITY_CHANNEL_GEAR_CORNER_SOCKETS = new Set([
+  'corner_ne',
+  'corner_nw',
+  'corner_se',
+  'corner_sw'
+]);
 
 const directionVector = {
   north: { x: 0, y: -1 },
@@ -141,6 +148,23 @@ const rotateLocalPosition = (position = {}, rotation = 0, flipped = false) => {
   return { x: Number(x.toFixed(3)), y: Number(y.toFixed(3)), z: Number(position.z) || 0 };
 };
 
+export const rotateGearLocalPosition = (position = {}, rotation = 0) => {
+  const radians = (normalizeRotation(rotation || 0) * Math.PI) / 180;
+  const x = Number(position.x) || 0;
+  const y = Number(position.y) || 0;
+  return {
+    x: (x * Math.cos(radians)) - (y * Math.sin(radians)),
+    y: (x * Math.sin(radians)) + (y * Math.cos(radians)),
+    z: Number(position.z) || 0
+  };
+};
+
+export const isCornerGearSocket = (position = '') => CITY_CHANNEL_GEAR_CORNER_SOCKETS.has(position);
+
+export const isCenterGearSocket = (position = '') => position === CITY_CHANNEL_GEAR_CENTER_SOCKET;
+
+export const getGearSocketKind = (position = '') => (isCornerGearSocket(position) ? 'corner' : 'center');
+
 export const getWorldTransmissionPorts = (tile = {}, componentKey = '') => {
   const catalogPorts = getCityChannelMaterial(tile.panelType)?.transmissionSkeleton?.ports;
   const ports = Array.isArray(catalogPorts) && catalogPorts.length > 0
@@ -160,12 +184,94 @@ export const getWorldTransmissionPorts = (tile = {}, componentKey = '') => {
 export const getGearMountLocalPosition = (position = 'center') => {
   const lookup = {
     center: { x: 0, y: 0, z: 0 },
-    corner_ne: { x: 0.32, y: -0.32, z: 0 },
-    corner_nw: { x: -0.32, y: -0.32, z: 0 },
-    corner_se: { x: 0.32, y: 0.32, z: 0 },
-    corner_sw: { x: -0.32, y: 0.32, z: 0 }
+    corner_ne: { x: 0.5, y: -0.5, z: 0 },
+    corner_nw: { x: -0.5, y: -0.5, z: 0 },
+    corner_se: { x: 0.5, y: 0.5, z: 0 },
+    corner_sw: { x: -0.5, y: 0.5, z: 0 }
   };
   return lookup[position] || lookup.center;
+};
+
+export const getHorizontalGearSocketWorldPosition = (placement = {}, socket = 'center') => {
+  if (!placement || placement.edge || placement.isVertical) return null;
+  const local = getGearMountLocalPosition(socket);
+  const rotated = rotateGearLocalPosition(local, placement.rotation || 0);
+  return {
+    x: (Number(placement.x) || 0) + rotated.x,
+    y: (Number(placement.y) || 0) + rotated.y,
+    z: Number(placement.z) || 0
+  };
+};
+
+const sameCornerPivot = (a = {}, b = {}, epsilon = 0.001) => (
+  Math.abs((Number(a.x) || 0) - (Number(b.x) || 0)) <= epsilon
+  && Math.abs((Number(a.y) || 0) - (Number(b.y) || 0)) <= epsilon
+  && Math.abs((Number(a.z) || 0) - (Number(b.z) || 0)) <= epsilon
+);
+
+export const normalizeGearAxisBinding = (binding = null) => {
+  if (!binding || typeof binding !== 'object' || !binding.componentKey) return null;
+  const socket = isCornerGearSocket(binding.socket) ? binding.socket : null;
+  if (!socket) return null;
+  return {
+    componentKey: binding.componentKey,
+    hostKind: binding.hostKind === 'wall' ? 'wall' : 'tile',
+    socket,
+    surface: binding.surface || 'front'
+  };
+};
+
+export const normalizeGearMount = (mount = {}) => {
+  const axisBinding = normalizeGearAxisBinding(mount.axisBinding);
+  return {
+    ...mount,
+    socketKind: mount.socketKind || getGearSocketKind(mount.position),
+    axisBinding
+  };
+};
+
+export const getCornerGearBindingCandidates = ({
+  mapData = {},
+  pivotWorld = null,
+  z = null,
+  epsilon = 0.001
+} = {}) => {
+  if (!pivotWorld) return [];
+  const pivotZ = Number.isFinite(Number(z)) ? Number(z) : Number(pivotWorld.z) || 0;
+  const candidates = [];
+  Object.entries(mapData.tiles || {}).forEach(([componentKey, tile]) => {
+    if (!tile || tile.edge || tile.isVertical) return;
+    if (Math.abs((Number(tile.z) || 0) - pivotZ) > epsilon) return;
+    CITY_CHANNEL_GEAR_CORNER_SOCKETS.forEach((socket) => {
+      const cornerWorld = getHorizontalGearSocketWorldPosition(tile, socket);
+      if (!sameCornerPivot(cornerWorld, { ...pivotWorld, z: pivotZ }, epsilon)) return;
+      candidates.push({
+        componentKey,
+        hostKind: 'tile',
+        socket,
+        surface: 'front',
+        pivotWorld: cornerWorld
+      });
+    });
+  });
+  return candidates;
+};
+
+export const createLegacyFixedAxisBinding = ({
+  mapData = {},
+  mount = {},
+  componentKey = '',
+  placement = null,
+  pivotWorld = null
+} = {}) => {
+  if (mount.axisBinding) return normalizeGearAxisBinding(mount.axisBinding);
+  if (mount.axisType !== 'fixedAxis' || !isCornerGearSocket(mount.position)) return null;
+  const hostPlacement = placement || mapData.tiles?.[componentKey] || null;
+  const pivot = pivotWorld || getHorizontalGearSocketWorldPosition(hostPlacement, mount.position);
+  if (!pivot) return null;
+  const candidates = getCornerGearBindingCandidates({ mapData, pivotWorld: pivot });
+  const ownCandidate = candidates.find((candidate) => candidate.componentKey === componentKey && candidate.socket === mount.position);
+  return normalizeGearAxisBinding(ownCandidate || candidates[0] || null);
 };
 
 const getNeighborKeyForPort = (tile, port) => {
@@ -289,8 +395,7 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
 
   Object.entries(components).forEach(([key, tile]) => {
     const ports = getWorldTransmissionPorts(tile, key);
-    const gearMounts = Array.isArray(tile.gearMounts) ? tile.gearMounts : [];
-    if (ports.length > 0 || gearMounts.length > 0) {
+    if (ports.length > 0) {
       connectableKeys.add(key);
       graph.set(key, graph.get(key) || []);
       portByTileKey.set(key, ports);
@@ -366,26 +471,30 @@ export const buildMechanicalAssemblies = (mapData = {}) => {
     const gearMounts = componentKeys.flatMap((componentKey) => {
       const tile = components[componentKey];
       return (Array.isArray(tile.gearMounts) ? tile.gearMounts : []).map((mount) => ({
-        ...mount,
+        ...normalizeGearMount({
+          ...mount,
+          axisBinding: mount.axisBinding || createLegacyFixedAxisBinding({
+            mapData,
+            mount,
+            componentKey,
+            placement: tile
+          })
+        }),
         componentKey,
         cell: parseCellKey(componentKey)
       }));
     });
-    const fixedAxes = gearMounts.filter((mount) => mount.axisType === 'fixedAxis');
+    const boundGearMounts = gearMounts.filter((mount) => !!mount.axisBinding);
+    const fixedAxes = boundGearMounts;
     const assembly = {
       id,
       componentKeys,
       edges: componentKeys.flatMap((componentKey) => (graph.get(componentKey) || []).map((edge) => ({ componentKey, ...edge }))),
       gearMounts,
+      boundGearMounts,
       fixedAxes,
       warnings: []
     };
-    if (componentKeys.length === 1 && (portByTileKey.get(componentKeys[0]) || []).length > 0 && fixedAxes.length <= 0) {
-      assembly.warnings.push('该传动骨骼未连接到固定轴。');
-    }
-    if (fixedAxes.length <= 0 && gearMounts.length > 0) {
-      assembly.warnings.push('承动结构没有固定轴，运行预览不会带动整体旋转。');
-    }
     assemblies.push(assembly);
     componentKeys.forEach((componentKey) => {
       assemblyByComponentKey[componentKey] = id;

@@ -14,6 +14,7 @@ import {
   getGearPhase,
   getGearSurfaceKey,
   getGearSurfaceNormal,
+  hasCornerGearConflict,
   getMountedGearLayerKey,
   getVisibleGearSurfaceSide,
   isGearOnCameraSide,
@@ -22,6 +23,7 @@ import {
   projectPointToSurfaceLocal,
   resolveDrivenGearNodes
 } from './cityChannelGears';
+import { getCornerGearBindingCandidates } from '../cityChannelMechanismRuntime';
 
 describe('cityChannelGears', () => {
   const createSurfaceMappers = () => ({
@@ -162,6 +164,81 @@ describe('cityChannelGears', () => {
     });
   });
 
+  it('returns corner binding candidates and rejects duplicate corner gears', () => {
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const neighbor = createTile({
+      x: 2,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const tileKey = createCellKey(tile.x, tile.y, tile.z);
+    const neighborKey = createCellKey(neighbor.x, neighbor.y, neighbor.z);
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'corner binding' }),
+      tiles: { [tileKey]: tile, [neighborKey]: neighbor }
+    };
+    const target = getGearInstallTarget({
+      mapData,
+      hitInfo: {
+        hit: {
+          type: 'tile',
+          cell: { x: tile.x, y: tile.y, z: tile.z },
+          tile,
+          panelType: tile.panelType,
+          gearSurfacePlane: true,
+          surfaceSide: 'front',
+          localSurfacePoint: { x: 100, y: 0 }
+        },
+        localPoint: { x: 100, y: 0 }
+      },
+      ...createSurfaceMappers()
+    });
+
+    expect(target).toMatchObject({
+      socket: 'corner_ne',
+      socketKind: 'corner',
+      valid: true,
+      reason: 'ok'
+    });
+    expect(target.bindingCandidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ componentKey: tileKey, socket: 'corner_ne' }),
+      expect.objectContaining({ componentKey: neighborKey, socket: 'corner_nw' })
+    ]));
+    expect(getCornerGearBindingCandidates({
+      mapData,
+      pivotWorld: target.pivotWorld
+    })).toHaveLength(2);
+
+    tile.gearMounts = [{ id: 'existing', position: 'corner_ne', surface: 'front' }];
+    expect(hasCornerGearConflict({ mapData, pivotWorld: target.pivotWorld, surface: 'front' })).toBe(true);
+    expect(getGearInstallTarget({
+      mapData,
+      hitInfo: {
+        hit: {
+          type: 'tile',
+          cell: { x: neighbor.x, y: neighbor.y, z: neighbor.z },
+          tile: neighbor,
+          panelType: neighbor.panelType,
+          gearSurfacePlane: true,
+          surfaceSide: 'front',
+          localSurfacePoint: { x: 0, y: 0 }
+        },
+        localPoint: { x: 0, y: 0 }
+      },
+      ...createSurfaceMappers()
+    })).toMatchObject({
+      socket: 'corner_nw',
+      valid: false,
+      reason: 'corner_occupied'
+    });
+  });
+
   it('detects socket and wall placement blocking', () => {
     const tile = createTile({
       x: 1,
@@ -243,5 +320,32 @@ describe('cityChannelGears', () => {
     expect(driven.map((node) => node.id)).toEqual(['tile:0:gear_a', 'tile:1:gear_b', 'tile:2:gear_c']);
     expect(driven.map((node) => node.direction)).toEqual([1, -1, 1]);
     expect(getGearPhase(driven[1], 45, 10)).toBe(325);
+    expect(getGearPhase(driven[2], 45, 10)).toBe(55);
+  });
+
+  it('uses stable world positions and tooth counts for gear mesh ratios', () => {
+    const nodes = [
+      {
+        id: 'a',
+        surfaceKey: 'floor:0:front',
+        point: { x: 1000, y: 1000 },
+        worldPoint: { x: 0, y: 0, z: 0 },
+        pitchRadiusWorld: 0.2,
+        gearRatioRadius: 12
+      },
+      {
+        id: 'b',
+        surfaceKey: 'floor:0:front',
+        point: { x: -1000, y: -1000 },
+        worldPoint: { x: 0.4, y: 0, z: 0 },
+        pitchRadiusWorld: 0.2,
+        gearRatioRadius: 24
+      }
+    ];
+
+    const graph = buildGearContactGraph(nodes);
+
+    expect(graph.get('a')).toEqual([{ id: 'b', ratio: -0.5 }]);
+    expect(graph.get('b')).toEqual([{ id: 'a', ratio: -2 }]);
   });
 });

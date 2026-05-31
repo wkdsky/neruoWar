@@ -1,7 +1,14 @@
 import { createCellKey, createWallKey, normalizeRotation } from '../cityChannelSchema';
 import { projectWorldOffset } from '../cityChannelGeometryUtils';
 import { isPortalMaterial } from '../cityChannelMovePreview';
-import { getGearMountLocalPosition } from '../cityChannelMechanismRuntime';
+import {
+  getCornerGearBindingCandidates,
+  getGearMountLocalPosition,
+  getGearSocketKind,
+  getHorizontalGearSocketWorldPosition,
+  isCornerGearSocket,
+  normalizeGearMount
+} from '../cityChannelMechanismRuntime';
 import { getCellVerticalEndpoints, getPlacementDepth } from './renderer/CityChannelDepth';
 import { isPlacementVisible as isCityChannelPlacementVisible } from './cityChannelPhaserVisibility';
 import {
@@ -272,6 +279,125 @@ export const hasGearOnSocket = (placement, socket, surface = 'front') => (
   ))
 );
 
+const normalizeIgnoreGearKeys = (ignoreGearKeys = new Set()) => (
+  ignoreGearKeys instanceof Set
+    ? ignoreGearKeys
+    : new Set(Array.isArray(ignoreGearKeys) ? ignoreGearKeys : [])
+);
+
+export const getGearMountIdentity = (hostKind, hostKey, mountId) => `${hostKind || 'tile'}:${hostKey}:${mountId}`;
+
+export const getGearSocketWorldPosition = (placement = {}, socket = 'center') => (
+  getHorizontalGearSocketWorldPosition(placement, socket)
+);
+
+export const isSameHorizontalCornerPivot = (a = {}, b = {}, epsilon = 0.001) => !!a && !!b
+  && Math.abs((Number(a.x) || 0) - (Number(b.x) || 0)) <= epsilon
+  && Math.abs((Number(a.y) || 0) - (Number(b.y) || 0)) <= epsilon
+  && Math.abs((Number(a.z) || 0) - (Number(b.z) || 0)) <= epsilon;
+
+export const hasCornerGearConflict = ({
+  mapData = {},
+  pivotWorld = null,
+  surface = 'front',
+  ignoreGearKeys = new Set(),
+  epsilon = 0.001
+} = {}) => {
+  if (!pivotWorld) return false;
+  const ignored = normalizeIgnoreGearKeys(ignoreGearKeys);
+  return Object.entries(mapData.tiles || {}).some(([hostKey, tile]) => {
+    if (!tile || tile.edge || tile.isVertical) return false;
+    return (tile.gearMounts || []).some((mount) => {
+      if (!isCornerGearSocket(mount.position)) return false;
+      if ((mount.surface || 'front') !== surface) return false;
+      if (ignored.has(getGearMountIdentity('tile', hostKey, mount.id))) return false;
+      const mountPivot = getGearSocketWorldPosition(tile, mount.position);
+      return isSameHorizontalCornerPivot(mountPivot, pivotWorld, epsilon);
+    });
+  });
+};
+
+export const validateGearPlacement = ({
+  mapData = {},
+  target = null,
+  ignoreGearKeys = new Set()
+} = {}) => {
+  if (!target?.placement || !target.socket) {
+    return {
+      valid: false,
+      reason: 'missing_target',
+      bindingCandidates: []
+    };
+  }
+  const ignored = normalizeIgnoreGearKeys(ignoreGearKeys);
+  const ownIdentity = getGearMountIdentity(target.hostKind, target.hostKey, target.mountId);
+  const occupied = (target.placement.gearMounts || []).some((mount) => (
+    mount.position === target.socket
+    && (mount.surface || 'front') === target.surface
+    && mount.id !== target.mountId
+    && !ignored.has(getGearMountIdentity(target.hostKind, target.hostKey, mount.id))
+    && !ignored.has(ownIdentity)
+  ));
+  if (occupied) {
+    return {
+      valid: false,
+      reason: 'occupied',
+      occupied: true,
+      bindingCandidates: []
+    };
+  }
+  const blocked = isGearSocketBlockedBySurface({
+    mapData,
+    placement: target.placement,
+    socket: target.socket
+  });
+  if (blocked) {
+    return {
+      valid: false,
+      reason: 'blocked_by_wall',
+      blocked: true,
+      bindingCandidates: []
+    };
+  }
+  if (!isCornerGearSocket(target.socket) || target.hostKind !== 'tile' || target.placement.edge || target.placement.isVertical) {
+    return {
+      valid: true,
+      reason: 'ok',
+      bindingCandidates: []
+    };
+  }
+  const pivotWorld = target.pivotWorld || getGearSocketWorldPosition(target.placement, target.socket);
+  const bindingCandidates = getCornerGearBindingCandidates({ mapData, pivotWorld });
+  if (bindingCandidates.length <= 0) {
+    return {
+      valid: false,
+      reason: 'no_adjacent_corner_board',
+      pivotWorld,
+      bindingCandidates
+    };
+  }
+  const conflict = hasCornerGearConflict({
+    mapData,
+    pivotWorld,
+    surface: target.surface,
+    ignoreGearKeys: ignored
+  });
+  if (conflict) {
+    return {
+      valid: false,
+      reason: 'corner_occupied',
+      pivotWorld,
+      bindingCandidates
+    };
+  }
+  return {
+    valid: true,
+    reason: 'ok',
+    pivotWorld,
+    bindingCandidates
+  };
+};
+
 export const getGearSocketsForEdge = (edge = 'north') => GEAR_SOCKET_BLOCKED_BY_EDGE[edge] || new Set();
 
 export const doesGearBlockWall = ({ mapData = {}, cell, edge = 'north' } = {}) => {
@@ -347,7 +473,8 @@ export const getGearInstallTarget = ({
   mapData = {},
   hitInfo,
   getGearSurfaceContext,
-  mapGearLocalPointToSurface
+  mapGearLocalPointToSurface,
+  ignoreGearKeys = new Set()
 } = {}) => {
   const hit = hitInfo?.hit;
   if (!hit || !['tile', 'wall'].includes(hit.type)) return null;
@@ -360,14 +487,33 @@ export const getGearInstallTarget = ({
   const candidates = GEAR_SOCKET_POSITIONS.map((socket) => {
     const point = getGearBoardPointForHit({ mapData, hit, socket, mapGearLocalPointToSurface });
     const socketLocal = getGearMountLocalPosition(socket);
-    const occupied = hasGearOnSocket(placement, socket, surface);
-    const blocked = isGearSocketBlockedBySurface({ mapData, placement, socket });
+    const pivotWorld = getGearSocketWorldPosition(placement, socket);
+    const validity = validateGearPlacement({
+      mapData,
+      target: {
+        hit,
+        cell: hit.cell,
+        hostKey: getGearHostKey(hit),
+        hostKind: hit.type,
+        surface,
+        socket,
+        socketKind: getGearSocketKind(socket),
+        point,
+        pivotWorld,
+        placement
+      },
+      ignoreGearKeys
+    });
     return {
       socket,
+      socketKind: getGearSocketKind(socket),
       point,
-      valid: !!point && !occupied && !blocked,
-      occupied,
-      blocked,
+      pivotWorld,
+      bindingCandidates: validity.bindingCandidates || [],
+      valid: !!point && validity.valid,
+      occupied: !!validity.occupied,
+      blocked: !!validity.blocked,
+      reason: validity.reason,
       distance: pointerLocal
         ? Math.hypot((socketLocal.x || 0) - pointerLocal.x, (socketLocal.y || 0) - pointerLocal.y)
         : point && hitInfo.localPoint ? Math.hypot(point.x - hitInfo.localPoint.x, point.y - hitInfo.localPoint.y) : Infinity
@@ -383,21 +529,25 @@ export const getGearInstallTarget = ({
     edge: hit.edge || null,
     surface,
     socket: nearest.socket,
+    socketKind: nearest.socketKind,
     point: nearest.point,
+    pivotWorld: nearest.pivotWorld,
     placement,
     candidates,
+    bindingCandidates: nearest.bindingCandidates || [],
     valid: nearest.valid,
-    reason: nearest.occupied ? 'occupied' : nearest.blocked ? 'blocked_by_wall' : 'ok'
+    reason: nearest.reason || (nearest.occupied ? 'occupied' : nearest.blocked ? 'blocked_by_wall' : 'ok')
   };
 };
 
-export const getGearInstallTargetForScene = (scene, hitInfo) => getGearInstallTarget({
+export const getGearInstallTargetForScene = (scene, hitInfo, options = {}) => getGearInstallTarget({
   mapData: scene?.mapData,
   hitInfo,
   getGearSurfaceContext: (placement, surface) => scene.getGearSurfaceContext(placement, surface),
   mapGearLocalPointToSurface: (placement, localPosition, options) => (
     scene.mapGearLocalPointToSurface(placement, localPosition, options)
-  )
+  ),
+  ignoreGearKeys: options.ignoreGearKeys
 });
 
 export const getGearSurfaceKey = (placement, mount = {}) => {
@@ -413,6 +563,12 @@ export const getGearSurfaceKey = (placement, mount = {}) => {
 
 export const getGearContactThreshold = () => 56;
 
+const getGearContactPoint = (node = {}) => node.worldPoint || node.point || { x: 0, y: 0, z: 0 };
+
+const getGearPitchRadius = (node = {}) => Number(node.pitchRadiusWorld ?? node.pitchRadius) || 1;
+
+const getGearRatioRadius = (node = {}) => Number(node.gearRatioRadius ?? node.pitchRadiusWorld ?? node.pitchRadius) || 1;
+
 export const buildGearContactGraph = (nodes = [], threshold = getGearContactThreshold()) => {
   const graph = new Map(nodes.map((node) => [node.id, []]));
   for (let i = 0; i < nodes.length; i += 1) {
@@ -420,13 +576,20 @@ export const buildGearContactGraph = (nodes = [], threshold = getGearContactThre
       const a = nodes[i];
       const b = nodes[j];
       if (a.surfaceKey !== b.surfaceKey) continue;
-      const distance = Math.hypot(a.point.x - b.point.x, a.point.y - b.point.y);
-      const pitchContact = (a.pitchRadius || 24) + (b.pitchRadius || 24);
-      const contactDistance = Math.max(18, Math.min(threshold, pitchContact * 1.18));
+      const aPoint = getGearContactPoint(a);
+      const bPoint = getGearContactPoint(b);
+      if (Math.abs((Number(aPoint.z) || 0) - (Number(bPoint.z) || 0)) > 0.08) continue;
+      const distance = Math.hypot(aPoint.x - bPoint.x, aPoint.y - bPoint.y);
+      const aRadius = getGearPitchRadius(a);
+      const bRadius = getGearPitchRadius(b);
+      const pitchContact = aRadius + bRadius;
+      const contactDistance = Math.max(pitchContact * 1.22, Math.min(threshold, pitchContact * 1.22));
       if (distance > contactDistance) continue;
-      if (distance < Math.max(8, pitchContact * 0.28)) continue;
-      graph.get(a.id)?.push({ id: b.id, ratio: -((a.pitchRadius || 1) / (b.pitchRadius || 1)) });
-      graph.get(b.id)?.push({ id: a.id, ratio: -((b.pitchRadius || 1) / (a.pitchRadius || 1)) });
+      if (distance < Math.max(pitchContact * 0.28, 0.08)) continue;
+      const aRatioRadius = getGearRatioRadius(a);
+      const bRatioRadius = getGearRatioRadius(b);
+      graph.get(a.id)?.push({ id: b.id, ratio: -(aRatioRadius / bRatioRadius) });
+      graph.get(b.id)?.push({ id: a.id, ratio: -(bRatioRadius / aRatioRadius) });
     }
   }
   return graph;
@@ -517,3 +680,5 @@ export const resolveDrivenGearNodes = ({
 export const getGearPhase = (node, angle = 0, basePhase = 0) => normalizeRotation(
   basePhase + ((node.driveRatio || node.direction || 1) * angle)
 );
+
+export const gearMountHasAxisBinding = (mount = {}) => !!normalizeGearMount(mount).axisBinding;

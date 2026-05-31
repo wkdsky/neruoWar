@@ -1,6 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import { getCityChannelMaterial } from './cityChannelCatalog';
-import { CITY_CHANNEL_MECHANISM_LIMITS } from './cityChannelMechanismRuntime';
+import {
+  CITY_CHANNEL_MECHANISM_LIMITS,
+  isCornerGearSocket
+} from './cityChannelMechanismRuntime';
 
 const GEAR_POSITION_LABELS = {
   center: '中心',
@@ -8,11 +11,6 @@ const GEAR_POSITION_LABELS = {
   corner_nw: '左上角',
   corner_se: '右下角',
   corner_sw: '左下角'
-};
-
-const GEAR_AXIS_LABELS = {
-  fixedAxis: '固定轴',
-  freeAxis: '活动轴'
 };
 
 const stopMechanismPanelPointerEvent = (event) => {
@@ -88,8 +86,7 @@ const CityChannelMechanismNumberParam = ({
 
 export const CityChannelGearAxisPrompt = ({
   prompt,
-  onDismiss,
-  onUpdateAxis
+  onDismiss
 }) => {
   const promptRef = useRef(null);
 
@@ -118,20 +115,7 @@ export const CityChannelGearAxisPrompt = ({
       onPointerDown={stopMechanismPanelPointerEvent}
       onClick={stopMechanismPanelPointerEvent}
     >
-      <button
-        type="button"
-        className={prompt.axisType !== 'fixedAxis' ? 'is-active' : ''}
-        onClick={() => onUpdateAxis?.('freeAxis')}
-      >
-        活动轴
-      </button>
-      <button
-        type="button"
-        className={prompt.axisType === 'fixedAxis' ? 'is-active' : ''}
-        onClick={() => onUpdateAxis?.('fixedAxis')}
-      >
-        固定轴
-      </button>
+      <span>选中齿轮后点击虚线选择连轴板材</span>
     </div>
   );
 };
@@ -149,7 +133,6 @@ const CityChannelMechanismPanel = ({
   mechanismPanelParams,
   onCloseInspect,
   onExecute,
-  onUpdateGearMountConfig,
   onUpdateMechanismParam
 }) => {
   if (!isOpen) return null;
@@ -216,18 +199,12 @@ const CityChannelMechanismPanel = ({
             <section key={mount.id || `gear-${index}`} className="city-channel-gear-config__item">
               <header>
                 <strong>{GEAR_POSITION_LABELS[mount.position] || mount.position || `齿轮 ${index + 1}`}</strong>
-                <span>{GEAR_AXIS_LABELS[mount.axisType] || '活动轴'}</span>
+                <span>{mount.axisBinding ? '已绑定' : '未绑定'}</span>
               </header>
-              <label>
-                <span>轴类型</span>
-                <select
-                  value={mount.axisType === 'fixedAxis' ? 'fixedAxis' : 'freeAxis'}
-                  onChange={(event) => onUpdateGearMountConfig?.(mount.id, { axisType: event.target.value })}
-                >
-                  <option value="fixedAxis">固定轴</option>
-                  <option value="freeAxis">活动轴</option>
-                </select>
-              </label>
+              <div className="city-channel-mechanism-summary is-detail">
+                <span>{`连轴板材：${mount.axisBinding?.componentKey || '未绑定'}`}</span>
+                <span>{isCornerGearSocket(mount.position) ? '点击虚线切换联动板材' : '中心齿轮不绑定板材'}</span>
+              </div>
             </section>
           ))}
         </div>

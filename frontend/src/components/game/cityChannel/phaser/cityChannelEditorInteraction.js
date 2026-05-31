@@ -89,8 +89,9 @@ export const applyPaint = (scene, pointer, suppliedHitInfo = null) => {
       id: `gear_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       componentType: GEAR_COMPONENT_TYPE,
       position: target.socket,
+      socketKind: target.socketKind,
       surface: target.surface,
-      axisType: 'freeAxis',
+      axisBinding: null,
       followMode: 'none',
       followDelaySeconds: 0,
       radius: 1,
@@ -106,17 +107,7 @@ export const applyPaint = (scene, pointer, suppliedHitInfo = null) => {
       edge: target.edge,
       mount
     });
-    scene.pendingGearAxisPrompt = {
-      hostKind: target.hostKind,
-      hostKey: target.hostKey,
-      mountId: mount.id,
-      cell: target.cell,
-      edge: target.edge,
-      axisType: mount.axisType,
-      socket: target.socket,
-      surface: target.surface,
-      anchor: scene.getScreenAnchorForLocalPoint(target.point)
-    };
+    scene.pendingGearAxisPrompt = null;
     const hostMap = target.hostKind === 'wall' ? scene.mapData.walls : scene.mapData.tiles;
     const host = hostMap?.[target.hostKey];
     if (host) {
@@ -125,6 +116,13 @@ export const applyPaint = (scene, pointer, suppliedHitInfo = null) => {
       else scene.renderTileObject(host);
       drawMechanicalLayers(scene);
     }
+    scene.setSelection?.([], [], [{
+      hostKind: target.hostKind,
+      hostKey: target.hostKey,
+      mountId: mount.id,
+      cell: target.cell,
+      edge: target.edge || null
+    }], 'component', { lockExternalSync: true });
     scene.refreshAfterIncrementalEdit();
     scene.drawGhostLayer(true);
     return;
@@ -331,7 +329,62 @@ export const eraseHit = (scene, hitInfo) => {
   if (operations.length) scene.config.onCommitOperations?.(operations, { label: '擦除' });
 };
 
+export const toggleGearAxisBinding = (scene, hit) => {
+  if (!hit?.hostKey || !hit?.mountId || !hit?.candidate) return false;
+  const host = hit.hostKind === 'wall' ? scene.mapData.walls?.[hit.hostKey] : scene.mapData.tiles?.[hit.hostKey];
+  if (!host) return false;
+  const mount = (host.gearMounts || []).find((item) => item.id === hit.mountId);
+  if (!mount) return false;
+  const current = mount.axisBinding || null;
+  const candidate = hit.candidate;
+  const sameBinding = current
+    && current.componentKey === candidate.componentKey
+    && current.socket === candidate.socket
+    && (current.surface || 'front') === (candidate.surface || 'front');
+  const nextBinding = sameBinding
+    ? null
+    : {
+      componentKey: candidate.componentKey,
+      hostKind: candidate.hostKind || 'tile',
+      socket: candidate.socket,
+      surface: candidate.surface || 'front'
+    };
+  const placementRef = hit.hostKind === 'wall'
+    ? { ...hit.cell, edge: hit.edge || host.edge || 'north' }
+    : { x: host.x, y: host.y, z: host.z };
+  scene.config.onCommitOperations?.([{
+    kind: 'gearMount',
+    action: 'erase',
+    hostKind: hit.hostKind,
+    hostKey: hit.hostKey,
+    mount
+  }, {
+    kind: 'gearMount',
+    action: 'place',
+    hostKind: hit.hostKind,
+    hostKey: hit.hostKey,
+    cell: placementRef,
+    edge: hit.edge || host.edge || null,
+    mount: {
+      ...mount,
+      socketKind: mount.socketKind || 'corner',
+      axisBinding: nextBinding,
+      followMode: 'none',
+      followDelaySeconds: 0
+    }
+  }], { label: nextBinding ? '绑定连轴板材' : '取消连轴板材' });
+  mount.axisBinding = nextBinding;
+  scene.redrawMountedGearHostLayers(hit.hostKind, hit.hostKey, host);
+  scene.drawGearBindingCandidates?.();
+  scene.config.onToast?.(nextBinding ? '已绑定连轴板材。' : '已取消连轴板材。', 'success');
+  return true;
+};
+
 export const selectHit = (scene, hit, additive = false) => {
+  if (hit.type === 'gearBindingCandidate') {
+    toggleGearAxisBinding(scene, hit);
+    return;
+  }
   if (hit.type === 'mechanical_port') {
     handleMechanicalPortHit({ scene, hit });
     return;
@@ -420,6 +473,7 @@ export const setSelection = (scene, cells, walls, gears = [], scope = null, { lo
   scene.config.onSelectionChange?.({ cells, walls, gears, scope: scene.selectionScope });
   applySelectionScopeVisualState(scene);
   scene.drawSelectionLayer();
+  scene.drawGearBindingCandidates?.();
   scene.refreshMechanismVisuals();
 };
 

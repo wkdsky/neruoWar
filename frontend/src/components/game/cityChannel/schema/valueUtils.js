@@ -10,7 +10,16 @@ export const cloneTransmissionSkeleton = (transmissionSkeleton) => (
 
 export const cloneGearMounts = (gearMounts = []) => (
   Array.isArray(gearMounts)
-    ? gearMounts.map((mount) => (mount && typeof mount === 'object' ? { ...mount } : mount)).filter(Boolean)
+    ? gearMounts.map((mount) => (
+      mount && typeof mount === 'object'
+        ? {
+          ...mount,
+          ...(mount.axisBinding && typeof mount.axisBinding === 'object'
+            ? { axisBinding: { ...mount.axisBinding } }
+            : {})
+        }
+        : mount
+    )).filter(Boolean)
     : []
 );
 

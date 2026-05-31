@@ -54,4 +54,23 @@ describe('cityChannelThumbnailUi', () => {
     expect(colors.assembly_1).toBe(palette[0]);
     expect(colors.assembly_2).toBe(palette[1]);
   });
+
+  it('does not reuse thumbnail colors for distinct assemblies when the palette is exhausted', () => {
+    const palette = [
+      { top: '#111111', side: '#111111', edge: '#ffffff' }
+    ];
+    const colors = buildThumbnailAssemblyColorMap({
+      assemblyGraph: {
+        assemblyByComponentKey: {
+          a: 'assembly_1',
+          b: 'assembly_2'
+        }
+      },
+      componentKeys: ['a', 'b'],
+      palette
+    });
+
+    expect(colors.assembly_1.top).toBe('#111111');
+    expect(colors.assembly_2.top).not.toBe('#111111');
+  });
 });
