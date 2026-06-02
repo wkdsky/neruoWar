@@ -330,7 +330,10 @@ export const commitPaint = (scene) => {
   scene.pendingGearAxisPrompt = null;
   scene.paintStroke = null;
   if (operations.length > 0) {
-    scene.skipMapDataRenderCount += 1;
+    if (typeof scene.config?.onCommitOperations === 'function') {
+      if (typeof scene.markLocalMapEchoPending === 'function') scene.markLocalMapEchoPending();
+      else scene.skipMapDataRenderCount += 1;
+    }
     scene.scheduleReactCommit(operations, { label });
     if (gearAxisPrompt) {
       if (typeof window !== 'undefined') {
@@ -376,6 +379,10 @@ export const toggleGearAxisBinding = (scene, hit) => {
   const placementRef = hit.hostKind === 'wall'
     ? { ...hit.cell, edge: hit.edge || host.edge || 'north' }
     : { x: host.x, y: host.y, z: host.z };
+  if (typeof scene.config?.onCommitOperations === 'function') {
+    if (typeof scene.markLocalMapEchoPending === 'function') scene.markLocalMapEchoPending();
+    else scene.skipMapDataRenderCount = (scene.skipMapDataRenderCount || 0) + 1;
+  }
   scene.config.onCommitOperations?.([{
     kind: 'gearMount',
     action: 'erase',

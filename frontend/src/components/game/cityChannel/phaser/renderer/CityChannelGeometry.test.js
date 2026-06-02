@@ -5,6 +5,7 @@ import {
   createEdgeWallGeometry,
   createTileGeometry,
   createVerticalTileWallGeometry,
+  getVerticalMiterTextureKey,
   getTransmissionMidPlane,
   localToCellAtLayer,
   projectCell
@@ -69,5 +70,15 @@ describe('CityChannelGeometry', () => {
 
     expect(rotated.wallFront[0].y).not.toBeCloseTo(base.wallFront[0].y);
     expect((rotated.wallFront[2].y - rotated.wallFront[0].y)).not.toBeCloseTo(base.wallFront[2].y - base.wallFront[0].y);
+  });
+
+  it('applies vertical miter profiles to tile wall geometry and texture keys', () => {
+    const base = createVerticalTileWallGeometry(0, 0, 0);
+    const mitered = createVerticalTileWallGeometry(0, 0, 0, { start: 1, end: -1 });
+
+    expect(mitered.miter).toEqual({ start: 1, end: -1 });
+    expect(mitered.wallFront[0].x).not.toBeCloseTo(base.wallFront[0].x);
+    expect(mitered.wallFront[1].x).not.toBeCloseTo(base.wallFront[1].x);
+    expect(getVerticalMiterTextureKey({ start: 2, end: -2 })).toBe(':m1_-1');
   });
 });

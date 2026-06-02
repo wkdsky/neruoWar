@@ -8,9 +8,10 @@ import {
   createPortalGeometry,
   createTileGeometry,
   createVerticalTileWallGeometry,
+  getVerticalMiterTextureKey,
   getTransmissionMidPlane
 } from './CityChannelGeometry';
-import { isGearPressurePlatePanel } from '../../cityChannelGearPressurePlateRender';
+import { hasDirectionalGearSurface, isGearPressurePlatePanel } from '../../cityChannelGearPressurePlateRender';
 
 export const TILE_TEXTURE_SUPERSAMPLE = 2;
 const TEXTURE_YAW_STEP = 2;
@@ -244,7 +245,8 @@ export class CityChannelTextureCache {
   getTileTexture(panelType, rotation = 0, cameraYaw = 0, transmissionRotation = rotation, options = {}) {
     const textureYaw = getTextureYawBucket(cameraYaw);
     const verticalKey = options?.isVertical ? ':v1' : '';
-    const key = `cc:tile:${panelType}:r${rotation}:tr${transmissionRotation}:y${textureYaw}${verticalKey}`;
+    const miterKey = options?.isVertical ? getVerticalMiterTextureKey(options?.miter) : '';
+    const key = `cc:tile:${panelType}:r${rotation}:tr${transmissionRotation}:y${textureYaw}${verticalKey}${miterKey}`;
     if (!this.generatedKeys.has(key)) this.createTileTexture(key, panelType, rotation, textureYaw, transmissionRotation, options);
     return key;
   }
@@ -263,7 +265,7 @@ export class CityChannelTextureCache {
     const graphics = this.scene.make.graphics({ x: 0, y: 0, add: false });
     graphics.scaleCanvas(TILE_TEXTURE_SUPERSAMPLE, TILE_TEXTURE_SUPERSAMPLE);
     const geometry = options?.isVertical
-      ? createVerticalTileWallGeometry(cameraYaw, rotation, transmissionRotation)
+      ? createVerticalTileWallGeometry(cameraYaw, rotation, transmissionRotation, options?.miter)
       : createTileGeometry(cameraYaw, rotation);
     const alpha = material.id === CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
       ? (colors.alpha || 0.94)
@@ -297,8 +299,11 @@ export class CityChannelTextureCache {
     } else {
       if (options?.isVertical) {
         const transmissionPlane = getTransmissionMidPlane(geometry, 'wall');
+        const gearMountPlane = hasDirectionalGearSurface(panelType)
+          ? (geometry.wallFront || geometry.wall)
+          : transmissionPlane;
         this.drawWallTransmissionSkeleton(graphics, material, transmissionPlane, 0);
-        this.drawWallGearMounts(graphics, material, geometry.wallFront || geometry.wall, 0);
+        this.drawWallGearMounts(graphics, material, gearMountPlane, 0);
       } else {
         this.drawTransmissionSkeleton(graphics, material, transmissionRotation, geometry);
         this.drawGearMounts(graphics, material, transmissionRotation);
@@ -343,10 +348,13 @@ export class CityChannelTextureCache {
     this.drawStoneSurface(graphics, geometry.wallFront || geometry.wall, material.id);
     const runtimeGeometry = createEdgeWallGeometry(cameraYaw, edge, miter, transmissionRotation);
     const transmissionPlane = getTransmissionMidPlane(runtimeGeometry, 'wall');
+    const gearMountPlane = hasDirectionalGearSurface(panelType)
+      ? (runtimeGeometry.wallFront || runtimeGeometry.wall)
+      : transmissionPlane;
     this.drawWallTransmissionSkeleton(graphics, material, transmissionPlane, 0);
-    this.drawWallGearMounts(graphics, material, runtimeGeometry.wallFront || runtimeGeometry.wall, 0);
+    this.drawWallGearMounts(graphics, material, gearMountPlane, 0);
     if (material.gearIcon) {
-      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, 0, runtimeGeometry.wallFront || runtimeGeometry.wall);
+      const center = this.mapBoardPointOnWall({ x: 0, y: 0 }, 0, gearMountPlane);
       this.drawGearIcon(graphics, center.x + 20, center.y - 8, 13, 10, 0xfacc15);
     }
 

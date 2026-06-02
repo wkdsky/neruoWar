@@ -409,17 +409,7 @@ export const validateGearPlacement = ({
 
 export const getGearSocketsForEdge = (edge = 'north') => GEAR_SOCKET_BLOCKED_BY_EDGE[edge] || new Set();
 
-export const doesGearBlockWall = ({ mapData = {}, cell, edge = 'north' } = {}) => {
-  if (!cell) return false;
-  const ownTile = mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)];
-  const ownBlockedSockets = getGearSocketsForEdge(edge);
-  if ((ownTile?.gearMounts || []).some((mount) => ownBlockedSockets.has(mount.position))) return true;
-  const neighborOffset = EDGE_NEIGHBOR_OFFSETS[edge] || EDGE_NEIGHBOR_OFFSETS.north;
-  const neighbor = { x: cell.x + neighborOffset.x, y: cell.y + neighborOffset.y, z: cell.z };
-  const neighborTile = mapData.tiles?.[createCellKey(neighbor.x, neighbor.y, neighbor.z)];
-  const neighborBlockedSockets = getGearSocketsForEdge(OPPOSITE_EDGE[edge] || 'south');
-  return (neighborTile?.gearMounts || []).some((mount) => neighborBlockedSockets.has(mount.position));
-};
+export const doesGearBlockWall = () => false;
 
 export const projectPointToSurfaceLocal = (point, origin, uAxis, vAxis, rotation = 0) => {
   const px = (point.x || 0) - (origin.x || 0);

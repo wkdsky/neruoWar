@@ -362,6 +362,66 @@ describe('cityChannelSceneInteraction', () => {
     });
   });
 
+  it('resolves a floor placement ghost from a real vertical-tile side edge hit', () => {
+    const key = createCellKey(10, 10, 0);
+    const tile = createTile({
+      x: 10,
+      y: 10,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+      isVertical: true,
+      rotation: 0
+    });
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'vertical side floor snap' }),
+      tiles: { [key]: tile },
+      walls: {}
+    };
+    const SceneClass = createCityChannelPhaserScene(PhaserStub, {
+      mapData,
+      activeTool: CITY_CHANNEL_TOOLS.PLACE_TILE,
+      activeTileType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE,
+      panelPose: 'floor'
+    });
+    const scene = new SceneClass();
+    scene.worldLayer = { x: 0, y: 0 };
+    scene.cameraState = { yaw: 0, zoom: 1, offsetX: 0, offsetY: 0 };
+    scene.mapData = mapData;
+    const projection = projectCell(tile, scene.cameraState.yaw, mapData);
+    const geometry = createVerticalTileWallGeometry(scene.cameraState.yaw, tile.rotation || 0);
+    const sidePoint = {
+      x: (geometry.wall[1].x + geometry.wall[2].x) * 0.5,
+      y: (geometry.wall[1].y + geometry.wall[2].y) * 0.5
+    };
+
+    const hitInfo = scene.hitTest({
+      x: projection.x - (TILE_RENDER_WIDTH * 0.5) + sidePoint.x,
+      y: projection.y - (TILE_RENDER_HEIGHT * 0.57) + sidePoint.y
+    }, { allowOutline: true });
+    const snap = scene.resolvePlacementEdgeSnap(hitInfo);
+    const target = scene.resolveDynamicPlacementTarget(hitInfo, {
+      forGhost: true,
+      snap,
+      allowReplacement: true
+    });
+
+    expect(hitInfo.hit).toMatchObject({
+      type: 'tile',
+      tile,
+      snapPriority: 2
+    });
+    expect(snap).toMatchObject({
+      side: 'side',
+      direction: 'east'
+    });
+    expect(target).toMatchObject({
+      kind: 'floor',
+      cell: { x: 11, y: 10, z: 0 },
+      valid: true,
+      layFlat: true
+    });
+  });
+
   it('draws vertical pressure plate ghosts without assuming a floor top polygon', () => {
     const mapData = createBaseCityChannelMap({ name: 'vertical pressure plate ghost' });
     const SceneClass = createCityChannelPhaserScene(PhaserStub, {

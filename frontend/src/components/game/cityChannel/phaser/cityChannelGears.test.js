@@ -170,6 +170,44 @@ describe('cityChannelGears', () => {
     });
   });
 
+  it('normalizes non-directional board back surface hits to the shared front surface', () => {
+    const wall = createWall({
+      x: 1,
+      y: 1,
+      z: 0,
+      edge: 'north',
+      panelType: CITY_CHANNEL_TILE_TYPES.TRANSMISSION_CROSS_PLATE
+    });
+    const wallKey = createWallKey(wall.x, wall.y, wall.z, wall.edge);
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'neutral surface gear placement' }),
+      walls: { [wallKey]: wall }
+    };
+    const target = getGearInstallTarget({
+      mapData,
+      hitInfo: {
+        hit: {
+          type: 'wall',
+          cell: { x: wall.x, y: wall.y, z: wall.z },
+          edge: wall.edge,
+          wall,
+          panelType: wall.panelType,
+          gearSurfacePlane: true,
+          surfaceSide: 'back',
+          localSurfacePoint: { x: 50, y: 50 }
+        },
+        localPoint: { x: 50, y: 50 }
+      },
+      ...createSurfaceMappers()
+    });
+
+    expect(target).toMatchObject({
+      hostKind: 'wall',
+      hostKey: wallKey,
+      surface: 'front'
+    });
+  });
+
   it('returns corner binding candidates and rejects duplicate corner gears', () => {
     const tile = createTile({
       x: 1,
@@ -245,7 +283,7 @@ describe('cityChannelGears', () => {
     });
   });
 
-  it('detects socket and wall placement blocking', () => {
+  it('detects socket blocking while gears do not block wall placement', () => {
     const tile = createTile({
       x: 1,
       y: 1,
@@ -276,7 +314,77 @@ describe('cityChannelGears', () => {
       mapData,
       cell: { x: tile.x, y: tile.y, z: tile.z },
       edge: 'north'
-    })).toBe(true);
+    })).toBe(false);
+  });
+
+  it('does not block wall edges touched by a corner gear', () => {
+    const tile = createTile({
+      x: 1,
+      y: 1,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    tile.gearMounts = [{ id: 'corner_gear', position: 'corner_ne', surface: 'front' }];
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'corner gear cross edge blocking' }),
+      tiles: { [createCellKey(tile.x, tile.y, tile.z)]: tile },
+      walls: {}
+    };
+
+    [
+      [{ x: 1, y: 1, z: 0 }, 'north'],
+      [{ x: 1, y: 1, z: 0 }, 'east'],
+      [{ x: 2, y: 0, z: 0 }, 'south'],
+      [{ x: 2, y: 0, z: 0 }, 'west'],
+      [{ x: 1, y: 1, z: 0 }, 'south'],
+      [{ x: 1, y: 1, z: 0 }, 'west'],
+      [{ x: 2, y: 0, z: 0 }, 'north'],
+      [{ x: 2, y: 0, z: 0 }, 'east']
+    ].forEach(([cell, edge]) => {
+      expect(doesGearBlockWall({ mapData, cell, edge })).toBe(false);
+    });
+  });
+
+  it('ignores directional gear surfaces for wall placement blocking', () => {
+    const tile = createTile({
+      x: 4,
+      y: 4,
+      z: 0,
+      panelType: CITY_CHANNEL_TILE_TYPES.GEAR_PRESSURE_PLATE
+    });
+    tile.gearMounts = [{ id: 'front_gear', position: 'corner_ne', surface: 'front' }];
+    const mapData = {
+      ...createBaseCityChannelMap({ name: 'gear surface wall blocking' }),
+      tiles: { [createCellKey(tile.x, tile.y, tile.z)]: tile },
+      walls: {}
+    };
+
+    expect(doesGearBlockWall({
+      mapData,
+      cell: { x: tile.x, y: tile.y, z: tile.z },
+      edge: 'north',
+      surface: 'front'
+    })).toBe(false);
+    expect(doesGearBlockWall({
+      mapData,
+      cell: { x: tile.x, y: tile.y, z: tile.z },
+      edge: 'north',
+      surface: 'back'
+    })).toBe(false);
+
+    tile.gearMounts = [{ id: 'back_gear', position: 'corner_ne', surface: 'back' }];
+    expect(doesGearBlockWall({
+      mapData,
+      cell: { x: tile.x, y: tile.y, z: tile.z },
+      edge: 'north',
+      surface: 'front'
+    })).toBe(false);
+    expect(doesGearBlockWall({
+      mapData,
+      cell: { x: tile.x, y: tile.y, z: tile.z },
+      edge: 'north',
+      surface: 'back'
+    })).toBe(false);
   });
 
   it('projects surface points into local coordinates', () => {

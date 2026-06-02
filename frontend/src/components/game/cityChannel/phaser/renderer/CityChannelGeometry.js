@@ -20,6 +20,16 @@ export const EDGE_NORMALS = {
   east: { x: 1, y: 0 }
 };
 
+export const normalizeVerticalMiterProfile = (miter = null) => ({
+  start: Math.max(-1, Math.min(1, Number(miter?.start) || 0)),
+  end: Math.max(-1, Math.min(1, Number(miter?.end) || 0))
+});
+
+export const getVerticalMiterTextureKey = (miter = null) => {
+  const normalized = normalizeVerticalMiterProfile(miter);
+  return `:m${normalized.start}_${normalized.end}`;
+};
+
 export const getMapCenter = (mapData = {}) => ({
   x: Math.floor((Number.isInteger(mapData.width) ? mapData.width : CITY_CHANNEL_WIDTH) / 2),
   y: Math.floor((Number.isInteger(mapData.height) ? mapData.height : CITY_CHANNEL_HEIGHT) / 2)
@@ -214,8 +224,7 @@ const createVerticalWallGeometryFromFrame = ({
       y: TILE_RENDER_CENTER.y + projected.y - bottomLift - ((0.5 - rotated.y) * WALL_HEIGHT)
     };
   };
-  const startSign = Math.max(-1, Math.min(1, Number(miter?.start) || 0));
-  const endSign = Math.max(-1, Math.min(1, Number(miter?.end) || 0));
+  const { start: startSign, end: endSign } = normalizeVerticalMiterProfile(miter);
   const corners = [
     { x: -0.5, y: 0.5, sign: startSign },
     { x: 0.5, y: 0.5, sign: endSign },
@@ -252,7 +261,7 @@ const createVerticalWallGeometryFromFrame = ({
   };
 };
 
-export const createVerticalTileWallGeometry = (cameraYaw = 0, tileRotation = 0, surfaceRotation = 0) => {
+export const createVerticalTileWallGeometry = (cameraYaw = 0, tileRotation = 0, surfaceRotation = 0, miter = null) => {
   const endpoints = [
     rotateWorldPoint({ x: -0.5, y: 0 }, tileRotation),
     rotateWorldPoint({ x: 0.5, y: 0 }, tileRotation)
@@ -262,6 +271,7 @@ export const createVerticalTileWallGeometry = (cameraYaw = 0, tileRotation = 0, 
     cameraYaw,
     endpoints,
     normal,
+    miter,
     bottomLift: 4,
     surfaceRotation
   });

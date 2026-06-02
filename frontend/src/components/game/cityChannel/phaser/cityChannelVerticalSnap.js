@@ -157,7 +157,7 @@ export const findWallCandidatesForVertex = ({ mapData = {}, vertex, z = 0 } = {}
 export const getSnapAxisEdge = (snap) => {
   if (!snap) return null;
   if (snap.axisEdge) return snap.axisEdge;
-  if (snap.side === 'top') return getSupportPrimaryEdge(snap.support);
+  if (snap.side === 'top' || snap.side === 'bottom') return getSupportPrimaryEdge(snap.support);
   return OPPOSITE_EDGE[snap.direction] || snap.direction || 'north';
 };
 
@@ -752,6 +752,7 @@ export const createAxisFloorTarget = ({
   activeVerticalBoardPlacement = false,
   markVertical = false,
   markPerpendicular = false,
+  markSideFloor = false,
   resolveVerticalSnapConnection,
   hasVerticalSnapStructuralEdgeSupport,
   isPlacementCellOccupiedForSnap
@@ -761,11 +762,11 @@ export const createAxisFloorTarget = ({
   if (isPlacementCellOccupiedForSnap(cell)) return null;
   // 竖直向上的板在自身格不需要已存在的水平地板支撑（其结构支撑由轴段校验保证），
   // 仅对平放选项要求该格已有水平地板。
-  if (activeVerticalBoardPlacement && !markVertical && !markPerpendicular) {
+  if (activeVerticalBoardPlacement && !markVertical && !markPerpendicular && !markSideFloor) {
     const floorTile = mapData.tiles?.[createCellKey(cell.x, cell.y, cell.z)];
     if (!floorTile || floorTile.isVertical || isPortalMaterial(floorTile.panelType)) return null;
   }
-  const connection = resolveVerticalSnapConnection(cell, snap.support, snap.side === 'top'
+  const connection = resolveVerticalSnapConnection(cell, snap.support, snap.side === 'top' || snap.side === 'bottom'
     ? getVerticalTopSnapSpec({
       support: snap.support,
       getTransmissionSocketPoint: snap.getTransmissionSocketPoint,
@@ -777,10 +778,11 @@ export const createAxisFloorTarget = ({
       endpointMode: 'socket'
     });
   // markVertical 的「竖直向上」板天然是竖直姿态，结构校验需按竖直轴比对（而非看当前 panelPose）。
-  // markPerpendicular 的前/后水平平放邻格，靠与竖板顶边相邻支撑，需放宽到「邻接支撑格」校验。
+  // markPerpendicular / markSideFloor 的水平平放邻格，靠竖板边缘支撑，需放宽到对应邻接格校验。
   let structuralSnap = snap;
   if (markVertical) structuralSnap = { ...snap, forceVerticalAxis: true };
   else if (markPerpendicular) structuralSnap = { ...snap, forcePerpendicularFloor: true };
+  else if (markSideFloor) structuralSnap = { ...snap, forceSideFloor: true };
   if (!hasVerticalSnapStructuralEdgeSupport(cell, null, structuralSnap)) return null;
   return {
     kind: 'floor',
@@ -845,13 +847,14 @@ export const getAxisPlacementOptions = ({
     seen.add(key);
     options.push(option);
   };
-  const createFloor = (cell, { markVertical = false, markPerpendicular = false } = {}) => createAxisFloorTarget({
+  const createFloor = (cell, { markVertical = false, markPerpendicular = false, markSideFloor = false } = {}) => createAxisFloorTarget({
     mapData,
     cell,
     snap: enrichedSnap,
     activeVerticalBoardPlacement,
     markVertical,
     markPerpendicular,
+    markSideFloor,
     resolveVerticalSnapConnection,
     hasVerticalSnapStructuralEdgeSupport,
     isPlacementCellOccupiedForSnap
@@ -873,7 +876,7 @@ export const getAxisPlacementOptions = ({
     isPlacementWallOccupiedForSnap
   });
 
-  if (snap.side === 'top') {
+  if (snap.side === 'top' || snap.side === 'bottom') {
     const segment = getSupportAxisSegment(snap.support);
     const z = snap.cell.z;
     const floorCandidates = findFloorCandidatesForSegment({ mapData, segment, z });
@@ -890,15 +893,16 @@ export const getAxisPlacementOptions = ({
       }
       return options;
     }
-    // 竖直板（tile）支撑：轴段过格心、匹配不到 cell 边，需手动给出三个可拼接方向：
-    //   1) 竖直向上（同格 z 的竖直板，markVertical）
-    //   2/3) 与竖板垂直的前/后两个水平平放邻格。
-    addOption(createFloor(snap.cell, { markVertical: true }));
+    // 竖直板（tile）支撑：轴段过格心、匹配不到 cell 边，需手动给出可拼接方向。
+    // 顶边允许继续竖直向上；底边只给当前高度的前/后水平板，避免和支撑板自身重叠。
+    if (snap.side === 'top') addOption(createFloor(snap.cell, { markVertical: true }));
     getPerpendicularNeighborCells(snap.support, snap.cell).forEach((cell) => {
       addOption(createFloor(cell, { markPerpendicular: true }));
     });
     return options;
   }
+
+  addOption(createFloor(snap.cell, { markSideFloor: true }));
 
   const sideSegment = snap.getVerticalSnapSupportEdgeSegment?.(snap.support, snap.direction);
   const wallCandidates = [];

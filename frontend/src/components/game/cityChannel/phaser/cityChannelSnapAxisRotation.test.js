@@ -89,6 +89,33 @@ const createVerticalTileSupport = ({ x = 10, y = 10, z = 0, rotation = 0 } = {})
 };
 
 describe('cityChannel snap axis rotation', () => {
+  it('derives wall corner miter profiles from shared physical endpoints', () => {
+    const southWall = createWall({
+      x: 10,
+      y: 10,
+      z: 0,
+      edge: 'south',
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const eastWall = createWall({
+      x: 10,
+      y: 10,
+      z: 0,
+      edge: 'east',
+      panelType: CITY_CHANNEL_TILE_TYPES.BASIC_PLATE
+    });
+    const mapData = createMap({
+      walls: {
+        [createWallKey(10, 10, 0, 'south')]: southWall,
+        [createWallKey(10, 10, 0, 'east')]: eastWall
+      }
+    });
+    const scene = createScene(mapData);
+
+    expect(scene.getWallMiterProfile(southWall)).toEqual({ start: 0, end: 1 });
+    expect(scene.getWallMiterProfile(eastWall)).toEqual({ start: 0, end: 1 });
+  });
+
   it('offers both horizontal floor sides across a wall top snap axis', () => {
     const support = createWallSupport({ edge: 'south' });
     const mapData = createMap({
@@ -283,6 +310,63 @@ describe('cityChannel snap axis rotation', () => {
     ))).toBe(true);
   });
 
+  it('offers a horizontal floor target on a vertical-tile side axis', () => {
+    const support = createVerticalTileSupport({ rotation: 0 });
+    const mapData = createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    });
+    const scene = createScene(mapData);
+    const snap = {
+      cell: { x: 11, y: 10, z: 0 },
+      support,
+      side: 'side',
+      direction: 'east',
+      axisEdge: 'west'
+    };
+
+    const options = scene.getAxisPlacementOptions(snap);
+    const keys = options.map((option) => getAxisOptionKey(option));
+
+    expect(keys).toContain(`floor:${createCellKey(11, 10, 0)}`);
+  });
+
+  it('resolves a horizontal ghost target from a vertical-tile side edge', () => {
+    const support = createVerticalTileSupport({ rotation: 0 });
+    const scene = createScene(createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    }));
+    const hitInfo = {
+      cell: { x: 10, y: 10, z: 0 },
+      hit: {
+        type: 'tile',
+        tile: support.placement,
+        cell: { x: 10, y: 10, z: 0 },
+        surfaceSide: 'front'
+      },
+      localPoint: { x: 0, y: 0 }
+    };
+    scene.panelPose = 'floor';
+    scene.isSupportEligibleForSnap = jest.fn(() => true);
+    scene.getVerticalSurfaceSnapEdge = jest.fn(() => ({ side: 'side', direction: 'east' }));
+    scene.resolveVerticalSnapConnection = jest.fn(() => ({ connection: 'side' }));
+
+    const target = scene.resolveDynamicPlacementTarget(hitInfo, {
+      forGhost: true,
+      allowReplacement: true
+    });
+
+    expect(target).toMatchObject({
+      kind: 'floor',
+      cell: { x: 11, y: 10, z: 0 },
+      valid: true,
+      layFlat: true
+    });
+  });
+
   it('does not handle X as a snap-axis keyboard shortcut', () => {
     const scene = createScene(createMap());
     scene.snapPlaneCycle = 0;
@@ -456,6 +540,99 @@ describe('cityChannel snap axis rotation', () => {
     expect(keys).not.toContain(`floor:${createCellKey(10, 10, 1)}`);
   });
 
+  it('offers perpendicular floors on a vertical-tile bottom axis', () => {
+    const support = createVerticalTileSupport({ z: 1, rotation: 0 });
+    const mapData = createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    });
+    const scene = createScene(mapData);
+    const snap = {
+      cell: { x: 10, y: 10, z: 1 },
+      support,
+      side: 'bottom',
+      direction: 'down',
+      axisEdge: 'south'
+    };
+
+    const options = scene.getAxisPlacementOptions(snap);
+    const keys = options.map((option) => getAxisOptionKey(option));
+
+    expect(keys).toContain(`floor:${createCellKey(10, 9, 1)}`);
+    expect(keys).toContain(`floor:${createCellKey(10, 11, 1)}`);
+    expect(keys).not.toContain(`vfloor:${createCellKey(10, 10, 1)}`);
+    expect(keys).not.toContain(`floor:${createCellKey(10, 10, 1)}`);
+  });
+
+  it('keeps a vertical bottom snap axis available while placing horizontally', () => {
+    const support = createVerticalTileSupport({ z: 1, rotation: 0 });
+    const scene = createScene(createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    }));
+    const hitInfo = {
+      cell: { x: 10, y: 10, z: 1 },
+      hit: {
+        type: 'tile',
+        tile: support.placement,
+        cell: { x: 10, y: 10, z: 1 }
+      },
+      localPoint: { x: 0, y: 0 }
+    };
+    const snap = {
+      cell: { x: 10, y: 10, z: 1 },
+      support,
+      side: 'bottom',
+      direction: 'down',
+      axisEdge: 'south'
+    };
+    scene.panelPose = 'floor';
+    scene.isWallPlacementActive = jest.fn(() => false);
+    scene.isVerticalSurfaceHit = jest.fn(() => true);
+    scene.resolveVerticalSurfaceSnap = jest.fn(() => snap);
+    scene.resolveVerticalGapFloorSnap = jest.fn(() => null);
+    scene.resolveFloorEdgePlacementTarget = jest.fn(() => null);
+
+    expect(scene.resolvePlacementEdgeSnap(hitInfo)).toBe(snap);
+  });
+
+  it('resolves a horizontal ghost target from a vertical-tile bottom seam', () => {
+    const support = createVerticalTileSupport({ z: 1, rotation: 0 });
+    const scene = createScene(createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    }));
+    const hitInfo = {
+      cell: { x: 10, y: 10, z: 1 },
+      hit: {
+        type: 'tile',
+        tile: support.placement,
+        cell: { x: 10, y: 10, z: 1 },
+        surfaceSide: 'front'
+      },
+      localPoint: { x: 0, y: 0 }
+    };
+    scene.panelPose = 'floor';
+    scene.isSupportEligibleForSnap = jest.fn(() => true);
+    scene.getVerticalSurfaceSnapEdge = jest.fn(() => ({ side: 'bottom', direction: 'down' }));
+    scene.resolveVerticalSnapConnection = jest.fn(() => ({ connection: 'bottom' }));
+
+    const target = scene.resolveDynamicPlacementTarget(hitInfo, {
+      forGhost: true,
+      allowReplacement: true
+    });
+
+    expect(target).toMatchObject({
+      kind: 'floor',
+      cell: { x: 10, y: 11, z: 1 },
+      valid: true,
+      layFlat: true
+    });
+  });
+
   it('cycles only the two perpendicular floors on a top axis while horizontal', () => {
     const support = createVerticalTileSupport({ rotation: 0 });
     const scene = createScene(createMap({
@@ -523,6 +700,42 @@ describe('cityChannel snap axis rotation', () => {
     scene.resolveFloorEdgePlacementTarget = jest.fn(() => null);
 
     expect(scene.resolvePlacementEdgeSnap(hitInfo)).toBe(snap);
+  });
+
+  it('prioritizes a vertical surface top edge snap over same-surface replacement', () => {
+    const support = createVerticalTileSupport({ rotation: 0 });
+    const scene = createScene(createMap({
+      tiles: {
+        [support.key]: support.placement
+      }
+    }), {
+      panelPose: 'wall'
+    });
+    const hitInfo = {
+      hit: {
+        type: 'tile',
+        cell: { x: 10, y: 10, z: 0 },
+        tile: support.placement,
+        surfaceSide: 'front'
+      },
+      localPoint: { x: 0, y: 0 }
+    };
+    scene.isSupportEligibleForSnap = jest.fn(() => true);
+    scene.getVerticalSurfaceSnapEdge = jest.fn(() => ({ side: 'top', direction: 'up' }));
+    scene.isPlacementWallOccupiedForSnap = jest.fn(() => false);
+    scene.hasVerticalSnapStructuralEdgeSupport = jest.fn(() => true);
+    scene.resolveVerticalSnapConnection = jest.fn(() => ({ connection: 'top' }));
+
+    const target = scene.resolveVerticalSurfaceWallSnap(hitInfo, { allowReplacement: true });
+
+    expect(target).toMatchObject({
+      cell: { x: 10, y: 10, z: 1 },
+      edge: 'north',
+      valid: true,
+      surfaceSide: 'front',
+      connection: { connection: 'top' }
+    });
+    expect(target.replace).toBeUndefined();
   });
 
   it('cycles a moving vertical board between perpendicular top floors while horizontal', () => {

@@ -489,7 +489,7 @@ const CityChannelPhaserEditor = ({
     const targetPlacements = selectedPlacements.length > 0 ? selectedPlacements : (meta?.placements || []);
     if (targetPlacements.length <= 0) return;
     if (!meta?.alreadyPreviewed) {
-      sceneRef.current?.rotateTransmissionForPlacements?.(targetPlacements, direction);
+      sceneRef.current?.rotateTransmissionForPlacements?.(targetPlacements, direction, { expectReactEcho: true });
     }
     if (direction === 'reverse') rotatePlacementsReverse(targetPlacements);
     else rotatePlacements(targetPlacements);
